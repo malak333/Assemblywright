@@ -1,13 +1,13 @@
 import Testing
-@testable import JarvisMacApp
-@testable import JarvisMacCore
+@testable import AssemblywrightMacApp
+@testable import AssemblywrightMacCore
 
 @MainActor
 @Suite("Assemblywright Mac app presentation")
-struct JarvisMacAppTests {
+struct AssemblywrightMacAppTests {
     @Test("Developer bridge presentation maps every read-only lifecycle state")
     func developerBridgePresentationMapsEveryLifecycleState() {
-        let cases: [(JarvisDeveloperBridgeAppPhase, String)] = [
+        let cases: [(AssemblywrightDeveloperBridgeAppPhase, String)] = [
             (.disabled, "Disabled"),
             (.starting, "Starting"),
             (.connected, "Connected"),
@@ -19,23 +19,23 @@ struct JarvisMacAppTests {
 
         for (phase, expectedLabel) in cases {
             let presentation = DeveloperBridgeStatusPresentation(
-                status: JarvisDeveloperBridgeAppStatus(phase: phase)
+                status: AssemblywrightDeveloperBridgeAppStatus(phase: phase)
             )
             #expect(presentation.phaseLabel == expectedLabel)
         }
-        #expect(JarvisDeveloperBridgeProcessLifecycle.proofBoundary.contains("Read-only"))
-        #expect(JarvisDeveloperBridgeProcessLifecycle.proofBoundary.contains("does not enable"))
+        #expect(AssemblywrightDeveloperBridgeProcessLifecycle.proofBoundary.contains("Read-only"))
+        #expect(AssemblywrightDeveloperBridgeProcessLifecycle.proofBoundary.contains("does not enable"))
     }
 
     @Test("Menu bar contract preserves the stable main-window route")
     func menuBarContractPreservesMainWindowRoute() {
-        #expect(JarvisMenuBarContract.mainWindowID == "assemblywright-main")
-        #expect(JarvisMenuBarContract.title == "Assemblywright")
+        #expect(AssemblywrightMenuBarContract.mainWindowID == "assemblywright-main")
+        #expect(AssemblywrightMenuBarContract.title == "Assemblywright")
     }
 
     @Test("Menu bar presentation maps every bridge lifecycle state")
     func menuBarPresentationMapsBridgeLifecycle() {
-        let cases: [(JarvisDeveloperBridgeAppPhase, String, String)] = [
+        let cases: [(AssemblywrightDeveloperBridgeAppPhase, String, String)] = [
             (.disabled, "Developer Mode disabled", "circle"),
             (.starting, "Bridge starting", "circle.dotted"),
             (.connected, "Bridge connected", "checkmark.circle.fill"),
@@ -46,8 +46,8 @@ struct JarvisMacAppTests {
         ]
 
         for (phase, expectedStatusLine, expectedImage) in cases {
-            let presentation = JarvisMenuBarPresentation(
-                status: JarvisDeveloperBridgeAppStatus(phase: phase)
+            let presentation = AssemblywrightMenuBarPresentation(
+                status: AssemblywrightDeveloperBridgeAppStatus(phase: phase)
             )
             #expect(presentation.statusLine == expectedStatusLine)
             #expect(presentation.systemImage == expectedImage)
@@ -57,7 +57,7 @@ struct JarvisMacAppTests {
     @Test("Menu bar badges every state that needs attention and only those")
     func menuBarBadgesOnlyStatesNeedingAttention() {
         for phase in [
-            JarvisDeveloperBridgeAppPhase.disabled,
+            AssemblywrightDeveloperBridgeAppPhase.disabled,
             .starting,
             .masterOffline,
             .maintenance,
@@ -65,28 +65,28 @@ struct JarvisMacAppTests {
             .stopped
         ] {
             #expect(
-                JarvisMenuBarPresentation(
-                    status: JarvisDeveloperBridgeAppStatus(phase: phase)
+                AssemblywrightMenuBarPresentation(
+                    status: AssemblywrightDeveloperBridgeAppStatus(phase: phase)
                 ).showsStateBadge
             )
         }
 
         // A connected bridge shows the proofmark alone, with no badge competing with it.
         #expect(
-            !JarvisMenuBarPresentation(
-                status: JarvisDeveloperBridgeAppStatus(phase: .connected)
+            !AssemblywrightMenuBarPresentation(
+                status: AssemblywrightDeveloperBridgeAppStatus(phase: .connected)
             ).showsStateBadge
         )
     }
 
     @Test("Menu bar template art loads as template art when the bundle carries it")
     func menuBarTemplateArtIsTemplateWhenBundled() {
-        #expect(JarvisBrandAssets.menuBarTemplateName == "menubar-template")
+        #expect(AssemblywrightBrandAssets.menuBarTemplateName == "menubar-template")
 
         // Unbundled test runs have no Resources directory, so the lookup is
         // expected to miss. When it does resolve, it must be template art or
         // AppKit would paint raw black pixels into the menu bar.
-        if let template = JarvisBrandAssets.menuBarTemplate() {
+        if let template = AssemblywrightBrandAssets.menuBarTemplate() {
             #expect(template.isTemplate)
         }
     }

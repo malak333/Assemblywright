@@ -93,9 +93,9 @@ cargo run -p assemblywright-cli -- release signed-distribution-runbook
 ```
 
 ```sh
-JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' \
-JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' \
-JARVIS_NOTARYTOOL_PROFILE='...' \
+ASSEMBLYWRIGHT_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' \
+ASSEMBLYWRIGHT_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' \
+ASSEMBLYWRIGHT_NOTARYTOOL_PROFILE='...' \
 ./scripts/package-distribution.sh
 ```
 
@@ -146,7 +146,7 @@ set -a && source target/release-evidence-bundle.env && set +a
 ## Readiness Confirmation
 
 ```sh
-JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness
+ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness
 ```
 
 `production_ready` stays false until signed distribution, notarization and

@@ -2,7 +2,7 @@ import CryptoKit
 import Darwin
 import Foundation
 
-public enum JarvisMacDeveloperBridgeError: Error, Equatable, Sendable, CustomStringConvertible {
+public enum AssemblywrightMacDeveloperBridgeError: Error, Equatable, Sendable, CustomStringConvertible {
     case documentTooLarge
     case invalidDocument
     case invalidInvitation
@@ -46,7 +46,7 @@ public enum JarvisMacDeveloperBridgeError: Error, Equatable, Sendable, CustomStr
     }
 }
 
-public struct JarvisMacBridgeCapability: Codable, Equatable, Sendable {
+public struct AssemblywrightMacBridgeCapability: Codable, Equatable, Sendable {
     public let id: String
     public let kind: String
     public let provider: String
@@ -83,12 +83,12 @@ public struct JarvisMacBridgeCapability: Codable, Equatable, Sendable {
               !model.isEmpty, model.utf8.count <= 128,
               maxContextBytes > 0, maxContextBytes <= 256 * 1_024,
               maxResultBytes > 0, maxResultBytes <= 768 * 1_024 else {
-            throw JarvisMacDeveloperBridgeError.invalidInvitation
+            throw AssemblywrightMacDeveloperBridgeError.invalidInvitation
         }
     }
 }
 
-public struct JarvisMacEnrollmentInvitation: Codable, Equatable, Sendable {
+public struct AssemblywrightMacEnrollmentInvitation: Codable, Equatable, Sendable {
     public let schemaVersion: UInt16
     public let status: String
     public let grantID: String
@@ -97,7 +97,7 @@ public struct JarvisMacEnrollmentInvitation: Codable, Equatable, Sendable {
     public let role: String
     public let registryRevision: UInt64
     public let expiresAtMilliseconds: UInt64
-    public let capabilities: [JarvisMacBridgeCapability]
+    public let capabilities: [AssemblywrightMacBridgeCapability]
     public let masterEndpoint: String
     public let caFingerprintSHA256: String
 
@@ -125,22 +125,22 @@ public struct JarvisMacEnrollmentInvitation: Codable, Equatable, Sendable {
               !capabilities.isEmpty, capabilities.count <= 64,
               validEndpoint(masterEndpoint),
               validLowercaseHex(caFingerprintSHA256, count: 64) else {
-            throw JarvisMacDeveloperBridgeError.invalidInvitation
+            throw AssemblywrightMacDeveloperBridgeError.invalidInvitation
         }
         guard expiresAtMilliseconds > nowMilliseconds else {
-            throw JarvisMacDeveloperBridgeError.invitationExpired
+            throw AssemblywrightMacDeveloperBridgeError.invitationExpired
         }
         var identifiers = Set<String>()
         for capability in capabilities {
             try capability.validate()
             guard identifiers.insert(capability.id).inserted else {
-                throw JarvisMacDeveloperBridgeError.invalidInvitation
+                throw AssemblywrightMacDeveloperBridgeError.invalidInvitation
             }
         }
     }
 }
 
-public struct JarvisMacEnrollmentCSR: Codable, Equatable, Sendable {
+public struct AssemblywrightMacEnrollmentCSR: Codable, Equatable, Sendable {
     public let schemaVersion: UInt16
     public let status: String
     public let grantID: String
@@ -170,7 +170,7 @@ public struct JarvisMacEnrollmentCSR: Codable, Equatable, Sendable {
     }
 }
 
-public struct JarvisMacIssuedDeviceCertificate: Codable, Equatable, Sendable {
+public struct AssemblywrightMacIssuedDeviceCertificate: Codable, Equatable, Sendable {
     public let status: String
     public let operation: String
     public let deviceID: String
@@ -207,17 +207,17 @@ public struct JarvisMacIssuedDeviceCertificate: Codable, Equatable, Sendable {
               validLowercaseHex(certificateSHA256, count: 64),
               validPEM(certificatePEM, label: "CERTIFICATE"),
               validPEM(caCertificatePEM, label: "CERTIFICATE") else {
-            throw JarvisMacDeveloperBridgeError.invalidDocument
+            throw AssemblywrightMacDeveloperBridgeError.invalidDocument
         }
     }
 }
 
-public struct JarvisMacBridgeProfile: Codable, Equatable, Sendable {
+public struct AssemblywrightMacBridgeProfile: Codable, Equatable, Sendable {
     public let deviceID: String
     public let deviceName: String
     public let role: String
     public let registryRevision: UInt64
-    public let capabilities: [JarvisMacBridgeCapability]
+    public let capabilities: [AssemblywrightMacBridgeCapability]
     public let masterEndpoint: String
     public let certificateNotAfterMilliseconds: UInt64
 
@@ -226,7 +226,7 @@ public struct JarvisMacBridgeProfile: Codable, Equatable, Sendable {
         deviceName: String,
         role: String,
         registryRevision: UInt64,
-        capabilities: [JarvisMacBridgeCapability],
+        capabilities: [AssemblywrightMacBridgeCapability],
         masterEndpoint: String,
         certificateNotAfterMilliseconds: UInt64
     ) {
@@ -240,7 +240,7 @@ public struct JarvisMacBridgeProfile: Codable, Equatable, Sendable {
     }
 }
 
-public enum JarvisMacBridgeIdentityProfile: String, Equatable, Sendable {
+public enum AssemblywrightMacBridgeIdentityProfile: String, Equatable, Sendable {
     case standard
     case fixtureReasoning = "fixture"
 
@@ -248,51 +248,51 @@ public enum JarvisMacBridgeIdentityProfile: String, Equatable, Sendable {
         self.init(rawValue: selector)
     }
 
-    func validate(invitation: JarvisMacEnrollmentInvitation) throws {
+    func validate(invitation: AssemblywrightMacEnrollmentInvitation) throws {
         guard self == .fixtureReasoning else { return }
         try validate(capabilities: invitation.capabilities)
     }
 
-    func validate(profile: JarvisMacBridgeProfile) throws {
+    func validate(profile: AssemblywrightMacBridgeProfile) throws {
         guard self == .fixtureReasoning else { return }
         try validate(capabilities: profile.capabilities)
     }
 
-    private func validate(capabilities: [JarvisMacBridgeCapability]) throws {
+    private func validate(capabilities: [AssemblywrightMacBridgeCapability]) throws {
         guard capabilities == [
-            JarvisMacBridgeCapability(
+            AssemblywrightMacBridgeCapability(
                 id: "fixture.reasoning",
                 kind: "local_inference",
-                provider: "jarvis-fixture",
-                model: "jarvis-fixture-v1",
+                provider: "assemblywright-fixture",
+                model: "assemblywright-fixture-v1",
                 maxContextBytes: 8 * 1_024,
                 maxResultBytes: 8 * 1_024
             )
         ] else {
-            throw JarvisMacDeveloperBridgeError.bindingMismatch
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
         }
     }
 }
 
-public protocol JarvisMacBridgeIdentityStore: Sendable {
-    func stageIdentity(for invitation: JarvisMacEnrollmentInvitation) throws -> JarvisMacEnrollmentCSR
-    func loadStagedInvitation() throws -> JarvisMacEnrollmentInvitation?
+public protocol AssemblywrightMacBridgeIdentityStore: Sendable {
+    func stageIdentity(for invitation: AssemblywrightMacEnrollmentInvitation) throws -> AssemblywrightMacEnrollmentCSR
+    func loadStagedInvitation() throws -> AssemblywrightMacEnrollmentInvitation?
     func install(
-        _ receipt: JarvisMacIssuedDeviceCertificate,
-        for invitation: JarvisMacEnrollmentInvitation
-    ) throws -> JarvisMacBridgeProfile
-    func loadInstalledProfile() throws -> JarvisMacBridgeProfile?
+        _ receipt: AssemblywrightMacIssuedDeviceCertificate,
+        for invitation: AssemblywrightMacEnrollmentInvitation
+    ) throws -> AssemblywrightMacBridgeProfile
+    func loadInstalledProfile() throws -> AssemblywrightMacBridgeProfile?
 }
 
-public struct JarvisMacEnrollmentCoordinator: Sendable {
+public struct AssemblywrightMacEnrollmentCoordinator: Sendable {
     public static let maximumDocumentBytes = 64 * 1_024
-    private let identityStore: any JarvisMacBridgeIdentityStore
-    private let identityProfile: JarvisMacBridgeIdentityProfile
+    private let identityStore: any AssemblywrightMacBridgeIdentityStore
+    private let identityProfile: AssemblywrightMacBridgeIdentityProfile
     private let nowMilliseconds: @Sendable () -> UInt64
 
     public init(
-        identityStore: any JarvisMacBridgeIdentityStore = KeychainJarvisMacBridgeIdentityStore(),
-        identityProfile: JarvisMacBridgeIdentityProfile = .standard,
+        identityStore: any AssemblywrightMacBridgeIdentityStore = KeychainAssemblywrightMacBridgeIdentityStore(),
+        identityProfile: AssemblywrightMacBridgeIdentityProfile = .standard,
         nowMilliseconds: @escaping @Sendable () -> UInt64 = {
             UInt64(max(Date().timeIntervalSince1970 * 1_000, 0))
         }
@@ -304,7 +304,7 @@ public struct JarvisMacEnrollmentCoordinator: Sendable {
 
     /// Consumes only the public invitation. The Windows-local grant secret is deliberately absent.
     public func prepare(invitationData: Data) throws -> Data {
-        let invitation: JarvisMacEnrollmentInvitation = try decodeExact(
+        let invitation: AssemblywrightMacEnrollmentInvitation = try decodeExact(
             invitationData,
             keys: [
                 "schema_version", "status", "grant_id", "device_id", "device_name", "role",
@@ -320,17 +320,17 @@ public struct JarvisMacEnrollmentCoordinator: Sendable {
               reply.grantID == invitation.grantID,
               reply.deviceID == invitation.deviceID,
               validPEM(reply.csrPEM, label: "CERTIFICATE REQUEST") else {
-            throw JarvisMacDeveloperBridgeError.bindingMismatch
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
         }
         let data = try strictEncoder.encode(reply)
         guard data.count <= Self.maximumDocumentBytes else {
-            throw JarvisMacDeveloperBridgeError.documentTooLarge
+            throw AssemblywrightMacDeveloperBridgeError.documentTooLarge
         }
         return data
     }
 
-    public func install(issuedReceiptData: Data) throws -> JarvisMacBridgeProfile {
-        let receipt: JarvisMacIssuedDeviceCertificate = try decodeExact(
+    public func install(issuedReceiptData: Data) throws -> AssemblywrightMacBridgeProfile {
+        let receipt: AssemblywrightMacIssuedDeviceCertificate = try decodeExact(
             issuedReceiptData,
             keys: [
                 "status", "operation", "device_id", "device_name", "role", "registry_revision",
@@ -340,19 +340,19 @@ public struct JarvisMacEnrollmentCoordinator: Sendable {
         )
         try receipt.validate()
         guard let invitation = try identityStore.loadStagedInvitation() else {
-            throw JarvisMacDeveloperBridgeError.noStagedEnrollment
+            throw AssemblywrightMacDeveloperBridgeError.noStagedEnrollment
         }
         try identityProfile.validate(invitation: invitation)
         guard receipt.deviceID == invitation.deviceID,
               receipt.deviceName == invitation.deviceName,
               receipt.role == invitation.role,
               receipt.registryRevision == invitation.registryRevision else {
-            throw JarvisMacDeveloperBridgeError.bindingMismatch
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
         }
         return try identityStore.install(receipt, for: invitation)
     }
 
-    public func status() throws -> JarvisMacBridgeProfile? {
+    public func status() throws -> AssemblywrightMacBridgeProfile? {
         let profile = try identityStore.loadInstalledProfile()
         if let profile {
             try identityProfile.validate(profile: profile)
@@ -361,7 +361,7 @@ public struct JarvisMacEnrollmentCoordinator: Sendable {
     }
 }
 
-public struct JarvisMacBridgeHTTPRequest: Equatable, Sendable {
+public struct AssemblywrightMacBridgeHTTPRequest: Equatable, Sendable {
     public let method: String
     public let path: String
     public let body: Data
@@ -373,7 +373,7 @@ public struct JarvisMacBridgeHTTPRequest: Equatable, Sendable {
     }
 }
 
-public struct JarvisMacBridgeHTTPResponse: Equatable, Sendable {
+public struct AssemblywrightMacBridgeHTTPResponse: Equatable, Sendable {
     public let status: Int
     public let body: Data
 
@@ -383,34 +383,34 @@ public struct JarvisMacBridgeHTTPResponse: Equatable, Sendable {
     }
 }
 
-public protocol JarvisMacAuthenticatedTLSChannel: Sendable {
+public protocol AssemblywrightMacAuthenticatedTLSChannel: Sendable {
     func tlsExporter(label: String, length: Int) async throws -> Data
-    func send(_ request: JarvisMacBridgeHTTPRequest) async throws -> JarvisMacBridgeHTTPResponse
+    func send(_ request: AssemblywrightMacBridgeHTTPRequest) async throws -> AssemblywrightMacBridgeHTTPResponse
     func cancel() async
 }
 
-public protocol JarvisMacAuthenticatedTLSChannelFactory: Sendable {
-    func connect(profile: JarvisMacBridgeProfile) async throws -> any JarvisMacAuthenticatedTLSChannel
+public protocol AssemblywrightMacAuthenticatedTLSChannelFactory: Sendable {
+    func connect(profile: AssemblywrightMacBridgeProfile) async throws -> any AssemblywrightMacAuthenticatedTLSChannel
 }
 
-public struct JarvisMacAuthenticatedBridgeSession: Sendable {
+public struct AssemblywrightMacAuthenticatedBridgeSession: Sendable {
     public let connectionEpoch: UInt64
-    public let profile: JarvisMacBridgeProfile
-    private let channel: any JarvisMacAuthenticatedTLSChannel
-    private let requestGate: JarvisMacBridgeRequestGate
+    public let profile: AssemblywrightMacBridgeProfile
+    private let channel: any AssemblywrightMacAuthenticatedTLSChannel
+    private let requestGate: AssemblywrightMacBridgeRequestGate
 
     fileprivate init(
         connectionEpoch: UInt64,
-        profile: JarvisMacBridgeProfile,
-        channel: any JarvisMacAuthenticatedTLSChannel
+        profile: AssemblywrightMacBridgeProfile,
+        channel: any AssemblywrightMacAuthenticatedTLSChannel
     ) {
         self.connectionEpoch = connectionEpoch
         self.profile = profile
         self.channel = channel
-        requestGate = JarvisMacBridgeRequestGate()
+        requestGate = AssemblywrightMacBridgeRequestGate()
     }
 
-    public func send(_ request: JarvisMacBridgeHTTPRequest) async throws -> JarvisMacBridgeHTTPResponse {
+    public func send(_ request: AssemblywrightMacBridgeHTTPRequest) async throws -> AssemblywrightMacBridgeHTTPResponse {
         try Task.checkCancellation()
         try await requestGate.begin()
         do {
@@ -426,11 +426,11 @@ public struct JarvisMacAuthenticatedBridgeSession: Sendable {
     public func cancel() async { await channel.cancel() }
 }
 
-actor JarvisMacBridgeRequestGate {
+actor AssemblywrightMacBridgeRequestGate {
     private var active = false
 
     func begin() throws {
-        guard !active else { throw JarvisMacDeveloperBridgeError.requestInFlight }
+        guard !active else { throw AssemblywrightMacDeveloperBridgeError.requestInFlight }
         active = true
     }
 
@@ -439,26 +439,26 @@ actor JarvisMacBridgeRequestGate {
     }
 }
 
-public struct JarvisMacMTLSBridgeTransport: Sendable {
+public struct AssemblywrightMacMTLSBridgeTransport: Sendable {
     public static let protocolVersion: UInt16 = 1
-    public static let exporterLabel = "EXPORTER-Jarvis-Developer-Mode-v1"
-    private let factory: any JarvisMacAuthenticatedTLSChannelFactory
+    public static let exporterLabel = "EXPORTER-Assemblywright-Developer-Mode-v1"
+    private let factory: any AssemblywrightMacAuthenticatedTLSChannelFactory
 
-    public init(factory: any JarvisMacAuthenticatedTLSChannelFactory = NetworkJarvisMacTLSChannelFactory()) {
+    public init(factory: any AssemblywrightMacAuthenticatedTLSChannelFactory = NetworkAssemblywrightMacTLSChannelFactory()) {
         self.factory = factory
     }
 
-    public func connect(profile: JarvisMacBridgeProfile) async throws -> JarvisMacAuthenticatedBridgeSession {
+    public func connect(profile: AssemblywrightMacBridgeProfile) async throws -> AssemblywrightMacAuthenticatedBridgeSession {
         let channel = try await factory.connect(profile: profile)
         do {
             try Task.checkCancellation()
             let exporter = try await channel.tlsExporter(label: Self.exporterLabel, length: 32)
             guard exporter.count == 32 else {
-                throw JarvisMacDeveloperBridgeError.channelBindingUnavailable
+                throw AssemblywrightMacDeveloperBridgeError.channelBindingUnavailable
             }
             let digest = Array(SHA256.hash(data: exporter))
             guard digest.contains(where: { $0 != 0 }) else {
-                throw JarvisMacDeveloperBridgeError.channelBindingUnavailable
+                throw AssemblywrightMacDeveloperBridgeError.channelBindingUnavailable
             }
             let body = try strictEncoder.encode(AuthenticatedHandshake(
                 handshake: Handshake(
@@ -472,15 +472,15 @@ public struct JarvisMacMTLSBridgeTransport: Sendable {
                 tlsExporterSHA256: digest
             ))
             guard body.count <= 64 * 1_024 else {
-                throw JarvisMacDeveloperBridgeError.documentTooLarge
+                throw AssemblywrightMacDeveloperBridgeError.documentTooLarge
             }
-            let response = try await channel.send(JarvisMacBridgeHTTPRequest(
+            let response = try await channel.send(AssemblywrightMacBridgeHTTPRequest(
                 method: "POST",
                 path: "/v1/distributed/connections/accept",
                 body: body
             ))
             guard response.status == 200 else {
-                throw JarvisMacDeveloperBridgeError.invalidResponse
+                throw AssemblywrightMacDeveloperBridgeError.invalidResponse
             }
             let acceptance: HandshakeAcceptance = try decodeExact(
                 response.body,
@@ -495,16 +495,16 @@ public struct JarvisMacMTLSBridgeTransport: Sendable {
                   acceptance.connectionEpoch > 0,
                   acceptance.acceptedRegistryRevision == profile.registryRevision,
                   acceptance.reasonCode == nil else {
-                throw JarvisMacDeveloperBridgeError.bindingMismatch
+                throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
             }
-            return JarvisMacAuthenticatedBridgeSession(
+            return AssemblywrightMacAuthenticatedBridgeSession(
                 connectionEpoch: acceptance.connectionEpoch,
                 profile: profile,
                 channel: channel
             )
         } catch is CancellationError {
             await channel.cancel()
-            throw JarvisMacDeveloperBridgeError.cancelled
+            throw AssemblywrightMacDeveloperBridgeError.cancelled
         } catch {
             await channel.cancel()
             throw error
@@ -518,7 +518,7 @@ private struct Handshake: Encodable {
     let deviceName: String
     let role: String
     let registryRevision: UInt64
-    let capabilities: [JarvisMacBridgeCapability]
+    let capabilities: [AssemblywrightMacBridgeCapability]
 
     enum CodingKeys: String, CodingKey {
         case protocolVersion = "protocol_version"
@@ -565,15 +565,15 @@ private let strictEncoder: JSONEncoder = {
 private func decodeExact<T: Decodable>(
     _ data: Data,
     keys: Set<String>,
-    maximum: Int = JarvisMacEnrollmentCoordinator.maximumDocumentBytes
+    maximum: Int = AssemblywrightMacEnrollmentCoordinator.maximumDocumentBytes
 ) throws -> T {
-    guard !data.isEmpty else { throw JarvisMacDeveloperBridgeError.invalidDocument }
-    guard data.count <= maximum else { throw JarvisMacDeveloperBridgeError.documentTooLarge }
+    guard !data.isEmpty else { throw AssemblywrightMacDeveloperBridgeError.invalidDocument }
+    guard data.count <= maximum else { throw AssemblywrightMacDeveloperBridgeError.documentTooLarge }
     guard let object = try? JSONSerialization.jsonObject(with: data),
           let dictionary = object as? [String: Any],
           Set(dictionary.keys) == keys,
           let decoded = try? JSONDecoder().decode(T.self, from: data) else {
-        throw JarvisMacDeveloperBridgeError.invalidDocument
+        throw AssemblywrightMacDeveloperBridgeError.invalidDocument
     }
     return decoded
 }

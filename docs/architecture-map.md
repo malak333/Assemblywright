@@ -113,7 +113,7 @@ export the enrolled identity to the agent: the separately signed helper keeps
 the Keychain/mTLS session, directly supervises the exact agent build, and
 forwards only authenticated metadata batches over a mutually code-identity-
 pinned local socket when the explicit agent paths are configured. Only the
-additional exact `JARVIS_MAC_DEVELOPER_FIXTURE_JOBS_ENABLED=true` diagnostic may
+additional exact `ASSEMBLYWRIGHT_MAC_DEVELOPER_FIXTURE_JOBS_ENABLED=true` diagnostic may
 lease the registered fixture capability and forward its exact job/result or
 cancellation/acknowledgement envelopes.
 That opt-in also makes the app launch the helper with the exact
@@ -179,7 +179,7 @@ P-256 key plus public binding journal in device-only Keychain items, validates
 the issued certificate against that key and pinned CA, and uses
 Network.framework for a TLS 1.3-only, client-authenticated, exporter-bound
 handshake on one persistent outbound connection.
-Live enrollment uses the separately provisioned `JarvisMacBridge` app target;
+Live enrollment uses the separately provisioned `AssemblywrightMacBridge` app target;
 its embedded CLI receives an Apple application identifier and distinct
 Keychain access group, while the SwiftPM executable remains compile-only.
 The separate `mac-windows-bridge-live-e2e.sh` harness rejects unentitled or

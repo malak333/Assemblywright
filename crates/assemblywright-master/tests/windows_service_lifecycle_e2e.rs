@@ -47,7 +47,7 @@ fn windows_service_install_maintenance_recovery_and_uninstall_preserve_master_st
     let binary = env!("CARGO_BIN_EXE_assemblywright-master");
     let directory = tempfile::tempdir().expect("service E2E data directory");
     let endpoint = unused_loopback_addr();
-    let service_name = format!("JarvisMasterE2E{}", Uuid::new_v4().simple());
+    let service_name = format!("AssemblywrightMasterE2E{}", Uuid::new_v4().simple());
 
     assert_success(
         &run(binary, directory.path(), &["setup"]),
@@ -70,7 +70,7 @@ fn windows_service_install_maintenance_recovery_and_uninstall_preserve_master_st
     );
     if !install.status.success()
         && String::from_utf8_lossy(&install.stderr).contains("Access is denied")
-        && std::env::var("JARVIS_REQUIRE_WINDOWS_SERVICE_E2E").as_deref() != Ok("1")
+        && std::env::var("ASSEMBLYWRIGHT_REQUIRE_WINDOWS_SERVICE_E2E").as_deref() != Ok("1")
     {
         eprintln!(
             "skipping real SCM lifecycle because this Windows token is not elevated; CI requires it"

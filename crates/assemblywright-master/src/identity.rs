@@ -354,7 +354,8 @@ impl IdentityAuthority {
             KeyUsagePurpose::KeyCertSign,
             KeyUsagePurpose::CrlSign,
         ];
-        params.distinguished_name = distinguished_name("Jarvis Windows Master Enrollment CA");
+        params.distinguished_name =
+            distinguished_name("Assemblywright Windows Master Enrollment CA");
         let private_key = Zeroizing::new(signing_key.serialize_der());
         let certified = CertifiedIssuer::self_signed(params, signing_key)?;
         let ca_certificate_pem = certified.pem();
@@ -451,7 +452,7 @@ impl IdentityAuthority {
         params.not_before = timestamp(now_ms.saturating_sub(CLOCK_SKEW_MS))?;
         params.not_after = timestamp(not_after_ms)?;
         params.serial_number = Some(random_serial()?.into());
-        params.distinguished_name = distinguished_name("Jarvis Windows Master");
+        params.distinguished_name = distinguished_name("Assemblywright Windows Master");
         params.subject_alt_names = vec![SanType::IpAddress(server_ip)];
         if server_ip.is_loopback() {
             params.subject_alt_names.push(SanType::DnsName(
@@ -510,7 +511,7 @@ impl IdentityAuthority {
         params.serial_number = Some(SerialNumber::from(serial));
         params.distinguished_name = distinguished_name(device_name);
         params.subject_alt_names = vec![SanType::URI(
-            format!("urn:jarvis:device:{}", device_id.0)
+            format!("urn:assemblywright:device:{}", device_id.0)
                 .try_into()
                 .map_err(|_| IdentityError::InvalidCertificateRequest)?,
         )];
@@ -973,7 +974,7 @@ fn timestamp(milliseconds: u64) -> Result<OffsetDateTime, IdentityError> {
 
 fn distinguished_name(common_name: &str) -> DistinguishedName {
     let mut name = DistinguishedName::new();
-    name.push(DnType::OrganizationName, "Jarvis Developer Mode");
+    name.push(DnType::OrganizationName, "Assemblywright Developer Mode");
     name.push(DnType::CommonName, common_name);
     name
 }

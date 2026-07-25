@@ -125,7 +125,7 @@ menu bar templates into `Contents/Resources` as it builds the bundle, and sets
 the unsigned structure check, and the installer payload assertions all require
 those files, so the icon cannot silently drop out of a release.
 
-The Swift shell reads the menu bar art through `JarvisBrandAssets`, which marks
+The Swift shell reads the menu bar art through `AssemblywrightBrandAssets`, which marks
 it as template art so AppKit tints it for the current menu bar appearance.
 `NSImage(named:)` resolves the `@2x` and `@3x` companions automatically. A
 development run through `swift run` has no bundle resources, so the lookup
@@ -135,32 +135,45 @@ The menu bar shows the proofmark alone when the core is available, and adds a
 small state badge beside it for every other mode. Brand presence is the calm
 state; a badge means something needs attention.
 
-## Compatibility Names
+## Migration From The Former Name
 
-The Cargo crates and their binaries are now `assemblywright-*`, and the legacy
-`jarvis*` binary aliases have been removed.
+The product was formerly named Jarvis. That name is now gone everywhere: crates,
+binaries, SwiftPM products and targets, environment variables, Keychain
+services, state directories, the Windows service, code-signing identifiers, wire
+labels, and certificate subjects. `./scripts/release-naming-contract-smoke.sh
+--check` fails if any of it comes back.
 
-Identifiers that bind installed state, issued credentials, or signed artifacts
-stay unchanged, because renaming them would change code-signing identity, void
-an already-issued certificate, or orphan a user's existing installation:
-`JARVIS_*` environment variables, Keychain services,
-`~/Library/Application Support/Jarvis`, protocol labels such as
-`EXPORTER-Jarvis-Developer-Mode-v1`, the `urn:jarvis:device:<uuid>` certificate
-subject-alternative-name URI, the protocol-version-1 fixture capability
-provider and model (`jarvis-fixture` and `jarvis-fixture-v1`), the
-`JarvisMaster` Windows service name and its `Jarvis\master` state directory,
-signed code identifiers such as `com.nobiletechnology.jarvis`, the
-`JarvisMacApp` executable name inside the bundle, and the bundled `jarvis-cli`
-filename. These remain stable compatibility contracts until a separately
-designed and tested migration exists.
+The rename crosses boundaries that bind real state, so it is a migration rather
+than a search and replace. What changed, and what each change costs:
 
-`./scripts/release-naming-contract-smoke.sh --check` enforces both directions:
-the product-facing names must be current, the legacy aliases must stay removed,
-and every identifier in the list above must stay exactly as it is. Do not "clean
-up" a name that gate protects; change the contract and its migration first.
+| Surface | Former | Current | Consequence |
+| --- | --- | --- | --- |
+| Code-signing identity | `com.nobiletechnology.jarvis` (+`.core`) | `com.nobiletechnology.assemblywright` (+`.core`) | Every previously signed artifact and notarization ticket is void. Re-sign, re-notarize, re-staple, and regenerate the evidence bundle. |
+| Bundle executable | `JarvisMacApp` | `AssemblywrightMacApp` | Signed provenance and live-device QA reports bind this filename, so prior reports no longer describe the shipped bundle. |
+| Bundled CLI | `jarvis-cli` | `assemblywright-cli` | Same: the evidence reports name it. |
+| Keychain service | `com.nobiletechnology.jarvis.developer-bridge` | `com.nobiletechnology.assemblywright.developer-bridge` | The enrolled Mac identity is not readable under the new service. Re-enroll. |
+| Application Support | `~/Library/Application Support/Jarvis` | `.../Assemblywright` | The IPC session token path moves. |
+| Windows service | `JarvisMaster` | `AssemblywrightMaster` | An installed service cannot be renamed in place. Stop, uninstall, reinstall. |
+| Master state | `%LOCALAPPDATA%\Jarvis\master` | `%LOCALAPPDATA%\Assemblywright\master` | Holds the only copy of the durable kernel, so the master adopts the former directory once on first run rather than stranding it. |
+| TLS exporter label | `EXPORTER-Jarvis-Developer-Mode-v1` | `EXPORTER-Assemblywright-Developer-Mode-v1` | Channel binding fails against a peer built before the rename. |
+| Certificate SAN | `urn:jarvis:device:<uuid>` | `urn:assemblywright:device:<uuid>` | Already-issued device certificates no longer verify. Re-enroll every device. |
+| Certificate subject | `Jarvis Windows Master*` | `Assemblywright Windows Master*` | The enrollment CA is reissued. |
+| Fixture capability | `jarvis-fixture` / `-v1` | `assemblywright-fixture` / `-v1` | A protocol-version-1 wire value changed. |
+| Environment variables | `JARVIS_*` | `ASSEMBLYWRIGHT_*` | Existing owner shell profiles and QA templates must be updated. |
 
-User-facing app bundles and release artifacts use `Assemblywright.app` and
-`Assemblywright-<version>.*`. The CLI entry point is `assemblywright`.
+Because the exporter label, the fixture capability identity, and the certificate
+subject are all wire values, `PROTOCOL_VERSION` moved from 1 to 2. Two builds
+that both claimed version 1 while disagreeing on those values would be mutually
+incompatible in a way the version field exists to prevent; the bump makes a
+pre-rename peer fail on version instead of failing later and less clearly.
+
+The one surviving reference to the former name is a read path:
+`LEGACY_MASTER_STATE_NAMESPACE` in `crates/assemblywright-master/src/main.rs`,
+used once to adopt a pre-rename Windows state directory. It is never written and
+never advertised, and the naming gate pins it so the exception cannot grow.
+
+The per-host procedure is in
+`docs/knowledge-base/assemblywright-project-facts.md`.
 
 ## License
 

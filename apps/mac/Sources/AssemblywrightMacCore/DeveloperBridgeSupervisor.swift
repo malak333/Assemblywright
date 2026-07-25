@@ -1,37 +1,37 @@
 import Foundation
 
-public protocol JarvisMacBridgeSession: Sendable {
+public protocol AssemblywrightMacBridgeSession: Sendable {
     var connectionEpoch: UInt64 { get }
-    func send(_ request: JarvisMacBridgeHTTPRequest) async throws -> JarvisMacBridgeHTTPResponse
+    func send(_ request: AssemblywrightMacBridgeHTTPRequest) async throws -> AssemblywrightMacBridgeHTTPResponse
     func cancel() async
 }
 
-extension JarvisMacAuthenticatedBridgeSession: JarvisMacBridgeSession {}
+extension AssemblywrightMacAuthenticatedBridgeSession: AssemblywrightMacBridgeSession {}
 
-public protocol JarvisMacBridgeConnecting: Sendable {
-    func connect(profile: JarvisMacBridgeProfile) async throws -> any JarvisMacBridgeSession
+public protocol AssemblywrightMacBridgeConnecting: Sendable {
+    func connect(profile: AssemblywrightMacBridgeProfile) async throws -> any AssemblywrightMacBridgeSession
 }
 
-public struct JarvisMacDefaultBridgeConnector: JarvisMacBridgeConnecting, Sendable {
-    private let transport: JarvisMacMTLSBridgeTransport
+public struct AssemblywrightMacDefaultBridgeConnector: AssemblywrightMacBridgeConnecting, Sendable {
+    private let transport: AssemblywrightMacMTLSBridgeTransport
 
-    public init(transport: JarvisMacMTLSBridgeTransport = JarvisMacMTLSBridgeTransport()) {
+    public init(transport: AssemblywrightMacMTLSBridgeTransport = AssemblywrightMacMTLSBridgeTransport()) {
         self.transport = transport
     }
 
-    public func connect(profile: JarvisMacBridgeProfile) async throws -> any JarvisMacBridgeSession {
+    public func connect(profile: AssemblywrightMacBridgeProfile) async throws -> any AssemblywrightMacBridgeSession {
         try await transport.connect(profile: profile)
     }
 }
 
-public enum JarvisMacBridgeSupervisorPhase: String, Codable, Equatable, Sendable {
+public enum AssemblywrightMacBridgeSupervisorPhase: String, Codable, Equatable, Sendable {
     case authenticated
     case backingOff = "backing_off"
     case stopped
 }
 
-public struct JarvisMacBridgeSupervisorSnapshot: Codable, Equatable, Sendable {
-    public let phase: JarvisMacBridgeSupervisorPhase
+public struct AssemblywrightMacBridgeSupervisorSnapshot: Codable, Equatable, Sendable {
+    public let phase: AssemblywrightMacBridgeSupervisorPhase
     public let deviceID: String
     public let masterEndpoint: String
     public let connectionEpoch: UInt64?
@@ -60,17 +60,17 @@ public struct JarvisMacBridgeSupervisorSnapshot: Codable, Equatable, Sendable {
     }
 
     public static func decodeStrict(_ data: Data) throws -> Self {
-        var keyScanner = JarvisStrictJSONObjectKeyScanner(data: data)
+        var keyScanner = AssemblywrightStrictJSONObjectKeyScanner(data: data)
         let rawKeys = try keyScanner.scanTopLevelKeys()
         guard Set(rawKeys).count == rawKeys.count else {
-            throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+            throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
         }
         guard !data.isEmpty,
-              data.count <= JarvisDeveloperBridgeProcessLifecycle.maximumLineBytes,
+              data.count <= AssemblywrightDeveloperBridgeProcessLifecycle.maximumLineBytes,
               let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let phaseText = object["phase"] as? String,
-              let phase = JarvisMacBridgeSupervisorPhase(rawValue: phaseText) else {
-            throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+              let phase = AssemblywrightMacBridgeSupervisorPhase(rawValue: phaseText) else {
+            throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
         }
         let authenticated = Set([
             "phase", "device_id", "master_endpoint", "connection_epoch",
@@ -93,20 +93,20 @@ public struct JarvisMacBridgeSupervisorSnapshot: Codable, Equatable, Sendable {
         case .stopped: expectedKeys = stopped
         }
         guard Set(object.keys) == expectedKeys else {
-            throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+            throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
         }
         let snapshot: Self
         do {
             snapshot = try JSONDecoder().decode(Self.self, from: data)
         } catch {
-            throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+            throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
         }
         let canonicalUUID = UUID(uuidString: snapshot.deviceID)?.uuidString.lowercased()
         guard canonicalUUID == snapshot.deviceID.lowercased(),
               !snapshot.masterEndpoint.isEmpty,
               snapshot.masterEndpoint.utf8.count <= 512,
               !snapshot.masterEndpoint.contains(where: { $0.isWhitespace || $0.isNewline }) else {
-            throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+            throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
         }
         switch snapshot.phase {
         case .authenticated:
@@ -121,15 +121,15 @@ public struct JarvisMacBridgeSupervisorSnapshot: Codable, Equatable, Sendable {
                         ? "maintenance"
                         : snapshot.emergencyPaused == true ? "paused" : "ok"
                   ),
-                  snapshot.protocolVersion == JarvisMacMTLSBridgeTransport.protocolVersion,
+                  snapshot.protocolVersion == AssemblywrightMacMTLSBridgeTransport.protocolVersion,
                   snapshot.schemaVersion.map({ $0 > 0 }) == true,
                   snapshot.errorCode == nil else {
-                throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+                throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
             }
         case .backingOff:
             guard snapshot.connectionEpoch == nil,
                   snapshot.consecutiveFailures > 0,
-                  (1 ... JarvisMacBridgeSupervisor.maximumBackoffMilliseconds)
+                  (1 ... AssemblywrightMacBridgeSupervisor.maximumBackoffMilliseconds)
                     .contains(snapshot.nextDelayMilliseconds),
                   [
                       "invalid_health", "bridge_unavailable", "connection_failed",
@@ -141,7 +141,7 @@ public struct JarvisMacBridgeSupervisorSnapshot: Codable, Equatable, Sendable {
                   snapshot.emergencyPaused == nil,
                   snapshot.protocolVersion == nil,
                   snapshot.schemaVersion == nil else {
-                throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+                throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
             }
         case .stopped:
             guard snapshot.connectionEpoch == nil,
@@ -152,14 +152,14 @@ public struct JarvisMacBridgeSupervisorSnapshot: Codable, Equatable, Sendable {
                   snapshot.protocolVersion == nil,
                   snapshot.schemaVersion == nil,
                   snapshot.errorCode == nil else {
-                throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+                throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
             }
         }
         return snapshot
     }
 }
 
-struct JarvisStrictJSONObjectKeyScanner {
+struct AssemblywrightStrictJSONObjectKeyScanner {
     private let bytes: [UInt8]
     private var index = 0
 
@@ -212,20 +212,20 @@ struct JarvisStrictJSONObjectKeyScanner {
                 do {
                     return try JSONDecoder().decode(String.self, from: encoded)
                 } catch {
-                    throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+                    throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
                 }
             }
             if byte < 0x20 {
-                throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+                throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
             }
         }
-        throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+        throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
     }
 
     private mutating func skipValue() throws {
         skipWhitespace()
         guard index < bytes.count else {
-            throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+            throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
         }
         if bytes[index] == 0x22 {
             _ = try parseString()
@@ -240,7 +240,7 @@ struct JarvisStrictJSONObjectKeyScanner {
             index += 1
         }
         guard bytes[start ..< index].contains(where: { !Self.isWhitespace($0) }) else {
-            throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+            throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
         }
     }
 
@@ -258,14 +258,14 @@ struct JarvisStrictJSONObjectKeyScanner {
             case 0x5b: stack.append(0x5d)
             case 0x7d, 0x5d:
                 guard stack.popLast() == byte else {
-                    throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+                    throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
                 }
                 if stack.isEmpty { return }
             default:
                 break
             }
         }
-        throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+        throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
     }
 
     private mutating func skipWhitespace() {
@@ -274,7 +274,7 @@ struct JarvisStrictJSONObjectKeyScanner {
 
     private mutating func consume(_ expected: UInt8) throws {
         guard consumeIfPresent(expected) else {
-            throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+            throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
         }
     }
 
@@ -286,7 +286,7 @@ struct JarvisStrictJSONObjectKeyScanner {
 
     private func requireEnd() throws {
         guard index == bytes.count else {
-            throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+            throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
         }
     }
 
@@ -295,7 +295,7 @@ struct JarvisStrictJSONObjectKeyScanner {
     }
 }
 
-struct JarvisMacFixtureControlReceipt: Equatable, Sendable {
+struct AssemblywrightMacFixtureControlReceipt: Equatable, Sendable {
     enum Status: String, Sendable {
         case successObserved = "fixture_success_observed"
         case cancellationLeased = "fixture_cancellation_leased"
@@ -318,7 +318,7 @@ struct JarvisMacFixtureControlReceipt: Equatable, Sendable {
     let lateOutputWindowMilliseconds: UInt64?
 
     static func decodeStrict(_ data: Data) throws -> Self {
-        var scanner = JarvisStrictJSONObjectKeyScanner(data: data)
+        var scanner = AssemblywrightStrictJSONObjectKeyScanner(data: data)
         let rawKeys = try scanner.scanTopLevelKeys()
         guard !data.isEmpty,
               data.count <= maximumBytes,
@@ -327,7 +327,7 @@ struct JarvisMacFixtureControlReceipt: Equatable, Sendable {
               strictInteger(object["schema_version"]) == 1,
               let statusText = object["status"] as? String,
               let status = Status(rawValue: statusText) else {
-            throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+            throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
         }
 
         let successKeys = Set([
@@ -362,14 +362,14 @@ struct JarvisMacFixtureControlReceipt: Equatable, Sendable {
                   taskID != nil, stepID != nil, streamID != nil,
                   let queued, let leased, let succeeded,
                   queued > 0, queued < leased, leased < succeeded else {
-                throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+                throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
             }
         case .cancellationLeased:
             guard Set(object.keys) == leasedKeys,
                   taskID != nil, stepID != nil, streamID != nil,
                   let queued, let leased,
                   queued > 0, queued < leased else {
-                throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+                throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
             }
         case .cancellationObserved:
             guard Set(object.keys) == cancellationKeys,
@@ -377,11 +377,11 @@ struct JarvisMacFixtureControlReceipt: Equatable, Sendable {
                   let requested, let acknowledged, let cancelled,
                   requested > 0, requested < acknowledged, acknowledged < cancelled,
                   lateOutputWindow == 7_000 else {
-                throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+                throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
             }
         case .emergencyResumed:
             guard Set(object.keys) == resumeKeys else {
-                throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+                throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
             }
         }
 
@@ -423,7 +423,7 @@ struct JarvisMacFixtureControlReceipt: Equatable, Sendable {
     }
 }
 
-struct JarvisMacMLXControlReceipt: Equatable, Sendable {
+struct AssemblywrightMacMLXControlReceipt: Equatable, Sendable {
     enum Status: String, Sendable {
         case successObserved = "mlx_success_observed"
         case cancellationLeased = "mlx_cancellation_leased"
@@ -448,7 +448,7 @@ struct JarvisMacMLXControlReceipt: Equatable, Sendable {
     let lateOutputWindowMilliseconds: UInt64?
 
     static func decodeStrict(_ data: Data) throws -> Self {
-        var scanner = JarvisStrictJSONObjectKeyScanner(data: data)
+        var scanner = AssemblywrightStrictJSONObjectKeyScanner(data: data)
         let rawKeys = try scanner.scanTopLevelKeys()
         guard !data.isEmpty,
               data.count <= maximumBytes,
@@ -457,7 +457,7 @@ struct JarvisMacMLXControlReceipt: Equatable, Sendable {
               strictInteger(object["schema_version"]) == 1,
               let statusText = object["status"] as? String,
               let status = Status(rawValue: statusText) else {
-            throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+            throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
         }
 
         let successKeys = Set([
@@ -496,7 +496,7 @@ struct JarvisMacMLXControlReceipt: Equatable, Sendable {
                   connectionEpoch.map({ $0 > 0 }) == true,
                   let queued, let leased, let succeeded,
                   queued > 0, queued < leased, leased < succeeded else {
-                throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+                throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
             }
         case .cancellationLeased:
             guard Set(object.keys) == leasedKeys,
@@ -504,7 +504,7 @@ struct JarvisMacMLXControlReceipt: Equatable, Sendable {
                   connectionEpoch.map({ $0 > 0 }) == true,
                   let queued, let leased,
                   queued > 0, queued < leased else {
-                throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+                throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
             }
         case .cancellationObserved:
             guard Set(object.keys) == cancellationKeys,
@@ -513,11 +513,11 @@ struct JarvisMacMLXControlReceipt: Equatable, Sendable {
                   let requested, let acknowledged, let cancelled,
                   requested > 0, requested < acknowledged, acknowledged < cancelled,
                   lateOutputWindow == 7_000 else {
-                throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+                throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
             }
         case .emergencyResumed:
             guard Set(object.keys) == resumeKeys else {
-                throw JarvisDeveloperBridgeProcessError.invalidSnapshot
+                throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
             }
         }
 
@@ -561,33 +561,33 @@ struct JarvisMacMLXControlReceipt: Equatable, Sendable {
     }
 }
 
-public actor JarvisMacBridgeSupervisor {
+public actor AssemblywrightMacBridgeSupervisor {
     public static let healthPath = "/health"
     public static let healthMaximumBytes = 64 * 1_024
     public static let normalPollDelayMilliseconds: UInt64 = 5_000
     public static let maximumBackoffMilliseconds: UInt64 = 30_000
 
-    private let profile: JarvisMacBridgeProfile
-    private let connector: any JarvisMacBridgeConnecting
-    private let eventRelay: (any JarvisMacBridgeEventRelaying)?
-    private var session: (any JarvisMacBridgeSession)?
+    private let profile: AssemblywrightMacBridgeProfile
+    private let connector: any AssemblywrightMacBridgeConnecting
+    private let eventRelay: (any AssemblywrightMacBridgeEventRelaying)?
+    private var session: (any AssemblywrightMacBridgeSession)?
     private var consecutiveFailures: UInt32 = 0
     private var stopped = false
 
     public init(
-        profile: JarvisMacBridgeProfile,
-        connector: any JarvisMacBridgeConnecting = JarvisMacDefaultBridgeConnector(),
-        eventRelay: (any JarvisMacBridgeEventRelaying)? = nil
+        profile: AssemblywrightMacBridgeProfile,
+        connector: any AssemblywrightMacBridgeConnecting = AssemblywrightMacDefaultBridgeConnector(),
+        eventRelay: (any AssemblywrightMacBridgeEventRelaying)? = nil
     ) {
         self.profile = profile
         self.connector = connector
         self.eventRelay = eventRelay
     }
 
-    public func sample() async -> JarvisMacBridgeSupervisorSnapshot {
+    public func sample() async -> AssemblywrightMacBridgeSupervisorSnapshot {
         guard !stopped else { return stoppedSnapshot() }
         do {
-            let activeSession: any JarvisMacBridgeSession
+            let activeSession: any AssemblywrightMacBridgeSession
             if let session {
                 activeSession = session
             } else {
@@ -595,9 +595,9 @@ public actor JarvisMacBridgeSupervisor {
                 session = activeSession
             }
             let response = try await activeSession.send(
-                JarvisMacBridgeHTTPRequest(method: "GET", path: Self.healthPath)
+                AssemblywrightMacBridgeHTTPRequest(method: "GET", path: Self.healthPath)
             )
-            let health = try JarvisMacRemoteMasterHealth.decode(response)
+            let health = try AssemblywrightMacRemoteMasterHealth.decode(response)
             if let eventRelay {
                 let progress = try await eventRelay.relayEvents(using: activeSession)
                 if progress.requiresFreshConnection {
@@ -606,7 +606,7 @@ public actor JarvisMacBridgeSupervisor {
                 }
             }
             consecutiveFailures = 0
-            return JarvisMacBridgeSupervisorSnapshot(
+            return AssemblywrightMacBridgeSupervisorSnapshot(
                 phase: .authenticated,
                 deviceID: profile.deviceID,
                 masterEndpoint: profile.masterEndpoint,
@@ -627,7 +627,7 @@ public actor JarvisMacBridgeSupervisor {
             if let session { await session.cancel() }
             session = nil
             consecutiveFailures = consecutiveFailures.saturatingIncremented()
-            return JarvisMacBridgeSupervisorSnapshot(
+            return AssemblywrightMacBridgeSupervisorSnapshot(
                 phase: .backingOff,
                 deviceID: profile.deviceID,
                 masterEndpoint: profile.masterEndpoint,
@@ -664,8 +664,8 @@ public actor JarvisMacBridgeSupervisor {
         return min(UInt64(1_000) << exponent, maximumBackoffMilliseconds)
     }
 
-    private func stoppedSnapshot() -> JarvisMacBridgeSupervisorSnapshot {
-        JarvisMacBridgeSupervisorSnapshot(
+    private func stoppedSnapshot() -> AssemblywrightMacBridgeSupervisorSnapshot {
+        AssemblywrightMacBridgeSupervisorSnapshot(
             phase: .stopped,
             deviceID: profile.deviceID,
             masterEndpoint: profile.masterEndpoint,
@@ -682,18 +682,18 @@ public actor JarvisMacBridgeSupervisor {
     }
 
     private static func redactedErrorCode(for error: Error) -> String {
-        if error is JarvisMacRemoteMasterHealthError { return "invalid_health" }
-        if error is JarvisMacDeveloperBridgeError { return "bridge_unavailable" }
-        if error is JarvisMacDeveloperEventRelayError { return "event_relay_failed" }
+        if error is AssemblywrightMacRemoteMasterHealthError { return "invalid_health" }
+        if error is AssemblywrightMacDeveloperBridgeError { return "bridge_unavailable" }
+        if error is AssemblywrightMacDeveloperEventRelayError { return "event_relay_failed" }
         return "connection_failed"
     }
 }
 
-private enum JarvisMacRemoteMasterHealthError: Error {
+private enum AssemblywrightMacRemoteMasterHealthError: Error {
     case invalid
 }
 
-private struct JarvisMacRemoteMasterHealth: Decodable {
+private struct AssemblywrightMacRemoteMasterHealth: Decodable {
     let status: String
     let mode: String
     let hostMode: String
@@ -760,23 +760,23 @@ private struct JarvisMacRemoteMasterHealth: Decodable {
         case boundary
     }
 
-    static func decode(_ response: JarvisMacBridgeHTTPResponse) throws -> Self {
+    static func decode(_ response: AssemblywrightMacBridgeHTTPResponse) throws -> Self {
         guard response.status == 200,
               !response.body.isEmpty,
-              response.body.count <= JarvisMacBridgeSupervisor.healthMaximumBytes,
+              response.body.count <= AssemblywrightMacBridgeSupervisor.healthMaximumBytes,
               let topLevel = try JSONSerialization.jsonObject(with: response.body) as? [String: Any],
               Set(topLevel.keys) == Set(CodingKeys.all),
               let startup = topLevel["startup_reconciliation"] as? [String: Any],
               Set(startup.keys) == Set(StartupReconciliation.CodingKeys.all),
               let state = topLevel["state"] as? [String: Any],
               Set(state.keys) == Set(State.CodingKeys.all) else {
-            throw JarvisMacRemoteMasterHealthError.invalid
+            throw AssemblywrightMacRemoteMasterHealthError.invalid
         }
         let health: Self
         do {
             health = try JSONDecoder().decode(Self.self, from: response.body)
         } catch {
-            throw JarvisMacRemoteMasterHealthError.invalid
+            throw AssemblywrightMacRemoteMasterHealthError.invalid
         }
         let expectedStatus = health.maintenanceActive
             ? "maintenance"
@@ -786,12 +786,12 @@ private struct JarvisMacRemoteMasterHealth: Decodable {
               health.mode == "developer_remote_master",
               !health.hostMode.isEmpty,
               !health.serviceIdentity.isEmpty,
-              health.protocolVersion == JarvisMacMTLSBridgeTransport.protocolVersion,
+              health.protocolVersion == AssemblywrightMacMTLSBridgeTransport.protocolVersion,
               health.schemaVersion > 0,
               health.processID > 0,
               health.startedAtMilliseconds > 0,
               !health.boundary.isEmpty else {
-            throw JarvisMacRemoteMasterHealthError.invalid
+            throw AssemblywrightMacRemoteMasterHealthError.invalid
         }
         return health
     }
@@ -801,9 +801,9 @@ private extension CodingKey where Self: CaseIterable {
     static var all: [String] { allCases.map(\.stringValue) }
 }
 
-extension JarvisMacRemoteMasterHealth.CodingKeys: CaseIterable {}
-extension JarvisMacRemoteMasterHealth.StartupReconciliation.CodingKeys: CaseIterable {}
-extension JarvisMacRemoteMasterHealth.State.CodingKeys: CaseIterable {}
+extension AssemblywrightMacRemoteMasterHealth.CodingKeys: CaseIterable {}
+extension AssemblywrightMacRemoteMasterHealth.StartupReconciliation.CodingKeys: CaseIterable {}
+extension AssemblywrightMacRemoteMasterHealth.State.CodingKeys: CaseIterable {}
 
 private extension UInt32 {
     func saturatingIncremented() -> UInt32 {

@@ -1,7 +1,7 @@
-pub type JarvisResult<T> = Result<T, JarvisError>;
+pub type AssemblywrightResult<T> = Result<T, AssemblywrightError>;
 
 #[derive(Debug, thiserror::Error)]
-pub enum JarvisError {
+pub enum AssemblywrightError {
     #[error("validation failed: {0}")]
     Validation(String),
     #[error("conflict: {0}")]

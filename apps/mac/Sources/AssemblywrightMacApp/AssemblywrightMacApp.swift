@@ -1,17 +1,17 @@
-import JarvisMacCore
+import AssemblywrightMacCore
 import AppKit
 import SwiftUI
 
 @main
 struct AssemblywrightMacApp: App {
-    @StateObject private var developerBridge: JarvisDeveloperBridgeProcessLifecycle
+    @StateObject private var developerBridge: AssemblywrightDeveloperBridgeProcessLifecycle
 
     init() {
-        _developerBridge = StateObject(wrappedValue: JarvisDeveloperBridgeProcessLifecycle())
+        _developerBridge = StateObject(wrappedValue: AssemblywrightDeveloperBridgeProcessLifecycle())
     }
 
     var body: some Scene {
-        WindowGroup("Assemblywright", id: JarvisMenuBarContract.mainWindowID) {
+        WindowGroup("Assemblywright", id: AssemblywrightMenuBarContract.mainWindowID) {
             AssemblywrightShellView(developerBridge: developerBridge)
                 .background(AppActivationView())
                 .task {
@@ -20,10 +20,10 @@ struct AssemblywrightMacApp: App {
         }
 
         MenuBarExtra {
-            JarvisMenuBarView(developerBridge: developerBridge)
+            AssemblywrightMenuBarView(developerBridge: developerBridge)
         } label: {
-            JarvisMenuBarLabel(
-                presentation: JarvisMenuBarPresentation(status: developerBridge.status)
+            AssemblywrightMenuBarLabel(
+                presentation: AssemblywrightMenuBarPresentation(status: developerBridge.status)
             )
         }
         .menuBarExtraStyle(.menu)
@@ -44,7 +44,7 @@ private struct AppActivationView: NSViewRepresentable {
 }
 
 struct AssemblywrightShellView: View {
-    @ObservedObject var developerBridge: JarvisDeveloperBridgeProcessLifecycle
+    @ObservedObject var developerBridge: AssemblywrightDeveloperBridgeProcessLifecycle
 
     var body: some View {
         DeveloperBridgeStatusView(model: developerBridge)
@@ -53,7 +53,7 @@ struct AssemblywrightShellView: View {
 }
 
 struct DeveloperBridgeStatusView: View {
-    @ObservedObject var model: JarvisDeveloperBridgeProcessLifecycle
+    @ObservedObject var model: AssemblywrightDeveloperBridgeProcessLifecycle
 
     private var presentation: DeveloperBridgeStatusPresentation {
         DeveloperBridgeStatusPresentation(status: model.status)
@@ -74,13 +74,13 @@ struct DeveloperBridgeStatusView: View {
                     LabeledContent("Status code", value: errorCode)
                 }
 
-                Text(JarvisDeveloperBridgeProcessLifecycle.proofBoundary)
+                Text(AssemblywrightDeveloperBridgeProcessLifecycle.proofBoundary)
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
                 if model.status.phase == .disabled {
                     Text(
-                        "Development opt-in is disabled. Set \(JarvisDeveloperBridgeProcessConfiguration.executableEnvironmentKey) to the exact separately signed helper and \(JarvisDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey) to its independently verified Apple team before launching Assemblywright."
+                        "Development opt-in is disabled. Set \(AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey) to the exact separately signed helper and \(AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey) to its independently verified Apple team before launching Assemblywright."
                     )
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -94,7 +94,7 @@ struct DeveloperBridgeStatusView: View {
 struct DeveloperBridgeStatusPresentation: Equatable {
     let phaseLabel: String
 
-    init(status: JarvisDeveloperBridgeAppStatus) {
+    init(status: AssemblywrightDeveloperBridgeAppStatus) {
         switch status.phase {
         case .disabled:
             phaseLabel = "Disabled"

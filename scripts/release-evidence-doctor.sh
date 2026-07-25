@@ -4,18 +4,18 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-VERSION="${JARVIS_EVIDENCE_VERSION:-$("$ROOT_DIR/scripts/release-version.sh")}"
-DIST_DIR="${JARVIS_EVIDENCE_DIST_DIR:-$ROOT_DIR/target/distribution}"
-APP_PATH="${JARVIS_EVIDENCE_APP_PATH:-$DIST_DIR/Assemblywright.app}"
-ZIP_PATH="${JARVIS_EVIDENCE_ZIP_PATH:-$DIST_DIR/Assemblywright-$VERSION.zip}"
-PKG_PATH="${JARVIS_EVIDENCE_PKG_PATH:-$DIST_DIR/Assemblywright-$VERSION.pkg}"
-SIGNED_PROVENANCE_REPORT="${JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT:-$DIST_DIR/Assemblywright-$VERSION-signed-provenance.json}"
-LIVE_QA_REPORT="${JARVIS_EVIDENCE_LIVE_QA_REPORT:-${JARVIS_QA_REPORT_PATH:-$ROOT_DIR/target/release-live-device-qa-report.json}}"
-BUNDLE_PATH="${JARVIS_EVIDENCE_OUTPUT_PATH:-$ROOT_DIR/target/release-evidence-bundle.json}"
-EXPECTED_BUNDLE_ID="${JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID:-com.nobiletechnology.jarvis}"
-EXPECTED_VERSION="${JARVIS_EVIDENCE_EXPECTED_VERSION:-$VERSION}"
-EXPECTED_INSTALLED_APP_PATH="${JARVIS_QA_INSTALLED_APP_PATH:-/Applications/Assemblywright.app}"
-EVIDENCE_STATUS_ENDPOINT="${JARVIS_EVIDENCE_STATUS_ENDPOINT:-}"
+VERSION="${ASSEMBLYWRIGHT_EVIDENCE_VERSION:-$("$ROOT_DIR/scripts/release-version.sh")}"
+DIST_DIR="${ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR:-$ROOT_DIR/target/distribution}"
+APP_PATH="${ASSEMBLYWRIGHT_EVIDENCE_APP_PATH:-$DIST_DIR/Assemblywright.app}"
+ZIP_PATH="${ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH:-$DIST_DIR/Assemblywright-$VERSION.zip}"
+PKG_PATH="${ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH:-$DIST_DIR/Assemblywright-$VERSION.pkg}"
+SIGNED_PROVENANCE_REPORT="${ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT:-$DIST_DIR/Assemblywright-$VERSION-signed-provenance.json}"
+LIVE_QA_REPORT="${ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT:-${ASSEMBLYWRIGHT_QA_REPORT_PATH:-$ROOT_DIR/target/release-live-device-qa-report.json}}"
+BUNDLE_PATH="${ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH:-$ROOT_DIR/target/release-evidence-bundle.json}"
+EXPECTED_BUNDLE_ID="${ASSEMBLYWRIGHT_EVIDENCE_EXPECTED_BUNDLE_ID:-com.nobiletechnology.assemblywright}"
+EXPECTED_VERSION="${ASSEMBLYWRIGHT_EVIDENCE_EXPECTED_VERSION:-$VERSION}"
+EXPECTED_INSTALLED_APP_PATH="${ASSEMBLYWRIGHT_QA_INSTALLED_APP_PATH:-/Applications/Assemblywright.app}"
+EVIDENCE_STATUS_ENDPOINT="${ASSEMBLYWRIGHT_EVIDENCE_STATUS_ENDPOINT:-}"
 
 CHECK_ONLY=false
 ASSERT_COMPLETE=false
@@ -43,18 +43,18 @@ Developer ID signing, notarization, or stapling by itself.
 exercises the status logic without claiming production readiness.
 
 Optional paths match scripts/release-evidence-bundle.sh:
-  JARVIS_EVIDENCE_VERSION
-  JARVIS_EVIDENCE_DIST_DIR
-  JARVIS_EVIDENCE_APP_PATH
-  JARVIS_EVIDENCE_ZIP_PATH
-  JARVIS_EVIDENCE_PKG_PATH
-  JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT
-  JARVIS_EVIDENCE_LIVE_QA_REPORT      Defaults to JARVIS_QA_REPORT_PATH or target/release-live-device-qa-report.json
-  JARVIS_EVIDENCE_OUTPUT_PATH
-  JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID
-  JARVIS_EVIDENCE_EXPECTED_VERSION
-  JARVIS_QA_INSTALLED_APP_PATH        Defaults to /Applications/Assemblywright.app and must match the live QA report
-  JARVIS_EVIDENCE_STATUS_ENDPOINT     Optional jarvis serve endpoint for repository-backed --assert-complete parity
+  ASSEMBLYWRIGHT_EVIDENCE_VERSION
+  ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR
+  ASSEMBLYWRIGHT_EVIDENCE_APP_PATH
+  ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH
+  ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH
+  ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT
+  ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT      Defaults to ASSEMBLYWRIGHT_QA_REPORT_PATH or target/release-live-device-qa-report.json
+  ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH
+  ASSEMBLYWRIGHT_EVIDENCE_EXPECTED_BUNDLE_ID
+  ASSEMBLYWRIGHT_EVIDENCE_EXPECTED_VERSION
+  ASSEMBLYWRIGHT_QA_INSTALLED_APP_PATH        Defaults to /Applications/Assemblywright.app and must match the live QA report
+  ASSEMBLYWRIGHT_EVIDENCE_STATUS_ENDPOINT     Optional assemblywright serve endpoint for repository-backed --assert-complete parity
 
 Proof boundary: this script inspects evidence files only. It does not sign,
 notarize, install, launch Finder, run a
@@ -79,16 +79,16 @@ print_next_steps() {
   cat <<'STEPS'
 Recommended next evidence commands:
   package preflight: ./scripts/package-distribution.sh --check
-  signing: JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh
-  signing alternative: JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_APPLE_ID='apple-id@example.com' JARVIS_NOTARYTOOL_TEAM_ID='TEAMID1234' JARVIS_NOTARYTOOL_PASSWORD='app-specific-password' ./scripts/package-distribution.sh
+  signing: ASSEMBLYWRIGHT_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' ASSEMBLYWRIGHT_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' ASSEMBLYWRIGHT_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh
+  signing alternative: ASSEMBLYWRIGHT_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' ASSEMBLYWRIGHT_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' ASSEMBLYWRIGHT_NOTARYTOOL_APPLE_ID='apple-id@example.com' ASSEMBLYWRIGHT_NOTARYTOOL_TEAM_ID='TEAMID1234' ASSEMBLYWRIGHT_NOTARYTOOL_PASSWORD='app-specific-password' ./scripts/package-distribution.sh
   external handoff directory: ./scripts/release-external-handoff.sh --write target/release-external-handoff
   live-device template: ./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env
-  live-device endpoint: set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' in target/release-live-device-qa.env
-  live-device IPC auth: launch Assemblywright with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then confirm JARVIS_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path before IPC commands
-  live-device command evidence: cargo run -p assemblywright-cli -- command "status check" --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}" --json
+  live-device endpoint: set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' in target/release-live-device-qa.env
+  live-device IPC auth: launch Assemblywright with ASSEMBLYWRIGHT_MAC_ENABLE_IPC_CLI_HANDOFF=true, then confirm ASSEMBLYWRIGHT_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path before IPC commands
+  live-device command evidence: cargo run -p assemblywright-cli -- command "status check" --endpoint "${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}" --json
   live-device assertion: set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete
-  live-device evidence status: JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"
-  live-device readiness: JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"
+  live-device evidence status: ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint "${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}"
+  live-device readiness: ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness --endpoint "${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}"
   final bundle template: ./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env
   final bundle: set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle
   final doctor assertion: ./scripts/release-evidence-doctor.sh --assert-complete
@@ -598,8 +598,8 @@ import zipfile
 
 zip_path = sys.argv[1]
 required_entries = (
-    "Assemblywright.app/Contents/MacOS/JarvisMacApp",
-    "Assemblywright.app/Contents/Resources/bin/jarvis-cli",
+    "Assemblywright.app/Contents/MacOS/AssemblywrightMacApp",
+    "Assemblywright.app/Contents/Resources/bin/assemblywright-cli",
     "Assemblywright.app/Contents/Info.plist",
 )
 
@@ -1095,7 +1095,7 @@ check_app_bundle_metadata() {
 }
 
 check_bundled_core_version() {
-  local core_path="$APP_PATH/Contents/Resources/bin/jarvis-cli"
+  local core_path="$APP_PATH/Contents/Resources/bin/assemblywright-cli"
   local marker_path="$core_path.version"
   local remediation="rerun ./scripts/package-distribution.sh --unsigned-launch-check for local evidence, or the signed package-distribution.sh lane before final release evidence"
   if [[ ! -x "$core_path" ]]; then
@@ -1152,8 +1152,8 @@ check_json_timestamp_between_reports() {
 check_release_evidence() {
   check_path "app bundle path" "$APP_PATH" dir
   check_app_bundle_metadata
-  check_path "app executable" "$APP_PATH/Contents/MacOS/JarvisMacApp" executable
-  check_path "bundled core executable" "$APP_PATH/Contents/Resources/bin/jarvis-cli" executable
+  check_path "app executable" "$APP_PATH/Contents/MacOS/AssemblywrightMacApp" executable
+  check_path "bundled core executable" "$APP_PATH/Contents/Resources/bin/assemblywright-cli" executable
   check_bundled_core_version
   check_path "app zip path" "$ZIP_PATH" file
   check_zip_payload "app zip" "$ZIP_PATH"
@@ -1169,16 +1169,16 @@ check_release_evidence() {
     check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.app_path" "$APP_PATH"
     check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.zip_path" "$ZIP_PATH"
     check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.pkg_path" "$PKG_PATH"
-    check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.app_executable_path" "$APP_PATH/Contents/MacOS/JarvisMacApp"
-    check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.bundled_core_path" "$APP_PATH/Contents/Resources/bin/jarvis-cli"
+    check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.app_executable_path" "$APP_PATH/Contents/MacOS/AssemblywrightMacApp"
+    check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.bundled_core_path" "$APP_PATH/Contents/Resources/bin/assemblywright-cli"
     check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.bundled_core_version" "assemblywright $EXPECTED_VERSION"
     for field in artifacts.zip_sha256 artifacts.pkg_sha256 artifacts.app_executable_sha256 artifacts.bundled_core_sha256; do
       check_json_sha256 "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "$field"
     done
     check_json_sha256_matches_file "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.zip_sha256" "app zip artifact" "$ZIP_PATH"
     check_json_sha256_matches_file "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.pkg_sha256" "installer package artifact" "$PKG_PATH"
-    check_json_sha256_matches_file "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.app_executable_sha256" "app executable" "$APP_PATH/Contents/MacOS/JarvisMacApp"
-    check_json_sha256_matches_file "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.bundled_core_sha256" "bundled core executable" "$APP_PATH/Contents/Resources/bin/jarvis-cli"
+    check_json_sha256_matches_file "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.app_executable_sha256" "app executable" "$APP_PATH/Contents/MacOS/AssemblywrightMacApp"
+    check_json_sha256_matches_file "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.bundled_core_sha256" "bundled core executable" "$APP_PATH/Contents/Resources/bin/assemblywright-cli"
     for flag in developer_id_application_signed developer_id_installer_signed app_zip_notarized installer_pkg_notarized app_stapled installer_pkg_stapled gatekeeper_assessed artifact_digests_recorded app_executable_identity_recorded; do
       check_json_flag "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "validation_flags.$flag"
     done
@@ -1239,7 +1239,7 @@ check_release_evidence() {
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.bundle_identifier" "$EXPECTED_BUNDLE_ID"
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.short_version" "$EXPECTED_VERSION"
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.build_version" "$EXPECTED_VERSION"
-    check_json_string "live-device QA report" "$LIVE_QA_REPORT" "app_executable.executable_path" "$EXPECTED_INSTALLED_APP_PATH/Contents/MacOS/JarvisMacApp"
+    check_json_string "live-device QA report" "$LIVE_QA_REPORT" "app_executable.executable_path" "$EXPECTED_INSTALLED_APP_PATH/Contents/MacOS/AssemblywrightMacApp"
     check_json_sha256 "live-device QA report" "$LIVE_QA_REPORT" "app_executable.sha256"
     check_json_app_code_identity "live-device QA report" "$LIVE_QA_REPORT" \
       "app_executable.code_identifier" "app_executable.team_identifier" \
@@ -1247,7 +1247,7 @@ check_release_evidence() {
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "signed_provenance.report_path" "$SIGNED_PROVENANCE_REPORT"
     check_json_sha256 "live-device QA report" "$LIVE_QA_REPORT" "signed_provenance.sha256"
     check_json_sha256_matches_file "live-device QA report" "$LIVE_QA_REPORT" "signed_provenance.sha256" "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT"
-    check_json_string "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.executable_path" "$EXPECTED_INSTALLED_APP_PATH/Contents/Resources/bin/jarvis-cli"
+    check_json_string "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.executable_path" "$EXPECTED_INSTALLED_APP_PATH/Contents/Resources/bin/assemblywright-cli"
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.version" "assemblywright $EXPECTED_VERSION"
     check_json_sha256 "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.sha256"
     if valid_json_file "$SIGNED_PROVENANCE_REPORT"; then
@@ -1335,7 +1335,7 @@ print_status() {
 }
 
 assert_cli_evidence_status_complete() {
-  if [[ "${JARVIS_EVIDENCE_DOCTOR_SELF_TEST_SHAPE_ONLY:-}" == "true" ]]; then
+  if [[ "${ASSEMBLYWRIGHT_EVIDENCE_DOCTOR_SELF_TEST_SHAPE_ONLY:-}" == "true" ]]; then
     return
   fi
 
@@ -1345,17 +1345,17 @@ assert_cli_evidence_status_complete() {
   fi
 
   local status_output
-  if ! status_output="$(JARVIS_EVIDENCE_VERSION="$VERSION" \
-    JARVIS_EVIDENCE_DIST_DIR="$DIST_DIR" \
-    JARVIS_EVIDENCE_APP_PATH="$APP_PATH" \
-    JARVIS_EVIDENCE_ZIP_PATH="$ZIP_PATH" \
-    JARVIS_EVIDENCE_PKG_PATH="$PKG_PATH" \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$SIGNED_PROVENANCE_REPORT" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$LIVE_QA_REPORT" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$BUNDLE_PATH" \
-    JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID="$EXPECTED_BUNDLE_ID" \
-    JARVIS_EVIDENCE_EXPECTED_VERSION="$EXPECTED_VERSION" \
-    JARVIS_QA_INSTALLED_APP_PATH="$EXPECTED_INSTALLED_APP_PATH" \
+  if ! status_output="$(ASSEMBLYWRIGHT_EVIDENCE_VERSION="$VERSION" \
+    ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$DIST_DIR" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$APP_PATH" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="$ZIP_PATH" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="$PKG_PATH" \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT="$SIGNED_PROVENANCE_REPORT" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$LIVE_QA_REPORT" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$BUNDLE_PATH" \
+    ASSEMBLYWRIGHT_EVIDENCE_EXPECTED_BUNDLE_ID="$EXPECTED_BUNDLE_ID" \
+    ASSEMBLYWRIGHT_EVIDENCE_EXPECTED_VERSION="$EXPECTED_VERSION" \
+    ASSEMBLYWRIGHT_QA_INSTALLED_APP_PATH="$EXPECTED_INSTALLED_APP_PATH" \
     cargo run -q -p assemblywright-cli -- release evidence-status --json "${endpoint_args[@]}" 2>&1)"; then
     fail "release evidence doctor --assert-complete requires assemblywright release evidence-status --json to pass; output: $status_output"
   fi
@@ -1415,7 +1415,7 @@ write_fixture_app() {
 <plist version="1.0">
 <dict>
   <key>CFBundleIdentifier</key>
-  <string>com.nobiletechnology.jarvis</string>
+  <string>com.nobiletechnology.assemblywright</string>
   <key>CFBundleShortVersionString</key>
   <string>$VERSION</string>
   <key>CFBundleVersion</key>
@@ -1423,25 +1423,25 @@ write_fixture_app() {
 </dict>
 </plist>
 XML
-  touch "$app_path/Contents/MacOS/JarvisMacApp"
-  cat >"$app_path/Contents/Resources/bin/jarvis-cli" <<EOF
+  touch "$app_path/Contents/MacOS/AssemblywrightMacApp"
+  cat >"$app_path/Contents/Resources/bin/assemblywright-cli" <<EOF
 #!/usr/bin/env bash
 if [[ "\${1:-}" == "--version" ]]; then
   printf 'assemblywright $VERSION\n'
   exit 0
 fi
-printf 'self-test jarvis-cli fixture\n'
+printf 'self-test assemblywright-cli fixture\n'
 EOF
-  printf 'assemblywright %s\n' "$VERSION" >"$app_path/Contents/Resources/bin/jarvis-cli.version"
-  chmod 755 "$app_path/Contents/MacOS/JarvisMacApp" "$app_path/Contents/Resources/bin/jarvis-cli"
+  printf 'assemblywright %s\n' "$VERSION" >"$app_path/Contents/Resources/bin/assemblywright-cli.version"
+  chmod 755 "$app_path/Contents/MacOS/AssemblywrightMacApp" "$app_path/Contents/Resources/bin/assemblywright-cli"
 }
 
 write_fixture_reports() {
   local live_path="$1"
   local live_core_sha
   local live_app_executable_sha
-  live_core_sha="$(file_sha256 "$(dirname "$live_path")/dist/Assemblywright.app/Contents/Resources/bin/jarvis-cli")"
-  live_app_executable_sha="$(file_sha256 "$(dirname "$live_path")/dist/Assemblywright.app/Contents/MacOS/JarvisMacApp")"
+  live_core_sha="$(file_sha256 "$(dirname "$live_path")/dist/Assemblywright.app/Contents/Resources/bin/assemblywright-cli")"
+  live_app_executable_sha="$(file_sha256 "$(dirname "$live_path")/dist/Assemblywright.app/Contents/MacOS/AssemblywrightMacApp")"
 
   cat >"$live_path" <<JSON
 {
@@ -1468,19 +1468,19 @@ write_fixture_reports() {
     "manual_release_qa_evidence_note": "Observed manual release QA surfaces in the controlled release QA lane."
   },
   "app_bundle": {
-    "bundle_identifier": "com.nobiletechnology.jarvis",
+    "bundle_identifier": "com.nobiletechnology.assemblywright",
     "short_version": "$VERSION",
     "build_version": "$VERSION"
   },
   "app_executable": {
-    "executable_path": "/Applications/Assemblywright.app/Contents/MacOS/JarvisMacApp",
+    "executable_path": "/Applications/Assemblywright.app/Contents/MacOS/AssemblywrightMacApp",
     "sha256": "$live_app_executable_sha",
-    "code_identifier": "com.nobiletechnology.jarvis",
+    "code_identifier": "com.nobiletechnology.assemblywright",
     "team_identifier": "9VZ742YKV4",
     "cdhash": "0123456789abcdef0123456789abcdef01234567"
   },
   "bundled_core": {
-    "executable_path": "/Applications/Assemblywright.app/Contents/Resources/bin/jarvis-cli",
+    "executable_path": "/Applications/Assemblywright.app/Contents/Resources/bin/assemblywright-cli",
     "version": "assemblywright $VERSION",
     "sha256": "$live_core_sha"
   },
@@ -1584,8 +1584,8 @@ fi
 require_command python3
 
 if [[ "$SELF_TEST" == true ]]; then
-  export JARVIS_EVIDENCE_DOCTOR_SELF_TEST_SHAPE_ONLY=true
-  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/jarvis-release-evidence-doctor.XXXXXX")"
+  export ASSEMBLYWRIGHT_EVIDENCE_DOCTOR_SELF_TEST_SHAPE_ONLY=true
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/assemblywright-release-evidence-doctor.XXXXXX")"
   trap 'rm -rf "$tmp_dir"' EXIT
   self_test_zip="$tmp_dir/dist/Assemblywright-$VERSION.zip"
   self_test_pkg="$tmp_dir/dist/Assemblywright-$VERSION.pkg"
@@ -1595,8 +1595,8 @@ if [[ "$SELF_TEST" == true ]]; then
   touch "$self_test_pkg"
   self_test_zip_sha="$(file_sha256 "$self_test_zip")"
   self_test_pkg_sha="$(file_sha256 "$self_test_pkg")"
-  self_test_app_executable_sha="$(file_sha256 "$tmp_dir/dist/Assemblywright.app/Contents/MacOS/JarvisMacApp")"
-  self_test_core_sha="$(file_sha256 "$tmp_dir/dist/Assemblywright.app/Contents/Resources/bin/jarvis-cli")"
+  self_test_app_executable_sha="$(file_sha256 "$tmp_dir/dist/Assemblywright.app/Contents/MacOS/AssemblywrightMacApp")"
+  self_test_core_sha="$(file_sha256 "$tmp_dir/dist/Assemblywright.app/Contents/Resources/bin/assemblywright-cli")"
   cat >"$tmp_dir/app-zip-notarytool.log" <<'LOG'
 id: 00000000-0000-4000-8000-000000000001
 status: Accepted
@@ -1614,16 +1614,16 @@ LOG
   "evidence_type": "signed_distribution_provenance",
   "generated_at": "2026-05-22T16:40:00Z",
   "version": "$VERSION",
-  "bundle_identifier": "com.nobiletechnology.jarvis",
+  "bundle_identifier": "com.nobiletechnology.assemblywright",
   "artifacts": {
     "app_path": "$tmp_dir/dist/Assemblywright.app",
     "zip_path": "$self_test_zip",
     "pkg_path": "$self_test_pkg",
     "zip_sha256": "$self_test_zip_sha",
     "pkg_sha256": "$self_test_pkg_sha",
-    "app_executable_path": "$tmp_dir/dist/Assemblywright.app/Contents/MacOS/JarvisMacApp",
+    "app_executable_path": "$tmp_dir/dist/Assemblywright.app/Contents/MacOS/AssemblywrightMacApp",
     "app_executable_sha256": "$self_test_app_executable_sha",
-    "bundled_core_path": "$tmp_dir/dist/Assemblywright.app/Contents/Resources/bin/jarvis-cli",
+    "bundled_core_path": "$tmp_dir/dist/Assemblywright.app/Contents/Resources/bin/assemblywright-cli",
     "bundled_core_sha256": "$self_test_core_sha",
     "bundled_core_version": "assemblywright $VERSION"
   },
@@ -1632,7 +1632,7 @@ LOG
     "developer_id_installer_identity": "Developer ID Installer: Assemblywright QA Fixture",
     "app_bundle_codesign": "Authority=Developer ID Application: Assemblywright QA Fixture",
     "app_executable_codesign": "Authority=Developer ID Application: Assemblywright QA Fixture",
-    "app_executable_identifier": "com.nobiletechnology.jarvis",
+    "app_executable_identifier": "com.nobiletechnology.assemblywright",
     "app_executable_team_identifier": "9VZ742YKV4",
     "app_executable_cdhash": "0123456789abcdef0123456789abcdef01234567",
     "bundled_core_codesign": "Authority=Developer ID Application: Assemblywright QA Fixture",
@@ -1694,24 +1694,24 @@ PY
     "$tmp_dir/dist/Assemblywright-$VERSION-signed-provenance.json" \
     "$tmp_dir/live.json"
 
-  JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+  ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null
 
   write_fixture_app "$tmp_dir/dist/Assemblywright.app"
 
-  printf 'assemblywright 0.0.0\n' >"$tmp_dir/dist/Assemblywright.app/Contents/Resources/bin/jarvis-cli.version"
+  printf 'assemblywright 0.0.0\n' >"$tmp_dir/dist/Assemblywright.app/Contents/Resources/bin/assemblywright-cli.version"
   stale_marker_output=""
-  stale_marker_output="$(JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+  stale_marker_output="$(ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --check)"
   if [[ "$stale_marker_output" != *"./scripts/package-distribution.sh --unsigned-launch-check"* ]]; then
     fail "release evidence doctor self-test expected stale bundled core guidance to include package-distribution.sh --unsigned-launch-check"
@@ -1719,28 +1719,28 @@ PY
   if [[ "$stale_marker_output" != *"package preflight: ./scripts/package-distribution.sh --check"* ]]; then
     fail "release evidence doctor self-test expected next-step guidance to include package-distribution.sh --check"
   fi
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected stale bundled core version marker to fail"
   fi
-  printf 'assemblywright %s\n' "$VERSION" >"$tmp_dir/dist/Assemblywright.app/Contents/Resources/bin/jarvis-cli.version"
+  printf 'assemblywright %s\n' "$VERSION" >"$tmp_dir/dist/Assemblywright.app/Contents/Resources/bin/assemblywright-cli.version"
 
   nested_zip="$tmp_dir/dist/nested-Assemblywright-$VERSION.zip"
   mkdir -p "$tmp_dir/nested/payload"
   cp -R "$tmp_dir/dist/Assemblywright.app" "$tmp_dir/nested/payload/Assemblywright.app"
   (cd "$tmp_dir/nested" && zip -qr "$nested_zip" payload/Assemblywright.app)
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="$nested_zip" \
-    JARVIS_EVIDENCE_PKG_PATH="$self_test_pkg" \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/dist/Assemblywright-$VERSION-signed-provenance.json" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="$nested_zip" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="$self_test_pkg" \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/dist/Assemblywright-$VERSION-signed-provenance.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected nested app zip payload to fail"
   fi
@@ -1756,13 +1756,13 @@ data["artifacts"]["zip_sha256"] = "0123456789abcdef0123456789abcdef0123456789abc
 with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/dist/stale-digest-signed-provenance.json" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/dist/stale-digest-signed-provenance.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
 	    fail "release evidence doctor self-test expected stale signed provenance digest to fail"
 	  fi
@@ -1778,13 +1778,13 @@ data["notarization"]["app_zip_notary_log_sha256"] = "0123456789abcdef0123456789a
 with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/dist/stale-notary-log-signed-provenance.json" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/dist/stale-notary-log-signed-provenance.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected stale signed provenance notary log digest to fail"
   fi
@@ -1800,13 +1800,13 @@ data["signing"]["app_bundle_codesign"] = "Authority=Apple Development: Assemblyw
 with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/dist/bad-apple-tool-signed-provenance.json" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/dist/bad-apple-tool-signed-provenance.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected non-Developer-ID signed provenance evidence to fail"
   fi
@@ -1822,13 +1822,13 @@ data["gatekeeper"]["app_bundle_assessment"] = "not accepted"
 with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/dist/negated-gatekeeper-signed-provenance.json" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/dist/negated-gatekeeper-signed-provenance.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected negated Gatekeeper acceptance to fail"
   fi
@@ -1844,37 +1844,37 @@ data["notarization"]["app_zip_status"] = "Rejected"
 with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/dist/rejected-notary-signed-provenance.json" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/dist/rejected-notary-signed-provenance.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected rejected notary status to fail"
   fi
 
-  check_output="$(JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/missing-dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/missing-dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="$tmp_dir/missing-dist/Assemblywright-$VERSION.zip" \
-    JARVIS_EVIDENCE_PKG_PATH="$tmp_dir/missing-dist/Assemblywright-$VERSION.pkg" \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/missing-dist/Assemblywright-$VERSION-signed-provenance.json" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/missing-live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/missing-bundle.json" \
+  check_output="$(ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/missing-dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/missing-dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="$tmp_dir/missing-dist/Assemblywright-$VERSION.zip" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="$tmp_dir/missing-dist/Assemblywright-$VERSION.pkg" \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/missing-dist/Assemblywright-$VERSION-signed-provenance.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/missing-live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/missing-bundle.json" \
     "$0" --check)"
   for expected in \
     "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env" \
-    "JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>'" \
-    "cargo run -p assemblywright-cli -- command \"status check\" --endpoint \"\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\" --json" \
+    "ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT='<release-core-endpoint>'" \
+    "cargo run -p assemblywright-cli -- command \"status check\" --endpoint \"\${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}\" --json" \
     "source target/release-live-device-qa.env" \
-    "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint \"\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"" \
-    "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness --endpoint \"\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"" \
+    "ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint \"\${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}\"" \
+    "ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness --endpoint \"\${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}\"" \
     "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env" \
     "source target/release-evidence-bundle.env" \
     "./scripts/release-evidence-doctor.sh --assert-complete" \
-    "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...'" \
-    "JARVIS_NOTARYTOOL_APPLE_ID='apple-id@example.com'" \
+    "ASSEMBLYWRIGHT_DEVELOPER_ID_APPLICATION='Developer ID Application: ...'" \
+    "ASSEMBLYWRIGHT_NOTARYTOOL_APPLE_ID='apple-id@example.com'" \
     "./scripts/release-external-handoff.sh --write target/release-external-handoff"; do
     if [[ "$check_output" != *"$expected"* ]]; then
       fail "release evidence doctor self-test expected --check output to include: $expected"
@@ -1892,12 +1892,12 @@ data["installed_app_path"] = "/tmp/Assemblywright.app"
 with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/mismatched-installed-app-live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/mismatched-installed-app-live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected mismatched installed app path to fail"
   fi
@@ -1913,12 +1913,12 @@ data["bundled_core"]["sha256"] = "0123456789abcdef0123456789abcdef0123456789abcd
 with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/mismatched-core-digest-live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/mismatched-core-digest-live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected mismatched live bundled-core digest to fail"
   fi
@@ -1934,12 +1934,12 @@ data["generated_at"] = "2026-05-22T16:04:00Z"
 with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/pregenerated-live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/pregenerated-live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected live report generated before completion to fail"
   fi
@@ -1956,12 +1956,12 @@ data.pop("reports", None)
 with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/minimal-bundle.json" \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/minimal-bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected minimal final bundle to fail"
   fi
@@ -1977,12 +1977,12 @@ data["artifacts"]["zip_sha256"] = "not-a-sha"
 with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bad-digest-bundle.json" \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/bad-digest-bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected malformed final bundle digest to fail"
   fi
@@ -1998,12 +1998,12 @@ data["reports"]["live_device_qa_sha256"] = "0123456789abcdef0123456789abcdef0123
 with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/stale-digest-bundle.json" \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/stale-digest-bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected stale final bundle report digest to fail"
   fi
@@ -2019,22 +2019,22 @@ data["owner_recorded_release_evidence"]["completed_at"] = "2026-05-22T16:00:00Z"
 with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/post-child-completion-bundle.json" \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/post-child-completion-bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected final bundle completed before child reports to fail"
   fi
 
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/invalid-bundle-child-live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/invalid-child-bundle.json" \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/invalid-bundle-child-live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/invalid-child-bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected invalid final bundle child report to fail"
   fi
@@ -2050,12 +2050,12 @@ data["validation_flags"]["local_signature_validation"] = False
 with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/disabled-local-signature-bundle.json" \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/disabled-local-signature-bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected disabled local signature validation to fail"
   fi

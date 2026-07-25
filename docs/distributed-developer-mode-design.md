@@ -185,7 +185,7 @@ an old lease or permits its late result.
 
 The earlier bridge foundation remains a Swift Keychain enrollment coordinator, Security.framework
 identity store, Network.framework TLS 1.3 client, and focused
-`jarvis-mac-bridge` operator CLI can complete an exporter-bound authenticated
+`assemblywright-mac-bridge` operator CLI can complete an exporter-bound authenticated
 health session. Its explicit monitor mode reuses the accepted connection for
 exact bounded health samples, cancels on any failure, and reconnects with capped
 backoff while emitting only allowlisted status. Its bounded reconnect diagnostic

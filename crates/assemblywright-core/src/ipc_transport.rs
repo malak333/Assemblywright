@@ -695,7 +695,7 @@ mod tests {
         let (_client, server) = UnixStream::pair().expect("socket pair");
         let requirement = Arc::new(
             CompiledPeerRequirement::compile(
-                "identifier \"com.example.jarvis.never\"",
+                "identifier \"com.example.assemblywright.never\"",
                 PeerIdentityProfile::AdhocExact,
             )
             .expect("compile rejecting requirement"),

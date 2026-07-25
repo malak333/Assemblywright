@@ -2,66 +2,66 @@ import CryptoKit
 import Foundation
 import Security
 
-struct JarvisMacBridgeKeychainNamespace: Equatable, Sendable {
+struct AssemblywrightMacBridgeKeychainNamespace: Equatable, Sendable {
     let service: String
     let stagedAccount: String
     let installedAccount: String
     let certificateLabel: String
     let keyTag: Data
 
-    static func identityProfile(_ profile: JarvisMacBridgeIdentityProfile) -> Self {
+    static func identityProfile(_ profile: AssemblywrightMacBridgeIdentityProfile) -> Self {
         switch profile {
         case .standard:
             Self(
-                service: "com.nobiletechnology.jarvis.developer-bridge",
+                service: "com.nobiletechnology.assemblywright.developer-bridge",
                 stagedAccount: "enrollment-staged-v1",
                 installedAccount: "identity-installed-v1",
-                certificateLabel: "com.nobiletechnology.jarvis.developer-bridge.identity-v1",
-                keyTag: Data("com.nobiletechnology.jarvis.developer-bridge.p256-v1".utf8)
+                certificateLabel: "com.nobiletechnology.assemblywright.developer-bridge.identity-v1",
+                keyTag: Data("com.nobiletechnology.assemblywright.developer-bridge.p256-v1".utf8)
             )
         case .fixtureReasoning:
             Self(
-                service: "com.nobiletechnology.jarvis.developer-bridge.fixture",
+                service: "com.nobiletechnology.assemblywright.developer-bridge.fixture",
                 stagedAccount: "enrollment-staged-v1",
                 installedAccount: "identity-installed-v1",
                 certificateLabel:
-                    "com.nobiletechnology.jarvis.developer-bridge.fixture.identity-v1",
+                    "com.nobiletechnology.assemblywright.developer-bridge.fixture.identity-v1",
                 keyTag: Data(
-                    "com.nobiletechnology.jarvis.developer-bridge.fixture.p256-v1".utf8
+                    "com.nobiletechnology.assemblywright.developer-bridge.fixture.p256-v1".utf8
                 )
             )
         }
     }
 }
 
-public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore, Sendable {
+public struct KeychainAssemblywrightMacBridgeIdentityStore: AssemblywrightMacBridgeIdentityStore, Sendable {
     private static let lock = NSLock()
-    private let identityProfile: JarvisMacBridgeIdentityProfile
-    private let namespace: JarvisMacBridgeKeychainNamespace
+    private let identityProfile: AssemblywrightMacBridgeIdentityProfile
+    private let namespace: AssemblywrightMacBridgeKeychainNamespace
 
-    public init(identityProfile: JarvisMacBridgeIdentityProfile = .standard) {
+    public init(identityProfile: AssemblywrightMacBridgeIdentityProfile = .standard) {
         self.identityProfile = identityProfile
         namespace = .identityProfile(identityProfile)
     }
 
-    public func stageIdentity(for invitation: JarvisMacEnrollmentInvitation) throws -> JarvisMacEnrollmentCSR {
+    public func stageIdentity(for invitation: AssemblywrightMacEnrollmentInvitation) throws -> AssemblywrightMacEnrollmentCSR {
         try Self.lock.withLock {
             try identityProfile.validate(invitation: invitation)
             if let installed: InstalledRecord = try readRecord(account: namespace.installedAccount) {
                 guard installed.profile.deviceID == invitation.deviceID else {
-                    throw JarvisMacDeveloperBridgeError.bindingMismatch
+                    throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
                 }
-                throw JarvisMacDeveloperBridgeError.identityUnavailable
+                throw AssemblywrightMacDeveloperBridgeError.identityUnavailable
             }
             if let staged: StagedRecord = try readRecord(account: namespace.stagedAccount) {
                 guard staged.invitation == invitation else {
-                    throw JarvisMacDeveloperBridgeError.bindingMismatch
+                    throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
                 }
                 let key = try loadPrivateKey()
                 return try makeCSR(invitation: invitation, privateKey: key)
             }
             guard try findPrivateKey() == nil else {
-                throw JarvisMacDeveloperBridgeError.identityUnavailable
+                throw AssemblywrightMacDeveloperBridgeError.identityUnavailable
             }
             let key = try createSecureEnclaveKey()
             do {
@@ -76,7 +76,7 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
         }
     }
 
-    public func loadStagedInvitation() throws -> JarvisMacEnrollmentInvitation? {
+    public func loadStagedInvitation() throws -> AssemblywrightMacEnrollmentInvitation? {
         try Self.lock.withLock {
             let staged: StagedRecord? = try readRecord(account: namespace.stagedAccount)
             if let invitation = staged?.invitation {
@@ -87,14 +87,14 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
     }
 
     public func install(
-        _ receipt: JarvisMacIssuedDeviceCertificate,
-        for invitation: JarvisMacEnrollmentInvitation
-    ) throws -> JarvisMacBridgeProfile {
+        _ receipt: AssemblywrightMacIssuedDeviceCertificate,
+        for invitation: AssemblywrightMacEnrollmentInvitation
+    ) throws -> AssemblywrightMacBridgeProfile {
         try Self.lock.withLock {
             try identityProfile.validate(invitation: invitation)
             let staged: StagedRecord? = try readRecord(account: namespace.stagedAccount)
             guard staged?.invitation == invitation else {
-                throw JarvisMacDeveloperBridgeError.noStagedEnrollment
+                throw AssemblywrightMacDeveloperBridgeError.noStagedEnrollment
             }
             let privateKey = try loadPrivateKey()
             let leafDER = try decodePEM(receipt.certificatePEM, label: "CERTIFICATE")
@@ -103,7 +103,7 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
                   hex(SHA256.hash(data: caDER)) == invitation.caFingerprintSHA256.lowercased(),
                   let leaf = SecCertificateCreateWithData(nil, leafDER as CFData),
                   let ca = SecCertificateCreateWithData(nil, caDER as CFData) else {
-                throw JarvisMacDeveloperBridgeError.certificateInvalid
+                throw AssemblywrightMacDeveloperBridgeError.certificateInvalid
             }
             try validateCertificate(
                 leaf: leaf,
@@ -115,7 +115,7 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
                 expectedSerialHex: receipt.serialHex,
                 expectedNotAfterMilliseconds: receipt.notAfterMilliseconds
             )
-            let profile = JarvisMacBridgeProfile(
+            let profile = AssemblywrightMacBridgeProfile(
                 deviceID: receipt.deviceID,
                 deviceName: receipt.deviceName,
                 role: receipt.role,
@@ -150,7 +150,7 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
         }
     }
 
-    public func loadInstalledProfile() throws -> JarvisMacBridgeProfile? {
+    public func loadInstalledProfile() throws -> AssemblywrightMacBridgeProfile? {
         try Self.lock.withLock {
             let record: InstalledRecord? = try readRecord(account: namespace.installedAccount)
             if let profile = record?.profile {
@@ -160,12 +160,12 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
         }
     }
 
-    func loadTLSIdentityMaterial() throws -> JarvisMacTLSIdentityMaterial {
+    func loadTLSIdentityMaterial() throws -> AssemblywrightMacTLSIdentityMaterial {
         try Self.lock.withLock {
             guard let record: InstalledRecord = try readRecord(
                 account: namespace.installedAccount
             ) else {
-                throw JarvisMacDeveloperBridgeError.identityUnavailable
+                throw AssemblywrightMacDeveloperBridgeError.identityUnavailable
             }
             try identityProfile.validate(profile: record.profile)
             let privateKey = try loadPrivateKey()
@@ -174,7 +174,7 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
             guard hex(SHA256.hash(data: caDER)) == record.caFingerprintSHA256,
                   let leaf = SecCertificateCreateWithData(nil, leafDER as CFData),
                   let ca = SecCertificateCreateWithData(nil, caDER as CFData) else {
-                throw JarvisMacDeveloperBridgeError.certificateInvalid
+                throw AssemblywrightMacDeveloperBridgeError.certificateInvalid
             }
             try validateCertificate(
                 leaf: leaf,
@@ -187,13 +187,13 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
                 expectedNotAfterMilliseconds: record.profile.certificateNotAfterMilliseconds
             )
             let identity = try loadIdentity(certificate: leaf)
-            return JarvisMacTLSIdentityMaterial(identity: identity, caCertificate: ca)
+            return AssemblywrightMacTLSIdentityMaterial(identity: identity, caCertificate: ca)
         }
     }
 
     public func removeFixtureIdentity() throws {
         guard identityProfile == .fixtureReasoning else {
-            throw JarvisMacDeveloperBridgeError.bindingMismatch
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
         }
         try Self.lock.withLock {
             try deleteInstalledCertificate()
@@ -211,7 +211,7 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
             [.privateKeyUsage],
             &accessError
         ) else {
-            throw JarvisMacDeveloperBridgeError.identityUnavailable
+            throw AssemblywrightMacDeveloperBridgeError.identityUnavailable
         }
         let attributes: [String: Any] = [
             kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
@@ -226,7 +226,7 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
         ]
         var error: Unmanaged<CFError>?
         guard let key = SecKeyCreateRandomKey(attributes as CFDictionary, &error) else {
-            throw JarvisMacDeveloperBridgeError.identityUnavailable
+            throw AssemblywrightMacDeveloperBridgeError.identityUnavailable
         }
         return key
     }
@@ -244,14 +244,14 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess, let key = result as! SecKey? else {
-            throw JarvisMacDeveloperBridgeError.keychainFailure(status)
+            throw AssemblywrightMacDeveloperBridgeError.keychainFailure(status)
         }
         return key
     }
 
     private func loadPrivateKey() throws -> SecKey {
         guard let key = try findPrivateKey() else {
-            throw JarvisMacDeveloperBridgeError.identityUnavailable
+            throw AssemblywrightMacDeveloperBridgeError.identityUnavailable
         }
         return key
     }
@@ -265,14 +265,14 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
         ]
         let status = SecItemDelete(query as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw JarvisMacDeveloperBridgeError.keychainFailure(status)
+            throw AssemblywrightMacDeveloperBridgeError.keychainFailure(status)
         }
     }
 
     private func installCertificate(_ certificate: SecCertificate, leafDER: Data) throws -> Bool {
         if let existing = try findInstalledCertificate() {
             guard SecCertificateCopyData(existing) as Data == leafDER else {
-                throw JarvisMacDeveloperBridgeError.bindingMismatch
+                throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
             }
             return false
         }
@@ -280,7 +280,7 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
         query[kSecValueRef as String] = certificate
         let status = SecItemAdd(query as CFDictionary, nil)
         guard status == errSecSuccess else {
-            throw JarvisMacDeveloperBridgeError.keychainFailure(status)
+            throw AssemblywrightMacDeveloperBridgeError.keychainFailure(status)
         }
         return true
     }
@@ -293,7 +293,7 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess, let certificate = result as! SecCertificate? else {
-            throw JarvisMacDeveloperBridgeError.keychainFailure(status)
+            throw AssemblywrightMacDeveloperBridgeError.keychainFailure(status)
         }
         return certificate
     }
@@ -301,7 +301,7 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
     private func deleteInstalledCertificate() throws {
         let status = SecItemDelete(installedCertificateQuery() as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw JarvisMacDeveloperBridgeError.keychainFailure(status)
+            throw AssemblywrightMacDeveloperBridgeError.keychainFailure(status)
         }
     }
 
@@ -317,19 +317,19 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
         var identity: SecIdentity?
         let status = SecIdentityCreateWithCertificate(nil, certificate, &identity)
         guard status == errSecSuccess, let identity else {
-            throw JarvisMacDeveloperBridgeError.keychainFailure(status)
+            throw AssemblywrightMacDeveloperBridgeError.keychainFailure(status)
         }
         return identity
     }
 
     private func makeCSR(
-        invitation: JarvisMacEnrollmentInvitation,
+        invitation: AssemblywrightMacEnrollmentInvitation,
         privateKey: SecKey
-    ) throws -> JarvisMacEnrollmentCSR {
+    ) throws -> AssemblywrightMacEnrollmentCSR {
         guard let publicKey = SecKeyCopyPublicKey(privateKey),
               let publicBytes = SecKeyCopyExternalRepresentation(publicKey, nil) as Data?,
               publicBytes.count == 65, publicBytes.first == 0x04 else {
-            throw JarvisMacDeveloperBridgeError.identityUnavailable
+            throw AssemblywrightMacDeveloperBridgeError.identityUnavailable
         }
         let requestInfo = certificationRequestInfo(
             commonName: invitation.deviceName,
@@ -342,15 +342,15 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
             requestInfo as CFData,
             &signatureError
         ) as Data? else {
-            throw JarvisMacDeveloperBridgeError.identityUnavailable
+            throw AssemblywrightMacDeveloperBridgeError.identityUnavailable
         }
         let signatureAlgorithm = derSequence(derOID([0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02]))
         let csr = derSequence(requestInfo + signatureAlgorithm + derBitString(signature))
         let pem = pemEncode(csr, label: "CERTIFICATE REQUEST")
-        guard pem.utf8.count <= JarvisMacEnrollmentCoordinator.maximumDocumentBytes else {
-            throw JarvisMacDeveloperBridgeError.documentTooLarge
+        guard pem.utf8.count <= AssemblywrightMacEnrollmentCoordinator.maximumDocumentBytes else {
+            throw AssemblywrightMacDeveloperBridgeError.documentTooLarge
         }
-        return JarvisMacEnrollmentCSR(
+        return AssemblywrightMacEnrollmentCSR(
             schemaVersion: 1,
             status: "enrollment_csr_ready",
             grantID: invitation.grantID,
@@ -403,7 +403,7 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
               (commonName as String?) == expectedDeviceName,
               serialMatches,
               expiryMatches else {
-            throw JarvisMacDeveloperBridgeError.certificateInvalid
+            throw AssemblywrightMacDeveloperBridgeError.certificateInvalid
         }
         var trust: SecTrust?
         guard SecTrustCreateWithCertificates(
@@ -411,12 +411,12 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
             SecPolicyCreateBasicX509(),
             &trust
         ) == errSecSuccess, let trust else {
-            throw JarvisMacDeveloperBridgeError.certificateInvalid
+            throw AssemblywrightMacDeveloperBridgeError.certificateInvalid
         }
         SecTrustSetAnchorCertificates(trust, [ca] as CFArray)
         SecTrustSetAnchorCertificatesOnly(trust, true)
         guard SecTrustEvaluateWithError(trust, nil) else {
-            throw JarvisMacDeveloperBridgeError.certificateInvalid
+            throw AssemblywrightMacDeveloperBridgeError.certificateInvalid
         }
     }
 
@@ -430,9 +430,9 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
         guard status == errSecSuccess, let data = result as? Data,
               let record = try? JSONDecoder().decode(T.self, from: data) else {
             if status != errSecSuccess {
-                throw JarvisMacDeveloperBridgeError.keychainFailure(status)
+                throw AssemblywrightMacDeveloperBridgeError.keychainFailure(status)
             }
-            throw JarvisMacDeveloperBridgeError.identityUnavailable
+            throw AssemblywrightMacDeveloperBridgeError.identityUnavailable
         }
         return record
     }
@@ -441,8 +441,8 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let data = try encoder.encode(record)
-        guard data.count <= JarvisMacEnrollmentCoordinator.maximumDocumentBytes else {
-            throw JarvisMacDeveloperBridgeError.documentTooLarge
+        guard data.count <= AssemblywrightMacEnrollmentCoordinator.maximumDocumentBytes else {
+            throw AssemblywrightMacDeveloperBridgeError.documentTooLarge
         }
         let query = baseRecordQuery(account: account)
         let attributes: [String: Any] = [
@@ -452,20 +452,20 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
         let update = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
         if update == errSecSuccess { return }
         guard update == errSecItemNotFound else {
-            throw JarvisMacDeveloperBridgeError.keychainFailure(update)
+            throw AssemblywrightMacDeveloperBridgeError.keychainFailure(update)
         }
         var add = query
         add.merge(attributes) { _, new in new }
         let status = SecItemAdd(add as CFDictionary, nil)
         guard status == errSecSuccess else {
-            throw JarvisMacDeveloperBridgeError.keychainFailure(status)
+            throw AssemblywrightMacDeveloperBridgeError.keychainFailure(status)
         }
     }
 
     private func deleteRecord(account: String) throws {
         let status = SecItemDelete(baseRecordQuery(account: account) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw JarvisMacDeveloperBridgeError.keychainFailure(status)
+            throw AssemblywrightMacDeveloperBridgeError.keychainFailure(status)
         }
     }
 
@@ -479,17 +479,17 @@ public struct KeychainJarvisMacBridgeIdentityStore: JarvisMacBridgeIdentityStore
     }
 }
 
-struct JarvisMacTLSIdentityMaterial: @unchecked Sendable {
+struct AssemblywrightMacTLSIdentityMaterial: @unchecked Sendable {
     let identity: SecIdentity
     let caCertificate: SecCertificate
 }
 
 private struct StagedRecord: Codable {
-    let invitation: JarvisMacEnrollmentInvitation
+    let invitation: AssemblywrightMacEnrollmentInvitation
 }
 
 private struct InstalledRecord: Codable {
-    let profile: JarvisMacBridgeProfile
+    let profile: AssemblywrightMacBridgeProfile
     let certificatePEM: String
     let caCertificatePEM: String
     let caFingerprintSHA256: String
@@ -499,7 +499,7 @@ private func decodePEM(_ value: String, label: String) throws -> Data {
     let header = "-----BEGIN \(label)-----"
     let footer = "-----END \(label)-----"
     guard value.hasPrefix(header), value.contains(footer) else {
-        throw JarvisMacDeveloperBridgeError.certificateInvalid
+        throw AssemblywrightMacDeveloperBridgeError.certificateInvalid
     }
     let base64 = value
         .replacingOccurrences(of: header, with: "")
@@ -507,7 +507,7 @@ private func decodePEM(_ value: String, label: String) throws -> Data {
         .components(separatedBy: .whitespacesAndNewlines)
         .joined()
     guard let data = Data(base64Encoded: base64), !data.isEmpty else {
-        throw JarvisMacDeveloperBridgeError.certificateInvalid
+        throw AssemblywrightMacDeveloperBridgeError.certificateInvalid
     }
     return data
 }
@@ -556,7 +556,7 @@ private func certificateNotAfterMilliseconds(_ certificate: SecCertificate) -> U
     ) as? [CFString: Any],
     let property = values[kSecOIDX509V1ValidityNotAfter] as? [CFString: Any],
     let rawValue = property[kSecPropertyKeyValue],
-    let date = jarvisCertificatePropertyDate(rawValue) else { return nil }
+    let date = assemblywrightCertificatePropertyDate(rawValue) else { return nil }
     let milliseconds = date.timeIntervalSince1970 * 1_000
     guard milliseconds.isFinite, milliseconds >= 0, milliseconds <= Double(UInt64.max) else {
         return nil
@@ -564,7 +564,7 @@ private func certificateNotAfterMilliseconds(_ certificate: SecCertificate) -> U
     return UInt64(milliseconds.rounded(.down))
 }
 
-func jarvisCertificatePropertyDate(_ value: Any) -> Date? {
+func assemblywrightCertificatePropertyDate(_ value: Any) -> Date? {
     if let date = value as? Date { return date }
     guard let number = value as? NSNumber else { return nil }
     let interval = number.doubleValue
@@ -581,12 +581,12 @@ private func certificateHasExactDeviceSAN(_ certificate: Data, deviceID: String)
     guard let san = certificateExtension(certificate, oid: [0x55, 0x1d, 0x11]),
           let names = derChildren(san), names.count == 1, names[0].tag == 0x30,
           let generalNames = derChildren(names[0].body) else { return false }
-    let jarvisURIs = generalNames.compactMap { name -> String? in
+    let assemblywrightURIs = generalNames.compactMap { name -> String? in
         guard name.tag == 0x86, let value = String(data: name.body, encoding: .ascii),
-              value.hasPrefix("urn:jarvis:device:") else { return nil }
+              value.hasPrefix("urn:assemblywright:device:") else { return nil }
         return value
     }
-    return jarvisURIs == ["urn:jarvis:device:\(deviceID.lowercased())"]
+    return assemblywrightURIs == ["urn:assemblywright:device:\(deviceID.lowercased())"]
 }
 
 private func certificateHasClientAuthenticationUsage(_ certificate: Data) -> Bool {

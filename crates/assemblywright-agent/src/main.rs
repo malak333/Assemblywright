@@ -202,7 +202,7 @@ fn validate_startup(startup: &AgentStartupDocument) -> anyhow::Result<()> {
             || startup.mlx_model_path.is_some()
             || startup.mlx_model_id.is_some())
     {
-        bail!("legacy assemblywright-agent startup documents cannot configure MLX jobs");
+        bail!("version-1 assemblywright-agent startup documents cannot configure MLX jobs");
     }
     if startup.fixture_jobs_enabled && startup.mlx_jobs_enabled {
         bail!("fixture and MLX job runtimes cannot be enabled together");

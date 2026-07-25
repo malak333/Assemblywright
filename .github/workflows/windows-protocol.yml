@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: jarvis-windows-protocol-${{ github.workflow }}-${{ github.ref }}
+  group: assemblywright-windows-protocol-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -52,7 +52,7 @@ jobs:
 
       - name: Test real Windows service lifecycle
         env:
-          JARVIS_REQUIRE_WINDOWS_SERVICE_E2E: "1"
+          ASSEMBLYWRIGHT_REQUIRE_WINDOWS_SERVICE_E2E: "1"
         run: |
           cargo test -p assemblywright-master --bin assemblywright-master service_logon_right_is_ensured_for_current_account --locked -- --ignored --nocapture
           cargo test -p assemblywright-master --test windows_service_lifecycle_e2e --locked -- --ignored --nocapture

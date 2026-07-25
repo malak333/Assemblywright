@@ -8,37 +8,37 @@ let package = Package(
         .macOS(.v14)
     ],
     products: [
-        .library(name: "AssemblywrightMacCore", targets: ["JarvisMacCore"]),
-        .executable(name: "AssemblywrightMacApp", targets: ["JarvisMacApp"]),
-        .executable(name: "assemblywright-mac-bridge", targets: ["JarvisMacBridgeCLI"])
+        .library(name: "AssemblywrightMacCore", targets: ["AssemblywrightMacCore"]),
+        .executable(name: "AssemblywrightMacApp", targets: ["AssemblywrightMacApp"]),
+        .executable(name: "assemblywright-mac-bridge", targets: ["AssemblywrightMacBridgeCLI"])
     ],
-    // Target names stay `Jarvis*` because module names are internal and
-    // renaming them would touch every import for no external benefit. The
-    // built executable is named after the *product*, so packaging copies
-    // `AssemblywrightMacApp` into the bundle as `Contents/MacOS/JarvisMacApp`.
-    // That bundle-internal filename is a signed-identity and release-evidence
-    // contract: signed provenance and live-device QA reports bind it directly.
-    // See SWIFT_APP_PRODUCT in scripts/package-distribution.sh.
+    // Products and targets share names, so the built executable and the
+    // bundle-internal filename agree: packaging copies `AssemblywrightMacApp`
+    // into `Contents/MacOS/AssemblywrightMacApp`. That filename is a
+    // signed-identity and release-evidence contract — signed provenance and
+    // live-device QA reports bind it directly — so changing it means
+    // regenerating that evidence. See SWIFT_APP_PRODUCT and
+    // APP_EXECUTABLE_NAME in scripts/package-distribution.sh.
     targets: [
         .target(
-            name: "JarvisMacCore",
+            name: "AssemblywrightMacCore",
             linkerSettings: [.linkedFramework("Security")]
         ),
         .executableTarget(
-            name: "JarvisMacApp",
-            dependencies: ["JarvisMacCore"]
+            name: "AssemblywrightMacApp",
+            dependencies: ["AssemblywrightMacCore"]
         ),
         .executableTarget(
-            name: "JarvisMacBridgeCLI",
-            dependencies: ["JarvisMacCore"]
+            name: "AssemblywrightMacBridgeCLI",
+            dependencies: ["AssemblywrightMacCore"]
         ),
         .testTarget(
-            name: "JarvisMacCoreTests",
-            dependencies: ["JarvisMacCore"]
+            name: "AssemblywrightMacCoreTests",
+            dependencies: ["AssemblywrightMacCore"]
         ),
         .testTarget(
-            name: "JarvisMacAppTests",
-            dependencies: ["JarvisMacApp", "JarvisMacCore"]
+            name: "AssemblywrightMacAppTests",
+            dependencies: ["AssemblywrightMacApp", "AssemblywrightMacCore"]
         )
     ]
 )

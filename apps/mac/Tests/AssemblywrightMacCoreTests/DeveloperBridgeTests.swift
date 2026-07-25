@@ -2,18 +2,18 @@ import Darwin
 import CryptoKit
 import Foundation
 import Testing
-@testable import JarvisMacCore
+@testable import AssemblywrightMacCore
 
-private final class FakeBridgeIdentityStore: JarvisMacBridgeIdentityStore, @unchecked Sendable {
-    var staged: JarvisMacEnrollmentInvitation?
-    var installed: JarvisMacIssuedDeviceCertificate?
+private final class FakeBridgeIdentityStore: AssemblywrightMacBridgeIdentityStore, @unchecked Sendable {
+    var staged: AssemblywrightMacEnrollmentInvitation?
+    var installed: AssemblywrightMacIssuedDeviceCertificate?
     var csrPEM = "-----BEGIN CERTIFICATE REQUEST-----\nZmFrZQ==\n-----END CERTIFICATE REQUEST-----\n"
     var publicKeySHA256 = String(repeating: "a", count: 64)
-    var installedProfile: JarvisMacBridgeProfile?
+    var installedProfile: AssemblywrightMacBridgeProfile?
 
-    func stageIdentity(for invitation: JarvisMacEnrollmentInvitation) throws -> JarvisMacEnrollmentCSR {
+    func stageIdentity(for invitation: AssemblywrightMacEnrollmentInvitation) throws -> AssemblywrightMacEnrollmentCSR {
         staged = invitation
-        return JarvisMacEnrollmentCSR(
+        return AssemblywrightMacEnrollmentCSR(
             schemaVersion: 1,
             status: "enrollment_csr_ready",
             grantID: invitation.grantID,
@@ -22,14 +22,14 @@ private final class FakeBridgeIdentityStore: JarvisMacBridgeIdentityStore, @unch
         )
     }
 
-    func loadStagedInvitation() throws -> JarvisMacEnrollmentInvitation? { staged }
+    func loadStagedInvitation() throws -> AssemblywrightMacEnrollmentInvitation? { staged }
 
     func install(
-        _ receipt: JarvisMacIssuedDeviceCertificate,
-        for invitation: JarvisMacEnrollmentInvitation
-    ) throws -> JarvisMacBridgeProfile {
+        _ receipt: AssemblywrightMacIssuedDeviceCertificate,
+        for invitation: AssemblywrightMacEnrollmentInvitation
+    ) throws -> AssemblywrightMacBridgeProfile {
         installed = receipt
-        let profile = JarvisMacBridgeProfile(
+        let profile = AssemblywrightMacBridgeProfile(
             deviceID: receipt.deviceID,
             deviceName: receipt.deviceName,
             role: receipt.role,
@@ -42,28 +42,28 @@ private final class FakeBridgeIdentityStore: JarvisMacBridgeIdentityStore, @unch
         return profile
     }
 
-    func loadInstalledProfile() throws -> JarvisMacBridgeProfile? { installedProfile }
+    func loadInstalledProfile() throws -> AssemblywrightMacBridgeProfile? { installedProfile }
 }
 
-private actor FakeBridgeChannel: JarvisMacAuthenticatedTLSChannel {
+private actor FakeBridgeChannel: AssemblywrightMacAuthenticatedTLSChannel {
     let exporter: Data?
-    let response: JarvisMacBridgeHTTPResponse
-    private(set) var requests: [JarvisMacBridgeHTTPRequest] = []
+    let response: AssemblywrightMacBridgeHTTPResponse
+    private(set) var requests: [AssemblywrightMacBridgeHTTPRequest] = []
     private(set) var cancelled = false
 
-    init(exporter: Data?, response: JarvisMacBridgeHTTPResponse) {
+    init(exporter: Data?, response: AssemblywrightMacBridgeHTTPResponse) {
         self.exporter = exporter
         self.response = response
     }
 
     func tlsExporter(label: String, length: Int) async throws -> Data {
-        guard let exporter else { throw JarvisMacDeveloperBridgeError.channelBindingUnavailable }
-        #expect(label == "EXPORTER-Jarvis-Developer-Mode-v1")
+        guard let exporter else { throw AssemblywrightMacDeveloperBridgeError.channelBindingUnavailable }
+        #expect(label == "EXPORTER-Assemblywright-Developer-Mode-v1")
         #expect(length == 32)
         return exporter
     }
 
-    func send(_ request: JarvisMacBridgeHTTPRequest) async throws -> JarvisMacBridgeHTTPResponse {
+    func send(_ request: AssemblywrightMacBridgeHTTPRequest) async throws -> AssemblywrightMacBridgeHTTPResponse {
         requests.append(request)
         return response
     }
@@ -73,25 +73,25 @@ private actor FakeBridgeChannel: JarvisMacAuthenticatedTLSChannel {
     }
 }
 
-private struct FakeBridgeChannelFactory: JarvisMacAuthenticatedTLSChannelFactory {
+private struct FakeBridgeChannelFactory: AssemblywrightMacAuthenticatedTLSChannelFactory {
     let channel: FakeBridgeChannel
 
-    func connect(profile _: JarvisMacBridgeProfile) async throws -> any JarvisMacAuthenticatedTLSChannel {
+    func connect(profile _: AssemblywrightMacBridgeProfile) async throws -> any AssemblywrightMacAuthenticatedTLSChannel {
         channel
     }
 }
 
 private enum FakeSupervisorOutcome: Sendable {
-    case response(JarvisMacBridgeHTTPResponse)
+    case response(AssemblywrightMacBridgeHTTPResponse)
     case failure
 }
 
 private struct FakeSupervisorError: Error {}
 
-private actor FakeSupervisorSession: JarvisMacBridgeSession {
+private actor FakeSupervisorSession: AssemblywrightMacBridgeSession {
     nonisolated let connectionEpoch: UInt64
     private var outcomes: [FakeSupervisorOutcome]
-    private(set) var requests: [JarvisMacBridgeHTTPRequest] = []
+    private(set) var requests: [AssemblywrightMacBridgeHTTPRequest] = []
     private(set) var cancelled = false
 
     init(connectionEpoch: UInt64, outcomes: [FakeSupervisorOutcome]) {
@@ -99,7 +99,7 @@ private actor FakeSupervisorSession: JarvisMacBridgeSession {
         self.outcomes = outcomes
     }
 
-    func send(_ request: JarvisMacBridgeHTTPRequest) async throws -> JarvisMacBridgeHTTPResponse {
+    func send(_ request: AssemblywrightMacBridgeHTTPRequest) async throws -> AssemblywrightMacBridgeHTTPResponse {
         requests.append(request)
         guard !outcomes.isEmpty else { throw FakeSupervisorError() }
         switch outcomes.removeFirst() {
@@ -113,7 +113,7 @@ private actor FakeSupervisorSession: JarvisMacBridgeSession {
     func cancel() async { cancelled = true }
 }
 
-private actor FakeSupervisorConnector: JarvisMacBridgeConnecting {
+private actor FakeSupervisorConnector: AssemblywrightMacBridgeConnecting {
     private var sessions: [FakeSupervisorSession]
     private(set) var connectCount = 0
 
@@ -121,23 +121,23 @@ private actor FakeSupervisorConnector: JarvisMacBridgeConnecting {
         self.sessions = sessions
     }
 
-    func connect(profile _: JarvisMacBridgeProfile) async throws -> any JarvisMacBridgeSession {
+    func connect(profile _: AssemblywrightMacBridgeProfile) async throws -> any AssemblywrightMacBridgeSession {
         connectCount += 1
         guard !sessions.isEmpty else { throw FakeSupervisorError() }
         return sessions.removeFirst()
     }
 }
 
-private actor FakeFixtureBridgeSession: JarvisMacBridgeSession {
+private actor FakeFixtureBridgeSession: AssemblywrightMacBridgeSession {
     nonisolated let connectionEpoch: UInt64
     let eventBatch: Data
     let job: Data
     let cancellation: Data?
     let acceptedResult: Data
     let cancellationPollDelayMilliseconds: UInt64
-    let leaseResponse: JarvisMacBridgeHTTPResponse
+    let leaseResponse: AssemblywrightMacBridgeHTTPResponse
     let noCancellationResponse: Data
-    private(set) var requests: [JarvisMacBridgeHTTPRequest] = []
+    private(set) var requests: [AssemblywrightMacBridgeHTTPRequest] = []
     private(set) var cancelled = false
     private var cancellationDelivered = false
 
@@ -148,7 +148,7 @@ private actor FakeFixtureBridgeSession: JarvisMacBridgeSession {
         cancellation: Data? = nil,
         acceptedResult: Data,
         cancellationPollDelayMilliseconds: UInt64 = 0,
-        leaseResponse: JarvisMacBridgeHTTPResponse? = nil,
+        leaseResponse: AssemblywrightMacBridgeHTTPResponse? = nil,
         noCancellationResponse: Data = Data(#"{"status":"no_cancellation"}"#.utf8)
     ) {
         self.connectionEpoch = connectionEpoch
@@ -161,16 +161,16 @@ private actor FakeFixtureBridgeSession: JarvisMacBridgeSession {
         self.noCancellationResponse = noCancellationResponse
     }
 
-    func send(_ request: JarvisMacBridgeHTTPRequest) async throws
-        -> JarvisMacBridgeHTTPResponse
+    func send(_ request: AssemblywrightMacBridgeHTTPRequest) async throws
+        -> AssemblywrightMacBridgeHTTPResponse
     {
         requests.append(request)
         switch request.path {
-        case JarvisMacDeveloperEventRelay.remoteEventsPath:
+        case AssemblywrightMacDeveloperEventRelay.remoteEventsPath:
             return .init(status: 200, body: eventBatch)
-        case JarvisMacDeveloperEventRelay.remoteLeasePath:
+        case AssemblywrightMacDeveloperEventRelay.remoteLeasePath:
             return leaseResponse
-        case JarvisMacDeveloperEventRelay.remoteCancellationPath:
+        case AssemblywrightMacDeveloperEventRelay.remoteCancellationPath:
             if cancellationPollDelayMilliseconds > 0 {
                 do {
                     try await Task.sleep(
@@ -189,9 +189,9 @@ private actor FakeFixtureBridgeSession: JarvisMacBridgeSession {
                 status: 200,
                 body: noCancellationResponse
             )
-        case JarvisMacDeveloperEventRelay.remoteResultPath:
+        case AssemblywrightMacDeveloperEventRelay.remoteResultPath:
             return .init(status: 200, body: acceptedResult)
-        case JarvisMacDeveloperEventRelay.remoteCancellationAcknowledgementPath:
+        case AssemblywrightMacDeveloperEventRelay.remoteCancellationAcknowledgementPath:
             return .init(
                 status: 200,
                 body: Data(#"{"accepted":true,"status":"cancelled"}"#.utf8)
@@ -206,8 +206,8 @@ private actor FakeFixtureBridgeSession: JarvisMacBridgeSession {
     }
 }
 
-private actor FakeDeveloperAgentSession: JarvisMacDeveloperAgentSession {
-    private var cursor: JarvisMacDeveloperEventCursor?
+private actor FakeDeveloperAgentSession: AssemblywrightMacDeveloperAgentSession {
+    private var cursor: AssemblywrightMacDeveloperEventCursor?
     private(set) var acceptedBatches: [Data] = []
     private(set) var executedJobs: [Data] = []
     private(set) var cancellations: [Data] = []
@@ -219,7 +219,7 @@ private actor FakeDeveloperAgentSession: JarvisMacDeveloperAgentSession {
     private(set) var stopped = false
 
     init(
-        cursor: JarvisMacDeveloperEventCursor? = nil,
+        cursor: AssemblywrightMacDeveloperEventCursor? = nil,
         fixtureResult: Data? = nil,
         cancellationAcknowledgement: Data? = nil,
         fixtureDelayMilliseconds: UInt64 = 0
@@ -230,14 +230,14 @@ private actor FakeDeveloperAgentSession: JarvisMacDeveloperAgentSession {
         self.fixtureDelayMilliseconds = fixtureDelayMilliseconds
     }
 
-    func health() async throws -> JarvisMacDeveloperAgentCursorSnapshot {
-        JarvisMacDeveloperAgentCursorSnapshot(
+    func health() async throws -> AssemblywrightMacDeveloperAgentCursorSnapshot {
+        AssemblywrightMacDeveloperAgentCursorSnapshot(
             cursor: cursor,
             updatedAtMilliseconds: cursor == nil ? nil : 1_000
         )
     }
 
-    func accept(batch: Data) async throws -> JarvisMacDeveloperAgentCursorSnapshot {
+    func accept(batch: Data) async throws -> AssemblywrightMacDeveloperAgentCursorSnapshot {
         let object = try #require(
             JSONSerialization.jsonObject(with: batch) as? [String: Any]
         )
@@ -245,12 +245,12 @@ private actor FakeDeveloperAgentSession: JarvisMacDeveloperAgentSession {
         let sequence = try #require(
             (object["next_sequence"] as? NSNumber)?.uint64Value
         )
-        cursor = JarvisMacDeveloperEventCursor(
+        cursor = AssemblywrightMacDeveloperEventCursor(
             streamID: try #require(UUID(uuidString: stream)),
             sequence: sequence
         )
         acceptedBatches.append(batch)
-        return JarvisMacDeveloperAgentCursorSnapshot(
+        return AssemblywrightMacDeveloperAgentCursorSnapshot(
             cursor: cursor,
             updatedAtMilliseconds: 1_000
         )
@@ -262,7 +262,7 @@ private actor FakeDeveloperAgentSession: JarvisMacDeveloperAgentSession {
             try await Task.sleep(for: .milliseconds(fixtureDelayMilliseconds))
         }
         guard let fixtureResult else {
-            throw JarvisMacDeveloperEventRelayError.fixtureJobRejected
+            throw AssemblywrightMacDeveloperEventRelayError.fixtureJobRejected
         }
         return fixtureResult
     }
@@ -270,7 +270,7 @@ private actor FakeDeveloperAgentSession: JarvisMacDeveloperAgentSession {
     func cancelFixtureJob(_ instruction: Data) async throws -> Data {
         cancellations.append(instruction)
         guard let cancellationAcknowledgement else {
-            throw JarvisMacDeveloperEventRelayError.fixtureJobRejected
+            throw AssemblywrightMacDeveloperEventRelayError.fixtureJobRejected
         }
         return cancellationAcknowledgement
     }
@@ -281,7 +281,7 @@ private actor FakeDeveloperAgentSession: JarvisMacDeveloperAgentSession {
             try await Task.sleep(for: .milliseconds(fixtureDelayMilliseconds))
         }
         guard let fixtureResult else {
-            throw JarvisMacDeveloperEventRelayError.mlxJobRejected
+            throw AssemblywrightMacDeveloperEventRelayError.mlxJobRejected
         }
         return fixtureResult
     }
@@ -289,7 +289,7 @@ private actor FakeDeveloperAgentSession: JarvisMacDeveloperAgentSession {
     func cancelMLXJob(_ instruction: Data) async throws -> Data {
         mlxCancellations.append(instruction)
         guard let cancellationAcknowledgement else {
-            throw JarvisMacDeveloperEventRelayError.mlxJobRejected
+            throw AssemblywrightMacDeveloperEventRelayError.mlxJobRejected
         }
         return cancellationAcknowledgement
     }
@@ -299,30 +299,30 @@ private actor FakeDeveloperAgentSession: JarvisMacDeveloperAgentSession {
     }
 }
 
-private actor FakeDeveloperAgentLauncher: JarvisMacDeveloperAgentLaunching {
+private actor FakeDeveloperAgentLauncher: AssemblywrightMacDeveloperAgentLaunching {
     let session: FakeDeveloperAgentSession
-    private(set) var configurations: [JarvisMacDeveloperEventRelayConfiguration] = []
+    private(set) var configurations: [AssemblywrightMacDeveloperEventRelayConfiguration] = []
 
     init(session: FakeDeveloperAgentSession) {
         self.session = session
     }
 
     func launch(
-        configuration: JarvisMacDeveloperEventRelayConfiguration
-    ) async throws -> any JarvisMacDeveloperAgentSession {
+        configuration: AssemblywrightMacDeveloperEventRelayConfiguration
+    ) async throws -> any AssemblywrightMacDeveloperAgentSession {
         configurations.append(configuration)
         return session
     }
 }
 
-private actor FakeBridgeEventRelay: JarvisMacBridgeEventRelaying {
-    let error: JarvisMacDeveloperEventRelayError?
+private actor FakeBridgeEventRelay: AssemblywrightMacBridgeEventRelaying {
+    let error: AssemblywrightMacDeveloperEventRelayError?
     let requiresFreshConnection: Bool
     private(set) var epochs: [UInt64] = []
     private(set) var stopped = false
 
     init(
-        error: JarvisMacDeveloperEventRelayError? = nil,
+        error: AssemblywrightMacDeveloperEventRelayError? = nil,
         requiresFreshConnection: Bool = false
     ) {
         self.error = error
@@ -330,12 +330,12 @@ private actor FakeBridgeEventRelay: JarvisMacBridgeEventRelaying {
     }
 
     func relayEvents(
-        using session: any JarvisMacBridgeSession
-    ) async throws -> JarvisMacDeveloperEventRelayProgress {
+        using session: any AssemblywrightMacBridgeSession
+    ) async throws -> AssemblywrightMacDeveloperEventRelayProgress {
         epochs.append(session.connectionEpoch)
         if let error { throw error }
-        return JarvisMacDeveloperEventRelayProgress(
-            cursor: JarvisMacDeveloperEventCursor(
+        return AssemblywrightMacDeveloperEventRelayProgress(
+            cursor: AssemblywrightMacDeveloperEventCursor(
                 streamID: UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")!,
                 sequence: 1
             ),
@@ -350,19 +350,19 @@ private actor FakeBridgeEventRelay: JarvisMacBridgeEventRelaying {
     }
 }
 
-private struct FakeBridgeExecutableValidator: JarvisDeveloperBridgeExecutableValidating {
-    let error: JarvisDeveloperBridgeProcessError?
+private struct FakeBridgeExecutableValidator: AssemblywrightDeveloperBridgeExecutableValidating {
+    let error: AssemblywrightDeveloperBridgeProcessError?
 
-    init(error: JarvisDeveloperBridgeProcessError? = nil) {
+    init(error: AssemblywrightDeveloperBridgeProcessError? = nil) {
         self.error = error
     }
 
     func validate(
         executableURL: URL,
         expectedTeamIdentifier: String
-    ) throws -> JarvisDeveloperBridgeValidatedExecutable {
+    ) throws -> AssemblywrightDeveloperBridgeValidatedExecutable {
         if let error { throw error }
-        return JarvisDeveloperBridgeValidatedExecutable(
+        return AssemblywrightDeveloperBridgeValidatedExecutable(
             executableURL: executableURL,
             teamIdentifier: expectedTeamIdentifier,
             codeRequirement: "anchor apple generic",
@@ -371,7 +371,7 @@ private struct FakeBridgeExecutableValidator: JarvisDeveloperBridgeExecutableVal
     }
 }
 
-private actor FakeBridgeProcessSession: JarvisDeveloperBridgeProcessSession {
+private actor FakeBridgeProcessSession: AssemblywrightDeveloperBridgeProcessSession {
     nonisolated let outputLines: AsyncThrowingStream<Data, Error>
     private let continuation: AsyncThrowingStream<Data, Error>.Continuation
     private(set) var stopped = false
@@ -391,14 +391,14 @@ private actor FakeBridgeProcessSession: JarvisDeveloperBridgeProcessSession {
         stopAttempts += 1
         if stopFailuresRemaining > 0 {
             stopFailuresRemaining -= 1
-            throw JarvisDeveloperBridgeProcessError.teardownFailed
+            throw AssemblywrightDeveloperBridgeProcessError.teardownFailed
         }
         stopped = true
         continuation.finish()
     }
 }
 
-private actor FakeBridgeProcessLauncher: JarvisDeveloperBridgeProcessLaunching {
+private actor FakeBridgeProcessLauncher: AssemblywrightDeveloperBridgeProcessLaunching {
     let session: FakeBridgeProcessSession
     private(set) var launchCount = 0
 
@@ -407,9 +407,9 @@ private actor FakeBridgeProcessLauncher: JarvisDeveloperBridgeProcessLaunching {
     }
 
     func launch(
-        executable _: JarvisDeveloperBridgeValidatedExecutable,
-        eventRelayConfiguration _: JarvisMacDeveloperEventRelayConfiguration?
-    ) async throws -> any JarvisDeveloperBridgeProcessSession {
+        executable _: AssemblywrightDeveloperBridgeValidatedExecutable,
+        eventRelayConfiguration _: AssemblywrightMacDeveloperEventRelayConfiguration?
+    ) async throws -> any AssemblywrightDeveloperBridgeProcessSession {
         launchCount += 1
         return session
     }
@@ -417,7 +417,7 @@ private actor FakeBridgeProcessLauncher: JarvisDeveloperBridgeProcessLaunching {
 
 @MainActor
 private func withStartedBridgeLifecycle<T: Sendable>(
-    _ lifecycle: JarvisDeveloperBridgeProcessLifecycle,
+    _ lifecycle: AssemblywrightDeveloperBridgeProcessLifecycle,
     operation: @MainActor () async throws -> T
 ) async throws -> T {
     lifecycle.start()
@@ -432,36 +432,36 @@ private func withStartedBridgeLifecycle<T: Sendable>(
 }
 
 private struct FakeBridgeRunningProcessValidator:
-    JarvisDeveloperBridgeRunningProcessValidating
+    AssemblywrightDeveloperBridgeRunningProcessValidating
 {
-    let error: JarvisDeveloperBridgeProcessError?
+    let error: AssemblywrightDeveloperBridgeProcessError?
 
-    init(error: JarvisDeveloperBridgeProcessError? = nil) {
+    init(error: AssemblywrightDeveloperBridgeProcessError? = nil) {
         self.error = error
     }
 
     func validate(
         processIdentifier _: Int32,
-        expected _: JarvisDeveloperBridgeValidatedExecutable
+        expected _: AssemblywrightDeveloperBridgeValidatedExecutable
     ) throws {
         if let error { throw error }
     }
 }
 
 private final class RecordingBridgeRunningProcessValidator:
-    JarvisDeveloperBridgeRunningProcessValidating, @unchecked Sendable
+    AssemblywrightDeveloperBridgeRunningProcessValidating, @unchecked Sendable
 {
     private let lock = NSLock()
-    private let error: JarvisDeveloperBridgeProcessError?
+    private let error: AssemblywrightDeveloperBridgeProcessError?
     private var recordedProcessIdentifier: Int32?
 
-    init(error: JarvisDeveloperBridgeProcessError? = nil) {
+    init(error: AssemblywrightDeveloperBridgeProcessError? = nil) {
         self.error = error
     }
 
     func validate(
         processIdentifier: Int32,
-        expected _: JarvisDeveloperBridgeValidatedExecutable
+        expected _: AssemblywrightDeveloperBridgeValidatedExecutable
     ) throws {
         lock.withLock {
             recordedProcessIdentifier = processIdentifier
@@ -488,7 +488,7 @@ struct DeveloperBridgeTests {
     func bodylessNoContentResponseIsAcceptedStrictly() throws {
         var bodyless = Data("HTTP/1.1 204 No Content\r\nDate: now\r\n\r\n".utf8)
         let response = try #require(
-            JarvisMacHTTP1ResponseParser.parseResponseIfComplete(
+            AssemblywrightMacHTTP1ResponseParser.parseResponseIfComplete(
                 &bodyless,
                 maximumHeaderBytes: 32 * 1_024,
                 maximumWireBytes: 1_024 * 1_024
@@ -501,8 +501,8 @@ struct DeveloperBridgeTests {
         var nonzeroLength = Data(
             "HTTP/1.1 204 No Content\r\nContent-Length: 1\r\n\r\n".utf8
         )
-        #expect(throws: JarvisMacDeveloperBridgeError.invalidResponse) {
-            _ = try JarvisMacHTTP1ResponseParser.parseResponseIfComplete(
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.invalidResponse) {
+            _ = try AssemblywrightMacHTTP1ResponseParser.parseResponseIfComplete(
                 &nonzeroLength,
                 maximumHeaderBytes: 32 * 1_024,
                 maximumWireBytes: 1_024 * 1_024
@@ -510,8 +510,8 @@ struct DeveloperBridgeTests {
         }
 
         var hiddenBody = Data("HTTP/1.1 204 No Content\r\n\r\nx".utf8)
-        #expect(throws: JarvisMacDeveloperBridgeError.invalidResponse) {
-            _ = try JarvisMacHTTP1ResponseParser.parseResponseIfComplete(
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.invalidResponse) {
+            _ = try AssemblywrightMacHTTP1ResponseParser.parseResponseIfComplete(
                 &hiddenBody,
                 maximumHeaderBytes: 32 * 1_024,
                 maximumWireBytes: 1_024 * 1_024
@@ -523,8 +523,8 @@ struct DeveloperBridgeTests {
             "HTTP/1.1 204 No Content\r\nContent-Length : 0\r\n\r\n"
         ] {
             var response = Data(malformed.utf8)
-            #expect(throws: JarvisMacDeveloperBridgeError.invalidResponse) {
-                _ = try JarvisMacHTTP1ResponseParser.parseResponseIfComplete(
+            #expect(throws: AssemblywrightMacDeveloperBridgeError.invalidResponse) {
+                _ = try AssemblywrightMacHTTP1ResponseParser.parseResponseIfComplete(
                     &response,
                     maximumHeaderBytes: 32 * 1_024,
                     maximumWireBytes: 1_024 * 1_024
@@ -536,21 +536,21 @@ struct DeveloperBridgeTests {
     @Test("Invitation decoding is exact and bounded before Keychain staging")
     func invitationIsExactAndBounded() throws {
         let store = FakeBridgeIdentityStore()
-        let enrollment = JarvisMacEnrollmentCoordinator(identityStore: store)
+        let enrollment = AssemblywrightMacEnrollmentCoordinator(identityStore: store)
 
         var unknown = try #require(
             JSONSerialization.jsonObject(with: validInvitationData()) as? [String: Any]
         )
         unknown["grant_secret"] = String(repeating: "0", count: 64)
         let unknownData = try JSONSerialization.data(withJSONObject: unknown)
-        #expect(throws: JarvisMacDeveloperBridgeError.invalidDocument) {
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.invalidDocument) {
             _ = try enrollment.prepare(invitationData: unknownData)
         }
         #expect(store.staged == nil)
 
-        #expect(throws: JarvisMacDeveloperBridgeError.documentTooLarge) {
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.documentTooLarge) {
             _ = try enrollment.prepare(
-                invitationData: Data(repeating: 0x20, count: JarvisMacEnrollmentCoordinator.maximumDocumentBytes + 1)
+                invitationData: Data(repeating: 0x20, count: AssemblywrightMacEnrollmentCoordinator.maximumDocumentBytes + 1)
             )
         }
         #expect(store.staged == nil)
@@ -559,7 +559,7 @@ struct DeveloperBridgeTests {
     @Test("Preparing enrollment stages only public binding and emits exact CSR reply")
     func prepareEmitsExactCSRReply() throws {
         let store = FakeBridgeIdentityStore()
-        let enrollment = JarvisMacEnrollmentCoordinator(identityStore: store)
+        let enrollment = AssemblywrightMacEnrollmentCoordinator(identityStore: store)
         let reply = try enrollment.prepare(invitationData: validInvitationData())
         let json = try #require(JSONSerialization.jsonObject(with: reply) as? [String: Any])
 
@@ -574,71 +574,71 @@ struct DeveloperBridgeTests {
     @Test("Fixture enrollment is exact and isolated from the standard profile")
     func fixtureEnrollmentIsExactAndProfileIsolated() throws {
         let rejectedStore = FakeBridgeIdentityStore()
-        let fixtureEnrollment = JarvisMacEnrollmentCoordinator(
+        let fixtureEnrollment = AssemblywrightMacEnrollmentCoordinator(
             identityStore: rejectedStore,
             identityProfile: .fixtureReasoning
         )
-        #expect(throws: JarvisMacDeveloperBridgeError.bindingMismatch) {
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.bindingMismatch) {
             _ = try fixtureEnrollment.prepare(invitationData: validInvitationData())
         }
         #expect(rejectedStore.staged == nil)
 
         let acceptedStore = FakeBridgeIdentityStore()
-        let exactFixtureEnrollment = JarvisMacEnrollmentCoordinator(
+        let exactFixtureEnrollment = AssemblywrightMacEnrollmentCoordinator(
             identityStore: acceptedStore,
             identityProfile: .fixtureReasoning
         )
         _ = try exactFixtureEnrollment.prepare(invitationData: fixtureInvitationData())
         #expect(acceptedStore.staged?.capabilities == [
-            JarvisMacBridgeCapability(
+            AssemblywrightMacBridgeCapability(
                 id: "fixture.reasoning",
                 kind: "local_inference",
-                provider: "jarvis-fixture",
-                model: "jarvis-fixture-v1",
+                provider: "assemblywright-fixture",
+                model: "assemblywright-fixture-v1",
                 maxContextBytes: 8_192,
                 maxResultBytes: 8_192
             )
         ])
         acceptedStore.installedProfile = sampleProfile()
-        #expect(throws: JarvisMacDeveloperBridgeError.bindingMismatch) {
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.bindingMismatch) {
             _ = try exactFixtureEnrollment.status()
         }
 
-        let standard = JarvisMacBridgeKeychainNamespace.identityProfile(.standard)
-        let fixture = JarvisMacBridgeKeychainNamespace.identityProfile(.fixtureReasoning)
+        let standard = AssemblywrightMacBridgeKeychainNamespace.identityProfile(.standard)
+        let fixture = AssemblywrightMacBridgeKeychainNamespace.identityProfile(.fixtureReasoning)
         #expect(
-            standard.service == "com.nobiletechnology.jarvis.developer-bridge"
+            standard.service == "com.nobiletechnology.assemblywright.developer-bridge"
         )
         #expect(standard.stagedAccount == "enrollment-staged-v1")
         #expect(standard.installedAccount == "identity-installed-v1")
         #expect(
             standard.certificateLabel
-                == "com.nobiletechnology.jarvis.developer-bridge.identity-v1"
+                == "com.nobiletechnology.assemblywright.developer-bridge.identity-v1"
         )
         #expect(
             standard.keyTag
-                == Data("com.nobiletechnology.jarvis.developer-bridge.p256-v1".utf8)
+                == Data("com.nobiletechnology.assemblywright.developer-bridge.p256-v1".utf8)
         )
         // These Keychain service names scope items already stored on an installed
         // Mac. Renaming them orphans the enrolled identity rather than migrating
         // it, so the Assemblywright rename left them unchanged on purpose. See
         // docs/brand.md "Compatibility Names".
         #expect(
-            fixture.service == "com.nobiletechnology.jarvis.developer-bridge.fixture"
+            fixture.service == "com.nobiletechnology.assemblywright.developer-bridge.fixture"
         )
         #expect(
             fixture.certificateLabel
-                == "com.nobiletechnology.jarvis.developer-bridge.fixture.identity-v1"
+                == "com.nobiletechnology.assemblywright.developer-bridge.fixture.identity-v1"
         )
         #expect(
             fixture.keyTag
-                == Data("com.nobiletechnology.jarvis.developer-bridge.fixture.p256-v1".utf8)
+                == Data("com.nobiletechnology.assemblywright.developer-bridge.fixture.p256-v1".utf8)
         )
         #expect(fixture.service != standard.service)
         #expect(fixture.certificateLabel != standard.certificateLabel)
         #expect(fixture.keyTag != standard.keyTag)
-        #expect(JarvisMacBridgeIdentityProfile(selector: "fixture") == .fixtureReasoning)
-        #expect(JarvisMacBridgeIdentityProfile(selector: "mlx") == nil)
+        #expect(AssemblywrightMacBridgeIdentityProfile(selector: "fixture") == .fixtureReasoning)
+        #expect(AssemblywrightMacBridgeIdentityProfile(selector: "mlx") == nil)
     }
 
     @Test("Expired and non-concrete master invitations fail before identity creation")
@@ -646,12 +646,12 @@ struct DeveloperBridgeTests {
         let unsafeEndpoints = ["0.0.0.0:7792", "224.0.0.1:7792", "[::]:7792", "[ff02::1]:7792", "master.local:7792"]
         for endpoint in unsafeEndpoints {
             let store = FakeBridgeIdentityStore()
-            let enrollment = JarvisMacEnrollmentCoordinator(identityStore: store)
+            let enrollment = AssemblywrightMacEnrollmentCoordinator(identityStore: store)
             var invitation = try #require(
                 JSONSerialization.jsonObject(with: validInvitationData()) as? [String: Any]
             )
             invitation["master_endpoint"] = endpoint
-            #expect(throws: JarvisMacDeveloperBridgeError.invalidInvitation) {
+            #expect(throws: AssemblywrightMacDeveloperBridgeError.invalidInvitation) {
                 _ = try enrollment.prepare(
                     invitationData: try JSONSerialization.data(withJSONObject: invitation)
                 )
@@ -660,11 +660,11 @@ struct DeveloperBridgeTests {
         }
 
         let store = FakeBridgeIdentityStore()
-        let expired = JarvisMacEnrollmentCoordinator(
+        let expired = AssemblywrightMacEnrollmentCoordinator(
             identityStore: store,
             nowMilliseconds: { 4_102_444_800_000 }
         )
-        #expect(throws: JarvisMacDeveloperBridgeError.invitationExpired) {
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.invitationExpired) {
             _ = try expired.prepare(invitationData: validInvitationData())
         }
         #expect(store.staged == nil)
@@ -673,14 +673,14 @@ struct DeveloperBridgeTests {
     @Test("Issued receipt mismatch fails before identity installation")
     func issuedMismatchFailsClosed() throws {
         let store = FakeBridgeIdentityStore()
-        let enrollment = JarvisMacEnrollmentCoordinator(identityStore: store)
+        let enrollment = AssemblywrightMacEnrollmentCoordinator(identityStore: store)
         _ = try enrollment.prepare(invitationData: validInvitationData())
         var receipt = try #require(
             JSONSerialization.jsonObject(with: validIssuedReceiptData()) as? [String: Any]
         )
         receipt["device_id"] = "33333333-3333-4333-8333-333333333333"
 
-        #expect(throws: JarvisMacDeveloperBridgeError.bindingMismatch) {
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.bindingMismatch) {
             _ = try enrollment.install(issuedReceiptData: try JSONSerialization.data(withJSONObject: receipt))
         }
         #expect(store.installed == nil)
@@ -689,7 +689,7 @@ struct DeveloperBridgeTests {
             JSONSerialization.jsonObject(with: validIssuedReceiptData()) as? [String: Any]
         )
         unknown["private_key"] = "must-never-be-accepted"
-        #expect(throws: JarvisMacDeveloperBridgeError.invalidDocument) {
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.invalidDocument) {
             _ = try enrollment.install(
                 issuedReceiptData: try JSONSerialization.data(withJSONObject: unknown)
             )
@@ -700,7 +700,7 @@ struct DeveloperBridgeTests {
     @Test("Windows CRLF certificate receipts install without relaxing PEM framing")
     func windowsCRLFIssuedReceiptInstalls() throws {
         let store = FakeBridgeIdentityStore()
-        let enrollment = JarvisMacEnrollmentCoordinator(identityStore: store)
+        let enrollment = AssemblywrightMacEnrollmentCoordinator(identityStore: store)
         _ = try enrollment.prepare(invitationData: validInvitationData())
         let receipt = try #require(String(data: validIssuedReceiptData(), encoding: .utf8))
             .replacingOccurrences(of: "\\n", with: "\\r\\n")
@@ -716,16 +716,16 @@ struct DeveloperBridgeTests {
             options: [],
             range: receipt.range(of: "-----END CERTIFICATE-----\\r\\n")
         )
-        #expect(throws: JarvisMacDeveloperBridgeError.invalidDocument) {
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.invalidDocument) {
             _ = try enrollment.install(issuedReceiptData: Data(mixed.utf8))
         }
     }
 
     @Test("Security validity numbers use the Apple reference date")
     func securityValidityNumberUsesReferenceDate() throws {
-        let date = try #require(jarvisCertificatePropertyDate(NSNumber(value: 809_033_786)))
+        let date = try #require(assemblywrightCertificatePropertyDate(NSNumber(value: 809_033_786)))
         #expect(UInt64(date.timeIntervalSince1970 * 1_000) == 1_787_340_986_000)
-        #expect(jarvisCertificatePropertyDate(NSNumber(value: Double.nan)) == nil)
+        #expect(assemblywrightCertificatePropertyDate(NSNumber(value: Double.nan)) == nil)
     }
 
     @Test("Handshake is exporter-bound and accepts only the exact registered profile")
@@ -736,9 +736,9 @@ struct DeveloperBridgeTests {
         )
         let channel = FakeBridgeChannel(
             exporter: Data(repeating: 0x42, count: 32),
-            response: JarvisMacBridgeHTTPResponse(status: 200, body: responseData)
+            response: AssemblywrightMacBridgeHTTPResponse(status: 200, body: responseData)
         )
-        let transport = JarvisMacMTLSBridgeTransport(factory: FakeBridgeChannelFactory(channel: channel))
+        let transport = AssemblywrightMacMTLSBridgeTransport(factory: FakeBridgeChannelFactory(channel: channel))
         let session = try await transport.connect(profile: profile)
 
         #expect(session.connectionEpoch == 7)
@@ -758,27 +758,27 @@ struct DeveloperBridgeTests {
     func invalidHandshakeCancelsChannel() async {
         let unavailable = FakeBridgeChannel(
             exporter: nil,
-            response: JarvisMacBridgeHTTPResponse(status: 500, body: Data())
+            response: AssemblywrightMacBridgeHTTPResponse(status: 500, body: Data())
         )
-        let unavailableTransport = JarvisMacMTLSBridgeTransport(
+        let unavailableTransport = AssemblywrightMacMTLSBridgeTransport(
             factory: FakeBridgeChannelFactory(channel: unavailable)
         )
-        await #expect(throws: JarvisMacDeveloperBridgeError.channelBindingUnavailable) {
+        await #expect(throws: AssemblywrightMacDeveloperBridgeError.channelBindingUnavailable) {
             _ = try await unavailableTransport.connect(profile: sampleProfile())
         }
         #expect(await unavailable.cancelled)
 
         let mismatched = FakeBridgeChannel(
             exporter: Data(repeating: 1, count: 32),
-            response: JarvisMacBridgeHTTPResponse(
+            response: AssemblywrightMacBridgeHTTPResponse(
                 status: 200,
                 body: Data(#"{"protocol_version":1,"status":"accepted","connection_epoch":7,"accepted_registry_revision":4,"reason_code":null}"#.utf8)
             )
         )
-        let mismatchedTransport = JarvisMacMTLSBridgeTransport(
+        let mismatchedTransport = AssemblywrightMacMTLSBridgeTransport(
             factory: FakeBridgeChannelFactory(channel: mismatched)
         )
-        await #expect(throws: JarvisMacDeveloperBridgeError.bindingMismatch) {
+        await #expect(throws: AssemblywrightMacDeveloperBridgeError.bindingMismatch) {
             _ = try await mismatchedTransport.connect(profile: sampleProfile())
         }
         #expect(await mismatched.cancelled)
@@ -786,9 +786,9 @@ struct DeveloperBridgeTests {
 
     @Test("Bridge request gate rejects overlap and reopens after completion")
     func requestGateRejectsOverlap() async throws {
-        let gate = JarvisMacBridgeRequestGate()
+        let gate = AssemblywrightMacBridgeRequestGate()
         try await gate.begin()
-        await #expect(throws: JarvisMacDeveloperBridgeError.requestInFlight) {
+        await #expect(throws: AssemblywrightMacDeveloperBridgeError.requestInFlight) {
             try await gate.begin()
         }
         await gate.finish()
@@ -798,13 +798,13 @@ struct DeveloperBridgeTests {
 
     @Test("Supervisor keeps one authenticated session for exact health samples")
     func supervisorKeepsAuthenticatedSession() async throws {
-        let response = JarvisMacBridgeHTTPResponse(status: 200, body: validRemoteHealthData())
+        let response = AssemblywrightMacBridgeHTTPResponse(status: 200, body: validRemoteHealthData())
         let session = FakeSupervisorSession(
             connectionEpoch: 41,
             outcomes: [.response(response), .response(response)]
         )
         let connector = FakeSupervisorConnector(sessions: [session])
-        let supervisor = JarvisMacBridgeSupervisor(profile: sampleProfile(), connector: connector)
+        let supervisor = AssemblywrightMacBridgeSupervisor(profile: sampleProfile(), connector: connector)
 
         let first = await supervisor.sample()
         let second = await supervisor.sample()
@@ -827,7 +827,7 @@ struct DeveloperBridgeTests {
             connectionEpoch: 42,
             outcomes: [.response(.init(status: 200, body: pausedRemoteHealthData()))]
         )
-        let supervisor = JarvisMacBridgeSupervisor(
+        let supervisor = AssemblywrightMacBridgeSupervisor(
             profile: sampleProfile(),
             connector: FakeSupervisorConnector(sessions: [session])
         )
@@ -846,17 +846,17 @@ struct DeveloperBridgeTests {
     func supervisorReconnectsAfterInvalidHealth() async throws {
         let invalid = FakeSupervisorSession(
             connectionEpoch: 7,
-            outcomes: [.response(JarvisMacBridgeHTTPResponse(
+            outcomes: [.response(AssemblywrightMacBridgeHTTPResponse(
                 status: 200,
                 body: Data(#"{"status":"ok","mode":"developer_remote_master"}"#.utf8)
             ))]
         )
         let recovered = FakeSupervisorSession(
             connectionEpoch: 8,
-            outcomes: [.response(JarvisMacBridgeHTTPResponse(status: 200, body: validRemoteHealthData()))]
+            outcomes: [.response(AssemblywrightMacBridgeHTTPResponse(status: 200, body: validRemoteHealthData()))]
         )
         let connector = FakeSupervisorConnector(sessions: [invalid, recovered])
-        let supervisor = JarvisMacBridgeSupervisor(profile: sampleProfile(), connector: connector)
+        let supervisor = AssemblywrightMacBridgeSupervisor(profile: sampleProfile(), connector: connector)
 
         let failed = await supervisor.sample()
         let healthy = await supervisor.sample()
@@ -879,11 +879,11 @@ struct DeveloperBridgeTests {
         let streamID = UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")!
         let agent = FakeDeveloperAgentSession()
         let launcher = FakeDeveloperAgentLauncher(session: agent)
-        let configuration = JarvisMacDeveloperEventRelayConfiguration(
+        let configuration = AssemblywrightMacDeveloperEventRelayConfiguration(
             agentExecutableURL: URL(fileURLWithPath: "/tmp/assemblywright-agent"),
             agentDataDirectoryURL: URL(fileURLWithPath: "/tmp/assemblywright-agent-data")
         )
-        let relay = JarvisMacDeveloperEventRelay(
+        let relay = AssemblywrightMacDeveloperEventRelay(
             configuration: configuration,
             launcher: launcher
         )
@@ -894,12 +894,12 @@ struct DeveloperBridgeTests {
         )
         let master = FakeSupervisorSession(
             connectionEpoch: 51,
-            outcomes: [.response(JarvisMacBridgeHTTPResponse(status: 200, body: batch))]
+            outcomes: [.response(AssemblywrightMacBridgeHTTPResponse(status: 200, body: batch))]
         )
 
         let progress = try await relay.relayEvents(using: master)
 
-        #expect(progress.cursor == JarvisMacDeveloperEventCursor(
+        #expect(progress.cursor == AssemblywrightMacDeveloperEventCursor(
             streamID: streamID,
             sequence: 1
         ))
@@ -910,7 +910,7 @@ struct DeveloperBridgeTests {
         #expect(await launcher.configurations == [configuration])
         let request = try #require(await master.requests.first)
         #expect(request.method == "POST")
-        #expect(request.path == JarvisMacDeveloperEventRelay.remoteEventsPath)
+        #expect(request.path == AssemblywrightMacDeveloperEventRelay.remoteEventsPath)
         let requestObject = try #require(
             JSONSerialization.jsonObject(with: request.body) as? [String: Any]
         )
@@ -924,8 +924,8 @@ struct DeveloperBridgeTests {
     @Test("Malformed master event batch fails before the local agent cursor changes")
     func eventRelayRejectsMalformedMasterBatch() async throws {
         let agent = FakeDeveloperAgentSession()
-        let relay = JarvisMacDeveloperEventRelay(
-            configuration: JarvisMacDeveloperEventRelayConfiguration(
+        let relay = AssemblywrightMacDeveloperEventRelay(
+            configuration: AssemblywrightMacDeveloperEventRelayConfiguration(
                 agentExecutableURL: URL(fileURLWithPath: "/tmp/assemblywright-agent"),
                 agentDataDirectoryURL: URL(fileURLWithPath: "/tmp/assemblywright-agent-data")
             ),
@@ -936,10 +936,10 @@ struct DeveloperBridgeTests {
         )
         let master = FakeSupervisorSession(
             connectionEpoch: 52,
-            outcomes: [.response(JarvisMacBridgeHTTPResponse(status: 200, body: malformed))]
+            outcomes: [.response(AssemblywrightMacBridgeHTTPResponse(status: 200, body: malformed))]
         )
 
-        await #expect(throws: JarvisMacDeveloperEventRelayError.invalidMasterResponse) {
+        await #expect(throws: AssemblywrightMacDeveloperEventRelayError.invalidMasterResponse) {
             _ = try await relay.relayEvents(using: master)
         }
         #expect(await agent.acceptedBatches.isEmpty)
@@ -950,8 +950,8 @@ struct DeveloperBridgeTests {
     func fixtureJobRelayCompletesExactSyntheticJob() async throws {
         let fixture = try fixtureJobDocuments(connectionEpoch: 61, delayMilliseconds: 0)
         let agent = FakeDeveloperAgentSession(fixtureResult: fixture.result)
-        let relay = JarvisMacDeveloperEventRelay(
-            configuration: JarvisMacDeveloperEventRelayConfiguration(
+        let relay = AssemblywrightMacDeveloperEventRelay(
+            configuration: AssemblywrightMacDeveloperEventRelayConfiguration(
                 agentExecutableURL: URL(fileURLWithPath: "/tmp/assemblywright-agent"),
                 agentDataDirectoryURL: URL(fileURLWithPath: "/tmp/assemblywright-agent-data"),
                 fixtureJobsEnabled: true
@@ -972,10 +972,10 @@ struct DeveloperBridgeTests {
         #expect(await agent.executedJobs == [fixture.job])
         #expect(await agent.cancellations.isEmpty)
         let paths = await master.requests.map(\.path)
-        #expect(paths.contains(JarvisMacDeveloperEventRelay.remoteLeasePath))
-        #expect(paths.contains(JarvisMacDeveloperEventRelay.remoteResultPath))
+        #expect(paths.contains(AssemblywrightMacDeveloperEventRelay.remoteLeasePath))
+        #expect(paths.contains(AssemblywrightMacDeveloperEventRelay.remoteResultPath))
         #expect(!paths.contains(
-            JarvisMacDeveloperEventRelay.remoteCancellationAcknowledgementPath
+            AssemblywrightMacDeveloperEventRelay.remoteCancellationAcknowledgementPath
         ))
         #expect(!(await master.cancelled))
         try await relay.stop()
@@ -985,8 +985,8 @@ struct DeveloperBridgeTests {
     func fixtureLeaseNoWorkRequiresFreshConnection() async throws {
         let fixture = try fixtureJobDocuments(connectionEpoch: 61, delayMilliseconds: 0)
         let agent = FakeDeveloperAgentSession(fixtureResult: fixture.result)
-        let relay = JarvisMacDeveloperEventRelay(
-            configuration: JarvisMacDeveloperEventRelayConfiguration(
+        let relay = AssemblywrightMacDeveloperEventRelay(
+            configuration: AssemblywrightMacDeveloperEventRelayConfiguration(
                 agentExecutableURL: URL(fileURLWithPath: "/tmp/assemblywright-agent"),
                 agentDataDirectoryURL: URL(fileURLWithPath: "/tmp/assemblywright-agent-data"),
                 fixtureJobsEnabled: true
@@ -1016,8 +1016,8 @@ struct DeveloperBridgeTests {
             fixtureResult: fixture.result,
             fixtureDelayMilliseconds: 100
         )
-        let relay = JarvisMacDeveloperEventRelay(
-            configuration: JarvisMacDeveloperEventRelayConfiguration(
+        let relay = AssemblywrightMacDeveloperEventRelay(
+            configuration: AssemblywrightMacDeveloperEventRelayConfiguration(
                 agentExecutableURL: URL(fileURLWithPath: "/tmp/assemblywright-agent"),
                 agentDataDirectoryURL: URL(fileURLWithPath: "/tmp/assemblywright-agent-data"),
                 fixtureJobsEnabled: true
@@ -1035,11 +1035,11 @@ struct DeveloperBridgeTests {
             )
         )
 
-        await #expect(throws: JarvisMacDeveloperEventRelayError.invalidMasterResponse) {
+        await #expect(throws: AssemblywrightMacDeveloperEventRelayError.invalidMasterResponse) {
             _ = try await relay.relayEvents(using: master)
         }
         #expect(!(await master.requests.map(\.path).contains(
-            JarvisMacDeveloperEventRelay.remoteResultPath
+            AssemblywrightMacDeveloperEventRelay.remoteResultPath
         )))
         try await relay.stop()
     }
@@ -1052,8 +1052,8 @@ struct DeveloperBridgeTests {
             cancellationAcknowledgement: fixture.cancellationAcknowledgement,
             fixtureDelayMilliseconds: 5_000
         )
-        let relay = JarvisMacDeveloperEventRelay(
-            configuration: JarvisMacDeveloperEventRelayConfiguration(
+        let relay = AssemblywrightMacDeveloperEventRelay(
+            configuration: AssemblywrightMacDeveloperEventRelayConfiguration(
                 agentExecutableURL: URL(fileURLWithPath: "/tmp/assemblywright-agent"),
                 agentDataDirectoryURL: URL(fileURLWithPath: "/tmp/assemblywright-agent-data"),
                 fixtureJobsEnabled: true
@@ -1075,9 +1075,9 @@ struct DeveloperBridgeTests {
         #expect(await agent.cancellations == [fixture.cancellation])
         let paths = await master.requests.map(\.path)
         #expect(paths.contains(
-            JarvisMacDeveloperEventRelay.remoteCancellationAcknowledgementPath
+            AssemblywrightMacDeveloperEventRelay.remoteCancellationAcknowledgementPath
         ))
-        #expect(!paths.contains(JarvisMacDeveloperEventRelay.remoteResultPath))
+        #expect(!paths.contains(AssemblywrightMacDeveloperEventRelay.remoteResultPath))
         try await relay.stop()
     }
 
@@ -1085,13 +1085,13 @@ struct DeveloperBridgeTests {
     func fixturePauseIsExactNoWork() async throws {
         let fixture = try fixtureJobDocuments(connectionEpoch: 63, delayMilliseconds: 0)
         let agent = FakeDeveloperAgentSession(fixtureResult: fixture.result)
-        let configuration = JarvisMacDeveloperEventRelayConfiguration(
+        let configuration = AssemblywrightMacDeveloperEventRelayConfiguration(
             agentExecutableURL: URL(fileURLWithPath: "/tmp/assemblywright-agent"),
             agentDataDirectoryURL: URL(fileURLWithPath: "/tmp/assemblywright-agent-data"),
             fixtureJobsEnabled: true
         )
         let deviceID = UUID(uuidString: "22222222-2222-4222-8222-222222222222")
-        let pausedRelay = JarvisMacDeveloperEventRelay(
+        let pausedRelay = AssemblywrightMacDeveloperEventRelay(
             configuration: configuration,
             deviceID: deviceID,
             launcher: FakeDeveloperAgentLauncher(session: agent)
@@ -1111,7 +1111,7 @@ struct DeveloperBridgeTests {
         #expect(await agent.executedJobs.isEmpty)
         try await pausedRelay.stop()
 
-        let malformedRelay = JarvisMacDeveloperEventRelay(
+        let malformedRelay = AssemblywrightMacDeveloperEventRelay(
             configuration: configuration,
             deviceID: deviceID,
             launcher: FakeDeveloperAgentLauncher(session: FakeDeveloperAgentSession())
@@ -1126,7 +1126,7 @@ struct DeveloperBridgeTests {
                 body: Data(#"{"error":"maintenance_mode_blocks_work"}"#.utf8)
             )
         )
-        await #expect(throws: JarvisMacDeveloperEventRelayError.invalidMasterResponse) {
+        await #expect(throws: AssemblywrightMacDeveloperEventRelayError.invalidMasterResponse) {
             _ = try await malformedRelay.relayEvents(using: malformedMaster)
         }
         try await malformedRelay.stop()
@@ -1136,13 +1136,13 @@ struct DeveloperBridgeTests {
     func supervisorFailsClosedOnEventRelayFailure() async {
         let session = FakeSupervisorSession(
             connectionEpoch: 53,
-            outcomes: [.response(JarvisMacBridgeHTTPResponse(
+            outcomes: [.response(AssemblywrightMacBridgeHTTPResponse(
                 status: 200,
                 body: validRemoteHealthData()
             ))]
         )
         let relay = FakeBridgeEventRelay(error: .eventCursorRejected)
-        let supervisor = JarvisMacBridgeSupervisor(
+        let supervisor = AssemblywrightMacBridgeSupervisor(
             profile: sampleProfile(),
             connector: FakeSupervisorConnector(sessions: [session]),
             eventRelay: relay
@@ -1159,7 +1159,7 @@ struct DeveloperBridgeTests {
 
     @Test("Fixture no-work closes the 204 connection before the next sample")
     func supervisorReconnectsAfterFixtureNoWork() async {
-        let response = JarvisMacBridgeHTTPResponse(
+        let response = AssemblywrightMacBridgeHTTPResponse(
             status: 200,
             body: validRemoteHealthData()
         )
@@ -1173,7 +1173,7 @@ struct DeveloperBridgeTests {
         )
         let connector = FakeSupervisorConnector(sessions: [firstSession, secondSession])
         let relay = FakeBridgeEventRelay(requiresFreshConnection: true)
-        let supervisor = JarvisMacBridgeSupervisor(
+        let supervisor = AssemblywrightMacBridgeSupervisor(
             profile: sampleProfile(),
             connector: connector,
             eventRelay: relay
@@ -1193,70 +1193,70 @@ struct DeveloperBridgeTests {
 
     @Test("App relay opt-in requires both absolute agent paths and keeps startup secret-free")
     func appRelayConfigurationIsExactAndSecretFree() throws {
-        let complete = JarvisDeveloperBridgeProcessConfiguration(environment: [
-            JarvisDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
-                "/tmp/jarvis-mac-bridge",
-            JarvisDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
+        let complete = AssemblywrightDeveloperBridgeProcessConfiguration(environment: [
+            AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
+                "/tmp/assemblywright-mac-bridge",
+            AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
                 "ABCDEFGHIJ",
-            JarvisDeveloperBridgeProcessConfiguration.agentExecutableEnvironmentKey:
+            AssemblywrightDeveloperBridgeProcessConfiguration.agentExecutableEnvironmentKey:
                 "/tmp/assemblywright-agent",
-            JarvisDeveloperBridgeProcessConfiguration.agentDataDirectoryEnvironmentKey:
+            AssemblywrightDeveloperBridgeProcessConfiguration.agentDataDirectoryEnvironmentKey:
                 "/tmp/assemblywright-agent-data"
         ])
         let relay = try #require(complete.eventRelayConfiguration)
         let document = try relay.encodeStartupDocument()
-        let decoded = try JarvisMacDeveloperEventRelayConfiguration
+        let decoded = try AssemblywrightMacDeveloperEventRelayConfiguration
             .decodeStartupDocument(document)
         #expect(decoded == relay)
         #expect(!String(decoding: document, as: UTF8.self).contains("bearer"))
         #expect(!relay.fixtureJobsEnabled)
 
-        let partial = JarvisDeveloperBridgeProcessConfiguration(environment: [
-            JarvisDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
-                "/tmp/jarvis-mac-bridge",
-            JarvisDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
+        let partial = AssemblywrightDeveloperBridgeProcessConfiguration(environment: [
+            AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
+                "/tmp/assemblywright-mac-bridge",
+            AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
                 "ABCDEFGHIJ",
-            JarvisDeveloperBridgeProcessConfiguration.agentExecutableEnvironmentKey:
+            AssemblywrightDeveloperBridgeProcessConfiguration.agentExecutableEnvironmentKey:
                 "/tmp/assemblywright-agent"
         ])
         #expect(partial.executableURL == nil)
         #expect(partial.eventRelayConfiguration == nil)
 
-        let fixture = JarvisDeveloperBridgeProcessConfiguration(environment: [
-            JarvisDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
-                "/tmp/jarvis-mac-bridge",
-            JarvisDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
+        let fixture = AssemblywrightDeveloperBridgeProcessConfiguration(environment: [
+            AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
+                "/tmp/assemblywright-mac-bridge",
+            AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
                 "ABCDEFGHIJ",
-            JarvisDeveloperBridgeProcessConfiguration.agentExecutableEnvironmentKey:
+            AssemblywrightDeveloperBridgeProcessConfiguration.agentExecutableEnvironmentKey:
                 "/tmp/assemblywright-agent",
-            JarvisDeveloperBridgeProcessConfiguration.agentDataDirectoryEnvironmentKey:
+            AssemblywrightDeveloperBridgeProcessConfiguration.agentDataDirectoryEnvironmentKey:
                 "/tmp/assemblywright-agent-data",
-            JarvisDeveloperBridgeProcessConfiguration.fixtureJobsEnabledEnvironmentKey:
+            AssemblywrightDeveloperBridgeProcessConfiguration.fixtureJobsEnabledEnvironmentKey:
                 "true"
         ])
         #expect(fixture.eventRelayConfiguration?.fixtureJobsEnabled == true)
         #expect(
-            FoundationJarvisDeveloperBridgeProcessLauncher.helperArguments(
+            FoundationAssemblywrightDeveloperBridgeProcessLauncher.helperArguments(
                 eventRelayConfiguration: fixture.eventRelayConfiguration
             ) == ["relay", "--identity-profile", "fixture"]
         )
         #expect(
-            FoundationJarvisDeveloperBridgeProcessLauncher.helperArguments(
+            FoundationAssemblywrightDeveloperBridgeProcessLauncher.helperArguments(
                 eventRelayConfiguration: relay
             ) == ["relay"]
         )
         #expect(
-            FoundationJarvisDeveloperBridgeProcessLauncher.helperArguments(
+            FoundationAssemblywrightDeveloperBridgeProcessLauncher.helperArguments(
                 eventRelayConfiguration: nil
             ) == ["monitor"]
         )
 
-        let unsafeFixture = JarvisDeveloperBridgeProcessConfiguration(environment: [
-            JarvisDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
-                "/tmp/jarvis-mac-bridge",
-            JarvisDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
+        let unsafeFixture = AssemblywrightDeveloperBridgeProcessConfiguration(environment: [
+            AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
+                "/tmp/assemblywright-mac-bridge",
+            AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
                 "ABCDEFGHIJ",
-            JarvisDeveloperBridgeProcessConfiguration.fixtureJobsEnabledEnvironmentKey:
+            AssemblywrightDeveloperBridgeProcessConfiguration.fixtureJobsEnabledEnvironmentKey:
                 "true"
         ])
         #expect(unsafeFixture.executableURL == nil)
@@ -1266,8 +1266,8 @@ struct DeveloperBridgeTests {
         )
         var modified = extra
         modified["bearer_token"] = "must-not-be-accepted"
-        #expect(throws: JarvisMacDeveloperEventRelayError.invalidStartupDocument) {
-            _ = try JarvisMacDeveloperEventRelayConfiguration.decodeStartupDocument(
+        #expect(throws: AssemblywrightMacDeveloperEventRelayError.invalidStartupDocument) {
+            _ = try AssemblywrightMacDeveloperEventRelayConfiguration.decodeStartupDocument(
                 try JSONSerialization.data(withJSONObject: modified)
             )
         }
@@ -1276,95 +1276,95 @@ struct DeveloperBridgeTests {
     @Test("MLX relay opt-in is complete, mutually exclusive, and keeps standard identity")
     func mlxRelayConfigurationIsStrictAndUsesStandardIdentity() throws {
         let base = [
-            JarvisDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
-                "/tmp/jarvis-mac-bridge",
-            JarvisDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
+            AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
+                "/tmp/assemblywright-mac-bridge",
+            AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
                 "ABCDEFGHIJ",
-            JarvisDeveloperBridgeProcessConfiguration.agentExecutableEnvironmentKey:
+            AssemblywrightDeveloperBridgeProcessConfiguration.agentExecutableEnvironmentKey:
                 "/tmp/assemblywright-agent",
-            JarvisDeveloperBridgeProcessConfiguration.agentDataDirectoryEnvironmentKey:
+            AssemblywrightDeveloperBridgeProcessConfiguration.agentDataDirectoryEnvironmentKey:
                 "/tmp/assemblywright-agent-data"
         ]
         var enabled = base
-        enabled[JarvisDeveloperBridgeProcessConfiguration.mlxJobsEnabledEnvironmentKey] =
+        enabled[AssemblywrightDeveloperBridgeProcessConfiguration.mlxJobsEnabledEnvironmentKey] =
             "true"
-        enabled[JarvisDeveloperBridgeProcessConfiguration.mlxExecutableEnvironmentKey] =
-            "/opt/jarvis/bin/mlx-runner"
+        enabled[AssemblywrightDeveloperBridgeProcessConfiguration.mlxExecutableEnvironmentKey] =
+            "/opt/assemblywright/bin/mlx-runner"
         enabled[
-            JarvisDeveloperBridgeProcessConfiguration.mlxModelDirectoryEnvironmentKey
-        ] = "/opt/jarvis/models/mlx-local"
-        enabled[JarvisDeveloperBridgeProcessConfiguration.mlxModelIDEnvironmentKey] =
+            AssemblywrightDeveloperBridgeProcessConfiguration.mlxModelDirectoryEnvironmentKey
+        ] = "/opt/assemblywright/models/mlx-local"
+        enabled[AssemblywrightDeveloperBridgeProcessConfiguration.mlxModelIDEnvironmentKey] =
             "mlx-local"
 
-        let configuration = JarvisDeveloperBridgeProcessConfiguration(environment: enabled)
+        let configuration = AssemblywrightDeveloperBridgeProcessConfiguration(environment: enabled)
         let relay = try #require(configuration.eventRelayConfiguration)
         #expect(relay.mlxJobsEnabled)
         #expect(!relay.fixtureJobsEnabled)
         #expect(relay.mlxModelID == "mlx-local")
         #expect(
-            FoundationJarvisDeveloperBridgeProcessLauncher.helperArguments(
+            FoundationAssemblywrightDeveloperBridgeProcessLauncher.helperArguments(
                 eventRelayConfiguration: relay
             ) == ["relay"]
         )
         let document = try relay.encodeStartupDocument()
-        let decoded = try JarvisMacDeveloperEventRelayConfiguration
+        let decoded = try AssemblywrightMacDeveloperEventRelayConfiguration
             .decodeStartupDocument(document)
         #expect(decoded == relay)
         let object = try #require(
             JSONSerialization.jsonObject(with: document) as? [String: Any]
         )
         #expect((object["version"] as? NSNumber)?.intValue == 3)
-        #expect(object["mlx_executable_path"] as? String == "/opt/jarvis/bin/mlx-runner")
-        #expect(object["mlx_model_dir"] as? String == "/opt/jarvis/models/mlx-local")
+        #expect(object["mlx_executable_path"] as? String == "/opt/assemblywright/bin/mlx-runner")
+        #expect(object["mlx_model_dir"] as? String == "/opt/assemblywright/models/mlx-local")
         #expect(object["mlx_model_id"] as? String == "mlx-local")
 
         for missing in [
-            JarvisDeveloperBridgeProcessConfiguration.mlxExecutableEnvironmentKey,
-            JarvisDeveloperBridgeProcessConfiguration.mlxModelDirectoryEnvironmentKey,
-            JarvisDeveloperBridgeProcessConfiguration.mlxModelIDEnvironmentKey
+            AssemblywrightDeveloperBridgeProcessConfiguration.mlxExecutableEnvironmentKey,
+            AssemblywrightDeveloperBridgeProcessConfiguration.mlxModelDirectoryEnvironmentKey,
+            AssemblywrightDeveloperBridgeProcessConfiguration.mlxModelIDEnvironmentKey
         ] {
             var partial = enabled
             partial.removeValue(forKey: missing)
             #expect(
-                JarvisDeveloperBridgeProcessConfiguration(environment: partial)
+                AssemblywrightDeveloperBridgeProcessConfiguration(environment: partial)
                     .executableURL == nil
             )
         }
         var mixed = enabled
         mixed[
-            JarvisDeveloperBridgeProcessConfiguration.fixtureJobsEnabledEnvironmentKey
+            AssemblywrightDeveloperBridgeProcessConfiguration.fixtureJobsEnabledEnvironmentKey
         ] = "true"
         #expect(
-            JarvisDeveloperBridgeProcessConfiguration(environment: mixed).executableURL
+            AssemblywrightDeveloperBridgeProcessConfiguration(environment: mixed).executableURL
                 == nil
         )
         var unexpectedFields = base
         unexpectedFields[
-            JarvisDeveloperBridgeProcessConfiguration.mlxModelIDEnvironmentKey
+            AssemblywrightDeveloperBridgeProcessConfiguration.mlxModelIDEnvironmentKey
         ] = "mlx-local"
         #expect(
-            JarvisDeveloperBridgeProcessConfiguration(environment: unexpectedFields)
+            AssemblywrightDeveloperBridgeProcessConfiguration(environment: unexpectedFields)
                 .executableURL == nil
         )
 
         var malformed = object
         malformed["mlx_model_id"] = "\n"
-        #expect(throws: JarvisMacDeveloperEventRelayError.invalidStartupDocument) {
-            _ = try JarvisMacDeveloperEventRelayConfiguration.decodeStartupDocument(
+        #expect(throws: AssemblywrightMacDeveloperEventRelayError.invalidStartupDocument) {
+            _ = try AssemblywrightMacDeveloperEventRelayConfiguration.decodeStartupDocument(
                 try JSONSerialization.data(withJSONObject: malformed)
             )
         }
         malformed = object
         malformed["mlx_model_dir"] = "relative/model"
-        #expect(throws: JarvisMacDeveloperEventRelayError.invalidStartupDocument) {
-            _ = try JarvisMacDeveloperEventRelayConfiguration.decodeStartupDocument(
+        #expect(throws: AssemblywrightMacDeveloperEventRelayError.invalidStartupDocument) {
+            _ = try AssemblywrightMacDeveloperEventRelayConfiguration.decodeStartupDocument(
                 try JSONSerialization.data(withJSONObject: malformed)
             )
         }
         malformed = object
         malformed["fixture_jobs_enabled"] = true
-        #expect(throws: JarvisMacDeveloperEventRelayError.invalidStartupDocument) {
-            _ = try JarvisMacDeveloperEventRelayConfiguration.decodeStartupDocument(
+        #expect(throws: AssemblywrightMacDeveloperEventRelayError.invalidStartupDocument) {
+            _ = try AssemblywrightMacDeveloperEventRelayConfiguration.decodeStartupDocument(
                 try JSONSerialization.data(withJSONObject: malformed)
             )
         }
@@ -1377,7 +1377,7 @@ struct DeveloperBridgeTests {
         let deviceID = UUID(uuidString: "22222222-2222-4222-8222-222222222222")
 
         let successAgent = FakeDeveloperAgentSession(fixtureResult: mlx.result)
-        let successRelay = JarvisMacDeveloperEventRelay(
+        let successRelay = AssemblywrightMacDeveloperEventRelay(
             configuration: configuration,
             deviceID: deviceID,
             launcher: FakeDeveloperAgentLauncher(session: successAgent)
@@ -1393,7 +1393,7 @@ struct DeveloperBridgeTests {
         #expect(await successAgent.executedJobs.isEmpty)
         #expect(
             await successMaster.requests.map(\.path).contains(
-                JarvisMacDeveloperEventRelay.remoteResultPath
+                AssemblywrightMacDeveloperEventRelay.remoteResultPath
             )
         )
         try await successRelay.stop()
@@ -1403,7 +1403,7 @@ struct DeveloperBridgeTests {
         )
         badJob["capability_id"] = "fixture.reasoning"
         let rejectedAgent = FakeDeveloperAgentSession(fixtureResult: mlx.result)
-        let rejectedRelay = JarvisMacDeveloperEventRelay(
+        let rejectedRelay = AssemblywrightMacDeveloperEventRelay(
             configuration: configuration,
             deviceID: deviceID,
             launcher: FakeDeveloperAgentLauncher(session: rejectedAgent)
@@ -1414,7 +1414,7 @@ struct DeveloperBridgeTests {
             job: try JSONSerialization.data(withJSONObject: badJob, options: [.sortedKeys]),
             acceptedResult: mlx.acceptedResult
         )
-        await #expect(throws: JarvisMacDeveloperEventRelayError.mlxJobRejected) {
+        await #expect(throws: AssemblywrightMacDeveloperEventRelayError.mlxJobRejected) {
             _ = try await rejectedRelay.relayEvents(using: rejectedMaster)
         }
         #expect(await rejectedAgent.executedMLXJobs.isEmpty)
@@ -1437,7 +1437,7 @@ struct DeveloperBridgeTests {
                 options: [.sortedKeys]
             )
         )
-        let resultRelay = JarvisMacDeveloperEventRelay(
+        let resultRelay = AssemblywrightMacDeveloperEventRelay(
             configuration: configuration,
             deviceID: deviceID,
             launcher: FakeDeveloperAgentLauncher(session: resultAgent)
@@ -1448,12 +1448,12 @@ struct DeveloperBridgeTests {
             job: mlx.job,
             acceptedResult: mlx.acceptedResult
         )
-        await #expect(throws: JarvisMacDeveloperEventRelayError.mlxJobRejected) {
+        await #expect(throws: AssemblywrightMacDeveloperEventRelayError.mlxJobRejected) {
             _ = try await resultRelay.relayEvents(using: resultMaster)
         }
         #expect(
             !(await resultMaster.requests.map(\.path).contains(
-                JarvisMacDeveloperEventRelay.remoteResultPath
+                AssemblywrightMacDeveloperEventRelay.remoteResultPath
             ))
         )
         try await resultRelay.stop()
@@ -1467,7 +1467,7 @@ struct DeveloperBridgeTests {
             cancellationAcknowledgement: mlx.cancellationAcknowledgement,
             fixtureDelayMilliseconds: 5_000
         )
-        let relay = JarvisMacDeveloperEventRelay(
+        let relay = AssemblywrightMacDeveloperEventRelay(
             configuration: mlxRelayConfiguration(),
             deviceID: UUID(uuidString: "22222222-2222-4222-8222-222222222222"),
             launcher: FakeDeveloperAgentLauncher(session: agent)
@@ -1486,24 +1486,24 @@ struct DeveloperBridgeTests {
         #expect(await agent.mlxCancellations == [mlx.cancellation])
         let paths = await master.requests.map(\.path)
         #expect(paths.contains(
-            JarvisMacDeveloperEventRelay.remoteCancellationAcknowledgementPath
+            AssemblywrightMacDeveloperEventRelay.remoteCancellationAcknowledgementPath
         ))
-        #expect(!paths.contains(JarvisMacDeveloperEventRelay.remoteResultPath))
+        #expect(!paths.contains(AssemblywrightMacDeveloperEventRelay.remoteResultPath))
         try await relay.stop()
     }
 
     @Test("Supervisor backoff is bounded")
     func supervisorBackoffIsBounded() {
-        #expect(JarvisMacBridgeSupervisor.backoffMilliseconds(for: 1) == 1_000)
-        #expect(JarvisMacBridgeSupervisor.backoffMilliseconds(for: 2) == 2_000)
-        #expect(JarvisMacBridgeSupervisor.backoffMilliseconds(for: 5) == 16_000)
-        #expect(JarvisMacBridgeSupervisor.backoffMilliseconds(for: 6) == 30_000)
-        #expect(JarvisMacBridgeSupervisor.backoffMilliseconds(for: .max) == 30_000)
+        #expect(AssemblywrightMacBridgeSupervisor.backoffMilliseconds(for: 1) == 1_000)
+        #expect(AssemblywrightMacBridgeSupervisor.backoffMilliseconds(for: 2) == 2_000)
+        #expect(AssemblywrightMacBridgeSupervisor.backoffMilliseconds(for: 5) == 16_000)
+        #expect(AssemblywrightMacBridgeSupervisor.backoffMilliseconds(for: 6) == 30_000)
+        #expect(AssemblywrightMacBridgeSupervisor.backoffMilliseconds(for: .max) == 30_000)
     }
 
     @Test("Explicit reconnect cancels the old session and advances to a new epoch")
     func supervisorExplicitReconnectAdvancesEpoch() async throws {
-        let response = JarvisMacBridgeHTTPResponse(status: 200, body: validRemoteHealthData())
+        let response = AssemblywrightMacBridgeHTTPResponse(status: 200, body: validRemoteHealthData())
         let firstSession = FakeSupervisorSession(
             connectionEpoch: 20,
             outcomes: [.response(response)]
@@ -1513,7 +1513,7 @@ struct DeveloperBridgeTests {
             outcomes: [.response(response)]
         )
         let connector = FakeSupervisorConnector(sessions: [firstSession, secondSession])
-        let supervisor = JarvisMacBridgeSupervisor(profile: sampleProfile(), connector: connector)
+        let supervisor = AssemblywrightMacBridgeSupervisor(profile: sampleProfile(), connector: connector)
 
         let first = await supervisor.sample()
         await supervisor.reconnectBeforeNextSample()
@@ -1539,9 +1539,9 @@ struct DeveloperBridgeTests {
             #"{"connection_epoch":24,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":true,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"paused","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#.utf8
         )
 
-        let connectedStatus = try JarvisDeveloperBridgeProcessLifecycle.status(from: connected)
-        let maintenanceStatus = try JarvisDeveloperBridgeProcessLifecycle.status(from: maintenance)
-        let pausedStatus = try JarvisDeveloperBridgeProcessLifecycle.status(from: paused)
+        let connectedStatus = try AssemblywrightDeveloperBridgeProcessLifecycle.status(from: connected)
+        let maintenanceStatus = try AssemblywrightDeveloperBridgeProcessLifecycle.status(from: maintenance)
+        let pausedStatus = try AssemblywrightDeveloperBridgeProcessLifecycle.status(from: paused)
 
         #expect(connectedStatus.phase == .connected)
         #expect(connectedStatus.masterEndpoint == "100.64.23.14:7792")
@@ -1563,19 +1563,19 @@ struct DeveloperBridgeTests {
         let duplicate = Data(
             #"{"connection_epoch":22,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","\u0070hase":"authenticated","protocol_version":1,"schema_version":2}"#.utf8
         )
-        let oversized = Data(repeating: 0x61, count: JarvisDeveloperBridgeProcessLifecycle.maximumLineBytes + 1)
+        let oversized = Data(repeating: 0x61, count: AssemblywrightDeveloperBridgeProcessLifecycle.maximumLineBytes + 1)
 
-        #expect(throws: JarvisDeveloperBridgeProcessError.invalidSnapshot) {
-            try JarvisDeveloperBridgeProcessLifecycle.status(from: extra)
+        #expect(throws: AssemblywrightDeveloperBridgeProcessError.invalidSnapshot) {
+            try AssemblywrightDeveloperBridgeProcessLifecycle.status(from: extra)
         }
-        #expect(throws: JarvisDeveloperBridgeProcessError.invalidSnapshot) {
-            try JarvisDeveloperBridgeProcessLifecycle.status(from: contradictory)
+        #expect(throws: AssemblywrightDeveloperBridgeProcessError.invalidSnapshot) {
+            try AssemblywrightDeveloperBridgeProcessLifecycle.status(from: contradictory)
         }
-        #expect(throws: JarvisDeveloperBridgeProcessError.invalidSnapshot) {
-            try JarvisDeveloperBridgeProcessLifecycle.status(from: duplicate)
+        #expect(throws: AssemblywrightDeveloperBridgeProcessError.invalidSnapshot) {
+            try AssemblywrightDeveloperBridgeProcessLifecycle.status(from: duplicate)
         }
-        #expect(throws: JarvisDeveloperBridgeProcessError.invalidSnapshot) {
-            try JarvisDeveloperBridgeProcessLifecycle.status(from: oversized)
+        #expect(throws: AssemblywrightDeveloperBridgeProcessError.invalidSnapshot) {
+            try AssemblywrightDeveloperBridgeProcessLifecycle.status(from: oversized)
         }
     }
 
@@ -1584,14 +1584,14 @@ struct DeveloperBridgeTests {
     func appHelperLifecycleIsDefaultInertAndSingleOwner() async {
         let session = FakeBridgeProcessSession(lines: [])
         let launcher = FakeBridgeProcessLauncher(session: session)
-        let disabled = JarvisDeveloperBridgeProcessLifecycle(
+        let disabled = AssemblywrightDeveloperBridgeProcessLifecycle(
             configuration: .init(environment: [:]),
             validator: FakeBridgeExecutableValidator(),
             launcher: launcher
         )
-        let missingTeamPin = JarvisDeveloperBridgeProcessLifecycle(
+        let missingTeamPin = AssemblywrightDeveloperBridgeProcessLifecycle(
             configuration: .init(environment: [
-                JarvisDeveloperBridgeProcessConfiguration.executableEnvironmentKey: "/tmp/unpinned-helper"
+                AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey: "/tmp/unpinned-helper"
             ]),
             validator: FakeBridgeExecutableValidator(),
             launcher: launcher
@@ -1617,10 +1617,10 @@ struct DeveloperBridgeTests {
         )
         let session = FakeBridgeProcessSession(lines: [line])
         let launcher = FakeBridgeProcessLauncher(session: session)
-        let lifecycle = JarvisDeveloperBridgeProcessLifecycle(
+        let lifecycle = AssemblywrightDeveloperBridgeProcessLifecycle(
             configuration: .init(environment: [
-                JarvisDeveloperBridgeProcessConfiguration.executableEnvironmentKey: "/tmp/jarvis-mac-bridge",
-                JarvisDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey: "ABCDEFGHIJ"
+                AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey: "/tmp/assemblywright-mac-bridge",
+                AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey: "ABCDEFGHIJ"
             ]),
             validator: FakeBridgeExecutableValidator(),
             launcher: launcher
@@ -1647,10 +1647,10 @@ struct DeveloperBridgeTests {
             #"{"connection_epoch":44,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#.utf8
         )
         let session = FakeBridgeProcessSession(lines: [line])
-        let lifecycle = JarvisDeveloperBridgeProcessLifecycle(
+        let lifecycle = AssemblywrightDeveloperBridgeProcessLifecycle(
             configuration: .init(environment: [
-                JarvisDeveloperBridgeProcessConfiguration.executableEnvironmentKey: "/tmp/jarvis-mac-bridge",
-                JarvisDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey: "ABCDEFGHIJ"
+                AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey: "/tmp/assemblywright-mac-bridge",
+                AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey: "ABCDEFGHIJ"
             ]),
             validator: FakeBridgeExecutableValidator(),
             launcher: FakeBridgeProcessLauncher(session: session)
@@ -1682,10 +1682,10 @@ struct DeveloperBridgeTests {
         )
         let session = FakeBridgeProcessSession(lines: [line], stopFailures: 2)
         let launcher = FakeBridgeProcessLauncher(session: session)
-        let lifecycle = JarvisDeveloperBridgeProcessLifecycle(
+        let lifecycle = AssemblywrightDeveloperBridgeProcessLifecycle(
             configuration: .init(environment: [
-                JarvisDeveloperBridgeProcessConfiguration.executableEnvironmentKey: "/tmp/jarvis-mac-bridge",
-                JarvisDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey: "ABCDEFGHIJ"
+                AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey: "/tmp/assemblywright-mac-bridge",
+                AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey: "ABCDEFGHIJ"
             ]),
             validator: FakeBridgeExecutableValidator(),
             launcher: launcher
@@ -1721,7 +1721,7 @@ struct DeveloperBridgeTests {
     @Test("Foundation helper session streams one bounded snapshot and is reaped on stop")
     func foundationHelperSessionStreamsAndStops() async throws {
         let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("jarvis-bridge-process-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("assemblywright-bridge-process-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
         let executable = directory.appendingPathComponent("bridge-fixture")
@@ -1732,13 +1732,13 @@ struct DeveloperBridgeTests {
             [.posixPermissions: 0o700],
             ofItemAtPath: executable.path
         )
-        let lifecycle = JarvisDeveloperBridgeProcessLifecycle(
+        let lifecycle = AssemblywrightDeveloperBridgeProcessLifecycle(
             configuration: .init(environment: [
-                JarvisDeveloperBridgeProcessConfiguration.executableEnvironmentKey: executable.path,
-                JarvisDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey: "ABCDEFGHIJ"
+                AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey: executable.path,
+                AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey: "ABCDEFGHIJ"
             ]),
             validator: FakeBridgeExecutableValidator(),
-            launcher: FoundationJarvisDeveloperBridgeProcessLauncher(
+            launcher: FoundationAssemblywrightDeveloperBridgeProcessLauncher(
                 runningProcessValidator: FakeBridgeRunningProcessValidator()
             )
         )
@@ -1758,7 +1758,7 @@ struct DeveloperBridgeTests {
     @Test("Foundation helper output queue is bounded and fails closed on overflow")
     func foundationHelperOutputQueueIsBounded() async throws {
         let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("jarvis-bridge-overflow-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("assemblywright-bridge-overflow-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
         let executable = directory.appendingPathComponent("bridge-fixture")
@@ -1769,13 +1769,13 @@ struct DeveloperBridgeTests {
             [.posixPermissions: 0o700],
             ofItemAtPath: executable.path
         )
-        let lifecycle = JarvisDeveloperBridgeProcessLifecycle(
+        let lifecycle = AssemblywrightDeveloperBridgeProcessLifecycle(
             configuration: .init(environment: [
-                JarvisDeveloperBridgeProcessConfiguration.executableEnvironmentKey: executable.path,
-                JarvisDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey: "ABCDEFGHIJ"
+                AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey: executable.path,
+                AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey: "ABCDEFGHIJ"
             ]),
             validator: FakeBridgeExecutableValidator(),
-            launcher: FoundationJarvisDeveloperBridgeProcessLauncher(
+            launcher: FoundationAssemblywrightDeveloperBridgeProcessLauncher(
                 runningProcessValidator: FakeBridgeRunningProcessValidator()
             )
         )
@@ -1794,7 +1794,7 @@ struct DeveloperBridgeTests {
     @Test("Running-child validation and bounded TERM-to-KILL teardown fail closed")
     func foundationHelperRunningValidationAndKillEscalation() async throws {
         let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("jarvis-bridge-kill-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("assemblywright-bridge-kill-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
         let executable = directory.appendingPathComponent("bridge-fixture")
@@ -1809,13 +1809,13 @@ struct DeveloperBridgeTests {
         let rejectedRunningValidator = RecordingBridgeRunningProcessValidator(
             error: .invalidExecutableSignature
         )
-        let rejected = JarvisDeveloperBridgeProcessLifecycle(
+        let rejected = AssemblywrightDeveloperBridgeProcessLifecycle(
             configuration: .init(environment: [
-                JarvisDeveloperBridgeProcessConfiguration.executableEnvironmentKey: executable.path,
-                JarvisDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey: "ABCDEFGHIJ"
+                AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey: executable.path,
+                AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey: "ABCDEFGHIJ"
             ]),
             validator: FakeBridgeExecutableValidator(),
-            launcher: FoundationJarvisDeveloperBridgeProcessLauncher(
+            launcher: FoundationAssemblywrightDeveloperBridgeProcessLauncher(
                 runningProcessValidator: rejectedRunningValidator
             )
         )
@@ -1831,13 +1831,13 @@ struct DeveloperBridgeTests {
         await rejected.stop()
 
         let stubbornRunningValidator = RecordingBridgeRunningProcessValidator()
-        let stubborn = JarvisDeveloperBridgeProcessLifecycle(
+        let stubborn = AssemblywrightDeveloperBridgeProcessLifecycle(
             configuration: .init(environment: [
-                JarvisDeveloperBridgeProcessConfiguration.executableEnvironmentKey: executable.path,
-                JarvisDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey: "ABCDEFGHIJ"
+                AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey: executable.path,
+                AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey: "ABCDEFGHIJ"
             ]),
             validator: FakeBridgeExecutableValidator(),
-            launcher: FoundationJarvisDeveloperBridgeProcessLauncher(
+            launcher: FoundationAssemblywrightDeveloperBridgeProcessLauncher(
                 runningProcessValidator: stubbornRunningValidator
             )
         )
@@ -1861,10 +1861,10 @@ struct DeveloperBridgeTests {
     func appHelperLifecycleFailsClosed() async {
         let finishedSession = FakeBridgeProcessSession(lines: [], finish: true)
         let finishedLauncher = FakeBridgeProcessLauncher(session: finishedSession)
-        let finished = JarvisDeveloperBridgeProcessLifecycle(
+        let finished = AssemblywrightDeveloperBridgeProcessLifecycle(
             configuration: .init(environment: [
-                JarvisDeveloperBridgeProcessConfiguration.executableEnvironmentKey: "/tmp/jarvis-mac-bridge",
-                JarvisDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey: "ABCDEFGHIJ"
+                AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey: "/tmp/assemblywright-mac-bridge",
+                AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey: "ABCDEFGHIJ"
             ]),
             validator: FakeBridgeExecutableValidator(),
             launcher: finishedLauncher
@@ -1877,10 +1877,10 @@ struct DeveloperBridgeTests {
         #expect(finished.status.errorCode == "helper_exited")
 
         let rejectedSession = FakeBridgeProcessSession(lines: [])
-        let rejected = JarvisDeveloperBridgeProcessLifecycle(
+        let rejected = AssemblywrightDeveloperBridgeProcessLifecycle(
             configuration: .init(environment: [
-                JarvisDeveloperBridgeProcessConfiguration.executableEnvironmentKey: "/tmp/replaced-helper",
-                JarvisDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey: "ABCDEFGHIJ"
+                AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey: "/tmp/replaced-helper",
+                AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey: "ABCDEFGHIJ"
             ]),
             validator: FakeBridgeExecutableValidator(error: .invalidExecutableSignature),
             launcher: FakeBridgeProcessLauncher(session: rejectedSession)
@@ -1899,13 +1899,13 @@ struct DeveloperBridgeTests {
     @Test("Live signed helper reaches the Windows master through the production app lifecycle")
     func liveSignedHelperAppLifecycleReachesWindowsMaster() async throws {
         let environment = ProcessInfo.processInfo.environment
-        guard environment["JARVIS_MAC_DEVELOPER_BRIDGE_LIVE_E2E"] == "true" else {
+        guard environment["ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_LIVE_E2E"] == "true" else {
             return
         }
-        let configuration = JarvisDeveloperBridgeProcessConfiguration(environment: environment)
+        let configuration = AssemblywrightDeveloperBridgeProcessConfiguration(environment: environment)
         try #require(configuration.executableURL != nil)
         try #require(configuration.expectedTeamIdentifier != nil)
-        let lifecycle = JarvisDeveloperBridgeProcessLifecycle(configuration: configuration)
+        let lifecycle = AssemblywrightDeveloperBridgeProcessLifecycle(configuration: configuration)
 
         lifecycle.start()
         for _ in 0 ..< 400
@@ -1922,7 +1922,7 @@ struct DeveloperBridgeTests {
         #expect(liveStatus.connectionEpoch.map { $0 > 0 } == true)
         #expect(lifecycle.status.phase == .stopped)
         print(
-            "jarvis_mac_app_bridge_live_e2e_ok "
+            "assemblywright_mac_app_bridge_live_e2e_ok "
                 + "endpoint=\(liveStatus.masterEndpoint ?? "missing") "
                 + "connection_epoch=\(liveStatus.connectionEpoch ?? 0)"
         )
@@ -1930,25 +1930,25 @@ struct DeveloperBridgeTests {
 
     @Test("Fixture control receipts bind exact identities and ordered event sequences")
     func fixtureControlReceiptsAreStrict() throws {
-        let success = try JarvisMacFixtureControlReceipt.decodeStrict(Data(
+        let success = try AssemblywrightMacFixtureControlReceipt.decodeStrict(Data(
             #"{"schema_version":1,"status":"fixture_success_observed","task_id":"11111111-1111-4111-8111-111111111111","step_id":"22222222-2222-4222-8222-222222222222","stream_id":"33333333-3333-4333-8333-333333333333","queued_sequence":10,"leased_sequence":11,"succeeded_sequence":12}"#.utf8
         ))
         #expect(success.status == .successObserved)
         #expect(success.queuedSequence == 10)
         #expect(success.succeededSequence == 12)
 
-        let leased = try JarvisMacFixtureControlReceipt.decodeStrict(Data(
+        let leased = try AssemblywrightMacFixtureControlReceipt.decodeStrict(Data(
             #"{"schema_version":1,"status":"fixture_cancellation_leased","task_id":"44444444-4444-4444-8444-444444444444","step_id":"55555555-5555-4555-8555-555555555555","stream_id":"33333333-3333-4333-8333-333333333333","queued_sequence":18,"leased_sequence":19}"#.utf8
         ))
         #expect(leased.status == .cancellationLeased)
         #expect(leased.leasedSequence == 19)
 
-        let cancellation = try JarvisMacFixtureControlReceipt.decodeStrict(Data(
+        let cancellation = try AssemblywrightMacFixtureControlReceipt.decodeStrict(Data(
             #"{"schema_version":1,"status":"fixture_cancellation_observed","task_id":"44444444-4444-4444-8444-444444444444","step_id":"55555555-5555-4555-8555-555555555555","stream_id":"33333333-3333-4333-8333-333333333333","requested_sequence":20,"acknowledged_sequence":21,"cancelled_sequence":22,"late_output_window_ms":7000}"#.utf8
         ))
         #expect(cancellation.status == .cancellationObserved)
         #expect(cancellation.cancelledSequence == 22)
-        let resumed = try JarvisMacFixtureControlReceipt.decodeStrict(Data(
+        let resumed = try AssemblywrightMacFixtureControlReceipt.decodeStrict(Data(
             #"{"schema_version":1,"status":"fixture_emergency_resumed"}"#.utf8
         ))
         #expect(resumed.status == .emergencyResumed)
@@ -1960,34 +1960,34 @@ struct DeveloperBridgeTests {
             #"{"schema_version":1,"status":"fixture_cancellation_observed","task_id":"44444444-4444-4444-8444-444444444444","step_id":"55555555-5555-4555-8555-555555555555","stream_id":"33333333-3333-4333-8333-333333333333","requested_sequence":20,"acknowledged_sequence":21,"cancelled_sequence":22,"late_output_window_ms":5000}"#,
             #"{"schema_version":1,"\u0073tatus":"fixture_success_observed","status":"fixture_success_observed","task_id":"11111111-1111-4111-8111-111111111111","step_id":"22222222-2222-4222-8222-222222222222","stream_id":"33333333-3333-4333-8333-333333333333","queued_sequence":10,"leased_sequence":11,"succeeded_sequence":12}"#
         ] {
-            #expect(throws: JarvisDeveloperBridgeProcessError.invalidSnapshot) {
-                _ = try JarvisMacFixtureControlReceipt.decodeStrict(Data(invalid.utf8))
+            #expect(throws: AssemblywrightDeveloperBridgeProcessError.invalidSnapshot) {
+                _ = try AssemblywrightMacFixtureControlReceipt.decodeStrict(Data(invalid.utf8))
             }
         }
     }
 
     @Test("MLX control receipts bind exact identities and ordered event sequences")
     func mlxControlReceiptsAreStrict() throws {
-        let success = try JarvisMacMLXControlReceipt.decodeStrict(Data(
+        let success = try AssemblywrightMacMLXControlReceipt.decodeStrict(Data(
             #"{"schema_version":1,"status":"mlx_success_observed","task_id":"11111111-1111-4111-8111-111111111111","step_id":"22222222-2222-4222-8222-222222222222","stream_id":"33333333-3333-4333-8333-333333333333","device_id":"66666666-6666-4666-8666-666666666666","connection_epoch":7,"queued_sequence":10,"leased_sequence":11,"succeeded_sequence":12}"#.utf8
         ))
         #expect(success.status == .successObserved)
         #expect(success.succeededSequence == 12)
         #expect(success.connectionEpoch == 7)
 
-        let leased = try JarvisMacMLXControlReceipt.decodeStrict(Data(
+        let leased = try AssemblywrightMacMLXControlReceipt.decodeStrict(Data(
             #"{"schema_version":1,"status":"mlx_cancellation_leased","task_id":"44444444-4444-4444-8444-444444444444","step_id":"55555555-5555-4555-8555-555555555555","stream_id":"33333333-3333-4333-8333-333333333333","device_id":"66666666-6666-4666-8666-666666666666","connection_epoch":8,"queued_sequence":18,"leased_sequence":19}"#.utf8
         ))
         #expect(leased.status == .cancellationLeased)
         #expect(leased.leasedSequence == 19)
 
-        let cancellation = try JarvisMacMLXControlReceipt.decodeStrict(Data(
+        let cancellation = try AssemblywrightMacMLXControlReceipt.decodeStrict(Data(
             #"{"schema_version":1,"status":"mlx_cancellation_observed","task_id":"44444444-4444-4444-8444-444444444444","step_id":"55555555-5555-4555-8555-555555555555","stream_id":"33333333-3333-4333-8333-333333333333","device_id":"66666666-6666-4666-8666-666666666666","connection_epoch":8,"requested_sequence":20,"acknowledged_sequence":21,"cancelled_sequence":22,"late_output_window_ms":7000}"#.utf8
         ))
         #expect(cancellation.status == .cancellationObserved)
         #expect(cancellation.cancelledSequence == 22)
 
-        let resumed = try JarvisMacMLXControlReceipt.decodeStrict(Data(
+        let resumed = try AssemblywrightMacMLXControlReceipt.decodeStrict(Data(
             #"{"schema_version":1,"status":"mlx_emergency_resumed"}"#.utf8
         ))
         #expect(resumed.status == .emergencyResumed)
@@ -1998,8 +1998,8 @@ struct DeveloperBridgeTests {
             #"{"schema_version":1,"status":"mlx_cancellation_observed","task_id":"44444444-4444-4444-8444-444444444444","step_id":"55555555-5555-4555-8555-555555555555","stream_id":"33333333-3333-4333-8333-333333333333","requested_sequence":20,"acknowledged_sequence":21,"cancelled_sequence":22,"late_output_window_ms":6000}"#,
             #"{"schema_version":1,"\u0073tatus":"mlx_emergency_resumed","status":"mlx_emergency_resumed"}"#
         ] {
-            #expect(throws: JarvisDeveloperBridgeProcessError.invalidSnapshot) {
-                _ = try JarvisMacMLXControlReceipt.decodeStrict(Data(invalid.utf8))
+            #expect(throws: AssemblywrightDeveloperBridgeProcessError.invalidSnapshot) {
+                _ = try AssemblywrightMacMLXControlReceipt.decodeStrict(Data(invalid.utf8))
             }
         }
     }
@@ -2008,16 +2008,16 @@ struct DeveloperBridgeTests {
     @Test("Live standard profile executes bounded local MLX under Windows control")
     func liveSignedHelperAppLifecycleRunsMLXJob() async throws {
         let environment = ProcessInfo.processInfo.environment
-        guard environment["JARVIS_MAC_DEVELOPER_MLX_LIVE_E2E"] == "true" else {
+        guard environment["ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_LIVE_E2E"] == "true" else {
             return
         }
-        let configuration = JarvisDeveloperBridgeProcessConfiguration(environment: environment)
+        let configuration = AssemblywrightDeveloperBridgeProcessConfiguration(environment: environment)
         try #require(configuration.executableURL != nil)
         try #require(configuration.expectedTeamIdentifier != nil)
         try #require(configuration.eventRelayConfiguration?.mlxJobsEnabled == true)
         try #require(configuration.eventRelayConfiguration?.fixtureJobsEnabled == false)
         let coordinationDirectory = try #require(
-            environment["JARVIS_MAC_DEVELOPER_MLX_COORDINATION_DIR"]
+            environment["ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_COORDINATION_DIR"]
         )
         try #require(coordinationDirectory.hasPrefix("/"))
         var directoryMetadata = stat()
@@ -2031,7 +2031,7 @@ struct DeveloperBridgeTests {
             fileURLWithPath: coordinationDirectory,
             isDirectory: true
         ).standardizedFileURL
-        let lifecycle = JarvisDeveloperBridgeProcessLifecycle(configuration: configuration)
+        let lifecycle = AssemblywrightDeveloperBridgeProcessLifecycle(configuration: configuration)
 
         let evidence = try await withStartedBridgeLifecycle(lifecycle) {
             func cancelledByHarness() throws {
@@ -2044,7 +2044,7 @@ struct DeveloperBridgeTests {
             }
             func controlReceipt(
                 named name: String
-            ) async throws -> JarvisMacMLXControlReceipt {
+            ) async throws -> AssemblywrightMacMLXControlReceipt {
                 let url = coordinationURL.appendingPathComponent(name)
                 for _ in 0 ..< 4_800 where !FileManager.default.fileExists(atPath: url.path) {
                     try cancelledByHarness()
@@ -2058,7 +2058,7 @@ struct DeveloperBridgeTests {
                         && metadata.st_mode & 0o777 == 0o600
                 )
                 let data = try Data(contentsOf: url, options: [.mappedIfSafe])
-                return try JarvisMacMLXControlReceipt.decodeStrict(data)
+                return try AssemblywrightMacMLXControlReceipt.decodeStrict(data)
             }
 
             for _ in 0 ..< 2_400 where lifecycle.status.phase != .connected {
@@ -2152,7 +2152,7 @@ struct DeveloperBridgeTests {
 
         #expect(lifecycle.status.phase == .stopped)
         print(
-            "jarvis_mac_app_mlx_live_e2e_ok "
+            "assemblywright_mac_app_mlx_live_e2e_ok "
                 + "endpoint=\(evidence.connectedBefore.masterEndpoint ?? "missing") "
                 + "connection_epoch_before=\(evidence.epochBefore) "
                 + "connection_epoch_after=\(evidence.epochAfter)"
@@ -2163,15 +2163,15 @@ struct DeveloperBridgeTests {
     @Test("Live fixture profile executes only through owner-coordinated Windows control")
     func liveSignedHelperAppLifecycleRunsFixtureJob() async throws {
         let environment = ProcessInfo.processInfo.environment
-        guard environment["JARVIS_MAC_DEVELOPER_FIXTURE_LIVE_E2E"] == "true" else {
+        guard environment["ASSEMBLYWRIGHT_MAC_DEVELOPER_FIXTURE_LIVE_E2E"] == "true" else {
             return
         }
-        let configuration = JarvisDeveloperBridgeProcessConfiguration(environment: environment)
+        let configuration = AssemblywrightDeveloperBridgeProcessConfiguration(environment: environment)
         try #require(configuration.executableURL != nil)
         try #require(configuration.expectedTeamIdentifier != nil)
         try #require(configuration.eventRelayConfiguration?.fixtureJobsEnabled == true)
         let coordinationDirectory = try #require(
-            environment["JARVIS_MAC_DEVELOPER_FIXTURE_COORDINATION_DIR"]
+            environment["ASSEMBLYWRIGHT_MAC_DEVELOPER_FIXTURE_COORDINATION_DIR"]
         )
         try #require(coordinationDirectory.hasPrefix("/"))
         var directoryMetadata = stat()
@@ -2185,7 +2185,7 @@ struct DeveloperBridgeTests {
             fileURLWithPath: coordinationDirectory,
             isDirectory: true
         ).standardizedFileURL
-        let lifecycle = JarvisDeveloperBridgeProcessLifecycle(configuration: configuration)
+        let lifecycle = AssemblywrightDeveloperBridgeProcessLifecycle(configuration: configuration)
 
         let evidence = try await withStartedBridgeLifecycle(lifecycle) {
             func cancelledByHarness() throws {
@@ -2198,7 +2198,7 @@ struct DeveloperBridgeTests {
             }
             func controlReceipt(
                 named name: String
-            ) async throws -> JarvisMacFixtureControlReceipt {
+            ) async throws -> AssemblywrightMacFixtureControlReceipt {
                 let url = coordinationURL.appendingPathComponent(name)
                 for _ in 0 ..< 4_800 where !FileManager.default.fileExists(atPath: url.path) {
                     try cancelledByHarness()
@@ -2212,7 +2212,7 @@ struct DeveloperBridgeTests {
                         && metadata.st_mode & 0o777 == 0o600
                 )
                 let data = try Data(contentsOf: url, options: [.mappedIfSafe])
-                return try JarvisMacFixtureControlReceipt.decodeStrict(data)
+                return try AssemblywrightMacFixtureControlReceipt.decodeStrict(data)
             }
 
             for _ in 0 ..< 2_400 where lifecycle.status.phase != .connected {
@@ -2299,7 +2299,7 @@ struct DeveloperBridgeTests {
 
         #expect(lifecycle.status.phase == .stopped)
         print(
-            "jarvis_mac_app_fixture_live_e2e_ok "
+            "assemblywright_mac_app_fixture_live_e2e_ok "
                 + "endpoint=\(evidence.connectedBefore.masterEndpoint ?? "missing") "
                 + "connection_epoch_before=\(evidence.epochBefore) "
                 + "connection_epoch_after=\(evidence.epochAfter)"
@@ -2310,14 +2310,14 @@ struct DeveloperBridgeTests {
     @Test("Live production app lifecycle fails closed and recovers across a Windows outage")
     func liveSignedHelperAppLifecycleRecoversFromWindowsOutage() async throws {
         let environment = ProcessInfo.processInfo.environment
-        guard environment["JARVIS_MAC_DEVELOPER_BRIDGE_OUTAGE_LIVE_E2E"] == "true" else {
+        guard environment["ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_OUTAGE_LIVE_E2E"] == "true" else {
             return
         }
-        let configuration = JarvisDeveloperBridgeProcessConfiguration(environment: environment)
+        let configuration = AssemblywrightDeveloperBridgeProcessConfiguration(environment: environment)
         try #require(configuration.executableURL != nil)
         try #require(configuration.expectedTeamIdentifier != nil)
         let coordinationDirectory = try #require(
-            environment["JARVIS_MAC_DEVELOPER_BRIDGE_OUTAGE_COORDINATION_DIR"]
+            environment["ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_OUTAGE_COORDINATION_DIR"]
         )
         try #require(coordinationDirectory.hasPrefix("/"))
         var directoryMetadata = stat()
@@ -2331,7 +2331,7 @@ struct DeveloperBridgeTests {
             fileURLWithPath: coordinationDirectory,
             isDirectory: true
         ).standardizedFileURL
-        let lifecycle = JarvisDeveloperBridgeProcessLifecycle(configuration: configuration)
+        let lifecycle = AssemblywrightDeveloperBridgeProcessLifecycle(configuration: configuration)
 
         let evidence = try await withStartedBridgeLifecycle(lifecycle) {
             func checkForHarnessCancellation() throws {
@@ -2396,7 +2396,7 @@ struct DeveloperBridgeTests {
 
         #expect(lifecycle.status.phase == .stopped)
         print(
-            "jarvis_mac_app_bridge_outage_recovery_live_e2e_ok "
+            "assemblywright_mac_app_bridge_outage_recovery_live_e2e_ok "
                 + "endpoint=\(evidence.connectedAfter.masterEndpoint ?? "missing") "
                 + "connection_epoch_before=\(evidence.epochBefore) "
                 + "connection_epoch_after=\(evidence.epochAfter) "
@@ -2442,7 +2442,7 @@ private func fixtureJobDocuments(
         "lease_id": leaseID,
         "cancellation_id": cancellationID,
         "capability_id": "fixture.reasoning",
-        "selected_model": "jarvis-fixture-v1",
+        "selected_model": "assemblywright-fixture-v1",
         "sensitivity": "public",
         "context_handling": "ephemeral_no_retention",
         "lease_duration_ms": 10_000,
@@ -2523,13 +2523,13 @@ private func fixtureJobDocuments(
     )
 }
 
-private func mlxRelayConfiguration() -> JarvisMacDeveloperEventRelayConfiguration {
-    JarvisMacDeveloperEventRelayConfiguration(
+private func mlxRelayConfiguration() -> AssemblywrightMacDeveloperEventRelayConfiguration {
+    AssemblywrightMacDeveloperEventRelayConfiguration(
         agentExecutableURL: URL(fileURLWithPath: "/tmp/assemblywright-agent"),
         agentDataDirectoryURL: URL(fileURLWithPath: "/tmp/assemblywright-agent-data"),
         mlxJobsEnabled: true,
-        mlxExecutableURL: URL(fileURLWithPath: "/opt/jarvis/bin/mlx-runner"),
-        mlxModelDirectoryURL: URL(fileURLWithPath: "/opt/jarvis/models/mlx-local"),
+        mlxExecutableURL: URL(fileURLWithPath: "/opt/assemblywright/bin/mlx-runner"),
+        mlxModelDirectoryURL: URL(fileURLWithPath: "/opt/assemblywright/models/mlx-local"),
         mlxModelID: "mlx-local"
     )
 }
@@ -2662,8 +2662,8 @@ private func fixtureInvitationData() throws -> Data {
     invitation["capabilities"] = [[
         "id": "fixture.reasoning",
         "kind": "local_inference",
-        "provider": "jarvis-fixture",
-        "model": "jarvis-fixture-v1",
+        "provider": "assemblywright-fixture",
+        "model": "assemblywright-fixture-v1",
         "max_context_bytes": 8_192,
         "max_result_bytes": 8_192
     ]]
@@ -2676,14 +2676,14 @@ private func validIssuedReceiptData() throws -> Data {
     )
 }
 
-private func sampleProfile() -> JarvisMacBridgeProfile {
-    JarvisMacBridgeProfile(
+private func sampleProfile() -> AssemblywrightMacBridgeProfile {
+    AssemblywrightMacBridgeProfile(
         deviceID: "22222222-2222-4222-8222-222222222222",
         deviceName: "owner-mac-bridge",
         role: "mac_bridge",
         registryRevision: 3,
         capabilities: [
-            JarvisMacBridgeCapability(
+            AssemblywrightMacBridgeCapability(
                 id: "mlx.reasoning",
                 kind: "local_inference",
                 provider: "mlx",

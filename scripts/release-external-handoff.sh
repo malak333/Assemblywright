@@ -4,10 +4,10 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-OUTPUT_DIR="${JARVIS_RELEASE_HANDOFF_DIR:-$ROOT_DIR/target/release-external-handoff}"
-ENDPOINT="${JARVIS_RELEASE_HANDOFF_ENDPOINT:-http://127.0.0.1:7787}"
+OUTPUT_DIR="${ASSEMBLYWRIGHT_RELEASE_HANDOFF_DIR:-$ROOT_DIR/target/release-external-handoff}"
+ENDPOINT="${ASSEMBLYWRIGHT_RELEASE_HANDOFF_ENDPOINT:-http://127.0.0.1:7787}"
 CANONICAL_VERSION="$("$ROOT_DIR/scripts/release-version.sh")"
-VERSION="${JARVIS_RELEASE_HANDOFF_VERSION:-$CANONICAL_VERSION}"
+VERSION="${ASSEMBLYWRIGHT_RELEASE_HANDOFF_VERSION:-$CANONICAL_VERSION}"
 CHECK_ONLY=false
 WRITE=false
 SELF_TEST=false
@@ -38,12 +38,12 @@ templates, snapshots, checklist, and digest manifest are present with validation
 flags still defaulted false.
 
 Optional:
-  JARVIS_RELEASE_HANDOFF_DIR       Default output directory for --write
-  JARVIS_RELEASE_HANDOFF_ENDPOINT  Endpoint used by CLI read-only snapshots.
+  ASSEMBLYWRIGHT_RELEASE_HANDOFF_DIR       Default output directory for --write
+  ASSEMBLYWRIGHT_RELEASE_HANDOFF_ENDPOINT  Endpoint used by CLI read-only snapshots.
                                    Defaults to http://127.0.0.1:7787; the CLI
                                    falls back to local read-only metadata when
                                    the endpoint is unavailable.
-  JARVIS_RELEASE_HANDOFF_VERSION   Optional explicit version guard. If set, it
+  ASSEMBLYWRIGHT_RELEASE_HANDOFF_VERSION   Optional explicit version guard. If set, it
                                    must match scripts/release-version.sh.
 
 Proof boundary: this script generates operator handoff files, read-only
@@ -85,8 +85,8 @@ require_file_contains() {
 }
 
 require_handoff_version_consistency() {
-  if [[ -n "${JARVIS_RELEASE_HANDOFF_VERSION:-}" && "$JARVIS_RELEASE_HANDOFF_VERSION" != "$CANONICAL_VERSION" ]]; then
-    fail "JARVIS_RELEASE_HANDOFF_VERSION must match canonical release version $CANONICAL_VERSION"
+  if [[ -n "${ASSEMBLYWRIGHT_RELEASE_HANDOFF_VERSION:-}" && "$ASSEMBLYWRIGHT_RELEASE_HANDOFF_VERSION" != "$CANONICAL_VERSION" ]]; then
+    fail "ASSEMBLYWRIGHT_RELEASE_HANDOFF_VERSION must match canonical release version $CANONICAL_VERSION"
   fi
 }
 
@@ -237,9 +237,9 @@ claim.
 ## Ordered Release Sequence
 
 1. Run the signed distribution lane with Developer ID and notarytool credentials:
-   \`JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh\`
+   \`ASSEMBLYWRIGHT_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' ASSEMBLYWRIGHT_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' ASSEMBLYWRIGHT_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh\`
    Or use Apple ID credentials instead of a stored profile:
-   \`JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_APPLE_ID='apple-id@example.com' JARVIS_NOTARYTOOL_TEAM_ID='TEAMID1234' JARVIS_NOTARYTOOL_PASSWORD='app-specific-password' ./scripts/package-distribution.sh\`
+   \`ASSEMBLYWRIGHT_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' ASSEMBLYWRIGHT_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' ASSEMBLYWRIGHT_NOTARYTOOL_APPLE_ID='apple-id@example.com' ASSEMBLYWRIGHT_NOTARYTOOL_TEAM_ID='TEAMID1234' ASSEMBLYWRIGHT_NOTARYTOOL_PASSWORD='app-specific-password' ./scripts/package-distribution.sh\`
 2. Install the signed, notarized package into \`/Applications\` on a clean Mac
    profile and complete the live-device checks. Then run
    \`set -a && source release-live-device-qa.env && set +a\` followed by
@@ -251,12 +251,12 @@ claim.
    \`./scripts/release-evidence-bundle.sh --bundle\`.
 5. Run \`./scripts/release-evidence-doctor.sh --assert-complete\`.
 6. Start or restart the packaged app with
-   \`JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external\` and the explicit
-   \`JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true\` operator-mode opt-in, export
-   \`JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>'\` and
-   \`JARVIS_IPC_TOKEN_FILE='<app-owned-ipc-session-auth.json>'\`, then run
-   \`JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint "\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"\`
-   and \`JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness --endpoint "\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"\`.
+   \`ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external\` and the explicit
+   \`ASSEMBLYWRIGHT_MAC_ENABLE_IPC_CLI_HANDOFF=true\` operator-mode opt-in, export
+   \`ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT='<release-core-endpoint>'\` and
+   \`ASSEMBLYWRIGHT_IPC_TOKEN_FILE='<app-owned-ipc-session-auth.json>'\`, then run
+   \`ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint "\${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}"\`
+   and \`ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness --endpoint "\${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}"\`.
 
 Proof boundary: these files are handoff scaffolding only. They do not prove that
 signing, notarization, stapling, installation, Finder launch, live-device QA,
@@ -293,10 +293,10 @@ restart behavior, and manual release QA.
 
 Required owner-recorded device evidence:
 
-- \`JARVIS_QA_OWNER_NAME\`, \`JARVIS_QA_DEVICE_LABEL\`, and
-  \`JARVIS_QA_PROFILE_LABEL\`: who validated, on which device, in which profile.
-- \`JARVIS_QA_DEVICE_CHECK_STARTED_AT\` and
-  \`JARVIS_QA_DEVICE_CHECK_COMPLETED_AT\`: UTC timestamps ending in \`Z\`.
+- \`ASSEMBLYWRIGHT_QA_OWNER_NAME\`, \`ASSEMBLYWRIGHT_QA_DEVICE_LABEL\`, and
+  \`ASSEMBLYWRIGHT_QA_PROFILE_LABEL\`: who validated, on which device, in which profile.
+- \`ASSEMBLYWRIGHT_QA_DEVICE_CHECK_STARTED_AT\` and
+  \`ASSEMBLYWRIGHT_QA_DEVICE_CHECK_COMPLETED_AT\`: UTC timestamps ending in \`Z\`.
 - Clean-profile, Finder launch, restart, and manual release QA evidence notes
   must contain real observations, not placeholders.
 
@@ -305,14 +305,14 @@ Required owner-recorded device evidence:
 Fill \`release-evidence-bundle.env\` only after signed distribution,
 live-device QA and durable archival are complete.
 
-- \`JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI\` must point at the durable archive
+- \`ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVE_URI\` must point at the durable archive
   containing signed artifacts, signed provenance, QA reports, final bundle, and
   supporting external evidence.
-- Keep \`JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=true\` for production bundle
+- Keep \`ASSEMBLYWRIGHT_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=true\` for production bundle
   generation.
 - Run \`./scripts/release-evidence-doctor.sh --assert-complete\` after bundle
   generation, then restart the core with
-  \`JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external\` before the final readiness
+  \`ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external\` before the final readiness
   query.
 
 Proof boundary: this checklist is operator guidance only; it does not sign,
@@ -416,7 +416,7 @@ write_handoff() {
   run ./scripts/release-live-device-qa.sh --write-template "$output_dir/release-live-device-qa.env"
   run ./scripts/release-evidence-bundle.sh --write-template "$output_dir/release-evidence-bundle.env"
 
-  run env JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -q -p assemblywright-cli -- release readiness --json --endpoint "$ENDPOINT" >"$output_dir/release-readiness.json"
+  run env ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -q -p assemblywright-cli -- release readiness --json --endpoint "$ENDPOINT" >"$output_dir/release-readiness.json"
   run cargo run -q -p assemblywright-cli -- release evidence-status --json --endpoint "$ENDPOINT" >"$output_dir/release-evidence-status.json"
   run cargo run -q -p assemblywright-cli -- release signed-distribution-runbook --json --endpoint "$ENDPOINT" >"$output_dir/signed-distribution-runbook.json"
   run cargo run -q -p assemblywright-cli -- release live-device-runbook --json --endpoint "$ENDPOINT" >"$output_dir/live-device-runbook.json"
@@ -431,34 +431,34 @@ write_handoff() {
 
 self_test() {
   local tmp_dir
-  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/jarvis-release-handoff.XXXXXX")"
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/assemblywright-release-handoff.XXXXXX")"
   trap "rm -rf '$tmp_dir'" EXIT
 
   "$0" --write "$tmp_dir/handoff" >/dev/null
 
-  require_file_contains "live-device template" "$tmp_dir/handoff/release-live-device-qa.env" "JARVIS_QA_CLEAN_PROFILE_VALIDATED=false"
-  require_file_contains "live-device template" "$tmp_dir/handoff/release-live-device-qa.env" "JARVIS_RELEASE_CORE_ENDPOINT"
-  require_file_contains "live-device template" "$tmp_dir/handoff/release-live-device-qa.env" 'JARVIS_QA_DEVICE_CHECK_STARTED_AT=""'
+  require_file_contains "live-device template" "$tmp_dir/handoff/release-live-device-qa.env" "ASSEMBLYWRIGHT_QA_CLEAN_PROFILE_VALIDATED=false"
+  require_file_contains "live-device template" "$tmp_dir/handoff/release-live-device-qa.env" "ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT"
+  require_file_contains "live-device template" "$tmp_dir/handoff/release-live-device-qa.env" 'ASSEMBLYWRIGHT_QA_DEVICE_CHECK_STARTED_AT=""'
   require_file_contains "live-device template" "$tmp_dir/handoff/release-live-device-qa.env" "release evidence-status"
   require_file_contains "live-device template" "$tmp_dir/handoff/release-live-device-qa.env" "release readiness"
-  require_file_contains "evidence-bundle template" "$tmp_dir/handoff/release-evidence-bundle.env" "JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=false"
-  require_file_contains "evidence-bundle template" "$tmp_dir/handoff/release-evidence-bundle.env" "JARVIS_EVIDENCE_OVERWRITE_OUTPUT=false"
-  require_file_contains "evidence-bundle template" "$tmp_dir/handoff/release-evidence-bundle.env" 'JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI=""'
-  require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "JARVIS_DEVELOPER_ID_APPLICATION"
+  require_file_contains "evidence-bundle template" "$tmp_dir/handoff/release-evidence-bundle.env" "ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=false"
+  require_file_contains "evidence-bundle template" "$tmp_dir/handoff/release-evidence-bundle.env" "ASSEMBLYWRIGHT_EVIDENCE_OVERWRITE_OUTPUT=false"
+  require_file_contains "evidence-bundle template" "$tmp_dir/handoff/release-evidence-bundle.env" 'ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVE_URI=""'
+  require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "ASSEMBLYWRIGHT_DEVELOPER_ID_APPLICATION"
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "set -a && source release-live-device-qa.env && set +a"
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "./scripts/release-live-device-qa.sh --assert-complete"
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "set -a && source release-evidence-bundle.env && set +a"
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "./scripts/release-evidence-bundle.sh --bundle"
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "./scripts/release-evidence-doctor.sh --assert-complete"
-  require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>'"
-  require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" 'JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"'
-  require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" 'JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"'
+  require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT='<release-core-endpoint>'"
+  require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" 'ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint "${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}"'
+  require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" 'ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness --endpoint "${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}"'
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "Proof boundary"
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "release-evidence-checklist.md"
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "release-handoff-manifest.json"
-  require_file_contains "handoff checklist" "$tmp_dir/handoff/release-evidence-checklist.md" "JARVIS_QA_DEVICE_CHECK_STARTED_AT"
+  require_file_contains "handoff checklist" "$tmp_dir/handoff/release-evidence-checklist.md" "ASSEMBLYWRIGHT_QA_DEVICE_CHECK_STARTED_AT"
   require_file_contains "handoff checklist" "$tmp_dir/handoff/release-evidence-checklist.md" "Developer Mode bridge status"
-  require_file_contains "handoff checklist" "$tmp_dir/handoff/release-evidence-checklist.md" "JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI"
+  require_file_contains "handoff checklist" "$tmp_dir/handoff/release-evidence-checklist.md" "ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVE_URI"
   require_json_key "handoff manifest" "$tmp_dir/handoff/release-handoff-manifest.json" "files"
   require_json_string_contains "handoff manifest" "$tmp_dir/handoff/release-handoff-manifest.json" "evidence_type" "release_external_handoff_manifest"
   require_manifest_integrity "handoff manifest" "$tmp_dir/handoff"
@@ -471,10 +471,10 @@ self_test() {
   require_json_string_contains "evidence-bundle runbook snapshot" "$tmp_dir/handoff/evidence-bundle-runbook.json" "proof_boundary" "does not generate the final bundle"
 
   local mismatch_log="$tmp_dir/version-mismatch.log"
-  if JARVIS_RELEASE_HANDOFF_VERSION="0.0.0-test" "$0" --write "$tmp_dir/version-mismatch" >"$mismatch_log" 2>&1; then
+  if ASSEMBLYWRIGHT_RELEASE_HANDOFF_VERSION="0.0.0-test" "$0" --write "$tmp_dir/version-mismatch" >"$mismatch_log" 2>&1; then
     fail "handoff self-test expected version mismatch to fail"
   fi
-  require_file_contains "version mismatch output" "$mismatch_log" "JARVIS_RELEASE_HANDOFF_VERSION must match canonical release version"
+  require_file_contains "version mismatch output" "$mismatch_log" "ASSEMBLYWRIGHT_RELEASE_HANDOFF_VERSION must match canonical release version"
 
   printf 'Assemblywright external release handoff self-test: ok\n'
   printf 'Proof boundary: temporary templates, checklist, read-only snapshots, and digest manifest only; no external release validation was performed.\n'

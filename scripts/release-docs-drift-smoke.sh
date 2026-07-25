@@ -44,16 +44,16 @@ MASTER_SERVICE_E2E="crates/assemblywright-master/tests/windows_service_lifecycle
 AGENT_E2E="crates/assemblywright-agent/tests/local_relay_e2e.rs"
 CLI_NAMING_E2E="crates/assemblywright-cli/tests/naming_contract_e2e.rs"
 
-MAC_BRIDGE="apps/mac/Sources/JarvisMacCore/DeveloperBridge.swift"
-MAC_BRIDGE_CLI="apps/mac/Sources/JarvisMacBridgeCLI/JarvisMacBridgeCLI.swift"
-MAC_BRIDGE_KEYCHAIN="apps/mac/Sources/JarvisMacCore/KeychainDeveloperIdentity.swift"
-MAC_BRIDGE_NETWORK="apps/mac/Sources/JarvisMacCore/NetworkMTLSBridge.swift"
-MAC_BRIDGE_SUPERVISOR="apps/mac/Sources/JarvisMacCore/DeveloperBridgeSupervisor.swift"
-MAC_BRIDGE_PROCESS="apps/mac/Sources/JarvisMacCore/DeveloperBridgeProcessLifecycle.swift"
-MAC_EVENT_RELAY="apps/mac/Sources/JarvisMacCore/DeveloperEventRelay.swift"
-MAC_APP="apps/mac/Sources/JarvisMacApp/JarvisMacApp.swift"
-MAC_BRIDGE_TESTS="apps/mac/Tests/JarvisMacCoreTests/DeveloperBridgeTests.swift"
-MAC_APP_TESTS="apps/mac/Tests/JarvisMacAppTests/JarvisMacAppTests.swift"
+MAC_BRIDGE="apps/mac/Sources/AssemblywrightMacCore/DeveloperBridge.swift"
+MAC_BRIDGE_CLI="apps/mac/Sources/AssemblywrightMacBridgeCLI/AssemblywrightMacBridgeCLI.swift"
+MAC_BRIDGE_KEYCHAIN="apps/mac/Sources/AssemblywrightMacCore/KeychainDeveloperIdentity.swift"
+MAC_BRIDGE_NETWORK="apps/mac/Sources/AssemblywrightMacCore/NetworkMTLSBridge.swift"
+MAC_BRIDGE_SUPERVISOR="apps/mac/Sources/AssemblywrightMacCore/DeveloperBridgeSupervisor.swift"
+MAC_BRIDGE_PROCESS="apps/mac/Sources/AssemblywrightMacCore/DeveloperBridgeProcessLifecycle.swift"
+MAC_EVENT_RELAY="apps/mac/Sources/AssemblywrightMacCore/DeveloperEventRelay.swift"
+MAC_APP="apps/mac/Sources/AssemblywrightMacApp/AssemblywrightMacApp.swift"
+MAC_BRIDGE_TESTS="apps/mac/Tests/AssemblywrightMacCoreTests/DeveloperBridgeTests.swift"
+MAC_APP_TESTS="apps/mac/Tests/AssemblywrightMacAppTests/AssemblywrightMacAppTests.swift"
 
 MAC_BRIDGE_LIVE_E2E="scripts/mac-windows-bridge-live-e2e.sh"
 WINDOWS_FIXTURE_LIVE_CONTROL="scripts/windows-fixture-live-control.ps1"
@@ -130,12 +130,12 @@ for path in \
   crates/assemblywright-core/src/trusted_wake.rs \
   crates/assemblywright-core/src/workspace.rs \
   crates/assemblywright-cli/tests/local_ipc_e2e.rs \
-  apps/mac/Sources/JarvisMacCore/VoiceAdapter.swift \
-  apps/mac/Sources/JarvisMacCore/SpeechOutputAdapter.swift \
-  apps/mac/Sources/JarvisMacCore/TrustedWake.swift \
-  apps/mac/Sources/JarvisMacCore/CoreSupervisor.swift \
-  apps/mac/Sources/JarvisMacCore/JarvisIPCClient.swift \
-  apps/mac/Sources/JarvisMacCore/ManagementModels.swift \
+  apps/mac/Sources/AssemblywrightMacCore/VoiceAdapter.swift \
+  apps/mac/Sources/AssemblywrightMacCore/SpeechOutputAdapter.swift \
+  apps/mac/Sources/AssemblywrightMacCore/TrustedWake.swift \
+  apps/mac/Sources/AssemblywrightMacCore/CoreSupervisor.swift \
+  apps/mac/Sources/AssemblywrightMacCore/AssemblywrightIPCClient.swift \
+  apps/mac/Sources/AssemblywrightMacCore/ManagementModels.swift \
   docs/plugin-contract.md \
   scripts/release-plugin-trust-qa.sh \
   scripts/release-operator-qa-smoke.sh; do
@@ -158,7 +158,7 @@ require_text "conveyor design approval" "$FEATURE_CONVEYOR_DESIGN" "Approve and 
 require_text "architecture conveyor kernel" "$ARCHITECTURE" "Feature Conveyor repository kernel"
 require_text "architecture core reduction" "$ARCHITECTURE" "no longer an assistant runtime"
 
-require_text "brand compatibility names" "$BRAND" "## Compatibility Names"
+require_text "brand migration section" "$BRAND" "## Migration From The Former Name"
 require_text "knowledge base naming contract gate" "$KB" \
   "release-naming-contract-smoke.sh"
 require_text "knowledge base pivot" "$KB" "## The Pivot"
@@ -177,8 +177,8 @@ require_text "build docs windows gate" "$BUILD_DOCS" "windows-protocol.yml"
 for file in "$README" "$DESIGN" "$ARCHITECTURE" "$BUILD_DOCS" "$CHECKLIST" "$KB" "$AGENTS"; do
   for phrase in \
     "assemblywright serve" \
-    "jarvis-cli -- serve" \
-    "jarvis-cli -- smoke" \
+    "assemblywright-cli -- serve" \
+    "assemblywright-cli -- smoke" \
     "release plugin-trust-runbook" \
     "release-plugin-trust-qa.sh" \
     "release-operator-qa-smoke.sh" \

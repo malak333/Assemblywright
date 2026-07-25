@@ -146,8 +146,8 @@ Canonical commands and their exact proof boundaries live in
 
 Assemblywright is licensed under the
 [Apache License 2.0](LICENSE). The crates are named `assemblywright-*`. A few
-`JARVIS_*` / `jarvis` identifiers survive deliberately as compatibility
+`ASSEMBLYWRIGHT_*` / `assemblywright` identifiers survive deliberately as compatibility
 contracts: environment variable names, Keychain and Application Support
-namespaces, the `com.nobiletechnology.jarvis` code-signing identity, and the
+namespaces, the `com.nobiletechnology.assemblywright` code-signing identity, and the
 bundled CLI filename inside the app. Those bind installed state and signed
 artifacts; they are not the product name.

@@ -130,14 +130,14 @@ fn enrollment_grants_issue_rotate_and_revoke_exact_device_identity() {
         .subject_alternative_name()
         .expect("decode SAN")
         .expect("issued SAN");
-    // The `urn:jarvis:device:` SAN prefix is a frozen credential contract, not
+    // The `urn:assemblywright:device:` SAN prefix is a frozen credential contract, not
     // leftover naming drift. It is baked into every certificate already issued to
     // an enrolled device, and the master strips exactly this prefix when it
     // verifies a presented client certificate, so renaming it voids those
     // certificates and fails enrollment closed. The Assemblywright rename left it
     // deliberately unchanged; see docs/brand.md "Compatibility Names".
-    let issued_uri = format!("urn:jarvis:device:{}", first.device_id.0);
-    assert!(issued_uri.starts_with("urn:jarvis:device:"));
+    let issued_uri = format!("urn:assemblywright:device:{}", first.device_id.0);
+    assert!(issued_uri.starts_with("urn:assemblywright:device:"));
     assert!(san.value.general_names.iter().any(|name| matches!(
         name,
         GeneralName::URI(uri) if *uri == issued_uri
@@ -406,7 +406,7 @@ fn windows_dpapi_protector_round_trips_without_plaintext_equivalence() {
     use assemblywright_master::PlatformSecretProtector;
 
     let protector = PlatformSecretProtector;
-    let plaintext = b"jarvis enrollment authority test key";
+    let plaintext = b"assemblywright enrollment authority test key";
     let protected = protector.protect(plaintext).expect("DPAPI protect");
     assert_ne!(protected, plaintext);
     let recovered = protector.unprotect(&protected).expect("DPAPI unprotect");

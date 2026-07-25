@@ -721,10 +721,10 @@ mod tests {
 
     #[test]
     fn service_name_is_bounded_and_shell_neutral() {
-        assert!(validate_service_name("JarvisMaster-test_1").is_ok());
+        assert!(validate_service_name("AssemblywrightMaster-test_1").is_ok());
         assert!(validate_service_name("").is_err());
         assert!(validate_service_name("Assemblywright Master").is_err());
-        assert!(validate_service_name("JarvisMaster;Remove-Item").is_err());
+        assert!(validate_service_name("AssemblywrightMaster;Remove-Item").is_err());
         assert!(validate_service_name(&"x".repeat(65)).is_err());
     }
 

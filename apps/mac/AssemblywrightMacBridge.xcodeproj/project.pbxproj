@@ -7,13 +7,13 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		446C3DFBEF31DC2898D0D08C /* JarvisMacCore in Frameworks */ = {isa = PBXBuildFile; productRef = 2E5135109C785A5C11F4254A /* JarvisMacCore */; };
-		474CA067C79F06CEBFC6244D /* JarvisMacBridgeCLI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F615D65E7D13D08EE92EB2A /* JarvisMacBridgeCLI.swift */; };
+		446C3DFBEF31DC2898D0D08C /* AssemblywrightMacCore in Frameworks */ = {isa = PBXBuildFile; productRef = 2E5135109C785A5C11F4254A /* AssemblywrightMacCore */; };
+		474CA067C79F06CEBFC6244D /* AssemblywrightMacBridgeCLI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F615D65E7D13D08EE92EB2A /* AssemblywrightMacBridgeCLI.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		3F615D65E7D13D08EE92EB2A /* JarvisMacBridgeCLI.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = JarvisMacBridgeCLI.swift; path = Sources/JarvisMacBridgeCLI/JarvisMacBridgeCLI.swift; sourceTree = "<group>"; };
-		8A4EE10E52EFC91A586311C4 /* JarvisMacBridge.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = JarvisMacBridge.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		3F615D65E7D13D08EE92EB2A /* AssemblywrightMacBridgeCLI.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = AssemblywrightMacBridgeCLI.swift; path = Sources/AssemblywrightMacBridgeCLI/AssemblywrightMacBridgeCLI.swift; sourceTree = "<group>"; };
+		8A4EE10E52EFC91A586311C4 /* AssemblywrightMacBridge.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AssemblywrightMacBridge.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -21,7 +21,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				446C3DFBEF31DC2898D0D08C /* JarvisMacCore in Frameworks */,
+				446C3DFBEF31DC2898D0D08C /* AssemblywrightMacCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -31,7 +31,7 @@
 		09038E09CB186B509D93D4ED /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				8A4EE10E52EFC91A586311C4 /* JarvisMacBridge.app */,
+				8A4EE10E52EFC91A586311C4 /* AssemblywrightMacBridge.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -49,7 +49,7 @@
 			children = (
 				09038E09CB186B509D93D4ED /* Products */,
 				0B0A5BAA3D7297DFB00A1D58 /* Frameworks */,
-				3F615D65E7D13D08EE92EB2A /* JarvisMacBridgeCLI.swift */,
+				3F615D65E7D13D08EE92EB2A /* AssemblywrightMacBridgeCLI.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -63,9 +63,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		114190F2471FDC8F33AA60C6 /* JarvisMacBridge */ = {
+		114190F2471FDC8F33AA60C6 /* AssemblywrightMacBridge */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 7515BF6D722B79B5FE60228E /* Build configuration list for PBXNativeTarget "JarvisMacBridge" */;
+			buildConfigurationList = 7515BF6D722B79B5FE60228E /* Build configuration list for PBXNativeTarget "AssemblywrightMacBridge" */;
 			buildPhases = (
 				8841E025CBDB45C2DA9C4CF2 /* Sources */,
 				D954E143BAE1D89A9A56A9B8 /* Frameworks */,
@@ -75,12 +75,12 @@
 			);
 			dependencies = (
 			);
-			name = JarvisMacBridge;
+			name = AssemblywrightMacBridge;
 			packageProductDependencies = (
-				2E5135109C785A5C11F4254A /* JarvisMacCore */,
+				2E5135109C785A5C11F4254A /* AssemblywrightMacCore */,
 			);
-			productName = JarvisMacBridge;
-			productReference = 8A4EE10E52EFC91A586311C4 /* JarvisMacBridge.app */;
+			productName = AssemblywrightMacBridge;
+			productReference = 8A4EE10E52EFC91A586311C4 /* AssemblywrightMacBridge.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -92,7 +92,7 @@
 				LastSwiftUpdateCheck = 1600;
 				LastUpgradeCheck = 1600;
 			};
-			buildConfigurationList = 30A6A156AA89BCDB9329C8AC /* Build configuration list for PBXProject "JarvisMacBridge" */;
+			buildConfigurationList = 30A6A156AA89BCDB9329C8AC /* Build configuration list for PBXProject "AssemblywrightMacBridge" */;
 			compatibilityVersion = "Xcode 3.2";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -110,7 +110,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				114190F2471FDC8F33AA60C6 /* JarvisMacBridge */,
+				114190F2471FDC8F33AA60C6 /* AssemblywrightMacBridge */,
 			);
 		};
 /* End PBXProject section */
@@ -130,7 +130,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				474CA067C79F06CEBFC6244D /* JarvisMacBridgeCLI.swift in Sources */,
+				474CA067C79F06CEBFC6244D /* AssemblywrightMacBridgeCLI.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -194,15 +194,15 @@
 		4D79DBBB12F23F3B27511D8D /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = "$(SRCROOT)/../../packaging/JarvisMacBridge.entitlements";
+				CODE_SIGN_ENTITLEMENTS = "$(SRCROOT)/../../packaging/AssemblywrightMacBridge.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSBackgroundOnly = YES;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.nobiletechnology.jarvis.developer-bridge.cli";
-				PRODUCT_NAME = "jarvis-mac-bridge";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.nobiletechnology.assemblywright.developer-bridge.cli";
+				PRODUCT_NAME = "assemblywright-mac-bridge";
 				SDKROOT = macosx;
 				SWIFT_VERSION = 6.0;
 			};
@@ -272,15 +272,15 @@
 		E2674A8D298CC5D1E6415088 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = "$(SRCROOT)/../../packaging/JarvisMacBridge.entitlements";
+				CODE_SIGN_ENTITLEMENTS = "$(SRCROOT)/../../packaging/AssemblywrightMacBridge.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_LSBackgroundOnly = YES;
 				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.nobiletechnology.jarvis.developer-bridge.cli";
-				PRODUCT_NAME = "jarvis-mac-bridge";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.nobiletechnology.assemblywright.developer-bridge.cli";
+				PRODUCT_NAME = "assemblywright-mac-bridge";
 				SDKROOT = macosx;
 				SWIFT_VERSION = 6.0;
 			};
@@ -289,7 +289,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		30A6A156AA89BCDB9329C8AC /* Build configuration list for PBXProject "JarvisMacBridge" */ = {
+		30A6A156AA89BCDB9329C8AC /* Build configuration list for PBXProject "AssemblywrightMacBridge" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				D56ADAC1FA8932048C950474 /* Debug */,
@@ -298,7 +298,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		7515BF6D722B79B5FE60228E /* Build configuration list for PBXNativeTarget "JarvisMacBridge" */ = {
+		7515BF6D722B79B5FE60228E /* Build configuration list for PBXNativeTarget "AssemblywrightMacBridge" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				4D79DBBB12F23F3B27511D8D /* Release */,
@@ -317,10 +317,10 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		2E5135109C785A5C11F4254A /* JarvisMacCore */ = {
+		2E5135109C785A5C11F4254A /* AssemblywrightMacCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 35EDCFBDA7C641F7FDCCC1A1 /* XCLocalSwiftPackageReference "." */;
-			productName = JarvisMacCore;
+			productName = AssemblywrightMacCore;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

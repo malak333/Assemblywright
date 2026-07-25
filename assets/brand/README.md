@@ -56,8 +56,8 @@ The generator needs `rsvg-convert` (`brew install librsvg`) plus `iconutil` and
 ## Notes for consumers
 
 The menu bar PNGs are template art, but AppKit will not treat them as such from
-the filename alone. `JarvisBrandAssets` in
-[apps/mac/Sources/JarvisMacApp/BrandAssets.swift](../../apps/mac/Sources/JarvisMacApp/BrandAssets.swift)
+the filename alone. `AssemblywrightBrandAssets` in
+[apps/mac/Sources/AssemblywrightMacApp/BrandAssets.swift](../../apps/mac/Sources/AssemblywrightMacApp/BrandAssets.swift)
 sets `isTemplate = true` after loading; any new consumer must do the same. The
 `@2x` and `@3x` suffixes resolve automatically through `NSImage(named:)`.
 

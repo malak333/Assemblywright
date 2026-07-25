@@ -34,7 +34,7 @@ pub use startup::{
     validate_peer_code_requirement, validate_unix_socket_path, PeerIdentityProfile,
     MAX_PEER_CODE_REQUIREMENT_BYTES, MAX_UNIX_SOCKET_PATH_BYTES,
 };
-pub use types::{JarvisError, JarvisResult};
+pub use types::{AssemblywrightError, AssemblywrightResult};
 
 pub const IPC_BEARER_TOKEN_LENGTH: usize = 43;
 pub const IPC_BEARER_TOKEN_BYTES: usize = 32;

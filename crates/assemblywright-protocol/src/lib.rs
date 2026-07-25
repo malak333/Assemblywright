@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::net::SocketAddr;
 use uuid::Uuid;
 
-pub const PROTOCOL_VERSION: u16 = 1;
+pub const PROTOCOL_VERSION: u16 = 2;
 pub const MAX_DEVICE_NAME_BYTES: usize = 128;
 pub const MAX_CAPABILITIES_PER_DEVICE: usize = 64;
 pub const MAX_CAPABILITY_ID_BYTES: usize = 64;
@@ -25,8 +25,8 @@ pub const MAX_ENROLLMENT_PAIRING_FRAME_BYTES: usize = 64 * 1024;
 pub const ENROLLMENT_INVITATION_READY_STATUS: &str = "enrollment_invitation_ready";
 pub const ENROLLMENT_CSR_READY_STATUS: &str = "enrollment_csr_ready";
 pub const FIXTURE_REASONING_CAPABILITY_ID: &str = "fixture.reasoning";
-pub const FIXTURE_REASONING_PROVIDER: &str = "jarvis-fixture";
-pub const FIXTURE_REASONING_MODEL: &str = "jarvis-fixture-v1";
+pub const FIXTURE_REASONING_PROVIDER: &str = "assemblywright-fixture";
+pub const FIXTURE_REASONING_MODEL: &str = "assemblywright-fixture-v1";
 pub const FIXTURE_SYNTHETIC_ECHO_OPERATION: &str = "synthetic_echo";
 pub const MAX_FIXTURE_CONTEXT_BYTES: usize = 8 * 1024;
 pub const MAX_FIXTURE_RESULT_BYTES: usize = 8 * 1024;
@@ -405,7 +405,7 @@ impl HandshakeRequest {
 
 /// Cross-device handshake envelope bound to the authenticated TLS 1.3 session.
 ///
-/// The digest is SHA-256 over 32 bytes exported with the fixed legacy Jarvis exporter
+/// The digest is SHA-256 over 32 bytes exported with the fixed Assemblywright exporter
 /// label. Keeping this value inside the bounded application handshake prevents
 /// a valid device handshake from being replayed on another TLS connection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

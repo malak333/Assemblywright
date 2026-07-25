@@ -5,8 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:---run}"
 PACKAGE_PATH="$ROOT_DIR/apps/mac"
 PRODUCT="assemblywright-mac-bridge"
-DEFAULT_SIGNED_APP="$PACKAGE_PATH/.build/jarvis-mac-bridge-signed/Build/Products/Debug/jarvis-mac-bridge.app"
-DEFAULT_SIGNED_BIN="$DEFAULT_SIGNED_APP/Contents/MacOS/jarvis-mac-bridge"
+DEFAULT_SIGNED_APP="$PACKAGE_PATH/.build/assemblywright-mac-bridge-signed/Build/Products/Debug/assemblywright-mac-bridge.app"
+DEFAULT_SIGNED_BIN="$DEFAULT_SIGNED_APP/Contents/MacOS/assemblywright-mac-bridge"
 
 fail() {
   printf 'error: %s\n' "$1" >&2
@@ -23,15 +23,15 @@ json_value() {
 case "$MODE" in
   --check)
     [[ -f "$PACKAGE_PATH/Package.swift" ]] || fail "missing Mac Swift package"
-    [[ -f "$PACKAGE_PATH/Sources/JarvisMacBridgeCLI/JarvisMacBridgeCLI.swift" ]] \
+    [[ -f "$PACKAGE_PATH/Sources/AssemblywrightMacBridgeCLI/AssemblywrightMacBridgeCLI.swift" ]] \
       || fail "missing Mac bridge CLI"
-    [[ -f "$PACKAGE_PATH/Sources/JarvisMacCore/DeveloperEventRelay.swift" ]] \
+    [[ -f "$PACKAGE_PATH/Sources/AssemblywrightMacCore/DeveloperEventRelay.swift" ]] \
       || fail "missing Mac event relay"
-    [[ -f "$PACKAGE_PATH/JarvisMacBridge.xcodeproj/project.pbxproj" ]] \
+    [[ -f "$PACKAGE_PATH/AssemblywrightMacBridge.xcodeproj/project.pbxproj" ]] \
       || fail "missing provisioned Mac bridge Xcode project"
     [[ -f "$ROOT_DIR/crates/assemblywright-agent/src/main.rs" ]] \
       || fail "missing supervised Rust agent"
-    [[ -f "$ROOT_DIR/packaging/JarvisMacBridge.entitlements" ]] \
+    [[ -f "$ROOT_DIR/packaging/AssemblywrightMacBridge.entitlements" ]] \
       || fail "missing Mac bridge Keychain entitlement"
     bash -n "$ROOT_DIR/scripts/build-mac-bridge-signed.sh"
     swift build --package-path "$PACKAGE_PATH" --product "$PRODUCT"
@@ -54,9 +54,9 @@ case "$MODE" in
     ;;
 esac
 
-BRIDGE_BIN="${JARVIS_MAC_BRIDGE_BIN:-$DEFAULT_SIGNED_BIN}"
+BRIDGE_BIN="${ASSEMBLYWRIGHT_MAC_BRIDGE_BIN:-$DEFAULT_SIGNED_BIN}"
 [[ -x "$BRIDGE_BIN" ]] || fail \
-  "signed Mac bridge is required; run ./scripts/build-mac-bridge-signed.sh or set JARVIS_MAC_BRIDGE_BIN"
+  "signed Mac bridge is required; run ./scripts/build-mac-bridge-signed.sh or set ASSEMBLYWRIGHT_MAC_BRIDGE_BIN"
 codesign --verify --strict "$BRIDGE_BIN" >/dev/null 2>&1 \
   || fail "Mac bridge signature is invalid"
 bridge_codesign="$(codesign -dv --verbose=4 "$BRIDGE_BIN" 2>&1)"
@@ -74,9 +74,9 @@ bridge_team="$(printf '%s\n' "$bridge_codesign" | sed -n 's/^TeamIdentifier=//p'
 [[ "$bridge_entitlements" == *"<key>keychain-access-groups</key>"* ]] \
   || fail "Mac bridge signature omitted its Keychain access group"
 
-TAILSCALE_BIN="${JARVIS_TAILSCALE_BIN:-$(command -v tailscale || true)}"
+TAILSCALE_BIN="${ASSEMBLYWRIGHT_TAILSCALE_BIN:-$(command -v tailscale || true)}"
 [[ -n "$TAILSCALE_BIN" && -x "$TAILSCALE_BIN" ]] \
-  || fail "Tailscale CLI is required; set JARVIS_TAILSCALE_BIN to its executable"
+  || fail "Tailscale CLI is required; set ASSEMBLYWRIGHT_TAILSCALE_BIN to its executable"
 command -v nc >/dev/null 2>&1 || fail "nc is required for the live TCP preflight"
 
 identity_profile_arguments=()
@@ -199,8 +199,8 @@ cleanup_relay() {
 if [[ "$MODE" == "--run-relay" || "$MODE" == "--run-fixture" || "$MODE" == "--run-mlx" ]]; then
   command -v sqlite3 >/dev/null 2>&1 \
     || fail "sqlite3 is required for the durable relay proof"
-  if [[ -n "${JARVIS_MAC_AGENT_BIN:-}" ]]; then
-    relay_agent_bin="$JARVIS_MAC_AGENT_BIN"
+  if [[ -n "${ASSEMBLYWRIGHT_MAC_AGENT_BIN:-}" ]]; then
+    relay_agent_bin="$ASSEMBLYWRIGHT_MAC_AGENT_BIN"
   else
     cargo build --manifest-path "$ROOT_DIR/Cargo.toml" -p assemblywright-agent --locked
     relay_agent_bin="$ROOT_DIR/target/debug/assemblywright-agent"
@@ -209,31 +209,31 @@ if [[ "$MODE" == "--run-relay" || "$MODE" == "--run-fixture" || "$MODE" == "--ru
     || fail "assemblywright-agent executable is unavailable"
   codesign --verify --strict "$relay_agent_bin" >/dev/null 2>&1 \
     || fail "assemblywright-agent signature is invalid"
-  relay_directory="$(mktemp -d -t jarvis-mac-agent-relay)"
+  relay_directory="$(mktemp -d -t assemblywright-mac-agent-relay)"
   chmod 700 "$relay_directory"
   relay_data_directory="$relay_directory/data"
   app_lifecycle_environment=(
-    "JARVIS_MAC_DEVELOPER_AGENT_EXECUTABLE=$relay_agent_bin"
-    "JARVIS_MAC_DEVELOPER_AGENT_DATA_DIR=$relay_data_directory"
+    "ASSEMBLYWRIGHT_MAC_DEVELOPER_AGENT_EXECUTABLE=$relay_agent_bin"
+    "ASSEMBLYWRIGHT_MAC_DEVELOPER_AGENT_DATA_DIR=$relay_data_directory"
   )
   if [[ "$MODE" == "--run-fixture" ]]; then
     app_lifecycle_environment+=(
-      "JARVIS_MAC_DEVELOPER_FIXTURE_JOBS_ENABLED=true"
+      "ASSEMBLYWRIGHT_MAC_DEVELOPER_FIXTURE_JOBS_ENABLED=true"
     )
   elif [[ "$MODE" == "--run-mlx" ]]; then
-    [[ -n "${JARVIS_MAC_DEVELOPER_MLX_EXECUTABLE:-}" \
-      && -x "$JARVIS_MAC_DEVELOPER_MLX_EXECUTABLE" ]] \
-      || fail "set JARVIS_MAC_DEVELOPER_MLX_EXECUTABLE to the exact executable"
-    [[ -n "${JARVIS_MAC_DEVELOPER_MLX_MODEL_DIR:-}" \
-      && -d "$JARVIS_MAC_DEVELOPER_MLX_MODEL_DIR" ]] \
-      || fail "set JARVIS_MAC_DEVELOPER_MLX_MODEL_DIR to the offline model directory"
-    [[ -n "${JARVIS_MAC_DEVELOPER_MLX_MODEL_ID:-}" ]] \
-      || fail "set JARVIS_MAC_DEVELOPER_MLX_MODEL_ID to the enrolled model identifier"
+    [[ -n "${ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_EXECUTABLE:-}" \
+      && -x "$ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_EXECUTABLE" ]] \
+      || fail "set ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_EXECUTABLE to the exact executable"
+    [[ -n "${ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_MODEL_DIR:-}" \
+      && -d "$ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_MODEL_DIR" ]] \
+      || fail "set ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_MODEL_DIR to the offline model directory"
+    [[ -n "${ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_MODEL_ID:-}" ]] \
+      || fail "set ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_MODEL_ID to the enrolled model identifier"
     app_lifecycle_environment+=(
-      "JARVIS_MAC_DEVELOPER_MLX_JOBS_ENABLED=true"
-      "JARVIS_MAC_DEVELOPER_MLX_EXECUTABLE=$JARVIS_MAC_DEVELOPER_MLX_EXECUTABLE"
-      "JARVIS_MAC_DEVELOPER_MLX_MODEL_DIR=$JARVIS_MAC_DEVELOPER_MLX_MODEL_DIR"
-      "JARVIS_MAC_DEVELOPER_MLX_MODEL_ID=$JARVIS_MAC_DEVELOPER_MLX_MODEL_ID"
+      "ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_JOBS_ENABLED=true"
+      "ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_EXECUTABLE=$ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_EXECUTABLE"
+      "ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_MODEL_DIR=$ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_MODEL_DIR"
+      "ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_MODEL_ID=$ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_MODEL_ID"
     )
   fi
   trap cleanup_relay EXIT
@@ -242,9 +242,9 @@ fi
 if [[ "$MODE" != "--run-fixture" && "$MODE" != "--run-mlx" ]] \
   && ! app_lifecycle_output="$(
   env \
-    JARVIS_MAC_DEVELOPER_BRIDGE_LIVE_E2E=true \
-    JARVIS_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE_BIN" \
-    JARVIS_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$bridge_team" \
+    ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_LIVE_E2E=true \
+    ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE_BIN" \
+    ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$bridge_team" \
     "${app_lifecycle_environment[@]}" \
     swift test --disable-sandbox --package-path "$PACKAGE_PATH" \
       --filter liveSignedHelperAppLifecycleReachesWindowsMaster 2>&1
@@ -253,7 +253,7 @@ if [[ "$MODE" != "--run-fixture" && "$MODE" != "--run-mlx" ]] \
   fail "production app bridge lifecycle did not reach the Windows master"
 fi
 if [[ "$MODE" != "--run-fixture" && "$MODE" != "--run-mlx" ]]; then
-  [[ "$app_lifecycle_output" == *"jarvis_mac_app_bridge_live_e2e_ok"* ]] \
+  [[ "$app_lifecycle_output" == *"assemblywright_mac_app_bridge_live_e2e_ok"* ]] \
     || fail "production app bridge lifecycle omitted its live E2E marker"
 fi
 
@@ -274,9 +274,9 @@ if [[ "$MODE" == "--run-relay" ]]; then
 
   if ! relay_resume_output="$(
     env \
-      JARVIS_MAC_DEVELOPER_BRIDGE_LIVE_E2E=true \
-      JARVIS_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE_BIN" \
-      JARVIS_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$bridge_team" \
+      ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_LIVE_E2E=true \
+      ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE_BIN" \
+      ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$bridge_team" \
       "${app_lifecycle_environment[@]}" \
       swift test --disable-sandbox --package-path "$PACKAGE_PATH" \
         --filter liveSignedHelperAppLifecycleReachesWindowsMaster 2>&1
@@ -284,7 +284,7 @@ if [[ "$MODE" == "--run-relay" ]]; then
     printf '%s\n' "$relay_resume_output" >&2
     fail "production app relay did not resume through a fresh helper and agent"
   fi
-  [[ "$relay_resume_output" == *"jarvis_mac_app_bridge_live_e2e_ok"* ]] \
+  [[ "$relay_resume_output" == *"assemblywright_mac_app_bridge_live_e2e_ok"* ]] \
     || fail "production app relay resume omitted its live E2E marker"
 
   resumed_cursor="$(
@@ -297,7 +297,7 @@ if [[ "$MODE" == "--run-relay" ]]; then
     && "$resumed_sequence" =~ ^[0-9]+$ \
     && "$resumed_sequence" -gt "$first_sequence" ]] \
     || fail "production app relay did not durably resume the same advancing stream"
-  printf 'jarvis_mac_windows_event_relay_live_e2e_ok endpoint=%s stream_id=%s sequence_before=%s sequence_after=%s app_supervision=verified agent_restart=verified\n' \
+  printf 'assemblywright_mac_windows_event_relay_live_e2e_ok endpoint=%s stream_id=%s sequence_before=%s sequence_after=%s app_supervision=verified agent_restart=verified\n' \
     "$endpoint" "$first_stream" "$first_sequence" "$resumed_sequence"
 fi
 
@@ -396,10 +396,10 @@ if [[ "$MODE" == "--run-mlx" ]]; then
   }
 
   env \
-    JARVIS_MAC_DEVELOPER_MLX_LIVE_E2E=true \
-    JARVIS_MAC_DEVELOPER_MLX_COORDINATION_DIR="$mlx_coordination_directory" \
-    JARVIS_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE_BIN" \
-    JARVIS_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$bridge_team" \
+    ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_LIVE_E2E=true \
+    ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_COORDINATION_DIR="$mlx_coordination_directory" \
+    ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE_BIN" \
+    ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$bridge_team" \
     "${app_lifecycle_environment[@]}" \
     swift test --disable-sandbox --package-path "$PACKAGE_PATH" \
       --filter liveSignedHelperAppLifecycleRunsMLXJob \
@@ -421,7 +421,7 @@ if [[ "$MODE" == "--run-mlx" ]]; then
     || fail "MLX lifecycle emitted an invalid initial cursor"
 
   printf '%s\n' \
-    "jarvis_mac_windows_mlx_success_enqueue_required action=EnqueueSuccess script=scripts/windows-mlx-live-control.ps1 expected_device_id=$standard_device_id receipt_stdin=required"
+    "assemblywright_mac_windows_mlx_success_enqueue_required action=EnqueueSuccess script=scripts/windows-mlx-live-control.ps1 expected_device_id=$standard_device_id receipt_stdin=required"
   capture_mlx_control_receipt "success-control.json" "MLX success"
   wait_for_mlx_marker "success-observed" 30 "strict MLX success receipt validation"
   success_receipt="$(<"$mlx_coordination_directory/success-control.json")"
@@ -443,7 +443,7 @@ if [[ "$MODE" == "--run-mlx" ]]; then
   mlx_sequence_success="${success_cursor##*|}"
 
   printf '%s\n' \
-    "jarvis_mac_windows_mlx_cancellation_enqueue_required action=EnqueueCancellationAndPause script=scripts/windows-mlx-live-control.ps1 expected_device_id=$standard_device_id receipts_stdin=leased_then_cancelled"
+    "assemblywright_mac_windows_mlx_cancellation_enqueue_required action=EnqueueCancellationAndPause script=scripts/windows-mlx-live-control.ps1 expected_device_id=$standard_device_id receipts_stdin=leased_then_cancelled"
   capture_mlx_control_receipt "cancellation-control.json" "MLX cancellation lease"
   wait_for_mlx_marker \
     "cancellation-leased-observed" 30 "strict MLX cancellation lease receipt validation"
@@ -462,7 +462,7 @@ if [[ "$MODE" == "--run-mlx" ]]; then
     && "$cancellation_receipt_leased_sequence" -gt "$mlx_sequence_success" ]] \
     || fail "strict cancellation receipt did not bind the active MLX stream"
   printf '%s\n' \
-    "jarvis_mac_windows_mlx_pause_receipt_required action=EnqueueCancellationAndPause expected_device_id=$standard_device_id connection_epoch=$cancellation_receipt_epoch receipt_stdin=second_receipt"
+    "assemblywright_mac_windows_mlx_pause_receipt_required action=EnqueueCancellationAndPause expected_device_id=$standard_device_id connection_epoch=$cancellation_receipt_epoch receipt_stdin=second_receipt"
   capture_mlx_control_receipt "pause-control.json" "MLX cancellation"
   wait_for_mlx_marker "cancellation-observed" 300 "the fail-closed paused MLX state"
   pause_receipt="$(<"$mlx_coordination_directory/pause-control.json")"
@@ -483,7 +483,7 @@ if [[ "$MODE" == "--run-mlx" ]]; then
   mlx_sequence_cancelled="${cancellation_cursor##*|}"
 
   printf '%s\n' \
-    'jarvis_mac_windows_mlx_resume_required action=Resume script=scripts/windows-mlx-live-control.ps1 receipt_stdin=required'
+    'assemblywright_mac_windows_mlx_resume_required action=Resume script=scripts/windows-mlx-live-control.ps1 receipt_stdin=required'
   capture_mlx_control_receipt "resume-control.json" "MLX resume"
   wait_for_mlx_marker "mlx-complete" 300 "deliberate MLX admission resume"
   if ! wait "$mlx_pid"; then
@@ -491,14 +491,14 @@ if [[ "$MODE" == "--run-mlx" ]]; then
     fail "production app MLX lifecycle failed"
   fi
   mlx_pid=""
-  [[ "$(cat "$mlx_output")" == *"jarvis_mac_app_mlx_live_e2e_ok"* ]] \
+  [[ "$(cat "$mlx_output")" == *"assemblywright_mac_app_mlx_live_e2e_ok"* ]] \
     || fail "production app MLX lifecycle omitted its live E2E marker"
 
   if ! mlx_restart_output="$(
     env \
-      JARVIS_MAC_DEVELOPER_BRIDGE_LIVE_E2E=true \
-      JARVIS_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE_BIN" \
-      JARVIS_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$bridge_team" \
+      ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_LIVE_E2E=true \
+      ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE_BIN" \
+      ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$bridge_team" \
       "${app_lifecycle_environment[@]}" \
       swift test --disable-sandbox --package-path "$PACKAGE_PATH" \
         --filter liveSignedHelperAppLifecycleReachesWindowsMaster 2>&1
@@ -506,7 +506,7 @@ if [[ "$MODE" == "--run-mlx" ]]; then
     printf '%s\n' "$mlx_restart_output" >&2
     fail "MLX cursor did not survive a fresh app/helper/agent chain"
   fi
-  [[ "$mlx_restart_output" == *"jarvis_mac_app_bridge_live_e2e_ok"* ]] \
+  [[ "$mlx_restart_output" == *"assemblywright_mac_app_bridge_live_e2e_ok"* ]] \
     || fail "MLX restart omitted its live E2E marker"
   restarted_cursor="$(mlx_cursor)" \
     || fail "MLX restart lost the durable agent cursor"
@@ -526,7 +526,7 @@ if [[ "$MODE" == "--run-mlx" ]]; then
     && "$(json_value "$standard_status_after" certificate_not_after_ms)" \
       == "$standard_certificate_not_after_ms" ]] \
     || fail "MLX run changed the stable standard Mac bridge profile projection"
-  printf 'jarvis_mac_windows_mlx_live_e2e_ok endpoint=%s sequence_before=%s sequence_success=%s sequence_cancelled=%s sequence_restarted=%s local_inference=verified exact_event_binding=verified cancellation=verified late_output_suppression=verified agent_restart=verified\n' \
+  printf 'assemblywright_mac_windows_mlx_live_e2e_ok endpoint=%s sequence_before=%s sequence_success=%s sequence_cancelled=%s sequence_restarted=%s local_inference=verified exact_event_binding=verified cancellation=verified late_output_suppression=verified agent_restart=verified\n' \
     "$endpoint" "$mlx_sequence_before" "$mlx_sequence_success" \
     "$mlx_sequence_cancelled" "$mlx_sequence_restarted"
 fi
@@ -622,10 +622,10 @@ if [[ "$MODE" == "--run-fixture" ]]; then
   }
 
   env \
-    JARVIS_MAC_DEVELOPER_FIXTURE_LIVE_E2E=true \
-    JARVIS_MAC_DEVELOPER_FIXTURE_COORDINATION_DIR="$fixture_coordination_directory" \
-    JARVIS_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE_BIN" \
-    JARVIS_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$bridge_team" \
+    ASSEMBLYWRIGHT_MAC_DEVELOPER_FIXTURE_LIVE_E2E=true \
+    ASSEMBLYWRIGHT_MAC_DEVELOPER_FIXTURE_COORDINATION_DIR="$fixture_coordination_directory" \
+    ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE_BIN" \
+    ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$bridge_team" \
     "${app_lifecycle_environment[@]}" \
     swift test --disable-sandbox --package-path "$PACKAGE_PATH" \
       --filter liveSignedHelperAppLifecycleRunsFixtureJob \
@@ -647,7 +647,7 @@ if [[ "$MODE" == "--run-fixture" ]]; then
     || fail "fixture lifecycle emitted an invalid initial cursor"
 
   printf '%s\n' \
-    'jarvis_mac_windows_fixture_success_enqueue_required action=EnqueueSuccess script=scripts/windows-fixture-live-control.ps1 receipt_stdin=required'
+    'assemblywright_mac_windows_fixture_success_enqueue_required action=EnqueueSuccess script=scripts/windows-fixture-live-control.ps1 receipt_stdin=required'
   capture_fixture_control_receipt "success-control.json" "fixture success"
   wait_for_fixture_marker "success-observed" 30 "strict success receipt validation"
   success_receipt="$(<"$fixture_coordination_directory/success-control.json")"
@@ -667,7 +667,7 @@ if [[ "$MODE" == "--run-fixture" ]]; then
     || fail "fixture success replaced the durable event stream"
 
   printf '%s\n' \
-    'jarvis_mac_windows_fixture_cancellation_enqueue_required action=EnqueueCancellation script=scripts/windows-fixture-live-control.ps1 receipt_stdin=required'
+    'assemblywright_mac_windows_fixture_cancellation_enqueue_required action=EnqueueCancellation script=scripts/windows-fixture-live-control.ps1 receipt_stdin=required'
   capture_fixture_control_receipt "cancellation-control.json" "fixture cancellation lease"
   wait_for_fixture_marker \
     "cancellation-leased-observed" 30 "strict cancellation lease receipt validation"
@@ -689,7 +689,7 @@ if [[ "$MODE" == "--run-fixture" ]]; then
     || fail "fixture cancellation lease replaced the durable event stream"
   fixture_sequence_leased="$cancellation_receipt_leased_sequence"
   printf '%s\n' \
-    'jarvis_mac_windows_fixture_pause_required action=Pause script=scripts/windows-fixture-live-control.ps1 args=prior_cancellation_receipt receipt_stdin=required'
+    'assemblywright_mac_windows_fixture_pause_required action=Pause script=scripts/windows-fixture-live-control.ps1 args=prior_cancellation_receipt receipt_stdin=required'
   capture_fixture_control_receipt "pause-control.json" "fixture cancellation"
   wait_for_fixture_marker "cancellation-observed" 240 "the fail-closed paused state"
   pause_receipt="$(<"$fixture_coordination_directory/pause-control.json")"
@@ -709,21 +709,21 @@ if [[ "$MODE" == "--run-fixture" ]]; then
     || fail "fixture cancellation replaced the durable event stream"
 
   printf '%s\n' \
-    'jarvis_mac_windows_fixture_resume_required action=Resume script=scripts/windows-fixture-live-control.ps1 receipt_stdin=required'
+    'assemblywright_mac_windows_fixture_resume_required action=Resume script=scripts/windows-fixture-live-control.ps1 receipt_stdin=required'
   capture_fixture_control_receipt "resume-control.json" "fixture resume"
   wait_for_fixture_marker "fixture-complete" 240 "deliberate fixture admission resume"
   if ! wait "$fixture_pid"; then
     fail "production app fixture lifecycle failed"
   fi
   fixture_pid=""
-  [[ "$(cat "$fixture_output")" == *"jarvis_mac_app_fixture_live_e2e_ok"* ]] \
+  [[ "$(cat "$fixture_output")" == *"assemblywright_mac_app_fixture_live_e2e_ok"* ]] \
     || fail "production app fixture lifecycle omitted its live E2E marker"
 
   if ! fixture_restart_output="$(
     env \
-      JARVIS_MAC_DEVELOPER_BRIDGE_LIVE_E2E=true \
-      JARVIS_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE_BIN" \
-      JARVIS_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$bridge_team" \
+      ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_LIVE_E2E=true \
+      ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE_BIN" \
+      ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$bridge_team" \
       "${app_lifecycle_environment[@]}" \
       swift test --disable-sandbox --package-path "$PACKAGE_PATH" \
         --filter liveSignedHelperAppLifecycleReachesWindowsMaster 2>&1
@@ -731,7 +731,7 @@ if [[ "$MODE" == "--run-fixture" ]]; then
     printf '%s\n' "$fixture_restart_output" >&2
     fail "fixture cursor did not survive a fresh app/helper/agent chain"
   fi
-  [[ "$fixture_restart_output" == *"jarvis_mac_app_bridge_live_e2e_ok"* ]] \
+  [[ "$fixture_restart_output" == *"assemblywright_mac_app_bridge_live_e2e_ok"* ]] \
     || fail "fixture restart omitted its live E2E marker"
   restarted_cursor="$(fixture_cursor)" \
     || fail "fixture restart lost the durable agent cursor"
@@ -757,15 +757,15 @@ if [[ "$MODE" == "--run-fixture" ]]; then
     && "$(json_value "$standard_connect_after" master_endpoint)" \
       == "$standard_master_endpoint" ]] \
     || fail "standard Mac bridge profile did not freshly reauthenticate after the fixture run"
-  printf 'jarvis_mac_windows_fixture_live_e2e_ok endpoint=%s sequence_before=%s sequence_success=%s sequence_cancelled=%s sequence_restarted=%s fixture_profile=verified exact_event_binding=verified standard_profile_preserved=verified standard_profile_reauthenticated=verified cancellation=verified late_output_suppression=verified agent_restart=verified\n' \
+  printf 'assemblywright_mac_windows_fixture_live_e2e_ok endpoint=%s sequence_before=%s sequence_success=%s sequence_cancelled=%s sequence_restarted=%s fixture_profile=verified exact_event_binding=verified standard_profile_preserved=verified standard_profile_reauthenticated=verified cancellation=verified late_output_suppression=verified agent_restart=verified\n' \
     "$endpoint" "$fixture_sequence_before" "$fixture_sequence_success" \
     "$fixture_sequence_cancelled" "$fixture_sequence_restarted"
 fi
 
 if [[ "$MODE" == "--run-outage" ]]; then
-  outage_directory="$(mktemp -d -t jarvis-mac-bridge-outage)"
+  outage_directory="$(mktemp -d -t assemblywright-mac-bridge-outage)"
   chmod 700 "$outage_directory"
-  outage_output="$(mktemp -t jarvis-mac-bridge-outage-log)"
+  outage_output="$(mktemp -t assemblywright-mac-bridge-outage-log)"
   chmod 600 "$outage_output"
   outage_pid=""
   outage_descendants() {
@@ -807,10 +807,10 @@ if [[ "$MODE" == "--run-outage" ]]; then
   }
   trap cleanup_outage EXIT
 
-  JARVIS_MAC_DEVELOPER_BRIDGE_OUTAGE_LIVE_E2E=true \
-  JARVIS_MAC_DEVELOPER_BRIDGE_OUTAGE_COORDINATION_DIR="$outage_directory" \
-  JARVIS_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE_BIN" \
-  JARVIS_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$bridge_team" \
+  ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_OUTAGE_LIVE_E2E=true \
+  ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_OUTAGE_COORDINATION_DIR="$outage_directory" \
+  ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE_BIN" \
+  ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$bridge_team" \
     swift test --disable-sandbox --package-path "$PACKAGE_PATH" \
       --filter liveSignedHelperAppLifecycleRecoversFromWindowsOutage \
       >"$outage_output" 2>&1 &
@@ -839,7 +839,7 @@ if [[ "$MODE" == "--run-outage" ]]; then
   outage_epoch_before="$(tr -d '\r\n' <"$outage_directory/connected-before")"
   [[ "$outage_epoch_before" =~ ^[0-9]+$ && "$outage_epoch_before" -gt 0 ]] \
     || fail "outage lifecycle emitted an invalid initial epoch"
-  printf 'jarvis_mac_windows_outage_stop_required service=AssemblywrightMaster connection_epoch=%s\n' \
+  printf 'assemblywright_mac_windows_outage_stop_required service=AssemblywrightMaster connection_epoch=%s\n' \
     "$outage_epoch_before"
 
   wait_for_outage_marker "master-offline" 180 "Master Offline after the induced outage"
@@ -848,7 +848,7 @@ if [[ "$MODE" == "--run-outage" ]]; then
     || "$outage_error" == "connection_failed" \
     || "$outage_error" == "invalid_health" ]] \
     || fail "outage lifecycle emitted a non-redacted offline error"
-  printf 'jarvis_mac_windows_outage_start_required service=AssemblywrightMaster offline_error=%s\n' \
+  printf 'assemblywright_mac_windows_outage_start_required service=AssemblywrightMaster offline_error=%s\n' \
     "$outage_error"
 
   wait_for_outage_marker "connected-after" 240 "authenticated recovery"
@@ -861,11 +861,11 @@ if [[ "$MODE" == "--run-outage" ]]; then
     fail "production app outage lifecycle failed"
   fi
   outage_pid=""
-  [[ "$(cat "$outage_output")" == *"jarvis_mac_app_bridge_outage_recovery_live_e2e_ok"* ]] \
+  [[ "$(cat "$outage_output")" == *"assemblywright_mac_app_bridge_outage_recovery_live_e2e_ok"* ]] \
     || fail "production app outage lifecycle omitted its live E2E marker"
-  printf 'jarvis_mac_windows_outage_recovery_live_e2e_ok endpoint=%s connection_epoch_before=%s connection_epoch_after=%s offline_error=%s app_supervision=verified\n' \
+  printf 'assemblywright_mac_windows_outage_recovery_live_e2e_ok endpoint=%s connection_epoch_before=%s connection_epoch_after=%s offline_error=%s app_supervision=verified\n' \
     "$endpoint" "$outage_epoch_before" "$outage_epoch_after" "$outage_error"
 fi
 
-printf 'jarvis_mac_windows_bridge_live_e2e_ok endpoint=%s connection_epoch=%s monitor_epoch=%s monitor_samples=2 reconnect_epoch_before=%s reconnect_epoch_after=%s app_supervision=verified team=%s\n' \
+printf 'assemblywright_mac_windows_bridge_live_e2e_ok endpoint=%s connection_epoch=%s monitor_epoch=%s monitor_samples=2 reconnect_epoch_before=%s reconnect_epoch_after=%s app_supervision=verified team=%s\n' \
   "$endpoint" "$connection_epoch" "$monitor_first_epoch" "$reconnect_first_epoch" "$reconnect_second_epoch" "$bridge_team"

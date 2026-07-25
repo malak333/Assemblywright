@@ -3,7 +3,7 @@ param(
     [ValidateSet("EnqueueSuccess", "EnqueueCancellation", "Pause", "Resume")]
     [string]$Action,
 
-    [string]$DataDir = (Join-Path $env:LOCALAPPDATA "Jarvis\master"),
+    [string]$DataDir = (Join-Path $env:LOCALAPPDATA "Assemblywright\master"),
 
     [ValidatePattern("^127\.0\.0\.1:[0-9]{1,5}$")]
     [string]$Endpoint = "127.0.0.1:7791",
@@ -238,7 +238,7 @@ switch ($Action) {
             sensitivity = "public"
             context = [ordered]@{
                 operation = "synthetic_echo"
-                input = "jarvis-live-fixture-success-v1"
+                input = "assemblywright-live-fixture-success-v1"
                 delay_ms = 0
             }
             lease_duration_ms = 60000
@@ -275,7 +275,7 @@ switch ($Action) {
             sensitivity = "public"
             context = [ordered]@{
                 operation = "synthetic_echo"
-                input = "jarvis-live-fixture-cancellation-v1"
+                input = "assemblywright-live-fixture-cancellation-v1"
                 delay_ms = 5000
             }
             lease_duration_ms = 60000

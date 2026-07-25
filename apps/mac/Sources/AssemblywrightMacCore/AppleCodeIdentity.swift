@@ -2,24 +2,24 @@ import Darwin
 import Foundation
 import Security
 
-public enum JarvisIPCPeerIdentityProfile: String, Equatable, Sendable {
+public enum AssemblywrightIPCPeerIdentityProfile: String, Equatable, Sendable {
     case adhocExact = "adhoc_exact"
     case developerIDSameTeamHardenedRuntime = "developer_id_hardened"
 }
 
-public struct JarvisIPCPeerIdentityPolicy: Equatable, Sendable {
+public struct AssemblywrightIPCPeerIdentityPolicy: Equatable, Sendable {
     public static let kind = "unix_socket_peer_identity_v1"
-    public static let appIdentifier = "com.nobiletechnology.jarvis"
-    public static let coreIdentifier = "com.nobiletechnology.jarvis.core"
+    public static let appIdentifier = "com.nobiletechnology.assemblywright"
+    public static let coreIdentifier = "com.nobiletechnology.assemblywright.core"
 
-    public let profile: JarvisIPCPeerIdentityProfile
+    public let profile: AssemblywrightIPCPeerIdentityProfile
     public let peerCodeRequirement: String
     public let coreCodeRequirement: String
     public let expectedCoreCDHash: Data
     public let expectedCoreExecutableURL: URL
 
     public init(
-        profile: JarvisIPCPeerIdentityProfile,
+        profile: AssemblywrightIPCPeerIdentityProfile,
         peerCodeRequirement: String,
         coreCodeRequirement: String,
         expectedCoreCDHash: Data,
@@ -33,7 +33,7 @@ public struct JarvisIPCPeerIdentityPolicy: Equatable, Sendable {
     }
 }
 
-public enum JarvisIPCPeerIdentityError: Error, Equatable, Sendable {
+public enum AssemblywrightIPCPeerIdentityError: Error, Equatable, Sendable {
     case unavailable
     case invalidIdentifier
     case invalidProfile
@@ -47,27 +47,27 @@ public enum JarvisIPCPeerIdentityError: Error, Equatable, Sendable {
     case peerCDHashMismatch
 }
 
-public protocol JarvisIPCPeerIdentityPolicyProviding: Sendable {
-    func policy(forCoreExecutable executableURL: URL) throws -> JarvisIPCPeerIdentityPolicy
+public protocol AssemblywrightIPCPeerIdentityPolicyProviding: Sendable {
+    func policy(forCoreExecutable executableURL: URL) throws -> AssemblywrightIPCPeerIdentityPolicy
 }
 
-public protocol JarvisUnixPeerIdentityVerifying: Sendable {
+public protocol AssemblywrightUnixPeerIdentityVerifying: Sendable {
     func verifyPeer(
         on socketDescriptor: Int32,
-        policy: JarvisIPCPeerIdentityPolicy
+        policy: AssemblywrightIPCPeerIdentityPolicy
     ) throws
 }
 
-public struct SecurityJarvisIPCPeerIdentityPolicyProvider: JarvisIPCPeerIdentityPolicyProviding {
+public struct SecurityAssemblywrightIPCPeerIdentityPolicyProvider: AssemblywrightIPCPeerIdentityPolicyProviding {
     private static let adhocFlag: UInt32 = 0x0002
     private static let hardenedRuntimeFlag: UInt32 = 0x10000
     private static let maximumRequirementBytes = 4 * 1024
 
     public init() {}
 
-    public func policy(forCoreExecutable executableURL: URL) throws -> JarvisIPCPeerIdentityPolicy {
+    public func policy(forCoreExecutable executableURL: URL) throws -> AssemblywrightIPCPeerIdentityPolicy {
         guard executableURL.isFileURL, executableURL.path.hasPrefix("/") else {
-            throw JarvisIPCPeerIdentityError.unavailable
+            throw AssemblywrightIPCPeerIdentityError.unavailable
         }
         let app = try Self.copySelfCode()
         let appStatic = try Self.copyStaticCode(from: app)
@@ -82,19 +82,19 @@ public struct SecurityJarvisIPCPeerIdentityPolicyProvider: JarvisIPCPeerIdentity
             SecCSFlags(rawValue: kSecCSStrictValidate),
             nil
         ) == errSecSuccess else {
-            throw JarvisIPCPeerIdentityError.invalidSignature
+            throw AssemblywrightIPCPeerIdentityError.invalidSignature
         }
         let appInfo = try Self.signingInformation(for: appStatic)
         let coreInfo = try Self.signingInformation(for: core)
         let appIdentity = try Self.identity(from: appInfo)
         let coreIdentity = try Self.identity(from: coreInfo)
 
-        guard appIdentity.identifier == JarvisIPCPeerIdentityPolicy.appIdentifier,
-              coreIdentity.identifier == JarvisIPCPeerIdentityPolicy.coreIdentifier else {
-            throw JarvisIPCPeerIdentityError.invalidIdentifier
+        guard appIdentity.identifier == AssemblywrightIPCPeerIdentityPolicy.appIdentifier,
+              coreIdentity.identifier == AssemblywrightIPCPeerIdentityPolicy.coreIdentifier else {
+            throw AssemblywrightIPCPeerIdentityError.invalidIdentifier
         }
 
-        let profile: JarvisIPCPeerIdentityProfile
+        let profile: AssemblywrightIPCPeerIdentityProfile
         let appRequirement: String
         let coreRequirement: String
         if appIdentity.isAdhoc, coreIdentity.isAdhoc,
@@ -107,7 +107,7 @@ public struct SecurityJarvisIPCPeerIdentityPolicyProvider: JarvisIPCPeerIdentity
                   !appTeam.isEmpty,
                   coreIdentity.teamIdentifier == appTeam {
             guard appIdentity.hasHardenedRuntime, coreIdentity.hasHardenedRuntime else {
-                throw JarvisIPCPeerIdentityError.hardenedRuntimeRequired
+                throw AssemblywrightIPCPeerIdentityError.hardenedRuntimeRequired
             }
             profile = .developerIDSameTeamHardenedRuntime
             appRequirement = Self.developerIDRequirement(
@@ -119,7 +119,7 @@ public struct SecurityJarvisIPCPeerIdentityPolicyProvider: JarvisIPCPeerIdentity
                 teamIdentifier: appTeam
             )
         } else {
-            throw JarvisIPCPeerIdentityError.invalidProfile
+            throw AssemblywrightIPCPeerIdentityError.invalidProfile
         }
 
         try Self.validateRequirement(appRequirement)
@@ -127,7 +127,7 @@ public struct SecurityJarvisIPCPeerIdentityPolicyProvider: JarvisIPCPeerIdentity
         try Self.validate(dynamicCode: app, requirement: appRequirement)
         try Self.validate(code: core, requirement: coreRequirement, checkAllArchitectures: false)
 
-        return JarvisIPCPeerIdentityPolicy(
+        return AssemblywrightIPCPeerIdentityPolicy(
             profile: profile,
             peerCodeRequirement: appRequirement,
             coreCodeRequirement: coreRequirement,
@@ -149,7 +149,7 @@ public struct SecurityJarvisIPCPeerIdentityPolicyProvider: JarvisIPCPeerIdentity
     private static func copySelfCode() throws -> SecCode {
         var code: SecCode?
         guard SecCodeCopySelf([], &code) == errSecSuccess, let code else {
-            throw JarvisIPCPeerIdentityError.unavailable
+            throw AssemblywrightIPCPeerIdentityError.unavailable
         }
         return code
     }
@@ -158,7 +158,7 @@ public struct SecurityJarvisIPCPeerIdentityPolicyProvider: JarvisIPCPeerIdentity
         var code: SecStaticCode?
         guard SecStaticCodeCreateWithPath(url as CFURL, [], &code) == errSecSuccess,
               let code else {
-            throw JarvisIPCPeerIdentityError.unavailable
+            throw AssemblywrightIPCPeerIdentityError.unavailable
         }
         return code
     }
@@ -167,7 +167,7 @@ public struct SecurityJarvisIPCPeerIdentityPolicyProvider: JarvisIPCPeerIdentity
         var staticCode: SecStaticCode?
         guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess,
               let staticCode else {
-            throw JarvisIPCPeerIdentityError.unavailable
+            throw AssemblywrightIPCPeerIdentityError.unavailable
         }
         return staticCode
     }
@@ -180,7 +180,7 @@ public struct SecurityJarvisIPCPeerIdentityPolicyProvider: JarvisIPCPeerIdentity
             &information
         ) == errSecSuccess,
         let information = information as? [String: Any] else {
-            throw JarvisIPCPeerIdentityError.unavailable
+            throw AssemblywrightIPCPeerIdentityError.unavailable
         }
         return information
     }
@@ -193,11 +193,11 @@ public struct SecurityJarvisIPCPeerIdentityPolicyProvider: JarvisIPCPeerIdentity
               !cdHash.isEmpty,
               cdHash.count <= 64,
               let flagsNumber = information[kSecCodeInfoFlags as String] as? NSNumber else {
-            throw JarvisIPCPeerIdentityError.invalidSignature
+            throw AssemblywrightIPCPeerIdentityError.invalidSignature
         }
         let team = information[kSecCodeInfoTeamIdentifier as String] as? String
         guard team?.utf8.count ?? 0 <= 64 else {
-            throw JarvisIPCPeerIdentityError.invalidSignature
+            throw AssemblywrightIPCPeerIdentityError.invalidSignature
         }
         return CodeIdentity(
             identifier: identifier,
@@ -220,7 +220,7 @@ public struct SecurityJarvisIPCPeerIdentityPolicyProvider: JarvisIPCPeerIdentity
 
     private static func validateRequirement(_ text: String) throws {
         guard !text.isEmpty, text.utf8.count <= maximumRequirementBytes else {
-            throw JarvisIPCPeerIdentityError.invalidRequirement
+            throw AssemblywrightIPCPeerIdentityError.invalidRequirement
         }
         _ = try requirement(from: text)
     }
@@ -229,7 +229,7 @@ public struct SecurityJarvisIPCPeerIdentityPolicyProvider: JarvisIPCPeerIdentity
         var requirement: SecRequirement?
         guard SecRequirementCreateWithString(text as CFString, [], &requirement) == errSecSuccess,
               let requirement else {
-            throw JarvisIPCPeerIdentityError.invalidRequirement
+            throw AssemblywrightIPCPeerIdentityError.invalidRequirement
         }
         return requirement
     }
@@ -247,7 +247,7 @@ public struct SecurityJarvisIPCPeerIdentityPolicyProvider: JarvisIPCPeerIdentity
             SecCSFlags(rawValue: rawFlags),
             requirement
         ) == errSecSuccess else {
-            throw JarvisIPCPeerIdentityError.invalidSignature
+            throw AssemblywrightIPCPeerIdentityError.invalidSignature
         }
     }
 
@@ -259,7 +259,7 @@ public struct SecurityJarvisIPCPeerIdentityPolicyProvider: JarvisIPCPeerIdentity
             SecCSFlags(rawValue: kSecCSStrictValidate),
             requirement
         ) == errSecSuccess else {
-            throw JarvisIPCPeerIdentityError.invalidSignature
+            throw AssemblywrightIPCPeerIdentityError.invalidSignature
         }
     }
 
@@ -268,14 +268,14 @@ public struct SecurityJarvisIPCPeerIdentityPolicyProvider: JarvisIPCPeerIdentity
     }
 }
 
-public struct SecurityJarvisUnixPeerIdentityVerifier: JarvisUnixPeerIdentityVerifying {
+public struct SecurityAssemblywrightUnixPeerIdentityVerifier: AssemblywrightUnixPeerIdentityVerifying {
     private static let hardenedRuntimeFlag: UInt32 = 0x10000
 
     public init() {}
 
     public func verifyPeer(
         on socketDescriptor: Int32,
-        policy: JarvisIPCPeerIdentityPolicy
+        policy: AssemblywrightIPCPeerIdentityPolicy
     ) throws {
         var token = audit_token_t()
         var tokenLength = socklen_t(MemoryLayout.size(ofValue: token))
@@ -287,7 +287,7 @@ public struct SecurityJarvisUnixPeerIdentityVerifier: JarvisUnixPeerIdentityVeri
             &tokenLength
         ) == 0,
         tokenLength == MemoryLayout.size(ofValue: token) else {
-            throw JarvisIPCPeerIdentityError.peerTokenUnavailable
+            throw AssemblywrightIPCPeerIdentityError.peerTokenUnavailable
         }
 
         let tokenData = withUnsafeBytes(of: &token) { Data($0) }
@@ -295,9 +295,9 @@ public struct SecurityJarvisUnixPeerIdentityVerifier: JarvisUnixPeerIdentityVeri
         var peerCode: SecCode?
         guard SecCodeCopyGuestWithAttributes(nil, attributes, [], &peerCode) == errSecSuccess,
               let peerCode else {
-            throw JarvisIPCPeerIdentityError.peerCodeUnavailable
+            throw AssemblywrightIPCPeerIdentityError.peerCodeUnavailable
         }
-        let requirement = try SecurityJarvisIPCPeerIdentityPolicyProvider.requirement(
+        let requirement = try SecurityAssemblywrightIPCPeerIdentityPolicyProvider.requirement(
             from: policy.coreCodeRequirement
         )
         guard SecCodeCheckValidity(
@@ -305,10 +305,10 @@ public struct SecurityJarvisUnixPeerIdentityVerifier: JarvisUnixPeerIdentityVeri
             SecCSFlags(rawValue: kSecCSStrictValidate),
             requirement
         ) == errSecSuccess else {
-            throw JarvisIPCPeerIdentityError.peerCodeInvalid
+            throw AssemblywrightIPCPeerIdentityError.peerCodeInvalid
         }
 
-        let peerStaticCode = try SecurityJarvisIPCPeerIdentityPolicyProvider.staticCode(
+        let peerStaticCode = try SecurityAssemblywrightIPCPeerIdentityPolicyProvider.staticCode(
             from: peerCode
         )
         var rawInformation: CFDictionary?
@@ -318,18 +318,18 @@ public struct SecurityJarvisUnixPeerIdentityVerifier: JarvisUnixPeerIdentityVeri
               let executableURL = information[kSecCodeInfoMainExecutable as String] as? URL,
               let cdHash = information[kSecCodeInfoUnique as String] as? Data,
               let signatureFlags = information[kSecCodeInfoFlags as String] as? NSNumber else {
-            throw JarvisIPCPeerIdentityError.peerCodeInvalid
+            throw AssemblywrightIPCPeerIdentityError.peerCodeInvalid
         }
         guard executableURL.standardizedFileURL.path
                 == policy.expectedCoreExecutableURL.standardizedFileURL.path else {
-            throw JarvisIPCPeerIdentityError.peerExecutableMismatch
+            throw AssemblywrightIPCPeerIdentityError.peerExecutableMismatch
         }
         guard cdHash.constantTimeEquals(policy.expectedCoreCDHash) else {
-            throw JarvisIPCPeerIdentityError.peerCDHashMismatch
+            throw AssemblywrightIPCPeerIdentityError.peerCDHashMismatch
         }
         if policy.profile == .developerIDSameTeamHardenedRuntime,
            signatureFlags.uint32Value & Self.hardenedRuntimeFlag == 0 {
-            throw JarvisIPCPeerIdentityError.hardenedRuntimeRequired
+            throw AssemblywrightIPCPeerIdentityError.hardenedRuntimeRequired
         }
     }
 }

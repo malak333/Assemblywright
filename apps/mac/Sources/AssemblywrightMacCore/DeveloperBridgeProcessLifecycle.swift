@@ -3,7 +3,7 @@ import Darwin
 import Foundation
 import Security
 
-public enum JarvisDeveloperBridgeAppPhase: String, Equatable, Sendable {
+public enum AssemblywrightDeveloperBridgeAppPhase: String, Equatable, Sendable {
     case disabled
     case starting
     case connected
@@ -13,14 +13,14 @@ public enum JarvisDeveloperBridgeAppPhase: String, Equatable, Sendable {
     case stopped
 }
 
-public struct JarvisDeveloperBridgeAppStatus: Equatable, Sendable {
-    public let phase: JarvisDeveloperBridgeAppPhase
+public struct AssemblywrightDeveloperBridgeAppStatus: Equatable, Sendable {
+    public let phase: AssemblywrightDeveloperBridgeAppPhase
     public let masterEndpoint: String?
     public let connectionEpoch: UInt64?
     public let errorCode: String?
 
     public init(
-        phase: JarvisDeveloperBridgeAppPhase,
+        phase: AssemblywrightDeveloperBridgeAppPhase,
         masterEndpoint: String? = nil,
         connectionEpoch: UInt64? = nil,
         errorCode: String? = nil
@@ -34,27 +34,27 @@ public struct JarvisDeveloperBridgeAppStatus: Equatable, Sendable {
     public static let disabled = Self(phase: .disabled)
 }
 
-public struct JarvisDeveloperBridgeProcessConfiguration: Equatable, Sendable {
-    public static let executableEnvironmentKey = "JARVIS_MAC_DEVELOPER_BRIDGE_EXECUTABLE"
+public struct AssemblywrightDeveloperBridgeProcessConfiguration: Equatable, Sendable {
+    public static let executableEnvironmentKey = "ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_EXECUTABLE"
     public static let teamIdentifierEnvironmentKey =
-        "JARVIS_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER"
+        "ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER"
     public static let agentExecutableEnvironmentKey =
-        "JARVIS_MAC_DEVELOPER_AGENT_EXECUTABLE"
+        "ASSEMBLYWRIGHT_MAC_DEVELOPER_AGENT_EXECUTABLE"
     public static let agentDataDirectoryEnvironmentKey =
-        "JARVIS_MAC_DEVELOPER_AGENT_DATA_DIR"
+        "ASSEMBLYWRIGHT_MAC_DEVELOPER_AGENT_DATA_DIR"
     public static let fixtureJobsEnabledEnvironmentKey =
-        "JARVIS_MAC_DEVELOPER_FIXTURE_JOBS_ENABLED"
+        "ASSEMBLYWRIGHT_MAC_DEVELOPER_FIXTURE_JOBS_ENABLED"
     public static let mlxJobsEnabledEnvironmentKey =
-        "JARVIS_MAC_DEVELOPER_MLX_JOBS_ENABLED"
+        "ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_JOBS_ENABLED"
     public static let mlxExecutableEnvironmentKey =
-        "JARVIS_MAC_DEVELOPER_MLX_EXECUTABLE"
+        "ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_EXECUTABLE"
     public static let mlxModelDirectoryEnvironmentKey =
-        "JARVIS_MAC_DEVELOPER_MLX_MODEL_DIR"
+        "ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_MODEL_DIR"
     public static let mlxModelIDEnvironmentKey =
-        "JARVIS_MAC_DEVELOPER_MLX_MODEL_ID"
+        "ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_MODEL_ID"
     public let executableURL: URL?
     public let expectedTeamIdentifier: String?
-    public let eventRelayConfiguration: JarvisMacDeveloperEventRelayConfiguration?
+    public let eventRelayConfiguration: AssemblywrightMacDeveloperEventRelayConfiguration?
 
     public init(environment: [String: String] = ProcessInfo.processInfo.environment) {
         guard let value = environment[Self.executableEnvironmentKey], !value.isEmpty,
@@ -110,10 +110,10 @@ public struct JarvisDeveloperBridgeProcessConfiguration: Equatable, Sendable {
             eventRelayConfiguration = nil
             return
         }
-        let relayConfiguration: JarvisMacDeveloperEventRelayConfiguration?
+        let relayConfiguration: AssemblywrightMacDeveloperEventRelayConfiguration?
         if let agentExecutable, !agentExecutable.isEmpty,
            let agentDataDirectory, !agentDataDirectory.isEmpty {
-            let relay = JarvisMacDeveloperEventRelayConfiguration(
+            let relay = AssemblywrightMacDeveloperEventRelayConfiguration(
                 agentExecutableURL: URL(fileURLWithPath: agentExecutable),
                 agentDataDirectoryURL: URL(
                     fileURLWithPath: agentDataDirectory,
@@ -166,7 +166,7 @@ public struct JarvisDeveloperBridgeProcessConfiguration: Equatable, Sendable {
     }
 }
 
-public enum JarvisDeveloperBridgeProcessError: Error, Equatable, Sendable {
+public enum AssemblywrightDeveloperBridgeProcessError: Error, Equatable, Sendable {
     case invalidExecutablePath
     case invalidExecutableSignature
     case launchFailed
@@ -176,7 +176,7 @@ public enum JarvisDeveloperBridgeProcessError: Error, Equatable, Sendable {
     case helperExited
 }
 
-public struct JarvisDeveloperBridgeValidatedExecutable: Equatable, Sendable {
+public struct AssemblywrightDeveloperBridgeValidatedExecutable: Equatable, Sendable {
     public let executableURL: URL
     public let teamIdentifier: String
     public let codeRequirement: String
@@ -195,17 +195,17 @@ public struct JarvisDeveloperBridgeValidatedExecutable: Equatable, Sendable {
     }
 }
 
-public protocol JarvisDeveloperBridgeExecutableValidating: Sendable {
+public protocol AssemblywrightDeveloperBridgeExecutableValidating: Sendable {
     func validate(
         executableURL: URL,
         expectedTeamIdentifier: String
-    ) throws -> JarvisDeveloperBridgeValidatedExecutable
+    ) throws -> AssemblywrightDeveloperBridgeValidatedExecutable
 }
 
-public struct SecurityJarvisDeveloperBridgeExecutableValidator:
-    JarvisDeveloperBridgeExecutableValidating, Sendable
+public struct SecurityAssemblywrightDeveloperBridgeExecutableValidator:
+    AssemblywrightDeveloperBridgeExecutableValidating, Sendable
 {
-    public static let helperIdentifier = "com.nobiletechnology.jarvis.developer-bridge.cli"
+    public static let helperIdentifier = "com.nobiletechnology.assemblywright.developer-bridge.cli"
     private static let maximumPathBytes = 4 * 1_024
 
     public init() {}
@@ -213,25 +213,25 @@ public struct SecurityJarvisDeveloperBridgeExecutableValidator:
     public func validate(
         executableURL: URL,
         expectedTeamIdentifier: String
-    ) throws -> JarvisDeveloperBridgeValidatedExecutable {
+    ) throws -> AssemblywrightDeveloperBridgeValidatedExecutable {
         let standardized = executableURL.standardizedFileURL
         guard standardized.isFileURL,
               standardized.path.hasPrefix("/"),
               !standardized.path.contains("\0"),
               standardized.path.utf8.count <= Self.maximumPathBytes else {
-            throw JarvisDeveloperBridgeProcessError.invalidExecutablePath
+            throw AssemblywrightDeveloperBridgeProcessError.invalidExecutablePath
         }
         var metadata = stat()
         guard lstat(standardized.path, &metadata) == 0,
               metadata.st_mode & S_IFMT == S_IFREG,
               access(standardized.path, X_OK) == 0 else {
-            throw JarvisDeveloperBridgeProcessError.invalidExecutablePath
+            throw AssemblywrightDeveloperBridgeProcessError.invalidExecutablePath
         }
 
         var code: SecStaticCode?
         guard SecStaticCodeCreateWithPath(standardized as CFURL, [], &code) == errSecSuccess,
               let code else {
-            throw JarvisDeveloperBridgeProcessError.invalidExecutableSignature
+            throw AssemblywrightDeveloperBridgeProcessError.invalidExecutableSignature
         }
         var rawInformation: CFDictionary?
         guard SecCodeCopySigningInformation(
@@ -254,7 +254,7 @@ public struct SecurityJarvisDeveloperBridgeExecutableValidator:
             == "\(teamIdentifier).\(Self.helperIdentifier)",
         let accessGroups = entitlements["keychain-access-groups"] as? [String],
         accessGroups == ["\(teamIdentifier).\(Self.helperIdentifier)"] else {
-            throw JarvisDeveloperBridgeProcessError.invalidExecutableSignature
+            throw AssemblywrightDeveloperBridgeProcessError.invalidExecutableSignature
         }
         let requirementText =
             "anchor apple generic and identifier \"\(Self.helperIdentifier)\" "
@@ -271,9 +271,9 @@ public struct SecurityJarvisDeveloperBridgeExecutableValidator:
             SecCSFlags(rawValue: kSecCSStrictValidate),
             requirement
         ) == errSecSuccess else {
-            throw JarvisDeveloperBridgeProcessError.invalidExecutableSignature
+            throw AssemblywrightDeveloperBridgeProcessError.invalidExecutableSignature
         }
-        return JarvisDeveloperBridgeValidatedExecutable(
+        return AssemblywrightDeveloperBridgeValidatedExecutable(
             executableURL: standardized,
             teamIdentifier: teamIdentifier,
             codeRequirement: requirementText,
@@ -282,21 +282,21 @@ public struct SecurityJarvisDeveloperBridgeExecutableValidator:
     }
 }
 
-public protocol JarvisDeveloperBridgeRunningProcessValidating: Sendable {
+public protocol AssemblywrightDeveloperBridgeRunningProcessValidating: Sendable {
     func validate(
         processIdentifier: Int32,
-        expected: JarvisDeveloperBridgeValidatedExecutable
+        expected: AssemblywrightDeveloperBridgeValidatedExecutable
     ) throws
 }
 
-public struct SecurityJarvisDeveloperBridgeRunningProcessValidator:
-    JarvisDeveloperBridgeRunningProcessValidating, Sendable
+public struct SecurityAssemblywrightDeveloperBridgeRunningProcessValidator:
+    AssemblywrightDeveloperBridgeRunningProcessValidating, Sendable
 {
     public init() {}
 
     public func validate(
         processIdentifier: Int32,
-        expected: JarvisDeveloperBridgeValidatedExecutable
+        expected: AssemblywrightDeveloperBridgeValidatedExecutable
     ) throws {
         let attributes = [
             kSecGuestAttributePid as String: NSNumber(value: processIdentifier)
@@ -304,7 +304,7 @@ public struct SecurityJarvisDeveloperBridgeRunningProcessValidator:
         var runningCode: SecCode?
         guard SecCodeCopyGuestWithAttributes(nil, attributes, [], &runningCode) == errSecSuccess,
               let runningCode else {
-            throw JarvisDeveloperBridgeProcessError.invalidExecutableSignature
+            throw AssemblywrightDeveloperBridgeProcessError.invalidExecutableSignature
         }
         var requirement: SecRequirement?
         guard SecRequirementCreateWithString(
@@ -318,7 +318,7 @@ public struct SecurityJarvisDeveloperBridgeRunningProcessValidator:
             SecCSFlags(rawValue: kSecCSStrictValidate),
             requirement
         ) == errSecSuccess else {
-            throw JarvisDeveloperBridgeProcessError.invalidExecutableSignature
+            throw AssemblywrightDeveloperBridgeProcessError.invalidExecutableSignature
         }
         var staticCode: SecStaticCode?
         var rawInformation: CFDictionary?
@@ -336,40 +336,40 @@ public struct SecurityJarvisDeveloperBridgeRunningProcessValidator:
               let runningExecutable = information[kSecCodeInfoMainExecutable as String] as? URL,
               runningExecutable.standardizedFileURL.path
                   == expected.executableURL.standardizedFileURL.path else {
-            throw JarvisDeveloperBridgeProcessError.invalidExecutableSignature
+            throw AssemblywrightDeveloperBridgeProcessError.invalidExecutableSignature
         }
     }
 }
 
-public protocol JarvisDeveloperBridgeProcessSession: Sendable {
+public protocol AssemblywrightDeveloperBridgeProcessSession: Sendable {
     var outputLines: AsyncThrowingStream<Data, Error> { get }
     func stop() async throws
 }
 
-public protocol JarvisDeveloperBridgeProcessLaunching: Sendable {
+public protocol AssemblywrightDeveloperBridgeProcessLaunching: Sendable {
     func launch(
-        executable: JarvisDeveloperBridgeValidatedExecutable,
-        eventRelayConfiguration: JarvisMacDeveloperEventRelayConfiguration?
-    ) async throws -> any JarvisDeveloperBridgeProcessSession
+        executable: AssemblywrightDeveloperBridgeValidatedExecutable,
+        eventRelayConfiguration: AssemblywrightMacDeveloperEventRelayConfiguration?
+    ) async throws -> any AssemblywrightDeveloperBridgeProcessSession
 }
 
-public struct FoundationJarvisDeveloperBridgeProcessLauncher:
-    JarvisDeveloperBridgeProcessLaunching, Sendable
+public struct FoundationAssemblywrightDeveloperBridgeProcessLauncher:
+    AssemblywrightDeveloperBridgeProcessLaunching, Sendable
 {
-    private let runningProcessValidator: any JarvisDeveloperBridgeRunningProcessValidating
+    private let runningProcessValidator: any AssemblywrightDeveloperBridgeRunningProcessValidating
 
     public init(
-        runningProcessValidator: any JarvisDeveloperBridgeRunningProcessValidating =
-            SecurityJarvisDeveloperBridgeRunningProcessValidator()
+        runningProcessValidator: any AssemblywrightDeveloperBridgeRunningProcessValidating =
+            SecurityAssemblywrightDeveloperBridgeRunningProcessValidator()
     ) {
         self.runningProcessValidator = runningProcessValidator
     }
 
     public func launch(
-        executable: JarvisDeveloperBridgeValidatedExecutable,
-        eventRelayConfiguration: JarvisMacDeveloperEventRelayConfiguration?
-    ) async throws -> any JarvisDeveloperBridgeProcessSession {
-        try FoundationJarvisDeveloperBridgeProcessSession(
+        executable: AssemblywrightDeveloperBridgeValidatedExecutable,
+        eventRelayConfiguration: AssemblywrightMacDeveloperEventRelayConfiguration?
+    ) async throws -> any AssemblywrightDeveloperBridgeProcessSession {
+        try FoundationAssemblywrightDeveloperBridgeProcessSession(
             executable: executable,
             eventRelayConfiguration: eventRelayConfiguration,
             runningProcessValidator: runningProcessValidator
@@ -377,7 +377,7 @@ public struct FoundationJarvisDeveloperBridgeProcessLauncher:
     }
 
     static func helperArguments(
-        eventRelayConfiguration: JarvisMacDeveloperEventRelayConfiguration?
+        eventRelayConfiguration: AssemblywrightMacDeveloperEventRelayConfiguration?
     ) -> [String] {
         if let eventRelayConfiguration, eventRelayConfiguration.fixtureJobsEnabled {
             return ["relay", "--identity-profile", "fixture"]
@@ -386,8 +386,8 @@ public struct FoundationJarvisDeveloperBridgeProcessLauncher:
     }
 }
 
-private actor FoundationJarvisDeveloperBridgeProcessSession:
-    JarvisDeveloperBridgeProcessSession
+private actor FoundationAssemblywrightDeveloperBridgeProcessSession:
+    AssemblywrightDeveloperBridgeProcessSession
 {
     private let process: Process
     private let pipe: Pipe
@@ -396,9 +396,9 @@ private actor FoundationJarvisDeveloperBridgeProcessSession:
     private var stopped = false
 
     init(
-        executable: JarvisDeveloperBridgeValidatedExecutable,
-        eventRelayConfiguration: JarvisMacDeveloperEventRelayConfiguration?,
-        runningProcessValidator: any JarvisDeveloperBridgeRunningProcessValidating
+        executable: AssemblywrightDeveloperBridgeValidatedExecutable,
+        eventRelayConfiguration: AssemblywrightMacDeveloperEventRelayConfiguration?,
+        runningProcessValidator: any AssemblywrightDeveloperBridgeRunningProcessValidating
     ) throws {
         let process = Process()
         let pipe = Pipe()
@@ -411,7 +411,7 @@ private actor FoundationJarvisDeveloperBridgeProcessSession:
         self.pipe = pipe
 
         process.executableURL = executable.executableURL
-        process.arguments = FoundationJarvisDeveloperBridgeProcessLauncher.helperArguments(
+        process.arguments = FoundationAssemblywrightDeveloperBridgeProcessLauncher.helperArguments(
             eventRelayConfiguration: eventRelayConfiguration
         )
         process.environment = [:]
@@ -421,7 +421,7 @@ private actor FoundationJarvisDeveloperBridgeProcessSession:
         do {
             try process.run()
         } catch {
-            throw JarvisDeveloperBridgeProcessError.launchFailed
+            throw AssemblywrightDeveloperBridgeProcessError.launchFailed
         }
 
         do {
@@ -438,9 +438,9 @@ private actor FoundationJarvisDeveloperBridgeProcessSession:
             try? input?.fileHandleForWriting.close()
             try? pipe.fileHandleForReading.close()
             guard Self.killAndReapRejectedProcess(process) else {
-                throw JarvisDeveloperBridgeProcessError.teardownFailed
+                throw AssemblywrightDeveloperBridgeProcessError.teardownFailed
             }
-            throw JarvisDeveloperBridgeProcessError.invalidExecutableSignature
+            throw AssemblywrightDeveloperBridgeProcessError.invalidExecutableSignature
         }
 
         reader = Task.detached {
@@ -449,8 +449,8 @@ private actor FoundationJarvisDeveloperBridgeProcessSession:
                 let chunk = pipe.fileHandleForReading.availableData
                 if chunk.isEmpty { break }
                 pending.append(chunk)
-                if pending.count > JarvisDeveloperBridgeProcessLifecycle.maximumBufferedBytes {
-                    continuation.finish(throwing: JarvisDeveloperBridgeProcessError.outputTooLarge)
+                if pending.count > AssemblywrightDeveloperBridgeProcessLifecycle.maximumBufferedBytes {
+                    continuation.finish(throwing: AssemblywrightDeveloperBridgeProcessError.outputTooLarge)
                     return
                 }
                 while let newline = pending.firstIndex(of: 0x0a) {
@@ -458,8 +458,8 @@ private actor FoundationJarvisDeveloperBridgeProcessSession:
                     pending.removeSubrange(...newline)
                     if line.last == 0x0d { line = line.dropLast() }
                     guard !line.isEmpty,
-                          line.count <= JarvisDeveloperBridgeProcessLifecycle.maximumLineBytes else {
-                        continuation.finish(throwing: JarvisDeveloperBridgeProcessError.invalidSnapshot)
+                          line.count <= AssemblywrightDeveloperBridgeProcessLifecycle.maximumLineBytes else {
+                        continuation.finish(throwing: AssemblywrightDeveloperBridgeProcessError.invalidSnapshot)
                         return
                     }
                     switch continuation.yield(Data(line)) {
@@ -467,21 +467,21 @@ private actor FoundationJarvisDeveloperBridgeProcessSession:
                         break
                     case .dropped:
                         continuation.finish(
-                            throwing: JarvisDeveloperBridgeProcessError.outputTooLarge
+                            throwing: AssemblywrightDeveloperBridgeProcessError.outputTooLarge
                         )
                         return
                     case .terminated:
                         return
                     @unknown default:
                         continuation.finish(
-                            throwing: JarvisDeveloperBridgeProcessError.invalidSnapshot
+                            throwing: AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
                         )
                         return
                     }
                 }
             }
             guard Task.isCancelled else {
-                continuation.finish(throwing: JarvisDeveloperBridgeProcessError.helperExited)
+                continuation.finish(throwing: AssemblywrightDeveloperBridgeProcessError.helperExited)
                 return
             }
             continuation.finish()
@@ -499,12 +499,12 @@ private actor FoundationJarvisDeveloperBridgeProcessSession:
         if process.isRunning {
             let result = Darwin.kill(process.processIdentifier, SIGKILL)
             guard result == 0 || errno == ESRCH else {
-                throw JarvisDeveloperBridgeProcessError.teardownFailed
+                throw AssemblywrightDeveloperBridgeProcessError.teardownFailed
             }
             await waitForProcessExit(until: .now + .seconds(1))
         }
         guard !process.isRunning else {
-            throw JarvisDeveloperBridgeProcessError.teardownFailed
+            throw AssemblywrightDeveloperBridgeProcessError.teardownFailed
         }
         await reader.value
         stopped = true
@@ -531,26 +531,26 @@ private actor FoundationJarvisDeveloperBridgeProcessSession:
 }
 
 @MainActor
-public final class JarvisDeveloperBridgeProcessLifecycle: ObservableObject {
+public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObject {
     nonisolated public static let maximumLineBytes = 16 * 1_024
     nonisolated public static let maximumBufferedBytes = maximumLineBytes + 1
     nonisolated public static let proofBoundary =
         "Read-only Developer Mode health and metadata relay, with a separately explicit Public synthetic fixture-job diagnostic. This does not enable models, tools, files, repositories, Codex, or Git authority."
 
-    @Published public private(set) var status: JarvisDeveloperBridgeAppStatus
+    @Published public private(set) var status: AssemblywrightDeveloperBridgeAppStatus
 
-    private let configuration: JarvisDeveloperBridgeProcessConfiguration
-    private let validator: any JarvisDeveloperBridgeExecutableValidating
-    private let launcher: any JarvisDeveloperBridgeProcessLaunching
+    private let configuration: AssemblywrightDeveloperBridgeProcessConfiguration
+    private let validator: any AssemblywrightDeveloperBridgeExecutableValidating
+    private let launcher: any AssemblywrightDeveloperBridgeProcessLaunching
     private var task: Task<Void, Never>?
-    private var session: (any JarvisDeveloperBridgeProcessSession)?
+    private var session: (any AssemblywrightDeveloperBridgeProcessSession)?
 
     public init(
-        configuration: JarvisDeveloperBridgeProcessConfiguration = .init(),
-        validator: any JarvisDeveloperBridgeExecutableValidating =
-            SecurityJarvisDeveloperBridgeExecutableValidator(),
-        launcher: any JarvisDeveloperBridgeProcessLaunching =
-            FoundationJarvisDeveloperBridgeProcessLauncher()
+        configuration: AssemblywrightDeveloperBridgeProcessConfiguration = .init(),
+        validator: any AssemblywrightDeveloperBridgeExecutableValidating =
+            SecurityAssemblywrightDeveloperBridgeExecutableValidator(),
+        launcher: any AssemblywrightDeveloperBridgeProcessLaunching =
+            FoundationAssemblywrightDeveloperBridgeProcessLauncher()
     ) {
         self.configuration = configuration
         self.validator = validator
@@ -636,11 +636,11 @@ public final class JarvisDeveloperBridgeProcessLifecycle: ObservableObject {
         await stop()
     }
 
-    nonisolated public static func status(from line: Data) throws -> JarvisDeveloperBridgeAppStatus {
-        let snapshot = try JarvisMacBridgeSupervisorSnapshot.decodeStrict(line)
+    nonisolated public static func status(from line: Data) throws -> AssemblywrightDeveloperBridgeAppStatus {
+        let snapshot = try AssemblywrightMacBridgeSupervisorSnapshot.decodeStrict(line)
         switch snapshot.phase {
         case .authenticated:
-            let phase: JarvisDeveloperBridgeAppPhase
+            let phase: AssemblywrightDeveloperBridgeAppPhase
             if snapshot.maintenanceActive == true {
                 phase = .maintenance
             } else if snapshot.emergencyPaused == true {
@@ -648,18 +648,18 @@ public final class JarvisDeveloperBridgeProcessLifecycle: ObservableObject {
             } else {
                 phase = .connected
             }
-            return JarvisDeveloperBridgeAppStatus(
+            return AssemblywrightDeveloperBridgeAppStatus(
                 phase: phase,
                 masterEndpoint: snapshot.masterEndpoint,
                 connectionEpoch: snapshot.connectionEpoch
             )
         case .backingOff:
-            return JarvisDeveloperBridgeAppStatus(
+            return AssemblywrightDeveloperBridgeAppStatus(
                 phase: .masterOffline,
                 errorCode: snapshot.errorCode
             )
         case .stopped:
-            return JarvisDeveloperBridgeAppStatus(phase: .stopped)
+            return AssemblywrightDeveloperBridgeAppStatus(phase: .stopped)
         }
     }
 
@@ -670,7 +670,7 @@ public final class JarvisDeveloperBridgeProcessLifecycle: ObservableObject {
     }
 
     private static func errorCode(for error: Error) -> String {
-        switch error as? JarvisDeveloperBridgeProcessError {
+        switch error as? AssemblywrightDeveloperBridgeProcessError {
         case .invalidExecutablePath: "invalid_helper_path"
         case .invalidExecutableSignature: "invalid_helper_signature"
         case .launchFailed: "helper_launch_failed"

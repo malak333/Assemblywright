@@ -49,7 +49,7 @@ release requirements, not optional UX guidance.
   existing standard accounts, key tag, certificate label, and installed
   profile. The fixture namespace must reject staging, installation, status, or
   TLS use unless its capability list is exactly
-  `fixture.reasoning` / `jarvis-fixture` / `jarvis-fixture-v1` with the fixed
+  `fixture.reasoning` / `assemblywright-fixture` / `assemblywright-fixture-v1` with the fixed
   8 KiB bounds. MLX, mixed, corrupt, or cross-profile material fails closed.
   Local fixture removal requires a confirmed fixture-only command and never
   deletes the standard identity; Windows revocation remains authoritative.
@@ -57,7 +57,7 @@ release requirements, not optional UX guidance.
   private-overlay IP from enrollment, pin the enrolled CA, present the enrolled
   client identity, require TLS 1.3, and bind the strict application handshake
   to SHA-256 of 32 bytes exported with
-  `EXPORTER-Jarvis-Developer-Mode-v1` on that same persistent connection.
+  `EXPORTER-Assemblywright-Developer-Mode-v1` on that same persistent connection.
   Missing channel binding, ordinary system trust without the pinned CA,
   certificate/key mismatch, expiry, revocation, role or capability drift,
   registry-revision mismatch, replay, or non-accepted handshake fails closed
@@ -96,7 +96,7 @@ release requirements, not optional UX guidance.
   identity shape, or non-MacBridge remote session fails closed.
 - Fixture-job execution is a separate default-off diagnostic, never an implied
   consequence of enabling the metadata cursor. It requires the exact registered
-  `fixture.reasoning` / `jarvis-fixture` / `jarvis-fixture-v1` descriptor and
+  `fixture.reasoning` / `assemblywright-fixture` / `assemblywright-fixture-v1` descriptor and
   accepts only Public `synthetic_echo` context with at most 4 KiB of UTF-8 input,
   an 8 KiB context/result ceiling, a 5-second synthetic delay ceiling, and
   `ephemeral_no_retention`. The agent may hold one active fixture in memory but
@@ -222,7 +222,7 @@ release requirements, not optional UX guidance.
   CodeDirectory flags. Unsigned,
   malformed, mixed-profile, missing-audit-token, or wrong-code peers fail
   closed. Packaging must sign the bundled core with the stable
-  `com.nobiletechnology.jarvis.core` identifier. Alternate package bundle
+  `com.nobiletechnology.assemblywright.core` identifier. Alternate package bundle
   identifiers are rejected because they cannot satisfy the fixed production
   code-identity contract.
 - The optional Developer Mode event relay keeps the enrolled private key and
@@ -261,12 +261,12 @@ release requirements, not optional UX guidance.
   identity mismatch. This is point-in-time candidate evidence only; it does not
   establish installation provenance, continuous runtime integrity, or Apple
   attestation.
-- Only exact `JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true` may select the explicitly
+- Only exact `ASSEMBLYWRIGHT_MAC_ENABLE_IPC_CLI_HANDOFF=true` may select the explicitly
   weaker authenticated loopback TCP and owner-only token-file compatibility
-  path. `JARVIS_MAC_IPC_AUTH_FILE` may select an absolute override only in that
+  path. `ASSEMBLYWRIGHT_MAC_IPC_AUTH_FILE` may select an absolute override only in that
   mode. The file must be bounded, no-follow, single-link, owner-matched, and
   have no group/other permissions. The supervisor must remove both app-only
-  variables, `JARVIS_MAC_RELEASE_SMOKE`, and `JARVIS_IPC_TOKEN_FILE` from the child. Managed TCP clients must
+  variables, `ASSEMBLYWRIGHT_MAC_RELEASE_SMOKE`, and `ASSEMBLYWRIGHT_IPC_TOKEN_FILE` from the child. Managed TCP clients must
   reject non-loopback destinations before attaching a bearer; authenticated
   TCP serving must reject non-loopback binds. Legacy explicitly unauthenticated
   servers reject any Authorization header so a managed client cannot silently

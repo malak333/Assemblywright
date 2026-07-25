@@ -51,12 +51,16 @@ use zeroize::{Zeroize, Zeroizing};
 mod windows_service_host;
 
 const DEFAULT_BIND: &str = "127.0.0.1:7791";
-const TLS_EXPORTER_LABEL: &[u8] = b"EXPORTER-Jarvis-Developer-Mode-v1";
+const TLS_EXPORTER_LABEL: &[u8] = b"EXPORTER-Assemblywright-Developer-Mode-v1";
 const TLS_EXPORTER_BYTES: usize = 32;
 const DEVELOPMENT_TOKEN_FILE: &str = "development.token";
 const MIN_TOKEN_BYTES: usize = 32;
 const MAX_TOKEN_BYTES: usize = 256;
-const DEFAULT_SERVICE_NAME: &str = "JarvisMaster";
+const DEFAULT_SERVICE_NAME: &str = "AssemblywrightMaster";
+const MASTER_STATE_NAMESPACE: &str = "Assemblywright";
+/// Pre-rename state namespace, read once by `adopt_legacy_master_state` so an
+/// already-enrolled host keeps its durable kernel. Never written.
+const LEGACY_MASTER_STATE_NAMESPACE: &str = "Jarvis";
 const MAINTENANCE_MARKER_FILE: &str = "maintenance-mode.json";
 
 #[derive(Debug, Parser)]
@@ -66,8 +70,8 @@ const MAINTENANCE_MARKER_FILE: &str = "maintenance-mode.json";
     about = "Headless Windows master foundation for Assemblywright Developer Mode"
 )]
 struct Cli {
-    /// Master state directory. Defaults to %LOCALAPPDATA%\Jarvis\master on Windows.
-    #[arg(long, env = "JARVIS_MASTER_DATA_DIR", global = true)]
+    /// Master state directory. Defaults to %LOCALAPPDATA%\Assemblywright\master on Windows.
+    #[arg(long, env = "ASSEMBLYWRIGHT_MASTER_DATA_DIR", global = true)]
     data_dir: Option<PathBuf>,
 
     #[command(subcommand)]
@@ -875,9 +879,47 @@ fn resolve_data_dir(explicit: Option<PathBuf>) -> anyhow::Result<PathBuf> {
         return Ok(path);
     }
     let local_app_data = std::env::var_os("LOCALAPPDATA").context(
-        "--data-dir or JARVIS_MASTER_DATA_DIR is required when LOCALAPPDATA is unavailable",
+        "--data-dir or ASSEMBLYWRIGHT_MASTER_DATA_DIR is required when LOCALAPPDATA is unavailable",
     )?;
-    Ok(PathBuf::from(local_app_data).join("Jarvis").join("master"))
+    let root = PathBuf::from(local_app_data);
+    let current = root.join(MASTER_STATE_NAMESPACE).join("master");
+    adopt_legacy_master_state(&root, &current)?;
+    Ok(current)
+}
+
+/// Move a pre-rename `Jarvis\master` state directory to the current namespace.
+///
+/// The rename changed the state namespace, and this directory holds the only
+/// copy of the durable kernel: `master.sqlite3`, the DPAPI-protected enrollment
+/// authority, and the owner lock. Leaving it behind would silently strand an
+/// enrolled host on an empty database rather than failing, so adopt it once.
+///
+/// This is deliberately a move and not a copy: two directories both claiming to
+/// be the authority is exactly the ambiguity the safety rules say to refuse. If
+/// both exist the legacy one is left untouched and the current one wins, because
+/// guessing which is authoritative is not safe.
+fn adopt_legacy_master_state(root: &Path, current: &Path) -> anyhow::Result<()> {
+    if current.exists() {
+        return Ok(());
+    }
+    let legacy = root.join(LEGACY_MASTER_STATE_NAMESPACE).join("master");
+    if !legacy.is_dir() {
+        return Ok(());
+    }
+    let parent = current
+        .parent()
+        .context("resolve the master state namespace directory")?;
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("create the master state namespace at {}", parent.display()))?;
+    std::fs::rename(&legacy, current).with_context(|| {
+        format!(
+            "adopt the pre-rename master state directory {} as {}; move it by hand if the \
+             volume differs",
+            legacy.display(),
+            current.display()
+        )
+    })?;
+    Ok(())
 }
 
 fn setup(data_dir: &Path) -> anyhow::Result<()> {
@@ -1418,14 +1460,14 @@ fn parse_device_certificate(certificate_der: &[u8]) -> anyhow::Result<(DeviceId,
         .general_names
         .iter()
         .filter_map(|name| match name {
-            GeneralName::URI(uri) => uri.strip_prefix("urn:jarvis:device:"),
+            GeneralName::URI(uri) => uri.strip_prefix("urn:assemblywright:device:"),
             _ => None,
         });
     let device_id = device_ids
         .next()
-        .context("enrolled device certificate omitted its legacy Jarvis device URI")?;
+        .context("enrolled device certificate omitted its Assemblywright device URI")?;
     if device_ids.next().is_some() {
-        bail!("enrolled device certificate contains multiple legacy Jarvis device URIs");
+        bail!("enrolled device certificate contains multiple Assemblywright device URIs");
     }
     let device_id =
         DeviceId::new(Uuid::parse_str(device_id).context("parse certificate device ID")?);
@@ -2463,7 +2505,7 @@ mod tests {
         });
         assert!(!registration_can_execute_fixture(&registration));
         registration.capabilities = vec![CapabilityDescriptor::fixture_reasoning()];
-        registration.capabilities[0].model = "jarvis-fixture-v2".to_string();
+        registration.capabilities[0].model = "assemblywright-fixture-v2".to_string();
         assert!(!registration_can_execute_fixture(&registration));
     }
 
@@ -2475,12 +2517,15 @@ mod tests {
     // so a future cosmetic rename pass fails here instead of in the field.
     #[test]
     fn windows_service_name_is_a_frozen_installed_state_contract() {
-        assert_eq!(DEFAULT_SERVICE_NAME, "JarvisMaster");
+        assert_eq!(DEFAULT_SERVICE_NAME, "AssemblywrightMaster");
     }
 
     #[test]
     fn tls_exporter_label_is_a_frozen_wire_contract() {
-        assert_eq!(TLS_EXPORTER_LABEL, b"EXPORTER-Jarvis-Developer-Mode-v1");
+        assert_eq!(
+            TLS_EXPORTER_LABEL,
+            b"EXPORTER-Assemblywright-Developer-Mode-v1"
+        );
         assert_eq!(TLS_EXPORTER_BYTES, 32);
     }
 
@@ -2489,5 +2534,62 @@ mod tests {
         let resolved = resolve_data_dir(Some(PathBuf::from("/explicit/override")))
             .expect("explicit data dir wins");
         assert_eq!(resolved, PathBuf::from("/explicit/override"));
+    }
+
+    #[test]
+    fn a_pre_rename_state_directory_is_adopted_once() {
+        let root = tempfile::tempdir().unwrap();
+        let legacy = root
+            .path()
+            .join(LEGACY_MASTER_STATE_NAMESPACE)
+            .join("master");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("master.sqlite3"), b"durable-kernel").unwrap();
+
+        let current = root.path().join(MASTER_STATE_NAMESPACE).join("master");
+        adopt_legacy_master_state(root.path(), &current).expect("adopt legacy state");
+
+        // The durable kernel moved rather than being stranded or duplicated.
+        assert_eq!(
+            std::fs::read(current.join("master.sqlite3")).unwrap(),
+            b"durable-kernel"
+        );
+        assert!(!legacy.exists(), "the legacy directory must not linger");
+
+        // Idempotent: a second run is a no-op, not a second move.
+        adopt_legacy_master_state(root.path(), &current).expect("second adopt is inert");
+        assert!(current.join("master.sqlite3").is_file());
+    }
+
+    #[test]
+    fn an_existing_current_state_directory_is_never_overwritten_by_the_legacy_one() {
+        let root = tempfile::tempdir().unwrap();
+        let legacy = root
+            .path()
+            .join(LEGACY_MASTER_STATE_NAMESPACE)
+            .join("master");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("master.sqlite3"), b"stale").unwrap();
+        let current = root.path().join(MASTER_STATE_NAMESPACE).join("master");
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::write(current.join("master.sqlite3"), b"authoritative").unwrap();
+
+        adopt_legacy_master_state(root.path(), &current).expect("ambiguity must not clobber");
+
+        // Two directories claiming authority is ambiguous, so the current one
+        // wins untouched and the legacy one is left for the owner to inspect.
+        assert_eq!(
+            std::fs::read(current.join("master.sqlite3")).unwrap(),
+            b"authoritative"
+        );
+        assert!(legacy.join("master.sqlite3").is_file());
+    }
+
+    #[test]
+    fn a_missing_legacy_state_directory_is_not_an_error() {
+        let root = tempfile::tempdir().unwrap();
+        let current = root.path().join(MASTER_STATE_NAMESPACE).join("master");
+        adopt_legacy_master_state(root.path(), &current).expect("nothing to adopt");
+        assert!(!current.exists());
     }
 }

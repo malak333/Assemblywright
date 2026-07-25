@@ -6,7 +6,7 @@ import SwiftUI
 /// `scripts/package-distribution.sh` copies these from assets/brand/generated.
 /// A development run through `swift run` has no bundle resources, so every
 /// lookup here is optional and callers fall back to an SF Symbol.
-enum JarvisBrandAssets {
+enum AssemblywrightBrandAssets {
     static let menuBarTemplateName = "menubar-template"
 
     /// The proofmark, marked as template art so AppKit tints it for the current
@@ -23,11 +23,11 @@ enum JarvisBrandAssets {
 
 /// The menu bar label: the proofmark, plus a state badge when the core needs
 /// attention. A healthy core shows the mark alone.
-struct JarvisMenuBarLabel: View {
-    let presentation: JarvisMenuBarPresentation
+struct AssemblywrightMenuBarLabel: View {
+    let presentation: AssemblywrightMenuBarPresentation
 
     var body: some View {
-        if let template = JarvisBrandAssets.menuBarTemplate() {
+        if let template = AssemblywrightBrandAssets.menuBarTemplate() {
             HStack(spacing: 2) {
                 Image(nsImage: template)
                 if presentation.showsStateBadge {
@@ -36,11 +36,11 @@ struct JarvisMenuBarLabel: View {
             }
             .accessibilityLabel(accessibilityLabel)
         } else {
-            Label(JarvisMenuBarContract.title, systemImage: presentation.systemImage)
+            Label(AssemblywrightMenuBarContract.title, systemImage: presentation.systemImage)
         }
     }
 
     private var accessibilityLabel: String {
-        "\(JarvisMenuBarContract.title), \(presentation.statusLine)"
+        "\(AssemblywrightMenuBarContract.title), \(presentation.statusLine)"
     }
 }

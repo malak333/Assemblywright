@@ -16,53 +16,45 @@ These notes capture durable facts for future agents working on this repository.
 - The Cargo crates are `assemblywright-protocol`, `assemblywright-master`,
   `assemblywright-agent`, `assemblywright-core`, and `assemblywright-cli`. Their
   binaries are `assemblywright`, `assemblywright-agent`, and
-  `assemblywright-master`; the legacy `jarvis*` binary aliases were removed.
-- A specific set of `JARVIS_*` / `jarvis` identifiers survives deliberately as
-  compatibility contracts, because they bind installed state, issued
-  credentials, or signed artifacts: environment variable names, Keychain and
-  Application Support namespaces, the Windows service name `JarvisMaster` and
-  its `%LOCALAPPDATA%\Jarvis\master` state directory, the
-  `com.nobiletechnology.jarvis` code-signing identity and its `.core` suffix,
-  the `JarvisMacApp` executable name inside the bundle, the bundled
-  `jarvis-cli` filename, the `EXPORTER-Jarvis-Developer-Mode-v1` TLS exporter
-  label, the `urn:jarvis:device:<uuid>` certificate SAN URI baked into every
-  issued device certificate, and the protocol-version-1 fixture capability
-  provider and model (`jarvis-fixture`, `jarvis-fixture-v1`). Renaming any of
-  these changes code-signing identity, voids issued certificates, breaks the
-  wire contract without a protocol version bump, or orphans installed state, so
-  they are not cosmetic.
-- `./scripts/release-naming-contract-smoke.sh` is the gate for that list. It
-  runs in `release-local.sh` as `--check` plus `--self-test` and fails in both
-  directions: if a legacy `jarvis*` crate, binary alias, or SwiftPM product
-  alias reappears, and if a preserved identifier is renamed or its documented
-  reason is dropped from `docs/brand.md` or this file. A rename pass that trips
-  it should change the contract and its migration, not the guard.
-- Prose, error messages, and CLI runbook output are *not* on that list. The
-  first rename pass left `cargo run -p jarvis-cli`, `` `jarvis-protocol` ``,
-  `` `jarvis-master` ``, and `jarvis-agent` in emitted runbooks, error strings,
-  and one `--bin jarvis-master` invocation in
-  `.github/workflows/windows-protocol.yml` that no longer resolved. When
-  renaming a crate, sweep emitted strings and CI invocations too, not just
-  manifests.
-- The SwiftPM product is `AssemblywrightMacApp`, and the built executable is
-  named after the product, not the target. Packaging copies it into the bundle
-  under the contract name via `SWIFT_APP_PRODUCT` in
-  `scripts/package-distribution.sh`. Swift target names remain `Jarvis*`
-  because module names are internal. The product-facing app and release artifact names are
-  `Assemblywright.app` and `Assemblywright-<version>.*`.
-- The GitHub repository was renamed from `Jarvis` to `Assemblywright`, so the
-  canonical remote is `https://github.com/malak333/Assemblywright`. GitHub
-  redirects the former `malak333/Jarvis` URL, so older clones keep fetching and
-  pushing, but new references must use the current URL. The local working
-  directory is `Assemblywright`.
+  `assemblywright-master`; the legacy `assemblywright*` binary aliases were removed.
+- The rename from the former product name is total. No crate, binary, SwiftPM
+  product or target, environment variable, Keychain service, state directory,
+  Windows service, code-signing identifier, wire label, or certificate subject
+  carries the old name. `./scripts/release-naming-contract-smoke.sh --check`
+  scans every tracked path and file and fails if it reappears.
+- Exactly one legacy reference survives: `LEGACY_MASTER_STATE_NAMESPACE` in
+  `crates/assemblywright-master/src/main.rs`, a read-only path used once to adopt
+  a pre-rename Windows master state directory. The gate pins it by name and caps
+  how many lines of that file may mention the old namespace, so the exception
+  cannot grow.
+- `PROTOCOL_VERSION` is 2. It moved from 1 because the rename changed wire
+  values: the TLS exporter label, the fixture capability provider and model, and
+  the certificate subject and SAN URI. Two builds both claiming version 1 while
+  disagreeing on those would be mutually incompatible, which is exactly what the
+  version field exists to prevent. A pre-rename peer now fails on version.
+- The current identity surface: code-signing identifier
+  `com.nobiletechnology.assemblywright` and its `.core` suffix for the bundled
+  CLI; bundle executable `AssemblywrightMacApp`; bundled CLI
+  `assemblywright-cli`; Keychain service
+  `com.nobiletechnology.assemblywright.developer-bridge` (plus a `.fixture`
+  sibling); `~/Library/Application Support/Assemblywright`; Windows service
+  `AssemblywrightMaster` with state in `%LOCALAPPDATA%\Assemblywright\master`;
+  TLS exporter label `EXPORTER-Assemblywright-Developer-Mode-v1`; certificate SAN
+  `urn:assemblywright:device:<uuid>`; fixture capability
+  `assemblywright-fixture` / `assemblywright-fixture-v1`; environment variables
+  `ASSEMBLYWRIGHT_*`.
+- The SwiftPM products and targets now share names: `AssemblywrightMacCore`,
+  `AssemblywrightMacApp`, and the `assemblywright-mac-bridge` executable from the
+  `AssemblywrightMacBridgeCLI` target. The product-facing app and release
+  artifact names are `Assemblywright.app` and `Assemblywright-<version>.*`.
+- The canonical remote is `https://github.com/malak333/Assemblywright`. GitHub
+  still redirects the former URL, so old clones keep working, but new references
+  must use the current one. The local working directory is `Assemblywright`.
 
 ## Repository Housekeeping Already Completed
 
-- The rename is finished end to end: the crates are `assemblywright-*` with no
-  legacy binary aliases, `apps/mac/Package.swift` exports only
-  `Assemblywright*` products, the local working directory is
-  `~/Antigravity/Assemblywright`, and the canonical remote is
-  `malak333/Assemblywright`. Do not re-plan any of these as outstanding work.
+- Crates, binaries, SwiftPM products, the working directory, and the remote are
+  all current. Do not re-plan any of these as outstanding work.
 - The `.worktrees/` directory of finished-branch worktrees is gone, and
   `git worktree list` should show only the primary checkout. If stale worktrees
   reappear, prune them with `git worktree prune` before adding new ones.
@@ -73,50 +65,62 @@ These notes capture durable facts for future agents working on this repository.
   `git push origin <sha>:refs/heads/<branch>`. That manifest is the only record;
   do not delete it while any recovery might still be wanted.
 
-## Windows Service Upgrade After The Rename
+## Migrating A Host Past The Rename
 
-- The rename preserved the `JarvisMaster` service name and the
-  `%LOCALAPPDATA%\Jarvis\master` state directory, but it *did* change the
-  executable filename from `jarvis-master.exe` to `assemblywright-master.exe`.
-  An already-installed service keeps its original `BINARY_PATH_NAME`, so a
-  machine that pulls the renamed `main` and rebuilds does not pick up the new
-  binary.
-- This fails silently rather than loudly: `cargo build --release` writes
-  `assemblywright-master.exe` beside the pre-rename `jarvis-master.exe`, which
-  survives until `cargo clean`, so the service keeps running the stale
-  pre-rename executable and reports itself healthy.
-- `windows_service_host::install` derives the path from
-  `std::env::current_exe()` and calls `create_service`, which cannot rewrite an
-  existing service. Upgrading an enrolled machine is therefore an explicit
-  sequence, run elevated, after the rebuild:
+The rename crosses signed identity and installed state, so an already-enrolled
+host needs an explicit migration. `docs/brand.md` has the full table of what
+changed and what each change costs.
 
-  ```text
-  assemblywright-master.exe service stop --service-name JarvisMaster
-  assemblywright-master.exe service uninstall --service-name JarvisMaster --confirm
-  assemblywright-master.exe --data-dir "%LOCALAPPDATA%\Jarvis\master" ^
-      service install --service-name JarvisMaster --bind 127.0.0.1:7791 ^
-      --remote-bind <overlay-ip>:7792 --identity owner-account ^
-      --credentials-stdin --confirm
-  assemblywright-master.exe service status --service-name JarvisMaster
-  ```
+**Windows master host.** The executable filename changed, and
+`windows_service_host::install` calls `create_service`, which cannot rewrite an
+existing registration. A host that only pulls and rebuilds keeps running the
+stale pre-rename binary and still reports healthy, because the old executable
+survives until `cargo clean`. Run this elevated, after the rebuild:
 
-  The subcommand is `service <verb>`, not `service-<verb>`; `service-run` is the
-  hidden SCM entry point and is never invoked by hand. `install` and `uninstall`
-  both require `--confirm`, and owner-account installation requires
-  `--credentials-stdin` because passwords must never appear in argv.
-- Uninstalling the service removes only the SCM registration, not
-  `%LOCALAPPDATA%\Jarvis\master`, so the SQLite kernel, enrollment identity, and
-  owner lock survive the reinstall. That is precisely why the state directory and
-  the service name were preserved while the executable filename was not.
-- Confirm the upgrade actually took effect with `sc qc JarvisMaster` and check
-  that `BINARY_PATH_NAME` names `assemblywright-master.exe`. A path still ending
-  in `jarvis-master.exe` means the reinstall did not happen.
-- Verified against the owner's Windows host on 2026-07-25: `JarvisMaster` was
-  `RUNNING` from `C:\Users\mike\Codex\Jarvis\target\release\jarvis-master.exe`
-  with live `master.sqlite3`, `identity`, `development.token`, and
-  `master.owner.lock` in `%LOCALAPPDATA%\Jarvis\master`. That checkout was still
-  on the pre-rename commit with the old `malak333/Jarvis` remote URL, so it needs
-  this sequence when it upgrades.
+```text
+assemblywright-master.exe service stop --service-name JarvisMaster
+assemblywright-master.exe service uninstall --service-name JarvisMaster --confirm
+assemblywright-master.exe --data-dir "%LOCALAPPDATA%\Assemblywright\master" ^
+    service install --service-name AssemblywrightMaster --bind 127.0.0.1:7791 ^
+    --remote-bind <overlay-ip>:7792 --identity owner-account ^
+    --credentials-stdin --confirm
+assemblywright-master.exe service status --service-name AssemblywrightMaster
+```
+
+Stop and uninstall still use the *old* service name, because that is what is
+registered; install creates the new one. The subcommand is `service <verb>`, not
+`service-<verb>`; `service-run` is the hidden SCM entry point and is never
+invoked by hand. `install` and `uninstall` both require `--confirm`, and
+owner-account installation requires `--credentials-stdin` because passwords must
+never appear in argv.
+
+**Master state.** On its first run the master will adopt a pre-rename
+`%LOCALAPPDATA%\Jarvis\master` directory by moving it to
+`%LOCALAPPDATA%\Assemblywright\master`, so `master.sqlite3`, the DPAPI-protected
+enrollment authority, and the owner lock survive. It is a move, not a copy: two
+directories both claiming to be the authority is the ambiguity the safety rules
+say to refuse. If the new directory already exists the legacy one is left alone
+and the current one wins, because guessing which is authoritative is not safe.
+Uninstalling the service never touches either directory.
+
+**Every enrolled device must re-enroll.** The certificate SAN moved from
+`urn:jarvis:device:` to `urn:assemblywright:device:` and the enrollment CA
+subject changed, so already-issued device certificates no longer verify. The
+Keychain service also moved, so the Mac bridge cannot read its previous identity.
+Re-enroll through the normal grant flow; device certificates are 30-day and
+rotate anyway, so this is an ordinary operation rather than a special path.
+
+**Release evidence must be regenerated.** The code-signing identifier, the bundle
+executable name, and the bundled CLI filename all changed, and signed provenance
+and live-device QA reports bind all three. Prior reports no longer describe the
+shipped bundle. Re-sign, re-notarize, re-staple, redo live-device QA, and rebuild
+the evidence bundle. Do not carry a pre-rename report forward.
+
+**Owner shell profiles.** Every `JARVIS_*` variable is now `ASSEMBLYWRIGHT_*`.
+Regenerate the QA and evidence templates with
+`./scripts/release-live-device-qa.sh --write-template` and
+`./scripts/release-evidence-bundle.sh --write-template` rather than hand-editing
+an old one.
 
 ## The Pivot
 
@@ -165,8 +169,8 @@ These notes capture durable facts for future agents working on this repository.
   authority. Missing tokens, malformed requirements, wrong code, mixed
   profiles, and unsigned peers fail closed.
 - Package signing keeps the app identifier at the fixed
-  `com.nobiletechnology.jarvis` identifier and explicitly assigns the bundled
-  CLI `com.nobiletechnology.jarvis.core`; package bundle-ID overrides are
+  `com.nobiletechnology.assemblywright` identifier and explicitly assigns the bundled
+  CLI `com.nobiletechnology.assemblywright.core`; package bundle-ID overrides are
   rejected because they cannot satisfy the fixed identity policy. Never rely on
   codesign's hash-derived identifier for the bare Mach-O.
 - An ad-hoc designated requirement is exact-build cdhash evidence without a
@@ -182,7 +186,7 @@ These notes capture durable facts for future agents working on this repository.
   and owner-recorded external evidence. Never conflate them.
 - `release readiness` reports `production_ready: false` until signed
   distribution, notarization and stapling, and the final evidence bundle checks
-  validate. `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` is set only after
+  validate. `ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external` is set only after
   owner-recorded evidence exists.
 - `release evidence-status` is file and report inventory plus structural
   validation. Presence never proves that an external check happened.

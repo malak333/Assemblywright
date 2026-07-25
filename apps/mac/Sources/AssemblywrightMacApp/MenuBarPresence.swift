@@ -1,13 +1,13 @@
 import AppKit
-import JarvisMacCore
+import AssemblywrightMacCore
 import SwiftUI
 
-enum JarvisMenuBarContract {
+enum AssemblywrightMenuBarContract {
     static let mainWindowID = "assemblywright-main"
     static let title = "Assemblywright"
 }
 
-struct JarvisMenuBarPresentation: Equatable {
+struct AssemblywrightMenuBarPresentation: Equatable {
     let statusLine: String
     let systemImage: String
 
@@ -16,7 +16,7 @@ struct JarvisMenuBarPresentation: Equatable {
     /// indicator.
     let showsStateBadge: Bool
 
-    init(status: JarvisDeveloperBridgeAppStatus) {
+    init(status: AssemblywrightDeveloperBridgeAppStatus) {
         switch status.phase {
         case .disabled:
             statusLine = "Developer Mode disabled"
@@ -50,17 +50,17 @@ struct JarvisMenuBarPresentation: Equatable {
     }
 }
 
-struct JarvisMenuBarView: View {
-    @ObservedObject var developerBridge: JarvisDeveloperBridgeProcessLifecycle
+struct AssemblywrightMenuBarView: View {
+    @ObservedObject var developerBridge: AssemblywrightDeveloperBridgeProcessLifecycle
     @Environment(\.openWindow) private var openWindow
 
-    private var presentation: JarvisMenuBarPresentation {
-        JarvisMenuBarPresentation(status: developerBridge.status)
+    private var presentation: AssemblywrightMenuBarPresentation {
+        AssemblywrightMenuBarPresentation(status: developerBridge.status)
     }
 
     var body: some View {
         Button("Open Assemblywright") {
-            openWindow(id: JarvisMenuBarContract.mainWindowID)
+            openWindow(id: AssemblywrightMenuBarContract.mainWindowID)
             NSApp.setActivationPolicy(.regular)
             NSApp.activate(ignoringOtherApps: true)
         }

@@ -3,7 +3,7 @@ import CryptoKit
 import Foundation
 import Security
 
-private actor JarvisMacFixtureRaceResolution {
+private actor AssemblywrightMacFixtureRaceResolution {
     private var resolved = false
 
     func markResolved() {
@@ -15,7 +15,7 @@ private actor JarvisMacFixtureRaceResolution {
     }
 }
 
-public struct JarvisMacDeveloperEventRelayConfiguration: Equatable, Sendable {
+public struct AssemblywrightMacDeveloperEventRelayConfiguration: Equatable, Sendable {
     public static let version = 3
     public static let maximumDocumentBytes = 16 * 1_024
 
@@ -59,13 +59,13 @@ public struct JarvisMacDeveloperEventRelayConfiguration: Equatable, Sendable {
         ]
         let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
         guard data.count <= Self.maximumDocumentBytes else {
-            throw JarvisMacDeveloperEventRelayError.invalidStartupDocument
+            throw AssemblywrightMacDeveloperEventRelayError.invalidStartupDocument
         }
         return data
     }
 
     public static func decodeStartupDocument(_ data: Data) throws -> Self {
-        var scanner = JarvisStrictJSONObjectKeyScanner(data: data)
+        var scanner = AssemblywrightStrictJSONObjectKeyScanner(data: data)
         guard !data.isEmpty, data.count <= maximumDocumentBytes,
               let keys = try? scanner.scanTopLevelKeys(),
               Set(keys).count == keys.count,
@@ -87,7 +87,7 @@ public struct JarvisMacDeveloperEventRelayConfiguration: Equatable, Sendable {
               let mlxModelID = optionalString(object["mlx_model_id"]),
               mlxExecutablePath.map(isValidAbsolutePath) ?? true,
               mlxModelDirectoryPath.map(isValidAbsolutePath) ?? true else {
-            throw JarvisMacDeveloperEventRelayError.invalidStartupDocument
+            throw AssemblywrightMacDeveloperEventRelayError.invalidStartupDocument
         }
         let configuration = Self(
             agentExecutableURL: URL(fileURLWithPath: executablePath),
@@ -113,7 +113,7 @@ public struct JarvisMacDeveloperEventRelayConfiguration: Equatable, Sendable {
                 : mlxExecutableURL == nil
                     && mlxModelDirectoryURL == nil
                     && mlxModelID == nil else {
-            throw JarvisMacDeveloperEventRelayError.invalidStartupDocument
+            throw AssemblywrightMacDeveloperEventRelayError.invalidStartupDocument
         }
         for url in [agentExecutableURL, agentDataDirectoryURL]
             + [mlxExecutableURL, mlxModelDirectoryURL].compactMap({ $0 })
@@ -123,14 +123,14 @@ public struct JarvisMacDeveloperEventRelayConfiguration: Equatable, Sendable {
                   !url.path.contains("\0"),
                   !url.path.split(separator: "/").contains(".."),
                   url.path.utf8.count <= 4 * 1_024 else {
-                throw JarvisMacDeveloperEventRelayError.invalidStartupDocument
+                throw AssemblywrightMacDeveloperEventRelayError.invalidStartupDocument
             }
         }
         if let mlxModelID {
             guard !mlxModelID.isEmpty,
                   mlxModelID.utf8.count <= 128,
                   mlxModelID.utf8.allSatisfy({ (0x20 ... 0x7e).contains($0) }) else {
-                throw JarvisMacDeveloperEventRelayError.invalidStartupDocument
+                throw AssemblywrightMacDeveloperEventRelayError.invalidStartupDocument
             }
         }
     }
@@ -149,7 +149,7 @@ public struct JarvisMacDeveloperEventRelayConfiguration: Equatable, Sendable {
     }
 }
 
-public enum JarvisMacDeveloperEventRelayError: Error, Equatable, Sendable {
+public enum AssemblywrightMacDeveloperEventRelayError: Error, Equatable, Sendable {
     case invalidStartupDocument
     case invalidAgentExecutable
     case invalidAgentSignature
@@ -169,7 +169,7 @@ public enum JarvisMacDeveloperEventRelayError: Error, Equatable, Sendable {
     case teardownFailed
 }
 
-public struct JarvisMacDeveloperEventCursor: Codable, Equatable, Sendable {
+public struct AssemblywrightMacDeveloperEventCursor: Codable, Equatable, Sendable {
     public let streamID: UUID
     public let sequence: UInt64
 
@@ -179,8 +179,8 @@ public struct JarvisMacDeveloperEventCursor: Codable, Equatable, Sendable {
     }
 }
 
-public struct JarvisMacDeveloperAgentCursorSnapshot: Codable, Equatable, Sendable {
-    public let cursor: JarvisMacDeveloperEventCursor?
+public struct AssemblywrightMacDeveloperAgentCursorSnapshot: Codable, Equatable, Sendable {
+    public let cursor: AssemblywrightMacDeveloperEventCursor?
     public let updatedAtMilliseconds: UInt64?
 
     enum CodingKeys: String, CodingKey {
@@ -189,23 +189,23 @@ public struct JarvisMacDeveloperAgentCursorSnapshot: Codable, Equatable, Sendabl
     }
 }
 
-public struct JarvisMacDeveloperEventRelayProgress: Equatable, Sendable {
-    public let cursor: JarvisMacDeveloperEventCursor
+public struct AssemblywrightMacDeveloperEventRelayProgress: Equatable, Sendable {
+    public let cursor: AssemblywrightMacDeveloperEventCursor
     public let acceptedEventCount: Int
     public let hasMore: Bool
     public let requiresFreshConnection: Bool
 }
 
-public protocol JarvisMacBridgeEventRelaying: Sendable {
+public protocol AssemblywrightMacBridgeEventRelaying: Sendable {
     func relayEvents(
-        using session: any JarvisMacBridgeSession
-    ) async throws -> JarvisMacDeveloperEventRelayProgress
+        using session: any AssemblywrightMacBridgeSession
+    ) async throws -> AssemblywrightMacDeveloperEventRelayProgress
     func stop() async throws
 }
 
-public protocol JarvisMacDeveloperAgentSession: Sendable {
-    func health() async throws -> JarvisMacDeveloperAgentCursorSnapshot
-    func accept(batch: Data) async throws -> JarvisMacDeveloperAgentCursorSnapshot
+public protocol AssemblywrightMacDeveloperAgentSession: Sendable {
+    func health() async throws -> AssemblywrightMacDeveloperAgentCursorSnapshot
+    func accept(batch: Data) async throws -> AssemblywrightMacDeveloperAgentCursorSnapshot
     func executeFixtureJob(_ job: Data) async throws -> Data
     func cancelFixtureJob(_ instruction: Data) async throws -> Data
     func executeMLXJob(_ job: Data) async throws -> Data
@@ -213,13 +213,13 @@ public protocol JarvisMacDeveloperAgentSession: Sendable {
     func stop() async throws
 }
 
-public protocol JarvisMacDeveloperAgentLaunching: Sendable {
+public protocol AssemblywrightMacDeveloperAgentLaunching: Sendable {
     func launch(
-        configuration: JarvisMacDeveloperEventRelayConfiguration
-    ) async throws -> any JarvisMacDeveloperAgentSession
+        configuration: AssemblywrightMacDeveloperEventRelayConfiguration
+    ) async throws -> any AssemblywrightMacDeveloperAgentSession
 }
 
-public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
+public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventRelaying {
     public static let remoteEventsPath = "/v1/distributed/events/next"
     public static let remoteLeasePath = "/v1/distributed/leases/next"
     public static let remoteResultPath = "/v1/distributed/results"
@@ -228,17 +228,17 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
         "/v1/distributed/cancellations/ack"
     public static let maximumEventsPerBatch = 64
 
-    private let configuration: JarvisMacDeveloperEventRelayConfiguration
+    private let configuration: AssemblywrightMacDeveloperEventRelayConfiguration
     private let deviceID: UUID?
-    private let launcher: any JarvisMacDeveloperAgentLaunching
-    private var agent: (any JarvisMacDeveloperAgentSession)?
+    private let launcher: any AssemblywrightMacDeveloperAgentLaunching
+    private var agent: (any AssemblywrightMacDeveloperAgentSession)?
     private var stopped = false
 
     public init(
-        configuration: JarvisMacDeveloperEventRelayConfiguration,
+        configuration: AssemblywrightMacDeveloperEventRelayConfiguration,
         deviceID: UUID? = nil,
-        launcher: any JarvisMacDeveloperAgentLaunching =
-            FoundationJarvisMacDeveloperAgentLauncher()
+        launcher: any AssemblywrightMacDeveloperAgentLaunching =
+            FoundationAssemblywrightMacDeveloperAgentLauncher()
     ) {
         self.configuration = configuration
         self.deviceID = deviceID
@@ -246,12 +246,12 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
     }
 
     public func relayEvents(
-        using session: any JarvisMacBridgeSession
-    ) async throws -> JarvisMacDeveloperEventRelayProgress {
+        using session: any AssemblywrightMacBridgeSession
+    ) async throws -> AssemblywrightMacDeveloperEventRelayProgress {
         guard !stopped else {
-            throw JarvisMacDeveloperEventRelayError.agentUnavailable
+            throw AssemblywrightMacDeveloperEventRelayError.agentUnavailable
         }
-        let activeAgent: any JarvisMacDeveloperAgentSession
+        let activeAgent: any AssemblywrightMacDeveloperAgentSession
         if let agent {
             activeAgent = agent
         } else {
@@ -265,7 +265,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
             after: before.cursor
         )
         let response = try await session.send(
-            JarvisMacBridgeHTTPRequest(
+            AssemblywrightMacBridgeHTTPRequest(
                 method: "POST",
                 path: Self.remoteEventsPath,
                 body: request
@@ -274,18 +274,18 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
         let batch = try Self.validateBatchResponse(response)
         let accepted = try await activeAgent.accept(batch: response.body)
         guard accepted.cursor == batch.cursor else {
-            throw JarvisMacDeveloperEventRelayError.eventCursorRejected
+            throw AssemblywrightMacDeveloperEventRelayError.eventCursorRejected
         }
         if configuration.fixtureJobsEnabled {
             guard let deviceID else {
-                throw JarvisMacDeveloperEventRelayError.fixtureJobRejected
+                throw AssemblywrightMacDeveloperEventRelayError.fixtureJobRejected
             }
             let requiresFreshConnection = try await relayOneFixtureJob(
                 using: session,
                 deviceID: deviceID,
                 agent: activeAgent
             )
-            return JarvisMacDeveloperEventRelayProgress(
+            return AssemblywrightMacDeveloperEventRelayProgress(
                 cursor: batch.cursor,
                 acceptedEventCount: batch.eventCount,
                 hasMore: batch.hasMore,
@@ -294,21 +294,21 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
         }
         if configuration.mlxJobsEnabled {
             guard let deviceID else {
-                throw JarvisMacDeveloperEventRelayError.mlxJobRejected
+                throw AssemblywrightMacDeveloperEventRelayError.mlxJobRejected
             }
             let requiresFreshConnection = try await relayOneMLXJob(
                 using: session,
                 deviceID: deviceID,
                 agent: activeAgent
             )
-            return JarvisMacDeveloperEventRelayProgress(
+            return AssemblywrightMacDeveloperEventRelayProgress(
                 cursor: batch.cursor,
                 acceptedEventCount: batch.eventCount,
                 hasMore: batch.hasMore,
                 requiresFreshConnection: requiresFreshConnection
             )
         }
-        return JarvisMacDeveloperEventRelayProgress(
+        return AssemblywrightMacDeveloperEventRelayProgress(
             cursor: batch.cursor,
             acceptedEventCount: batch.eventCount,
             hasMore: batch.hasMore,
@@ -373,9 +373,9 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
     }
 
     private func relayOneFixtureJob(
-        using session: any JarvisMacBridgeSession,
+        using session: any AssemblywrightMacBridgeSession,
         deviceID: UUID,
-        agent: any JarvisMacDeveloperAgentSession
+        agent: any AssemblywrightMacDeveloperAgentSession
     ) async throws -> Bool {
         let leaseRequest = try JSONSerialization.data(
             withJSONObject: [
@@ -385,7 +385,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
             options: [.sortedKeys]
         )
         let leased = try await session.send(
-            JarvisMacBridgeHTTPRequest(
+            AssemblywrightMacBridgeHTTPRequest(
                 method: "POST",
                 path: Self.remoteLeasePath,
                 body: leaseRequest
@@ -393,7 +393,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
         )
         if leased.status == 204 {
             guard leased.body.isEmpty else {
-                throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
+                throw AssemblywrightMacDeveloperEventRelayError.invalidMasterResponse
             }
             return true
         }
@@ -402,19 +402,19 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
                     as? [String: Any],
                   Set(object.keys) == Set(["error"]),
                   object["error"] as? String == "emergency_pause_blocks_work" else {
-                throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
+                throw AssemblywrightMacDeveloperEventRelayError.invalidMasterResponse
             }
             return false
         }
         guard leased.status == 200 else {
-            throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
+            throw AssemblywrightMacDeveloperEventRelayError.invalidMasterResponse
         }
         let job = try Self.validateFixtureJob(
             leased.body,
             expectedConnectionEpoch: session.connectionEpoch
         )
 
-        let resolution = JarvisMacFixtureRaceResolution()
+        let resolution = AssemblywrightMacFixtureRaceResolution()
         let outcome = try await withThrowingTaskGroup(
             of: FixtureRaceOutcome.self,
             returning: FixtureRaceOutcome.self
@@ -458,7 +458,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
                 return await resolution.isResolved() ? .settled : .timedOut
             }
             guard let first = try await group.next() else {
-                throw JarvisMacDeveloperEventRelayError.fixtureJobRejected
+                throw AssemblywrightMacDeveloperEventRelayError.fixtureJobRejected
             }
             if case .result = first {
                 // Cancellation polling shares this serialized mTLS session with
@@ -476,7 +476,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
         case let .result(result):
             let resultDigest = try Self.validateFixtureResult(result, for: job)
             let accepted = try await session.send(
-                JarvisMacBridgeHTTPRequest(
+                AssemblywrightMacBridgeHTTPRequest(
                     method: "POST",
                     path: Self.remoteResultPath,
                     body: result
@@ -495,7 +495,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
                 job: job
             )
             let accepted = try await session.send(
-                JarvisMacBridgeHTTPRequest(
+                AssemblywrightMacBridgeHTTPRequest(
                     method: "POST",
                     path: Self.remoteCancellationAcknowledgementPath,
                     body: acknowledgement
@@ -505,26 +505,26 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
         case .timedOut:
             try await agent.stop()
             self.agent = nil
-            throw JarvisMacDeveloperEventRelayError.fixtureJobTimedOut
+            throw AssemblywrightMacDeveloperEventRelayError.fixtureJobTimedOut
         case .settled:
-            throw JarvisMacDeveloperEventRelayError.fixtureJobRejected
+            throw AssemblywrightMacDeveloperEventRelayError.fixtureJobRejected
         }
         return false
     }
 
     private static func pollFixtureCancellation(
-        using session: any JarvisMacBridgeSession,
+        using session: any AssemblywrightMacBridgeSession,
         job: ValidatedFixtureJob
     ) async throws -> ValidatedCancellation? {
         let request = try JSONSerialization.data(
             withJSONObject: [
-                "protocol_version": Int(JarvisMacMTLSBridgeTransport.protocolVersion),
+                "protocol_version": Int(AssemblywrightMacMTLSBridgeTransport.protocolVersion),
                 "connection_epoch": NSNumber(value: session.connectionEpoch)
             ],
             options: [.sortedKeys]
         )
         let response = try await session.send(
-            JarvisMacBridgeHTTPRequest(
+            AssemblywrightMacBridgeHTTPRequest(
                 method: "POST",
                 path: remoteCancellationPath,
                 body: request
@@ -532,7 +532,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
         )
         guard response.status == 200,
               let object = strictJSONObject(response.body) else {
-            throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
+            throw AssemblywrightMacDeveloperEventRelayError.invalidMasterResponse
         }
         if Set(object.keys) == Set(["status"]),
            object["status"] as? String == "no_cancellation" {
@@ -544,7 +544,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
                   "cancellation_id", "deadline_after_ms"
               ]),
               strictInteger(object["protocol_version"])
-                == UInt64(JarvisMacMTLSBridgeTransport.protocolVersion),
+                == UInt64(AssemblywrightMacMTLSBridgeTransport.protocolVersion),
               strictInteger(object["connection_epoch"]) == job.connectionEpoch,
               let sequence = strictInteger(object["sequence"]),
               sequence > job.sequence,
@@ -555,18 +555,18 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
               strictUUID(object["cancellation_id"]) == job.cancellationID,
               let deadline = strictInteger(object["deadline_after_ms"]),
               (1 ... 2_000).contains(deadline) else {
-            throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
+            throw AssemblywrightMacDeveloperEventRelayError.invalidMasterResponse
         }
         return ValidatedCancellation(body: response.body, sequence: sequence)
     }
 
     private func relayOneMLXJob(
-        using session: any JarvisMacBridgeSession,
+        using session: any AssemblywrightMacBridgeSession,
         deviceID: UUID,
-        agent: any JarvisMacDeveloperAgentSession
+        agent: any AssemblywrightMacDeveloperAgentSession
     ) async throws -> Bool {
         guard let selectedModel = configuration.mlxModelID else {
-            throw JarvisMacDeveloperEventRelayError.mlxJobRejected
+            throw AssemblywrightMacDeveloperEventRelayError.mlxJobRejected
         }
         let leaseRequest = try JSONSerialization.data(
             withJSONObject: [
@@ -576,7 +576,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
             options: [.sortedKeys]
         )
         let leased = try await session.send(
-            JarvisMacBridgeHTTPRequest(
+            AssemblywrightMacBridgeHTTPRequest(
                 method: "POST",
                 path: Self.remoteLeasePath,
                 body: leaseRequest
@@ -584,7 +584,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
         )
         if leased.status == 204 {
             guard leased.body.isEmpty else {
-                throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
+                throw AssemblywrightMacDeveloperEventRelayError.invalidMasterResponse
             }
             return true
         }
@@ -592,19 +592,19 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
             guard let object = Self.strictJSONObject(leased.body),
                   Set(object.keys) == Set(["error"]),
                   object["error"] as? String == "emergency_pause_blocks_work" else {
-                throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
+                throw AssemblywrightMacDeveloperEventRelayError.invalidMasterResponse
             }
             return false
         }
         guard leased.status == 200 else {
-            throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
+            throw AssemblywrightMacDeveloperEventRelayError.invalidMasterResponse
         }
         let job = try Self.validateMLXJob(
             leased.body,
             expectedConnectionEpoch: session.connectionEpoch,
             selectedModel: selectedModel
         )
-        let resolution = JarvisMacFixtureRaceResolution()
+        let resolution = AssemblywrightMacFixtureRaceResolution()
         let outcome = try await withThrowingTaskGroup(
             of: MLXRaceOutcome.self,
             returning: MLXRaceOutcome.self
@@ -642,7 +642,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
                 return await resolution.isResolved() ? .settled : .timedOut
             }
             guard let first = try await group.next() else {
-                throw JarvisMacDeveloperEventRelayError.mlxJobRejected
+                throw AssemblywrightMacDeveloperEventRelayError.mlxJobRejected
             }
             if case .result = first {
                 await resolution.markResolved()
@@ -657,7 +657,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
         case let .result(result):
             let resultDigest = try Self.validateMLXResult(result, for: job)
             let accepted = try await session.send(
-                JarvisMacBridgeHTTPRequest(
+                AssemblywrightMacBridgeHTTPRequest(
                     method: "POST",
                     path: Self.remoteResultPath,
                     body: result
@@ -676,7 +676,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
                 job: job
             )
             let accepted = try await session.send(
-                JarvisMacBridgeHTTPRequest(
+                AssemblywrightMacBridgeHTTPRequest(
                     method: "POST",
                     path: Self.remoteCancellationAcknowledgementPath,
                     body: acknowledgement
@@ -686,26 +686,26 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
         case .timedOut:
             try await agent.stop()
             self.agent = nil
-            throw JarvisMacDeveloperEventRelayError.mlxJobTimedOut
+            throw AssemblywrightMacDeveloperEventRelayError.mlxJobTimedOut
         case .settled:
-            throw JarvisMacDeveloperEventRelayError.mlxJobRejected
+            throw AssemblywrightMacDeveloperEventRelayError.mlxJobRejected
         }
         return false
     }
 
     private static func pollMLXCancellation(
-        using session: any JarvisMacBridgeSession,
+        using session: any AssemblywrightMacBridgeSession,
         job: ValidatedMLXJob
     ) async throws -> ValidatedCancellation? {
         let request = try JSONSerialization.data(
             withJSONObject: [
-                "protocol_version": Int(JarvisMacMTLSBridgeTransport.protocolVersion),
+                "protocol_version": Int(AssemblywrightMacMTLSBridgeTransport.protocolVersion),
                 "connection_epoch": NSNumber(value: session.connectionEpoch)
             ],
             options: [.sortedKeys]
         )
         let response = try await session.send(
-            JarvisMacBridgeHTTPRequest(
+            AssemblywrightMacBridgeHTTPRequest(
                 method: "POST",
                 path: remoteCancellationPath,
                 body: request
@@ -713,7 +713,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
         )
         guard response.status == 200,
               let object = strictJSONObject(response.body) else {
-            throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
+            throw AssemblywrightMacDeveloperEventRelayError.invalidMasterResponse
         }
         if Set(object.keys) == Set(["status"]),
            object["status"] as? String == "no_cancellation" {
@@ -725,7 +725,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
                   "cancellation_id", "deadline_after_ms"
               ]),
               strictInteger(object["protocol_version"])
-                == UInt64(JarvisMacMTLSBridgeTransport.protocolVersion),
+                == UInt64(AssemblywrightMacMTLSBridgeTransport.protocolVersion),
               strictInteger(object["connection_epoch"]) == job.connectionEpoch,
               let sequence = strictInteger(object["sequence"]),
               sequence > job.sequence,
@@ -736,7 +736,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
               strictUUID(object["cancellation_id"]) == job.cancellationID,
               let deadline = strictInteger(object["deadline_after_ms"]),
               (1 ... 2_000).contains(deadline) else {
-            throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
+            throw AssemblywrightMacDeveloperEventRelayError.invalidMasterResponse
         }
         return ValidatedCancellation(body: response.body, sequence: sequence)
     }
@@ -756,7 +756,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
                   "deadline_after_ms", "context_sha256", "context"
               ]),
               strictInteger(object["protocol_version"])
-                == UInt64(JarvisMacMTLSBridgeTransport.protocolVersion),
+                == UInt64(AssemblywrightMacMTLSBridgeTransport.protocolVersion),
               strictInteger(object["connection_epoch"]) == expectedConnectionEpoch,
               let sequence = strictInteger(object["sequence"]),
               sequence > 0,
@@ -766,7 +766,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
               let leaseID = strictUUID(object["lease_id"]),
               let cancellationID = strictUUID(object["cancellation_id"]),
               object["capability_id"] as? String == "fixture.reasoning",
-              object["selected_model"] as? String == "jarvis-fixture-v1",
+              object["selected_model"] as? String == "assemblywright-fixture-v1",
               object["sensitivity"] as? String == "public",
               object["context_handling"] as? String == "ephemeral_no_retention",
               let leaseDuration = strictInteger(object["lease_duration_ms"]),
@@ -787,7 +787,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
               ),
               contextData.count <= 8_192,
               Array(SHA256.hash(data: contextData)) == contextDigest else {
-            throw JarvisMacDeveloperEventRelayError.fixtureJobRejected
+            throw AssemblywrightMacDeveloperEventRelayError.fixtureJobRejected
         }
         return ValidatedFixtureJob(
             body: body,
@@ -819,7 +819,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
                   "payload_sha256", "payload"
               ]),
               strictInteger(object["protocol_version"])
-                == UInt64(JarvisMacMTLSBridgeTransport.protocolVersion),
+                == UInt64(AssemblywrightMacMTLSBridgeTransport.protocolVersion),
               strictInteger(object["connection_epoch"]) == job.connectionEpoch,
               strictInteger(object["sequence"]).map({ $0 > job.sequence }) == true,
               strictUUID(object["task_id"]) == job.taskID,
@@ -841,7 +841,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
               ),
               payloadData.count <= 8_192,
               Array(SHA256.hash(data: payloadData)) == payloadDigest else {
-            throw JarvisMacDeveloperEventRelayError.fixtureJobRejected
+            throw AssemblywrightMacDeveloperEventRelayError.fixtureJobRejected
         }
         return payloadDigest
     }
@@ -862,7 +862,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
                   "deadline_after_ms", "context_sha256", "context"
               ]),
               strictInteger(object["protocol_version"])
-                == UInt64(JarvisMacMTLSBridgeTransport.protocolVersion),
+                == UInt64(AssemblywrightMacMTLSBridgeTransport.protocolVersion),
               strictInteger(object["connection_epoch"]) == expectedConnectionEpoch,
               let sequence = strictInteger(object["sequence"]),
               sequence > 0,
@@ -898,7 +898,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
               ),
               contextData.count <= 40 * 1_024,
               Array(SHA256.hash(data: contextData)) == contextDigest else {
-            throw JarvisMacDeveloperEventRelayError.mlxJobRejected
+            throw AssemblywrightMacDeveloperEventRelayError.mlxJobRejected
         }
         return ValidatedMLXJob(
             body: body,
@@ -930,7 +930,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
                   "payload_sha256", "payload"
               ]),
               strictInteger(object["protocol_version"])
-                == UInt64(JarvisMacMTLSBridgeTransport.protocolVersion),
+                == UInt64(AssemblywrightMacMTLSBridgeTransport.protocolVersion),
               strictInteger(object["connection_epoch"]) == job.connectionEpoch,
               strictInteger(object["sequence"]).map({ $0 > job.sequence }) == true,
               strictUUID(object["task_id"]) == job.taskID,
@@ -954,13 +954,13 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
               ),
               payloadData.count <= 800 * 1_024,
               Array(SHA256.hash(data: payloadData)) == payloadDigest else {
-            throw JarvisMacDeveloperEventRelayError.mlxJobRejected
+            throw AssemblywrightMacDeveloperEventRelayError.mlxJobRejected
         }
         return payloadDigest
     }
 
     private static func validateAcceptedMLXResult(
-        _ response: JarvisMacBridgeHTTPResponse,
+        _ response: AssemblywrightMacBridgeHTTPResponse,
         for job: ValidatedMLXJob,
         expectedPayloadDigest: [UInt8]
     ) throws {
@@ -973,7 +973,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
               strictUUID(object["step_id"]) == job.stepID,
               object["status"] as? String == "succeeded",
               strictDigest(object["payload_sha256"]) == expectedPayloadDigest else {
-            throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
+            throw AssemblywrightMacDeveloperEventRelayError.invalidMasterResponse
         }
     }
 
@@ -989,7 +989,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
                   "cancellation_id", "status"
               ]),
               strictInteger(object["protocol_version"])
-                == UInt64(JarvisMacMTLSBridgeTransport.protocolVersion),
+                == UInt64(AssemblywrightMacMTLSBridgeTransport.protocolVersion),
               strictInteger(object["connection_epoch"]) == job.connectionEpoch,
               strictInteger(object["sequence"]).map({ $0 > instruction.sequence }) == true,
               strictUUID(object["task_id"]) == job.taskID,
@@ -998,12 +998,12 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
               strictUUID(object["lease_id"]) == job.leaseID,
               strictUUID(object["cancellation_id"]) == job.cancellationID,
               object["status"] as? String == "cancelled" else {
-            throw JarvisMacDeveloperEventRelayError.mlxJobRejected
+            throw AssemblywrightMacDeveloperEventRelayError.mlxJobRejected
         }
     }
 
     private static func validateAcceptedFixtureResult(
-        _ response: JarvisMacBridgeHTTPResponse,
+        _ response: AssemblywrightMacBridgeHTTPResponse,
         for job: ValidatedFixtureJob,
         expectedPayloadDigest: [UInt8]
     ) throws {
@@ -1016,7 +1016,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
               strictUUID(object["step_id"]) == job.stepID,
               object["status"] as? String == "succeeded",
               strictDigest(object["payload_sha256"]) == expectedPayloadDigest else {
-            throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
+            throw AssemblywrightMacDeveloperEventRelayError.invalidMasterResponse
         }
     }
 
@@ -1032,7 +1032,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
                   "cancellation_id", "status"
               ]),
               strictInteger(object["protocol_version"])
-                == UInt64(JarvisMacMTLSBridgeTransport.protocolVersion),
+                == UInt64(AssemblywrightMacMTLSBridgeTransport.protocolVersion),
               strictInteger(object["connection_epoch"]) == job.connectionEpoch,
               strictInteger(object["sequence"]).map({ $0 > instruction.sequence }) == true,
               strictUUID(object["task_id"]) == job.taskID,
@@ -1041,24 +1041,24 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
               strictUUID(object["lease_id"]) == job.leaseID,
               strictUUID(object["cancellation_id"]) == job.cancellationID,
               object["status"] as? String == "cancelled" else {
-            throw JarvisMacDeveloperEventRelayError.fixtureJobRejected
+            throw AssemblywrightMacDeveloperEventRelayError.fixtureJobRejected
         }
     }
 
     private static func validateAcceptedCancellation(
-        _ response: JarvisMacBridgeHTTPResponse
+        _ response: AssemblywrightMacBridgeHTTPResponse
     ) throws {
         guard response.status == 200,
               let object = strictJSONObject(response.body),
               Set(object.keys) == Set(["accepted", "status"]),
               object["accepted"] as? Bool == true,
               object["status"] as? String == "cancelled" else {
-            throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
+            throw AssemblywrightMacDeveloperEventRelayError.invalidMasterResponse
         }
     }
 
     private static func strictJSONObject(_ data: Data) -> [String: Any]? {
-        var scanner = JarvisStrictJSONObjectKeyScanner(data: data)
+        var scanner = AssemblywrightStrictJSONObjectKeyScanner(data: data)
         guard !data.isEmpty,
               let keys = try? scanner.scanTopLevelKeys(),
               Set(keys).count == keys.count,
@@ -1098,13 +1098,13 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
 
     private static func eventRequest(
         connectionEpoch: UInt64,
-        after: JarvisMacDeveloperEventCursor?
+        after: AssemblywrightMacDeveloperEventCursor?
     ) throws -> Data {
         guard connectionEpoch > 0 else {
-            throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
+            throw AssemblywrightMacDeveloperEventRelayError.invalidMasterResponse
         }
         var object: [String: Any] = [
-            "protocol_version": Int(JarvisMacMTLSBridgeTransport.protocolVersion),
+            "protocol_version": Int(AssemblywrightMacMTLSBridgeTransport.protocolVersion),
             "connection_epoch": NSNumber(value: connectionEpoch),
             "after": NSNull(),
             "limit": maximumEventsPerBatch
@@ -1119,17 +1119,17 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
     }
 
     private struct ValidatedBatch {
-        let cursor: JarvisMacDeveloperEventCursor
+        let cursor: AssemblywrightMacDeveloperEventCursor
         let eventCount: Int
         let hasMore: Bool
     }
 
     private static func validateBatchResponse(
-        _ response: JarvisMacBridgeHTTPResponse
+        _ response: AssemblywrightMacBridgeHTTPResponse
     ) throws -> ValidatedBatch {
         guard response.status == 200,
               !response.body.isEmpty,
-              response.body.count <= DarwinJarvisUnixSocketTransport.maximumRequestBodyBytes,
+              response.body.count <= DarwinAssemblywrightUnixSocketTransport.maximumRequestBodyBytes,
               let object = try JSONSerialization.jsonObject(with: response.body)
                 as? [String: Any],
               Set(object.keys) == Set([
@@ -1137,7 +1137,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
                   "next_sequence", "events", "has_more"
               ]),
               Self.strictInteger(object["protocol_version"])
-                == UInt64(JarvisMacMTLSBridgeTransport.protocolVersion),
+                == UInt64(AssemblywrightMacMTLSBridgeTransport.protocolVersion),
               let streamText = object["stream_id"] as? String,
               let streamID = UUID(uuidString: streamText),
               streamText.lowercased() != "00000000-0000-0000-0000-000000000000",
@@ -1148,7 +1148,7 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
               events.count <= maximumEventsPerBatch,
               UInt64(events.count) == nextSequence - afterSequence,
               let hasMore = object["has_more"] as? Bool else {
-            throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
+            throw AssemblywrightMacDeveloperEventRelayError.invalidMasterResponse
         }
         var expectedSequence = afterSequence
         for event in events {
@@ -1158,18 +1158,18 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
                 "task_id", "step_id", "device_id", "connection_epoch"
             ]),
             Self.strictInteger(event["protocol_version"])
-                == UInt64(JarvisMacMTLSBridgeTransport.protocolVersion),
+                == UInt64(AssemblywrightMacMTLSBridgeTransport.protocolVersion),
             Self.strictInteger(event["occurred_at_ms"]).map({ $0 > 0 }) == true,
             let cursor = event["cursor"] as? [String: Any],
             Set(cursor.keys) == Set(["stream_id", "sequence"]),
             cursor["stream_id"] as? String == streamText,
             Self.strictInteger(cursor["sequence"]) == expectedSequence,
             event["kind"] is String else {
-                throw JarvisMacDeveloperEventRelayError.invalidMasterResponse
+                throw AssemblywrightMacDeveloperEventRelayError.invalidMasterResponse
             }
         }
         return ValidatedBatch(
-            cursor: JarvisMacDeveloperEventCursor(
+            cursor: AssemblywrightMacDeveloperEventCursor(
                 streamID: streamID,
                 sequence: nextSequence
             ),
@@ -1192,20 +1192,20 @@ public actor JarvisMacDeveloperEventRelay: JarvisMacBridgeEventRelaying {
     }
 }
 
-public struct FoundationJarvisMacDeveloperAgentLauncher:
-    JarvisMacDeveloperAgentLaunching, Sendable
+public struct FoundationAssemblywrightMacDeveloperAgentLauncher:
+    AssemblywrightMacDeveloperAgentLaunching, Sendable
 {
     public init() {}
 
     public func launch(
-        configuration: JarvisMacDeveloperEventRelayConfiguration
-    ) async throws -> any JarvisMacDeveloperAgentSession {
+        configuration: AssemblywrightMacDeveloperEventRelayConfiguration
+    ) async throws -> any AssemblywrightMacDeveloperAgentSession {
         try configuration.validatePaths()
-        let agent = try SecurityJarvisMacRelayCodeIdentity.staticIdentity(
+        let agent = try SecurityAssemblywrightMacRelayCodeIdentity.staticIdentity(
             executableURL: configuration.agentExecutableURL
         )
-        let helper = try SecurityJarvisMacRelayCodeIdentity.currentProcessIdentity()
-        return try await FoundationJarvisMacDeveloperAgentSession.start(
+        let helper = try SecurityAssemblywrightMacRelayCodeIdentity.currentProcessIdentity()
+        return try await FoundationAssemblywrightMacDeveloperAgentSession.start(
             configuration: configuration,
             agentIdentity: agent,
             helperIdentity: helper
@@ -1213,15 +1213,15 @@ public struct FoundationJarvisMacDeveloperAgentLauncher:
     }
 }
 
-private struct JarvisMacRelayCodeIdentity: Sendable {
+private struct AssemblywrightMacRelayCodeIdentity: Sendable {
     let executableURL: URL
     let identifier: String
     let cdHash: Data
     let requirement: String
 }
 
-private enum SecurityJarvisMacRelayCodeIdentity {
-    static func staticIdentity(executableURL: URL) throws -> JarvisMacRelayCodeIdentity {
+private enum SecurityAssemblywrightMacRelayCodeIdentity {
+    static func staticIdentity(executableURL: URL) throws -> AssemblywrightMacRelayCodeIdentity {
         let standardized = executableURL.standardizedFileURL
         var metadata = stat()
         guard standardized.isFileURL,
@@ -1229,7 +1229,7 @@ private enum SecurityJarvisMacRelayCodeIdentity {
               lstat(standardized.path, &metadata) == 0,
               metadata.st_mode & S_IFMT == S_IFREG,
               access(standardized.path, X_OK) == 0 else {
-            throw JarvisMacDeveloperEventRelayError.invalidAgentExecutable
+            throw AssemblywrightMacDeveloperEventRelayError.invalidAgentExecutable
         }
         var code: SecStaticCode?
         guard SecStaticCodeCreateWithPath(standardized as CFURL, [], &code) == errSecSuccess,
@@ -1239,12 +1239,12 @@ private enum SecurityJarvisMacRelayCodeIdentity {
                   SecCSFlags(rawValue: kSecCSStrictValidate),
                   nil
               ) == errSecSuccess else {
-            throw JarvisMacDeveloperEventRelayError.invalidAgentSignature
+            throw AssemblywrightMacDeveloperEventRelayError.invalidAgentSignature
         }
         return try identity(from: code, expectedURL: standardized)
     }
 
-    static func currentProcessIdentity() throws -> JarvisMacRelayCodeIdentity {
+    static func currentProcessIdentity() throws -> AssemblywrightMacRelayCodeIdentity {
         var dynamicCode: SecCode?
         guard SecCodeCopySelf([], &dynamicCode) == errSecSuccess,
               let dynamicCode,
@@ -1253,19 +1253,19 @@ private enum SecurityJarvisMacRelayCodeIdentity {
                   SecCSFlags(rawValue: kSecCSStrictValidate),
                   nil
               ) == errSecSuccess else {
-            throw JarvisMacDeveloperEventRelayError.invalidHelperIdentity
+            throw AssemblywrightMacDeveloperEventRelayError.invalidHelperIdentity
         }
         var staticCode: SecStaticCode?
         guard SecCodeCopyStaticCode(dynamicCode, [], &staticCode) == errSecSuccess,
               let staticCode else {
-            throw JarvisMacDeveloperEventRelayError.invalidHelperIdentity
+            throw AssemblywrightMacDeveloperEventRelayError.invalidHelperIdentity
         }
         return try identity(from: staticCode, expectedURL: nil)
     }
 
     static func validateRunning(
         processIdentifier: Int32,
-        expected: JarvisMacRelayCodeIdentity
+        expected: AssemblywrightMacRelayCodeIdentity
     ) throws {
         let attributes = [
             kSecGuestAttributePid as String: NSNumber(value: processIdentifier)
@@ -1274,7 +1274,7 @@ private enum SecurityJarvisMacRelayCodeIdentity {
         guard SecCodeCopyGuestWithAttributes(nil, attributes, [], &dynamicCode)
                 == errSecSuccess,
               let dynamicCode else {
-            throw JarvisMacDeveloperEventRelayError.agentIdentityMismatch
+            throw AssemblywrightMacDeveloperEventRelayError.agentIdentityMismatch
         }
         var requirement: SecRequirement?
         guard SecRequirementCreateWithString(
@@ -1288,24 +1288,24 @@ private enum SecurityJarvisMacRelayCodeIdentity {
             SecCSFlags(rawValue: kSecCSStrictValidate),
             requirement
         ) == errSecSuccess else {
-            throw JarvisMacDeveloperEventRelayError.agentIdentityMismatch
+            throw AssemblywrightMacDeveloperEventRelayError.agentIdentityMismatch
         }
         var staticCode: SecStaticCode?
         guard SecCodeCopyStaticCode(dynamicCode, [], &staticCode) == errSecSuccess,
               let staticCode else {
-            throw JarvisMacDeveloperEventRelayError.agentIdentityMismatch
+            throw AssemblywrightMacDeveloperEventRelayError.agentIdentityMismatch
         }
         let actual = try identity(from: staticCode, expectedURL: expected.executableURL)
         guard actual.cdHash == expected.cdHash,
               actual.identifier == expected.identifier else {
-            throw JarvisMacDeveloperEventRelayError.agentIdentityMismatch
+            throw AssemblywrightMacDeveloperEventRelayError.agentIdentityMismatch
         }
     }
 
     private static func identity(
         from code: SecStaticCode,
         expectedURL: URL?
-    ) throws -> JarvisMacRelayCodeIdentity {
+    ) throws -> AssemblywrightMacRelayCodeIdentity {
         var rawInformation: CFDictionary?
         guard SecCodeCopySigningInformation(
             code,
@@ -1320,15 +1320,15 @@ private enum SecurityJarvisMacRelayCodeIdentity {
         !cdHash.isEmpty,
         cdHash.count <= 64,
         let executableURL = information[kSecCodeInfoMainExecutable as String] as? URL else {
-            throw JarvisMacDeveloperEventRelayError.invalidAgentSignature
+            throw AssemblywrightMacDeveloperEventRelayError.invalidAgentSignature
         }
         let standardized = executableURL.standardizedFileURL
         if let expectedURL,
            standardized.path != expectedURL.standardizedFileURL.path {
-            throw JarvisMacDeveloperEventRelayError.invalidAgentSignature
+            throw AssemblywrightMacDeveloperEventRelayError.invalidAgentSignature
         }
         let requirement =
-            "identifier \"\(identifier)\" and cdhash H\"\(cdHash.jarvisHexString)\""
+            "identifier \"\(identifier)\" and cdhash H\"\(cdHash.assemblywrightHexString)\""
         var compiled: SecRequirement?
         guard SecRequirementCreateWithString(
             requirement as CFString,
@@ -1341,9 +1341,9 @@ private enum SecurityJarvisMacRelayCodeIdentity {
             SecCSFlags(rawValue: kSecCSStrictValidate),
             compiled
         ) == errSecSuccess else {
-            throw JarvisMacDeveloperEventRelayError.invalidAgentSignature
+            throw AssemblywrightMacDeveloperEventRelayError.invalidAgentSignature
         }
-        return JarvisMacRelayCodeIdentity(
+        return AssemblywrightMacRelayCodeIdentity(
             executableURL: standardized,
             identifier: identifier,
             cdHash: cdHash,
@@ -1352,16 +1352,16 @@ private enum SecurityJarvisMacRelayCodeIdentity {
     }
 }
 
-private actor FoundationJarvisMacDeveloperAgentSession:
-    JarvisMacDeveloperAgentSession
+private actor FoundationAssemblywrightMacDeveloperAgentSession:
+    AssemblywrightMacDeveloperAgentSession
 {
     private static let maximumAgentStartupBytes = 16 * 1_024
     private let process: Process
     private let runtimeDirectoryURL: URL
     private let socketURL: URL
     private let bearerToken: String
-    private let transport: DarwinJarvisUnixSocketTransport
-    private let mlxExecutionTransport: DarwinJarvisUnixSocketTransport
+    private let transport: DarwinAssemblywrightUnixSocketTransport
+    private let mlxExecutionTransport: DarwinAssemblywrightUnixSocketTransport
     private let configurationFixtureJobsEnabled: Bool
     private let configurationMLXJobsEnabled: Bool
     private var stopped = false
@@ -1371,8 +1371,8 @@ private actor FoundationJarvisMacDeveloperAgentSession:
         runtimeDirectoryURL: URL,
         socketURL: URL,
         bearerToken: String,
-        transport: DarwinJarvisUnixSocketTransport,
-        mlxExecutionTransport: DarwinJarvisUnixSocketTransport,
+        transport: DarwinAssemblywrightUnixSocketTransport,
+        mlxExecutionTransport: DarwinAssemblywrightUnixSocketTransport,
         configurationFixtureJobsEnabled: Bool,
         configurationMLXJobsEnabled: Bool
     ) {
@@ -1387,31 +1387,31 @@ private actor FoundationJarvisMacDeveloperAgentSession:
     }
 
     static func start(
-        configuration: JarvisMacDeveloperEventRelayConfiguration,
-        agentIdentity: JarvisMacRelayCodeIdentity,
-        helperIdentity: JarvisMacRelayCodeIdentity
-    ) async throws -> FoundationJarvisMacDeveloperAgentSession {
+        configuration: AssemblywrightMacDeveloperEventRelayConfiguration,
+        agentIdentity: AssemblywrightMacRelayCodeIdentity,
+        helperIdentity: AssemblywrightMacRelayCodeIdentity
+    ) async throws -> FoundationAssemblywrightMacDeveloperAgentSession {
         let runtimeDirectoryURL = try makeRuntimeDirectory()
         let socketURL = runtimeDirectoryURL.appendingPathComponent("relay.sock")
         guard socketURL.path.utf8.count < 104 else {
             try? FileManager.default.removeItem(at: runtimeDirectoryURL)
-            throw JarvisMacDeveloperEventRelayError.unsafeRuntimeDirectory
+            throw AssemblywrightMacDeveloperEventRelayError.unsafeRuntimeDirectory
         }
         let bearer = try randomBearer()
-        let peerPolicy = JarvisIPCPeerIdentityPolicy(
+        let peerPolicy = AssemblywrightIPCPeerIdentityPolicy(
             profile: .adhocExact,
             peerCodeRequirement: helperIdentity.requirement,
             coreCodeRequirement: agentIdentity.requirement,
             expectedCoreCDHash: agentIdentity.cdHash,
             expectedCoreExecutableURL: agentIdentity.executableURL
         )
-        let transport = DarwinJarvisUnixSocketTransport(
+        let transport = DarwinAssemblywrightUnixSocketTransport(
             // A valid fixture may deliberately wait for up to five seconds.
             // Keep bounded framing and scheduling overhead outside that budget.
             timeoutSeconds: 10,
             peerIdentityPolicy: { peerPolicy }
         )
-        let mlxExecutionTransport = DarwinJarvisUnixSocketTransport(
+        let mlxExecutionTransport = DarwinAssemblywrightUnixSocketTransport(
             // The protocol permits a ten-minute MLX lease. The agent owns the
             // earlier lease/deadline timeout and process-group cleanup.
             timeoutSeconds: 610,
@@ -1431,10 +1431,10 @@ private actor FoundationJarvisMacDeveloperAgentSession:
             try process.run()
         } catch {
             try? FileManager.default.removeItem(at: runtimeDirectoryURL)
-            throw JarvisMacDeveloperEventRelayError.agentLaunchFailed
+            throw AssemblywrightMacDeveloperEventRelayError.agentLaunchFailed
         }
         do {
-            try SecurityJarvisMacRelayCodeIdentity.validateRunning(
+            try SecurityAssemblywrightMacRelayCodeIdentity.validateRunning(
                 processIdentifier: process.processIdentifier,
                 expected: agentIdentity
             )
@@ -1443,7 +1443,7 @@ private actor FoundationJarvisMacDeveloperAgentSession:
                 "supervised_parent_pid": Int(getpid()),
                 "socket_path": socketURL.path,
                 "peer_code_requirement": helperIdentity.requirement,
-                "peer_identity_profile": JarvisIPCPeerIdentityProfile.adhocExact.rawValue,
+                "peer_identity_profile": AssemblywrightIPCPeerIdentityProfile.adhocExact.rawValue,
                 "bearer_token": bearer,
                 "fixture_jobs_enabled": configuration.fixtureJobsEnabled,
                 "mlx_jobs_enabled": configuration.mlxJobsEnabled,
@@ -1456,11 +1456,11 @@ private actor FoundationJarvisMacDeveloperAgentSession:
                 options: [.sortedKeys]
             )
             guard startupData.count <= maximumAgentStartupBytes else {
-                throw JarvisMacDeveloperEventRelayError.invalidStartupDocument
+                throw AssemblywrightMacDeveloperEventRelayError.invalidStartupDocument
             }
             try input.fileHandleForWriting.write(contentsOf: startupData)
             try input.fileHandleForWriting.close()
-            let session = FoundationJarvisMacDeveloperAgentSession(
+            let session = FoundationAssemblywrightMacDeveloperAgentSession(
                 process: process,
                 runtimeDirectoryURL: runtimeDirectoryURL,
                 socketURL: socketURL,
@@ -1481,7 +1481,7 @@ private actor FoundationJarvisMacDeveloperAgentSession:
         }
     }
 
-    func health() async throws -> JarvisMacDeveloperAgentCursorSnapshot {
+    func health() async throws -> AssemblywrightMacDeveloperAgentCursorSnapshot {
         let response = try await send(method: "GET", path: "/health")
         guard response.status == 200,
               let object = try JSONSerialization.jsonObject(with: response.body)
@@ -1493,7 +1493,7 @@ private actor FoundationJarvisMacDeveloperAgentSession:
               object["status"] as? String == "ok",
               object["mode"] as? String == "developer_event_relay",
               (object["protocol_version"] as? NSNumber)?.intValue
-                == Int(JarvisMacMTLSBridgeTransport.protocolVersion),
+                == Int(AssemblywrightMacMTLSBridgeTransport.protocolVersion),
               (object["schema_version"] as? NSNumber)?.intValue == 1,
               object["fixture_jobs_enabled"] as? Bool
                 == configurationFixtureJobsEnabled,
@@ -1501,19 +1501,19 @@ private actor FoundationJarvisMacDeveloperAgentSession:
               object["boundary"] as? String == expectedBoundary,
               let cursorObject = object["cursor"] as? [String: Any],
               Set(cursorObject.keys) == Set(["cursor", "updated_at_ms"]) else {
-            throw JarvisMacDeveloperEventRelayError.invalidAgentResponse
+            throw AssemblywrightMacDeveloperEventRelayError.invalidAgentResponse
         }
         do {
             return try JSONDecoder().decode(
-                JarvisMacDeveloperAgentCursorSnapshot.self,
+                AssemblywrightMacDeveloperAgentCursorSnapshot.self,
                 from: JSONSerialization.data(withJSONObject: cursorObject)
             )
         } catch {
-            throw JarvisMacDeveloperEventRelayError.invalidAgentResponse
+            throw AssemblywrightMacDeveloperEventRelayError.invalidAgentResponse
         }
     }
 
-    func accept(batch: Data) async throws -> JarvisMacDeveloperAgentCursorSnapshot {
+    func accept(batch: Data) async throws -> AssemblywrightMacDeveloperAgentCursorSnapshot {
         let response = try await send(
             method: "POST",
             path: "/v1/events/accept",
@@ -1526,21 +1526,21 @@ private actor FoundationJarvisMacDeveloperAgentSession:
               object["status"] as? String == "accepted",
               let cursorObject = object["cursor"] as? [String: Any],
               Set(cursorObject.keys) == Set(["cursor", "updated_at_ms"]) else {
-            throw JarvisMacDeveloperEventRelayError.eventCursorRejected
+            throw AssemblywrightMacDeveloperEventRelayError.eventCursorRejected
         }
         do {
             return try JSONDecoder().decode(
-                JarvisMacDeveloperAgentCursorSnapshot.self,
+                AssemblywrightMacDeveloperAgentCursorSnapshot.self,
                 from: JSONSerialization.data(withJSONObject: cursorObject)
             )
         } catch {
-            throw JarvisMacDeveloperEventRelayError.invalidAgentResponse
+            throw AssemblywrightMacDeveloperEventRelayError.invalidAgentResponse
         }
     }
 
     func executeFixtureJob(_ job: Data) async throws -> Data {
         guard configurationFixtureJobsEnabled else {
-            throw JarvisMacDeveloperEventRelayError.fixtureJobRejected
+            throw AssemblywrightMacDeveloperEventRelayError.fixtureJobRejected
         }
         let response = try await send(
             method: "POST",
@@ -1550,14 +1550,14 @@ private actor FoundationJarvisMacDeveloperAgentSession:
         guard response.status == 200,
               !response.body.isEmpty,
               response.body.count <= 16 * 1_024 else {
-            throw JarvisMacDeveloperEventRelayError.fixtureJobRejected
+            throw AssemblywrightMacDeveloperEventRelayError.fixtureJobRejected
         }
         return response.body
     }
 
     func cancelFixtureJob(_ instruction: Data) async throws -> Data {
         guard configurationFixtureJobsEnabled else {
-            throw JarvisMacDeveloperEventRelayError.fixtureJobRejected
+            throw AssemblywrightMacDeveloperEventRelayError.fixtureJobRejected
         }
         let response = try await send(
             method: "POST",
@@ -1567,14 +1567,14 @@ private actor FoundationJarvisMacDeveloperAgentSession:
         guard response.status == 200,
               !response.body.isEmpty,
               response.body.count <= 16 * 1_024 else {
-            throw JarvisMacDeveloperEventRelayError.fixtureJobRejected
+            throw AssemblywrightMacDeveloperEventRelayError.fixtureJobRejected
         }
         return response.body
     }
 
     func executeMLXJob(_ job: Data) async throws -> Data {
         guard configurationMLXJobsEnabled else {
-            throw JarvisMacDeveloperEventRelayError.mlxJobRejected
+            throw AssemblywrightMacDeveloperEventRelayError.mlxJobRejected
         }
         let response = try await send(
             method: "POST",
@@ -1585,14 +1585,14 @@ private actor FoundationJarvisMacDeveloperAgentSession:
         guard response.status == 200,
               !response.body.isEmpty,
               response.body.count <= 1_024 * 1_024 else {
-            throw JarvisMacDeveloperEventRelayError.mlxJobRejected
+            throw AssemblywrightMacDeveloperEventRelayError.mlxJobRejected
         }
         return response.body
     }
 
     func cancelMLXJob(_ instruction: Data) async throws -> Data {
         guard configurationMLXJobsEnabled else {
-            throw JarvisMacDeveloperEventRelayError.mlxJobRejected
+            throw AssemblywrightMacDeveloperEventRelayError.mlxJobRejected
         }
         let response = try await send(
             method: "POST",
@@ -1602,7 +1602,7 @@ private actor FoundationJarvisMacDeveloperAgentSession:
         guard response.status == 200,
               !response.body.isEmpty,
               response.body.count <= 16 * 1_024 else {
-            throw JarvisMacDeveloperEventRelayError.mlxJobRejected
+            throw AssemblywrightMacDeveloperEventRelayError.mlxJobRejected
         }
         return response.body
     }
@@ -1617,7 +1617,7 @@ private actor FoundationJarvisMacDeveloperAgentSession:
         if process.isRunning {
             let result = kill(process.processIdentifier, SIGKILL)
             guard result == 0 || errno == ESRCH else {
-                throw JarvisMacDeveloperEventRelayError.teardownFailed
+                throw AssemblywrightMacDeveloperEventRelayError.teardownFailed
             }
         }
         let killDeadline = ContinuousClock.now + .seconds(1)
@@ -1625,7 +1625,7 @@ private actor FoundationJarvisMacDeveloperAgentSession:
             try? await Task.sleep(for: .milliseconds(20))
         }
         guard !process.isRunning else {
-            throw JarvisMacDeveloperEventRelayError.teardownFailed
+            throw AssemblywrightMacDeveloperEventRelayError.teardownFailed
         }
         process.waitUntilExit()
         try? FileManager.default.removeItem(at: runtimeDirectoryURL)
@@ -1635,12 +1635,12 @@ private actor FoundationJarvisMacDeveloperAgentSession:
     private func waitUntilHealthy() async throws {
         for _ in 0 ..< 100 {
             if !process.isRunning {
-                throw JarvisMacDeveloperEventRelayError.agentUnavailable
+                throw AssemblywrightMacDeveloperEventRelayError.agentUnavailable
             }
             if (try? await health()) != nil { return }
             try await Task.sleep(for: .milliseconds(20))
         }
-        throw JarvisMacDeveloperEventRelayError.agentUnavailable
+        throw AssemblywrightMacDeveloperEventRelayError.agentUnavailable
     }
 
     private var expectedBoundary: String {
@@ -1657,10 +1657,10 @@ private actor FoundationJarvisMacDeveloperAgentSession:
         method: String,
         path: String,
         body: Data? = nil,
-        using selectedTransport: DarwinJarvisUnixSocketTransport? = nil
-    ) async throws -> JarvisIPCTransportResponse {
+        using selectedTransport: DarwinAssemblywrightUnixSocketTransport? = nil
+    ) async throws -> AssemblywrightIPCTransportResponse {
         try await (selectedTransport ?? transport).send(
-            JarvisIPCTransportRequest(
+            AssemblywrightIPCTransportRequest(
                 method: method,
                 path: path,
                 authorization: "Bearer \(bearerToken)",
@@ -1678,7 +1678,7 @@ private actor FoundationJarvisMacDeveloperAgentSession:
             mkdtemp(buffer.baseAddress)
         }
         guard let path else {
-            throw JarvisMacDeveloperEventRelayError.unsafeRuntimeDirectory
+            throw AssemblywrightMacDeveloperEventRelayError.unsafeRuntimeDirectory
         }
         let url = URL(
             fileURLWithPath: String(cString: path),
@@ -1690,7 +1690,7 @@ private actor FoundationJarvisMacDeveloperAgentSession:
               metadata.st_uid == geteuid(),
               chmod(url.path, 0o700) == 0 else {
             try? FileManager.default.removeItem(at: url)
-            throw JarvisMacDeveloperEventRelayError.unsafeRuntimeDirectory
+            throw AssemblywrightMacDeveloperEventRelayError.unsafeRuntimeDirectory
         }
         return url
     }
@@ -1698,7 +1698,7 @@ private actor FoundationJarvisMacDeveloperAgentSession:
     private static func randomBearer() throws -> String {
         var bytes = [UInt8](repeating: 0, count: 32)
         guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
-            throw JarvisMacDeveloperEventRelayError.randomUnavailable
+            throw AssemblywrightMacDeveloperEventRelayError.randomUnavailable
         }
         return Data(bytes).base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
@@ -1708,7 +1708,7 @@ private actor FoundationJarvisMacDeveloperAgentSession:
 }
 
 private extension Data {
-    var jarvisHexString: String {
+    var assemblywrightHexString: String {
         map { String(format: "%02x", $0) }.joined()
     }
 }

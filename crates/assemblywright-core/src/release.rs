@@ -240,7 +240,7 @@ fn release_readiness_features(
 }
 
 fn release_readiness_evidence_mode_enabled() -> bool {
-    std::env::var("JARVIS_RELEASE_READINESS_EVIDENCE_MODE")
+    std::env::var("ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE")
         .map(|value| value == "external")
         .unwrap_or(false)
 }
@@ -310,21 +310,21 @@ fn release_live_device_runbook_from(
             "./scripts/release-live-device-qa.sh --check".to_string(),
             "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env"
                 .to_string(),
-            "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' in target/release-live-device-qa.env before collecting command evidence"
+            "Set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' in target/release-live-device-qa.env before collecting command evidence"
                 .to_string(),
-            "Launch Assemblywright with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true for this operator evidence session, then confirm JARVIS_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path before IPC commands"
+            "Launch Assemblywright with ASSEMBLYWRIGHT_MAC_ENABLE_IPC_CLI_HANDOFF=true for this operator evidence session, then confirm ASSEMBLYWRIGHT_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path before IPC commands"
                 .to_string(),
-            "cargo run -p assemblywright-cli -- command \"status check\" --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\" --json"
+            "cargo run -p assemblywright-cli -- command \"status check\" --endpoint \"${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}\" --json"
                 .to_string(),
-            "Record the returned task ID as JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>' or a task-associated audit ID as 'audit:<uuid>' in target/release-live-device-qa.env"
+            "Record the returned task ID as ASSEMBLYWRIGHT_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>' or a task-associated audit ID as 'audit:<uuid>' in target/release-live-device-qa.env"
                 .to_string(),
             "set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete"
                 .to_string(),
-            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
+            "ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint \"${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}\""
                 .to_string(),
-            "Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external"
+            "Start or restart the core with ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external"
                 .to_string(),
-            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
+            "ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness --endpoint \"${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}\""
                 .to_string(),
         ],
         manual_checks: vec![
@@ -369,15 +369,15 @@ fn release_signed_distribution_runbook_from(
         commands: vec![
             "./scripts/package-distribution.sh --check".to_string(),
             "./scripts/package-distribution.sh --unsigned-launch-check".to_string(),
-            "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh"
+            "ASSEMBLYWRIGHT_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' ASSEMBLYWRIGHT_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' ASSEMBLYWRIGHT_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh"
                 .to_string(),
-            "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_APPLE_ID='apple-id@example.com' JARVIS_NOTARYTOOL_TEAM_ID='TEAMID1234' JARVIS_NOTARYTOOL_PASSWORD='app-specific-password' ./scripts/package-distribution.sh"
+            "ASSEMBLYWRIGHT_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' ASSEMBLYWRIGHT_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' ASSEMBLYWRIGHT_NOTARYTOOL_APPLE_ID='apple-id@example.com' ASSEMBLYWRIGHT_NOTARYTOOL_TEAM_ID='TEAMID1234' ASSEMBLYWRIGHT_NOTARYTOOL_PASSWORD='app-specific-password' ./scripts/package-distribution.sh"
                 .to_string(),
-            "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks"
+            "Set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks"
                 .to_string(),
-            "Launch Assemblywright with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks"
+            "Launch Assemblywright with ASSEMBLYWRIGHT_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export ASSEMBLYWRIGHT_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks"
                 .to_string(),
-            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
+            "ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint \"${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}\""
                 .to_string(),
             "./scripts/release-evidence-doctor.sh --check".to_string(),
             "cargo run -p assemblywright-cli -- release live-device-runbook".to_string(),
@@ -429,15 +429,15 @@ fn release_evidence_bundle_runbook_from(
                 .to_string(),
             "./scripts/release-evidence-doctor.sh --check".to_string(),
             "./scripts/release-evidence-doctor.sh --assert-complete".to_string(),
-            "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks"
+            "Set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks"
                 .to_string(),
-            "Launch Assemblywright with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks"
+            "Launch Assemblywright with ASSEMBLYWRIGHT_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export ASSEMBLYWRIGHT_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks"
                 .to_string(),
-            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
+            "ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint \"${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}\""
                 .to_string(),
-            "Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external"
+            "Start or restart the core with ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external"
                 .to_string(),
-            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
+            "ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness --endpoint \"${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}\""
                 .to_string(),
         ],
         manual_checks: vec![
@@ -447,7 +447,7 @@ fn release_evidence_bundle_runbook_from(
                 .to_string(),
             "Confirm release-evidence-doctor --assert-complete reports every required evidence item present before enabling external evidence-mode readiness."
                 .to_string(),
-            "Restart or start the release core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external before the final readiness check."
+            "Restart or start the release core with ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external before the final readiness check."
                 .to_string(),
             "Confirm production_ready remains false if any required evidence item is missing, invalid, or stale."
                 .to_string(),
@@ -475,32 +475,32 @@ fn release_evidence_status_from_env() -> ReleaseEvidenceStatusResponse {
 }
 
 fn release_evidence_status_from_env_inner() -> ReleaseEvidenceStatusResponse {
-    let version = std::env::var("JARVIS_EVIDENCE_VERSION")
+    let version = std::env::var("ASSEMBLYWRIGHT_EVIDENCE_VERSION")
         .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string());
-    let dist_dir = env_path("JARVIS_EVIDENCE_DIST_DIR", "target/distribution");
+    let dist_dir = env_path("ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR", "target/distribution");
     let app_path = env_path_or(
-        "JARVIS_EVIDENCE_APP_PATH",
+        "ASSEMBLYWRIGHT_EVIDENCE_APP_PATH",
         dist_dir.join("Assemblywright.app"),
     );
     let zip_path = env_path_or(
-        "JARVIS_EVIDENCE_ZIP_PATH",
+        "ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH",
         dist_dir.join(format!("Assemblywright-{version}.zip")),
     );
     let pkg_path = env_path_or(
-        "JARVIS_EVIDENCE_PKG_PATH",
+        "ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH",
         dist_dir.join(format!("Assemblywright-{version}.pkg")),
     );
     let live_qa_report = env_path_alias(
-        "JARVIS_EVIDENCE_LIVE_QA_REPORT",
-        "JARVIS_QA_REPORT_PATH",
+        "ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT",
+        "ASSEMBLYWRIGHT_QA_REPORT_PATH",
         "target/release-live-device-qa-report.json",
     );
     let bundle_path = env_path(
-        "JARVIS_EVIDENCE_OUTPUT_PATH",
+        "ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH",
         "target/release-evidence-bundle.json",
     );
     let signed_provenance_report = env_path_or(
-        "JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT",
+        "ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT",
         dist_dir.join(format!("Assemblywright-{version}-signed-provenance.json")),
     );
 
@@ -517,13 +517,13 @@ fn release_evidence_status_from_env_inner() -> ReleaseEvidenceStatusResponse {
         release_path_item(
             "app_executable",
             "App executable",
-            app_path.join("Contents/MacOS/JarvisMacApp"),
+            app_path.join("Contents/MacOS/AssemblywrightMacApp"),
             ReleaseEvidenceKind::Executable,
         ),
         release_bundled_core_item(
             "bundled_core_executable",
             "Bundled core executable",
-            app_path.join("Contents/Resources/bin/jarvis-cli"),
+            app_path.join("Contents/Resources/bin/assemblywright-cli"),
         ),
         release_path_item(
             "signed_app_zip",
@@ -858,7 +858,7 @@ fn inspect_release_bundled_core(path: &FsPath) -> (ReleaseEvidenceItemStatus, St
         "{}.version",
         path.file_name()
             .and_then(|name| name.to_str())
-            .unwrap_or("jarvis-cli")
+            .unwrap_or("assemblywright-cli")
     ));
     let version = match fs::read_to_string(&version_marker) {
         Ok(version) => version,
@@ -1022,21 +1022,21 @@ fn validate_live_device_qa_report(value: &serde_json::Value) -> Result<(), Strin
     }
 
     let expected_bundle_id = env_value_alias(
-        "JARVIS_QA_EXPECTED_BUNDLE_ID",
-        "JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID",
-        "com.nobiletechnology.jarvis",
+        "ASSEMBLYWRIGHT_QA_EXPECTED_BUNDLE_ID",
+        "ASSEMBLYWRIGHT_EVIDENCE_EXPECTED_BUNDLE_ID",
+        "com.nobiletechnology.assemblywright",
     );
     let expected_version = expected_live_qa_version();
     require_json_string_value(value, "app_bundle.bundle_identifier", &expected_bundle_id)?;
     require_json_string_value(value, "app_bundle.short_version", &expected_version)?;
     require_json_string_value(value, "app_bundle.build_version", &expected_version)?;
-    let expected_installed_app_path = std::env::var("JARVIS_QA_INSTALLED_APP_PATH")
+    let expected_installed_app_path = std::env::var("ASSEMBLYWRIGHT_QA_INSTALLED_APP_PATH")
         .unwrap_or_else(|_| "/Applications/Assemblywright.app".to_string());
     require_json_string_value(value, "installed_app_path", &expected_installed_app_path)?;
     require_json_string_value(
         value,
         "app_executable.executable_path",
-        &format!("{expected_installed_app_path}/Contents/MacOS/JarvisMacApp"),
+        &format!("{expected_installed_app_path}/Contents/MacOS/AssemblywrightMacApp"),
     )?;
     require_json_sha256_value(value, "app_executable.sha256")?;
     require_json_string_value(value, "app_executable.code_identifier", &expected_bundle_id)?;
@@ -1047,7 +1047,7 @@ fn validate_live_device_qa_report(value: &serde_json::Value) -> Result<(), Strin
     require_json_string_value(
         value,
         "bundled_core.executable_path",
-        &format!("{expected_installed_app_path}/Contents/Resources/bin/jarvis-cli"),
+        &format!("{expected_installed_app_path}/Contents/Resources/bin/assemblywright-cli"),
     )?;
     require_json_string_value(
         value,
@@ -1149,14 +1149,15 @@ fn validate_signed_distribution_provenance(value: &serde_json::Value) -> Result<
     }
     require_json_string_value(value, "version", &expected_release_evidence_version())?;
     let expected_app_path = env_path_or(
-        "JARVIS_EVIDENCE_APP_PATH",
-        env_path("JARVIS_EVIDENCE_DIST_DIR", "target/distribution").join("Assemblywright.app"),
+        "ASSEMBLYWRIGHT_EVIDENCE_APP_PATH",
+        env_path("ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR", "target/distribution")
+            .join("Assemblywright.app"),
     );
     require_json_string_value(
         value,
         "artifacts.app_executable_path",
         &expected_app_path
-            .join("Contents/MacOS/JarvisMacApp")
+            .join("Contents/MacOS/AssemblywrightMacApp")
             .display()
             .to_string(),
     )?;
@@ -1165,7 +1166,7 @@ fn validate_signed_distribution_provenance(value: &serde_json::Value) -> Result<
         value,
         "artifacts.bundled_core_path",
         &expected_app_path
-            .join("Contents/Resources/bin/jarvis-cli")
+            .join("Contents/Resources/bin/assemblywright-cli")
             .display()
             .to_string(),
     )?;
@@ -1178,15 +1179,15 @@ fn validate_signed_distribution_provenance(value: &serde_json::Value) -> Result<
         value,
         "bundle_identifier",
         &env_value_alias(
-            "JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID",
-            "JARVIS_QA_EXPECTED_BUNDLE_ID",
-            "com.nobiletechnology.jarvis",
+            "ASSEMBLYWRIGHT_EVIDENCE_EXPECTED_BUNDLE_ID",
+            "ASSEMBLYWRIGHT_QA_EXPECTED_BUNDLE_ID",
+            "com.nobiletechnology.assemblywright",
         ),
     )?;
     let expected_bundle_identifier = env_value_alias(
-        "JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID",
-        "JARVIS_QA_EXPECTED_BUNDLE_ID",
-        "com.nobiletechnology.jarvis",
+        "ASSEMBLYWRIGHT_EVIDENCE_EXPECTED_BUNDLE_ID",
+        "ASSEMBLYWRIGHT_QA_EXPECTED_BUNDLE_ID",
+        "com.nobiletechnology.assemblywright",
     );
     require_json_string_value(
         value,
@@ -1287,13 +1288,13 @@ fn validate_signed_distribution_artifact_digests(
         value,
         "artifacts.app_executable_sha256",
         "app executable",
-        &app_path.join("Contents/MacOS/JarvisMacApp"),
+        &app_path.join("Contents/MacOS/AssemblywrightMacApp"),
     )?;
     require_json_sha256_matches_file(
         value,
         "artifacts.bundled_core_sha256",
         "bundled core executable",
-        &app_path.join("Contents/Resources/bin/jarvis-cli"),
+        &app_path.join("Contents/Resources/bin/assemblywright-cli"),
     )?;
     require_json_sha256_matches_json_path(
         value,
@@ -1617,21 +1618,21 @@ fn env_value_alias(primary: &str, alias: &str, default: &str) -> String {
 }
 
 fn expected_live_qa_version() -> String {
-    std::env::var("JARVIS_QA_EXPECTED_VERSION")
-        .or_else(|_| std::env::var("JARVIS_EVIDENCE_VERSION"))
+    std::env::var("ASSEMBLYWRIGHT_QA_EXPECTED_VERSION")
+        .or_else(|_| std::env::var("ASSEMBLYWRIGHT_EVIDENCE_VERSION"))
         .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string())
 }
 
 fn expected_release_evidence_version() -> String {
-    std::env::var("JARVIS_EVIDENCE_VERSION")
+    std::env::var("ASSEMBLYWRIGHT_EVIDENCE_VERSION")
         .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string())
 }
 
 fn expected_release_bundle_id() -> String {
     env_value_alias(
-        "JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID",
-        "JARVIS_QA_EXPECTED_BUNDLE_ID",
-        "com.nobiletechnology.jarvis",
+        "ASSEMBLYWRIGHT_EVIDENCE_EXPECTED_BUNDLE_ID",
+        "ASSEMBLYWRIGHT_QA_EXPECTED_BUNDLE_ID",
+        "com.nobiletechnology.assemblywright",
     )
 }
 
@@ -1956,7 +1957,7 @@ fn release_verification_commands() -> Vec<String> {
         "./scripts/package-distribution.sh --check".to_string(),
         "./scripts/package-distribution.sh --unsigned-launch-check".to_string(),
         "cargo run -p assemblywright-cli -- release signed-distribution-runbook".to_string(),
-        "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh".to_string(),
+        "ASSEMBLYWRIGHT_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' ASSEMBLYWRIGHT_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' ASSEMBLYWRIGHT_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh".to_string(),
         "./scripts/release-external-handoff.sh --write target/release-external-handoff".to_string(),
         "cargo run -p assemblywright-cli -- release live-device-runbook".to_string(),
         "./scripts/release-live-device-qa.sh --check".to_string(),
@@ -1968,7 +1969,7 @@ fn release_verification_commands() -> Vec<String> {
         "./scripts/release-evidence-doctor.sh --check".to_string(),
         "set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle".to_string(),
         "./scripts/release-evidence-doctor.sh --assert-complete".to_string(),
-        "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness".to_string(),
+        "ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness".to_string(),
     ]
 }
 

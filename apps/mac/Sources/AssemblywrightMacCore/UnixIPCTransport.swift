@@ -2,7 +2,7 @@ import Foundation
 import Darwin
 import CoreFoundation
 
-public struct JarvisIPCTransportRequest: Equatable, Sendable {
+public struct AssemblywrightIPCTransportRequest: Equatable, Sendable {
     public let method: String
     public let path: String
     public let authorization: String
@@ -27,13 +27,13 @@ public struct JarvisIPCTransportRequest: Equatable, Sendable {
     }
 }
 
-public struct JarvisIPCTransportResponse: Equatable, Sendable {
+public struct AssemblywrightIPCTransportResponse: Equatable, Sendable {
     public let status: Int
     public let contentType: String?
     public let body: Data
 }
 
-public enum JarvisUnixSocketTransportError: Error, Equatable, Sendable {
+public enum AssemblywrightUnixSocketTransportError: Error, Equatable, Sendable {
     case cancelled
     case invalidRequest
     case invalidSocketPath
@@ -47,27 +47,27 @@ public enum JarvisUnixSocketTransportError: Error, Equatable, Sendable {
     case invalidResponse
 }
 
-public protocol JarvisUnixSocketRequesting: Sendable {
+public protocol AssemblywrightUnixSocketRequesting: Sendable {
     func send(
-        _ request: JarvisIPCTransportRequest,
+        _ request: AssemblywrightIPCTransportRequest,
         to socketURL: URL
-    ) async throws -> JarvisIPCTransportResponse
+    ) async throws -> AssemblywrightIPCTransportResponse
 }
 
-public struct DarwinJarvisUnixSocketTransport: JarvisUnixSocketRequesting {
+public struct DarwinAssemblywrightUnixSocketTransport: AssemblywrightUnixSocketRequesting {
     public static let maximumRequestFrameBytes = 2 * 1024 * 1024
     public static let maximumRequestBodyBytes = 1 * 1024 * 1024
     public static let maximumResponseFrameBytes = 12 * 1024 * 1024
     public static let maximumResponseBodyBytes = 8 * 1024 * 1024
     public static let maximumTimeoutSeconds = 610
     public var timeoutSeconds: Int
-    private let peerIdentityPolicy: @Sendable () throws -> JarvisIPCPeerIdentityPolicy?
-    private let peerIdentityVerifier: any JarvisUnixPeerIdentityVerifying
+    private let peerIdentityPolicy: @Sendable () throws -> AssemblywrightIPCPeerIdentityPolicy?
+    private let peerIdentityVerifier: any AssemblywrightUnixPeerIdentityVerifying
 
     public init(
         timeoutSeconds: Int = 300,
-        peerIdentityPolicy: @escaping @Sendable () throws -> JarvisIPCPeerIdentityPolicy? = { nil },
-        peerIdentityVerifier: any JarvisUnixPeerIdentityVerifying = SecurityJarvisUnixPeerIdentityVerifier()
+        peerIdentityPolicy: @escaping @Sendable () throws -> AssemblywrightIPCPeerIdentityPolicy? = { nil },
+        peerIdentityVerifier: any AssemblywrightUnixPeerIdentityVerifying = SecurityAssemblywrightUnixPeerIdentityVerifier()
     ) {
         self.timeoutSeconds = min(max(timeoutSeconds, 1), Self.maximumTimeoutSeconds)
         self.peerIdentityPolicy = peerIdentityPolicy
@@ -76,15 +76,15 @@ public struct DarwinJarvisUnixSocketTransport: JarvisUnixSocketRequesting {
 
     static func validatePeerUID(_ peerUID: uid_t, currentEUID: uid_t) throws {
         guard peerUID == currentEUID else {
-            throw JarvisUnixSocketTransportError.peerUIDMismatch
+            throw AssemblywrightUnixSocketTransportError.peerUIDMismatch
         }
     }
 
     public func send(
-        _ request: JarvisIPCTransportRequest,
+        _ request: AssemblywrightIPCTransportRequest,
         to socketURL: URL
-    ) async throws -> JarvisIPCTransportResponse {
-        let operation = JarvisUnixSocketOperation(
+    ) async throws -> AssemblywrightIPCTransportResponse {
+        let operation = AssemblywrightUnixSocketOperation(
             request: request,
             socketURL: socketURL,
             timeoutSeconds: timeoutSeconds,
@@ -101,22 +101,22 @@ public struct DarwinJarvisUnixSocketTransport: JarvisUnixSocketRequesting {
     }
 }
 
-private final class JarvisUnixSocketOperation: @unchecked Sendable {
-    private let request: JarvisIPCTransportRequest
+private final class AssemblywrightUnixSocketOperation: @unchecked Sendable {
+    private let request: AssemblywrightIPCTransportRequest
     private let socketURL: URL
     private let deadlineNanoseconds: UInt64
-    private let peerIdentityPolicy: @Sendable () throws -> JarvisIPCPeerIdentityPolicy?
-    private let peerIdentityVerifier: any JarvisUnixPeerIdentityVerifying
+    private let peerIdentityPolicy: @Sendable () throws -> AssemblywrightIPCPeerIdentityPolicy?
+    private let peerIdentityVerifier: any AssemblywrightUnixPeerIdentityVerifying
     private let lock = NSLock()
     private var descriptor: Int32 = -1
     private var cancelled = false
 
     init(
-        request: JarvisIPCTransportRequest,
+        request: AssemblywrightIPCTransportRequest,
         socketURL: URL,
         timeoutSeconds: Int,
-        peerIdentityPolicy: @escaping @Sendable () throws -> JarvisIPCPeerIdentityPolicy?,
-        peerIdentityVerifier: any JarvisUnixPeerIdentityVerifying
+        peerIdentityPolicy: @escaping @Sendable () throws -> AssemblywrightIPCPeerIdentityPolicy?,
+        peerIdentityVerifier: any AssemblywrightUnixPeerIdentityVerifying
     ) {
         self.request = request
         self.socketURL = socketURL
@@ -140,18 +140,18 @@ private final class JarvisUnixSocketOperation: @unchecked Sendable {
         }
     }
 
-    func execute() throws -> JarvisIPCTransportResponse {
+    func execute() throws -> AssemblywrightIPCTransportResponse {
         let payload = try encodeRequest()
-        guard payload.count <= DarwinJarvisUnixSocketTransport.maximumRequestFrameBytes else {
-            throw JarvisUnixSocketTransportError.frameTooLarge
+        guard payload.count <= DarwinAssemblywrightUnixSocketTransport.maximumRequestFrameBytes else {
+            throw AssemblywrightUnixSocketTransportError.frameTooLarge
         }
         let socketDescriptor = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
         guard socketDescriptor >= 0 else {
-            throw JarvisUnixSocketTransportError.connectionFailed
+            throw AssemblywrightUnixSocketTransportError.connectionFailed
         }
         guard install(socketDescriptor) else {
             _ = Darwin.close(socketDescriptor)
-            throw JarvisUnixSocketTransportError.cancelled
+            throw AssemblywrightUnixSocketTransportError.cancelled
         }
         defer { finish(socketDescriptor) }
         try configure(socketDescriptor)
@@ -169,8 +169,8 @@ private final class JarvisUnixSocketOperation: @unchecked Sendable {
         _ = withUnsafeMutableBytes(of: &encodedLength) { responsePrefix.copyBytes(to: $0) }
         let responseLength = Int(UInt32(bigEndian: encodedLength))
         guard responseLength > 0,
-              responseLength <= DarwinJarvisUnixSocketTransport.maximumResponseFrameBytes else {
-            throw JarvisUnixSocketTransportError.frameTooLarge
+              responseLength <= DarwinAssemblywrightUnixSocketTransport.maximumResponseFrameBytes else {
+            throw AssemblywrightUnixSocketTransportError.frameTooLarge
         }
         return try decodeResponse(try readExactly(responseLength, from: socketDescriptor))
     }
@@ -195,7 +195,7 @@ private final class JarvisUnixSocketOperation: @unchecked Sendable {
         lock.lock()
         let isCancelled = cancelled
         lock.unlock()
-        if isCancelled { throw JarvisUnixSocketTransportError.cancelled }
+        if isCancelled { throw AssemblywrightUnixSocketTransportError.cancelled }
     }
 
     private func configure(_ socketDescriptor: Int32) throws {
@@ -207,17 +207,17 @@ private final class JarvisUnixSocketOperation: @unchecked Sendable {
             &enabled,
             socklen_t(MemoryLayout.size(ofValue: enabled))
         ) == 0 else {
-            throw JarvisUnixSocketTransportError.connectionFailed
+            throw AssemblywrightUnixSocketTransportError.connectionFailed
         }
     }
 
     private func connect(_ socketDescriptor: Int32) throws {
         guard socketURL.isFileURL, socketURL.path.hasPrefix("/") else {
-            throw JarvisUnixSocketTransportError.invalidSocketPath
+            throw AssemblywrightUnixSocketTransportError.invalidSocketPath
         }
         let pathBytes = Array(socketURL.path.utf8)
         guard !pathBytes.isEmpty, pathBytes.count < 104 else {
-            throw JarvisUnixSocketTransportError.invalidSocketPath
+            throw AssemblywrightUnixSocketTransportError.invalidSocketPath
         }
         var address = sockaddr_un()
         let addressLength = MemoryLayout.offset(of: \sockaddr_un.sun_path)! + pathBytes.count + 1
@@ -239,9 +239,9 @@ private final class JarvisUnixSocketOperation: @unchecked Sendable {
             if code == EINTR { continue }
             try checkCancellation()
             if Self.isTimeoutError(code) || deadlineExpired {
-                throw JarvisUnixSocketTransportError.timedOut
+                throw AssemblywrightUnixSocketTransportError.timedOut
             }
-            throw JarvisUnixSocketTransportError.connectionFailed
+            throw AssemblywrightUnixSocketTransportError.connectionFailed
         }
     }
 
@@ -249,19 +249,19 @@ private final class JarvisUnixSocketOperation: @unchecked Sendable {
         var peerUID: uid_t = 0
         var peerGID: gid_t = 0
         guard Darwin.getpeereid(socketDescriptor, &peerUID, &peerGID) == 0 else {
-            throw JarvisUnixSocketTransportError.peerIdentityUnavailable
+            throw AssemblywrightUnixSocketTransportError.peerIdentityUnavailable
         }
-        try DarwinJarvisUnixSocketTransport.validatePeerUID(
+        try DarwinAssemblywrightUnixSocketTransport.validatePeerUID(
             peerUID,
             currentEUID: Darwin.geteuid()
         )
         guard let policy = try peerIdentityPolicy() else {
-            throw JarvisUnixSocketTransportError.peerIdentityUnavailable
+            throw AssemblywrightUnixSocketTransportError.peerIdentityUnavailable
         }
         do {
             try peerIdentityVerifier.verifyPeer(on: socketDescriptor, policy: policy)
         } catch {
-            throw JarvisUnixSocketTransportError.peerIdentityUnavailable
+            throw AssemblywrightUnixSocketTransportError.peerIdentityUnavailable
         }
     }
 
@@ -282,9 +282,9 @@ private final class JarvisUnixSocketOperation: @unchecked Sendable {
                     let code = errno
                     try checkCancellation()
                     if Self.isTimeoutError(code) || deadlineExpired {
-                        throw JarvisUnixSocketTransportError.timedOut
+                        throw AssemblywrightUnixSocketTransportError.timedOut
                     }
-                    throw JarvisUnixSocketTransportError.writeFailed
+                    throw AssemblywrightUnixSocketTransportError.writeFailed
                 }
                 written += result
             }
@@ -309,9 +309,9 @@ private final class JarvisUnixSocketOperation: @unchecked Sendable {
                     let code = errno
                     try checkCancellation()
                     if (result < 0 && Self.isTimeoutError(code)) || deadlineExpired {
-                        throw JarvisUnixSocketTransportError.timedOut
+                        throw AssemblywrightUnixSocketTransportError.timedOut
                     }
-                    throw JarvisUnixSocketTransportError.readFailed
+                    throw AssemblywrightUnixSocketTransportError.readFailed
                 }
                 readCount += result
             }
@@ -322,12 +322,12 @@ private final class JarvisUnixSocketOperation: @unchecked Sendable {
     private func shutdownWrite(_ socketDescriptor: Int32) throws {
         try checkCancellation()
         guard !deadlineExpired else {
-            throw JarvisUnixSocketTransportError.timedOut
+            throw AssemblywrightUnixSocketTransportError.timedOut
         }
         while Darwin.shutdown(socketDescriptor, SHUT_WR) != 0 {
             if errno == EINTR { continue }
             try checkCancellation()
-            throw JarvisUnixSocketTransportError.writeFailed
+            throw AssemblywrightUnixSocketTransportError.writeFailed
         }
     }
 
@@ -339,7 +339,7 @@ private final class JarvisUnixSocketOperation: @unchecked Sendable {
         try checkCancellation()
         let now = DispatchTime.now().uptimeNanoseconds
         guard now < deadlineNanoseconds else {
-            throw JarvisUnixSocketTransportError.timedOut
+            throw AssemblywrightUnixSocketTransportError.timedOut
         }
         let remaining = deadlineNanoseconds - now
         var seconds = remaining / 1_000_000_000
@@ -368,7 +368,7 @@ private final class JarvisUnixSocketOperation: @unchecked Sendable {
                 try waitForReady(POLLIN, on: socketDescriptor)
                 return
             }
-            throw JarvisUnixSocketTransportError.connectionFailed
+            throw AssemblywrightUnixSocketTransportError.connectionFailed
         }
     }
 
@@ -377,7 +377,7 @@ private final class JarvisUnixSocketOperation: @unchecked Sendable {
             try checkCancellation()
             let now = DispatchTime.now().uptimeNanoseconds
             guard now < deadlineNanoseconds else {
-                throw JarvisUnixSocketTransportError.timedOut
+                throw AssemblywrightUnixSocketTransportError.timedOut
             }
             let remaining = deadlineNanoseconds - now
             let milliseconds = min(
@@ -391,11 +391,11 @@ private final class JarvisUnixSocketOperation: @unchecked Sendable {
             )
             let result = Darwin.poll(&state, 1, Int32(milliseconds))
             if result < 0, errno == EINTR { continue }
-            if result == 0 { throw JarvisUnixSocketTransportError.timedOut }
+            if result == 0 { throw AssemblywrightUnixSocketTransportError.timedOut }
             guard result > 0,
                   state.revents & Int16(POLLNVAL | POLLERR) == 0 else {
                 try checkCancellation()
-                throw JarvisUnixSocketTransportError.connectionFailed
+                throw AssemblywrightUnixSocketTransportError.connectionFailed
             }
             if state.revents & Int16(event | POLLHUP) != 0 { return }
         }
@@ -414,8 +414,8 @@ private final class JarvisUnixSocketOperation: @unchecked Sendable {
               !request.authorization.isEmpty, request.authorization.utf8.count <= 1024,
               request.accept?.utf8.count ?? 0 <= 1024,
               request.contentType?.utf8.count ?? 0 <= 1024,
-              request.body?.count ?? 0 <= DarwinJarvisUnixSocketTransport.maximumRequestBodyBytes else {
-            throw JarvisUnixSocketTransportError.invalidRequest
+              request.body?.count ?? 0 <= DarwinAssemblywrightUnixSocketTransport.maximumRequestBodyBytes else {
+            throw AssemblywrightUnixSocketTransportError.invalidRequest
         }
         let object: [String: Any] = [
             "version": 1,
@@ -427,12 +427,12 @@ private final class JarvisUnixSocketOperation: @unchecked Sendable {
             "body_base64": request.body?.base64EncodedString() ?? ""
         ]
         guard JSONSerialization.isValidJSONObject(object) else {
-            throw JarvisUnixSocketTransportError.invalidRequest
+            throw AssemblywrightUnixSocketTransportError.invalidRequest
         }
         return try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
     }
 
-    private func decodeResponse(_ data: Data) throws -> JarvisIPCTransportResponse {
+    private func decodeResponse(_ data: Data) throws -> AssemblywrightIPCTransportResponse {
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(object.keys) == Set(["version", "status", "content_type", "body_base64"]),
               Self.strictJSONInteger(object["version"]) == 1,
@@ -440,7 +440,7 @@ private final class JarvisUnixSocketOperation: @unchecked Sendable {
               (100...599).contains(status),
               object.keys.contains("content_type"),
               object.keys.contains("body_base64") else {
-            throw JarvisUnixSocketTransportError.invalidResponse
+            throw AssemblywrightUnixSocketTransportError.invalidResponse
         }
         let contentType: String?
         if object["content_type"] is NSNull {
@@ -448,17 +448,17 @@ private final class JarvisUnixSocketOperation: @unchecked Sendable {
         } else if let value = object["content_type"] as? String, value.utf8.count <= 256 {
             contentType = value
         } else {
-            throw JarvisUnixSocketTransportError.invalidResponse
+            throw AssemblywrightUnixSocketTransportError.invalidResponse
         }
         let body: Data
         if let value = object["body_base64"] as? String,
            let decoded = Data(base64Encoded: value),
-           decoded.count <= DarwinJarvisUnixSocketTransport.maximumResponseBodyBytes {
+           decoded.count <= DarwinAssemblywrightUnixSocketTransport.maximumResponseBodyBytes {
             body = decoded
         } else {
-            throw JarvisUnixSocketTransportError.invalidResponse
+            throw AssemblywrightUnixSocketTransportError.invalidResponse
         }
-        return JarvisIPCTransportResponse(status: status, contentType: contentType, body: body)
+        return AssemblywrightIPCTransportResponse(status: status, contentType: contentType, body: body)
     }
 
     private static func strictJSONInteger(_ value: Any?) -> Int? {

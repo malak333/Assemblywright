@@ -4,7 +4,7 @@
 <dict>
   <key>keychain-access-groups</key>
   <array>
-    <string>$(AppIdentifierPrefix)com.nobiletechnology.jarvis.developer-bridge.cli</string>
+    <string>$(AppIdentifierPrefix)com.nobiletechnology.assemblywright.developer-bridge.cli</string>
   </array>
 </dict>
 </plist>

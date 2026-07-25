@@ -41,7 +41,7 @@ fn fixture_capability_and_job_are_exact_and_bounded() {
         .expect("exact public synthetic fixture");
 
     let mut wrong_model = CapabilityDescriptor::fixture_reasoning();
-    wrong_model.model = "jarvis-fixture-v2".to_string();
+    wrong_model.model = "assemblywright-fixture-v2".to_string();
     assert_eq!(
         wrong_model.validate(),
         Err(ProtocolError::InvalidFixtureCapability)
@@ -126,37 +126,57 @@ fn fixture_result_revalidates_the_stored_job_and_exact_output_contract() {
     );
 }
 
-// The fixture capability's provider and model are protocol-version-1 wire
-// values, not cosmetic names. An enrolled Mac agent advertises them verbatim and
-// the master rejects anything that does not match exactly, so renaming them is a
-// breaking wire change that needs a protocol version bump. The Assemblywright
-// rename deliberately left them alone; pin them so a later rename pass fails
-// here instead of against an enrolled device.
+// The fixture capability's provider and model are wire values, not cosmetic
+// names: an enrolled Mac agent advertises them verbatim and the master rejects
+// anything that is not an exact match. The rename changed them, which is why
+// PROTOCOL_VERSION moved to 2 — a peer still on version 1 advertises the former
+// provider and must be rejected on version rather than deep inside capability
+// validation. Pin the pairing so the two can never drift apart again.
 #[test]
-fn fixture_capability_identity_is_a_frozen_protocol_v1_contract() {
-    assert_eq!(PROTOCOL_VERSION, 1);
+fn fixture_capability_identity_is_bound_to_protocol_version_2() {
+    assert_eq!(PROTOCOL_VERSION, 2);
     assert_eq!(FIXTURE_REASONING_CAPABILITY_ID, "fixture.reasoning");
-    assert_eq!(FIXTURE_REASONING_PROVIDER, "jarvis-fixture");
-    assert_eq!(FIXTURE_REASONING_MODEL, "jarvis-fixture-v1");
+    assert_eq!(FIXTURE_REASONING_PROVIDER, "assemblywright-fixture");
+    assert_eq!(FIXTURE_REASONING_MODEL, "assemblywright-fixture-v1");
 
     let advertised = CapabilityDescriptor::fixture_reasoning();
     assert_eq!(advertised.id, FIXTURE_REASONING_CAPABILITY_ID);
     assert_eq!(advertised.provider, FIXTURE_REASONING_PROVIDER);
     assert_eq!(advertised.model, FIXTURE_REASONING_MODEL);
+    advertised.validate().expect("current fixture capability");
 
-    advertised.validate().expect("frozen fixture capability");
+    // Any other provider or model for this capability id fails closed, including
+    // whatever a differently-named build would advertise.
+    for provider in ["other-fixture", "fixture"] {
+        let mut mismatched = CapabilityDescriptor::fixture_reasoning();
+        mismatched.provider = provider.to_string();
+        assert_eq!(
+            mismatched.validate(),
+            Err(ProtocolError::InvalidFixtureCapability),
+            "provider {provider:?} must not satisfy the fixture capability"
+        );
+    }
+    for model in ["assemblywright-fixture-v2", "fixture-v1"] {
+        let mut mismatched = CapabilityDescriptor::fixture_reasoning();
+        mismatched.model = model.to_string();
+        assert_eq!(
+            mismatched.validate(),
+            Err(ProtocolError::InvalidFixtureCapability),
+            "model {model:?} must not satisfy the fixture capability"
+        );
+    }
 
-    // A renamed provider or model must fail closed rather than be tolerated.
-    let mut renamed_provider = CapabilityDescriptor::fixture_reasoning();
-    renamed_provider.provider = "assemblywright-fixture".to_string();
-    assert_eq!(
-        renamed_provider.validate(),
-        Err(ProtocolError::InvalidFixtureCapability)
-    );
-    let mut renamed_model = CapabilityDescriptor::fixture_reasoning();
-    renamed_model.model = "assemblywright-fixture-v1".to_string();
-    assert_eq!(
-        renamed_model.validate(),
-        Err(ProtocolError::InvalidFixtureCapability)
-    );
+    // An empty provider or model is rejected earlier, as an empty field rather
+    // than a fixture mismatch. Both are fail-closed, so assert only that.
+    for blanked in ["provider", "model"] {
+        let mut mismatched = CapabilityDescriptor::fixture_reasoning();
+        match blanked {
+            "provider" => mismatched.provider.clear(),
+            _ => mismatched.model.clear(),
+        }
+        assert!(
+            mismatched.validate().is_err(),
+            "an empty {blanked} must fail closed"
+        );
+    }
 }

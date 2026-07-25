@@ -4,11 +4,11 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-APP_PATH="${JARVIS_QA_INSTALLED_APP_PATH:-/Applications/Assemblywright.app}"
-REPORT_PATH="${JARVIS_QA_REPORT_PATH:-$ROOT_DIR/target/release-live-device-qa-report.json}"
-EXPECTED_BUNDLE_ID="${JARVIS_QA_EXPECTED_BUNDLE_ID:-com.nobiletechnology.jarvis}"
-EXPECTED_VERSION="${JARVIS_QA_EXPECTED_VERSION:-$("$ROOT_DIR/scripts/release-version.sh")}"
-SIGNED_PROVENANCE_PATH="${JARVIS_QA_SIGNED_PROVENANCE_REPORT:-$ROOT_DIR/target/distribution/Assemblywright-$EXPECTED_VERSION-signed-provenance.json}"
+APP_PATH="${ASSEMBLYWRIGHT_QA_INSTALLED_APP_PATH:-/Applications/Assemblywright.app}"
+REPORT_PATH="${ASSEMBLYWRIGHT_QA_REPORT_PATH:-$ROOT_DIR/target/release-live-device-qa-report.json}"
+EXPECTED_BUNDLE_ID="${ASSEMBLYWRIGHT_QA_EXPECTED_BUNDLE_ID:-com.nobiletechnology.assemblywright}"
+EXPECTED_VERSION="${ASSEMBLYWRIGHT_QA_EXPECTED_VERSION:-$("$ROOT_DIR/scripts/release-version.sh")}"
+SIGNED_PROVENANCE_PATH="${ASSEMBLYWRIGHT_QA_SIGNED_PROVENANCE_REPORT:-$ROOT_DIR/target/distribution/Assemblywright-$EXPECTED_VERSION-signed-provenance.json}"
 CHECK_ONLY=false
 ASSERT_COMPLETE=false
 SELF_TEST=false
@@ -38,21 +38,21 @@ that must be performed on a clean Mac profile before any production-ready claim.
 
 --assert-complete verifies that the installed app exists and that the owner has
 explicitly recorded each live validation flag below as true:
-  JARVIS_QA_CLEAN_PROFILE_VALIDATED=true
-  JARVIS_QA_FINDER_LAUNCH_VALIDATED=true
-  JARVIS_QA_RESTART_VALIDATED=true
-  JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true
+  ASSEMBLYWRIGHT_QA_CLEAN_PROFILE_VALIDATED=true
+  ASSEMBLYWRIGHT_QA_FINDER_LAUNCH_VALIDATED=true
+  ASSEMBLYWRIGHT_QA_RESTART_VALIDATED=true
+  ASSEMBLYWRIGHT_QA_MANUAL_RELEASE_QA_VALIDATED=true
 
 The owner must also record non-empty live QA evidence notes:
-  JARVIS_QA_OWNER_NAME
-  JARVIS_QA_DEVICE_LABEL
-  JARVIS_QA_PROFILE_LABEL
-  JARVIS_QA_DEVICE_CHECK_STARTED_AT
-  JARVIS_QA_DEVICE_CHECK_COMPLETED_AT
-  JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE
-  JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE
-  JARVIS_QA_RESTART_EVIDENCE_NOTE
-  JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE
+  ASSEMBLYWRIGHT_QA_OWNER_NAME
+  ASSEMBLYWRIGHT_QA_DEVICE_LABEL
+  ASSEMBLYWRIGHT_QA_PROFILE_LABEL
+  ASSEMBLYWRIGHT_QA_DEVICE_CHECK_STARTED_AT
+  ASSEMBLYWRIGHT_QA_DEVICE_CHECK_COMPLETED_AT
+  ASSEMBLYWRIGHT_QA_CLEAN_PROFILE_EVIDENCE_NOTE
+  ASSEMBLYWRIGHT_QA_FINDER_LAUNCH_EVIDENCE_NOTE
+  ASSEMBLYWRIGHT_QA_RESTART_EVIDENCE_NOTE
+  ASSEMBLYWRIGHT_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE
 
 Owner-recorded evidence notes must contain non-placeholder release evidence, not
 values such as `TODO`, `TBD`, `pending`, `n/a`, `fixture`, or `self-test
@@ -62,16 +62,16 @@ fixture`. Other owner metadata fields must contain non-whitespace text.
 the assertion/report mechanics without claiming live-device validation.
 
 --write-template PATH writes a sourceable shell env template containing every
-JARVIS_QA_* field required by --assert-complete. Edit the template on the
+ASSEMBLYWRIGHT_QA_* field required by --assert-complete. Edit the template on the
 validated release machine, source it, and then run --assert-complete.
 
 Optional:
-  JARVIS_QA_INSTALLED_APP_PATH     Defaults to /Applications/Assemblywright.app
-  JARVIS_QA_REPORT_PATH            Defaults to target/release-live-device-qa-report.json
-  JARVIS_QA_SIGNED_PROVENANCE_REPORT
+  ASSEMBLYWRIGHT_QA_INSTALLED_APP_PATH     Defaults to /Applications/Assemblywright.app
+  ASSEMBLYWRIGHT_QA_REPORT_PATH            Defaults to target/release-live-device-qa-report.json
+  ASSEMBLYWRIGHT_QA_SIGNED_PROVENANCE_REPORT
                                     Defaults to target/distribution/Assemblywright-<version>-signed-provenance.json
-  JARVIS_QA_EXPECTED_BUNDLE_ID     Defaults to com.nobiletechnology.jarvis
-  JARVIS_QA_EXPECTED_VERSION       Defaults to the Rust package release version
+  ASSEMBLYWRIGHT_QA_EXPECTED_BUNDLE_ID     Defaults to com.nobiletechnology.assemblywright
+  ASSEMBLYWRIGHT_QA_EXPECTED_VERSION       Defaults to the Rust package release version
 
 This script records manual proof boundaries only. It does not perform Developer
 ID signing, notarization, App Store review, malware analysis, marketplace
@@ -289,7 +289,7 @@ require_plist_value_equals() {
 
 validate_installed_app_bundle_metadata() {
   local info_plist="$APP_PATH/Contents/Info.plist"
-  local core_path="$APP_PATH/Contents/Resources/bin/jarvis-cli"
+  local core_path="$APP_PATH/Contents/Resources/bin/assemblywright-cli"
   plutil -lint "$info_plist" >/dev/null
   APP_BUNDLE_ID="$(plist_value "$info_plist" CFBundleIdentifier)"
   APP_SHORT_VERSION="$(plist_value "$info_plist" CFBundleShortVersionString)"
@@ -331,7 +331,7 @@ validate_installed_app_executable_binding() {
   [[ -f "$SIGNED_PROVENANCE_PATH" ]] ||
     fail "signed-distribution provenance report is missing: $SIGNED_PROVENANCE_PATH"
 
-  APP_EXECUTABLE_PATH="$APP_PATH/Contents/MacOS/JarvisMacApp"
+  APP_EXECUTABLE_PATH="$APP_PATH/Contents/MacOS/AssemblywrightMacApp"
   [[ -x "$APP_EXECUTABLE_PATH" ]] ||
     fail "installed app executable is missing or not executable: $APP_EXECUTABLE_PATH"
   APP_EXECUTABLE_SHA256="$(file_sha256 "$APP_EXECUTABLE_PATH")"
@@ -346,7 +346,7 @@ validate_installed_app_executable_binding() {
 
   provenance_app_path="$(json_string_value "$SIGNED_PROVENANCE_PATH" artifacts.app_path)"
   provenance_executable_path="$(json_string_value "$SIGNED_PROVENANCE_PATH" artifacts.app_executable_path)"
-  [[ "$provenance_executable_path" == "$provenance_app_path/Contents/MacOS/JarvisMacApp" ]] ||
+  [[ "$provenance_executable_path" == "$provenance_app_path/Contents/MacOS/AssemblywrightMacApp" ]] ||
     fail "signed provenance artifacts.app_executable_path is not inside artifacts.app_path"
   provenance_executable_sha256="$(json_string_value "$SIGNED_PROVENANCE_PATH" artifacts.app_executable_sha256)"
   [[ "$APP_EXECUTABLE_SHA256" == "$provenance_executable_sha256" ]] ||
@@ -413,13 +413,13 @@ write_report() {
   local self_test_fixture
   require_command python3
   generated_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-  self_test_fixture="${JARVIS_QA_SELF_TEST_FIXTURE:-false}"
+  self_test_fixture="${ASSEMBLYWRIGHT_QA_SELF_TEST_FIXTURE:-false}"
   case "$self_test_fixture" in
     true|false) ;;
-    *) fail "JARVIS_QA_SELF_TEST_FIXTURE must be true or false" ;;
+    *) fail "ASSEMBLYWRIGHT_QA_SELF_TEST_FIXTURE must be true or false" ;;
   esac
-  if [[ "$self_test_fixture" == true && "${JARVIS_QA_INTERNAL_SELF_TEST:-false}" != true ]]; then
-    fail "JARVIS_QA_SELF_TEST_FIXTURE is reserved for --self-test and cannot be used for release evidence"
+  if [[ "$self_test_fixture" == true && "${ASSEMBLYWRIGHT_QA_INTERNAL_SELF_TEST:-false}" != true ]]; then
+    fail "ASSEMBLYWRIGHT_QA_SELF_TEST_FIXTURE is reserved for --self-test and cannot be used for release evidence"
   fi
   escaped_app_path="$(json_escape "$APP_PATH")"
   escaped_bundle_id="$(json_escape "$APP_BUNDLE_ID")"
@@ -435,15 +435,15 @@ write_report() {
   escaped_app_executable_cdhash="$(json_escape "$APP_EXECUTABLE_CDHASH")"
   escaped_signed_provenance_path="$(json_escape "$SIGNED_PROVENANCE_PATH")"
   escaped_signed_provenance_sha256="$(json_escape "$SIGNED_PROVENANCE_SHA256")"
-  escaped_owner_name="$(json_escape "$JARVIS_QA_OWNER_NAME")"
-  escaped_device_label="$(json_escape "$JARVIS_QA_DEVICE_LABEL")"
-  escaped_profile_label="$(json_escape "$JARVIS_QA_PROFILE_LABEL")"
-  escaped_started_at="$(json_escape "$JARVIS_QA_DEVICE_CHECK_STARTED_AT")"
-  escaped_completed_at="$(json_escape "$JARVIS_QA_DEVICE_CHECK_COMPLETED_AT")"
-  escaped_clean_profile_note="$(json_escape "$JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE")"
-  escaped_finder_launch_note="$(json_escape "$JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE")"
-  escaped_restart_note="$(json_escape "$JARVIS_QA_RESTART_EVIDENCE_NOTE")"
-  escaped_manual_release_qa_note="$(json_escape "$JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE")"
+  escaped_owner_name="$(json_escape "$ASSEMBLYWRIGHT_QA_OWNER_NAME")"
+  escaped_device_label="$(json_escape "$ASSEMBLYWRIGHT_QA_DEVICE_LABEL")"
+  escaped_profile_label="$(json_escape "$ASSEMBLYWRIGHT_QA_PROFILE_LABEL")"
+  escaped_started_at="$(json_escape "$ASSEMBLYWRIGHT_QA_DEVICE_CHECK_STARTED_AT")"
+  escaped_completed_at="$(json_escape "$ASSEMBLYWRIGHT_QA_DEVICE_CHECK_COMPLETED_AT")"
+  escaped_clean_profile_note="$(json_escape "$ASSEMBLYWRIGHT_QA_CLEAN_PROFILE_EVIDENCE_NOTE")"
+  escaped_finder_launch_note="$(json_escape "$ASSEMBLYWRIGHT_QA_FINDER_LAUNCH_EVIDENCE_NOTE")"
+  escaped_restart_note="$(json_escape "$ASSEMBLYWRIGHT_QA_RESTART_EVIDENCE_NOTE")"
+  escaped_manual_release_qa_note="$(json_escape "$ASSEMBLYWRIGHT_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE")"
   escaped_boundary="$(json_escape "Owner-recorded clean-profile install, Finder launch, restart, and manual release QA flags bound at report generation to the exact installed app executable bytes and Developer ID code identity recorded by signed provenance. This is point-in-time candidate binding, not installation provenance, continuous filesystem integrity, App Store review, or OS-level sandbox/egress enforcement.")"
 
   mkdir -p "$(dirname "$REPORT_PATH")"
@@ -508,12 +508,12 @@ write_env_template() {
 # or LaunchServices.
 #
 # For the operator evidence session, launch Assemblywright with the exact opt-in
-# JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true. Then set JARVIS_RELEASE_CORE_ENDPOINT
-# to the running release core endpoint and JARVIS_IPC_TOKEN_FILE to the app-owned
+# ASSEMBLYWRIGHT_MAC_ENABLE_IPC_CLI_HANDOFF=true. Then set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT
+# to the running release core endpoint and ASSEMBLYWRIGHT_IPC_TOKEN_FILE to the app-owned
 # handoff file, source this template, and capture the command evidence ID from
 # that same authenticated endpoint:
-#   cargo run -p assemblywright-cli -- command "status check" --endpoint "\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}" --json
-# Use the returned task ID as JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:<uuid>",
+#   cargo run -p assemblywright-cli -- command "status check" --endpoint "\${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}" --json
+# Use the returned task ID as ASSEMBLYWRIGHT_QA_COMMAND_RESULT_EVIDENCE_ID="task:<uuid>",
 # or use an audit ID from task-associated command/audit evidence as "audit:<uuid>".
 #
 # After filling every field below, run:
@@ -521,36 +521,36 @@ write_env_template() {
 #   source ./target/release-live-device-qa.env
 #   set +a
 #   ./scripts/release-live-device-qa.sh --assert-complete
-#   JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint "\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"
-#   JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness --endpoint "\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"
+#   ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint "\${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}"
+#   ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness --endpoint "\${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}"
 #
 # Keep all validation flags false until that check has actually been observed
 # on the signed, notarized app installed in a clean macOS profile.
-# Do not set JARVIS_QA_SELF_TEST_FIXTURE in release evidence; it is reserved for
+# Do not set ASSEMBLYWRIGHT_QA_SELF_TEST_FIXTURE in release evidence; it is reserved for
 # this script's internal fake-fixture self-test.
 
-JARVIS_QA_INSTALLED_APP_PATH="/Applications/Assemblywright.app"
-JARVIS_QA_REPORT_PATH="target/release-live-device-qa-report.json"
-JARVIS_QA_SIGNED_PROVENANCE_REPORT="target/distribution/Assemblywright-$EXPECTED_VERSION-signed-provenance.json"
-JARVIS_RELEASE_CORE_ENDPOINT="" # release core endpoint used for command evidence and external readiness checks
-JARVIS_IPC_TOKEN_FILE="\$HOME/Library/Application Support/Jarvis/ipc-session-auth.json" # path only; never copy the bearer value into this template
-JARVIS_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.jarvis"
-JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION"
+ASSEMBLYWRIGHT_QA_INSTALLED_APP_PATH="/Applications/Assemblywright.app"
+ASSEMBLYWRIGHT_QA_REPORT_PATH="target/release-live-device-qa-report.json"
+ASSEMBLYWRIGHT_QA_SIGNED_PROVENANCE_REPORT="target/distribution/Assemblywright-$EXPECTED_VERSION-signed-provenance.json"
+ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT="" # release core endpoint used for command evidence and external readiness checks
+ASSEMBLYWRIGHT_IPC_TOKEN_FILE="\$HOME/Library/Application Support/Assemblywright/ipc-session-auth.json" # path only; never copy the bearer value into this template
+ASSEMBLYWRIGHT_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.assemblywright"
+ASSEMBLYWRIGHT_QA_EXPECTED_VERSION="$EXPECTED_VERSION"
 
-JARVIS_QA_CLEAN_PROFILE_VALIDATED=false
-JARVIS_QA_FINDER_LAUNCH_VALIDATED=false
-JARVIS_QA_RESTART_VALIDATED=false
-JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=false
+ASSEMBLYWRIGHT_QA_CLEAN_PROFILE_VALIDATED=false
+ASSEMBLYWRIGHT_QA_FINDER_LAUNCH_VALIDATED=false
+ASSEMBLYWRIGHT_QA_RESTART_VALIDATED=false
+ASSEMBLYWRIGHT_QA_MANUAL_RELEASE_QA_VALIDATED=false
 
-JARVIS_QA_OWNER_NAME=""
-JARVIS_QA_DEVICE_LABEL=""
-JARVIS_QA_PROFILE_LABEL=""
-JARVIS_QA_DEVICE_CHECK_STARTED_AT=""
-JARVIS_QA_DEVICE_CHECK_COMPLETED_AT=""
-JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE=""
-JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE=""
-JARVIS_QA_RESTART_EVIDENCE_NOTE=""
-JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE=""
+ASSEMBLYWRIGHT_QA_OWNER_NAME=""
+ASSEMBLYWRIGHT_QA_DEVICE_LABEL=""
+ASSEMBLYWRIGHT_QA_PROFILE_LABEL=""
+ASSEMBLYWRIGHT_QA_DEVICE_CHECK_STARTED_AT=""
+ASSEMBLYWRIGHT_QA_DEVICE_CHECK_COMPLETED_AT=""
+ASSEMBLYWRIGHT_QA_CLEAN_PROFILE_EVIDENCE_NOTE=""
+ASSEMBLYWRIGHT_QA_FINDER_LAUNCH_EVIDENCE_NOTE=""
+ASSEMBLYWRIGHT_QA_RESTART_EVIDENCE_NOTE=""
+ASSEMBLYWRIGHT_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE=""
 EOF
 }
 
@@ -599,7 +599,7 @@ fi
 require_command plutil
 require_command grep
 
-ENTITLEMENTS="$ROOT_DIR/packaging/Jarvis.entitlements"
+ENTITLEMENTS="$ROOT_DIR/packaging/Assemblywright.entitlements"
 INFO_TEMPLATE_HINT="$ROOT_DIR/scripts/package-distribution.sh"
 
 plutil -lint "$ENTITLEMENTS" >/dev/null
@@ -612,9 +612,9 @@ if [[ "$WRITE_TEMPLATE" == true ]]; then
 fi
 
 if [[ "$SELF_TEST" == true ]]; then
-  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/jarvis-live-qa-self-test.XXXXXX")"
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/assemblywright-live-qa-self-test.XXXXXX")"
   trap 'rm -rf "$tmp_dir"' EXIT
-  export JARVIS_QA_INTERNAL_SELF_TEST=true
+  export ASSEMBLYWRIGHT_QA_INTERNAL_SELF_TEST=true
   fixture_app="$tmp_dir/Assemblywright.app"
   fixture_report="$tmp_dir/release-live-device-qa-report.json"
   fixture_template="$tmp_dir/release-live-device-qa.env"
@@ -627,9 +627,9 @@ if [[ "$SELF_TEST" == true ]]; then
 <plist version="1.0">
 <dict>
   <key>CFBundleExecutable</key>
-  <string>JarvisMacApp</string>
+  <string>AssemblywrightMacApp</string>
   <key>CFBundleIdentifier</key>
-  <string>com.nobiletechnology.jarvis.selftest</string>
+  <string>com.nobiletechnology.assemblywright.selftest</string>
   <key>CFBundleShortVersionString</key>
   <string>$EXPECTED_VERSION</string>
   <key>CFBundleVersion</key>
@@ -637,19 +637,19 @@ if [[ "$SELF_TEST" == true ]]; then
 </dict>
 </plist>
 PLIST
-  touch "$fixture_app/Contents/MacOS/JarvisMacApp"
-  printf '#!/usr/bin/env sh\nprintf "assemblywright %s\\n"\n' "$EXPECTED_VERSION" >"$fixture_app/Contents/Resources/bin/jarvis-cli"
-  chmod 755 "$fixture_app/Contents/MacOS/JarvisMacApp" "$fixture_app/Contents/Resources/bin/jarvis-cli"
+  touch "$fixture_app/Contents/MacOS/AssemblywrightMacApp"
+  printf '#!/usr/bin/env sh\nprintf "assemblywright %s\\n"\n' "$EXPECTED_VERSION" >"$fixture_app/Contents/Resources/bin/assemblywright-cli"
+  chmod 755 "$fixture_app/Contents/MacOS/AssemblywrightMacApp" "$fixture_app/Contents/Resources/bin/assemblywright-cli"
 
   cat >"$stub_dir/codesign" <<'SH'
 #!/usr/bin/env bash
 if [[ " $* " == *" --verify "* ]]; then
   exit 0
 fi
-identifier="${JARVIS_QA_STUB_APP_IDENTIFIER:-com.nobiletechnology.jarvis.selftest}"
-team_identifier="${JARVIS_QA_STUB_TEAM_IDENTIFIER:-9VZ742YKV4}"
-cdhash="${JARVIS_QA_STUB_CDHASH:-0123456789abcdef0123456789abcdef01234567}"
-printf 'Executable=/fixture/JarvisMacApp\nIdentifier=%s\nAuthority=Developer ID Application: Assemblywright QA Fixture\nTeamIdentifier=%s\nCDHash=%s\n' \
+identifier="${ASSEMBLYWRIGHT_QA_STUB_APP_IDENTIFIER:-com.nobiletechnology.assemblywright.selftest}"
+team_identifier="${ASSEMBLYWRIGHT_QA_STUB_TEAM_IDENTIFIER:-9VZ742YKV4}"
+cdhash="${ASSEMBLYWRIGHT_QA_STUB_CDHASH:-0123456789abcdef0123456789abcdef01234567}"
+printf 'Executable=/fixture/AssemblywrightMacApp\nIdentifier=%s\nAuthority=Developer ID Application: Assemblywright QA Fixture\nTeamIdentifier=%s\nCDHash=%s\n' \
   "$identifier" "$team_identifier" "$cdhash"
 SH
   cat >"$stub_dir/xcrun" <<'SH'
@@ -667,74 +667,74 @@ SH
   chmod 755 "$stub_dir/codesign" "$stub_dir/xcrun" "$stub_dir/spctl"
   export PATH="$stub_dir:$PATH"
 
-  fixture_app_executable_sha256="$(file_sha256 "$fixture_app/Contents/MacOS/JarvisMacApp")"
+  fixture_app_executable_sha256="$(file_sha256 "$fixture_app/Contents/MacOS/AssemblywrightMacApp")"
   cat >"$fixture_signed_provenance" <<JSON
 {
   "schema_version": 1,
   "evidence_type": "signed_distribution_provenance",
   "version": "$EXPECTED_VERSION",
-  "bundle_identifier": "com.nobiletechnology.jarvis.selftest",
+  "bundle_identifier": "com.nobiletechnology.assemblywright.selftest",
   "artifacts": {
     "app_path": "$fixture_app",
-    "app_executable_path": "$fixture_app/Contents/MacOS/JarvisMacApp",
+    "app_executable_path": "$fixture_app/Contents/MacOS/AssemblywrightMacApp",
     "app_executable_sha256": "$fixture_app_executable_sha256"
   },
   "signing": {
-    "app_executable_identifier": "com.nobiletechnology.jarvis.selftest",
+    "app_executable_identifier": "com.nobiletechnology.assemblywright.selftest",
     "app_executable_team_identifier": "9VZ742YKV4",
     "app_executable_cdhash": "0123456789abcdef0123456789abcdef01234567"
   }
 }
 JSON
-  export JARVIS_QA_SIGNED_PROVENANCE_REPORT="$fixture_signed_provenance"
+  export ASSEMBLYWRIGHT_QA_SIGNED_PROVENANCE_REPORT="$fixture_signed_provenance"
 
   "$0" --write-template "$fixture_template" >/dev/null
-  require_file_contains "live QA env template" "$fixture_template" "JARVIS_QA_EXPECTED_VERSION=\"$EXPECTED_VERSION\""
-  require_file_contains "live QA env template" "$fixture_template" "JARVIS_QA_SIGNED_PROVENANCE_REPORT=\"target/distribution/Assemblywright-$EXPECTED_VERSION-signed-provenance.json\""
-  if grep -F 'JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION"' "$fixture_template" >/dev/null 2>&1; then
+  require_file_contains "live QA env template" "$fixture_template" "ASSEMBLYWRIGHT_QA_EXPECTED_VERSION=\"$EXPECTED_VERSION\""
+  require_file_contains "live QA env template" "$fixture_template" "ASSEMBLYWRIGHT_QA_SIGNED_PROVENANCE_REPORT=\"target/distribution/Assemblywright-$EXPECTED_VERSION-signed-provenance.json\""
+  if grep -F 'ASSEMBLYWRIGHT_QA_EXPECTED_VERSION="$EXPECTED_VERSION"' "$fixture_template" >/dev/null 2>&1; then
     fail "live QA self-test expected env template to materialize the expected version"
   fi
-  require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_CLEAN_PROFILE_VALIDATED=false'
-  require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE=""'
-  require_file_contains "live QA env template" "$fixture_template" 'JARVIS_RELEASE_CORE_ENDPOINT=""'
-  require_file_contains "live QA env template" "$fixture_template" 'JARVIS_IPC_TOKEN_FILE="$HOME/Library/Application Support/Jarvis/ipc-session-auth.json"'
+  require_file_contains "live QA env template" "$fixture_template" 'ASSEMBLYWRIGHT_QA_CLEAN_PROFILE_VALIDATED=false'
+  require_file_contains "live QA env template" "$fixture_template" 'ASSEMBLYWRIGHT_QA_CLEAN_PROFILE_EVIDENCE_NOTE=""'
+  require_file_contains "live QA env template" "$fixture_template" 'ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT=""'
+  require_file_contains "live QA env template" "$fixture_template" 'ASSEMBLYWRIGHT_IPC_TOKEN_FILE="$HOME/Library/Application Support/Assemblywright/ipc-session-auth.json"'
   require_file_contains "live QA env template" "$fixture_template" './scripts/release-live-device-qa.sh --assert-complete'
-  require_file_contains "live QA env template" "$fixture_template" 'cargo run -p assemblywright-cli -- command "status check" --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}" --json'
-  require_file_contains "live QA env template" "$fixture_template" 'JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"'
-  require_file_contains "live QA env template" "$fixture_template" 'JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"'
-  require_file_contains "live QA env template" "$fixture_template" 'Do not set JARVIS_QA_SELF_TEST_FIXTURE in release evidence'
-  if grep -F 'JARVIS_QA_CLEAN_PROFILE_VALIDATED=true' "$fixture_template" >/dev/null 2>&1; then
+  require_file_contains "live QA env template" "$fixture_template" 'cargo run -p assemblywright-cli -- command "status check" --endpoint "${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}" --json'
+  require_file_contains "live QA env template" "$fixture_template" 'ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint "${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}"'
+  require_file_contains "live QA env template" "$fixture_template" 'ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness --endpoint "${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}"'
+  require_file_contains "live QA env template" "$fixture_template" 'Do not set ASSEMBLYWRIGHT_QA_SELF_TEST_FIXTURE in release evidence'
+  if grep -F 'ASSEMBLYWRIGHT_QA_CLEAN_PROFILE_VALIDATED=true' "$fixture_template" >/dev/null 2>&1; then
     fail "live QA self-test expected env template validation flags to default false"
   fi
 
   export 
-  JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
-    JARVIS_QA_REPORT_PATH="$fixture_report" \
-    JARVIS_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.jarvis.selftest" \
-    JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
-    JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
-    JARVIS_QA_RESTART_VALIDATED=true \
-    JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
-    JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
-    JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
-    JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
-    JARVIS_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
-    JARVIS_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
-    JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE="Clean profile install observed in the controlled release QA lane." \
-    JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE="Finder launch observed in the controlled release QA lane." \
-    JARVIS_QA_RESTART_EVIDENCE_NOTE="Restart recovery observed in the controlled release QA lane." \
-    JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE="Manual release QA surfaces observed in the controlled release QA lane." \
-    JARVIS_QA_SELF_TEST_FIXTURE=true \
+  ASSEMBLYWRIGHT_QA_INSTALLED_APP_PATH="$fixture_app" \
+    ASSEMBLYWRIGHT_QA_REPORT_PATH="$fixture_report" \
+    ASSEMBLYWRIGHT_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.assemblywright.selftest" \
+    ASSEMBLYWRIGHT_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
+    ASSEMBLYWRIGHT_QA_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_FINDER_LAUNCH_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_RESTART_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_MANUAL_RELEASE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_OWNER_NAME="Assemblywright QA Self-Test" \
+    ASSEMBLYWRIGHT_QA_DEVICE_LABEL="self-test Mac fixture" \
+    ASSEMBLYWRIGHT_QA_PROFILE_LABEL="self-test clean profile" \
+    ASSEMBLYWRIGHT_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
+    ASSEMBLYWRIGHT_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
+    ASSEMBLYWRIGHT_QA_CLEAN_PROFILE_EVIDENCE_NOTE="Clean profile install observed in the controlled release QA lane." \
+    ASSEMBLYWRIGHT_QA_FINDER_LAUNCH_EVIDENCE_NOTE="Finder launch observed in the controlled release QA lane." \
+    ASSEMBLYWRIGHT_QA_RESTART_EVIDENCE_NOTE="Restart recovery observed in the controlled release QA lane." \
+    ASSEMBLYWRIGHT_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE="Manual release QA surfaces observed in the controlled release QA lane." \
+    ASSEMBLYWRIGHT_QA_SELF_TEST_FIXTURE=true \
     "$0" --assert-complete >/dev/null
   require_file_contains "live QA self-test report" "$fixture_report" '"manual_release_qa": true'
   require_file_contains "live QA self-test report" "$fixture_report" '"schema_version": 1'
   require_file_contains "live QA self-test report" "$fixture_report" '"evidence_type": "owner_recorded_live_device_qa"'
   require_file_contains "live QA self-test report" "$fixture_report" '"self_test_fixture": true'
-  require_file_contains "live QA self-test report" "$fixture_report" '"bundle_identifier": "com.nobiletechnology.jarvis.selftest"'
+  require_file_contains "live QA self-test report" "$fixture_report" '"bundle_identifier": "com.nobiletechnology.assemblywright.selftest"'
   require_file_contains "live QA self-test report" "$fixture_report" '"bundled_core"'
   require_file_contains "live QA self-test report" "$fixture_report" '"app_executable"'
-  require_file_contains "live QA self-test report" "$fixture_report" '"code_identifier": "com.nobiletechnology.jarvis.selftest"'
+  require_file_contains "live QA self-test report" "$fixture_report" '"code_identifier": "com.nobiletechnology.assemblywright.selftest"'
   require_file_contains "live QA self-test report" "$fixture_report" '"team_identifier": "9VZ742YKV4"'
   require_file_contains "live QA self-test report" "$fixture_report" '"cdhash": "0123456789abcdef0123456789abcdef01234567"'
   require_file_contains "live QA self-test report" "$fixture_report" '"signed_provenance"'
@@ -750,24 +750,24 @@ JSON
     local report_path="$1"
     shift
     env \
-      JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
-      JARVIS_QA_REPORT_PATH="$report_path" \
-      JARVIS_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.jarvis.selftest" \
-      JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
-      JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
-      JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
-      JARVIS_QA_RESTART_VALIDATED=true \
-      JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
-      JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
-      JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
-      JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
-      JARVIS_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
-      JARVIS_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
-      JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE="Clean profile install observed in the controlled release QA lane." \
-      JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE="Finder launch observed in the controlled release QA lane." \
-      JARVIS_QA_RESTART_EVIDENCE_NOTE="Restart recovery observed in the controlled release QA lane." \
-      JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE="Manual release QA surfaces observed in the controlled release QA lane." \
-      JARVIS_QA_SELF_TEST_FIXTURE=true \
+      ASSEMBLYWRIGHT_QA_INSTALLED_APP_PATH="$fixture_app" \
+      ASSEMBLYWRIGHT_QA_REPORT_PATH="$report_path" \
+      ASSEMBLYWRIGHT_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.assemblywright.selftest" \
+      ASSEMBLYWRIGHT_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
+      ASSEMBLYWRIGHT_QA_CLEAN_PROFILE_VALIDATED=true \
+      ASSEMBLYWRIGHT_QA_FINDER_LAUNCH_VALIDATED=true \
+      ASSEMBLYWRIGHT_QA_RESTART_VALIDATED=true \
+      ASSEMBLYWRIGHT_QA_MANUAL_RELEASE_QA_VALIDATED=true \
+      ASSEMBLYWRIGHT_QA_OWNER_NAME="Assemblywright QA Self-Test" \
+      ASSEMBLYWRIGHT_QA_DEVICE_LABEL="self-test Mac fixture" \
+      ASSEMBLYWRIGHT_QA_PROFILE_LABEL="self-test clean profile" \
+      ASSEMBLYWRIGHT_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
+      ASSEMBLYWRIGHT_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
+      ASSEMBLYWRIGHT_QA_CLEAN_PROFILE_EVIDENCE_NOTE="Clean profile install observed in the controlled release QA lane." \
+      ASSEMBLYWRIGHT_QA_FINDER_LAUNCH_EVIDENCE_NOTE="Finder launch observed in the controlled release QA lane." \
+      ASSEMBLYWRIGHT_QA_RESTART_EVIDENCE_NOTE="Restart recovery observed in the controlled release QA lane." \
+      ASSEMBLYWRIGHT_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE="Manual release QA surfaces observed in the controlled release QA lane." \
+      ASSEMBLYWRIGHT_QA_SELF_TEST_FIXTURE=true \
       "$@" \
       "$0" --assert-complete
   }
@@ -788,18 +788,18 @@ with open(path, "wb") as handle:
 PY
   }
 
-  cp "$fixture_app/Contents/MacOS/JarvisMacApp" "$tmp_dir/JarvisMacApp.original"
-  printf 'mutated after signed provenance\n' >>"$fixture_app/Contents/MacOS/JarvisMacApp"
+  cp "$fixture_app/Contents/MacOS/AssemblywrightMacApp" "$tmp_dir/AssemblywrightMacApp.original"
+  printf 'mutated after signed provenance\n' >>"$fixture_app/Contents/MacOS/AssemblywrightMacApp"
   if run_fixture_assertion "$tmp_dir/mutated-app-executable.json" >/dev/null 2>"$tmp_dir/mutated-app-executable.err"; then
     fail "live QA self-test expected mutated app executable to fail"
   fi
   require_file_contains "live QA self-test mutated app executable error" \
     "$tmp_dir/mutated-app-executable.err" "installed app executable SHA-256 does not match signed provenance"
-  mv "$tmp_dir/JarvisMacApp.original" "$fixture_app/Contents/MacOS/JarvisMacApp"
-  chmod 755 "$fixture_app/Contents/MacOS/JarvisMacApp"
+  mv "$tmp_dir/AssemblywrightMacApp.original" "$fixture_app/Contents/MacOS/AssemblywrightMacApp"
+  chmod 755 "$fixture_app/Contents/MacOS/AssemblywrightMacApp"
 
   if run_fixture_assertion "$tmp_dir/mismatched-app-identity.json" \
-    JARVIS_QA_STUB_APP_IDENTIFIER="com.example.WrongJarvis" >/dev/null 2>"$tmp_dir/mismatched-app-identity.err"; then
+    ASSEMBLYWRIGHT_QA_STUB_APP_IDENTIFIER="com.example.WrongAssemblywright" >/dev/null 2>"$tmp_dir/mismatched-app-identity.err"; then
     fail "live QA self-test expected mismatched app executable identity to fail"
   fi
   require_file_contains "live QA self-test mismatched app executable identity error" \
@@ -817,204 +817,204 @@ with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
   if run_fixture_assertion "$tmp_dir/mismatched-provenance-team.json" \
-    JARVIS_QA_SIGNED_PROVENANCE_REPORT="$tmp_dir/mismatched-team-signed-provenance.json" >/dev/null 2>"$tmp_dir/mismatched-provenance-team.err"; then
+    ASSEMBLYWRIGHT_QA_SIGNED_PROVENANCE_REPORT="$tmp_dir/mismatched-team-signed-provenance.json" >/dev/null 2>"$tmp_dir/mismatched-provenance-team.err"; then
     fail "live QA self-test expected mismatched signed provenance team identifier to fail"
   fi
   require_file_contains "live QA self-test mismatched signed provenance team error" \
     "$tmp_dir/mismatched-provenance-team.err" "TeamIdentifier does not match signed provenance"
 
   if run_fixture_assertion "$tmp_dir/placeholder-non-voice-evidence.json" \
-    JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE="self-test fixture" >/dev/null 2>"$tmp_dir/placeholder-non-voice-evidence.err"; then
+    ASSEMBLYWRIGHT_QA_CLEAN_PROFILE_EVIDENCE_NOTE="self-test fixture" >/dev/null 2>"$tmp_dir/placeholder-non-voice-evidence.err"; then
     fail "live QA self-test expected placeholder non-voice evidence note to fail"
   fi
   require_file_contains "live QA self-test placeholder non-voice error" \
     "$tmp_dir/placeholder-non-voice-evidence.err" "owner-recorded external evidence"
 
-  if env -u JARVIS_QA_INTERNAL_SELF_TEST \
-    JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
-    JARVIS_QA_REPORT_PATH="$tmp_dir/operator-self-test-fixture.json" \
-    JARVIS_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.jarvis.selftest" \
-    JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
-    JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
-    JARVIS_QA_RESTART_VALIDATED=true \
-    JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
-    JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
-    JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
-    JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
-    JARVIS_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
-    JARVIS_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
-    JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE="Clean profile install observed in the controlled release QA lane." \
-    JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE="Finder launch observed in the controlled release QA lane." \
-    JARVIS_QA_RESTART_EVIDENCE_NOTE="Restart recovery observed in the controlled release QA lane." \
-    JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE="Manual release QA surfaces observed in the controlled release QA lane." \
-    JARVIS_QA_SELF_TEST_FIXTURE=true \
+  if env -u ASSEMBLYWRIGHT_QA_INTERNAL_SELF_TEST \
+    ASSEMBLYWRIGHT_QA_INSTALLED_APP_PATH="$fixture_app" \
+    ASSEMBLYWRIGHT_QA_REPORT_PATH="$tmp_dir/operator-self-test-fixture.json" \
+    ASSEMBLYWRIGHT_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.assemblywright.selftest" \
+    ASSEMBLYWRIGHT_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
+    ASSEMBLYWRIGHT_QA_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_FINDER_LAUNCH_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_RESTART_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_MANUAL_RELEASE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_OWNER_NAME="Assemblywright QA Self-Test" \
+    ASSEMBLYWRIGHT_QA_DEVICE_LABEL="self-test Mac fixture" \
+    ASSEMBLYWRIGHT_QA_PROFILE_LABEL="self-test clean profile" \
+    ASSEMBLYWRIGHT_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
+    ASSEMBLYWRIGHT_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
+    ASSEMBLYWRIGHT_QA_CLEAN_PROFILE_EVIDENCE_NOTE="Clean profile install observed in the controlled release QA lane." \
+    ASSEMBLYWRIGHT_QA_FINDER_LAUNCH_EVIDENCE_NOTE="Finder launch observed in the controlled release QA lane." \
+    ASSEMBLYWRIGHT_QA_RESTART_EVIDENCE_NOTE="Restart recovery observed in the controlled release QA lane." \
+    ASSEMBLYWRIGHT_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE="Manual release QA surfaces observed in the controlled release QA lane." \
+    ASSEMBLYWRIGHT_QA_SELF_TEST_FIXTURE=true \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "live QA self-test expected operator-authored self-test fixture reports to fail"
   fi
 
-  if JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
-    JARVIS_QA_REPORT_PATH="$tmp_dir/blank-clean-profile-evidence.json" \
-    JARVIS_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.jarvis.selftest" \
-    JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
-    JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
-    JARVIS_QA_RESTART_VALIDATED=true \
-    JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
-    JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
-    JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
-    JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
-    JARVIS_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
-    JARVIS_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
-    JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE="   " \
-    JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE="Finder launch observed in the controlled release QA lane." \
-    JARVIS_QA_RESTART_EVIDENCE_NOTE="Restart recovery observed in the controlled release QA lane." \
-    JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE="Manual release QA surfaces observed in the controlled release QA lane." \
-    JARVIS_QA_SELF_TEST_FIXTURE=true \
+  if ASSEMBLYWRIGHT_QA_INSTALLED_APP_PATH="$fixture_app" \
+    ASSEMBLYWRIGHT_QA_REPORT_PATH="$tmp_dir/blank-clean-profile-evidence.json" \
+    ASSEMBLYWRIGHT_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.assemblywright.selftest" \
+    ASSEMBLYWRIGHT_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
+    ASSEMBLYWRIGHT_QA_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_FINDER_LAUNCH_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_RESTART_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_MANUAL_RELEASE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_OWNER_NAME="Assemblywright QA Self-Test" \
+    ASSEMBLYWRIGHT_QA_DEVICE_LABEL="self-test Mac fixture" \
+    ASSEMBLYWRIGHT_QA_PROFILE_LABEL="self-test clean profile" \
+    ASSEMBLYWRIGHT_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
+    ASSEMBLYWRIGHT_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
+    ASSEMBLYWRIGHT_QA_CLEAN_PROFILE_EVIDENCE_NOTE="   " \
+    ASSEMBLYWRIGHT_QA_FINDER_LAUNCH_EVIDENCE_NOTE="Finder launch observed in the controlled release QA lane." \
+    ASSEMBLYWRIGHT_QA_RESTART_EVIDENCE_NOTE="Restart recovery observed in the controlled release QA lane." \
+    ASSEMBLYWRIGHT_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE="Manual release QA surfaces observed in the controlled release QA lane." \
+    ASSEMBLYWRIGHT_QA_SELF_TEST_FIXTURE=true \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "live QA self-test expected blank non-voice owner evidence to fail"
   fi
 
-  if JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
-    JARVIS_QA_REPORT_PATH="$tmp_dir/blank-owner-evidence.json" \
-    JARVIS_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.jarvis.selftest" \
-    JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
-    JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
-    JARVIS_QA_RESTART_VALIDATED=true \
-    JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
-    JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
-    JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
-    JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
-    JARVIS_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
-    JARVIS_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
-    JARVIS_QA_SELF_TEST_FIXTURE=true \
+  if ASSEMBLYWRIGHT_QA_INSTALLED_APP_PATH="$fixture_app" \
+    ASSEMBLYWRIGHT_QA_REPORT_PATH="$tmp_dir/blank-owner-evidence.json" \
+    ASSEMBLYWRIGHT_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.assemblywright.selftest" \
+    ASSEMBLYWRIGHT_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
+    ASSEMBLYWRIGHT_QA_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_FINDER_LAUNCH_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_RESTART_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_MANUAL_RELEASE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_OWNER_NAME="Assemblywright QA Self-Test" \
+    ASSEMBLYWRIGHT_QA_DEVICE_LABEL="self-test Mac fixture" \
+    ASSEMBLYWRIGHT_QA_PROFILE_LABEL="self-test clean profile" \
+    ASSEMBLYWRIGHT_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
+    ASSEMBLYWRIGHT_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
+    ASSEMBLYWRIGHT_QA_SELF_TEST_FIXTURE=true \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "live QA self-test expected whitespace-only owner evidence to fail"
   fi
 
-  if JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
-    JARVIS_QA_REPORT_PATH="$tmp_dir/missing-transcript-handoff.json" \
-    JARVIS_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.jarvis.selftest" \
-    JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
-    JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
-    JARVIS_QA_RESTART_VALIDATED=true \
-    JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
-    JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
-    JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
-    JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
-    JARVIS_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
-    JARVIS_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
-    JARVIS_QA_SELF_TEST_FIXTURE=true \
+  if ASSEMBLYWRIGHT_QA_INSTALLED_APP_PATH="$fixture_app" \
+    ASSEMBLYWRIGHT_QA_REPORT_PATH="$tmp_dir/missing-transcript-handoff.json" \
+    ASSEMBLYWRIGHT_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.assemblywright.selftest" \
+    ASSEMBLYWRIGHT_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
+    ASSEMBLYWRIGHT_QA_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_FINDER_LAUNCH_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_RESTART_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_MANUAL_RELEASE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_OWNER_NAME="Assemblywright QA Self-Test" \
+    ASSEMBLYWRIGHT_QA_DEVICE_LABEL="self-test Mac fixture" \
+    ASSEMBLYWRIGHT_QA_PROFILE_LABEL="self-test clean profile" \
+    ASSEMBLYWRIGHT_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
+    ASSEMBLYWRIGHT_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
+    ASSEMBLYWRIGHT_QA_SELF_TEST_FIXTURE=true \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "live QA self-test expected missing transcript handoff validation to fail"
   fi
 
-  if JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
-    JARVIS_QA_REPORT_PATH="$tmp_dir/missing-owner-note.json" \
-    JARVIS_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.jarvis.selftest" \
-    JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
-    JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
-    JARVIS_QA_RESTART_VALIDATED=true \
-    JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
-    JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
-    JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
-    JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
-    JARVIS_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
-    JARVIS_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
-    JARVIS_QA_SELF_TEST_FIXTURE=true \
+  if ASSEMBLYWRIGHT_QA_INSTALLED_APP_PATH="$fixture_app" \
+    ASSEMBLYWRIGHT_QA_REPORT_PATH="$tmp_dir/missing-owner-note.json" \
+    ASSEMBLYWRIGHT_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.assemblywright.selftest" \
+    ASSEMBLYWRIGHT_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
+    ASSEMBLYWRIGHT_QA_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_FINDER_LAUNCH_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_RESTART_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_MANUAL_RELEASE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_OWNER_NAME="Assemblywright QA Self-Test" \
+    ASSEMBLYWRIGHT_QA_DEVICE_LABEL="self-test Mac fixture" \
+    ASSEMBLYWRIGHT_QA_PROFILE_LABEL="self-test clean profile" \
+    ASSEMBLYWRIGHT_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
+    ASSEMBLYWRIGHT_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
+    ASSEMBLYWRIGHT_QA_SELF_TEST_FIXTURE=true \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "live QA self-test expected missing owner-recorded audio evidence note to fail"
   fi
 
-  if JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
-    JARVIS_QA_REPORT_PATH="$tmp_dir/missing-structured-transcript.json" \
-    JARVIS_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.jarvis.selftest" \
-    JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
-    JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
-    JARVIS_QA_RESTART_VALIDATED=true \
-    JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
-    JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
-    JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
-    JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
-    JARVIS_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
-    JARVIS_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
-    JARVIS_QA_SELF_TEST_FIXTURE=true \
+  if ASSEMBLYWRIGHT_QA_INSTALLED_APP_PATH="$fixture_app" \
+    ASSEMBLYWRIGHT_QA_REPORT_PATH="$tmp_dir/missing-structured-transcript.json" \
+    ASSEMBLYWRIGHT_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.assemblywright.selftest" \
+    ASSEMBLYWRIGHT_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
+    ASSEMBLYWRIGHT_QA_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_FINDER_LAUNCH_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_RESTART_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_MANUAL_RELEASE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_OWNER_NAME="Assemblywright QA Self-Test" \
+    ASSEMBLYWRIGHT_QA_DEVICE_LABEL="self-test Mac fixture" \
+    ASSEMBLYWRIGHT_QA_PROFILE_LABEL="self-test clean profile" \
+    ASSEMBLYWRIGHT_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
+    ASSEMBLYWRIGHT_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
+    ASSEMBLYWRIGHT_QA_SELF_TEST_FIXTURE=true \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "live QA self-test expected missing structured command observation to fail"
   fi
 
-  if JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
-    JARVIS_QA_REPORT_PATH="$tmp_dir/mismatched-observed-transcript.json" \
-    JARVIS_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.jarvis.selftest" \
-    JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
-    JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
-    JARVIS_QA_RESTART_VALIDATED=true \
-    JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
-    JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
-    JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
-    JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
-    JARVIS_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
-    JARVIS_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
-    JARVIS_QA_SELF_TEST_FIXTURE=true \
+  if ASSEMBLYWRIGHT_QA_INSTALLED_APP_PATH="$fixture_app" \
+    ASSEMBLYWRIGHT_QA_REPORT_PATH="$tmp_dir/mismatched-observed-transcript.json" \
+    ASSEMBLYWRIGHT_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.assemblywright.selftest" \
+    ASSEMBLYWRIGHT_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
+    ASSEMBLYWRIGHT_QA_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_FINDER_LAUNCH_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_RESTART_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_MANUAL_RELEASE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_OWNER_NAME="Assemblywright QA Self-Test" \
+    ASSEMBLYWRIGHT_QA_DEVICE_LABEL="self-test Mac fixture" \
+    ASSEMBLYWRIGHT_QA_PROFILE_LABEL="self-test clean profile" \
+    ASSEMBLYWRIGHT_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
+    ASSEMBLYWRIGHT_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
+    ASSEMBLYWRIGHT_QA_SELF_TEST_FIXTURE=true \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "live QA self-test expected mismatched observed transcript to fail"
   fi
 
-  if JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
-    JARVIS_QA_REPORT_PATH="$tmp_dir/mismatched-command-observation.json" \
-    JARVIS_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.jarvis.selftest" \
-    JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
-    JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
-    JARVIS_QA_RESTART_VALIDATED=true \
-    JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
-    JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
-    JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
-    JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
-    JARVIS_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
-    JARVIS_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
-    JARVIS_QA_SELF_TEST_FIXTURE=true \
+  if ASSEMBLYWRIGHT_QA_INSTALLED_APP_PATH="$fixture_app" \
+    ASSEMBLYWRIGHT_QA_REPORT_PATH="$tmp_dir/mismatched-command-observation.json" \
+    ASSEMBLYWRIGHT_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.assemblywright.selftest" \
+    ASSEMBLYWRIGHT_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
+    ASSEMBLYWRIGHT_QA_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_FINDER_LAUNCH_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_RESTART_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_MANUAL_RELEASE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_OWNER_NAME="Assemblywright QA Self-Test" \
+    ASSEMBLYWRIGHT_QA_DEVICE_LABEL="self-test Mac fixture" \
+    ASSEMBLYWRIGHT_QA_PROFILE_LABEL="self-test clean profile" \
+    ASSEMBLYWRIGHT_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
+    ASSEMBLYWRIGHT_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
+    ASSEMBLYWRIGHT_QA_SELF_TEST_FIXTURE=true \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "live QA self-test expected mismatched command observation to fail"
   fi
 
-  if JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
-    JARVIS_QA_REPORT_PATH="$tmp_dir/malformed-command-result-evidence-id.json" \
-    JARVIS_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.jarvis.selftest" \
-    JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
-    JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
-    JARVIS_QA_RESTART_VALIDATED=true \
-    JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
-    JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
-    JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
-    JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
-    JARVIS_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
-    JARVIS_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
-    JARVIS_QA_SELF_TEST_FIXTURE=true \
+  if ASSEMBLYWRIGHT_QA_INSTALLED_APP_PATH="$fixture_app" \
+    ASSEMBLYWRIGHT_QA_REPORT_PATH="$tmp_dir/malformed-command-result-evidence-id.json" \
+    ASSEMBLYWRIGHT_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.assemblywright.selftest" \
+    ASSEMBLYWRIGHT_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
+    ASSEMBLYWRIGHT_QA_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_FINDER_LAUNCH_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_RESTART_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_MANUAL_RELEASE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_OWNER_NAME="Assemblywright QA Self-Test" \
+    ASSEMBLYWRIGHT_QA_DEVICE_LABEL="self-test Mac fixture" \
+    ASSEMBLYWRIGHT_QA_PROFILE_LABEL="self-test clean profile" \
+    ASSEMBLYWRIGHT_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
+    ASSEMBLYWRIGHT_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
+    ASSEMBLYWRIGHT_QA_SELF_TEST_FIXTURE=true \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "live QA self-test expected malformed command result evidence id to fail"
   fi
 
-  if JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
-    JARVIS_QA_REPORT_PATH="$tmp_dir/bad-timestamp-order.json" \
-    JARVIS_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.jarvis.selftest" \
-    JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
-    JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
-    JARVIS_QA_RESTART_VALIDATED=true \
-    JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
-    JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
-    JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
-    JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
-    JARVIS_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:05:00Z" \
-    JARVIS_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:00:00Z" \
-    JARVIS_QA_SELF_TEST_FIXTURE=true \
+  if ASSEMBLYWRIGHT_QA_INSTALLED_APP_PATH="$fixture_app" \
+    ASSEMBLYWRIGHT_QA_REPORT_PATH="$tmp_dir/bad-timestamp-order.json" \
+    ASSEMBLYWRIGHT_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.assemblywright.selftest" \
+    ASSEMBLYWRIGHT_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
+    ASSEMBLYWRIGHT_QA_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_FINDER_LAUNCH_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_RESTART_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_MANUAL_RELEASE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_QA_OWNER_NAME="Assemblywright QA Self-Test" \
+    ASSEMBLYWRIGHT_QA_DEVICE_LABEL="self-test Mac fixture" \
+    ASSEMBLYWRIGHT_QA_PROFILE_LABEL="self-test clean profile" \
+    ASSEMBLYWRIGHT_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:05:00Z" \
+    ASSEMBLYWRIGHT_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:00:00Z" \
+    ASSEMBLYWRIGHT_QA_SELF_TEST_FIXTURE=true \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "live QA self-test expected timestamp order validation to fail"
   fi
@@ -1072,26 +1072,26 @@ CHECKLIST
 fi
 
 [[ -d "$APP_PATH" ]] || fail "installed app is missing: $APP_PATH"
-[[ -x "$APP_PATH/Contents/MacOS/JarvisMacApp" ]] || fail "installed app executable is missing or not executable"
-[[ -x "$APP_PATH/Contents/Resources/bin/jarvis-cli" ]] || fail "bundled core executable is missing or not executable"
+[[ -x "$APP_PATH/Contents/MacOS/AssemblywrightMacApp" ]] || fail "installed app executable is missing or not executable"
+[[ -x "$APP_PATH/Contents/Resources/bin/assemblywright-cli" ]] || fail "bundled core executable is missing or not executable"
 validate_installed_app_bundle_metadata
 validate_installed_app_executable_binding
 
-require_true JARVIS_QA_CLEAN_PROFILE_VALIDATED
-require_true JARVIS_QA_FINDER_LAUNCH_VALIDATED
-require_true JARVIS_QA_RESTART_VALIDATED
-require_true JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED
-require_non_empty_env JARVIS_QA_OWNER_NAME
-require_non_empty_env JARVIS_QA_DEVICE_LABEL
-require_non_empty_env JARVIS_QA_PROFILE_LABEL
-require_utc_timestamp_env JARVIS_QA_DEVICE_CHECK_STARTED_AT
-require_utc_timestamp_env JARVIS_QA_DEVICE_CHECK_COMPLETED_AT
-require_timestamp_order JARVIS_QA_DEVICE_CHECK_STARTED_AT JARVIS_QA_DEVICE_CHECK_COMPLETED_AT
-require_not_future_timestamp_env JARVIS_QA_DEVICE_CHECK_COMPLETED_AT
-require_owner_evidence_note_env JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE
-require_owner_evidence_note_env JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE
-require_owner_evidence_note_env JARVIS_QA_RESTART_EVIDENCE_NOTE
-require_owner_evidence_note_env JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE
+require_true ASSEMBLYWRIGHT_QA_CLEAN_PROFILE_VALIDATED
+require_true ASSEMBLYWRIGHT_QA_FINDER_LAUNCH_VALIDATED
+require_true ASSEMBLYWRIGHT_QA_RESTART_VALIDATED
+require_true ASSEMBLYWRIGHT_QA_MANUAL_RELEASE_QA_VALIDATED
+require_non_empty_env ASSEMBLYWRIGHT_QA_OWNER_NAME
+require_non_empty_env ASSEMBLYWRIGHT_QA_DEVICE_LABEL
+require_non_empty_env ASSEMBLYWRIGHT_QA_PROFILE_LABEL
+require_utc_timestamp_env ASSEMBLYWRIGHT_QA_DEVICE_CHECK_STARTED_AT
+require_utc_timestamp_env ASSEMBLYWRIGHT_QA_DEVICE_CHECK_COMPLETED_AT
+require_timestamp_order ASSEMBLYWRIGHT_QA_DEVICE_CHECK_STARTED_AT ASSEMBLYWRIGHT_QA_DEVICE_CHECK_COMPLETED_AT
+require_not_future_timestamp_env ASSEMBLYWRIGHT_QA_DEVICE_CHECK_COMPLETED_AT
+require_owner_evidence_note_env ASSEMBLYWRIGHT_QA_CLEAN_PROFILE_EVIDENCE_NOTE
+require_owner_evidence_note_env ASSEMBLYWRIGHT_QA_FINDER_LAUNCH_EVIDENCE_NOTE
+require_owner_evidence_note_env ASSEMBLYWRIGHT_QA_RESTART_EVIDENCE_NOTE
+require_owner_evidence_note_env ASSEMBLYWRIGHT_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE
 write_report
 
 cat <<EOF

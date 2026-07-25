@@ -1,6 +1,6 @@
 import Darwin
 import Foundation
-import JarvisMacCore
+import AssemblywrightMacCore
 
 private enum BridgeCLIError: Error, CustomStringConvertible {
     case usage
@@ -11,7 +11,7 @@ private enum BridgeCLIError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .usage:
-            "Usage: jarvis-mac-bridge enrollment prepare|install [--identity-profile fixture] | enrollment remove --confirm --identity-profile fixture | status|connect [--identity-profile fixture] | monitor|relay [--identity-profile fixture] [--samples COUNT] [--interval-ms MILLISECONDS] [--reconnect-between-samples]"
+            "Usage: assemblywright-mac-bridge enrollment prepare|install [--identity-profile fixture] | enrollment remove --confirm --identity-profile fixture | status|connect [--identity-profile fixture] | monitor|relay [--identity-profile fixture] [--samples COUNT] [--interval-ms MILLISECONDS] [--reconnect-between-samples]"
         case .inputTooLarge:
             "Input exceeds the 64 KiB enrollment-document limit."
         case .notEnrolled:
@@ -23,34 +23,34 @@ private enum BridgeCLIError: Error, CustomStringConvertible {
 }
 
 @main
-private struct JarvisMacBridgeCLI {
+private struct AssemblywrightMacBridgeCLI {
     static func main() async {
         do {
             try await run(arguments: Array(CommandLine.arguments.dropFirst()))
         } catch {
-            FileHandle.standardError.write(Data("jarvis-mac-bridge: \(error)\n".utf8))
+            FileHandle.standardError.write(Data("assemblywright-mac-bridge: \(error)\n".utf8))
             Darwin.exit(1)
         }
     }
 
     private static func run(arguments: [String]) async throws {
         let parsed = try identityProfileArguments(arguments)
-        let identityStore = KeychainJarvisMacBridgeIdentityStore(
+        let identityStore = KeychainAssemblywrightMacBridgeIdentityStore(
             identityProfile: parsed.profile
         )
-        let coordinator = JarvisMacEnrollmentCoordinator(
+        let coordinator = AssemblywrightMacEnrollmentCoordinator(
             identityStore: identityStore,
             identityProfile: parsed.profile
         )
         switch parsed.arguments {
         case ["enrollment", "prepare"]:
             let invitation = try readBoundedStdin(
-                maximum: JarvisMacEnrollmentCoordinator.maximumDocumentBytes
+                maximum: AssemblywrightMacEnrollmentCoordinator.maximumDocumentBytes
             )
             try writeStdout(coordinator.prepare(invitationData: invitation))
         case ["enrollment", "install"]:
             let receipt = try readBoundedStdin(
-                maximum: JarvisMacEnrollmentCoordinator.maximumDocumentBytes
+                maximum: AssemblywrightMacEnrollmentCoordinator.maximumDocumentBytes
             )
             let profile = try coordinator.install(issuedReceiptData: receipt)
             try writeJSON([
@@ -66,7 +66,7 @@ private struct JarvisMacBridgeCLI {
             try identityStore.removeFixtureIdentity()
             try writeJSON([
                 "status": "fixture_identity_removed",
-                "identity_profile": JarvisMacBridgeIdentityProfile.fixtureReasoning.rawValue
+                "identity_profile": AssemblywrightMacBridgeIdentityProfile.fixtureReasoning.rawValue
             ])
         case ["status"]:
             guard let profile = try coordinator.status() else {
@@ -83,12 +83,12 @@ private struct JarvisMacBridgeCLI {
             ])
         case ["connect"]:
             guard let profile = try coordinator.status() else { throw BridgeCLIError.notEnrolled }
-            let session = try await JarvisMacMTLSBridgeTransport(
-                factory: NetworkJarvisMacTLSChannelFactory(identityStore: identityStore)
+            let session = try await AssemblywrightMacMTLSBridgeTransport(
+                factory: NetworkAssemblywrightMacTLSChannelFactory(identityStore: identityStore)
             ).connect(profile: profile)
             do {
                 let health = try await session.send(
-                    JarvisMacBridgeHTTPRequest(method: "GET", path: "/health")
+                    AssemblywrightMacBridgeHTTPRequest(method: "GET", path: "/health")
                 )
                 guard health.status == 200,
                       let healthObject = try JSONSerialization.jsonObject(with: health.body)
@@ -133,14 +133,14 @@ private struct JarvisMacBridgeCLI {
             )
         case let arguments where arguments.first == "relay":
             guard let profile = try coordinator.status() else { throw BridgeCLIError.notEnrolled }
-            let configuration = try JarvisMacDeveloperEventRelayConfiguration
+            let configuration = try AssemblywrightMacDeveloperEventRelayConfiguration
                 .decodeStartupDocument(
                     readBoundedStdin(
-                        maximum: JarvisMacDeveloperEventRelayConfiguration.maximumDocumentBytes
+                        maximum: AssemblywrightMacDeveloperEventRelayConfiguration.maximumDocumentBytes
                     )
             )
             let options = try monitorOptions(Array(arguments.dropFirst()))
-            let relay = JarvisMacDeveloperEventRelay(
+            let relay = AssemblywrightMacDeveloperEventRelay(
                 configuration: configuration,
                 deviceID: configuration.fixtureJobsEnabled || configuration.mlxJobsEnabled
                     ? UUID(uuidString: profile.deviceID)
@@ -159,16 +159,16 @@ private struct JarvisMacBridgeCLI {
 
     private static func identityProfileArguments(
         _ arguments: [String]
-    ) throws -> (arguments: [String], profile: JarvisMacBridgeIdentityProfile) {
+    ) throws -> (arguments: [String], profile: AssemblywrightMacBridgeIdentityProfile) {
         var remaining: [String] = []
-        var profile = JarvisMacBridgeIdentityProfile.standard
+        var profile = AssemblywrightMacBridgeIdentityProfile.standard
         var selected = false
         var index = 0
         while index < arguments.count {
             if arguments[index] == "--identity-profile" {
                 guard !selected, index + 1 < arguments.count,
                       arguments[index + 1]
-                        == JarvisMacBridgeIdentityProfile.fixtureReasoning.rawValue else {
+                        == AssemblywrightMacBridgeIdentityProfile.fixtureReasoning.rawValue else {
                     throw BridgeCLIError.usage
                 }
                 selected = true
@@ -186,7 +186,7 @@ private struct JarvisMacBridgeCLI {
         samples: Int?, intervalMilliseconds: UInt64, reconnectBetweenSamples: Bool
     ) {
         var samples: Int?
-        var intervalMilliseconds = JarvisMacBridgeSupervisor.normalPollDelayMilliseconds
+        var intervalMilliseconds = AssemblywrightMacBridgeSupervisor.normalPollDelayMilliseconds
         var reconnectBetweenSamples = false
         var index = 0
         while index < arguments.count {
@@ -221,16 +221,16 @@ private struct JarvisMacBridgeCLI {
     }
 
     private static func runMonitor(
-        profile: JarvisMacBridgeProfile,
+        profile: AssemblywrightMacBridgeProfile,
         options: (samples: Int?, intervalMilliseconds: UInt64, reconnectBetweenSamples: Bool),
-        eventRelay: (any JarvisMacBridgeEventRelaying)?,
-        identityStore: KeychainJarvisMacBridgeIdentityStore
+        eventRelay: (any AssemblywrightMacBridgeEventRelaying)?,
+        identityStore: KeychainAssemblywrightMacBridgeIdentityStore
     ) async throws {
-        let supervisor = JarvisMacBridgeSupervisor(
+        let supervisor = AssemblywrightMacBridgeSupervisor(
             profile: profile,
-            connector: JarvisMacDefaultBridgeConnector(
-                transport: JarvisMacMTLSBridgeTransport(
-                    factory: NetworkJarvisMacTLSChannelFactory(identityStore: identityStore)
+            connector: AssemblywrightMacDefaultBridgeConnector(
+                transport: AssemblywrightMacMTLSBridgeTransport(
+                    factory: NetworkAssemblywrightMacTLSChannelFactory(identityStore: identityStore)
                 )
             ),
             eventRelay: eventRelay

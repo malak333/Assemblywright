@@ -18,7 +18,7 @@ documentation check.
 On GitHub, `.github/workflows/release-local.yml` runs the same gate on
 `macos-15` with SHA-pinned checkout/toolchain actions and Rust `1.95.0` for
 pull requests, pushes to `main`, and manual dispatch. CI sets
-`JARVIS_RELEASE_LOCAL_HEARTBEAT_SECONDS=60` so long-running commands
+`ASSEMBLYWRIGHT_RELEASE_LOCAL_HEARTBEAT_SECONDS=60` so long-running commands
 periodically print elapsed-time heartbeat lines without changing the canonical
 command list or proof boundary. The workflow is configuration evidence only; it
 does not perform Developer ID signing, notarization, clean-profile

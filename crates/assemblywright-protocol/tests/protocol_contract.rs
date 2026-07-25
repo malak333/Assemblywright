@@ -186,8 +186,8 @@ fn enrollment_pairing_documents_fail_closed_on_expiry_identity_and_bounds() {
 }
 
 #[test]
-fn mac_bridge_handshake_matches_v1_golden_fixture() {
-    let fixture = include_str!("fixtures/mac_bridge_hello_v1.json");
+fn mac_bridge_handshake_matches_v2_golden_fixture() {
+    let fixture = include_str!("fixtures/mac_bridge_hello_v2.json");
     let request =
         HandshakeRequest::decode_frame(fixture.as_bytes()).expect("decode golden request");
 
@@ -204,7 +204,7 @@ fn mac_bridge_handshake_matches_v1_golden_fixture() {
 #[test]
 fn authenticated_handshake_requires_a_bounded_nonzero_tls_exporter_digest() {
     let handshake = HandshakeRequest::decode_frame(
-        include_str!("fixtures/mac_bridge_hello_v1.json").as_bytes(),
+        include_str!("fixtures/mac_bridge_hello_v2.json").as_bytes(),
     )
     .expect("decode handshake fixture");
     let request = AuthenticatedHandshakeRequest {
@@ -230,7 +230,7 @@ fn authenticated_handshake_requires_a_bounded_nonzero_tls_exporter_digest() {
 #[test]
 fn handshake_rejects_unknown_fields_and_duplicate_capabilities() {
     let unknown = json!({
-        "protocol_version": 1,
+        "protocol_version": 2,
         "device_id": "11111111-1111-4111-8111-111111111111",
         "device_name": "worker",
         "role": "inference_worker",

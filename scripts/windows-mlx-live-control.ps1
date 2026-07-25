@@ -9,7 +9,7 @@ param(
     )]
     [string]$Action,
 
-    [string]$DataDir = (Join-Path $env:LOCALAPPDATA "Jarvis\master"),
+    [string]$DataDir = (Join-Path $env:LOCALAPPDATA "Assemblywright\master"),
 
     [ValidatePattern("^127\.0\.0\.1:[0-9]{1,5}$")]
     [string]$Endpoint = "127.0.0.1:7791",
@@ -279,7 +279,7 @@ switch ($Action) {
             sensitivity = "public"
             context = [ordered]@{
                 operation = "generate_text"
-                prompt = "Reply with the exact token JARVIS_MLX_DISTRIBUTED_OK"
+                prompt = "Reply with the exact token ASSEMBLYWRIGHT_MLX_DISTRIBUTED_OK"
                 max_tokens = 32
                 temperature_milli = 0
             }

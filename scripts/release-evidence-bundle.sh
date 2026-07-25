@@ -4,19 +4,19 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-VERSION="${JARVIS_EVIDENCE_VERSION:-$("$ROOT_DIR/scripts/release-version.sh")}"
-DIST_DIR="${JARVIS_EVIDENCE_DIST_DIR:-$ROOT_DIR/target/distribution}"
-APP_PATH="${JARVIS_EVIDENCE_APP_PATH:-$DIST_DIR/Assemblywright.app}"
-ZIP_PATH="${JARVIS_EVIDENCE_ZIP_PATH:-$DIST_DIR/Assemblywright-$VERSION.zip}"
-PKG_PATH="${JARVIS_EVIDENCE_PKG_PATH:-$DIST_DIR/Assemblywright-$VERSION.pkg}"
-SIGNED_PROVENANCE_REPORT="${JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT:-$DIST_DIR/Assemblywright-$VERSION-signed-provenance.json}"
-LIVE_QA_REPORT="${JARVIS_EVIDENCE_LIVE_QA_REPORT:-${JARVIS_QA_REPORT_PATH:-$ROOT_DIR/target/release-live-device-qa-report.json}}"
-OUTPUT_PATH="${JARVIS_EVIDENCE_OUTPUT_PATH:-$ROOT_DIR/target/release-evidence-bundle.json}"
-OVERWRITE_OUTPUT="${JARVIS_EVIDENCE_OVERWRITE_OUTPUT:-false}"
-VALIDATE_LOCAL_SIGNATURES="${JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES:-true}"
-EXPECTED_BUNDLE_ID="${JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID:-com.nobiletechnology.jarvis}"
-EXPECTED_VERSION="${JARVIS_EVIDENCE_EXPECTED_VERSION:-$VERSION}"
-EXPECTED_INSTALLED_APP_PATH="${JARVIS_QA_INSTALLED_APP_PATH:-/Applications/Assemblywright.app}"
+VERSION="${ASSEMBLYWRIGHT_EVIDENCE_VERSION:-$("$ROOT_DIR/scripts/release-version.sh")}"
+DIST_DIR="${ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR:-$ROOT_DIR/target/distribution}"
+APP_PATH="${ASSEMBLYWRIGHT_EVIDENCE_APP_PATH:-$DIST_DIR/Assemblywright.app}"
+ZIP_PATH="${ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH:-$DIST_DIR/Assemblywright-$VERSION.zip}"
+PKG_PATH="${ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH:-$DIST_DIR/Assemblywright-$VERSION.pkg}"
+SIGNED_PROVENANCE_REPORT="${ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT:-$DIST_DIR/Assemblywright-$VERSION-signed-provenance.json}"
+LIVE_QA_REPORT="${ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT:-${ASSEMBLYWRIGHT_QA_REPORT_PATH:-$ROOT_DIR/target/release-live-device-qa-report.json}}"
+OUTPUT_PATH="${ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH:-$ROOT_DIR/target/release-evidence-bundle.json}"
+OVERWRITE_OUTPUT="${ASSEMBLYWRIGHT_EVIDENCE_OVERWRITE_OUTPUT:-false}"
+VALIDATE_LOCAL_SIGNATURES="${ASSEMBLYWRIGHT_EVIDENCE_VALIDATE_LOCAL_SIGNATURES:-true}"
+EXPECTED_BUNDLE_ID="${ASSEMBLYWRIGHT_EVIDENCE_EXPECTED_BUNDLE_ID:-com.nobiletechnology.assemblywright}"
+EXPECTED_VERSION="${ASSEMBLYWRIGHT_EVIDENCE_EXPECTED_VERSION:-$VERSION}"
+EXPECTED_INSTALLED_APP_PATH="${ASSEMBLYWRIGHT_QA_INSTALLED_APP_PATH:-/Applications/Assemblywright.app}"
 CHECK_ONLY=false
 BUNDLE=false
 SELF_TEST=false
@@ -41,43 +41,43 @@ a JSON bundle manifest.
 exercises the bundle manifest mechanics without claiming production readiness.
 
 --write-template PATH writes a sourceable shell env template containing every
-JARVIS_EVIDENCE_* input required by --bundle. Edit the template only after the
+ASSEMBLYWRIGHT_EVIDENCE_* input required by --bundle. Edit the template only after the
 external release checks are complete, then source it and rerun --bundle.
 
 Required before --bundle:
-  JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true
-  JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true
-  JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true
-  JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true
-  JARVIS_EVIDENCE_REPORTS_ARCHIVED=true
-  JARVIS_EVIDENCE_OWNER_NAME
-  JARVIS_EVIDENCE_COMPLETED_AT
-  JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE
-  JARVIS_EVIDENCE_NOTARIZATION_NOTE
-  JARVIS_EVIDENCE_CLEAN_PROFILE_NOTE
-  JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE
-  JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE
-  JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI
+  ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true
+  ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_VALIDATED=true
+  ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_VALIDATED=true
+  ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true
+  ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVED=true
+  ASSEMBLYWRIGHT_EVIDENCE_OWNER_NAME
+  ASSEMBLYWRIGHT_EVIDENCE_COMPLETED_AT
+  ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_NOTE
+  ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_NOTE
+  ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_NOTE
+  ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_NOTE
+  ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVE_NOTE
+  ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVE_URI
 
 Optional:
-  JARVIS_EVIDENCE_VERSION             Defaults to the Rust package release version
-  JARVIS_EVIDENCE_DIST_DIR            Defaults to target/distribution
-  JARVIS_EVIDENCE_APP_PATH            Defaults to target/distribution/Assemblywright.app
-  JARVIS_EVIDENCE_ZIP_PATH            Defaults to target/distribution/Assemblywright-<version>.zip
-  JARVIS_EVIDENCE_PKG_PATH            Defaults to target/distribution/Assemblywright-<version>.pkg
-  JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT
+  ASSEMBLYWRIGHT_EVIDENCE_VERSION             Defaults to the Rust package release version
+  ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR            Defaults to target/distribution
+  ASSEMBLYWRIGHT_EVIDENCE_APP_PATH            Defaults to target/distribution/Assemblywright.app
+  ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH            Defaults to target/distribution/Assemblywright-<version>.zip
+  ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH            Defaults to target/distribution/Assemblywright-<version>.pkg
+  ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT
                                       Defaults to target/distribution/Assemblywright-<version>-signed-provenance.json
-  JARVIS_EVIDENCE_LIVE_QA_REPORT      Defaults to JARVIS_QA_REPORT_PATH or target/release-live-device-qa-report.json
-  JARVIS_EVIDENCE_OUTPUT_PATH         Defaults to target/release-evidence-bundle.json
-  JARVIS_EVIDENCE_OVERWRITE_OUTPUT    Defaults to false. Set to true only when
+  ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT      Defaults to ASSEMBLYWRIGHT_QA_REPORT_PATH or target/release-live-device-qa-report.json
+  ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH         Defaults to target/release-evidence-bundle.json
+  ASSEMBLYWRIGHT_EVIDENCE_OVERWRITE_OUTPUT    Defaults to false. Set to true only when
                                       intentionally replacing an existing
                                       bundle after preserving the old artifact.
-  JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES
+  ASSEMBLYWRIGHT_EVIDENCE_VALIDATE_LOCAL_SIGNATURES
                                       Defaults to true. Set to false only for
                                       fake self-test fixtures.
-  JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID  Defaults to com.nobiletechnology.jarvis
-  JARVIS_EVIDENCE_EXPECTED_VERSION    Defaults to JARVIS_EVIDENCE_VERSION
-  JARVIS_QA_INSTALLED_APP_PATH        Defaults to /Applications/Assemblywright.app and must match the live QA report
+  ASSEMBLYWRIGHT_EVIDENCE_EXPECTED_BUNDLE_ID  Defaults to com.nobiletechnology.assemblywright
+  ASSEMBLYWRIGHT_EVIDENCE_EXPECTED_VERSION    Defaults to ASSEMBLYWRIGHT_EVIDENCE_VERSION
+  ASSEMBLYWRIGHT_QA_INSTALLED_APP_PATH        Defaults to /Applications/Assemblywright.app and must match the live QA report
 
 This script validates evidence capture only. It does not sign, notarize,
 install, launch Finder, or
@@ -239,7 +239,7 @@ PY
 }
 
 require_bundled_core_version() {
-  local core_path="$APP_PATH/Contents/Resources/bin/jarvis-cli"
+  local core_path="$APP_PATH/Contents/Resources/bin/assemblywright-cli"
   local marker_path="$core_path.version"
   local output
   [[ -x "$core_path" ]] || fail "missing bundled core executable: $core_path"
@@ -260,14 +260,14 @@ require_artifact_validation_mode() {
     true|false)
       ;;
     *)
-      fail "JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES must be true or false"
+      fail "ASSEMBLYWRIGHT_EVIDENCE_VALIDATE_LOCAL_SIGNATURES must be true or false"
       ;;
   esac
 }
 
 require_production_signature_validation() {
-  if [[ "$VALIDATE_LOCAL_SIGNATURES" != true && "${JARVIS_EVIDENCE_SELF_TEST_MODE:-}" != true ]]; then
-    fail "JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false is only allowed during --self-test"
+  if [[ "$VALIDATE_LOCAL_SIGNATURES" != true && "${ASSEMBLYWRIGHT_EVIDENCE_SELF_TEST_MODE:-}" != true ]]; then
+    fail "ASSEMBLYWRIGHT_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false is only allowed during --self-test"
   fi
 }
 
@@ -276,14 +276,14 @@ require_output_write_mode() {
     true|false)
       ;;
     *)
-      fail "JARVIS_EVIDENCE_OVERWRITE_OUTPUT must be true or false"
+      fail "ASSEMBLYWRIGHT_EVIDENCE_OVERWRITE_OUTPUT must be true or false"
       ;;
   esac
 }
 
 require_output_path_available() {
   if [[ -e "$OUTPUT_PATH" && "$OVERWRITE_OUTPUT" != true ]]; then
-    fail "release evidence bundle output already exists: $OUTPUT_PATH; preserve the existing artifact or set JARVIS_EVIDENCE_OVERWRITE_OUTPUT=true for an intentional replacement"
+    fail "release evidence bundle output already exists: $OUTPUT_PATH; preserve the existing artifact or set ASSEMBLYWRIGHT_EVIDENCE_OVERWRITE_OUTPUT=true for an intentional replacement"
   fi
 }
 
@@ -940,8 +940,8 @@ import zipfile
 
 zip_path = sys.argv[1]
 required_entries = (
-    "Assemblywright.app/Contents/MacOS/JarvisMacApp",
-    "Assemblywright.app/Contents/Resources/bin/jarvis-cli",
+    "Assemblywright.app/Contents/MacOS/AssemblywrightMacApp",
+    "Assemblywright.app/Contents/Resources/bin/assemblywright-cli",
     "Assemblywright.app/Contents/Info.plist",
 )
 
@@ -1056,7 +1056,7 @@ PY
 
 validate_local_distribution_evidence() {
   if [[ "$VALIDATE_LOCAL_SIGNATURES" != true ]]; then
-    printf 'warning: local signature/stapling validation skipped by JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false\n' >&2
+    printf 'warning: local signature/stapling validation skipped by ASSEMBLYWRIGHT_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false\n' >&2
     return
   fi
 
@@ -1103,14 +1103,14 @@ write_bundle() {
     "$signed_provenance_sha" \
     "$live_sha" \
     "$local_signature_validation" \
-    "$JARVIS_EVIDENCE_OWNER_NAME" \
-    "$JARVIS_EVIDENCE_COMPLETED_AT" \
-    "$JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE" \
-    "$JARVIS_EVIDENCE_NOTARIZATION_NOTE" \
-    "$JARVIS_EVIDENCE_CLEAN_PROFILE_NOTE" \
-    "$JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE" \
-    "$JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE" \
-    "$JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI" <<'PY'
+    "$ASSEMBLYWRIGHT_EVIDENCE_OWNER_NAME" \
+    "$ASSEMBLYWRIGHT_EVIDENCE_COMPLETED_AT" \
+    "$ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_NOTE" \
+    "$ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_NOTE" \
+    "$ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_NOTE" \
+    "$ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_NOTE" \
+    "$ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVE_NOTE" \
+    "$ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVE_URI" <<'PY'
 import json
 import sys
 
@@ -1200,33 +1200,33 @@ write_env_template() {
 #   set +a
 #   ./scripts/release-evidence-bundle.sh --bundle
 
-JARVIS_EVIDENCE_VERSION="$VERSION"
-JARVIS_EVIDENCE_DIST_DIR="$DIST_DIR"
-JARVIS_EVIDENCE_APP_PATH="$APP_PATH"
-JARVIS_EVIDENCE_ZIP_PATH="$ZIP_PATH"
-JARVIS_EVIDENCE_PKG_PATH="$PKG_PATH"
-JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$SIGNED_PROVENANCE_REPORT"
-JARVIS_EVIDENCE_LIVE_QA_REPORT="$LIVE_QA_REPORT"
-JARVIS_EVIDENCE_OUTPUT_PATH="$OUTPUT_PATH"
-JARVIS_EVIDENCE_OVERWRITE_OUTPUT=false
-JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=true
-JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID="$EXPECTED_BUNDLE_ID"
-JARVIS_EVIDENCE_EXPECTED_VERSION="$EXPECTED_VERSION"
+ASSEMBLYWRIGHT_EVIDENCE_VERSION="$VERSION"
+ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$DIST_DIR"
+ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$APP_PATH"
+ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="$ZIP_PATH"
+ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="$PKG_PATH"
+ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT="$SIGNED_PROVENANCE_REPORT"
+ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$LIVE_QA_REPORT"
+ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$OUTPUT_PATH"
+ASSEMBLYWRIGHT_EVIDENCE_OVERWRITE_OUTPUT=false
+ASSEMBLYWRIGHT_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=true
+ASSEMBLYWRIGHT_EVIDENCE_EXPECTED_BUNDLE_ID="$EXPECTED_BUNDLE_ID"
+ASSEMBLYWRIGHT_EVIDENCE_EXPECTED_VERSION="$EXPECTED_VERSION"
 
-JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=false
-JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=false
-JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=false
-JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=false
-JARVIS_EVIDENCE_REPORTS_ARCHIVED=false
+ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=false
+ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_VALIDATED=false
+ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_VALIDATED=false
+ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=false
+ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVED=false
 
-JARVIS_EVIDENCE_OWNER_NAME=""
-JARVIS_EVIDENCE_COMPLETED_AT=""
-JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE=""
-JARVIS_EVIDENCE_NOTARIZATION_NOTE=""
-JARVIS_EVIDENCE_CLEAN_PROFILE_NOTE=""
-JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE=""
-JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE=""
-JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI=""
+ASSEMBLYWRIGHT_EVIDENCE_OWNER_NAME=""
+ASSEMBLYWRIGHT_EVIDENCE_COMPLETED_AT=""
+ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_NOTE=""
+ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_NOTE=""
+ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_NOTE=""
+ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_NOTE=""
+ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVE_NOTE=""
+ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVE_URI=""
 EOF
 }
 
@@ -1283,7 +1283,7 @@ if [[ "$WRITE_TEMPLATE" == true ]]; then
 fi
 
 if [[ "$SELF_TEST" == true ]]; then
-  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/jarvis-release-evidence-self-test.XXXXXX")"
+  tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/assemblywright-release-evidence-self-test.XXXXXX")"
   trap 'rm -rf "$tmp_dir"' EXIT
   self_test_zip="$tmp_dir/dist/Assemblywright-$VERSION.zip"
   self_test_pkg="$tmp_dir/dist/Assemblywright-$VERSION.pkg"
@@ -1293,7 +1293,7 @@ if [[ "$SELF_TEST" == true ]]; then
 <plist version="1.0">
 <dict>
   <key>CFBundleIdentifier</key>
-  <string>com.nobiletechnology.jarvis</string>
+  <string>com.nobiletechnology.assemblywright</string>
   <key>CFBundleShortVersionString</key>
   <string>$VERSION</string>
   <key>CFBundleVersion</key>
@@ -1301,23 +1301,23 @@ if [[ "$SELF_TEST" == true ]]; then
 </dict>
 </plist>
 XML
-  touch "$tmp_dir/dist/Assemblywright.app/Contents/MacOS/JarvisMacApp"
-  cat >"$tmp_dir/dist/Assemblywright.app/Contents/Resources/bin/jarvis-cli" <<EOF
+  touch "$tmp_dir/dist/Assemblywright.app/Contents/MacOS/AssemblywrightMacApp"
+  cat >"$tmp_dir/dist/Assemblywright.app/Contents/Resources/bin/assemblywright-cli" <<EOF
 #!/usr/bin/env bash
 if [[ "\${1:-}" == "--version" ]]; then
   printf 'assemblywright $VERSION\n'
   exit 0
 fi
-printf 'self-test jarvis-cli fixture\n'
+printf 'self-test assemblywright-cli fixture\n'
 EOF
-  printf 'assemblywright %s\n' "$VERSION" >"$tmp_dir/dist/Assemblywright.app/Contents/Resources/bin/jarvis-cli.version"
-  chmod 755 "$tmp_dir/dist/Assemblywright.app/Contents/MacOS/JarvisMacApp" "$tmp_dir/dist/Assemblywright.app/Contents/Resources/bin/jarvis-cli"
+  printf 'assemblywright %s\n' "$VERSION" >"$tmp_dir/dist/Assemblywright.app/Contents/Resources/bin/assemblywright-cli.version"
+  chmod 755 "$tmp_dir/dist/Assemblywright.app/Contents/MacOS/AssemblywrightMacApp" "$tmp_dir/dist/Assemblywright.app/Contents/Resources/bin/assemblywright-cli"
   (cd "$tmp_dir/dist" && zip -qr "$self_test_zip" Assemblywright.app)
   touch "$self_test_pkg"
   self_test_zip_sha="$(file_sha256 "$self_test_zip")"
   self_test_pkg_sha="$(file_sha256 "$self_test_pkg")"
-  self_test_app_executable_sha="$(file_sha256 "$tmp_dir/dist/Assemblywright.app/Contents/MacOS/JarvisMacApp")"
-  self_test_core_sha="$(file_sha256 "$tmp_dir/dist/Assemblywright.app/Contents/Resources/bin/jarvis-cli")"
+  self_test_app_executable_sha="$(file_sha256 "$tmp_dir/dist/Assemblywright.app/Contents/MacOS/AssemblywrightMacApp")"
+  self_test_core_sha="$(file_sha256 "$tmp_dir/dist/Assemblywright.app/Contents/Resources/bin/assemblywright-cli")"
   cat >"$tmp_dir/app-zip-notarytool.log" <<'LOG'
 id: 00000000-0000-4000-8000-000000000001
 status: Accepted
@@ -1353,19 +1353,19 @@ LOG
     "manual_release_qa_evidence_note": "Observed manual release QA surfaces in the controlled release lane."
   },
   "app_bundle": {
-    "bundle_identifier": "com.nobiletechnology.jarvis",
+    "bundle_identifier": "com.nobiletechnology.assemblywright",
     "short_version": "$VERSION",
     "build_version": "$VERSION"
   },
   "app_executable": {
-    "executable_path": "/Applications/Assemblywright.app/Contents/MacOS/JarvisMacApp",
+    "executable_path": "/Applications/Assemblywright.app/Contents/MacOS/AssemblywrightMacApp",
     "sha256": "$self_test_app_executable_sha",
-    "code_identifier": "com.nobiletechnology.jarvis",
+    "code_identifier": "com.nobiletechnology.assemblywright",
     "team_identifier": "9VZ742YKV4",
     "cdhash": "0123456789abcdef0123456789abcdef01234567"
   },
   "bundled_core": {
-    "executable_path": "/Applications/Assemblywright.app/Contents/Resources/bin/jarvis-cli",
+    "executable_path": "/Applications/Assemblywright.app/Contents/Resources/bin/assemblywright-cli",
     "version": "assemblywright $VERSION",
     "sha256": "$self_test_core_sha"
   },
@@ -1378,16 +1378,16 @@ JSON
   "evidence_type": "signed_distribution_provenance",
   "generated_at": "2026-05-22T16:40:00Z",
   "version": "$VERSION",
-  "bundle_identifier": "com.nobiletechnology.jarvis",
+  "bundle_identifier": "com.nobiletechnology.assemblywright",
   "artifacts": {
     "app_path": "$tmp_dir/dist/Assemblywright.app",
     "zip_path": "$self_test_zip",
     "pkg_path": "$self_test_pkg",
     "zip_sha256": "$self_test_zip_sha",
     "pkg_sha256": "$self_test_pkg_sha",
-    "app_executable_path": "$tmp_dir/dist/Assemblywright.app/Contents/MacOS/JarvisMacApp",
+    "app_executable_path": "$tmp_dir/dist/Assemblywright.app/Contents/MacOS/AssemblywrightMacApp",
     "app_executable_sha256": "$self_test_app_executable_sha",
-    "bundled_core_path": "$tmp_dir/dist/Assemblywright.app/Contents/Resources/bin/jarvis-cli",
+    "bundled_core_path": "$tmp_dir/dist/Assemblywright.app/Contents/Resources/bin/assemblywright-cli",
     "bundled_core_sha256": "$self_test_core_sha",
     "bundled_core_version": "assemblywright $VERSION"
   },
@@ -1396,7 +1396,7 @@ JSON
     "developer_id_installer_identity": "Developer ID Installer: Assemblywright QA Fixture",
     "app_bundle_codesign": "Authority=Developer ID Application: Assemblywright QA Fixture",
     "app_executable_codesign": "Authority=Developer ID Application: Assemblywright QA Fixture",
-    "app_executable_identifier": "com.nobiletechnology.jarvis",
+    "app_executable_identifier": "com.nobiletechnology.assemblywright",
     "app_executable_team_identifier": "9VZ742YKV4",
     "app_executable_cdhash": "0123456789abcdef0123456789abcdef01234567",
     "bundled_core_codesign": "Authority=Developer ID Application: Assemblywright QA Fixture",
@@ -1454,61 +1454,61 @@ PY
   "$0" --write-template "$tmp_dir/release-evidence-bundle.env" >/dev/null
   require_file "release evidence template" "$tmp_dir/release-evidence-bundle.env"
   for field in \
-    JARVIS_EVIDENCE_VERSION \
-    JARVIS_EVIDENCE_APP_PATH \
-    JARVIS_EVIDENCE_ZIP_PATH \
-    JARVIS_EVIDENCE_PKG_PATH \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT \
-    JARVIS_EVIDENCE_OUTPUT_PATH \
-    JARVIS_EVIDENCE_OVERWRITE_OUTPUT \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES \
-    JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID \
-    JARVIS_EVIDENCE_EXPECTED_VERSION \
-    JARVIS_EVIDENCE_OWNER_NAME \
-    JARVIS_EVIDENCE_COMPLETED_AT \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE \
-    JARVIS_EVIDENCE_NOTARIZATION_NOTE \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_NOTE \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI; do
+    ASSEMBLYWRIGHT_EVIDENCE_VERSION \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH \
+    ASSEMBLYWRIGHT_EVIDENCE_OVERWRITE_OUTPUT \
+    ASSEMBLYWRIGHT_EVIDENCE_VALIDATE_LOCAL_SIGNATURES \
+    ASSEMBLYWRIGHT_EVIDENCE_EXPECTED_BUNDLE_ID \
+    ASSEMBLYWRIGHT_EVIDENCE_EXPECTED_VERSION \
+    ASSEMBLYWRIGHT_EVIDENCE_OWNER_NAME \
+    ASSEMBLYWRIGHT_EVIDENCE_COMPLETED_AT \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_NOTE \
+    ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_NOTE \
+    ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_NOTE \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_NOTE \
+    ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVE_NOTE \
+    ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVE_URI; do
     require_file_contains "release evidence template" "$tmp_dir/release-evidence-bundle.env" "$field="
   done
   for flag in \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED; do
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED \
+    ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_VALIDATED \
+    ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_VALIDATED \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_VALIDATED \
+    ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVED; do
     require_file_contains "release evidence template" "$tmp_dir/release-evidence-bundle.env" "$flag=false"
     if grep -F "$flag=true" "$tmp_dir/release-evidence-bundle.env" >/dev/null 2>&1; then
       fail "release evidence template must not default $flag to true"
     fi
   done
-  export JARVIS_EVIDENCE_OWNER_NAME="Assemblywright Release Self-Test"
-  export JARVIS_EVIDENCE_COMPLETED_AT="2026-05-22T16:45:00Z"
-  export JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE="Signed distribution provenance reviewed in the controlled release lane."
-  export JARVIS_EVIDENCE_NOTARIZATION_NOTE="Notarization evidence reviewed in the controlled release lane."
-  export JARVIS_EVIDENCE_CLEAN_PROFILE_NOTE="Clean profile evidence reviewed in the controlled release lane."
-  export JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE="Live-device QA evidence reviewed in the controlled release lane."
-  export JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE=$'Release evidence reports archived in the controlled release lane.\nArchive reviewer noted "release archive index" and preserved backslash \\ marker.'
-  export JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI="file:///Users/jarvis/releases/evidence-archive"
+  export ASSEMBLYWRIGHT_EVIDENCE_OWNER_NAME="Assemblywright Release Self-Test"
+  export ASSEMBLYWRIGHT_EVIDENCE_COMPLETED_AT="2026-05-22T16:45:00Z"
+  export ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_NOTE="Signed distribution provenance reviewed in the controlled release lane."
+  export ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_NOTE="Notarization evidence reviewed in the controlled release lane."
+  export ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_NOTE="Clean profile evidence reviewed in the controlled release lane."
+  export ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_NOTE="Live-device QA evidence reviewed in the controlled release lane."
+  export ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVE_NOTE=$'Release evidence reports archived in the controlled release lane.\nArchive reviewer noted "release archive index" and preserved backslash \\ marker.'
+  export ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVE_URI="file:///Users/assemblywright/releases/evidence-archive"
 
-  JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
-    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+  ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_SELF_TEST_MODE=true \
+    ASSEMBLYWRIGHT_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"reports_archived": true'
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"schema_version": 1'
@@ -1531,100 +1531,100 @@ if "\n" not in note or '"release archive index"' not in note or "\\ marker" not 
     raise SystemExit("release evidence self-test expected structured JSON writer to preserve multiline reports archive note")
 PY
 
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/temp-archive-uri-bundle.json" \
-    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI="file:///tmp/jarvis/release-evidence" \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/temp-archive-uri-bundle.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_SELF_TEST_MODE=true \
+    ASSEMBLYWRIGHT_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVE_URI="file:///tmp/assemblywright/release-evidence" \
     "$0" --bundle >/dev/null 2>"$tmp_dir/temp-archive-uri.err"; then
     fail "release evidence self-test expected temporary reports archive URI to be rejected"
   fi
   require_file_contains "temporary reports archive URI error" "$tmp_dir/temp-archive-uri.err" "durable release evidence archive"
 
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bare-archive-uri-bundle.json" \
-    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI="release-evidence/archive" \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/bare-archive-uri-bundle.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_SELF_TEST_MODE=true \
+    ASSEMBLYWRIGHT_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVE_URI="release-evidence/archive" \
     "$0" --bundle >/dev/null 2>"$tmp_dir/bare-archive-uri.err"; then
     fail "release evidence self-test expected bare reports archive location to be rejected"
   fi
   require_file_contains "bare reports archive URI error" "$tmp_dir/bare-archive-uri.err" "must be a URI with a scheme"
 
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OVERWRITE_OUTPUT=true \
-    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OVERWRITE_OUTPUT=true \
+    ASSEMBLYWRIGHT_EVIDENCE_SELF_TEST_MODE=true \
+    ASSEMBLYWRIGHT_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>"$tmp_dir/output-collision.err"; then
     fail "release evidence self-test expected bundle output collision to be rejected"
   fi
   require_file_contains "bundle output collision error" "$tmp_dir/output-collision.err" "must not overwrite live-device QA report"
 
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
-    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_SELF_TEST_MODE=true \
+    ASSEMBLYWRIGHT_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>"$tmp_dir/existing-output.err"; then
     fail "release evidence self-test expected existing bundle output to be rejected"
   fi
   require_file_contains "existing bundle output error" "$tmp_dir/existing-output.err" "release evidence bundle output already exists"
 
-  JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
-    JARVIS_EVIDENCE_OVERWRITE_OUTPUT=true \
-    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+  ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OVERWRITE_OUTPUT=true \
+    ASSEMBLYWRIGHT_EVIDENCE_SELF_TEST_MODE=true \
+    ASSEMBLYWRIGHT_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null
   require_json_contains "release evidence self-test overwritten bundle" "$tmp_dir/bundle.json" '"evidence_type": "release_evidence_bundle"'
 
@@ -1644,41 +1644,41 @@ PY
   fi
   require_file_contains "placeholder archive URI error" "$tmp_dir/placeholder-archive.err" "durable release evidence archive"
 
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/placeholder-note-bundle.json" \
-    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE="pending external archive" \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/placeholder-note-bundle.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_SELF_TEST_MODE=true \
+    ASSEMBLYWRIGHT_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_NOTE="pending external archive" \
     "$0" --bundle >/dev/null 2>"$tmp_dir/placeholder-note.err"; then
     fail "release evidence self-test expected placeholder owner evidence note to be rejected"
   fi
   require_file_contains "placeholder owner evidence note error" "$tmp_dir/placeholder-note.err" "owner-recorded external evidence"
 
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/embedded-fixture-note-bundle.json" \
-    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE="Signed distribution fixture was archived." \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/embedded-fixture-note-bundle.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_SELF_TEST_MODE=true \
+    ASSEMBLYWRIGHT_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_NOTE="Signed distribution fixture was archived." \
     "$0" --bundle >/dev/null 2>"$tmp_dir/embedded-fixture-note.err"; then
     fail "release evidence self-test expected embedded fixture owner evidence note to be rejected"
   fi
@@ -1688,20 +1688,20 @@ PY
   mkdir -p "$tmp_dir/nested/payload"
   cp -R "$tmp_dir/dist/Assemblywright.app" "$tmp_dir/nested/payload/Assemblywright.app"
   (cd "$tmp_dir/nested" && zip -qr "$nested_zip" payload/Assemblywright.app)
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="$nested_zip" \
-    JARVIS_EVIDENCE_PKG_PATH="$self_test_pkg" \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/nested-zip-bundle.json" \
-    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="$nested_zip" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="$self_test_pkg" \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/nested-zip-bundle.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_SELF_TEST_MODE=true \
+    ASSEMBLYWRIGHT_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
     fail "release evidence self-test expected nested app zip payload to be rejected"
   fi
@@ -1717,20 +1717,20 @@ data["gatekeeper"]["app_bundle_assessment"] = "not accepted"
 with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/negated-gatekeeper-signed-provenance.json" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/negated-gatekeeper-bundle.json" \
-    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/negated-gatekeeper-signed-provenance.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/negated-gatekeeper-bundle.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_SELF_TEST_MODE=true \
+    ASSEMBLYWRIGHT_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
     fail "release evidence self-test expected negated Gatekeeper acceptance to be rejected"
   fi
@@ -1746,76 +1746,76 @@ data["notarization"]["installer_pkg_status"] = "In Progress"
 with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/pending-notary-signed-provenance.json" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/pending-notary-bundle.json" \
-    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/pending-notary-signed-provenance.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/pending-notary-bundle.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_SELF_TEST_MODE=true \
+    ASSEMBLYWRIGHT_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
     fail "release evidence self-test expected pending notary status to be rejected"
   fi
 
-  printf 'assemblywright 0.0.0\n' >"$tmp_dir/dist/Assemblywright.app/Contents/Resources/bin/jarvis-cli.version"
+  printf 'assemblywright 0.0.0\n' >"$tmp_dir/dist/Assemblywright.app/Contents/Resources/bin/assemblywright-cli.version"
   stale_marker_output=""
-  stale_marker_output="$(JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/stale-marker-bundle.json" \
-    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+  stale_marker_output="$(ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/stale-marker-bundle.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_SELF_TEST_MODE=true \
+    ASSEMBLYWRIGHT_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle 2>&1 >/dev/null || true)"
   if [[ "$stale_marker_output" != *"./scripts/package-distribution.sh --unsigned-launch-check"* ]]; then
     fail "release evidence self-test expected stale bundled core guidance to include package-distribution.sh --unsigned-launch-check"
   fi
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/stale-marker-bundle.json" \
-    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/stale-marker-bundle.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_SELF_TEST_MODE=true \
+    ASSEMBLYWRIGHT_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
     fail "release evidence self-test expected stale bundled core version marker to be rejected"
   fi
-  printf 'assemblywright %s\n' "$VERSION" >"$tmp_dir/dist/Assemblywright.app/Contents/Resources/bin/jarvis-cli.version"
+  printf 'assemblywright %s\n' "$VERSION" >"$tmp_dir/dist/Assemblywright.app/Contents/Resources/bin/assemblywright-cli.version"
 
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/forbidden-bundle.json" \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/forbidden-bundle.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
     fail "release evidence self-test expected production bundle to reject disabled local signature validation"
   fi
@@ -1828,19 +1828,19 @@ PY
   "proof_boundary": "incomplete self-test fixture"
 }
 JSON
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/incomplete-live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/incomplete-live-bundle.json" \
-    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/incomplete-live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/incomplete-live-bundle.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_SELF_TEST_MODE=true \
+    ASSEMBLYWRIGHT_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
     fail "release evidence self-test expected incomplete live-device report to be rejected"
   fi
@@ -1856,19 +1856,19 @@ data["installed_app_path"] = "/tmp/Assemblywright.app"
 with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/mismatched-installed-app-live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/mismatched-installed-app-bundle.json" \
-    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/mismatched-installed-app-live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/mismatched-installed-app-bundle.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_SELF_TEST_MODE=true \
+    ASSEMBLYWRIGHT_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
     fail "release evidence self-test expected mismatched installed app path to be rejected"
   fi
@@ -1884,19 +1884,19 @@ data["generated_at"] = "2026-05-22T16:04:00Z"
 with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/pregenerated-live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/pregenerated-live-bundle.json" \
-    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/pregenerated-live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/pregenerated-live-bundle.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_SELF_TEST_MODE=true \
+    ASSEMBLYWRIGHT_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
     fail "release evidence self-test expected live report generated before completion to be rejected"
   fi
@@ -1912,20 +1912,20 @@ data["bundled_core"]["sha256"] = "0123456789abcdef0123456789abcdef0123456789abcd
 with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/mismatched-core-digest-live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/mismatched-core-digest-bundle.json" \
-    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/mismatched-core-digest-live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/mismatched-core-digest-bundle.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_SELF_TEST_MODE=true \
+    ASSEMBLYWRIGHT_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
     fail "release evidence self-test expected mismatched live bundled-core digest to be rejected"
   fi
@@ -1941,20 +1941,20 @@ data["generated_at"] = "2026-05-22T16:50:00Z"
 with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/post-completion-live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/post-completion-live-bundle.json" \
-    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/post-completion-live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/post-completion-live-bundle.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_SELF_TEST_MODE=true \
+    ASSEMBLYWRIGHT_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
     fail "release evidence self-test expected child report generated after owner completion to be rejected"
   fi
@@ -1970,20 +1970,20 @@ data["artifacts"]["zip_sha256"] = "0123456789abcdef0123456789abcdef0123456789abc
 with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/stale-digest-signed-provenance.json" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/stale-digest-bundle.json" \
-    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/stale-digest-signed-provenance.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/stale-digest-bundle.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_SELF_TEST_MODE=true \
+    ASSEMBLYWRIGHT_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
 	    fail "release evidence self-test expected stale signed provenance digest to be rejected"
 	  fi
@@ -1999,20 +1999,20 @@ data["notarization"]["app_zip_notary_log_sha256"] = "0123456789abcdef0123456789a
 with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/stale-notary-log-signed-provenance.json" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/stale-notary-log-bundle.json" \
-    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/stale-notary-log-signed-provenance.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/stale-notary-log-bundle.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_SELF_TEST_MODE=true \
+    ASSEMBLYWRIGHT_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
     fail "release evidence self-test expected stale signed provenance notary log digest to be rejected"
   fi
@@ -2028,20 +2028,20 @@ data["signing"]["app_bundle_codesign"] = "Authority=Apple Development: Assemblyw
 with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/bad-apple-tool-signed-provenance.json" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bad-apple-tool-bundle.json" \
-    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
+  if ASSEMBLYWRIGHT_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
+    ASSEMBLYWRIGHT_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
+    ASSEMBLYWRIGHT_EVIDENCE_ZIP_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_PKG_PATH="" \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/bad-apple-tool-signed-provenance.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_OUTPUT_PATH="$tmp_dir/bad-apple-tool-bundle.json" \
+    ASSEMBLYWRIGHT_EVIDENCE_SELF_TEST_MODE=true \
+    ASSEMBLYWRIGHT_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
+    ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
+    ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
     fail "release evidence self-test expected non-Developer-ID signed provenance evidence to be rejected"
   fi
@@ -2104,7 +2104,7 @@ Required before --bundle:
   exists.
 - Marketplace review, malware scan, signed publisher policy, OS sandbox, and
   host-level egress evidence report exists.
-- Owner sets every JARVIS_EVIDENCE_* validation flag to true and fills the
+- Owner sets every ASSEMBLYWRIGHT_EVIDENCE_* validation flag to true and fills the
   owner name, completion timestamp, evidence notes, and reports archive URI.
 - After the matching external checks complete, generate and source the
   sourceable final-bundle environment file, then bundle it:
@@ -2135,16 +2135,16 @@ require_json_string_equals "signed-distribution provenance report" "$SIGNED_PROV
 require_json_string_equals "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.app_path" "$APP_PATH"
 require_json_string_equals "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.zip_path" "$ZIP_PATH"
 require_json_string_equals "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.pkg_path" "$PKG_PATH"
-require_json_string_equals "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.app_executable_path" "$APP_PATH/Contents/MacOS/JarvisMacApp"
-require_json_string_equals "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.bundled_core_path" "$APP_PATH/Contents/Resources/bin/jarvis-cli"
+require_json_string_equals "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.app_executable_path" "$APP_PATH/Contents/MacOS/AssemblywrightMacApp"
+require_json_string_equals "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.bundled_core_path" "$APP_PATH/Contents/Resources/bin/assemblywright-cli"
 require_json_string_equals "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.bundled_core_version" "assemblywright $EXPECTED_VERSION"
 for field in artifacts.zip_sha256 artifacts.pkg_sha256 artifacts.app_executable_sha256 artifacts.bundled_core_sha256; do
   require_json_sha256 "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "$field"
 done
 require_json_sha256_matches_file "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.zip_sha256" "app zip artifact" "$ZIP_PATH"
 require_json_sha256_matches_file "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.pkg_sha256" "installer package artifact" "$PKG_PATH"
-require_json_sha256_matches_file "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.app_executable_sha256" "app executable" "$APP_PATH/Contents/MacOS/JarvisMacApp"
-require_json_sha256_matches_file "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.bundled_core_sha256" "bundled core executable" "$APP_PATH/Contents/Resources/bin/jarvis-cli"
+require_json_sha256_matches_file "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.app_executable_sha256" "app executable" "$APP_PATH/Contents/MacOS/AssemblywrightMacApp"
+require_json_sha256_matches_file "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.bundled_core_sha256" "bundled core executable" "$APP_PATH/Contents/Resources/bin/assemblywright-cli"
 for flag in developer_id_application_signed developer_id_installer_signed app_zip_notarized installer_pkg_notarized app_stapled installer_pkg_stapled gatekeeper_assessed artifact_digests_recorded app_executable_identity_recorded; do
   require_json_bool_true "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "validation_flags.$flag"
 done
@@ -2193,7 +2193,7 @@ require_json_timestamp_order "live-device QA report" "$LIVE_QA_REPORT" "owner_re
 require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.bundle_identifier" "$EXPECTED_BUNDLE_ID"
 require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.short_version" "$EXPECTED_VERSION"
 require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.build_version" "$EXPECTED_VERSION"
-require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "app_executable.executable_path" "$EXPECTED_INSTALLED_APP_PATH/Contents/MacOS/JarvisMacApp"
+require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "app_executable.executable_path" "$EXPECTED_INSTALLED_APP_PATH/Contents/MacOS/AssemblywrightMacApp"
 require_json_sha256 "live-device QA report" "$LIVE_QA_REPORT" "app_executable.sha256"
 require_json_app_code_identity "live-device QA report" "$LIVE_QA_REPORT" \
   "app_executable.code_identifier" "app_executable.team_identifier" \
@@ -2201,7 +2201,7 @@ require_json_app_code_identity "live-device QA report" "$LIVE_QA_REPORT" \
 require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "signed_provenance.report_path" "$SIGNED_PROVENANCE_REPORT"
 require_json_sha256 "live-device QA report" "$LIVE_QA_REPORT" "signed_provenance.sha256"
 require_json_sha256_matches_file "live-device QA report" "$LIVE_QA_REPORT" "signed_provenance.sha256" "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT"
-require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.executable_path" "$EXPECTED_INSTALLED_APP_PATH/Contents/Resources/bin/jarvis-cli"
+require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.executable_path" "$EXPECTED_INSTALLED_APP_PATH/Contents/Resources/bin/assemblywright-cli"
 require_json_string_equals "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.version" "assemblywright $EXPECTED_VERSION"
 require_json_sha256 "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.sha256"
 require_json_fields_equal "live-device bundled-core digest" "$LIVE_QA_REPORT" "bundled_core.sha256" "$SIGNED_PROVENANCE_REPORT" "artifacts.bundled_core_sha256"
@@ -2209,19 +2209,19 @@ require_json_fields_equal "live-device app-executable digest" "$LIVE_QA_REPORT" 
 require_json_fields_equal "live-device app-executable identifier" "$LIVE_QA_REPORT" "app_executable.code_identifier" "$SIGNED_PROVENANCE_REPORT" "signing.app_executable_identifier"
 require_json_fields_equal "live-device app-executable team identifier" "$LIVE_QA_REPORT" "app_executable.team_identifier" "$SIGNED_PROVENANCE_REPORT" "signing.app_executable_team_identifier"
 require_json_fields_equal "live-device app-executable CDHash" "$LIVE_QA_REPORT" "app_executable.cdhash" "$SIGNED_PROVENANCE_REPORT" "signing.app_executable_cdhash"
-require_true JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED
-require_true JARVIS_EVIDENCE_NOTARIZATION_VALIDATED
-require_true JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED
-require_true JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED
-require_true JARVIS_EVIDENCE_REPORTS_ARCHIVED
-require_non_empty_env JARVIS_EVIDENCE_OWNER_NAME
-require_not_future_timestamp_env JARVIS_EVIDENCE_COMPLETED_AT
-require_meaningful_evidence_env JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE
-require_meaningful_evidence_env JARVIS_EVIDENCE_NOTARIZATION_NOTE
-require_meaningful_evidence_env JARVIS_EVIDENCE_CLEAN_PROFILE_NOTE
-require_meaningful_evidence_env JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE
-require_meaningful_evidence_env JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE
-require_reports_archive_uri_env JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI
+require_true ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED
+require_true ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_VALIDATED
+require_true ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_VALIDATED
+require_true ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_VALIDATED
+require_true ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVED
+require_non_empty_env ASSEMBLYWRIGHT_EVIDENCE_OWNER_NAME
+require_not_future_timestamp_env ASSEMBLYWRIGHT_EVIDENCE_COMPLETED_AT
+require_meaningful_evidence_env ASSEMBLYWRIGHT_EVIDENCE_SIGNED_DISTRIBUTION_NOTE
+require_meaningful_evidence_env ASSEMBLYWRIGHT_EVIDENCE_NOTARIZATION_NOTE
+require_meaningful_evidence_env ASSEMBLYWRIGHT_EVIDENCE_CLEAN_PROFILE_NOTE
+require_meaningful_evidence_env ASSEMBLYWRIGHT_EVIDENCE_LIVE_DEVICE_QA_NOTE
+require_meaningful_evidence_env ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVE_NOTE
+require_reports_archive_uri_env ASSEMBLYWRIGHT_EVIDENCE_REPORTS_ARCHIVE_URI
 write_bundle
 require_json_number_equals "release evidence bundle" "$OUTPUT_PATH" "schema_version" "1"
 require_json_string_equals "release evidence bundle" "$OUTPUT_PATH" "evidence_type" "release_evidence_bundle"

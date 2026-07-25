@@ -7,7 +7,7 @@ export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-$ROOT_DIR/target/clan
 mkdir -p "$CLANG_MODULE_CACHE_PATH"
 
 run() {
-  local heartbeat_seconds="${JARVIS_RELEASE_LOCAL_HEARTBEAT_SECONDS:-0}"
+  local heartbeat_seconds="${ASSEMBLYWRIGHT_RELEASE_LOCAL_HEARTBEAT_SECONDS:-0}"
   local started_at start_epoch end_epoch duration status
   started_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
   start_epoch="$(date -u '+%s')"
@@ -54,7 +54,7 @@ run() {
 
 heartbeat_self_test() {
   local output
-  if ! output="$(JARVIS_RELEASE_LOCAL_HEARTBEAT_SECONDS=1 run bash -c 'sleep 2' 2>&1)"; then
+  if ! output="$(ASSEMBLYWRIGHT_RELEASE_LOCAL_HEARTBEAT_SECONDS=1 run bash -c 'sleep 2' 2>&1)"; then
     printf '%s\n' "$output" >&2
     printf 'error: release-local heartbeat self-test command failed\n' >&2
     exit 1

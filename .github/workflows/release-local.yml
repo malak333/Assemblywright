@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: jarvis-release-local-${{ github.workflow }}-${{ github.ref }}
+  group: assemblywright-release-local-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -38,5 +38,5 @@ jobs:
 
       - name: Run local release verification
         env:
-          JARVIS_RELEASE_LOCAL_HEARTBEAT_SECONDS: "60"
+          ASSEMBLYWRIGHT_RELEASE_LOCAL_HEARTBEAT_SECONDS: "60"
         run: ./scripts/release-local.sh
