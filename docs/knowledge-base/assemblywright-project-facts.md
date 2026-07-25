@@ -90,9 +90,31 @@ assemblywright-master.exe service status --service-name AssemblywrightMaster
 Stop and uninstall still use the *old* service name, because that is what is
 registered; install creates the new one. The subcommand is `service <verb>`, not
 `service-<verb>`; `service-run` is the hidden SCM entry point and is never
-invoked by hand. `install` and `uninstall` both require `--confirm`, and
-owner-account installation requires `--credentials-stdin` because passwords must
-never appear in argv.
+invoked by hand. `install` and `uninstall` both require `--confirm`.
+
+Owner-account installation requires `--credentials-stdin` so the password never
+reaches argv. Supplying it with `echo {...} | assemblywright-master.exe` defeats
+that: the password lands in shell history and in the `echo` process's own command
+line. Prompt for it instead, and hand the master a document built in memory:
+
+```powershell
+$secure = Read-Host -Prompt "Windows password for $account" -AsSecureString
+$bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+try {
+    $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+    (@{ account_name = $account; password = $plain } | ConvertTo-Json -Compress) |
+        & $exe --data-dir $dataDir service install --service-name AssemblywrightMaster `
+            --bind 127.0.0.1:7791 --remote-bind <overlay-ip>:7792 `
+            --identity owner-account --credentials-stdin --confirm
+} finally {
+    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+}
+```
+
+`CreateService` does not verify the password, so `install` reports success even
+when it is wrong. Only `service start` proves it: a wrong password fails there
+with `os error 1069` (logon failure), and the fix is to uninstall and reinstall.
+Always follow an install with a start before considering the host migrated.
 
 **Master state.** On its first run the master will adopt a pre-rename
 `%LOCALAPPDATA%\Jarvis\master` directory by moving it to
