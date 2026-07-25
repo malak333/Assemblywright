@@ -56,7 +56,7 @@ const MAX_MLX_EXECUTABLE_BYTES: u64 = 16 * 1024 * 1024;
 const MLX_TERM_GRACE: Duration = Duration::from_millis(150);
 const MLX_KILL_GRACE: Duration = Duration::from_secs(1);
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum MlxRuntimeError {
     #[error(transparent)]
     Protocol(#[from] ProtocolError),
@@ -78,6 +78,8 @@ pub enum MlxRuntimeError {
     InvalidOutput,
     #[error("MLX process group could not be terminated and reaped")]
     CleanupFailed,
+    #[error("MLX runtime is closed because a previous process group could not be proven reaped")]
+    CleanupUnproven,
     #[error("MLX runtime state is unavailable")]
     Unavailable,
 }
@@ -209,6 +211,10 @@ impl MlxRuntimeConfig {
 pub struct MlxJobRuntime {
     config: Option<Arc<MlxRuntimeConfig>>,
     active: Arc<Mutex<Option<ActiveMlxJob>>>,
+    /// Latched when a process group could not be proven reaped. Sticky for the
+    /// life of the process: the agent is app-supervised and default-off, so a
+    /// restart is the intended reset rather than a self-clearing timer.
+    cleanup_unproven: Arc<AtomicBool>,
 }
 
 #[derive(Clone)]
@@ -226,10 +232,45 @@ impl MlxJobRuntime {
         Self {
             config: config.map(Arc::new),
             active: Arc::new(Mutex::new(None)),
+            cleanup_unproven: Arc::new(AtomicBool::new(false)),
         }
     }
 
+    /// Report a job that already has a definite verdict, without letting a slow
+    /// or unprovable cleanup relabel it.
+    ///
+    /// `terminate_backend` failing means "I could not prove the process group is
+    /// gone". That is a fail-closed condition for the *runtime*, not this job's
+    /// outcome: a cancelled job is cancelled even when reaping was slow, and the
+    /// safety rule is that cancellation dominates completion. Masking the verdict
+    /// with `CleanupFailed` used to turn a cancellation into an internal error
+    /// under load, which lost the one fact the caller needed.
+    ///
+    /// So the verdict is preserved and the cleanup failure is latched instead.
+    /// The latch closes the runtime to new work, so an unproven reap still fails
+    /// closed rather than being swallowed.
+    fn resolve_cleanup(
+        &self,
+        cleanup: Result<(), MlxRuntimeError>,
+        verdict: MlxRuntimeError,
+    ) -> MlxRuntimeError {
+        if cleanup.is_err() {
+            self.cleanup_unproven.store(true, Ordering::SeqCst);
+        }
+        verdict
+    }
+
+    /// True once a process group could not be proven reaped. The runtime refuses
+    /// new work in that state, because it cannot promise that a previous
+    /// backend is no longer running or emitting output.
+    pub fn cleanup_unproven(&self) -> bool {
+        self.cleanup_unproven.load(Ordering::SeqCst)
+    }
+
     pub async fn execute(&self, job: JobEnvelope) -> Result<JobResultEnvelope, MlxRuntimeError> {
+        if self.cleanup_unproven() {
+            return Err(MlxRuntimeError::CleanupUnproven);
+        }
         let config = self.config.clone().ok_or(MlxRuntimeError::Disabled)?;
         let request = job.validate_mlx_reasoning()?;
         if job.selected_model != config.model_id {
@@ -437,8 +478,8 @@ impl MlxJobRuntime {
         let leader_pid = Pid::from_raw(process_group).ok_or(MlxRuntimeError::BackendFailed)?;
         active.process_group.store(process_group, Ordering::SeqCst);
         if active.cancelled.load(Ordering::SeqCst) {
-            terminate_process_group(&mut child, process_group).await?;
-            return Err(MlxRuntimeError::Cancelled);
+            let cleanup = terminate_process_group(&mut child, process_group).await;
+            return Err(self.resolve_cleanup(cleanup, MlxRuntimeError::Cancelled));
         }
         let mut stdin = child.stdin.take().ok_or(MlxRuntimeError::BackendFailed)?;
         let stdout = child.stdout.take().ok_or(MlxRuntimeError::BackendFailed)?;
@@ -471,29 +512,29 @@ impl MlxJobRuntime {
                 leader = observe_leader_exit(leader_pid) => match leader {
                     Ok(()) => break reap_exited_process_group(&mut child, process_group).await?,
                     Err(_) => {
-                        terminate_backend(
+                        let cleanup = terminate_backend(
                             &mut child,
                             process_group,
                             &mut writer,
                             writer_done,
                             &mut reader,
                             reader_done,
-                        ).await?;
-                        return Err(MlxRuntimeError::BackendFailed);
+                        ).await;
+                        return Err(self.resolve_cleanup(cleanup, MlxRuntimeError::BackendFailed));
                     }
                 },
                 result = &mut writer, if !writer_done => {
                     writer_done = true;
                     if !matches!(result, Ok(Ok(()))) {
-                        terminate_backend(
+                        let cleanup = terminate_backend(
                             &mut child,
                             process_group,
                             &mut writer,
                             writer_done,
                             &mut reader,
                             reader_done,
-                        ).await?;
-                        return Err(MlxRuntimeError::BackendFailed);
+                        ).await;
+                        return Err(self.resolve_cleanup(cleanup, MlxRuntimeError::BackendFailed));
                     }
                 }
                 result = &mut reader, if !reader_done => {
@@ -501,56 +542,56 @@ impl MlxJobRuntime {
                     let bytes = match result {
                         Ok(Ok(bytes)) => bytes,
                         _ => {
-                            terminate_backend(
+                            let cleanup = terminate_backend(
                                 &mut child,
                                 process_group,
                                 &mut writer,
                                 writer_done,
                                 &mut reader,
                                 reader_done,
-                            ).await?;
-                            return Err(MlxRuntimeError::BackendFailed);
+                            ).await;
+                            return Err(self.resolve_cleanup(cleanup, MlxRuntimeError::BackendFailed));
                         }
                     };
                     if bytes.len() > MAX_MLX_STDOUT_BYTES {
-                        terminate_backend(
+                        let cleanup = terminate_backend(
                             &mut child,
                             process_group,
                             &mut writer,
                             writer_done,
                             &mut reader,
                             reader_done,
-                        ).await?;
-                        return Err(MlxRuntimeError::InvalidOutput);
+                        ).await;
+                        return Err(self.resolve_cleanup(cleanup, MlxRuntimeError::InvalidOutput));
                     }
                     output = Some(bytes);
                 }
                 _ = active.wake.notified() => {
-                    terminate_backend(
+                    let cleanup = terminate_backend(
                         &mut child,
                         process_group,
                         &mut writer,
                         writer_done,
                         &mut reader,
                         reader_done,
-                    ).await?;
-                    return Err(MlxRuntimeError::Cancelled);
+                    ).await;
+                    return Err(self.resolve_cleanup(cleanup, MlxRuntimeError::Cancelled));
                 }
                 _ = &mut timeout => {
-                    terminate_backend(
+                    let cleanup = terminate_backend(
                         &mut child,
                         process_group,
                         &mut writer,
                         writer_done,
                         &mut reader,
                         reader_done,
-                    ).await?;
-                    return Err(MlxRuntimeError::Timeout);
+                    ).await;
+                    return Err(self.resolve_cleanup(cleanup, MlxRuntimeError::Timeout));
                 }
             }
         };
         if active.cancelled.load(Ordering::SeqCst) {
-            terminate_backend(
+            let cleanup = terminate_backend(
                 &mut child,
                 process_group,
                 &mut writer,
@@ -558,11 +599,11 @@ impl MlxJobRuntime {
                 &mut reader,
                 reader_done,
             )
-            .await?;
-            return Err(MlxRuntimeError::Cancelled);
+            .await;
+            return Err(self.resolve_cleanup(cleanup, MlxRuntimeError::Cancelled));
         }
         if !status.success() {
-            terminate_backend(
+            let cleanup = terminate_backend(
                 &mut child,
                 process_group,
                 &mut writer,
@@ -570,14 +611,14 @@ impl MlxJobRuntime {
                 &mut reader,
                 reader_done,
             )
-            .await?;
-            return Err(MlxRuntimeError::BackendFailed);
+            .await;
+            return Err(self.resolve_cleanup(cleanup, MlxRuntimeError::BackendFailed));
         }
         if !writer_done {
             match tokio::time::timeout(Duration::from_secs(1), &mut writer).await {
                 Ok(Ok(Ok(()))) => writer_done = true,
                 Err(_) => {
-                    terminate_backend(
+                    let cleanup = terminate_backend(
                         &mut child,
                         process_group,
                         &mut writer,
@@ -585,11 +626,11 @@ impl MlxJobRuntime {
                         &mut reader,
                         reader_done,
                     )
-                    .await?;
-                    return Err(MlxRuntimeError::BackendFailed);
+                    .await;
+                    return Err(self.resolve_cleanup(cleanup, MlxRuntimeError::BackendFailed));
                 }
                 Ok(_) => {
-                    terminate_backend(
+                    let cleanup = terminate_backend(
                         &mut child,
                         process_group,
                         &mut writer,
@@ -597,8 +638,8 @@ impl MlxJobRuntime {
                         &mut reader,
                         reader_done,
                     )
-                    .await?;
-                    return Err(MlxRuntimeError::BackendFailed);
+                    .await;
+                    return Err(self.resolve_cleanup(cleanup, MlxRuntimeError::BackendFailed));
                 }
             }
         }
@@ -607,7 +648,7 @@ impl MlxJobRuntime {
             None => match tokio::time::timeout(Duration::from_secs(1), &mut reader).await {
                 Ok(Ok(Ok(output))) => output,
                 Err(_) => {
-                    terminate_backend(
+                    let cleanup = terminate_backend(
                         &mut child,
                         process_group,
                         &mut writer,
@@ -615,11 +656,11 @@ impl MlxJobRuntime {
                         &mut reader,
                         false,
                     )
-                    .await?;
-                    return Err(MlxRuntimeError::BackendFailed);
+                    .await;
+                    return Err(self.resolve_cleanup(cleanup, MlxRuntimeError::BackendFailed));
                 }
                 Ok(_) => {
-                    terminate_backend(
+                    let cleanup = terminate_backend(
                         &mut child,
                         process_group,
                         &mut writer,
@@ -627,8 +668,8 @@ impl MlxJobRuntime {
                         &mut reader,
                         true,
                     )
-                    .await?;
-                    return Err(MlxRuntimeError::BackendFailed);
+                    .await;
+                    return Err(self.resolve_cleanup(cleanup, MlxRuntimeError::BackendFailed));
                 }
             },
         };
@@ -1502,6 +1543,66 @@ printf 'must-not-escape'
             matches!(execution_outcome, Err(MlxRuntimeError::Cancelled)),
             "unexpected shutdown outcome: {execution_outcome:?}"
         );
+    }
+
+    // A slow or unprovable reap must not relabel a job that already has a
+    // definite verdict. This used to fail only under CPU load, where the reap
+    // proof exceeded its budget and a cancelled job surfaced as an internal
+    // error (HTTP 500) instead of `job_cancelled` (409) — losing the one fact
+    // the caller needed and contradicting "cancellation dominates completion".
+    // Pin the precedence directly so it no longer depends on machine speed.
+    #[test]
+    fn an_unprovable_cleanup_never_overwrites_a_definite_verdict() {
+        let runtime = MlxJobRuntime::new(None);
+        assert!(!runtime.cleanup_unproven());
+
+        for verdict in [
+            MlxRuntimeError::Cancelled,
+            MlxRuntimeError::Timeout,
+            MlxRuntimeError::BackendFailed,
+            MlxRuntimeError::InvalidOutput,
+        ] {
+            let reported =
+                runtime.resolve_cleanup(Err(MlxRuntimeError::CleanupFailed), verdict.clone());
+            assert_eq!(
+                reported, verdict,
+                "cleanup failure must not replace the {verdict:?} verdict"
+            );
+        }
+
+        // Swallowing it would be the other failure mode, so the runtime latches
+        // closed instead and refuses to admit new work.
+        assert!(runtime.cleanup_unproven());
+    }
+
+    #[test]
+    fn a_proven_cleanup_leaves_the_runtime_open() {
+        let runtime = MlxJobRuntime::new(None);
+        let reported = runtime.resolve_cleanup(Ok(()), MlxRuntimeError::Cancelled);
+        assert_eq!(reported, MlxRuntimeError::Cancelled);
+        assert!(!runtime.cleanup_unproven());
+    }
+
+    #[tokio::test]
+    async fn a_latched_runtime_refuses_new_work_before_touching_the_backend() {
+        let (_directory, runtime) = mlx_runtime(
+            r#"#!/bin/sh
+cat >/dev/null
+printf 'must-not-run'
+"#,
+        );
+        runtime.resolve_cleanup(
+            Err(MlxRuntimeError::CleanupFailed),
+            MlxRuntimeError::Cancelled,
+        );
+        assert!(runtime.cleanup_unproven());
+
+        // Refusal happens before configuration or contract checks, because the
+        // runtime cannot promise the previous backend stopped emitting output.
+        assert!(matches!(
+            runtime.execute(mlx_job("after-latch")).await,
+            Err(MlxRuntimeError::CleanupUnproven)
+        ));
     }
 
     #[cfg(unix)]

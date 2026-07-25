@@ -40,7 +40,7 @@ pub const MAX_MLX_PROMPT_BYTES: usize = 32 * 1024;
 pub const MAX_MLX_TOKENS: u32 = 512;
 pub const MAX_MLX_TEMPERATURE_MILLI: u32 = 2_000;
 
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum ProtocolError {
     #[error("unsupported protocol version: expected {expected}, received {received}")]
     UnsupportedVersion { expected: u16, received: u16 },

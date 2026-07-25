@@ -240,7 +240,14 @@ an old one.
 - Planning and action stay separate. Models propose; the owner authorizes.
 - Redaction is structural: audit and event surfaces carry metadata and digests,
   never raw payloads or credentials.
-- Cancellation dominates completion and suppresses late output.
+- Cancellation dominates completion and suppresses late output. It also dominates
+  cleanup: when a job already has a definite verdict, a slow or unprovable
+  process-group reap must not relabel it. The MLX runtime latches
+  `cleanup_unproven` instead and refuses new work with
+  `mlx_cleanup_unproven` (HTTP 503) until the app-supervised agent restarts, so
+  an unproven reap fails closed without turning a cancellation into an internal
+  error. Reporting the cleanup failure *as* the job outcome was a real defect: it
+  surfaced only under CPU load, as HTTP 500 in place of 409 `job_cancelled`.
 - Emergency pause blocks new leases and publication.
 - Audit evidence commits in the same transaction as the state transition it
   describes.

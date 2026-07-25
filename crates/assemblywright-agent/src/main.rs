@@ -405,6 +405,14 @@ fn mlx_error(error: MlxRuntimeError) -> (StatusCode, Json<serde_json::Value>) {
             StatusCode::BAD_GATEWAY,
             Json(json!({"error":"mlx_backend_failed"})),
         ),
+        // The runtime latched closed because a previous process group could not
+        // be proven reaped. That is a refusal to admit work, not a failure of
+        // this request, so it is 503 with a distinguishable reason rather than an
+        // opaque 500. Restarting the app-supervised agent clears it.
+        MlxRuntimeError::CleanupUnproven => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error":"mlx_cleanup_unproven"})),
+        ),
         MlxRuntimeError::InvalidConfiguration
         | MlxRuntimeError::CleanupFailed
         | MlxRuntimeError::Unavailable => internal_error(),
