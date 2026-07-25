@@ -3,58 +3,59 @@ import JarvisMacCore
 import SwiftUI
 
 enum JarvisMenuBarContract {
-    static let mainWindowID = "jarvis-main"
+    static let mainWindowID = "assemblywright-main"
     static let title = "Assemblywright"
 }
 
 struct JarvisMenuBarPresentation: Equatable {
     let statusLine: String
     let systemImage: String
-    let canStartCore: Bool
-    let canStopCore: Bool
 
-    /// Whether the menu bar draws a state badge beside the proofmark. A healthy
-    /// core shows the mark alone; every other mode earns an indicator.
+    /// Whether the menu bar draws a state badge beside the proofmark. A
+    /// connected bridge shows the mark alone; every other phase earns an
+    /// indicator.
     let showsStateBadge: Bool
 
-    init(mode: JarvisCoreMode) {
-        switch mode {
-        case .stopped:
-            statusLine = "Core stopped"
+    init(status: JarvisDeveloperBridgeAppStatus) {
+        switch status.phase {
+        case .disabled:
+            statusLine = "Developer Mode disabled"
             systemImage = "circle"
-            canStartCore = true
-            canStopCore = false
             showsStateBadge = true
         case .starting:
-            statusLine = "Core starting"
+            statusLine = "Bridge starting"
             systemImage = "circle.dotted"
-            canStartCore = false
-            canStopCore = false
             showsStateBadge = true
-        case .available:
-            statusLine = "Core available"
+        case .connected:
+            statusLine = "Bridge connected"
             systemImage = "checkmark.circle.fill"
-            canStartCore = false
-            canStopCore = true
             showsStateBadge = false
-        case .degraded:
-            statusLine = "Core degraded"
+        case .masterOffline:
+            statusLine = "Master offline"
             systemImage = "exclamationmark.triangle.fill"
-            canStartCore = false
-            canStopCore = true
+            showsStateBadge = true
+        case .maintenance:
+            statusLine = "Master maintenance"
+            systemImage = "wrench.and.screwdriver.fill"
+            showsStateBadge = true
+        case .paused:
+            statusLine = "Bridge paused"
+            systemImage = "pause.circle.fill"
+            showsStateBadge = true
+        case .stopped:
+            statusLine = "Bridge stopped"
+            systemImage = "circle"
             showsStateBadge = true
         }
     }
 }
 
 struct JarvisMenuBarView: View {
-    @ObservedObject var supervisor: JarvisCoreSupervisor
-    @ObservedObject var console: CommandConsoleModel
-    @ObservedObject var modelConfiguration: ModelConfigurationModel
+    @ObservedObject var developerBridge: JarvisDeveloperBridgeProcessLifecycle
     @Environment(\.openWindow) private var openWindow
 
     private var presentation: JarvisMenuBarPresentation {
-        JarvisMenuBarPresentation(mode: supervisor.mode)
+        JarvisMenuBarPresentation(status: developerBridge.status)
     }
 
     var body: some View {
@@ -67,42 +68,6 @@ struct JarvisMenuBarView: View {
         Divider()
 
         Text(presentation.statusLine)
-
-        Button("Refresh Health") {
-            Task {
-                await supervisor.refreshHealth()
-                await synchronizeConsoleWithSupervisor(
-                    supervisor: supervisor,
-                    console: console,
-                    modelConfiguration: modelConfiguration
-                )
-            }
-        }
-
-        Button("Start Core") {
-            Task {
-                await supervisor.start(
-                    environmentOverrides: modelConfiguration.launchEnvironmentOverrides
-                )
-                await synchronizeConsoleWithSupervisor(
-                    supervisor: supervisor,
-                    console: console,
-                    modelConfiguration: modelConfiguration
-                )
-            }
-        }
-        .disabled(!presentation.canStartCore)
-
-        Button("Stop Core") {
-            Task {
-                guard await supervisor.stop() else {
-                    console.markDegraded("Assemblywright core did not stop before the shutdown timeout.")
-                    return
-                }
-                console.markDegraded("Assemblywright core was stopped from the menu bar.")
-            }
-        }
-        .disabled(!presentation.canStopCore)
 
         Divider()
 
