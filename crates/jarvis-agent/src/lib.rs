@@ -962,6 +962,14 @@ pub struct AgentCursorStore {
     connection: Connection,
 }
 
+impl Drop for AgentCursorStore {
+    fn drop(&mut self) {
+        // Release explicitly so an immediate same-process reopen does not
+        // depend on platform-specific close/unlock ordering.
+        let _ = FileExt::unlock(&self._owner_lock);
+    }
+}
+
 impl AgentCursorStore {
     pub fn open(data_dir: impl AsRef<Path>) -> Result<Self, AgentError> {
         let data_dir = data_dir.as_ref();
@@ -1438,8 +1446,7 @@ printf 'generated:%s' "$prompt"
             r#"#!/bin/sh
 trap '' TERM
 cat >/dev/null
-sleep 30
-printf 'must-not-escape'
+exec sleep 30
 "#,
         );
         let job = mlx_job("cancel");

@@ -480,6 +480,13 @@ These notes capture durable facts for future agents working on this repository.
   also avoid CPU-spinning shell loops: ignore `TERM`, then `exec` a bounded
   sleeping process so the same PID remains stubborn without starving the full
   parallel Swift suite.
+- File-backed single-owner test fixtures that immediately reopen the same store
+  must explicitly release their advisory owner lock during `Drop`; relying only
+  on file-close ordering can intermittently report `OwnerAlreadyActive` on
+  loaded macOS runners. MLX shutdown fixtures should likewise ignore `TERM`
+  and then `exec` a bounded sleeper so TERM-to-KILL behavior is preserved
+  without leaving an extra shell child whose zombie-reaping latency can make a
+  bounded process-group absence check nondeterministic.
 - The sixth distributed-development slice adds an explicit Windows Service
   Control Manager lifecycle without removing foreground mode. The same
   single-owner master runtime can be installed, started, stopped, inspected,
