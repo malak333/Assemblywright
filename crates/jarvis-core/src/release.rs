@@ -13,10 +13,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-const EXPECTED_MICROPHONE_USAGE_DESCRIPTION: &str =
-    "Assemblywright uses microphone input only when you explicitly start local voice capture.";
-const EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION: &str =
-    "Assemblywright uses speech recognition only to turn your spoken command into a local assistant request.";
 const LIVE_DEVICE_QA_REQUIRED_FIELDS: &[&str] = &[
     "schema_version",
     "evidence_type",
@@ -24,23 +20,11 @@ const LIVE_DEVICE_QA_REQUIRED_FIELDS: &[&str] = &[
     "installed_app_path",
     "validation_flags.clean_profile",
     "validation_flags.finder_launch",
-    "validation_flags.microphone",
-    "validation_flags.speech_permission",
-    "validation_flags.transcript_handoff",
-    "validation_flags.audio_output",
-    "validation_flags.notification",
     "validation_flags.restart",
     "validation_flags.manual_release_qa",
-    "voice_loop.microphone_permission_prompt",
-    "voice_loop.speech_permission_prompt",
-    "voice_loop.spoken_transcript_handoff",
-    "voice_loop.same_command_path",
-    "voice_loop.speech_output_playback",
     "app_bundle.bundle_identifier",
     "app_bundle.short_version",
     "app_bundle.build_version",
-    "app_bundle.microphone_usage_description",
-    "app_bundle.speech_recognition_usage_description",
     "app_executable.executable_path",
     "app_executable.sha256",
     "app_executable.code_identifier",
@@ -51,70 +35,15 @@ const LIVE_DEVICE_QA_REQUIRED_FIELDS: &[&str] = &[
     "bundled_core.executable_path",
     "bundled_core.version",
     "bundled_core.sha256",
-    "owner_recorded_live_voice_evidence.owner_name",
-    "owner_recorded_live_voice_evidence.device_label",
-    "owner_recorded_live_voice_evidence.profile_label",
-    "owner_recorded_live_voice_evidence.voice_check_started_at",
-    "owner_recorded_live_voice_evidence.voice_check_completed_at",
-    "owner_recorded_live_voice_evidence.microphone_evidence_note",
-    "owner_recorded_live_voice_evidence.speech_permission_evidence_note",
-    "owner_recorded_live_voice_evidence.transcript_handoff_evidence_note",
-    "owner_recorded_live_voice_evidence.audio_output_evidence_note",
-    "owner_recorded_non_voice_evidence.clean_profile_evidence_note",
-    "owner_recorded_non_voice_evidence.finder_launch_evidence_note",
-    "owner_recorded_non_voice_evidence.notification_evidence_note",
-    "owner_recorded_non_voice_evidence.notification_observed_at",
-    "owner_recorded_non_voice_evidence.restart_evidence_note",
-    "owner_recorded_non_voice_evidence.manual_release_qa_evidence_note",
-    "notification_observation.kind",
-    "notification_observation.title",
-    "notification_observation.body",
-    "notification_observation.thread_identifier",
-    "notification_observation.observed_at",
-    "voice_command_observation.test_phrase",
-    "voice_command_observation.observed_transcript",
-    "voice_command_observation.expected_command_text",
-    "voice_command_observation.observed_command_text",
-    "voice_command_observation.command_result_evidence_id",
-    "voice_command_observation.audio_output_device_label",
-    "proof_boundary",
-];
-const PLUGIN_TRUST_QA_REQUIRED_FIELDS: &[&str] = &[
-    "schema_version",
-    "evidence_type",
-    "generated_at",
-    "review_source",
-    "validation_flags.marketplace_review",
-    "validation_flags.malware_scan",
-    "validation_flags.os_sandbox",
-    "validation_flags.egress_enforcement",
-    "validation_flags.signed_publisher_policy",
-    "validation_flags.manual_trust_review",
-    "owner_recorded_plugin_trust_evidence.owner_name",
-    "owner_recorded_plugin_trust_evidence.review_started_at",
-    "owner_recorded_plugin_trust_evidence.review_completed_at",
-    "owner_recorded_plugin_trust_evidence.marketplace_evidence_note",
-    "owner_recorded_plugin_trust_evidence.malware_scan_evidence_note",
-    "owner_recorded_plugin_trust_evidence.os_sandbox_evidence_note",
-    "owner_recorded_plugin_trust_evidence.egress_evidence_note",
-    "owner_recorded_plugin_trust_evidence.egress_policy_label",
-    "owner_recorded_plugin_trust_evidence.egress_validation_completed_at",
-    "owner_recorded_plugin_trust_evidence.egress_deny_fixture_evidence_note",
-    "owner_recorded_plugin_trust_evidence.egress_allow_fixture_evidence_note",
-    "owner_recorded_plugin_trust_evidence.signed_publisher_evidence_note",
-    "owner_recorded_plugin_trust_evidence.manual_review_evidence_note",
-    "evidence_artifacts.marketplace_review.uri",
-    "evidence_artifacts.marketplace_review.sha256",
-    "evidence_artifacts.malware_scan.uri",
-    "evidence_artifacts.malware_scan.sha256",
-    "evidence_artifacts.os_sandbox.uri",
-    "evidence_artifacts.os_sandbox.sha256",
-    "evidence_artifacts.egress_enforcement.uri",
-    "evidence_artifacts.egress_enforcement.sha256",
-    "evidence_artifacts.signed_publisher_policy.uri",
-    "evidence_artifacts.signed_publisher_policy.sha256",
-    "evidence_artifacts.manual_trust_review.uri",
-    "evidence_artifacts.manual_trust_review.sha256",
+    "owner_recorded_device_evidence.owner_name",
+    "owner_recorded_device_evidence.device_label",
+    "owner_recorded_device_evidence.profile_label",
+    "owner_recorded_device_evidence.device_check_started_at",
+    "owner_recorded_device_evidence.device_check_completed_at",
+    "owner_recorded_device_evidence.clean_profile_evidence_note",
+    "owner_recorded_device_evidence.finder_launch_evidence_note",
+    "owner_recorded_device_evidence.restart_evidence_note",
+    "owner_recorded_device_evidence.manual_release_qa_evidence_note",
     "proof_boundary",
 ];
 const SIGNED_DISTRIBUTION_PROVENANCE_REQUIRED_FIELDS: &[&str] = &[
@@ -177,15 +106,12 @@ const RELEASE_EVIDENCE_BUNDLE_REQUIRED_FIELDS: &[&str] = &[
     "artifacts.pkg_sha256",
     "reports.signed_distribution_provenance_report",
     "reports.live_device_qa_report",
-    "reports.plugin_trust_qa_report",
     "reports.signed_distribution_provenance_sha256",
     "reports.live_device_qa_sha256",
-    "reports.plugin_trust_qa_sha256",
     "validation_flags.signed_distribution",
     "validation_flags.notarization",
     "validation_flags.clean_profile",
     "validation_flags.live_device_qa",
-    "validation_flags.plugin_trust_qa",
     "validation_flags.reports_archived",
     "validation_flags.local_signature_validation",
     "owner_recorded_release_evidence.owner_name",
@@ -194,7 +120,6 @@ const RELEASE_EVIDENCE_BUNDLE_REQUIRED_FIELDS: &[&str] = &[
     "owner_recorded_release_evidence.notarization_note",
     "owner_recorded_release_evidence.clean_profile_note",
     "owner_recorded_release_evidence.live_device_qa_note",
-    "owner_recorded_release_evidence.plugin_trust_qa_note",
     "owner_recorded_release_evidence.reports_archive_note",
     "owner_recorded_release_evidence.reports_archive_uri",
     "proof_boundary",
@@ -477,60 +402,6 @@ fn release_signed_distribution_runbook_from(
     }
 }
 
-fn release_plugin_trust_runbook_from(
-    readiness: &ReleaseReadinessResponse,
-    evidence_status: &ReleaseEvidenceStatusResponse,
-) -> ReleaseRunbookResponse {
-    ReleaseRunbookResponse {
-        generated_at: Utc::now(),
-        generated_from: "release readiness plus evidence-status".to_string(),
-        runbook: "plugin_trust".to_string(),
-        production_ready: readiness.production_ready,
-        live_voice_feature: None,
-        evidence_items: release_evidence_items_by_key(evidence_status, &["plugin_trust_qa_report"]),
-        commands: vec![
-            "./scripts/release-plugin-trust-qa.sh --check".to_string(),
-            "./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env"
-                .to_string(),
-            "set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete"
-                .to_string(),
-            "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks"
-                .to_string(),
-            "Launch Assemblywright with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks"
-                .to_string(),
-            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
-                .to_string(),
-            "./scripts/release-evidence-doctor.sh --check".to_string(),
-            "./scripts/release-evidence-bundle.sh --check".to_string(),
-            "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env"
-                .to_string(),
-            "set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle"
-                .to_string(),
-            "./scripts/release-evidence-doctor.sh --assert-complete".to_string(),
-        ],
-        manual_checks: vec![
-            "Run the marketplace review workflow for every public plugin listing.".to_string(),
-            "Preserve malware scan evidence for distributed plugin archives and updates."
-                .to_string(),
-            "Validate signed publisher policy for trusted publisher keys and revocation."
-                .to_string(),
-            "Validate the macOS sandbox profile or equivalent OS-level confinement."
-                .to_string(),
-            "Validate host-level egress enforcement with deny and declared-host allow fixtures."
-                .to_string(),
-            "Record archived artifact URIs and SHA-256 digests for every plugin-trust evidence category before assertion."
-                .to_string(),
-            "Preserve target/release-plugin-trust-qa-report.json for final release evidence bundling."
-                .to_string(),
-            "Generate the final release evidence bundle only after signed distribution, live-device QA, and plugin-trust QA evidence all exist."
-                .to_string(),
-        ],
-        proof_boundary:
-            "Runbook and local evidence inspection only; this endpoint does not perform marketplace review, malware scanning, sandbox deployment, host-level egress enforcement, signing, notarization, live-device QA, or final evidence bundling."
-                .to_string(),
-    }
-}
-
 fn release_evidence_bundle_runbook_from(
     readiness: &ReleaseReadinessResponse,
     evidence_status: &ReleaseEvidenceStatusResponse,
@@ -624,11 +495,6 @@ fn release_evidence_status_from_env_inner() -> ReleaseEvidenceStatusResponse {
         "JARVIS_QA_REPORT_PATH",
         "target/release-live-device-qa-report.json",
     );
-    let plugin_qa_report = env_path_alias(
-        "JARVIS_EVIDENCE_PLUGIN_QA_REPORT",
-        "JARVIS_PLUGIN_QA_REPORT_PATH",
-        "target/release-plugin-trust-qa-report.json",
-    );
     let bundle_path = env_path(
         "JARVIS_EVIDENCE_OUTPUT_PATH",
         "target/release-evidence-bundle.json",
@@ -644,7 +510,6 @@ fn release_evidence_status_from_env_inner() -> ReleaseEvidenceStatusResponse {
         pkg_path: &pkg_path,
         signed_provenance_report: &signed_provenance_report,
         live_qa_report: &live_qa_report,
-        plugin_qa_report: &plugin_qa_report,
     };
 
     let mut items = vec![
@@ -687,12 +552,6 @@ fn release_evidence_status_from_env_inner() -> ReleaseEvidenceStatusResponse {
             live_qa_report.clone(),
             LIVE_DEVICE_QA_REQUIRED_FIELDS,
             signed_provenance_report.clone(),
-        ),
-        release_json_report_item(
-            "plugin_trust_qa_report",
-            "Plugin-trust QA report",
-            plugin_qa_report.clone(),
-            PLUGIN_TRUST_QA_REQUIRED_FIELDS,
         ),
         release_evidence_bundle_report_item(
             "release_evidence_bundle",
@@ -800,25 +659,6 @@ fn release_bundled_core_item(key: &str, label: &str, path: PathBuf) -> ReleaseEv
     }
 }
 
-fn release_json_report_item(
-    key: &str,
-    label: &str,
-    path: PathBuf,
-    required_fields: &[&str],
-) -> ReleaseEvidenceStatusItem {
-    let (status, detail) = inspect_release_json_report(key, &path, required_fields);
-    ReleaseEvidenceStatusItem {
-        key: key.to_string(),
-        label: label.to_string(),
-        path: path.display().to_string(),
-        kind: ReleaseEvidenceKind::JsonReport,
-        status,
-        required_for_production: true,
-        manual_gate: true,
-        detail,
-    }
-}
-
 fn release_live_device_qa_report_item(
     key: &str,
     label: &str,
@@ -914,7 +754,6 @@ struct ReleaseEvidenceBundleDigestPaths<'a> {
     pkg_path: &'a FsPath,
     signed_provenance_report: &'a FsPath,
     live_qa_report: &'a FsPath,
-    plugin_qa_report: &'a FsPath,
 }
 
 fn inspect_release_path(
@@ -980,14 +819,6 @@ fn inspect_release_app_bundle(path: &FsPath) -> (ReleaseEvidenceItemStatus, Stri
         ("CFBundleIdentifier", expected_bundle_id.as_str()),
         ("CFBundleShortVersionString", expected_version.as_str()),
         ("CFBundleVersion", expected_version.as_str()),
-        (
-            "NSMicrophoneUsageDescription",
-            EXPECTED_MICROPHONE_USAGE_DESCRIPTION,
-        ),
-        (
-            "NSSpeechRecognitionUsageDescription",
-            EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION,
-        ),
     ] {
         match plist_xml_string_value(&contents, key) {
             Some(actual) if actual == expected => {}
@@ -1132,10 +963,6 @@ fn inspect_release_json_report_inner(
             if let Err(error) = validate_live_device_qa_report(&value) {
                 return (ReleaseEvidenceItemStatus::Invalid, error);
             }
-        } else if key == "plugin_trust_qa_report" {
-            if let Err(error) = validate_plugin_trust_qa_report(&value) {
-                return (ReleaseEvidenceItemStatus::Invalid, error);
-            }
         } else if key == "signed_distribution_provenance_report" {
             if let Err(error) = validate_signed_distribution_provenance(&value) {
                 return (ReleaseEvidenceItemStatus::Invalid, error);
@@ -1231,264 +1058,44 @@ fn validate_live_device_qa_report(value: &serde_json::Value) -> Result<(), Strin
     for field in [
         "validation_flags.clean_profile",
         "validation_flags.finder_launch",
-        "validation_flags.microphone",
-        "validation_flags.speech_permission",
-        "validation_flags.transcript_handoff",
-        "validation_flags.audio_output",
-        "validation_flags.notification",
         "validation_flags.restart",
         "validation_flags.manual_release_qa",
-        "voice_loop.microphone_permission_prompt",
-        "voice_loop.speech_permission_prompt",
-        "voice_loop.spoken_transcript_handoff",
-        "voice_loop.same_command_path",
-        "voice_loop.speech_output_playback",
     ] {
         require_json_bool_value(value, field, true)?;
     }
+    require_json_nonempty_string_value(value, "proof_boundary")?;
     for field in [
-        "owner_recorded_live_voice_evidence.owner_name",
-        "owner_recorded_live_voice_evidence.device_label",
-        "owner_recorded_live_voice_evidence.profile_label",
-        "voice_command_observation.test_phrase",
-        "voice_command_observation.observed_transcript",
-        "voice_command_observation.expected_command_text",
-        "voice_command_observation.observed_command_text",
-        "voice_command_observation.audio_output_device_label",
-        "notification_observation.title",
-        "notification_observation.body",
-        "proof_boundary",
-    ] {
-        require_json_nonempty_string_value(value, field)?;
-    }
-    require_json_string_value(
-        value,
-        "app_bundle.microphone_usage_description",
-        EXPECTED_MICROPHONE_USAGE_DESCRIPTION,
-    )?;
-    require_json_string_value(
-        value,
-        "app_bundle.speech_recognition_usage_description",
-        EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION,
-    )?;
-    require_json_string_value(
-        value,
-        "notification_observation.thread_identifier",
-        "jarvis.scheduler",
-    )?;
-    let notification_kind =
-        json_string_at(value, "notification_observation.kind").ok_or_else(|| {
-            "JSON report is missing required field: notification_observation.kind".to_string()
-        })?;
-    if !matches!(
-        notification_kind.as_str(),
-        "due_now" | "failed" | "blocked_by_emergency_pause"
-    ) {
-        return Err("JSON report notification_observation.kind must be due_now, failed, or blocked_by_emergency_pause".to_string());
-    }
-    for field in [
-        "owner_recorded_live_voice_evidence.microphone_evidence_note",
-        "owner_recorded_live_voice_evidence.speech_permission_evidence_note",
-        "owner_recorded_live_voice_evidence.transcript_handoff_evidence_note",
-        "owner_recorded_live_voice_evidence.audio_output_evidence_note",
-        "owner_recorded_non_voice_evidence.clean_profile_evidence_note",
-        "owner_recorded_non_voice_evidence.finder_launch_evidence_note",
-        "owner_recorded_non_voice_evidence.notification_evidence_note",
-        "owner_recorded_non_voice_evidence.restart_evidence_note",
-        "owner_recorded_non_voice_evidence.manual_release_qa_evidence_note",
+        "owner_recorded_device_evidence.owner_name",
+        "owner_recorded_device_evidence.device_label",
+        "owner_recorded_device_evidence.profile_label",
+        "owner_recorded_device_evidence.device_check_started_at",
+        "owner_recorded_device_evidence.device_check_completed_at",
+        "owner_recorded_device_evidence.clean_profile_evidence_note",
+        "owner_recorded_device_evidence.finder_launch_evidence_note",
+        "owner_recorded_device_evidence.restart_evidence_note",
+        "owner_recorded_device_evidence.manual_release_qa_evidence_note",
     ] {
         require_json_meaningful_owner_evidence(value, field)?;
     }
 
     let started_at = require_utc_report_timestamp(
         value,
-        "owner_recorded_live_voice_evidence.voice_check_started_at",
+        "owner_recorded_device_evidence.device_check_started_at",
     )?;
     let completed_at = require_utc_report_timestamp(
         value,
-        "owner_recorded_live_voice_evidence.voice_check_completed_at",
+        "owner_recorded_device_evidence.device_check_completed_at",
     )?;
     if completed_at < started_at {
-        return Err("JSON report voice_check_completed_at must be greater than or equal to voice_check_started_at".to_string());
-    }
-    let notification_observed_at = require_utc_report_timestamp(
-        value,
-        "owner_recorded_non_voice_evidence.notification_observed_at",
-    )?;
-    let notification_payload_observed_at =
-        require_utc_report_timestamp(value, "notification_observation.observed_at")?;
-    if notification_payload_observed_at != notification_observed_at {
-        return Err("JSON report notification_observation.observed_at must match owner_recorded_non_voice_evidence.notification_observed_at".to_string());
-    }
-    if notification_observed_at < started_at {
-        return Err("JSON report notification_observed_at must be greater than or equal to voice_check_started_at".to_string());
+        return Err("JSON report device_check_completed_at must be greater than or equal to device_check_started_at".to_string());
     }
     if generated_at < completed_at {
         return Err(
-            "JSON report generated_at must be greater than or equal to voice_check_completed_at"
-                .to_string(),
-        );
-    }
-    if generated_at < notification_observed_at {
-        return Err(
-            "JSON report generated_at must be greater than or equal to notification_observed_at"
+            "JSON report generated_at must be greater than or equal to device_check_completed_at"
                 .to_string(),
         );
     }
 
-    let expected_command = json_string_at(value, "voice_command_observation.expected_command_text")
-        .ok_or_else(|| {
-            "JSON report is missing required field: voice_command_observation.expected_command_text"
-                .to_string()
-        })?;
-    let observed_command = json_string_at(value, "voice_command_observation.observed_command_text")
-        .ok_or_else(|| {
-            "JSON report is missing required field: voice_command_observation.observed_command_text"
-                .to_string()
-        })?;
-    let test_phrase =
-        json_string_at(value, "voice_command_observation.test_phrase").ok_or_else(|| {
-            "JSON report is missing required field: voice_command_observation.test_phrase"
-                .to_string()
-        })?;
-    let observed_transcript = json_string_at(
-        value,
-        "voice_command_observation.observed_transcript",
-    )
-    .ok_or_else(|| {
-        "JSON report is missing required field: voice_command_observation.observed_transcript"
-            .to_string()
-    })?;
-    if test_phrase.trim() != observed_transcript.trim() {
-        return Err(
-            "JSON report observed_transcript must match test_phrase after trimming whitespace"
-                .to_string(),
-        );
-    }
-    if expected_command.trim() != observed_command.trim() {
-        return Err(
-            "JSON report observed_command_text must match expected_command_text".to_string(),
-        );
-    }
-    let command_result_evidence_id = json_string_at(
-        value,
-        "voice_command_observation.command_result_evidence_id",
-    )
-    .ok_or_else(|| {
-        "JSON report is missing required field: voice_command_observation.command_result_evidence_id"
-            .to_string()
-    })?;
-    validate_command_result_evidence_id(&command_result_evidence_id)?;
-
-    Ok(())
-}
-
-fn validate_command_result_evidence_id(value: &str) -> Result<(), String> {
-    let (kind, id) = value.trim().split_once(':').ok_or_else(|| {
-        "JSON report command_result_evidence_id must be task:<uuid> or audit:<uuid>".to_string()
-    })?;
-    if kind != "task" && kind != "audit" {
-        return Err(
-            "JSON report command_result_evidence_id must be task:<uuid> or audit:<uuid>"
-                .to_string(),
-        );
-    }
-    Uuid::parse_str(id).map_err(|_| {
-        "JSON report command_result_evidence_id must be task:<uuid> or audit:<uuid>".to_string()
-    })?;
-    Ok(())
-}
-
-fn validate_plugin_trust_qa_report(value: &serde_json::Value) -> Result<(), String> {
-    let generated_at = require_utc_report_timestamp_not_future(value, "generated_at")?;
-    if value
-        .get("schema_version")
-        .and_then(|schema| schema.as_i64())
-        != Some(1)
-    {
-        return Err("JSON report schema_version must be 1".to_string());
-    }
-    if value.get("evidence_type").and_then(|kind| kind.as_str())
-        != Some("owner_recorded_plugin_trust_qa")
-    {
-        return Err("JSON report evidence_type must be owner_recorded_plugin_trust_qa".to_string());
-    }
-    require_json_string_value(value, "version", &expected_release_evidence_version())?;
-    require_json_bool_value(value, "self_test_fixture", false)?;
-    require_json_string_value(value, "review_source", "owner-asserted-manual-review")?;
-    for field in [
-        "validation_flags.marketplace_review",
-        "validation_flags.malware_scan",
-        "validation_flags.os_sandbox",
-        "validation_flags.egress_enforcement",
-        "validation_flags.signed_publisher_policy",
-        "validation_flags.manual_trust_review",
-    ] {
-        require_json_bool_value(value, field, true)?;
-    }
-    let started_at = require_utc_report_timestamp(
-        value,
-        "owner_recorded_plugin_trust_evidence.review_started_at",
-    )?;
-    let completed_at = require_utc_report_timestamp(
-        value,
-        "owner_recorded_plugin_trust_evidence.review_completed_at",
-    )?;
-    let egress_completed_at = require_utc_report_timestamp(
-        value,
-        "owner_recorded_plugin_trust_evidence.egress_validation_completed_at",
-    )?;
-    for field in [
-        "owner_recorded_plugin_trust_evidence.marketplace_evidence_note",
-        "owner_recorded_plugin_trust_evidence.malware_scan_evidence_note",
-        "owner_recorded_plugin_trust_evidence.os_sandbox_evidence_note",
-        "owner_recorded_plugin_trust_evidence.egress_evidence_note",
-        "owner_recorded_plugin_trust_evidence.egress_policy_label",
-        "owner_recorded_plugin_trust_evidence.egress_deny_fixture_evidence_note",
-        "owner_recorded_plugin_trust_evidence.egress_allow_fixture_evidence_note",
-        "owner_recorded_plugin_trust_evidence.signed_publisher_evidence_note",
-        "owner_recorded_plugin_trust_evidence.manual_review_evidence_note",
-    ] {
-        require_json_meaningful_owner_evidence(value, field)?;
-    }
-    for artifact in [
-        "marketplace_review",
-        "malware_scan",
-        "os_sandbox",
-        "egress_enforcement",
-        "signed_publisher_policy",
-        "manual_trust_review",
-    ] {
-        require_json_durable_evidence_archive_uri_value(
-            value,
-            &format!("evidence_artifacts.{artifact}.uri"),
-        )?;
-        require_json_sha256_value(value, &format!("evidence_artifacts.{artifact}.sha256"))?;
-    }
-    if completed_at < started_at {
-        return Err(
-            "JSON report review_completed_at must be greater than or equal to review_started_at"
-                .to_string(),
-        );
-    }
-    if egress_completed_at < started_at {
-        return Err(
-            "JSON report egress_validation_completed_at must be greater than or equal to review_started_at"
-                .to_string(),
-        );
-    }
-    if completed_at < egress_completed_at {
-        return Err(
-            "JSON report review_completed_at must be greater than or equal to egress_validation_completed_at"
-                .to_string(),
-        );
-    }
-    if generated_at < completed_at {
-        return Err(
-            "JSON report generated_at must be greater than or equal to review_completed_at"
-                .to_string(),
-        );
-    }
     Ok(())
 }
 
@@ -1772,7 +1379,6 @@ fn validate_release_evidence_bundle(value: &serde_json::Value) -> Result<(), Str
         "validation_flags.notarization",
         "validation_flags.clean_profile",
         "validation_flags.live_device_qa",
-        "validation_flags.plugin_trust_qa",
         "validation_flags.reports_archived",
         "validation_flags.local_signature_validation",
     ] {
@@ -1783,7 +1389,6 @@ fn validate_release_evidence_bundle(value: &serde_json::Value) -> Result<(), Str
         "artifacts.pkg_sha256",
         "reports.signed_distribution_provenance_sha256",
         "reports.live_device_qa_sha256",
-        "reports.plugin_trust_qa_sha256",
     ] {
         require_json_sha256_value(value, field)?;
     }
@@ -1799,7 +1404,6 @@ fn validate_release_evidence_bundle(value: &serde_json::Value) -> Result<(), Str
         "owner_recorded_release_evidence.notarization_note",
         "owner_recorded_release_evidence.clean_profile_note",
         "owner_recorded_release_evidence.live_device_qa_note",
-        "owner_recorded_release_evidence.plugin_trust_qa_note",
         "owner_recorded_release_evidence.reports_archive_note",
     ] {
         require_json_meaningful_owner_evidence(value, field)?;
@@ -1913,11 +1517,6 @@ fn validate_release_evidence_bundle_file_bindings(
         "reports.live_device_qa_report",
         &paths.live_qa_report.display().to_string(),
     )?;
-    require_json_string_value(
-        value,
-        "reports.plugin_trust_qa_report",
-        &paths.plugin_qa_report.display().to_string(),
-    )?;
     require_json_sha256_matches_file(
         value,
         "artifacts.zip_sha256",
@@ -1941,12 +1540,6 @@ fn validate_release_evidence_bundle_file_bindings(
         "reports.live_device_qa_sha256",
         "live-device QA report",
         paths.live_qa_report,
-    )?;
-    require_json_sha256_matches_file(
-        value,
-        "reports.plugin_trust_qa_sha256",
-        "plugin-trust QA report",
-        paths.plugin_qa_report,
     )?;
     let signed_provenance = read_release_evidence_child_report(
         paths.signed_provenance_report,
@@ -1979,18 +1572,12 @@ fn validate_release_evidence_bundle_file_bindings(
     .map_err(|error| {
         format!("live-device QA report referenced by release evidence bundle is invalid: {error}")
     })?;
-    let plugin_qa =
-        read_release_evidence_child_report(paths.plugin_qa_report, "plugin-trust QA report")?;
-    validate_plugin_trust_qa_report(&plugin_qa).map_err(|error| {
-        format!("plugin-trust QA report referenced by release evidence bundle is invalid: {error}")
-    })?;
     let bundle_generated_at = require_utc_report_timestamp_not_future(value, "generated_at")?;
     let bundle_completed_at =
         require_utc_report_timestamp(value, "owner_recorded_release_evidence.completed_at")?;
     for (label, report) in [
         ("signed-distribution provenance report", &signed_provenance),
         ("live-device QA report", &live_qa),
-        ("plugin-trust QA report", &plugin_qa),
     ] {
         let child_generated_at =
             require_utc_report_timestamp(report, "generated_at").map_err(|error| {
@@ -2349,18 +1936,13 @@ fn release_blocking_manual_gates(
         "notarization and stapling completed for both app and installer package".to_string(),
         "clean-profile installer run into /Applications".to_string(),
         "Finder/LaunchServices launch validation for the installed app".to_string(),
-        "live microphone and Speech permission prompt validation plus spoken transcript handoff on a real Mac".to_string(),
-        "live audio-output playback validation on a real Mac".to_string(),
-        "manual clean-profile release QA pass covering installed-app command, audit, memory, scheduler, plugin, pause, diagnostics, restart behavior, and user-visible prompts".to_string(),
-        "broader installed-plugin marketplace trust, malware analysis, and OS-level sandbox/egress enforcement before marketplace claims".to_string(),
-        "final release evidence bundle generated and archived after signed distribution, live-device QA, and plugin-trust QA reports exist".to_string(),
+        "manual clean-profile release QA pass covering installed-app launch, Developer Mode bridge status, restart behavior, and user-visible prompts".to_string(),
+        "final release evidence bundle generated and archived after signed distribution and live-device QA reports exist".to_string(),
     ];
     if live_device_qa_valid {
         gates.retain(|gate| {
             !gate.contains("clean-profile installer run")
                 && !gate.contains("Finder/LaunchServices launch")
-                && !gate.contains("live microphone")
-                && !gate.contains("live audio-output")
                 && !gate.contains("manual clean-profile release QA pass")
         });
     }
@@ -2371,186 +1953,92 @@ fn release_verification_commands() -> Vec<String> {
     vec![
         "./scripts/release-local.sh".to_string(),
         "./scripts/release-ci-workflow-smoke.sh".to_string(),
-        "./scripts/release-operator-qa-smoke.sh".to_string(),
         "./scripts/package-distribution.sh --check".to_string(),
         "./scripts/package-distribution.sh --unsigned-launch-check".to_string(),
         "cargo run -p jarvis-cli -- release signed-distribution-runbook".to_string(),
         "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh".to_string(),
-        "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_APPLE_ID='apple-id@example.com' JARVIS_NOTARYTOOL_TEAM_ID='TEAMID1234' JARVIS_NOTARYTOOL_PASSWORD='app-specific-password' ./scripts/package-distribution.sh".to_string(),
         "./scripts/release-external-handoff.sh --write target/release-external-handoff".to_string(),
         "cargo run -p jarvis-cli -- release live-device-runbook".to_string(),
         "./scripts/release-live-device-qa.sh --check".to_string(),
         "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env".to_string(),
         "set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
-        "JARVIS_QA_CLEAN_PROFILE_VALIDATED=true JARVIS_QA_FINDER_LAUNCH_VALIDATED=true JARVIS_QA_MICROPHONE_VALIDATED=true JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true JARVIS_QA_NOTIFICATION_VALIDATED=true JARVIS_QA_RESTART_VALIDATED=true JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true JARVIS_QA_OWNER_NAME='Release Operator' JARVIS_QA_DEVICE_LABEL='Clean-profile release Mac' JARVIS_QA_PROFILE_LABEL='Clean macOS QA profile' JARVIS_QA_VOICE_CHECK_STARTED_AT='2026-05-22T16:00:00Z' JARVIS_QA_VOICE_CHECK_COMPLETED_AT='2026-05-22T16:05:00Z' JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE='Clean profile install observed' JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE='Finder launch observed' JARVIS_QA_MICROPHONE_EVIDENCE_NOTE='Microphone prompt and capture observed' JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE='Speech prompt and recognition observed' JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE='Spoken transcript reached the command path' JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE='Speech output playback observed' JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE='Scheduler notification observed' JARVIS_QA_NOTIFICATION_KIND='due_now' JARVIS_QA_NOTIFICATION_TITLE='Scheduler job ready: release verification' JARVIS_QA_NOTIFICATION_BODY='A scheduled Assemblywright job is due now.' JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER='jarvis.scheduler' JARVIS_QA_NOTIFICATION_OBSERVED_AT='2026-05-22T16:04:00Z' JARVIS_QA_RESTART_EVIDENCE_NOTE='Restart recovery observed' JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE='Manual release QA surfaces observed' JARVIS_QA_VOICE_TEST_PHRASE='Assemblywright status check' JARVIS_QA_OBSERVED_TRANSCRIPT='Assemblywright status check' JARVIS_QA_EXPECTED_COMMAND_TEXT='status check' JARVIS_QA_OBSERVED_COMMAND_TEXT='status check' JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid-from-live-command>' JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL='Built-in speakers' ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
-        "cargo run -p jarvis-cli -- release plugin-trust-runbook".to_string(),
-        "./scripts/release-plugin-trust-qa.sh --check".to_string(),
-        "./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env".to_string(),
-        "set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete".to_string(),
-        "JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED=true JARVIS_PLUGIN_QA_MALWARE_SCAN_VALIDATED=true JARVIS_PLUGIN_QA_OS_SANDBOX_VALIDATED=true JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=true JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED=true JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED=true JARVIS_PLUGIN_QA_OWNER_NAME='Release Operator' JARVIS_PLUGIN_QA_REVIEW_STARTED_AT='2026-05-22T16:10:00Z' JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT='2026-05-22T16:20:00Z' JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE='Marketplace review evidence archived' JARVIS_PLUGIN_QA_MARKETPLACE_ARTIFACT_URI='archive://jarvis/plugin-trust/marketplace-review.json' JARVIS_PLUGIN_QA_MARKETPLACE_ARTIFACT_SHA256='1111111111111111111111111111111111111111111111111111111111111111' JARVIS_PLUGIN_QA_MALWARE_SCAN_EVIDENCE_NOTE='Malware scan evidence archived' JARVIS_PLUGIN_QA_MALWARE_SCAN_ARTIFACT_URI='archive://jarvis/plugin-trust/malware-scan.json' JARVIS_PLUGIN_QA_MALWARE_SCAN_ARTIFACT_SHA256='2222222222222222222222222222222222222222222222222222222222222222' JARVIS_PLUGIN_QA_OS_SANDBOX_EVIDENCE_NOTE='OS sandbox validation evidence archived' JARVIS_PLUGIN_QA_OS_SANDBOX_ARTIFACT_URI='archive://jarvis/plugin-trust/os-sandbox.json' JARVIS_PLUGIN_QA_OS_SANDBOX_ARTIFACT_SHA256='3333333333333333333333333333333333333333333333333333333333333333' JARVIS_PLUGIN_QA_EGRESS_EVIDENCE_NOTE='Host-level egress validation evidence archived' JARVIS_PLUGIN_QA_EGRESS_ARTIFACT_URI='archive://jarvis/plugin-trust/egress.json' JARVIS_PLUGIN_QA_EGRESS_ARTIFACT_SHA256='4444444444444444444444444444444444444444444444444444444444444444' JARVIS_PLUGIN_QA_EGRESS_POLICY_LABEL='Host egress policy/profile reviewed' JARVIS_PLUGIN_QA_EGRESS_VALIDATION_COMPLETED_AT='2026-05-22T16:18:00Z' JARVIS_PLUGIN_QA_EGRESS_DENY_FIXTURE_EVIDENCE_NOTE='Undeclared-host deny fixture evidence archived' JARVIS_PLUGIN_QA_EGRESS_ALLOW_FIXTURE_EVIDENCE_NOTE='Declared-host allow fixture evidence archived' JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_EVIDENCE_NOTE='Signed publisher policy evidence archived' JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_ARTIFACT_URI='archive://jarvis/plugin-trust/signed-publisher.json' JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_ARTIFACT_SHA256='5555555555555555555555555555555555555555555555555555555555555555' JARVIS_PLUGIN_QA_MANUAL_REVIEW_EVIDENCE_NOTE='Manual plugin trust review evidence archived' JARVIS_PLUGIN_QA_MANUAL_REVIEW_ARTIFACT_URI='archive://jarvis/plugin-trust/manual-review.json' JARVIS_PLUGIN_QA_MANUAL_REVIEW_ARTIFACT_SHA256='6666666666666666666666666666666666666666666666666666666666666666' ./scripts/release-plugin-trust-qa.sh --assert-complete".to_string(),
         "cargo run -p jarvis-cli -- release evidence-bundle-runbook".to_string(),
         "./scripts/release-evidence-bundle.sh --check".to_string(),
         "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env".to_string(),
         "./scripts/release-evidence-doctor.sh --check".to_string(),
         "set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle".to_string(),
-        "JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true JARVIS_EVIDENCE_REPORTS_ARCHIVED=true JARVIS_EVIDENCE_OWNER_NAME='Release Operator' JARVIS_EVIDENCE_COMPLETED_AT='2026-05-22T17:00:00Z' JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE='Signed distribution evidence archived' JARVIS_EVIDENCE_NOTARIZATION_NOTE='Notarization evidence archived' JARVIS_EVIDENCE_CLEAN_PROFILE_NOTE='Clean-profile evidence archived' JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE='Live-device QA evidence archived' JARVIS_EVIDENCE_PLUGIN_TRUST_QA_NOTE='Plugin-trust QA evidence archived' JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE='Release reports archived' JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI='<archive-uri>' ./scripts/release-evidence-bundle.sh --bundle".to_string(),
         "./scripts/release-evidence-doctor.sh --assert-complete".to_string(),
-        "Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external".to_string(),
-        "cargo run -p jarvis-cli -- release readiness".to_string(),
+        "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness".to_string(),
     ]
 }
 
 fn contract_features() -> Vec<ContractFeature> {
     vec![
         feature(
-            "app_supervised_ipc_auth",
+            "distributed_protocol_contract",
             "implemented",
-            "Default app supervision rotates a 32-byte bearer through strict bounded startup stdin and uses a generation-random owner-only Unix socket. Swift and Rust obtain LOCAL_PEERTOKEN, validate the running peer against the launch-supplied Security.framework designated requirement and current EUID before framing, require half-close without trailing input, and protect the whole router with constant-time bearer comparison. The release-built smoke proves legitimate audit-token requirement acceptance and same-EUID wrong-code pre-frame rejection. Exact CLI handoff opt-in replaces UDS with weaker authenticated loopback TCP plus a bounded owner-only token file.",
-            "Ad-hoc exact-build requirements bind the evaluated cdhash but do not prove Developer ID publisher identity. The Developer ID hardened profile still requires signed/notarized clean-profile evidence. This defense in depth is not device authentication, same-user/process isolation, XPC, App Sandbox enforcement, host-level egress policy, notarization, or live-device proof. Explicit CLI handoff is same-user-readable loopback compatibility; explicitly launched legacy servers remain unauthenticated but reject any Authorization header.",
+            "`jarvis-protocol` owns protocol version 1: typed device/task/step/attempt/lease/cancellation identifiers, bounded capability advertisements, handshake, job and result envelopes, strict bound-before-decode JSON entry points, nil-identity rejection, and a golden compatibility fixture.",
+            "A versioned wire contract with golden-fixture coverage only; it is not proof of live two-device behavior.",
         ),
         feature(
-            "repository_state",
+            "distributed_master_kernel",
             "implemented",
-            "SQLite-backed task, audit, model-route, memory, scheduler, approval, and installed-plugin state is covered by Rust unit tests and local IPC E2E.",
-            "Local repository evidence only; no hosted sync or multi-device state claim.",
+            "The portable `jarvis-master` schema-v5 SQLite kernel persists registered devices, connection epochs, queued steps, immutable leased job envelopes, attempts, cancellation and expiry outcomes, accepted payload digests, and a metadata-only event journal with one server-issued stream ID and contiguous sequence. It enforces the 256-step admission ceiling, four global leases, one live lease per device connection, exact leased-attempt result identity, and durable abandon-before-reissue.",
+            "Durable single-owner state only; it is not the production runtime authority and carries no live cross-device reliability claim.",
         ),
         feature(
-            "active_command_cancellation",
+            "feature_conveyor_repository_kernel",
             "implemented",
-            "An optional client-generated UUID cancellation_id is registered for the full active POST /commands lifetime. The Swift console serializes submissions before changing its active handle. Authenticated POST /runtime/cancellations/:id targets only that handle, propagates to its bound task and active provider/tool work, and the final guard suppresses late model steps and tool results when cancellation wins. Rust race/unit tests, real-server CLI IPC E2E, and Swift model tests cover the boundary.",
-            "The registry is process-local, capped at 128 active handles, and retains the 1,024 most recently consumed UUIDs as FIFO tombstones so delayed stale cancellation cannot target a new run that reuses a recent handle. Clients must always generate fresh random UUIDs; a tombstone can be evicted after the bounded window or lost on process restart. cancellation_requested proves an active local command accepted the signal; not_found means no active execution existed at that linearization point. Cancellation cannot reverse an external effect that already occurred and is not distributed cancellation or crash recovery.",
+            "The default-inert schema-v5 Feature Conveyor kernel persists immutable owner-approved specification revisions, three independent repository-grant revisions, a bounded owner-ordered queue with strict head/dependency ordering, compare-and-set revisions, one durable active lease, exact lifecycle advancement, cancellation without advancement, explicit safe abandonment, startup quarantine, and same-transaction redacted audits.",
+            "Persistence only. It exposes no HTTP/API, worker dispatcher, repository execution, review provider, publication coordinator, Mac queue UI, or autonomous activation.",
         ),
         feature(
-            "activity_events",
+            "enrollment_identity_and_mtls",
             "implemented",
-            "Repository-backed `/activity/events` exposes bounded redacted task metadata, audit event batches, redacted installed-plugin progress, model-step progress, and model-output chunk metadata frames and is covered by CLI IPC E2E plus Swift decoding tests.",
-            "This is bounded state polling over SSE from completed audit evidence; activity recent tasks omit command bodies, model-output chunks expose counts with content_redacted:true rather than raw token text, and the Swift client buffers each bounded watch response rather than rendering live tokens.",
+            "Windows enrollment creates a DPAPI-protected P-256 CA, issues ten-minute single-use digest-only grants, verifies client CSRs, and issues 30-day device certificates with rotation and revocation. The optional TLS 1.3 mTLS listener binds an exact-IP ephemeral server identity, rechecks certificate serial/digest/device revocation per request, and binds the application handshake to the TLS exporter.",
+            "Loopback and private-overlay evidence only; live device enrollment remains owner-recorded external evidence.",
         ),
         feature(
-            "ollama_native_transport_streaming",
+            "windows_service_lifecycle",
             "implemented",
-            "The Ollama adapter requests native NDJSON streaming, enforces byte/response/metadata limits and a terminal done frame, supports in-flight runtime cancellation, then parses the quarantined final response before any audit or tool-plan exposure.",
-            "Transport progress metadata only after terminal validation; no partial raw text or tool envelope reaches IPC, Swift transcript, audit, or execution, and this is not raw-token UI streaming or production-readiness proof.",
+            "The Windows SCM host provides automatic start, bounded restart recovery, explicit install/start/stop/status/maintenance/recover/uninstall commands, and a durable fail-closed maintenance marker that blocks new enqueue and lease admission.",
+            "Proven on an elevated Windows runner; it is not a host-hardening, upgrade automation, or unattended reliability claim.",
         ),
         feature(
-            "scheduler_attention",
+            "app_supervised_peer_identity_transport",
             "implemented",
-            "Repository-backed scheduler jobs expose redacted `/scheduler/attention`, plus a schema-v14 bounded durable occurrence outbox with compare-and-swap acknowledgement after app submission or explicit no-authorization suppression. Due occurrence claim precedes execution, failed and stale-running outcomes revision-escalate atomically, and app notification identifiers are stable per occurrence revision.",
-            "This is an at-least-once app-notification handoff: concurrent consumers or a crash after notification-center submission but before acknowledgement may repeat a stable request. It does not prove live OS display, background OS wake, or proactive plugin authorization, and live-device notification evidence remains a manual release gate.",
+            "The local Unix-domain-socket transport uses an owner-only 0700 runtime directory and 0600 random socket leaf, obtains LOCAL_PEERTOKEN, validates the connected peer against a launch-supplied Security.framework designated requirement and current EUID before framing, and requires half-close without trailing input under strict bounded frames.",
+            "Ad-hoc exact-build requirements bind the evaluated cdhash but do not prove Developer ID publisher identity. This is not device authentication, XPC, App Sandbox enforcement, host-level egress policy, notarization, or live-device proof.",
         ),
         feature(
-            "trusted_macos_system_wake",
+            "mac_developer_bridge_and_agent",
             "implemented",
-            "A disabled-by-default schema-v11 wake rule accepts bounded P-256 envelopes, supports old-key-signed rotation plus explicit stronger-warning lost-key recovery through short-lived one-shot grants, persists replay/dispatch evidence, and enters the existing proactive policy funnel.",
-            "Local enrolled-key possession and explicit key control only. The packaged app requires per-launch bearer possession while an explicit legacy server does not; recovery confirmation remains accident prevention, not device authentication, OS identity, ownership proof, or same-user/process isolation; no Apple attestation, OS wake provenance, background launch reliability, exactly-once side effects, live-device QA, or production readiness is claimed.",
-        ),
-        feature(
-            "scheduler_trigger_policy_review",
-            "implemented",
-            "Active scheduler triggers appear in `/permissions/policy-review` without scheduler command text; due execution emits `scheduler_proactive_policy_checked` using the same trigger classification, and proactive plugin call requests require manifest opt-in plus `proactive_run` permission.",
-            "Review visibility only for scheduler policy review; due-run audit and plugin opt-in enforcement are local-only, scheduler command bodies remain redacted, proactive plugin requests that are not opted in fail closed, and live OS notification delivery remains a manual release gate.",
-        ),
-        feature(
-            "scheduler_stale_running_recovery",
-            "implemented",
-            "Explicit `/scheduler/recover-stale` plus opt-in startup recovery mark stale running jobs failed with redacted audit evidence and are covered by Rust unit plus CLI IPC E2E tests.",
-            "Bounded local stale-job cleanup only; no default background recovery or distributed lease claim.",
-        ),
-        feature(
-            "memory_policy_review",
-            "implemented",
-            "Unreviewed memory items and deleted sensitive retained memory appear in `/permissions/policy-review` with redacted values; `/memory/retention-plan` exposes the memory-specific redacted operator action queue; diagnostics export exposes only aggregate memory review counts.",
-            "Review visibility and retention-action planning only; no autonomous memory rewrite or purge automation claim.",
-        ),
-        feature(
-            "memory_index_governance",
-            "implemented",
-            "Versioned local memory-index manifests are atomically rebuilt from canonical active SQLite memory records; redacted status reports current, missing, stale, deleted, orphaned, and corrupt projection counts with Rust, CLI IPC E2E, and Swift coverage.",
-            "SQLite remains canonical and the projection is a local rebuildable eligibility gate, not a source of memory values, cloud context, or autonomous rewriting.",
-        ),
-        feature(
-            "bounded_local_memory_retrieval",
-            "implemented",
-            "Explicit CLI and Swift opt-in can attach deterministic lexical context to a selected local non-proactive route. Retrieval requires a current index, reviewed active Public/Workspace/Personal records, strict query/item/corpus/result/context caps, pause/cancel checks, untrusted-data framing, redacted audit counts, and is covered by Rust unit, cross-process CLI/Ollama-stub, and Swift tests.",
-            "Disabled by default and local-model-only. Private, CredentialAdjacent, Restricted, unreviewed, deleted, missing/stale/corrupt, proactive, cloud, and over-budget paths fail closed. This is not vector/embedding search, automatic retrieval, autonomous memory rewrite/purge, or production relevance proof.",
-        ),
-        feature(
-            "approval_execution",
-            "implemented",
-            "Approved first-party and installed-plugin actions execute through `/approvals/:id/execute` only after matching approval_granted audit evidence plus current action, risk, scope, input-schema, and policy validation; schema-v15 installed bindings additionally protect canonical input, manifest/provenance, and execution grant. Missing, unrelated, or changed evidence fails before claim or plugin entry; current redacted and exact legacy raw-metadata audit shapes are accepted only when their authority and decision fields match. Schema-v13 atomically records a unique durable execution claim plus redacted policy/claim audits before plugin invocation; terminal state, task state, and terminal audits commit together. Schema-v16 startup reconciliation inserts durable redacted attention once for unresolved claimed executions, safely fails a still-waiting task, and exposes exact-revision acknowledgement_without_retry through authenticated IPC, CLI, and Swift without entering plugin runtime or altering the claim. Rust migration/CAS/redaction tests, authenticated cross-process restart E2E, and Swift model/request tests cover the boundary.",
-            "Every durable claim permanently consumes that approval. Failure, cancellation, timeout, storage interruption, or restart after claim may leave the effect ambiguous and automatic retry is forbidden; acknowledgement records operator review only and cannot prove whether a pre-restart effect occurred. A deliberate new attempt requires a new approval. Grant/deny remains side-effect-free, the claim path never fabricates grant evidence, and this is not broad autonomous execution or distributed exactly-once delivery.",
-        ),
-        feature(
-            "model_tool_catalog_grounding",
-            "implemented",
-            "`/tools/model` exposes the redacted default first-party model-tool catalog, Ollama prompts use the same per-request JSON allowlist, ChatGPT/OpenAI-compatible tool schemas are derived from that allowlist, and invalid model-planned plugin IDs/actions are rejected before policy or execution with registered-tool audit guidance and CLI IPC E2E coverage. Eligible installed local_wasm actions are added only to an explicitly opted-in local reactive command.",
-            "The default catalog remains first-party only. Installed subprocess, network, model, memory, high-risk, proactive, disabled, stale, or provenance-mismatched capabilities are excluded, and this is not broad third-party tool execution, marketplace trust, malware analysis, or OS-level sandboxing.",
-        ),
-        feature(
-            "model_planned_installed_wasm_tools",
-            "implemented",
-            "An additive installed_wasm_tools request flag, false when absent, can advertise eligible installed local_wasm compute actions only to a selected local non-proactive model route. Eligibility requires enabled execution, current exact artifact provenance, wasm_compute grant, low-risk non-proactive actions, no permissions, memory, model, or network capability, valid schemas, and the same bounded direct WASM runner with immediate pre-execution revalidation, cancellation, emergency-pause dominance, and redacted audit evidence.",
-            "Explicit opt-in is scoped to one reactive command and does not include subprocess plugins or cloud routes. Wasmi provides import-free language-level compute confinement with bounded fuel, memory, request, and output, but not an OS sandbox, publisher/marketplace trust, malware analysis, same-user/process isolation, host-level egress enforcement, signing/notarization, or live-device production evidence.",
-        ),
-        feature(
-            "installed_plugin_execution",
-            "implemented",
-            "Local subprocess plugins retain explicit source-matched grants and bounded JSON streams with os_sandbox_enforced:false audit evidence. Compute-only local_wasm plugins require wasm_compute, exact current artifact provenance, no imports/WASI/filesystem/network/environment, fixed module/request/output/memory/fuel limits, and pause-dominant resumable execution. Repository locks are released before either untrusted runtime starts and reacquired only for redacted audit persistence.",
-            "Wasmi supplies language-level confinement for low-risk compute-only modules, not an OS process sandbox, marketplace approval, malware analysis, publisher reputation, same-user/process IPC isolation, or host-level egress proof. Legacy subprocess audit remains os_sandbox_enforced:false.",
-        ),
-        feature(
-            "wasm_plugin_confinement",
-            "implemented",
-            "The jarvis_json_v1 ABI requires memory, jarvis_alloc(i32)->i32, and jarvis_run(i32,i32)->i64 exports; every import is rejected and exact executed bytes are bound to install provenance. Unit and cross-process tests cover success plus import, mutation, schema, resource, timeout, pause, and restart denial paths.",
-            "Compute-only Wasmi boundary with no host capabilities. It does not clear external plugin-trust, signed-distribution, or live-device evidence gates.",
-        ),
-        feature(
-            "plugin_publisher_signature",
-            "implemented",
-            "Installed plugin manifests can verify an Ed25519 publisher signature against an explicit trusted public key with audit evidence.",
-            "Trusted-key verification only; not marketplace approval, malware analysis, or reputation service trust.",
-        ),
-        feature(
-            "plugin_network_governance",
-            "implemented",
-            "Network-capable plugin actions must declare exact allowed hosts, appear in permission policy review, and require the explicit subprocess_stdio_network execution grant.",
-            "Runtime grant gate plus manifest governance only; not OS-level network sandbox enforcement or host-level egress filtering.",
-        ),
-        feature(
-            "operator_release_qa_smoke",
-            "implemented",
-            "`release-operator-qa-smoke.sh` exercises repository-backed command, audit, route, memory, scheduler, activity, permission, diagnostics, pause, readiness, and restart paths in one local QA lane.",
-            "Local CLI/operator QA evidence only; not clean-profile installed-app QA, Finder/LaunchServices validation, live voice/audio validation, live notification delivery, notarization, or marketplace trust.",
+            "The Mac app supervises only the exact separately signed bridge helper, which keeps the Keychain identity and outbound mTLS session, directly supervises the pinned agent, and forwards authenticated metadata pages into a durable cursor. The agent's default-off fixture and singleton MLX lanes run one bounded no-retention request with cleared offline environment and dedicated process-group reaping; cancellation dominates completion and suppresses late output.",
+            "Bounded local inference and metadata relay only. It adds no remote planning, repository, tool, credential, Codex, Git, publication, or unattended authority.",
         ),
         feature(
             "release_ci_gate",
             "implemented",
-            "`.github/workflows/release-local.yml` runs `./scripts/release-local.sh` on macOS for pull requests, pushes to main, and manual dispatch; `release-ci-workflow-smoke.sh` is part of the local gate and verifies the workflow remains wired to the canonical release script.",
-            "Public CI evidence for the repo-owned local release gate only; it does not perform Developer ID signing, notarization, clean-profile installation, Finder/LaunchServices validation, live-device QA, plugin-trust QA, malware review, or OS sandbox enforcement.",
+            "`./scripts/release-local.sh` runs version consistency, CI workflow and docs drift smoke, the bridge live-E2E preflight, formatting, clippy, workspace tests including ignored release proofs, cargo packaging, distribution self-tests, unsigned structure and launch checks, release runbooks, evidence preflights, and the Swift build and test suites. GitHub Actions runs the same gate on macOS.",
+            "Repository-owned validation only; it does not sign, notarize, staple, install, or validate on a live device.",
         ),
         feature(
             "unsigned_distribution_launch",
             "implemented",
-            "`package-distribution.sh --unsigned-launch-check` builds the release app layout, creates an unsigned installer payload, launches the release-built app executable with isolated HOME, proves the default owner-only Unix socket plus memory-only bearer path has no TCP listener or credential handoff file, validates audit-token requirements and same-EUID wrong-code pre-frame rejection, then relaunches only for the explicit authenticated TCP/token CLI compatibility check.",
-            "Unsigned distribution-layout, ad-hoc exact-build identity mechanics, and bearer-possession proof only; not Developer ID publisher identity, device authentication, App Sandbox or host-egress enforcement, signing, notarization, stapling, /Applications install, Finder/LaunchServices validation, live-device validation, App Store review, or manual QA.",
+            "`package-distribution.sh` builds an unsigned app and installer package, validates bundle and package metadata against expected release identity, proves the running-app guard, and performs a clean-profile unsigned launch check.",
+            "Unsigned local structure and launch proof only; Developer ID signing, notarization, stapling, and Gatekeeper assessment remain separate owner-recorded evidence.",
         ),
         feature(
             "release_evidence_status",
             "implemented",
-            "`/release/evidence-status` and `assemblywright release evidence-status` expose structured present, missing, or invalid status for standard signed artifacts, QA reports, and final evidence bundle paths, including app bundle metadata and approved privacy prompt copy matching, bundled core version-marker matching, signed-provenance core path/version/digest binding, signed-provenance artifact digest matching, live-device QA bundle/version/non-future timestamp and repository-backed command-result evidence checks, plugin-trust release-version, non-future timestamp, owner-review-source, host-egress policy and deny/allow fixture checks, and final-bundle path/digest/local-signature/archive-URI validation plus child-report semantic revalidation, with Rust, CLI E2E, and Swift model coverage.",
-            "Read-only file/report inventory plus report semantic validation only; it does not sign, notarize, staple, install, Finder-launch, execute release artifacts, run live-device QA, review marketplace trust, scan malware, or enforce OS sandboxing.",
+            "`assemblywright release evidence-status` reports present, missing, or invalid status for expected artifact paths and owner-recorded JSON reports, validating app bundle metadata, bundled core version markers, signed-provenance artifact digest matching, live-device QA release metadata and non-future timestamp semantics, exact app-executable identity and cross-report binding, and final-bundle path/digest/archive-URI/signature-validation semantics.",
+            "File and report inventory plus structural validation only. Presence never proves that signing, notarization, stapling, installation, or live-device QA actually happened.",
         ),
         feature(
             "release_evidence_bundle",
             "implemented",
-            "`release-evidence-bundle.sh --check`, `--write-template`, `--self-test`, and `release-evidence-doctor.sh --check` are part of the release evidence workflow; `--bundle` validates signed/stapled artifact references, live-device QA bundle metadata and command observation, plugin-trust QA flags, owner evidence, review source, host-egress fields, and a durable reports archive URI, then writes SHA-256-bound evidence manifest entries whose child reports are revalidated by doctor/status checks.",
-            "Evidence-bundle mechanics, local artifact/report validation, and release-evidence inventory only; production readiness still depends on owner-recorded external signing, notarization, live-device QA, plugin-trust QA, and archived evidence.",
-        ),
-        feature(
-            "live_voice_loop",
-            "pending_manual_validation",
-            "Swift voice input and speech-output adapters have deterministic fake-adapter tests, including final transcript staging and opt-in final-transcript auto-submit into the text command path.",
-            "Live microphone, Speech permission, spoken transcript handoff, live audio output, and device validation are not proven by automated tests.",
+            "`release-evidence-bundle.sh` assembles the final owner-attested bundle from the signed artifacts, signed-distribution provenance report, and live-device QA report, revalidating each child report and binding paths, digests, and archive URIs.",
+            "Owner-recorded external evidence, not local proof that the external release checks were performed.",
         ),
     ]
 }
@@ -2623,10 +2111,6 @@ pub fn release_live_device_runbook() -> ReleaseRunbookResponse {
 
 pub fn release_signed_distribution_runbook() -> ReleaseRunbookResponse {
     release_signed_distribution_runbook_from(&release_readiness(), &release_evidence_status())
-}
-
-pub fn release_plugin_trust_runbook() -> ReleaseRunbookResponse {
-    release_plugin_trust_runbook_from(&release_readiness(), &release_evidence_status())
 }
 
 pub fn release_evidence_bundle_runbook() -> ReleaseRunbookResponse {

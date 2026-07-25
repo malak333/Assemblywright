@@ -24,13 +24,11 @@ evidence sequence. It does not write files.
 
 --write DIR writes sourceable env templates and read-only JSON snapshots:
   release-live-device-qa.env
-  release-plugin-trust-qa.env
   release-evidence-bundle.env
   release-readiness.json
   release-evidence-status.json
   signed-distribution-runbook.json
   live-device-runbook.json
-  plugin-trust-runbook.json
   release-evidence-checklist.md
   release-handoff-manifest.json
   README.md
@@ -163,13 +161,11 @@ with manifest_path.open(encoding="utf-8") as handle:
 
 expected_files = [
     "release-live-device-qa.env",
-    "release-plugin-trust-qa.env",
     "release-evidence-bundle.env",
     "release-readiness.json",
     "release-evidence-status.json",
     "signed-distribution-runbook.json",
     "live-device-runbook.json",
-    "plugin-trust-runbook.json",
     "evidence-bundle-runbook.json",
     "release-evidence-checklist.md",
     "README.md",
@@ -227,14 +223,9 @@ claim.
 ## Files
 
 - \`release-live-device-qa.env\`: fill on the clean release Mac after installed
-  app, Finder launch, live microphone/Speech, transcript handoff, live audio,
-  notification, restart, and manual release QA have actually passed.
-- \`release-plugin-trust-qa.env\`: fill after marketplace review, malware scan,
-  signed publisher policy review, OS sandbox validation, host-level egress deny
-  and declared-host allow fixtures, and manual plugin trust review have actually
-  passed.
+  app, Finder launch, restart, and manual release QA have actually passed.
 - \`release-evidence-bundle.env\`: fill after signed/notarized distribution,
-  live-device QA, plugin-trust QA, and report archival have actually completed.
+  live-device QA and report archival have actually completed.
 - \`release-readiness.json\`, \`release-evidence-status.json\`, and the three
   \`*-runbook.json\` files: read-only snapshots from the current checkout.
 - \`release-evidence-checklist.md\`: exact remaining evidence fields and artifact
@@ -253,11 +244,8 @@ claim.
    profile and complete the live-device checks. Then run
    \`set -a && source release-live-device-qa.env && set +a\` followed by
    \`./scripts/release-live-device-qa.sh --assert-complete\`.
-3. Complete the plugin trust review checks. Then run
-   \`set -a && source release-plugin-trust-qa.env && set +a\` followed by
-   \`./scripts/release-plugin-trust-qa.sh --assert-complete\`.
 4. Archive the signed distribution, signed provenance, live-device QA report,
-   plugin-trust QA report, and supporting external evidence in a durable
+   and supporting external evidence in a durable
    release location. Then run
    \`set -a && source release-evidence-bundle.env && set +a\` followed by
    \`./scripts/release-evidence-bundle.sh --bundle\`.
@@ -272,7 +260,7 @@ claim.
 
 Proof boundary: these files are handoff scaffolding only. They do not prove that
 signing, notarization, stapling, installation, Finder launch, live-device QA,
-plugin trust QA, host-level egress enforcement, or final evidence archival have
+or final evidence archival have
 been performed.
 EOF
 }
@@ -324,31 +312,10 @@ Required scheduler notification observation:
 - \`JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER\`: \`jarvis.scheduler\`.
 - \`JARVIS_QA_NOTIFICATION_OBSERVED_AT\`: UTC timestamp ending in \`Z\`.
 
-## Plugin Trust QA Evidence
-
-Fill \`release-plugin-trust-qa.env\` only after marketplace review, malware
-scan, signed publisher policy review, OS sandbox validation, host-level egress
-deny/allow fixtures, and manual trust review have actually passed.
-
-Each category must have a durable artifact URI plus SHA-256 digest:
-
-- \`JARVIS_PLUGIN_QA_MARKETPLACE_ARTIFACT_URI\` and
-  \`JARVIS_PLUGIN_QA_MARKETPLACE_ARTIFACT_SHA256\`
-- \`JARVIS_PLUGIN_QA_MALWARE_SCAN_ARTIFACT_URI\` and
-  \`JARVIS_PLUGIN_QA_MALWARE_SCAN_ARTIFACT_SHA256\`
-- \`JARVIS_PLUGIN_QA_OS_SANDBOX_ARTIFACT_URI\` and
-  \`JARVIS_PLUGIN_QA_OS_SANDBOX_ARTIFACT_SHA256\`
-- \`JARVIS_PLUGIN_QA_EGRESS_ARTIFACT_URI\` and
-  \`JARVIS_PLUGIN_QA_EGRESS_ARTIFACT_SHA256\`
-- \`JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_ARTIFACT_URI\` and
-  \`JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_ARTIFACT_SHA256\`
-- \`JARVIS_PLUGIN_QA_MANUAL_REVIEW_ARTIFACT_URI\` and
-  \`JARVIS_PLUGIN_QA_MANUAL_REVIEW_ARTIFACT_SHA256\`
-
 ## Final Evidence Bundle
 
 Fill \`release-evidence-bundle.env\` only after signed distribution,
-live-device QA, plugin-trust QA, and durable archival are complete.
+live-device QA and durable archival are complete.
 
 - \`JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI\` must point at the durable archive
   containing signed artifacts, signed provenance, QA reports, final bundle, and
@@ -362,7 +329,7 @@ live-device QA, plugin-trust QA, and durable archival are complete.
 
 Proof boundary: this checklist is operator guidance only; it does not sign,
 notarize, staple, install, Finder-launch, validate live device behavior, review
-plugin trust, enforce egress, or archive evidence.
+or archive evidence.
 EOF
 }
 
@@ -383,13 +350,11 @@ output_dir = Path(sys.argv[1])
 generated_at, version, git_commit, endpoint = sys.argv[2:6]
 files = [
     "release-live-device-qa.env",
-    "release-plugin-trust-qa.env",
     "release-evidence-bundle.env",
     "release-readiness.json",
     "release-evidence-status.json",
     "signed-distribution-runbook.json",
     "live-device-runbook.json",
-    "plugin-trust-runbook.json",
     "evidence-bundle-runbook.json",
     "release-evidence-checklist.md",
     "README.md",
@@ -416,7 +381,7 @@ manifest = {
     "proof_boundary": (
         "Handoff manifest and per-file digests only; this does not prove signing, "
         "notarization, stapling, installation, Finder launch, live-device QA, "
-        "plugin trust QA, host-level egress enforcement, or final evidence archival."
+        "or final evidence archival."
     ),
     "files": entries,
 }
@@ -433,7 +398,6 @@ check_prerequisites() {
   require_command python3
   require_command date
   [[ -x ./scripts/release-live-device-qa.sh ]] || fail "missing executable scripts/release-live-device-qa.sh"
-  [[ -x ./scripts/release-plugin-trust-qa.sh ]] || fail "missing executable scripts/release-plugin-trust-qa.sh"
   [[ -x ./scripts/release-evidence-bundle.sh ]] || fail "missing executable scripts/release-evidence-bundle.sh"
   [[ -x ./scripts/package-distribution.sh ]] || fail "missing executable scripts/package-distribution.sh"
 }
@@ -450,7 +414,6 @@ requires external evidence:
   structured scheduler notification observation, restart, and manual release QA
   on a real Mac.
 - Marketplace review, malware scan, signed publisher policy, OS sandbox
-  validation, host-level egress deny/allow fixtures, and manual plugin trust QA.
 - Durable archival of signed artifacts, reports, and supporting evidence.
 
 Write the handoff directory:
@@ -465,14 +428,12 @@ write_handoff() {
   mkdir -p "$output_dir"
 
   run ./scripts/release-live-device-qa.sh --write-template "$output_dir/release-live-device-qa.env"
-  run ./scripts/release-plugin-trust-qa.sh --write-template "$output_dir/release-plugin-trust-qa.env"
   run ./scripts/release-evidence-bundle.sh --write-template "$output_dir/release-evidence-bundle.env"
 
   run env JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -q -p jarvis-cli -- release readiness --json --endpoint "$ENDPOINT" >"$output_dir/release-readiness.json"
   run cargo run -q -p jarvis-cli -- release evidence-status --json --endpoint "$ENDPOINT" >"$output_dir/release-evidence-status.json"
   run cargo run -q -p jarvis-cli -- release signed-distribution-runbook --json --endpoint "$ENDPOINT" >"$output_dir/signed-distribution-runbook.json"
   run cargo run -q -p jarvis-cli -- release live-device-runbook --json --endpoint "$ENDPOINT" >"$output_dir/live-device-runbook.json"
-  run cargo run -q -p jarvis-cli -- release plugin-trust-runbook --json --endpoint "$ENDPOINT" >"$output_dir/plugin-trust-runbook.json"
   run cargo run -q -p jarvis-cli -- release evidence-bundle-runbook --json --endpoint "$ENDPOINT" >"$output_dir/evidence-bundle-runbook.json"
   write_evidence_checklist "$output_dir"
   write_readme "$output_dir"
@@ -494,18 +455,12 @@ self_test() {
   require_file_contains "live-device template" "$tmp_dir/handoff/release-live-device-qa.env" 'JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID=""'
   require_file_contains "live-device template" "$tmp_dir/handoff/release-live-device-qa.env" "release evidence-status"
   require_file_contains "live-device template" "$tmp_dir/handoff/release-live-device-qa.env" "release readiness"
-  require_file_contains "plugin-trust template" "$tmp_dir/handoff/release-plugin-trust-qa.env" "JARVIS_PLUGIN_QA_MARKETPLACE_REVIEW_VALIDATED=false"
-  require_file_contains "plugin-trust template" "$tmp_dir/handoff/release-plugin-trust-qa.env" 'JARVIS_PLUGIN_QA_MARKETPLACE_ARTIFACT_URI=""'
-  require_file_contains "plugin-trust template" "$tmp_dir/handoff/release-plugin-trust-qa.env" 'JARVIS_PLUGIN_QA_MALWARE_SCAN_ARTIFACT_SHA256=""'
-  require_file_contains "plugin-trust template" "$tmp_dir/handoff/release-plugin-trust-qa.env" 'JARVIS_PLUGIN_QA_MANUAL_REVIEW_ARTIFACT_URI=""'
   require_file_contains "evidence-bundle template" "$tmp_dir/handoff/release-evidence-bundle.env" "JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=false"
   require_file_contains "evidence-bundle template" "$tmp_dir/handoff/release-evidence-bundle.env" "JARVIS_EVIDENCE_OVERWRITE_OUTPUT=false"
   require_file_contains "evidence-bundle template" "$tmp_dir/handoff/release-evidence-bundle.env" 'JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI=""'
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "JARVIS_DEVELOPER_ID_APPLICATION"
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "set -a && source release-live-device-qa.env && set +a"
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "./scripts/release-live-device-qa.sh --assert-complete"
-  require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "set -a && source release-plugin-trust-qa.env && set +a"
-  require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "./scripts/release-plugin-trust-qa.sh --assert-complete"
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "set -a && source release-evidence-bundle.env && set +a"
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "./scripts/release-evidence-bundle.sh --bundle"
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "./scripts/release-evidence-doctor.sh --assert-complete"
@@ -517,7 +472,6 @@ self_test() {
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "release-handoff-manifest.json"
   require_file_contains "handoff checklist" "$tmp_dir/handoff/release-evidence-checklist.md" "JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER"
   require_file_contains "handoff checklist" "$tmp_dir/handoff/release-evidence-checklist.md" "jarvis.scheduler"
-  require_file_contains "handoff checklist" "$tmp_dir/handoff/release-evidence-checklist.md" "JARVIS_PLUGIN_QA_MARKETPLACE_ARTIFACT_URI"
   require_file_contains "handoff checklist" "$tmp_dir/handoff/release-evidence-checklist.md" "JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI"
   require_json_key "handoff manifest" "$tmp_dir/handoff/release-handoff-manifest.json" "files"
   require_json_string_contains "handoff manifest" "$tmp_dir/handoff/release-handoff-manifest.json" "evidence_type" "release_external_handoff_manifest"
@@ -527,7 +481,6 @@ self_test() {
   require_json_key "evidence-status snapshot" "$tmp_dir/handoff/release-evidence-status.json" "complete"
   require_json_key "signed-distribution runbook snapshot" "$tmp_dir/handoff/signed-distribution-runbook.json" "commands"
   require_json_key "live-device runbook snapshot" "$tmp_dir/handoff/live-device-runbook.json" "commands"
-  require_json_key "plugin-trust runbook snapshot" "$tmp_dir/handoff/plugin-trust-runbook.json" "commands"
   require_json_key "evidence-bundle runbook snapshot" "$tmp_dir/handoff/evidence-bundle-runbook.json" "commands"
   require_json_string_contains "evidence-bundle runbook snapshot" "$tmp_dir/handoff/evidence-bundle-runbook.json" "proof_boundary" "does not generate the final bundle"
 

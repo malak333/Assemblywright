@@ -26,10 +26,9 @@ pub use ipc_transport::{
 };
 pub use release::{
     release_evidence_bundle_runbook, release_evidence_status, release_live_device_runbook,
-    release_plugin_trust_runbook, release_readiness, release_signed_distribution_runbook,
-    ReleaseEvidenceItemStatus, ReleaseEvidenceKind, ReleaseEvidenceStatusItem,
-    ReleaseEvidenceStatusResponse, ReleaseReadinessFeature, ReleaseReadinessResponse,
-    ReleaseRunbookResponse,
+    release_readiness, release_signed_distribution_runbook, ReleaseEvidenceItemStatus,
+    ReleaseEvidenceKind, ReleaseEvidenceStatusItem, ReleaseEvidenceStatusResponse,
+    ReleaseReadinessFeature, ReleaseReadinessResponse, ReleaseRunbookResponse,
 };
 pub use startup::{
     validate_peer_code_requirement, validate_unix_socket_path, PeerIdentityProfile,

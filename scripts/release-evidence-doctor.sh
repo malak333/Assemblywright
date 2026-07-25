@@ -11,7 +11,6 @@ ZIP_PATH="${JARVIS_EVIDENCE_ZIP_PATH:-$DIST_DIR/Assemblywright-$VERSION.zip}"
 PKG_PATH="${JARVIS_EVIDENCE_PKG_PATH:-$DIST_DIR/Assemblywright-$VERSION.pkg}"
 SIGNED_PROVENANCE_REPORT="${JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT:-$DIST_DIR/Assemblywright-$VERSION-signed-provenance.json}"
 LIVE_QA_REPORT="${JARVIS_EVIDENCE_LIVE_QA_REPORT:-${JARVIS_QA_REPORT_PATH:-$ROOT_DIR/target/release-live-device-qa-report.json}}"
-PLUGIN_QA_REPORT="${JARVIS_EVIDENCE_PLUGIN_QA_REPORT:-${JARVIS_PLUGIN_QA_REPORT_PATH:-$ROOT_DIR/target/release-plugin-trust-qa-report.json}}"
 BUNDLE_PATH="${JARVIS_EVIDENCE_OUTPUT_PATH:-$ROOT_DIR/target/release-evidence-bundle.json}"
 EXPECTED_BUNDLE_ID="${JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID:-com.nobiletechnology.jarvis}"
 EXPECTED_VERSION="${JARVIS_EVIDENCE_EXPECTED_VERSION:-$VERSION}"
@@ -27,7 +26,6 @@ MISSING_ITEMS=()
 SATISFIED_ITEMS=()
 SIGNED_PROVENANCE_REPORT_VALID=false
 LIVE_QA_REPORT_VALID=false
-PLUGIN_QA_REPORT_VALID=false
 
 usage() {
   cat <<'USAGE'
@@ -54,7 +52,6 @@ Optional paths match scripts/release-evidence-bundle.sh:
   JARVIS_EVIDENCE_PKG_PATH
   JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT
   JARVIS_EVIDENCE_LIVE_QA_REPORT      Defaults to JARVIS_QA_REPORT_PATH or target/release-live-device-qa-report.json
-  JARVIS_EVIDENCE_PLUGIN_QA_REPORT    Defaults to JARVIS_PLUGIN_QA_REPORT_PATH or target/release-plugin-trust-qa-report.json
   JARVIS_EVIDENCE_OUTPUT_PATH
   JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID
   JARVIS_EVIDENCE_EXPECTED_VERSION
@@ -95,8 +92,6 @@ Recommended next evidence commands:
   live-device assertion: set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete
   live-device evidence status: JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"
   live-device readiness: JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"
-  plugin-trust template: ./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env
-  plugin-trust assertion: set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete
   final bundle template: ./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env
   final bundle: set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle
   final doctor assertion: ./scripts/release-evidence-doctor.sh --assert-complete
@@ -1305,47 +1300,11 @@ check_release_evidence() {
     record_missing "live-device QA report missing or invalid JSON: $LIVE_QA_REPORT"
   fi
 
-  if valid_json_file "$PLUGIN_QA_REPORT"; then
-    record_satisfied "plugin-trust QA report JSON: $PLUGIN_QA_REPORT"
-    local missing_before_plugin="${#MISSING_ITEMS[@]}"
-    check_json_number "plugin-trust QA report" "$PLUGIN_QA_REPORT" "schema_version" "1"
-    check_json_string "plugin-trust QA report" "$PLUGIN_QA_REPORT" "evidence_type" "owner_recorded_plugin_trust_qa"
-    check_json_string "plugin-trust QA report" "$PLUGIN_QA_REPORT" "version" "$EXPECTED_VERSION"
-    check_json_false_flag "plugin-trust QA report" "$PLUGIN_QA_REPORT" "self_test_fixture"
-    check_json_string "plugin-trust QA report" "$PLUGIN_QA_REPORT" "review_source" "owner-asserted-manual-review"
-    for flag in marketplace_review malware_scan os_sandbox egress_enforcement signed_publisher_policy manual_trust_review; do
-      check_json_flag "plugin-trust QA report" "$PLUGIN_QA_REPORT" "validation_flags.$flag"
-    done
-    for field in owner_name review_started_at review_completed_at; do
-      check_json_nonempty_string "plugin-trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.$field"
-    done
-    for field in marketplace_evidence_note malware_scan_evidence_note os_sandbox_evidence_note egress_evidence_note egress_policy_label egress_deny_fixture_evidence_note egress_allow_fixture_evidence_note signed_publisher_evidence_note manual_review_evidence_note; do
-      check_json_meaningful_evidence_string "plugin-trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.$field"
-    done
-    for artifact in marketplace_review malware_scan os_sandbox egress_enforcement signed_publisher_policy manual_trust_review; do
-      check_json_reports_archive_uri "plugin-trust QA report" "$PLUGIN_QA_REPORT" "evidence_artifacts.$artifact.uri"
-      check_json_sha256 "plugin-trust QA report" "$PLUGIN_QA_REPORT" "evidence_artifacts.$artifact.sha256"
-    done
-    check_json_utc_timestamp "plugin-trust QA report" "$PLUGIN_QA_REPORT" "generated_at"
-    check_json_utc_timestamp "plugin-trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.review_started_at"
-    check_json_utc_timestamp "plugin-trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.review_completed_at"
-    check_json_utc_timestamp "plugin-trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.egress_validation_completed_at"
-    check_json_timestamp_order "plugin-trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.review_started_at" "owner_recorded_plugin_trust_evidence.review_completed_at"
-    check_json_timestamp_order "plugin-trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.review_started_at" "owner_recorded_plugin_trust_evidence.egress_validation_completed_at"
-    check_json_timestamp_order "plugin-trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.egress_validation_completed_at" "owner_recorded_plugin_trust_evidence.review_completed_at"
-    check_json_timestamp_order "plugin-trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.review_completed_at" "generated_at"
-    if [[ "${#MISSING_ITEMS[@]}" -eq "$missing_before_plugin" ]]; then
-      PLUGIN_QA_REPORT_VALID=true
-    fi
-  else
-    record_missing "plugin-trust QA report missing or invalid JSON: $PLUGIN_QA_REPORT"
-  fi
-
   if valid_json_file "$BUNDLE_PATH"; then
     record_satisfied "release evidence bundle JSON: $BUNDLE_PATH"
     check_json_number "release evidence bundle" "$BUNDLE_PATH" "schema_version" "1"
     check_json_string "release evidence bundle" "$BUNDLE_PATH" "evidence_type" "release_evidence_bundle"
-    for flag in signed_distribution notarization clean_profile live_device_qa plugin_trust_qa reports_archived; do
+    for flag in signed_distribution notarization clean_profile live_device_qa reports_archived; do
       check_json_flag "release evidence bundle" "$BUNDLE_PATH" "validation_flags.$flag"
     done
     check_json_flag "release evidence bundle" "$BUNDLE_PATH" "validation_flags.local_signature_validation"
@@ -1356,11 +1315,10 @@ check_release_evidence() {
     check_json_string "release evidence bundle" "$BUNDLE_PATH" "artifacts.pkg_path" "$PKG_PATH"
     check_json_string "release evidence bundle" "$BUNDLE_PATH" "reports.signed_distribution_provenance_report" "$SIGNED_PROVENANCE_REPORT"
     check_json_string "release evidence bundle" "$BUNDLE_PATH" "reports.live_device_qa_report" "$LIVE_QA_REPORT"
-    check_json_string "release evidence bundle" "$BUNDLE_PATH" "reports.plugin_trust_qa_report" "$PLUGIN_QA_REPORT"
-    for field in artifacts.app_path artifacts.zip_path artifacts.pkg_path reports.signed_distribution_provenance_report reports.live_device_qa_report reports.plugin_trust_qa_report; do
+    for field in artifacts.app_path artifacts.zip_path artifacts.pkg_path reports.signed_distribution_provenance_report reports.live_device_qa_report; do
       check_json_nonempty_string "release evidence bundle" "$BUNDLE_PATH" "$field"
     done
-    for field in owner_name completed_at signed_distribution_note notarization_note clean_profile_note live_device_qa_note plugin_trust_qa_note reports_archive_note reports_archive_uri; do
+    for field in owner_name completed_at signed_distribution_note notarization_note clean_profile_note live_device_qa_note reports_archive_note reports_archive_uri; do
       check_json_nonempty_string "release evidence bundle" "$BUNDLE_PATH" "owner_recorded_release_evidence.$field"
     done
     check_json_utc_timestamp "release evidence bundle" "$BUNDLE_PATH" "owner_recorded_release_evidence.completed_at"
@@ -1371,25 +1329,18 @@ check_release_evidence() {
     if valid_json_file "$LIVE_QA_REPORT"; then
       check_json_timestamp_between_reports "release evidence bundle live-device QA" "$LIVE_QA_REPORT" "generated_at" "$BUNDLE_PATH" "owner_recorded_release_evidence.completed_at" "$BUNDLE_PATH" "generated_at"
     fi
-    if valid_json_file "$PLUGIN_QA_REPORT"; then
-      check_json_timestamp_between_reports "release evidence bundle plugin-trust QA" "$PLUGIN_QA_REPORT" "generated_at" "$BUNDLE_PATH" "owner_recorded_release_evidence.completed_at" "$BUNDLE_PATH" "generated_at"
-    fi
-    for field in artifacts.zip_sha256 artifacts.pkg_sha256 reports.signed_distribution_provenance_sha256 reports.live_device_qa_sha256 reports.plugin_trust_qa_sha256; do
+    for field in artifacts.zip_sha256 artifacts.pkg_sha256 reports.signed_distribution_provenance_sha256 reports.live_device_qa_sha256; do
       check_json_sha256 "release evidence bundle" "$BUNDLE_PATH" "$field"
     done
     check_json_sha256_matches_file "release evidence bundle" "$BUNDLE_PATH" "artifacts.zip_sha256" "app zip artifact" "$ZIP_PATH"
     check_json_sha256_matches_file "release evidence bundle" "$BUNDLE_PATH" "artifacts.pkg_sha256" "installer package artifact" "$PKG_PATH"
     check_json_sha256_matches_file "release evidence bundle" "$BUNDLE_PATH" "reports.signed_distribution_provenance_sha256" "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT"
     check_json_sha256_matches_file "release evidence bundle" "$BUNDLE_PATH" "reports.live_device_qa_sha256" "live-device QA report" "$LIVE_QA_REPORT"
-    check_json_sha256_matches_file "release evidence bundle" "$BUNDLE_PATH" "reports.plugin_trust_qa_sha256" "plugin-trust QA report" "$PLUGIN_QA_REPORT"
     if [[ "$SIGNED_PROVENANCE_REPORT_VALID" != true ]]; then
       record_missing "release evidence bundle references invalid signed-distribution provenance report: $SIGNED_PROVENANCE_REPORT"
     fi
     if [[ "$LIVE_QA_REPORT_VALID" != true ]]; then
       record_missing "release evidence bundle references invalid live-device QA report: $LIVE_QA_REPORT"
-    fi
-    if [[ "$PLUGIN_QA_REPORT_VALID" != true ]]; then
-      record_missing "release evidence bundle references invalid plugin-trust QA report: $PLUGIN_QA_REPORT"
     fi
   else
     record_missing "release evidence bundle missing or invalid JSON: $BUNDLE_PATH"
@@ -1437,7 +1388,6 @@ assert_cli_evidence_status_complete() {
     JARVIS_EVIDENCE_PKG_PATH="$PKG_PATH" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$SIGNED_PROVENANCE_REPORT" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$LIVE_QA_REPORT" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$PLUGIN_QA_REPORT" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$BUNDLE_PATH" \
     JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID="$EXPECTED_BUNDLE_ID" \
     JARVIS_EVIDENCE_EXPECTED_VERSION="$EXPECTED_VERSION" \
@@ -1528,7 +1478,6 @@ EOF
 
 write_fixture_reports() {
   local live_path="$1"
-  local plugin_path="$2"
   local live_core_sha
   local live_app_executable_sha
   live_core_sha="$(file_sha256 "$(dirname "$live_path")/dist/Assemblywright.app/Contents/Resources/bin/jarvis-cli")"
@@ -1608,66 +1557,6 @@ write_fixture_reports() {
   "proof_boundary": "self-test fixture"
 }
 JSON
-  cat >"$plugin_path" <<JSON
-{
-  "schema_version": 1,
-  "evidence_type": "owner_recorded_plugin_trust_qa",
-  "version": "$VERSION",
-  "self_test_fixture": false,
-  "generated_at": "2026-05-22T16:30:00Z",
-  "review_source": "owner-asserted-manual-review",
-  "validation_flags": {
-    "marketplace_review": true,
-    "malware_scan": true,
-    "os_sandbox": true,
-    "egress_enforcement": true,
-    "signed_publisher_policy": true,
-    "manual_trust_review": true
-  },
-  "owner_recorded_plugin_trust_evidence": {
-    "owner_name": "Assemblywright Plugin QA Self-Test",
-    "review_started_at": "2026-05-22T16:10:00Z",
-    "review_completed_at": "2026-05-22T16:20:00Z",
-    "marketplace_evidence_note": "Marketplace review evidence was observed in the controlled release trust lane.",
-    "malware_scan_evidence_note": "Malware scan evidence was observed in the controlled release trust lane.",
-    "os_sandbox_evidence_note": "OS sandbox evidence was observed in the controlled release trust lane.",
-    "egress_evidence_note": "Egress enforcement evidence was observed in the controlled release trust lane.",
-    "egress_policy_label": "Controlled release host egress policy",
-    "egress_validation_completed_at": "2026-05-22T16:18:00Z",
-    "egress_deny_fixture_evidence_note": "Deny validation blocked undeclared outbound traffic in the controlled release trust lane.",
-    "egress_allow_fixture_evidence_note": "Allow validation reached the declared host only in the controlled release trust lane.",
-    "signed_publisher_evidence_note": "Signed publisher policy evidence was observed in the controlled release trust lane.",
-    "manual_review_evidence_note": "Manual trust review evidence was observed in the controlled release trust lane."
-  },
-  "evidence_artifacts": {
-    "marketplace_review": {
-      "uri": "archive://jarvis/plugin-trust/marketplace-review.json",
-      "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
-    },
-    "malware_scan": {
-      "uri": "archive://jarvis/plugin-trust/malware-scan.json",
-      "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
-    },
-    "os_sandbox": {
-      "uri": "archive://jarvis/plugin-trust/os-sandbox.json",
-      "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
-    },
-    "egress_enforcement": {
-      "uri": "archive://jarvis/plugin-trust/egress.json",
-      "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
-    },
-    "signed_publisher_policy": {
-      "uri": "archive://jarvis/plugin-trust/signed-publisher.json",
-      "sha256": "5555555555555555555555555555555555555555555555555555555555555555"
-    },
-    "manual_trust_review": {
-      "uri": "archive://jarvis/plugin-trust/manual-review.json",
-      "sha256": "6666666666666666666666666666666666666666666666666666666666666666"
-    }
-  },
-  "proof_boundary": "self-test fixture"
-}
-JSON
 }
 
 write_fixture_bundle() {
@@ -1677,17 +1566,14 @@ write_fixture_bundle() {
   local pkg_path="$4"
   local signed_path="$5"
   local live_path="$6"
-  local plugin_path="$7"
   local zip_sha
   local pkg_sha
   local signed_sha
   local live_sha
-  local plugin_sha
   zip_sha="$(file_sha256 "$zip_path")"
   pkg_sha="$(file_sha256 "$pkg_path")"
   signed_sha="$(file_sha256 "$signed_path")"
   live_sha="$(file_sha256 "$live_path")"
-  plugin_sha="$(file_sha256 "$plugin_path")"
 
   cat >"$bundle_path" <<JSON
 {
@@ -1705,17 +1591,14 @@ write_fixture_bundle() {
   "reports": {
     "signed_distribution_provenance_report": "$signed_path",
     "live_device_qa_report": "$live_path",
-    "plugin_trust_qa_report": "$plugin_path",
     "signed_distribution_provenance_sha256": "$signed_sha",
-    "live_device_qa_sha256": "$live_sha",
-    "plugin_trust_qa_sha256": "$plugin_sha"
+    "live_device_qa_sha256": "$live_sha"
   },
   "validation_flags": {
     "signed_distribution": true,
     "notarization": true,
     "clean_profile": true,
     "live_device_qa": true,
-    "plugin_trust_qa": true,
     "reports_archived": true,
     "local_signature_validation": true
   },
@@ -1726,7 +1609,6 @@ write_fixture_bundle() {
     "notarization_note": "Notarization fixture reviewed.",
     "clean_profile_note": "Clean profile fixture reviewed.",
     "live_device_qa_note": "Live-device QA fixture reviewed.",
-    "plugin_trust_qa_note": "Plugin-trust QA fixture reviewed.",
     "reports_archive_note": "Release evidence reports archived in the fixture.",
     "reports_archive_uri": "file://self-test/release-evidence"
   },
@@ -1795,7 +1677,7 @@ status: Accepted
 LOG
   self_test_app_notary_log_sha="$(file_sha256 "$tmp_dir/app-zip-notarytool.log")"
   self_test_pkg_notary_log_sha="$(file_sha256 "$tmp_dir/installer-pkg-notarytool.log")"
-  write_fixture_reports "$tmp_dir/live.json" "$tmp_dir/plugin.json"
+  write_fixture_reports "$tmp_dir/live.json"
   cat >"$tmp_dir/dist/Assemblywright-$VERSION-signed-provenance.json" <<JSON
 {
   "schema_version": 1,
@@ -1880,15 +1762,13 @@ PY
     "$self_test_zip" \
     "$self_test_pkg" \
     "$tmp_dir/dist/Assemblywright-$VERSION-signed-provenance.json" \
-    "$tmp_dir/live.json" \
-    "$tmp_dir/plugin.json"
+    "$tmp_dir/live.json"
 
   JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
     JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-  JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null
 
@@ -1908,7 +1788,6 @@ PY
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >"$tmp_dir/privacy-copy.err" 2>&1; then
     fail "release evidence doctor self-test expected stale app privacy prompt copy to fail"
@@ -1918,78 +1797,6 @@ PY
   fi
   write_fixture_app "$tmp_dir/dist/Assemblywright.app"
 
-  python3 - "$tmp_dir/plugin.json" "$tmp_dir/invalid-plugin-artifact.json" <<'PY'
-import json
-import sys
-
-source, target = sys.argv[1:3]
-with open(source, encoding="utf-8") as handle:
-    data = json.load(handle)
-data["evidence_artifacts"]["manual_trust_review"]["sha256"] = "not-a-sha"
-with open(target, "w", encoding="utf-8") as handle:
-    json.dump(data, handle)
-PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/invalid-plugin-artifact.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
-    "$0" --assert-complete >/dev/null 2>&1; then
-    fail "release evidence doctor self-test expected invalid plugin-trust artifact binding to fail"
-  fi
-
-  python3 - "$tmp_dir/plugin.json" "$tmp_dir/temp-plugin-artifact-uri.json" <<'PY'
-import json
-import sys
-
-source, target = sys.argv[1:3]
-with open(source, encoding="utf-8") as handle:
-    data = json.load(handle)
-data["evidence_artifacts"]["manual_trust_review"]["uri"] = "file:///tmp/jarvis/plugin-trust/manual-review.json"
-with open(target, "w", encoding="utf-8") as handle:
-    json.dump(data, handle)
-PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/temp-plugin-artifact-uri.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
-    "$0" --assert-complete >"$tmp_dir/temp-plugin-artifact.err" 2>&1; then
-    fail "release evidence doctor self-test expected temporary plugin-trust artifact URI to fail"
-  fi
-  if ! grep -q "durable release evidence archive" "$tmp_dir/temp-plugin-artifact.err"; then
-    fail "release evidence doctor self-test expected temporary plugin artifact URI error to mention durable release evidence archive"
-  fi
-
-  python3 - "$tmp_dir/plugin.json" "$tmp_dir/bare-plugin-artifact-uri.json" <<'PY'
-import json
-import sys
-
-source, target = sys.argv[1:3]
-with open(source, encoding="utf-8") as handle:
-    data = json.load(handle)
-data["evidence_artifacts"]["manual_trust_review"]["uri"] = "jarvis/plugin-trust/manual-review.json"
-with open(target, "w", encoding="utf-8") as handle:
-    json.dump(data, handle)
-PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/bare-plugin-artifact-uri.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
-    "$0" --assert-complete >"$tmp_dir/bare-plugin-artifact.err" 2>&1; then
-    fail "release evidence doctor self-test expected bare plugin-trust artifact URI to fail"
-  fi
-  if ! grep -q "durable release evidence archive" "$tmp_dir/bare-plugin-artifact.err"; then
-    fail "release evidence doctor self-test expected bare plugin artifact URI error to mention durable release evidence archive"
-  fi
-
   printf 'assemblywright 0.0.0\n' >"$tmp_dir/dist/Assemblywright.app/Contents/Resources/bin/jarvis-cli.version"
   stale_marker_output=""
   stale_marker_output="$(JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
@@ -1997,7 +1804,6 @@ PY
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --check)"
   if [[ "$stale_marker_output" != *"./scripts/package-distribution.sh --unsigned-launch-check"* ]]; then
@@ -2011,7 +1817,6 @@ PY
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected stale bundled core version marker to fail"
@@ -2028,7 +1833,6 @@ PY
     JARVIS_EVIDENCE_PKG_PATH="$self_test_pkg" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/dist/Assemblywright-$VERSION-signed-provenance.json" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected nested app zip payload to fail"
@@ -2051,7 +1855,6 @@ PY
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/dist/stale-digest-signed-provenance.json" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
 	    fail "release evidence doctor self-test expected stale signed provenance digest to fail"
@@ -2074,7 +1877,6 @@ PY
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/dist/stale-notary-log-signed-provenance.json" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected stale signed provenance notary log digest to fail"
@@ -2097,7 +1899,6 @@ PY
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/dist/bad-apple-tool-signed-provenance.json" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected non-Developer-ID signed provenance evidence to fail"
@@ -2120,7 +1921,6 @@ PY
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/dist/negated-gatekeeper-signed-provenance.json" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected negated Gatekeeper acceptance to fail"
@@ -2143,7 +1943,6 @@ PY
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/dist/rejected-notary-signed-provenance.json" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected rejected notary status to fail"
@@ -2155,7 +1954,6 @@ PY
     JARVIS_EVIDENCE_PKG_PATH="$tmp_dir/missing-dist/Assemblywright-$VERSION.pkg" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/missing-dist/Assemblywright-$VERSION-signed-provenance.json" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/missing-live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/missing-plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/missing-bundle.json" \
     "$0" --check)"
   for expected in \
@@ -2166,8 +1964,6 @@ PY
     "source target/release-live-device-qa.env" \
     "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"" \
     "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint \"\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"" \
-    "./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env" \
-    "source target/release-plugin-trust-qa.env" \
     "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env" \
     "source target/release-evidence-bundle.env" \
     "./scripts/release-evidence-doctor.sh --assert-complete" \
@@ -2195,7 +1991,6 @@ PY
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/missing-observation-live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected blank live voice observation to fail"
@@ -2217,7 +2012,6 @@ PY
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/placeholder-live-owner-note.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected placeholder live-device owner note to fail"
@@ -2239,7 +2033,6 @@ PY
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/mismatched-command-live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected mismatched live command observation to fail"
@@ -2261,7 +2054,6 @@ PY
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/mismatched-transcript-live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected mismatched live transcript observation to fail"
@@ -2283,7 +2075,6 @@ PY
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/mismatched-installed-app-live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected mismatched installed app path to fail"
@@ -2305,7 +2096,6 @@ PY
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/malformed-command-result-evidence-live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected malformed command result evidence id to fail"
@@ -2327,7 +2117,6 @@ PY
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/mismatched-core-digest-live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected mismatched live bundled-core digest to fail"
@@ -2349,144 +2138,9 @@ PY
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/pregenerated-live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected live report generated before completion to fail"
-  fi
-
-  python3 - "$tmp_dir/plugin.json" "$tmp_dir/missing-observation-plugin.json" <<'PY'
-import json
-import sys
-
-source, target = sys.argv[1:3]
-with open(source, encoding="utf-8") as handle:
-    data = json.load(handle)
-data["owner_recorded_plugin_trust_evidence"]["egress_deny_fixture_evidence_note"] = ""
-with open(target, "w", encoding="utf-8") as handle:
-    json.dump(data, handle)
-PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/missing-observation-plugin.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
-    "$0" --assert-complete >/dev/null 2>&1; then
-    fail "release evidence doctor self-test expected blank plugin trust observation to fail"
-  fi
-
-  python3 - "$tmp_dir/plugin.json" "$tmp_dir/placeholder-plugin-owner-note.json" <<'PY'
-import json
-import sys
-
-source, target = sys.argv[1:3]
-with open(source, encoding="utf-8") as handle:
-    data = json.load(handle)
-data["owner_recorded_plugin_trust_evidence"]["manual_review_evidence_note"] = "placeholder review evidence"
-with open(target, "w", encoding="utf-8") as handle:
-    json.dump(data, handle)
-PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/placeholder-plugin-owner-note.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
-    "$0" --assert-complete >/dev/null 2>&1; then
-    fail "release evidence doctor self-test expected placeholder plugin-trust owner note to fail"
-  fi
-
-  python3 - "$tmp_dir/plugin.json" "$tmp_dir/non-utc-plugin.json" <<'PY'
-import json
-import sys
-
-source, target = sys.argv[1:3]
-with open(source, encoding="utf-8") as handle:
-    data = json.load(handle)
-data["owner_recorded_plugin_trust_evidence"]["review_started_at"] = "2026-05-22T16:10:00-04:00"
-with open(target, "w", encoding="utf-8") as handle:
-    json.dump(data, handle)
-PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/non-utc-plugin.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
-    "$0" --assert-complete >/dev/null 2>&1; then
-    fail "release evidence doctor self-test expected non-UTC plugin trust timestamp to fail"
-  fi
-
-  python3 - "$tmp_dir/plugin.json" "$tmp_dir/future-plugin.json" <<'PY'
-import json
-import sys
-
-source, target = sys.argv[1:3]
-with open(source, encoding="utf-8") as handle:
-    data = json.load(handle)
-data["generated_at"] = "2999-01-01T00:00:00Z"
-with open(target, "w", encoding="utf-8") as handle:
-    json.dump(data, handle)
-PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/future-plugin.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
-    "$0" --assert-complete >/dev/null 2>&1; then
-    fail "release evidence doctor self-test expected future-dated plugin trust report to fail"
-  fi
-
-  python3 - "$tmp_dir/plugin.json" "$tmp_dir/reversed-plugin.json" <<'PY'
-import json
-import sys
-
-source, target = sys.argv[1:3]
-with open(source, encoding="utf-8") as handle:
-    data = json.load(handle)
-data["owner_recorded_plugin_trust_evidence"]["review_started_at"] = "2026-05-22T16:20:00Z"
-data["owner_recorded_plugin_trust_evidence"]["review_completed_at"] = "2026-05-22T16:10:00Z"
-with open(target, "w", encoding="utf-8") as handle:
-    json.dump(data, handle)
-PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/reversed-plugin.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
-    "$0" --assert-complete >/dev/null 2>&1; then
-    fail "release evidence doctor self-test expected reversed plugin trust timestamps to fail"
-  fi
-
-  python3 - "$tmp_dir/plugin.json" "$tmp_dir/pregenerated-plugin.json" <<'PY'
-import json
-import sys
-
-source, target = sys.argv[1:3]
-with open(source, encoding="utf-8") as handle:
-    data = json.load(handle)
-data["generated_at"] = "2026-05-22T16:15:00Z"
-data["owner_recorded_plugin_trust_evidence"]["review_completed_at"] = "2026-05-22T16:20:00Z"
-with open(target, "w", encoding="utf-8") as handle:
-    json.dump(data, handle)
-PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/pregenerated-plugin.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
-    "$0" --assert-complete >/dev/null 2>&1; then
-    fail "release evidence doctor self-test expected plugin report generated before completion to fail"
   fi
 
   python3 - "$tmp_dir/bundle.json" "$tmp_dir/minimal-bundle.json" <<'PY'
@@ -2506,7 +2160,6 @@ PY
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/minimal-bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected minimal final bundle to fail"
@@ -2528,7 +2181,6 @@ PY
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bad-digest-bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected malformed final bundle digest to fail"
@@ -2550,7 +2202,6 @@ PY
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/stale-digest-bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected stale final bundle report digest to fail"
@@ -2572,32 +2223,9 @@ PY
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/post-child-completion-bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected final bundle completed before child reports to fail"
-  fi
-
-  python3 - "$tmp_dir/plugin.json" "$tmp_dir/stale-version-plugin.json" <<'PY'
-import json
-import sys
-
-source, target = sys.argv[1:3]
-with open(source, encoding="utf-8") as handle:
-    data = json.load(handle)
-data["version"] = "0.0.0"
-with open(target, "w", encoding="utf-8") as handle:
-    json.dump(data, handle)
-PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/stale-version-plugin.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
-    "$0" --assert-complete >/dev/null 2>&1; then
-    fail "release evidence doctor self-test expected stale plugin trust version to fail"
   fi
 
   python3 - "$tmp_dir/live.json" "$tmp_dir/invalid-bundle-child-live.json" <<'PY'
@@ -2617,14 +2245,12 @@ PY
     "$self_test_zip" \
     "$self_test_pkg" \
     "$tmp_dir/dist/Assemblywright-$VERSION-signed-provenance.json" \
-    "$tmp_dir/invalid-bundle-child-live.json" \
-    "$tmp_dir/plugin.json"
+    "$tmp_dir/invalid-bundle-child-live.json"
   invalid_child_output="$(JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
     JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/invalid-bundle-child-live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/invalid-child-bundle.json" \
     "$0" --check)"
   if [[ "$invalid_child_output" != *"release evidence bundle references invalid live-device QA report"* ]]; then
@@ -2635,7 +2261,6 @@ PY
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/invalid-bundle-child-live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/invalid-child-bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected invalid final bundle child report to fail"
@@ -2657,22 +2282,9 @@ PY
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/disabled-local-signature-bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected disabled local signature validation to fail"
-  fi
-
-  rm "$tmp_dir/plugin.json"
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
-    "$0" --assert-complete >/dev/null 2>&1; then
-    fail "release evidence doctor self-test expected missing plugin report to fail"
   fi
 
   printf 'Assemblywright release evidence doctor self-test: ok\n'

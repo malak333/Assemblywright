@@ -115,21 +115,6 @@ enum ReleaseCommand {
         #[arg(long, value_enum)]
         format: Option<OutputFormat>,
     },
-    /// Print the plugin-trust QA runbook and current evidence status.
-    #[command(
-        long_about = "Print the plugin-trust QA runbook and current evidence status.\n\nThis is a read-only operator guide for clearing plugin marketplace review, malware scanning, signed publisher policy, OS sandbox, host-level egress enforcement, and manual trust-review evidence gates. It combines conservative release readiness with local evidence-status inspection and does not perform marketplace review, malware scanning, sandbox deployment, network egress enforcement, signing, notarization, live-device QA, or final evidence bundling."
-    )]
-    PluginTrustRunbook {
-        /// HTTP IPC endpoint. Falls back to local read-only readiness and evidence inspection when unavailable.
-        #[arg(long, default_value = "http://127.0.0.1:7787")]
-        endpoint: String,
-        /// Print a structured JSON runbook summary.
-        #[arg(long)]
-        json: bool,
-        /// Compatibility alias for machine-readable output. Only `json` is supported.
-        #[arg(long, value_enum)]
-        format: Option<OutputFormat>,
-    },
     /// Print the final evidence-bundle runbook and current evidence status.
     #[command(
         long_about = "Print the final evidence-bundle runbook and current evidence status.\n\nThis is a read-only operator guide for generating the final release evidence bundle after signed distribution, live-device QA, and plugin-trust QA evidence exist. It combines conservative release readiness with local evidence-status inspection and does not generate the bundle, sign, notarize, staple, install, launch Finder, run live-device QA, perform marketplace review, scan malware, deploy a sandbox, or enforce host-level egress."
@@ -225,25 +210,6 @@ fn main() -> anyhow::Result<()> {
                     println!(
                         "{}",
                         format_release_signed_distribution_runbook(&readiness, &evidence_status)?
-                    );
-                }
-            }
-            ReleaseCommand::PluginTrustRunbook {
-                endpoint,
-                json,
-                format,
-            } => {
-                let readiness = release_readiness(&endpoint)?;
-                let evidence_status = release_evidence_status(&endpoint)?;
-                if json || format == Some(OutputFormat::Json) || cli_json_requested() {
-                    println!(
-                        "{}",
-                        release_plugin_trust_runbook_json(&readiness, &evidence_status)?
-                    );
-                } else {
-                    println!(
-                        "{}",
-                        format_release_plugin_trust_runbook(&readiness, &evidence_status)?
                     );
                 }
             }
@@ -823,116 +789,6 @@ fn format_release_signed_distribution_runbook(
         "Raw JSON: rerun with --json for a structured runbook summary.".to_string(),
     ]);
     Ok(lines.join("\n"))
-}
-
-fn release_plugin_trust_runbook_json(
-    readiness_response: &str,
-    evidence_status_response: &str,
-) -> anyhow::Result<String> {
-    let readiness: serde_json::Value = serde_json::from_str(readiness_response)?;
-    let evidence_status: serde_json::Value = serde_json::from_str(evidence_status_response)?;
-    let plugin_trust_evidence = evidence_status
-        .get("items")
-        .and_then(serde_json::Value::as_array)
-        .and_then(|items| {
-            items.iter().find(|item| {
-                item.get("key").and_then(serde_json::Value::as_str)
-                    == Some("plugin_trust_qa_report")
-            })
-        })
-        .cloned();
-    let payload = serde_json::json!({
-        "generated_from": "release readiness plus evidence-status",
-        "production_ready": readiness.get("production_ready").cloned().unwrap_or(serde_json::Value::Bool(false)),
-        "plugin_trust_evidence": plugin_trust_evidence,
-        "commands": [
-            "./scripts/release-plugin-trust-qa.sh --check",
-            "./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env",
-            "set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete",
-            "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks",
-            "Launch Assemblywright with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks",
-            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"",
-            "./scripts/release-evidence-doctor.sh --check",
-            "./scripts/release-evidence-bundle.sh --check",
-            "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env",
-            "set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle",
-            "./scripts/release-evidence-doctor.sh --assert-complete"
-        ],
-        "manual_checks": [
-            "Run the marketplace review workflow for every public plugin listing.",
-            "Preserve malware scan evidence for distributed plugin archives and updates.",
-            "Validate signed publisher policy for trusted publisher keys and revocation.",
-            "Validate the macOS sandbox profile or equivalent OS-level confinement.",
-            "Validate host-level egress enforcement with deny and declared-host allow fixtures.",
-            "Record archived artifact URIs and SHA-256 digests for every plugin-trust evidence category before assertion.",
-            "Preserve target/release-plugin-trust-qa-report.json for final release evidence bundling.",
-            "Generate the final release evidence bundle only after signed distribution, live-device QA, and plugin-trust QA evidence all exist."
-        ],
-        "proof_boundary": "Runbook and local evidence inspection only; this command does not perform marketplace review, malware scanning, sandbox deployment, host-level egress enforcement, signing, notarization, live-device QA, or final evidence bundling."
-    });
-    Ok(serde_json::to_string_pretty(&payload)?)
-}
-
-fn format_release_plugin_trust_runbook(
-    readiness_response: &str,
-    evidence_status_response: &str,
-) -> anyhow::Result<String> {
-    let readiness: serde_json::Value = serde_json::from_str(readiness_response)?;
-    let evidence_status: serde_json::Value = serde_json::from_str(evidence_status_response)?;
-    let plugin_trust_item = evidence_status
-        .get("items")
-        .and_then(serde_json::Value::as_array)
-        .and_then(|items| {
-            items.iter().find(|item| {
-                item.get("key").and_then(serde_json::Value::as_str)
-                    == Some("plugin_trust_qa_report")
-            })
-        });
-    let evidence_status = plugin_trust_item
-        .and_then(|item| item.get("status"))
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("unknown");
-    let evidence_detail = plugin_trust_item
-        .and_then(|item| item.get("detail"))
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("No plugin-trust QA report detail was available.");
-
-    Ok([
-        "Assemblywright plugin-trust QA runbook:".to_string(),
-        format!(
-            "Production ready: {}",
-            readiness
-                .get("production_ready")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false)
-        ),
-        format!("plugin_trust_qa_report: {evidence_status}"),
-        format!("Evidence detail: {evidence_detail}"),
-        "Run on the release machine:".to_string(),
-        "- ./scripts/release-plugin-trust-qa.sh --check".to_string(),
-        "- ./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env".to_string(),
-        "- set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete".to_string(),
-        "- Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks".to_string(),
-        "- Launch Assemblywright with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks".to_string(),
-        "- JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"".to_string(),
-        "- ./scripts/release-evidence-doctor.sh --check".to_string(),
-        "- ./scripts/release-evidence-bundle.sh --check".to_string(),
-        "- ./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env".to_string(),
-        "- set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle".to_string(),
-        "- ./scripts/release-evidence-doctor.sh --assert-complete".to_string(),
-        "Manual checks:".to_string(),
-        "- Run the marketplace review workflow for every public plugin listing.".to_string(),
-        "- Preserve malware scan evidence for distributed plugin archives and updates.".to_string(),
-        "- Validate signed publisher policy for trusted publisher keys and revocation.".to_string(),
-        "- Validate the macOS sandbox profile or equivalent OS-level confinement.".to_string(),
-        "- Validate host-level egress enforcement with deny and declared-host allow fixtures.".to_string(),
-        "- Record archived artifact URIs and SHA-256 digests for every plugin-trust evidence category before assertion.".to_string(),
-        "- Preserve target/release-plugin-trust-qa-report.json for final release evidence bundling.".to_string(),
-        "- Generate the final release evidence bundle only after signed distribution, live-device QA, and plugin-trust QA evidence all exist.".to_string(),
-        "Boundary: runbook and local evidence inspection only; no marketplace review, malware scanning, sandbox deployment, host-level egress enforcement, signing, notarization, live-device QA, or final evidence bundling was performed.".to_string(),
-        "Raw JSON: rerun with --json for a structured runbook summary.".to_string(),
-    ]
-    .join("\n"))
 }
 
 fn release_evidence_bundle_runbook_json(

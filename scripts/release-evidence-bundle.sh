@@ -11,7 +11,6 @@ ZIP_PATH="${JARVIS_EVIDENCE_ZIP_PATH:-$DIST_DIR/Assemblywright-$VERSION.zip}"
 PKG_PATH="${JARVIS_EVIDENCE_PKG_PATH:-$DIST_DIR/Assemblywright-$VERSION.pkg}"
 SIGNED_PROVENANCE_REPORT="${JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT:-$DIST_DIR/Assemblywright-$VERSION-signed-provenance.json}"
 LIVE_QA_REPORT="${JARVIS_EVIDENCE_LIVE_QA_REPORT:-${JARVIS_QA_REPORT_PATH:-$ROOT_DIR/target/release-live-device-qa-report.json}}"
-PLUGIN_QA_REPORT="${JARVIS_EVIDENCE_PLUGIN_QA_REPORT:-${JARVIS_PLUGIN_QA_REPORT_PATH:-$ROOT_DIR/target/release-plugin-trust-qa-report.json}}"
 OUTPUT_PATH="${JARVIS_EVIDENCE_OUTPUT_PATH:-$ROOT_DIR/target/release-evidence-bundle.json}"
 OVERWRITE_OUTPUT="${JARVIS_EVIDENCE_OVERWRITE_OUTPUT:-false}"
 VALIDATE_LOCAL_SIGNATURES="${JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES:-true}"
@@ -37,7 +36,7 @@ production-ready claim for Assemblywright.
 external artifacts/reports required for a production release decision.
 
 --bundle validates the expected signed distribution artifacts, live-device QA
-report, plugin-trust QA report, and explicit owner evidence flags, then writes
+report and explicit owner evidence flags, then writes
 a JSON bundle manifest.
 
 --self-test creates fake artifacts/reports in a temporary directory and
@@ -52,7 +51,6 @@ Required before --bundle:
   JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true
   JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true
   JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true
-  JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true
   JARVIS_EVIDENCE_REPORTS_ARCHIVED=true
   JARVIS_EVIDENCE_OWNER_NAME
   JARVIS_EVIDENCE_COMPLETED_AT
@@ -60,7 +58,6 @@ Required before --bundle:
   JARVIS_EVIDENCE_NOTARIZATION_NOTE
   JARVIS_EVIDENCE_CLEAN_PROFILE_NOTE
   JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE
-  JARVIS_EVIDENCE_PLUGIN_TRUST_QA_NOTE
   JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE
   JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI
 
@@ -73,7 +70,6 @@ Optional:
   JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT
                                       Defaults to target/distribution/Assemblywright-<version>-signed-provenance.json
   JARVIS_EVIDENCE_LIVE_QA_REPORT      Defaults to JARVIS_QA_REPORT_PATH or target/release-live-device-qa-report.json
-  JARVIS_EVIDENCE_PLUGIN_QA_REPORT    Defaults to JARVIS_PLUGIN_QA_REPORT_PATH or target/release-plugin-trust-qa-report.json
   JARVIS_EVIDENCE_OUTPUT_PATH         Defaults to target/release-evidence-bundle.json
   JARVIS_EVIDENCE_OVERWRITE_OUTPUT    Defaults to false. Set to true only when
                                       intentionally replacing an existing
@@ -300,8 +296,7 @@ require_distinct_evidence_paths() {
     "$ZIP_PATH" \
     "$PKG_PATH" \
     "$SIGNED_PROVENANCE_REPORT" \
-    "$LIVE_QA_REPORT" \
-    "$PLUGIN_QA_REPORT" <<'PY'
+    "$LIVE_QA_REPORT" <<'PY'
 import os
 import sys
 
@@ -311,7 +306,6 @@ inputs = [
     ("installer package artifact", sys.argv[3]),
     ("signed-distribution provenance report", sys.argv[4]),
     ("live-device QA report", sys.argv[5]),
-    ("plugin-trust QA report", sys.argv[6]),
 ]
 for label, path in inputs:
     normalized = os.path.abspath(os.path.expanduser(path))
@@ -1083,7 +1077,6 @@ write_bundle() {
   local zip_sha
   local pkg_sha
   local live_sha
-  local plugin_sha
   local signed_provenance_sha
   local local_signature_validation
   require_command shasum
@@ -1093,7 +1086,6 @@ write_bundle() {
   zip_sha="$(file_sha256 "$ZIP_PATH")"
   pkg_sha="$(file_sha256 "$PKG_PATH")"
   live_sha="$(file_sha256 "$LIVE_QA_REPORT")"
-  plugin_sha="$(file_sha256 "$PLUGIN_QA_REPORT")"
   signed_provenance_sha="$(file_sha256 "$SIGNED_PROVENANCE_REPORT")"
   local_signature_validation="$VALIDATE_LOCAL_SIGNATURES"
 
@@ -1108,12 +1100,10 @@ write_bundle() {
     "$PKG_PATH" \
     "$SIGNED_PROVENANCE_REPORT" \
     "$LIVE_QA_REPORT" \
-    "$PLUGIN_QA_REPORT" \
     "$zip_sha" \
     "$pkg_sha" \
     "$signed_provenance_sha" \
     "$live_sha" \
-    "$plugin_sha" \
     "$local_signature_validation" \
     "$JARVIS_EVIDENCE_OWNER_NAME" \
     "$JARVIS_EVIDENCE_COMPLETED_AT" \
@@ -1121,7 +1111,6 @@ write_bundle() {
     "$JARVIS_EVIDENCE_NOTARIZATION_NOTE" \
     "$JARVIS_EVIDENCE_CLEAN_PROFILE_NOTE" \
     "$JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE" \
-    "$JARVIS_EVIDENCE_PLUGIN_TRUST_QA_NOTE" \
     "$JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE" \
     "$JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI" <<'PY'
 import json
@@ -1136,12 +1125,10 @@ import sys
     pkg_path,
     signed_provenance_report,
     live_qa_report,
-    plugin_qa_report,
     zip_sha,
     pkg_sha,
     signed_provenance_sha,
     live_sha,
-    plugin_sha,
     local_signature_validation,
     owner_name,
     completed_at,
@@ -1149,10 +1136,9 @@ import sys
     notarization_note,
     clean_profile_note,
     live_device_qa_note,
-    plugin_trust_qa_note,
     reports_archive_note,
     reports_archive_uri,
-) = sys.argv[1:25]
+) = sys.argv[1:22]
 
 data = {
     "schema_version": 1,
@@ -1169,17 +1155,14 @@ data = {
     "reports": {
         "signed_distribution_provenance_report": signed_provenance_report,
         "live_device_qa_report": live_qa_report,
-        "plugin_trust_qa_report": plugin_qa_report,
         "signed_distribution_provenance_sha256": signed_provenance_sha,
         "live_device_qa_sha256": live_sha,
-        "plugin_trust_qa_sha256": plugin_sha,
     },
     "validation_flags": {
         "signed_distribution": True,
         "notarization": True,
         "clean_profile": True,
         "live_device_qa": True,
-        "plugin_trust_qa": True,
         "reports_archived": True,
         "local_signature_validation": local_signature_validation == "true",
     },
@@ -1190,7 +1173,6 @@ data = {
         "notarization_note": notarization_note,
         "clean_profile_note": clean_profile_note,
         "live_device_qa_note": live_device_qa_note,
-        "plugin_trust_qa_note": plugin_trust_qa_note,
         "reports_archive_note": reports_archive_note,
         "reports_archive_uri": reports_archive_uri,
     },
@@ -1210,7 +1192,7 @@ write_env_template() {
   cat >"$template_path" <<EOF
 # Assemblywright final release evidence bundle template.
 # Edit this file only after the signed/notarized distribution artifacts,
-# live-device QA report, plugin-trust QA report, and archive locations have
+# live-device QA report and archive locations have
 # been validated for the release candidate. Keep every validation flag false
 # until the matching external check has actually completed.
 #
@@ -1227,7 +1209,6 @@ JARVIS_EVIDENCE_ZIP_PATH="$ZIP_PATH"
 JARVIS_EVIDENCE_PKG_PATH="$PKG_PATH"
 JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$SIGNED_PROVENANCE_REPORT"
 JARVIS_EVIDENCE_LIVE_QA_REPORT="$LIVE_QA_REPORT"
-JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$PLUGIN_QA_REPORT"
 JARVIS_EVIDENCE_OUTPUT_PATH="$OUTPUT_PATH"
 JARVIS_EVIDENCE_OVERWRITE_OUTPUT=false
 JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=true
@@ -1238,7 +1219,6 @@ JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=false
 JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=false
 JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=false
 JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=false
-JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=false
 JARVIS_EVIDENCE_REPORTS_ARCHIVED=false
 
 JARVIS_EVIDENCE_OWNER_NAME=""
@@ -1247,7 +1227,6 @@ JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE=""
 JARVIS_EVIDENCE_NOTARIZATION_NOTE=""
 JARVIS_EVIDENCE_CLEAN_PROFILE_NOTE=""
 JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE=""
-JARVIS_EVIDENCE_PLUGIN_TRUST_QA_NOTE=""
 JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE=""
 JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI=""
 EOF
@@ -1432,66 +1411,6 @@ LOG
   "proof_boundary": "self-test fixture"
 }
 JSON
-  cat >"$tmp_dir/plugin.json" <<JSON
-{
-  "schema_version": 1,
-  "evidence_type": "owner_recorded_plugin_trust_qa",
-  "version": "$VERSION",
-  "self_test_fixture": false,
-  "generated_at": "2026-05-22T16:30:00Z",
-  "review_source": "owner-asserted-manual-review",
-  "validation_flags": {
-    "marketplace_review": true,
-    "malware_scan": true,
-    "os_sandbox": true,
-    "egress_enforcement": true,
-    "signed_publisher_policy": true,
-    "manual_trust_review": true
-  },
-  "owner_recorded_plugin_trust_evidence": {
-    "owner_name": "Assemblywright Plugin QA Self-Test",
-    "review_started_at": "2026-05-22T16:10:00Z",
-    "review_completed_at": "2026-05-22T16:20:00Z",
-    "marketplace_evidence_note": "Marketplace review evidence archived in the controlled release lane.",
-    "malware_scan_evidence_note": "Malware scan evidence archived in the controlled release lane.",
-    "os_sandbox_evidence_note": "OS sandbox evidence archived in the controlled release lane.",
-    "egress_evidence_note": "Egress evidence archived in the controlled release lane.",
-    "egress_policy_label": "Host egress policy reviewed in the controlled release lane",
-    "egress_validation_completed_at": "2026-05-22T16:18:00Z",
-    "egress_deny_fixture_evidence_note": "Undeclared-host deny evidence archived in the controlled release lane.",
-    "egress_allow_fixture_evidence_note": "Declared-host allow evidence archived in the controlled release lane.",
-    "signed_publisher_evidence_note": "Signed publisher policy evidence archived in the controlled release lane.",
-    "manual_review_evidence_note": "Manual trust review evidence archived in the controlled release lane."
-  },
-  "evidence_artifacts": {
-    "marketplace_review": {
-      "uri": "archive://jarvis/plugin-trust/marketplace-review.json",
-      "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
-    },
-    "malware_scan": {
-      "uri": "archive://jarvis/plugin-trust/malware-scan.json",
-      "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
-    },
-    "os_sandbox": {
-      "uri": "archive://jarvis/plugin-trust/os-sandbox.json",
-      "sha256": "3333333333333333333333333333333333333333333333333333333333333333"
-    },
-    "egress_enforcement": {
-      "uri": "archive://jarvis/plugin-trust/egress.json",
-      "sha256": "4444444444444444444444444444444444444444444444444444444444444444"
-    },
-    "signed_publisher_policy": {
-      "uri": "archive://jarvis/plugin-trust/signed-publisher.json",
-      "sha256": "5555555555555555555555555555555555555555555555555555555555555555"
-    },
-    "manual_trust_review": {
-      "uri": "archive://jarvis/plugin-trust/manual-review.json",
-      "sha256": "6666666666666666666666666666666666666666666666666666666666666666"
-    }
-  },
-  "proof_boundary": "self-test fixture"
-}
-JSON
   cat >"$tmp_dir/signed-provenance.json" <<JSON
 {
   "schema_version": 1,
@@ -1580,7 +1499,6 @@ PY
     JARVIS_EVIDENCE_PKG_PATH \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT \
     JARVIS_EVIDENCE_LIVE_QA_REPORT \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT \
     JARVIS_EVIDENCE_OUTPUT_PATH \
     JARVIS_EVIDENCE_OVERWRITE_OUTPUT \
     JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES \
@@ -1592,7 +1510,6 @@ PY
     JARVIS_EVIDENCE_NOTARIZATION_NOTE \
     JARVIS_EVIDENCE_CLEAN_PROFILE_NOTE \
     JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_NOTE \
     JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE \
     JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI; do
     require_file_contains "release evidence template" "$tmp_dir/release-evidence-bundle.env" "$field="
@@ -1602,7 +1519,6 @@ PY
     JARVIS_EVIDENCE_NOTARIZATION_VALIDATED \
     JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED \
     JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED \
     JARVIS_EVIDENCE_REPORTS_ARCHIVED; do
     require_file_contains "release evidence template" "$tmp_dir/release-evidence-bundle.env" "$flag=false"
     if grep -F "$flag=true" "$tmp_dir/release-evidence-bundle.env" >/dev/null 2>&1; then
@@ -1615,7 +1531,6 @@ PY
   export JARVIS_EVIDENCE_NOTARIZATION_NOTE="Notarization evidence reviewed in the controlled release lane."
   export JARVIS_EVIDENCE_CLEAN_PROFILE_NOTE="Clean profile evidence reviewed in the controlled release lane."
   export JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE="Live-device QA evidence reviewed in the controlled release lane."
-  export JARVIS_EVIDENCE_PLUGIN_TRUST_QA_NOTE="Plugin-trust QA evidence reviewed in the controlled release lane."
   export JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE=$'Release evidence reports archived in the controlled release lane.\nArchive reviewer noted "release archive index" and preserved backslash \\ marker.'
   export JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI="file:///Users/jarvis/releases/evidence-archive"
 
@@ -1625,7 +1540,6 @@ PY
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     JARVIS_EVIDENCE_SELF_TEST_MODE=true \
     JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
@@ -1633,7 +1547,6 @@ PY
     JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
     JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"reports_archived": true'
@@ -1644,7 +1557,6 @@ PY
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"signed_distribution_provenance_report"'
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"signed_distribution_provenance_sha256"'
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"live_device_qa_sha256"'
-  require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"plugin_trust_qa_report"'
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"owner_recorded_release_evidence"'
   require_json_contains "release evidence self-test bundle" "$tmp_dir/bundle.json" '"owner_name": "Assemblywright Release Self-Test"'
   python3 - "$tmp_dir/bundle.json" <<'PY'
@@ -1664,7 +1576,6 @@ PY
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/temp-archive-uri-bundle.json" \
     JARVIS_EVIDENCE_SELF_TEST_MODE=true \
     JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
@@ -1672,7 +1583,6 @@ PY
     JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
     JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
     JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI="file:///tmp/jarvis/release-evidence" \
     "$0" --bundle >/dev/null 2>"$tmp_dir/temp-archive-uri.err"; then
@@ -1686,7 +1596,6 @@ PY
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bare-archive-uri-bundle.json" \
     JARVIS_EVIDENCE_SELF_TEST_MODE=true \
     JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
@@ -1694,7 +1603,6 @@ PY
     JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
     JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
     JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI="release-evidence/archive" \
     "$0" --bundle >/dev/null 2>"$tmp_dir/bare-archive-uri.err"; then
@@ -1708,7 +1616,6 @@ PY
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/live.json" \
     JARVIS_EVIDENCE_OVERWRITE_OUTPUT=true \
     JARVIS_EVIDENCE_SELF_TEST_MODE=true \
@@ -1717,7 +1624,6 @@ PY
     JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
     JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>"$tmp_dir/output-collision.err"; then
     fail "release evidence self-test expected bundle output collision to be rejected"
@@ -1730,7 +1636,6 @@ PY
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     JARVIS_EVIDENCE_SELF_TEST_MODE=true \
     JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
@@ -1738,7 +1643,6 @@ PY
     JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
     JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>"$tmp_dir/existing-output.err"; then
     fail "release evidence self-test expected existing bundle output to be rejected"
@@ -1751,7 +1655,6 @@ PY
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     JARVIS_EVIDENCE_OVERWRITE_OUTPUT=true \
     JARVIS_EVIDENCE_SELF_TEST_MODE=true \
@@ -1760,7 +1663,6 @@ PY
     JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
     JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null
   require_json_contains "release evidence self-test overwritten bundle" "$tmp_dir/bundle.json" '"evidence_type": "release_evidence_bundle"'
@@ -1781,77 +1683,12 @@ PY
   fi
   require_file_contains "placeholder archive URI error" "$tmp_dir/placeholder-archive.err" "durable release evidence archive"
 
-  python3 - "$tmp_dir/plugin.json" "$tmp_dir/temp-plugin-artifact-uri.json" <<'PY'
-import json
-import sys
-
-source, target = sys.argv[1:3]
-with open(source, encoding="utf-8") as handle:
-    data = json.load(handle)
-data["evidence_artifacts"]["manual_trust_review"]["uri"] = "file:///tmp/jarvis/plugin-trust/manual-review.json"
-with open(target, "w", encoding="utf-8") as handle:
-    json.dump(data, handle)
-PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
     JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/temp-plugin-artifact-uri.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/temp-plugin-artifact-bundle.json" \
-    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
-    "$0" --bundle >/dev/null 2>"$tmp_dir/temp-plugin-artifact.err"; then
-    fail "release evidence self-test expected temporary plugin artifact URI to be rejected"
-  fi
-  require_file_contains "temporary plugin artifact URI error" "$tmp_dir/temp-plugin-artifact.err" "durable release evidence archive"
-
-  python3 - "$tmp_dir/plugin.json" "$tmp_dir/bare-plugin-artifact-uri.json" <<'PY'
-import json
-import sys
-
-source, target = sys.argv[1:3]
-with open(source, encoding="utf-8") as handle:
-    data = json.load(handle)
-data["evidence_artifacts"]["manual_trust_review"]["uri"] = "jarvis/plugin-trust/manual-review.json"
-with open(target, "w", encoding="utf-8") as handle:
-    json.dump(data, handle)
-PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/bare-plugin-artifact-uri.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bare-plugin-artifact-bundle.json" \
-    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
-    "$0" --bundle >/dev/null 2>"$tmp_dir/bare-plugin-artifact.err"; then
-    fail "release evidence self-test expected bare plugin artifact URI to be rejected"
-  fi
-  require_file_contains "bare plugin artifact URI error" "$tmp_dir/bare-plugin-artifact.err" "URI with a scheme"
-
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/placeholder-note-bundle.json" \
     JARVIS_EVIDENCE_SELF_TEST_MODE=true \
     JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
@@ -1859,7 +1696,6 @@ PY
     JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
     JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
     JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE="pending external archive" \
     "$0" --bundle >/dev/null 2>"$tmp_dir/placeholder-note.err"; then
@@ -1873,7 +1709,6 @@ PY
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/embedded-fixture-note-bundle.json" \
     JARVIS_EVIDENCE_SELF_TEST_MODE=true \
     JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
@@ -1881,7 +1716,6 @@ PY
     JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
     JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
     JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE="Signed distribution fixture was archived." \
     "$0" --bundle >/dev/null 2>"$tmp_dir/embedded-fixture-note.err"; then
@@ -1899,7 +1733,6 @@ PY
     JARVIS_EVIDENCE_PKG_PATH="$self_test_pkg" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/nested-zip-bundle.json" \
     JARVIS_EVIDENCE_SELF_TEST_MODE=true \
     JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
@@ -1907,7 +1740,6 @@ PY
     JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
     JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
     fail "release evidence self-test expected nested app zip payload to be rejected"
@@ -1930,7 +1762,6 @@ PY
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/negated-gatekeeper-signed-provenance.json" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/negated-gatekeeper-bundle.json" \
     JARVIS_EVIDENCE_SELF_TEST_MODE=true \
     JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
@@ -1938,7 +1769,6 @@ PY
     JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
     JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
     fail "release evidence self-test expected negated Gatekeeper acceptance to be rejected"
@@ -1961,7 +1791,6 @@ PY
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/pending-notary-signed-provenance.json" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/pending-notary-bundle.json" \
     JARVIS_EVIDENCE_SELF_TEST_MODE=true \
     JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
@@ -1969,7 +1798,6 @@ PY
     JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
     JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
     fail "release evidence self-test expected pending notary status to be rejected"
@@ -1983,7 +1811,6 @@ PY
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/stale-marker-bundle.json" \
     JARVIS_EVIDENCE_SELF_TEST_MODE=true \
     JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
@@ -1991,7 +1818,6 @@ PY
     JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
     JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle 2>&1 >/dev/null || true)"
   if [[ "$stale_marker_output" != *"./scripts/package-distribution.sh --unsigned-launch-check"* ]]; then
@@ -2003,7 +1829,6 @@ PY
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/stale-marker-bundle.json" \
     JARVIS_EVIDENCE_SELF_TEST_MODE=true \
     JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
@@ -2011,7 +1836,6 @@ PY
     JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
     JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
     fail "release evidence self-test expected stale bundled core version marker to be rejected"
@@ -2024,14 +1848,12 @@ PY
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/forbidden-bundle.json" \
     JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
     JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
     JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
     JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
     fail "release evidence self-test expected production bundle to reject disabled local signature validation"
@@ -2050,7 +1872,6 @@ JSON
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/incomplete-live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/incomplete-live-bundle.json" \
     JARVIS_EVIDENCE_SELF_TEST_MODE=true \
     JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
@@ -2058,7 +1879,6 @@ JSON
     JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
     JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
     fail "release evidence self-test expected incomplete live-device report to be rejected"
@@ -2080,7 +1900,6 @@ PY
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/missing-observation-live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/missing-observation-bundle.json" \
     JARVIS_EVIDENCE_SELF_TEST_MODE=true \
     JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
@@ -2088,7 +1907,6 @@ PY
     JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
     JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
     fail "release evidence self-test expected blank live voice observation to be rejected"
@@ -2110,7 +1928,6 @@ PY
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/placeholder-live-owner-note.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/placeholder-live-owner-note-bundle.json" \
     JARVIS_EVIDENCE_SELF_TEST_MODE=true \
     JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
@@ -2118,7 +1935,6 @@ PY
     JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
     JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
     fail "release evidence self-test expected placeholder live-device owner note to be rejected"
@@ -2140,7 +1956,6 @@ PY
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/mismatched-command-live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/mismatched-command-bundle.json" \
     JARVIS_EVIDENCE_SELF_TEST_MODE=true \
     JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
@@ -2148,7 +1963,6 @@ PY
     JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
     JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
     fail "release evidence self-test expected mismatched live command observation to be rejected"
@@ -2170,7 +1984,6 @@ PY
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/mismatched-transcript-live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/mismatched-transcript-bundle.json" \
     JARVIS_EVIDENCE_SELF_TEST_MODE=true \
     JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
@@ -2178,7 +1991,6 @@ PY
     JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
     JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
     fail "release evidence self-test expected mismatched live transcript observation to be rejected"
@@ -2200,7 +2012,6 @@ PY
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/mismatched-installed-app-live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/mismatched-installed-app-bundle.json" \
     JARVIS_EVIDENCE_SELF_TEST_MODE=true \
     JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
@@ -2208,7 +2019,6 @@ PY
     JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
     JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
     fail "release evidence self-test expected mismatched installed app path to be rejected"
@@ -2230,7 +2040,6 @@ PY
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/malformed-command-result-evidence-live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/malformed-command-result-evidence-bundle.json" \
     JARVIS_EVIDENCE_SELF_TEST_MODE=true \
     JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
@@ -2238,7 +2047,6 @@ PY
     JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
     JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
     fail "release evidence self-test expected malformed command result evidence id to be rejected"
@@ -2260,7 +2068,6 @@ PY
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/pregenerated-live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/pregenerated-live-bundle.json" \
     JARVIS_EVIDENCE_SELF_TEST_MODE=true \
     JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
@@ -2268,249 +2075,9 @@ PY
     JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
     JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
     fail "release evidence self-test expected live report generated before completion to be rejected"
-  fi
-
-  cat >"$tmp_dir/incomplete-plugin.json" <<'JSON'
-{
-  "validation_flags": {
-    "manual_trust_review": true
-  },
-  "proof_boundary": "incomplete self-test fixture"
-}
-JSON
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/incomplete-plugin.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/incomplete-plugin-bundle.json" \
-    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
-    "$0" --bundle >/dev/null 2>&1; then
-    fail "release evidence self-test expected incomplete plugin-trust report to be rejected"
-  fi
-
-  python3 - "$tmp_dir/plugin.json" "$tmp_dir/stale-version-plugin.json" <<'PY'
-import json
-import sys
-
-source, target = sys.argv[1:3]
-with open(source, encoding="utf-8") as handle:
-    data = json.load(handle)
-data["version"] = "0.0.0"
-with open(target, "w", encoding="utf-8") as handle:
-    json.dump(data, handle)
-PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/stale-version-plugin.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/stale-plugin-version-bundle.json" \
-    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
-    "$0" --bundle >/dev/null 2>&1; then
-    fail "release evidence self-test expected stale plugin trust version to be rejected"
-  fi
-
-  python3 - "$tmp_dir/plugin.json" "$tmp_dir/missing-observation-plugin.json" <<'PY'
-import json
-import sys
-
-source, target = sys.argv[1:3]
-with open(source, encoding="utf-8") as handle:
-    data = json.load(handle)
-data["owner_recorded_plugin_trust_evidence"]["egress_deny_fixture_evidence_note"] = ""
-with open(target, "w", encoding="utf-8") as handle:
-    json.dump(data, handle)
-PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/missing-observation-plugin.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/missing-plugin-observation-bundle.json" \
-    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
-    "$0" --bundle >/dev/null 2>&1; then
-    fail "release evidence self-test expected blank plugin trust observation to be rejected"
-  fi
-
-  python3 - "$tmp_dir/plugin.json" "$tmp_dir/placeholder-plugin-owner-note.json" <<'PY'
-import json
-import sys
-
-source, target = sys.argv[1:3]
-with open(source, encoding="utf-8") as handle:
-    data = json.load(handle)
-data["owner_recorded_plugin_trust_evidence"]["manual_review_evidence_note"] = "placeholder review evidence"
-with open(target, "w", encoding="utf-8") as handle:
-    json.dump(data, handle)
-PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/placeholder-plugin-owner-note.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/placeholder-plugin-owner-note-bundle.json" \
-    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
-    "$0" --bundle >/dev/null 2>&1; then
-    fail "release evidence self-test expected placeholder plugin-trust owner note to be rejected"
-  fi
-
-  python3 - "$tmp_dir/plugin.json" "$tmp_dir/non-utc-plugin.json" <<'PY'
-import json
-import sys
-
-source, target = sys.argv[1:3]
-with open(source, encoding="utf-8") as handle:
-    data = json.load(handle)
-data["owner_recorded_plugin_trust_evidence"]["review_started_at"] = "2026-05-22T16:10:00-04:00"
-with open(target, "w", encoding="utf-8") as handle:
-    json.dump(data, handle)
-PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/non-utc-plugin.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/non-utc-plugin-bundle.json" \
-    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
-    "$0" --bundle >/dev/null 2>&1; then
-    fail "release evidence self-test expected non-UTC plugin trust timestamp to be rejected"
-  fi
-
-  python3 - "$tmp_dir/plugin.json" "$tmp_dir/future-plugin.json" <<'PY'
-import json
-import sys
-
-source, target = sys.argv[1:3]
-with open(source, encoding="utf-8") as handle:
-    data = json.load(handle)
-data["generated_at"] = "2999-01-01T00:00:00Z"
-with open(target, "w", encoding="utf-8") as handle:
-    json.dump(data, handle)
-PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/future-plugin.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/future-plugin-bundle.json" \
-    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
-    "$0" --bundle >/dev/null 2>&1; then
-    fail "release evidence self-test expected future-dated plugin trust report to be rejected"
-  fi
-
-  python3 - "$tmp_dir/plugin.json" "$tmp_dir/reversed-plugin.json" <<'PY'
-import json
-import sys
-
-source, target = sys.argv[1:3]
-with open(source, encoding="utf-8") as handle:
-    data = json.load(handle)
-data["owner_recorded_plugin_trust_evidence"]["review_started_at"] = "2026-05-22T16:20:00Z"
-data["owner_recorded_plugin_trust_evidence"]["review_completed_at"] = "2026-05-22T16:10:00Z"
-with open(target, "w", encoding="utf-8") as handle:
-    json.dump(data, handle)
-PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/reversed-plugin.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/reversed-plugin-bundle.json" \
-    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
-    "$0" --bundle >/dev/null 2>&1; then
-    fail "release evidence self-test expected reversed plugin trust timestamps to be rejected"
-  fi
-
-  python3 - "$tmp_dir/plugin.json" "$tmp_dir/pregenerated-plugin.json" <<'PY'
-import json
-import sys
-
-source, target = sys.argv[1:3]
-with open(source, encoding="utf-8") as handle:
-    data = json.load(handle)
-data["generated_at"] = "2026-05-22T16:15:00Z"
-data["owner_recorded_plugin_trust_evidence"]["review_completed_at"] = "2026-05-22T16:20:00Z"
-with open(target, "w", encoding="utf-8") as handle:
-    json.dump(data, handle)
-PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/pregenerated-plugin.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/pregenerated-plugin-bundle.json" \
-    JARVIS_EVIDENCE_SELF_TEST_MODE=true \
-    JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
-    JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=true \
-    JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
-    JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
-    JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
-    "$0" --bundle >/dev/null 2>&1; then
-    fail "release evidence self-test expected plugin report generated before completion to be rejected"
   fi
 
   python3 - "$tmp_dir/live.json" "$tmp_dir/mismatched-core-digest-live.json" <<'PY'
@@ -2530,7 +2097,6 @@ PY
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/mismatched-core-digest-live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/mismatched-core-digest-bundle.json" \
     JARVIS_EVIDENCE_SELF_TEST_MODE=true \
     JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
@@ -2538,7 +2104,6 @@ PY
     JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
     JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
     fail "release evidence self-test expected mismatched live bundled-core digest to be rejected"
@@ -2561,7 +2126,6 @@ PY
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/signed-provenance.json" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/post-completion-live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/post-completion-live-bundle.json" \
     JARVIS_EVIDENCE_SELF_TEST_MODE=true \
     JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
@@ -2569,7 +2133,6 @@ PY
     JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
     JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
     fail "release evidence self-test expected child report generated after owner completion to be rejected"
@@ -2592,7 +2155,6 @@ PY
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/stale-digest-signed-provenance.json" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/stale-digest-bundle.json" \
     JARVIS_EVIDENCE_SELF_TEST_MODE=true \
     JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
@@ -2600,7 +2162,6 @@ PY
     JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
     JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
 	    fail "release evidence self-test expected stale signed provenance digest to be rejected"
@@ -2623,7 +2184,6 @@ PY
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/stale-notary-log-signed-provenance.json" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/stale-notary-log-bundle.json" \
     JARVIS_EVIDENCE_SELF_TEST_MODE=true \
     JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
@@ -2631,7 +2191,6 @@ PY
     JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
     JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
     fail "release evidence self-test expected stale signed provenance notary log digest to be rejected"
@@ -2654,7 +2213,6 @@ PY
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/bad-apple-tool-signed-provenance.json" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bad-apple-tool-bundle.json" \
     JARVIS_EVIDENCE_SELF_TEST_MODE=true \
     JARVIS_EVIDENCE_VALIDATE_LOCAL_SIGNATURES=false \
@@ -2662,7 +2220,6 @@ PY
     JARVIS_EVIDENCE_NOTARIZATION_VALIDATED=true \
     JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED=true \
-    JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED=true \
     JARVIS_EVIDENCE_REPORTS_ARCHIVED=true \
     "$0" --bundle >/dev/null 2>&1; then
     fail "release evidence self-test expected non-Developer-ID signed provenance evidence to be rejected"
@@ -2713,7 +2270,6 @@ fi
 if [[ "$CHECK_ONLY" == true ]]; then
   require_file "package-distribution script" "$ROOT_DIR/scripts/package-distribution.sh"
   require_file "live-device QA script" "$ROOT_DIR/scripts/release-live-device-qa.sh"
-  require_file "plugin trust QA script" "$ROOT_DIR/scripts/release-plugin-trust-qa.sh"
   require_file "release checklist" "$ROOT_DIR/docs/release-checklist.md"
   printf 'Assemblywright release evidence bundle preflight: ok\n\n'
   cat <<'CHECKLIST'
@@ -2864,37 +2420,10 @@ require_json_fields_equal "live-device app-executable digest" "$LIVE_QA_REPORT" 
 require_json_fields_equal "live-device app-executable identifier" "$LIVE_QA_REPORT" "app_executable.code_identifier" "$SIGNED_PROVENANCE_REPORT" "signing.app_executable_identifier"
 require_json_fields_equal "live-device app-executable team identifier" "$LIVE_QA_REPORT" "app_executable.team_identifier" "$SIGNED_PROVENANCE_REPORT" "signing.app_executable_team_identifier"
 require_json_fields_equal "live-device app-executable CDHash" "$LIVE_QA_REPORT" "app_executable.cdhash" "$SIGNED_PROVENANCE_REPORT" "signing.app_executable_cdhash"
-for flag in marketplace_review malware_scan os_sandbox egress_enforcement signed_publisher_policy manual_trust_review; do
-  require_json_bool_true "plugin trust QA report" "$PLUGIN_QA_REPORT" "validation_flags.$flag"
-done
-require_json_number_equals "plugin trust QA report" "$PLUGIN_QA_REPORT" "schema_version" "1"
-require_json_string_equals "plugin trust QA report" "$PLUGIN_QA_REPORT" "evidence_type" "owner_recorded_plugin_trust_qa"
-require_json_string_equals "plugin trust QA report" "$PLUGIN_QA_REPORT" "version" "$EXPECTED_VERSION"
-require_json_bool_false "plugin trust QA report" "$PLUGIN_QA_REPORT" "self_test_fixture"
-require_json_string_equals "plugin trust QA report" "$PLUGIN_QA_REPORT" "review_source" "owner-asserted-manual-review"
-for field in owner_name review_started_at review_completed_at; do
-  require_json_nonempty_string "plugin trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.$field"
-done
-for field in marketplace_evidence_note malware_scan_evidence_note os_sandbox_evidence_note egress_evidence_note egress_policy_label egress_deny_fixture_evidence_note egress_allow_fixture_evidence_note signed_publisher_evidence_note manual_review_evidence_note; do
-  require_json_meaningful_evidence_string "plugin trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.$field"
-done
-for artifact in marketplace_review malware_scan os_sandbox egress_enforcement signed_publisher_policy manual_trust_review; do
-  require_json_reports_archive_uri "plugin trust QA report" "$PLUGIN_QA_REPORT" "evidence_artifacts.$artifact.uri"
-  require_json_sha256 "plugin trust QA report" "$PLUGIN_QA_REPORT" "evidence_artifacts.$artifact.sha256"
-done
-require_json_utc_timestamp "plugin trust QA report" "$PLUGIN_QA_REPORT" "generated_at"
-require_json_utc_timestamp "plugin trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.review_started_at"
-require_json_utc_timestamp "plugin trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.review_completed_at"
-require_json_utc_timestamp "plugin trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.egress_validation_completed_at"
-require_json_timestamp_order "plugin trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.review_started_at" "owner_recorded_plugin_trust_evidence.review_completed_at"
-require_json_timestamp_order "plugin trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.review_started_at" "owner_recorded_plugin_trust_evidence.egress_validation_completed_at"
-require_json_timestamp_order "plugin trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.egress_validation_completed_at" "owner_recorded_plugin_trust_evidence.review_completed_at"
-require_json_timestamp_order "plugin trust QA report" "$PLUGIN_QA_REPORT" "owner_recorded_plugin_trust_evidence.review_completed_at" "generated_at"
 require_true JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED
 require_true JARVIS_EVIDENCE_NOTARIZATION_VALIDATED
 require_true JARVIS_EVIDENCE_CLEAN_PROFILE_VALIDATED
 require_true JARVIS_EVIDENCE_LIVE_DEVICE_QA_VALIDATED
-require_true JARVIS_EVIDENCE_PLUGIN_TRUST_QA_VALIDATED
 require_true JARVIS_EVIDENCE_REPORTS_ARCHIVED
 require_non_empty_env JARVIS_EVIDENCE_OWNER_NAME
 require_not_future_timestamp_env JARVIS_EVIDENCE_COMPLETED_AT
@@ -2902,7 +2431,6 @@ require_meaningful_evidence_env JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_NOTE
 require_meaningful_evidence_env JARVIS_EVIDENCE_NOTARIZATION_NOTE
 require_meaningful_evidence_env JARVIS_EVIDENCE_CLEAN_PROFILE_NOTE
 require_meaningful_evidence_env JARVIS_EVIDENCE_LIVE_DEVICE_QA_NOTE
-require_meaningful_evidence_env JARVIS_EVIDENCE_PLUGIN_TRUST_QA_NOTE
 require_meaningful_evidence_env JARVIS_EVIDENCE_REPORTS_ARCHIVE_NOTE
 require_reports_archive_uri_env JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI
 write_bundle
@@ -2911,7 +2439,7 @@ require_json_string_equals "release evidence bundle" "$OUTPUT_PATH" "evidence_ty
 for field in owner_name completed_at reports_archive_uri; do
   require_json_nonempty_string "release evidence bundle" "$OUTPUT_PATH" "owner_recorded_release_evidence.$field"
 done
-for field in signed_distribution_note notarization_note clean_profile_note live_device_qa_note plugin_trust_qa_note reports_archive_note; do
+for field in signed_distribution_note notarization_note clean_profile_note live_device_qa_note reports_archive_note; do
   require_json_meaningful_evidence_string "release evidence bundle" "$OUTPUT_PATH" "owner_recorded_release_evidence.$field"
 done
 require_json_reports_archive_uri "release evidence bundle" "$OUTPUT_PATH" "owner_recorded_release_evidence.reports_archive_uri"
@@ -2919,7 +2447,6 @@ require_json_utc_timestamp "release evidence bundle" "$OUTPUT_PATH" "owner_recor
 require_json_timestamp_order "release evidence bundle" "$OUTPUT_PATH" "owner_recorded_release_evidence.completed_at" "generated_at"
 require_json_timestamp_between_reports "release evidence bundle signed provenance" "$SIGNED_PROVENANCE_REPORT" "generated_at" "$OUTPUT_PATH" "owner_recorded_release_evidence.completed_at" "$OUTPUT_PATH" "generated_at"
 require_json_timestamp_between_reports "release evidence bundle live-device QA" "$LIVE_QA_REPORT" "generated_at" "$OUTPUT_PATH" "owner_recorded_release_evidence.completed_at" "$OUTPUT_PATH" "generated_at"
-require_json_timestamp_between_reports "release evidence bundle plugin-trust QA" "$PLUGIN_QA_REPORT" "generated_at" "$OUTPUT_PATH" "owner_recorded_release_evidence.completed_at" "$OUTPUT_PATH" "generated_at"
 
 cat <<EOF
 Assemblywright release evidence bundle: complete

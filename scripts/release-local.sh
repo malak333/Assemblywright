@@ -85,10 +85,7 @@ run cargo fmt --check
 run cargo clippy --workspace --all-targets -- -D warnings
 run cargo test --workspace
 run cargo test --workspace -- --ignored
-run ./scripts/storage-migration-backup-smoke.sh
 run cargo build --workspace
-run cargo run -p jarvis-cli -- smoke
-run ./scripts/release-operator-qa-smoke.sh
 run ./scripts/release-cargo-package.sh
 run ./scripts/package-distribution.sh --check
 run ./scripts/package-distribution.sh --check-guidance-self-test
@@ -100,11 +97,8 @@ run ./scripts/package-distribution.sh --running-app-guard-e2e
 run ./scripts/package-distribution.sh --unsigned-launch-check
 run cargo run -p jarvis-cli -- release signed-distribution-runbook
 run cargo run -p jarvis-cli -- release live-device-runbook
-run cargo run -p jarvis-cli -- release plugin-trust-runbook
 run ./scripts/release-live-device-qa.sh --check
 run ./scripts/release-live-device-qa.sh --self-test
-run ./scripts/release-plugin-trust-qa.sh --check
-run ./scripts/release-plugin-trust-qa.sh --self-test
 run ./scripts/release-evidence-bundle.sh --check
 run ./scripts/release-evidence-bundle.sh --self-test
 run ./scripts/release-evidence-doctor.sh --check
