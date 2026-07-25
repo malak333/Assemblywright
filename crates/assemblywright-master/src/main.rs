@@ -1,8 +1,9 @@
 use anyhow::{bail, Context};
 use assemblywright_master::{
     current_time_ms, AcceptedCancellation, AcceptedResult, DeviceRegistration, EnrollmentGrantSpec,
-    EnrollmentRequest, EphemeralServerIdentity, IdentityAuthority, MasterHealthSnapshot,
-    MasterProcess, NewStep, PlatformSecretProtector, RemoteWorkContract, StartupReconciliation,
+    EnrollmentRequest, EphemeralServerIdentity, FeatureConveyorStatus, IdentityAuthority,
+    MasterHealthSnapshot, MasterProcess, NewStep, PlatformSecretProtector, RemoteWorkContract,
+    StartupReconciliation,
 };
 #[cfg(test)]
 use assemblywright_protocol::CapabilityKind;
@@ -1264,6 +1265,10 @@ async fn serve_runtime(
 
     let app = Router::new()
         .route("/health", get(get_health))
+        .route(
+            "/v1/feature-conveyor/status",
+            get(get_feature_conveyor_status),
+        )
         .route("/v1/development/devices/register", post(register_device))
         .route("/v1/development/connections/accept", post(accept_handshake))
         .route("/v1/development/events/next", post(development_events_next))
@@ -1806,6 +1811,18 @@ async fn get_health(
         boundary: "authenticated loopback development transport; not mTLS or enrolled-device authentication"
             .to_string(),
     }))
+}
+
+async fn get_feature_conveyor_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<FeatureConveyorStatus> {
+    authorize(&headers, &state)?;
+    let status = lock_process(&state)?
+        .kernel()
+        .feature_conveyor_status()
+        .map_err(api_error)?;
+    Ok(Json(status))
 }
 
 async fn register_device(

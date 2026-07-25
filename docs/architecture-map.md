@@ -64,10 +64,15 @@ Master-process upgrades from supported legacy schemas v1-v4 to v5 are
 backup-first under the owner lock, verify the versioned backup before migration,
 and restore through a fsynced sibling plus atomic replacement when
 migration-open fails. Direct file-backed legacy migration through
-`MasterKernel::open` fails closed. This persistence slice has no HTTP/API,
-coding worker, repository
-mutation, review-provider invocation, GitHub publication, Mac queue UI,
-live-device, unattended, or activation authority.
+`MasterKernel::open` fails closed. This persistence slice exposes one
+owner-token-authenticated loopback-only
+`GET /v1/feature-conveyor/status` observation seam. Its pure-SELECT projection
+returns only bounded lifecycle metadata and aggregate lifecycle counts for the
+current queue and retained lease. It cannot determine claimability, dependency
+blockers, or owner action and must not drive owner action. The route is absent
+from the enrolled-device remote mTLS router. It has no
+mutation, coding worker, Codex, repository, review-provider invocation, GitHub
+publication, Mac queue UI, live-device, unattended, or activation authority.
 
 The existing distributed-device portion of `assemblywright-master` persists explicitly
 registered device metadata, active connection epoch and sequence state, queued

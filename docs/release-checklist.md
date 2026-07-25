@@ -14,9 +14,11 @@ Before starting a release pass, confirm the claim you intend to make.
   it. Do not describe autonomous dispatch, repository mutation, review-provider
   invocation, or GitHub publication as implemented.
 - Confirm `docs/feature-conveyor-design.md` still marks the implemented slice
-  accurately. The repository kernel is default-inert; it exposes no HTTP/API,
-  worker dispatcher, repository execution, review provider, publication
-  coordinator, Mac queue UI, or autonomous activation.
+  accurately. The repository kernel is default-inert and exposes only the
+  owner-token-authenticated loopback read-only
+  `GET /v1/feature-conveyor/status` observation seam. It exposes no remote
+  Feature Conveyor API, worker dispatcher, repository execution, review
+  provider, publication coordinator, Mac queue UI, or autonomous activation.
 - Confirm `docs/architecture-map.md` matches the code for any surface that
   changed in this cycle.
 - Confirm the version is consistent:
@@ -72,6 +74,11 @@ Update in the same change as the code:
 - `docs/build-test-commands.md` — canonical commands and proof boundaries.
 - `docs/knowledge-base/assemblywright-project-facts.md` — durable facts.
 - This checklist, when the release flow itself changes.
+
+For every feature or phase, also complete the closeout contract in
+`docs/development-agent-workflow.md`: conversation-derived knowledge review,
+focused unit coverage, real-boundary E2E, explicit browser/Playwright
+applicability, requirements and safety review, and exact publication evidence.
 
 ## Distribution
 

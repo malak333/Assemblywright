@@ -40,7 +40,13 @@ single-owner executable.
   active lease. Enqueue, reorder, claim, lifecycle, cancellation, abandonment,
   and startup quarantine commit with redacted audit evidence in the same
   transaction. Success releases the lease only with verified healthy-main
-  evidence; cancellation retains it until explicit safe abandonment.
+  evidence; cancellation retains it until explicit safe abandonment. One
+  owner-token-authenticated loopback-only `GET /v1/feature-conveyor/status`
+  exposes bounded, redacted lifecycle observation for current queue and
+  retained-lease entries. It does not report dependencies, blocker reasons,
+  claimability, or owner-action guidance and must not drive owner action. It is
+  absent from the enrolled-device remote mTLS router and grants no mutation,
+  execution, review, repository, Git, publication, or activation authority.
 - *Identity*: a DPAPI-current-user protected ECDSA P-256 enrollment CA,
   ten-minute single-use digest-only grants, verified client CSRs, 30-day client
   certificates bound to a server-selected device ID, rotation, and immediate

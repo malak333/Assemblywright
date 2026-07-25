@@ -44,4 +44,13 @@
 
 - Preserve unrelated dirty-worktree changes; never reset, clean, broadly stage, or rewrite them.
 - Behavior changes include focused tests; feature slices include relevant docs, knowledge-base updates, and E2E coverage.
+- Close every feature or phase with the checklist in
+  `docs/development-agent-workflow.md`: documentation compliance, durable
+  conversation-derived knowledge, focused unit coverage, real-boundary E2E,
+  requirements and safety review, canonical validation, and verified
+  publication when the owner requested it.
+- Apply the `unit-testing-test-generate` and `e2e-testing` workflows when they
+  are available. Playwright, visual regression, and cross-browser matrices are
+  required only for an actual browser surface; native Rust, Swift, process,
+  protocol, service, and live-device boundaries require native E2E instead.
 - Do not commit or push unless explicitly requested. Never bypass hooks or add AI attribution unless requested.

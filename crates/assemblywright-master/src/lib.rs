@@ -36,6 +36,7 @@ pub const MASTER_SCHEMA_VERSION: i64 = 5;
 pub const MAX_QUEUED_OR_LEASED_STEPS: u64 = 256;
 pub const MAX_CONCURRENT_JOBS: u64 = 4;
 pub const MAX_CONVEYOR_NONTERMINAL_FEATURES: u64 = 100;
+pub const MAX_CONVEYOR_STATUS_FEATURES: usize = 100;
 pub const MAX_APPROVED_FEATURE_SPECIFICATION_BYTES: usize = 256 * 1024;
 
 const REASON_UNKNOWN_DEVICE: &str = "unknown_device";
@@ -44,6 +45,59 @@ const REASON_REGISTRY_MISMATCH: &str = "registry_mismatch";
 const REASON_IDENTITY_MISMATCH: &str = "identity_mismatch";
 const REASON_CAPABILITY_MISMATCH: &str = "capability_mismatch";
 const REASON_DUPLICATE_ACTIVE: &str = "duplicate_active_connection";
+const FEATURE_CONVEYOR_STATUS_COUNTS_SQL: &str = "
+    WITH visible_features AS (
+      SELECT f.status
+      FROM feature_conveyor_queue q
+      JOIN feature_conveyor_features f ON f.feature_id = q.feature_id
+      UNION ALL
+      SELECT f.status
+      FROM feature_active_lease l
+      JOIN feature_conveyor_features f ON f.feature_id = l.feature_id
+      WHERE NOT EXISTS (
+        SELECT 1 FROM feature_conveyor_queue q
+        WHERE q.feature_id = l.feature_id
+      )
+    )
+    SELECT
+      COUNT(*),
+      COALESCE(SUM(CASE WHEN status = 'queued' THEN 1 ELSE 0 END), 0),
+      COALESCE(SUM(CASE WHEN status = 'implementing' THEN 1 ELSE 0 END), 0),
+      COALESCE(SUM(CASE WHEN status = 'validating' THEN 1 ELSE 0 END), 0),
+      COALESCE(SUM(CASE WHEN status = 'reviewing' THEN 1 ELSE 0 END), 0),
+      COALESCE(SUM(CASE WHEN status = 'publishing' THEN 1 ELSE 0 END), 0),
+      COALESCE(SUM(CASE WHEN status = 'verifying_main' THEN 1 ELSE 0 END), 0),
+      COALESCE(SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END), 0),
+      COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0),
+      COALESCE(SUM(CASE WHEN status = 'abandoned' THEN 1 ELSE 0 END), 0),
+      COALESCE(SUM(CASE WHEN status = 'quarantined' THEN 1 ELSE 0 END), 0)
+    FROM visible_features";
+const FEATURE_CONVEYOR_STATUS_ENTRIES_SQL: &str = "
+    WITH visible_features AS (
+      SELECT f.feature_id, f.current_specification_revision,
+             f.lifecycle_revision, f.queue_position, f.status,
+             CASE WHEN l.feature_id IS NULL THEN 0 ELSE 1 END AS lease_present,
+             f.effect_possible
+      FROM feature_conveyor_queue q
+      JOIN feature_conveyor_features f ON f.feature_id = q.feature_id
+      LEFT JOIN feature_active_lease l ON l.feature_id = f.feature_id
+      UNION ALL
+      SELECT f.feature_id, f.current_specification_revision,
+             f.lifecycle_revision, f.queue_position, f.status,
+             1 AS lease_present, f.effect_possible
+      FROM feature_active_lease l
+      JOIN feature_conveyor_features f ON f.feature_id = l.feature_id
+      WHERE NOT EXISTS (
+        SELECT 1 FROM feature_conveyor_queue q
+        WHERE q.feature_id = l.feature_id
+      )
+    )
+    SELECT feature_id, current_specification_revision,
+           lifecycle_revision, queue_position, status,
+           lease_present, effect_possible
+    FROM visible_features
+    ORDER BY queue_position ASC, feature_id ASC
+    LIMIT ?1";
 
 #[derive(Debug, thiserror::Error)]
 pub enum MasterError {
@@ -521,6 +575,45 @@ pub struct FeatureSnapshot {
     pub effect_possible: bool,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorStatusCounts {
+    pub queued: u64,
+    pub implementing: u64,
+    pub validating: u64,
+    pub reviewing: u64,
+    pub publishing: u64,
+    pub verifying_main: u64,
+    pub succeeded: u64,
+    pub cancelled: u64,
+    pub abandoned: u64,
+    pub quarantined: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorStatusEntry {
+    pub feature_id: Uuid,
+    pub specification_revision: u64,
+    pub lifecycle_revision: u64,
+    pub queue_position: u64,
+    pub status: FeatureLifecycleStatus,
+    pub lease_present: bool,
+    pub effect_possible: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorStatus {
+    pub schema_version: i64,
+    pub queue_revision: u64,
+    pub startup_quarantine_count: u64,
+    pub counts_by_status: FeatureConveyorStatusCounts,
+    pub visible_feature_count: u64,
+    pub features_truncated: bool,
+    pub features: Vec<FeatureConveyorStatusEntry>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FeatureClaim {
     pub feature_id: Uuid,
@@ -748,6 +841,89 @@ impl MasterKernel {
             |row| row.get(0),
         )?;
         i64_to_u64(revision)
+    }
+
+    pub fn feature_conveyor_status(&self) -> Result<FeatureConveyorStatus, MasterError> {
+        let schema_version = self.schema_version()?;
+        let queue_revision = self.feature_queue_revision()?;
+        let counts = self
+            .connection
+            .query_row(FEATURE_CONVEYOR_STATUS_COUNTS_SQL, [], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, i64>(8)?,
+                    row.get::<_, i64>(9)?,
+                    row.get::<_, i64>(10)?,
+                ))
+            })?;
+        let visible_feature_count = i64_to_u64(counts.0)?;
+        let counts_by_status = FeatureConveyorStatusCounts {
+            queued: i64_to_u64(counts.1)?,
+            implementing: i64_to_u64(counts.2)?,
+            validating: i64_to_u64(counts.3)?,
+            reviewing: i64_to_u64(counts.4)?,
+            publishing: i64_to_u64(counts.5)?,
+            verifying_main: i64_to_u64(counts.6)?,
+            succeeded: i64_to_u64(counts.7)?,
+            cancelled: i64_to_u64(counts.8)?,
+            abandoned: i64_to_u64(counts.9)?,
+            quarantined: i64_to_u64(counts.10)?,
+        };
+        let mut statement = self
+            .connection
+            .prepare(FEATURE_CONVEYOR_STATUS_ENTRIES_SQL)?;
+        let features = statement
+            .query_map([MAX_CONVEYOR_STATUS_FEATURES as i64], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
+                ))
+            })?
+            .map(|row| {
+                let (
+                    feature_id,
+                    specification_revision,
+                    lifecycle_revision,
+                    queue_position,
+                    status,
+                    lease_present,
+                    effect_possible,
+                ) = row?;
+                Ok(FeatureConveyorStatusEntry {
+                    feature_id: parse_uuid(&feature_id)?,
+                    specification_revision: i64_to_u64(specification_revision)?,
+                    lifecycle_revision: i64_to_u64(lifecycle_revision)?,
+                    queue_position: i64_to_u64(queue_position)?,
+                    status: FeatureLifecycleStatus::parse(&status)?,
+                    lease_present: parse_stored_boolean(lease_present, "feature lease presence")?,
+                    effect_possible: parse_stored_boolean(
+                        effect_possible,
+                        "feature effect_possible",
+                    )?,
+                })
+            })
+            .collect::<Result<Vec<_>, MasterError>>()?;
+        Ok(FeatureConveyorStatus {
+            schema_version,
+            queue_revision,
+            startup_quarantine_count: self.feature_startup_quarantines,
+            counts_by_status,
+            visible_feature_count,
+            features_truncated: visible_feature_count > features.len() as u64,
+            features,
+        })
     }
 
     pub fn record_repository_grant_revision(
@@ -3990,6 +4166,16 @@ fn i64_to_u64(value: i64) -> Result<u64, MasterError> {
     u64::try_from(value).map_err(|_| MasterError::IntegerOutOfRange)
 }
 
+fn parse_stored_boolean(value: i64, field: &str) -> Result<bool, MasterError> {
+    match value {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(MasterError::InvalidStoredState(format!(
+            "{field} is not boolean"
+        ))),
+    }
+}
+
 fn is_constraint_violation(error: &rusqlite::Error) -> bool {
     matches!(
         error,
@@ -4619,5 +4805,17 @@ mod feature_conveyor_unit_tests {
             .map(|_| Uuid::new_v4())
             .collect();
         assert_invalid_specification(&invalid);
+    }
+
+    #[test]
+    fn feature_conveyor_unit_status_boolean_parser_is_exact() {
+        assert!(!parse_stored_boolean(0, "feature effect_possible").unwrap());
+        assert!(parse_stored_boolean(1, "feature effect_possible").unwrap());
+        for invalid in [-1, 2, i64::MAX] {
+            assert!(matches!(
+                parse_stored_boolean(invalid, "feature effect_possible"),
+                Err(MasterError::InvalidStoredState(_))
+            ));
+        }
     }
 }

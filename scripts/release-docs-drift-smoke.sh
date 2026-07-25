@@ -157,6 +157,18 @@ require_text "DESIGN assistant non-goal" "$DESIGN" "No general-purpose assistant
 
 require_text "conveyor design status" "$FEATURE_CONVEYOR_DESIGN" "default-inert"
 require_text "conveyor design approval" "$FEATURE_CONVEYOR_DESIGN" "Approve and Enqueue"
+require_text "conveyor loopback status route" "$FEATURE_CONVEYOR_DESIGN" \
+  "GET /v1/feature-conveyor/status"
+require_text "conveyor remote route absence" "$FEATURE_CONVEYOR_DESIGN" \
+  "the enrolled-device remote mTLS router and grants no"
+require_text "conveyor lifecycle observation limit" "$FEATURE_CONVEYOR_DESIGN" \
+  "This is lifecycle observation only"
+require_text "conveyor owner action limit" "$FEATURE_CONVEYOR_DESIGN" \
+  "must not drive owner action"
+require_text "conveyor local status implementation" "$MASTER_PROCESS" \
+  '"/v1/feature-conveyor/status"'
+require_text "conveyor remote route regression" "$MASTER_REMOTE_MTLS_E2E" \
+  "Feature Conveyor owner status leaked onto the enrolled-device router"
 
 require_text "architecture conveyor kernel" "$ARCHITECTURE" "Feature Conveyor repository kernel"
 require_text "architecture core reduction" "$ARCHITECTURE" "no longer an assistant runtime"
@@ -167,6 +179,12 @@ require_text "knowledge base naming contract gate" "$KB" \
 require_text "knowledge base pivot" "$KB" "## The Pivot"
 require_text "knowledge base crate boundaries" "$KB" "## Current Crate Boundaries"
 require_text "knowledge base proof boundaries" "$KB" "## Proof Boundaries"
+require_text "knowledge base conveyor status boundary" "$KB" \
+  "owner-token-authenticated loopback-only"
+require_text "knowledge base feature closeout" "$KB" \
+  "Every feature or phase uses the closeout contract"
+require_text "knowledge base native E2E boundary" "$KB" \
+  "Native Rust/Swift HTTP, process, protocol, service, packaged-app"
 require_text "knowledge base shell portability" "$KB" "## Shell Portability"
 require_text "knowledge base shell portability gate" "$KB" \
   "release-shell-portability-smoke.sh"
@@ -174,6 +192,23 @@ require_text "knowledge base shell portability gate" "$KB" \
 require_text "release checklist live-device QA" "$CHECKLIST" "live-device QA"
 require_text "release checklist Developer ID" "$CHECKLIST" "Developer ID"
 require_text "release checklist docs gate" "$CHECKLIST" "release-docs-drift-smoke.sh"
+require_text "release checklist conveyor observation seam" "$CHECKLIST" \
+  "GET /v1/feature-conveyor/status"
+require_text "release checklist feature closeout" "$CHECKLIST" \
+  "docs/development-agent-workflow.md"
+
+require_text "agent instructions feature closeout" "$AGENTS" \
+  "Close every feature or phase"
+require_text "agent workflow closeout section" "$AGENT_WORKFLOW" \
+  "## Feature And Phase Closeout"
+require_text "agent workflow unit skill" "$AGENT_WORKFLOW" \
+  "unit-testing-test-generate"
+require_text "agent workflow E2E skill" "$AGENT_WORKFLOW" \
+  "e2e-testing"
+require_text "agent workflow Playwright applicability" "$AGENT_WORKFLOW" \
+  "Playwright, screenshots, visual"
+require_text "agent workflow native E2E boundary" "$AGENT_WORKFLOW" \
+  "native cross-process"
 
 require_text "build docs local gate" "$BUILD_DOCS" "./scripts/release-local.sh"
 require_text "build docs evidence boundary" "$BUILD_DOCS" "## Release Evidence Boundary"

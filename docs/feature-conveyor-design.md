@@ -14,9 +14,22 @@ approved specification revisions, the bounded owner-ordered queue, dependency
 blocking, compare-and-set revisions, one active lease, exact lifecycle
 advancement, cancellation without advancement, explicit safe abandonment,
 startup quarantine, and same-transaction redacted audits. It intentionally
-exposes no HTTP/API, worker dispatcher, repository execution, review provider,
-publication coordinator, Mac UI, or autonomous activation. The remainder of
-this document is still target design.
+exposes only one owner-token-authenticated loopback read-only API:
+`GET /v1/feature-conveyor/status`. That pure-SELECT projection returns the
+schema and queue revisions, startup-quarantine count, zero-inclusive aggregate
+lifecycle counts, and at most 100 current queue or retained-lease entries
+containing only feature ID, specification and lifecycle revisions, queue
+position, status, lease presence, and effect-possible state. It reports the
+current visible total and whether entries were truncated. Historical terminal
+rows are excluded. This is lifecycle observation only: it is insufficient to
+determine claimability, dependency blockers, blocker reasons, or an exact owner
+action and must not drive owner action. Later UI/control work must add exact
+blocker guidance before representing a blocked state. The route is absent from
+the enrolled-device remote mTLS router and grants no enqueue, execution, review,
+repository, Git, publication, or activation authority. No worker dispatcher,
+repository execution, review provider, publication coordinator, Mac UI, or
+autonomous activation is implemented. The remainder of this document is still
+target design.
 
 ## Understanding Summary
 

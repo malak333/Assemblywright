@@ -150,6 +150,21 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
     assert!(health.contains("developer_remote_master"), "{health}");
     tokio::time::sleep(Duration::from_millis(50)).await;
 
+    let (status_handshake, remote_feature_status) = authenticated_application_request(
+        remote_endpoint,
+        &valid,
+        "GET",
+        "/v1/feature-conveyor/status",
+        &serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(status_handshake.status, HandshakeStatus::Accepted);
+    assert!(
+        remote_feature_status.starts_with("HTTP/1.1 404 Not Found"),
+        "Feature Conveyor owner status leaked onto the enrolled-device router: {remote_feature_status}"
+    );
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
     let (first_response, first_exporter) = tls_request_with_body(
         remote_endpoint,
         valid.config.clone(),

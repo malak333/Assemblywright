@@ -124,9 +124,15 @@ release requirements, not optional UX guidance.
   repository, credential, network, Codex, Git, publication, or unattended
   authority.
 - The Windows `assemblywright-master` schema-v5 Durable Feature Conveyor kernel is
-  default-inert and exposes no HTTP/API, worker, Codex, repository-mutation,
-  GitHub, publication, or automatic activation authority. Approved feature
-  manifests must be canonical bounded JSON with an exact SHA-256 binding; their
+  default-inert. Its only HTTP/API surface is the owner-token-authenticated,
+  loopback-only `GET /v1/feature-conveyor/status`: a pure-SELECT, bounded,
+  structurally redacted lifecycle-observation projection for current queue and
+  retained-lease entries. It is insufficient to determine claimability,
+  dependency blockers, or owner action, must not drive owner action, and is
+  absent from the enrolled-device remote mTLS router. It exposes no mutation,
+  worker, Codex, repository, GitHub, publication, or automatic activation
+  authority. Approved feature manifests must be canonical bounded JSON with an
+  exact SHA-256 binding; their
   immutable numbered specification rows and owner-approval/design/brainstorming
   proof digests are append-only. The three repository grant revisions remain
   independent and one never implies another. The queue admits at most 100

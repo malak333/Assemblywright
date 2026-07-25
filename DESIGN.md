@@ -69,7 +69,10 @@ SQLite database holds two kernels:
 - The default-inert Feature Conveyor repository kernel: immutable approved
   specification revisions, three independent repository grants, the bounded
   owner-ordered queue, one active lease, exact lifecycle advancement, and
-  startup quarantine.
+  startup quarantine. Its only API is an owner-token-authenticated,
+  loopback-only, bounded and redacted lifecycle-observation projection. It is
+  insufficient to determine claimability, dependency blockers, or owner action
+  and is not registered on the enrolled-device remote mTLS router.
 
 Every authoritative transition commits its redacted audit event in the same
 transaction. Migrations from supported legacy schemas are backup-first under

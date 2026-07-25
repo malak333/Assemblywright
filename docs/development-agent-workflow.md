@@ -47,3 +47,35 @@ Run after changing `AGENTS.md`, `.codex/config.toml`, or any custom agent:
 The validator parses every TOML file, verifies the expected model, reasoning,
 and sandbox matrix, checks the concurrency limits, rejects dangerous policy
 overrides, and confirms the root instructions reference every role.
+
+## Feature And Phase Closeout
+
+Every feature or phase closes as one auditable slice. Before publication:
+
+1. Re-read the applicable accepted design, safety rules, requirements, and
+   canonical build commands. Update implementation and documentation together;
+   a stale or contradicted contract is blocking.
+2. Review the conversation for durable repository facts. Add reusable
+   architecture, failure, command, proof-boundary, or operator knowledge to
+   `docs/knowledge-base/assemblywright-project-facts.md`; record explicitly when
+   there is no new durable knowledge.
+3. Apply the `unit-testing-test-generate` workflow when available. Cover the
+   smallest testable units with success, rejection, empty, boundary, maximum,
+   malformed-state, redaction, idempotence, cancellation, concurrency, and
+   recovery cases that apply. Do not generate meaningless mocks or assertions.
+4. Apply the `e2e-testing` workflow when available, but choose the E2E
+   technology from the real product boundary. Playwright, screenshots, visual
+   regression, and cross-browser matrices apply only to an actual browser
+   surface. Rust/Swift APIs, native apps, processes, protocols, Windows
+   services, and Mac/Windows paths require native cross-process, packaged-app,
+   service, or live-device E2E.
+5. Run focused tests, `./scripts/release-docs-drift-smoke.sh`,
+   `git diff --check`, and `./scripts/release-local.sh`. Keep Windows-only,
+   signing, notarization, clean-profile, and live-device evidence separate and
+   name every unexecuted boundary.
+6. Obtain an independent review proportional to risk and resolve every blocking
+   finding. Security, authentication, routing, persistence, concurrency, and
+   publication changes require the high-risk reviewer.
+7. When the owner requested publication, commit without bypassing hooks, push
+   to `main`, verify local `HEAD` equals `origin/main`, and wait for every
+   required hosted gate. A local pass or successful push alone is not closeout.

@@ -2,7 +2,7 @@ use assemblywright_master::{
     ApprovedFeatureSpecification, FeatureAbandonmentEvidence, FeatureGrantRevisions,
     FeatureLifecycleStatus, FeatureTransitionEvidence, MasterError, MasterKernel, MasterProcess,
     RepositoryGrantKind, RepositoryGrantRevision, VerifiedFeatureSuccess,
-    MAX_CONVEYOR_NONTERMINAL_FEATURES,
+    MAX_CONVEYOR_NONTERMINAL_FEATURES, MAX_CONVEYOR_STATUS_FEATURES,
 };
 use rusqlite::Connection;
 use serde_json::{json, Value};
@@ -107,6 +107,232 @@ fn specification(
         model_id: "review-v1".to_string(),
         dependencies,
     }
+}
+
+fn assert_exact_object_keys(value: &Value, expected: &[&str]) {
+    let object = value.as_object().expect("JSON object");
+    let mut actual = object.keys().map(String::as_str).collect::<Vec<_>>();
+    let mut expected = expected.to_vec();
+    actual.sort_unstable();
+    expected.sort_unstable();
+    assert_eq!(actual, expected);
+}
+
+fn assert_status_json_allowlist(value: &Value) {
+    assert_exact_object_keys(
+        value,
+        &[
+            "schema_version",
+            "queue_revision",
+            "startup_quarantine_count",
+            "counts_by_status",
+            "visible_feature_count",
+            "features_truncated",
+            "features",
+        ],
+    );
+    assert_exact_object_keys(
+        &value["counts_by_status"],
+        &[
+            "queued",
+            "implementing",
+            "validating",
+            "reviewing",
+            "publishing",
+            "verifying_main",
+            "succeeded",
+            "cancelled",
+            "abandoned",
+            "quarantined",
+        ],
+    );
+    for feature in value["features"].as_array().expect("status feature array") {
+        assert_exact_object_keys(
+            feature,
+            &[
+                "feature_id",
+                "specification_revision",
+                "lifecycle_revision",
+                "queue_position",
+                "status",
+                "lease_present",
+                "effect_possible",
+            ],
+        );
+    }
+}
+
+fn complete_feature(kernel: &mut MasterKernel, feature: &ApprovedFeatureSpecification, now: u64) {
+    let queue_revision = kernel.feature_queue_revision().unwrap();
+    kernel
+        .enqueue_approved_feature(feature, queue_revision, now)
+        .unwrap();
+    let claim = kernel
+        .claim_next_feature(kernel.feature_queue_revision().unwrap(), now + 1)
+        .unwrap();
+    let evidence = FeatureTransitionEvidence {
+        repository_snapshot_sha256: digest("history-snapshot"),
+        accepted_evidence_sha256: digest("history-evidence"),
+    };
+    let mut lifecycle_revision = claim.lifecycle_revision;
+    for (offset, next) in [
+        (2, FeatureLifecycleStatus::Validating),
+        (3, FeatureLifecycleStatus::Reviewing),
+        (4, FeatureLifecycleStatus::Publishing),
+        (5, FeatureLifecycleStatus::VerifyingMain),
+    ] {
+        lifecycle_revision = kernel
+            .advance_feature_lifecycle(
+                feature.feature_id,
+                lifecycle_revision,
+                next,
+                evidence,
+                now + offset,
+            )
+            .unwrap()
+            .lifecycle_revision;
+    }
+    kernel
+        .mark_feature_succeeded(
+            feature.feature_id,
+            lifecycle_revision,
+            kernel.feature_queue_revision().unwrap(),
+            VerifiedFeatureSuccess {
+                main_commit_sha256: digest("history-main"),
+                post_merge_evidence_sha256: digest("history-post-merge"),
+                main_healthy: true,
+            },
+            now + 6,
+        )
+        .unwrap();
+}
+
+fn abandon_feature(kernel: &mut MasterKernel, feature: &ApprovedFeatureSpecification, now: u64) {
+    kernel
+        .enqueue_approved_feature(feature, kernel.feature_queue_revision().unwrap(), now)
+        .unwrap();
+    let claim = kernel
+        .claim_next_feature(kernel.feature_queue_revision().unwrap(), now + 1)
+        .unwrap();
+    let cancelled = kernel
+        .cancel_active_feature(feature.feature_id, claim.lifecycle_revision, now + 2)
+        .unwrap();
+    kernel
+        .abandon_and_advance(
+            feature.feature_id,
+            cancelled.lifecycle_revision,
+            kernel.feature_queue_revision().unwrap(),
+            FeatureAbandonmentEvidence {
+                safe_reconciliation_sha256: digest("history-safe-reconciliation"),
+                merged: false,
+                verified_healthy_main_sha256: None,
+            },
+            now + 3,
+        )
+        .unwrap();
+}
+
+#[test]
+fn status_projection_is_empty_bounded_and_redacted() {
+    let mut kernel = MasterKernel::in_memory().unwrap();
+    let empty = kernel.feature_conveyor_status().unwrap();
+    assert_eq!(empty.schema_version, 5);
+    assert_eq!(empty.queue_revision, 0);
+    assert_eq!(empty.startup_quarantine_count, 0);
+    assert_eq!(empty.visible_feature_count, 0);
+    assert!(!empty.features_truncated);
+    assert!(empty.features.is_empty());
+    assert_eq!(empty.counts_by_status, Default::default());
+    assert_status_json_allowlist(&serde_json::to_value(&empty).unwrap());
+
+    let repository_id = Uuid::new_v4();
+    install_grants(&mut kernel, repository_id);
+    let features = (0..=MAX_CONVEYOR_NONTERMINAL_FEATURES)
+        .map(|_| specification(Uuid::new_v4(), repository_id, vec![]))
+        .collect::<Vec<_>>();
+    for (index, feature) in features
+        .iter()
+        .take(MAX_CONVEYOR_NONTERMINAL_FEATURES as usize)
+        .enumerate()
+    {
+        kernel
+            .enqueue_approved_feature(feature, index as u64, 10 + index as u64)
+            .unwrap();
+    }
+    let claim = kernel
+        .claim_next_feature(MAX_CONVEYOR_NONTERMINAL_FEATURES, 200)
+        .unwrap();
+    kernel
+        .cancel_active_feature(claim.feature_id, claim.lifecycle_revision, 201)
+        .unwrap();
+    kernel
+        .enqueue_approved_feature(
+            features.last().unwrap(),
+            MAX_CONVEYOR_NONTERMINAL_FEATURES + 1,
+            202,
+        )
+        .unwrap();
+
+    let status = kernel.feature_conveyor_status().unwrap();
+    assert_eq!(
+        status.visible_feature_count,
+        MAX_CONVEYOR_NONTERMINAL_FEATURES + 1
+    );
+    assert!(status.features_truncated);
+    assert_eq!(status.features.len(), MAX_CONVEYOR_STATUS_FEATURES);
+    assert_eq!(status.features[0].feature_id, claim.feature_id);
+    assert_eq!(status.features[0].status, FeatureLifecycleStatus::Cancelled);
+    assert!(status.features[0].lease_present);
+    assert!(status.features[0].effect_possible);
+    assert_eq!(
+        status.counts_by_status.queued,
+        MAX_CONVEYOR_NONTERMINAL_FEATURES
+    );
+    assert_eq!(status.counts_by_status.cancelled, 1);
+    assert_eq!(status.counts_by_status.implementing, 0);
+    assert_eq!(
+        kernel.feature_conveyor_status().unwrap(),
+        status,
+        "read-only projection changed durable Feature Conveyor state"
+    );
+    let positions = status
+        .features
+        .iter()
+        .map(|feature| feature.queue_position)
+        .collect::<Vec<_>>();
+    assert!(
+        positions.windows(2).all(|pair| pair[0] < pair[1]),
+        "status features were not deterministically queue ordered"
+    );
+
+    assert_status_json_allowlist(&serde_json::to_value(&status).unwrap());
+}
+
+#[test]
+fn status_projection_excludes_substantial_terminal_history() {
+    let mut kernel = MasterKernel::in_memory().unwrap();
+    let repository_id = Uuid::new_v4();
+    install_grants(&mut kernel, repository_id);
+    for index in 0..24 {
+        let succeeded = specification(Uuid::new_v4(), repository_id, vec![]);
+        complete_feature(&mut kernel, &succeeded, 1_000 + index * 20);
+        let abandoned = specification(Uuid::new_v4(), repository_id, vec![]);
+        abandon_feature(&mut kernel, &abandoned, 1_010 + index * 20);
+    }
+    let current = specification(Uuid::new_v4(), repository_id, vec![]);
+    kernel
+        .enqueue_approved_feature(&current, kernel.feature_queue_revision().unwrap(), 10_000)
+        .unwrap();
+
+    let status = kernel.feature_conveyor_status().unwrap();
+    assert_eq!(status.visible_feature_count, 1);
+    assert_eq!(status.features.len(), 1);
+    assert_eq!(status.features[0].feature_id, current.feature_id);
+    assert_eq!(status.counts_by_status.queued, 1);
+    assert_eq!(status.counts_by_status.succeeded, 0);
+    assert_eq!(status.counts_by_status.abandoned, 0);
+    assert!(!status.features_truncated);
+    assert_status_json_allowlist(&serde_json::to_value(status).unwrap());
 }
 
 #[test]

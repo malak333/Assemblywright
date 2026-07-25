@@ -212,9 +212,18 @@ an old one.
   owner-recorded evidence exists.
 - `release evidence-status` is file and report inventory plus structural
   validation. Presence never proves that an external check happened.
-- The Feature Conveyor kernel is persistence only. It has no HTTP/API, worker
-  dispatcher, repository execution, review provider, publication coordinator,
-  Mac queue UI, or autonomous activation.
+- The Feature Conveyor kernel is persistence plus one observation seam:
+  owner-token-authenticated loopback-only
+  `GET /v1/feature-conveyor/status`. Its pure-SELECT response is bounded to 100
+  redacted current queue or retained-lease lifecycle entries, excludes terminal
+  history, includes current aggregate lifecycle counts and an explicit
+  visible-total/truncation signal, and is absent from the enrolled-device
+  remote mTLS router. It is insufficient to determine claimability, dependency
+  blockers, blocker reasons, or owner action and must not drive owner action.
+  Later UI/control work must add exact blocker guidance before representing a
+  blocked state. It grants no enqueue, mutation, worker,
+  Codex, repository, Git, review, publication, Mac queue UI, or autonomous
+  activation authority.
 - The Mac agent's fixture and MLX lanes are default-off, singleton, and
   no-retention. They add no remote planning, repository, tool, credential,
   network, Codex, Git, publication, or unattended authority.
@@ -232,6 +241,21 @@ an old one.
   in the same change.
 - Behavior changes include focused tests. Feature slices include relevant docs,
   knowledge-base updates, and E2E coverage.
+- Every feature or phase uses the closeout contract in
+  `docs/development-agent-workflow.md`: re-check accepted documentation and
+  safety rules; capture durable facts from the conversation; apply
+  `unit-testing-test-generate` to meaningful unit boundaries; apply
+  `e2e-testing` to the real product boundary; run focused, docs, diff, and full
+  local gates; obtain risk-proportional independent review; and, when
+  publication is requested, verify the pushed commit and hosted gates on
+  `origin/main`.
+- Playwright, screenshots, visual regression, and cross-browser testing are not
+  generic E2E requirements. They apply only when the changed surface is a
+  browser UI. Native Rust/Swift HTTP, process, protocol, service, packaged-app,
+  and Mac/Windows flows use native E2E. For the Feature Conveyor status slice,
+  `master_process_e2e` proves the authenticated loopback HTTP path and the
+  Windows-only `remote_mtls_e2e` proves the route is absent from the enrolled
+  device router.
 - Do not commit or push unless explicitly requested.
 
 ## Shell Portability

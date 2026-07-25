@@ -93,8 +93,8 @@ executable changes as release evidence.
 | Whole workspace | `cargo test --workspace` |
 | Protocol contract | `cargo test -p assemblywright-protocol` |
 | Master kernel | `cargo test -p assemblywright-master` |
-| Feature Conveyor kernel | `cargo test -p assemblywright-master --test feature_conveyor_kernel` |
-| Master process E2E | `cargo test -p assemblywright-master --test master_process_e2e` |
+| Feature Conveyor kernel and read-only projection | `cargo test -p assemblywright-master --test feature_conveyor_kernel` |
+| Master process E2E, including authenticated loopback Feature Conveyor status | `cargo test -p assemblywright-master --test master_process_e2e` |
 | Enrollment and identity | `cargo test -p assemblywright-master --test enrollment_identity_e2e` |
 | Remote mTLS | `cargo test -p assemblywright-master --test remote_mtls_e2e` |
 | Event cursor | `cargo test -p assemblywright-master --test event_cursor_e2e` |
@@ -184,7 +184,12 @@ Deterministic cross-process coverage proves:
   and ordering, dependency blocking, compare-and-set revisions, singleton
   active lease, exact lifecycle advancement, cancellation without advancement,
   explicit abandonment, startup quarantine, and same-transaction redacted
-  audits.
+  audits. Its observation proof covers the owner-token-authenticated
+  loopback-only `GET /v1/feature-conveyor/status`, empty state, deterministic
+  current-lifecycle counts and ordering, exclusion of terminal history, the
+  100-entry cap with explicit truncation, exact JSON-key allowlists, and
+  absence from the enrolled-device remote mTLS router. The response does not
+  establish claimability, dependency blockers, or owner-action guidance.
 - Enrollment identity: digest-only grants, signed-CSR issuance, expiry and
   replay denial, rotation, revocation, schema migration, real Windows DPAPI
   round trips, and the CLI stdin boundary.

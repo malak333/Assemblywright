@@ -1,10 +1,16 @@
+use assemblywright_master::{
+    ApprovedFeatureSpecification, FeatureGrantRevisions, MasterProcess, RepositoryGrantKind,
+    RepositoryGrantRevision, MAX_CONVEYOR_NONTERMINAL_FEATURES,
+};
 use assemblywright_protocol::MAX_WIRE_FRAME_BYTES;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
 use std::process::{Child, Command, Output, Stdio};
 use tempfile::tempdir;
+use uuid::Uuid;
 
 struct ChildGuard {
     child: Child,
@@ -15,6 +21,73 @@ impl Drop for ChildGuard {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+#[test]
+fn feature_conveyor_status_is_owner_authenticated_bounded_and_redacted() {
+    let directory = tempdir().expect("temporary feature status directory");
+    let binary = env!("CARGO_BIN_EXE_assemblywright-master");
+    assert_success(&run(binary, directory.path(), ["setup"]), "setup");
+
+    let empty_endpoint = unused_loopback_addr();
+    let mut empty_server = spawn_server(binary, directory.path(), empty_endpoint);
+    read_ready(&mut empty_server.child);
+    let token = std::fs::read_to_string(directory.path().join("development.token"))
+        .expect("read development bearer");
+    let token = token.trim();
+    let unauthorized = get_request(empty_endpoint, "/v1/feature-conveyor/status", None);
+    assert!(
+        unauthorized.starts_with("HTTP/1.1 401 Unauthorized"),
+        "unauthenticated feature status was reachable: {unauthorized}"
+    );
+    let empty = get_request(empty_endpoint, "/v1/feature-conveyor/status", Some(token));
+    assert!(empty.starts_with("HTTP/1.1 200 OK"), "{empty}");
+    let empty_json = response_json(&empty);
+    assert_eq!(empty_json["schema_version"], 5);
+    assert_eq!(empty_json["queue_revision"], 0);
+    assert_eq!(empty_json["startup_quarantine_count"], 0);
+    assert_eq!(empty_json["visible_feature_count"], 0);
+    assert_eq!(empty_json["features_truncated"], false);
+    assert_eq!(empty_json["features"], serde_json::json!([]));
+    assert_eq!(empty_json["counts_by_status"]["queued"], 0);
+    assert_eq!(empty_json["counts_by_status"]["quarantined"], 0);
+    assert_status_json_allowlist(&empty_json);
+
+    empty_server.child.kill().expect("stop empty master");
+    empty_server.child.wait().expect("reap empty master");
+    seed_bounded_feature_status(directory.path());
+
+    let populated_endpoint = unused_loopback_addr();
+    let mut populated_server = spawn_server(binary, directory.path(), populated_endpoint);
+    read_ready(&mut populated_server.child);
+    let populated = get_request(
+        populated_endpoint,
+        "/v1/feature-conveyor/status",
+        Some(token),
+    );
+    assert!(populated.starts_with("HTTP/1.1 200 OK"), "{populated}");
+    let populated_json = response_json(&populated);
+    assert_eq!(
+        populated_json["visible_feature_count"],
+        MAX_CONVEYOR_NONTERMINAL_FEATURES + 1
+    );
+    assert_eq!(populated_json["features_truncated"], true);
+    assert_eq!(
+        populated_json["features"]
+            .as_array()
+            .expect("bounded feature metadata")
+            .len(),
+        MAX_CONVEYOR_NONTERMINAL_FEATURES as usize
+    );
+    assert_eq!(
+        populated_json["counts_by_status"]["queued"],
+        MAX_CONVEYOR_NONTERMINAL_FEATURES
+    );
+    assert_eq!(populated_json["counts_by_status"]["cancelled"], 1);
+    assert_eq!(populated_json["features"][0]["status"], "cancelled");
+    assert_eq!(populated_json["features"][0]["lease_present"], true);
+    assert_eq!(populated_json["features"][0]["effect_possible"], true);
+    assert_status_json_allowlist(&populated_json);
 }
 
 #[test]
@@ -352,11 +425,161 @@ fn post_request(endpoint: SocketAddr, path: &str, token: Option<&str>, body: &st
     response
 }
 
+fn get_request(endpoint: SocketAddr, path: &str, token: Option<&str>) -> String {
+    let mut stream = TcpStream::connect(endpoint).expect("connect owner observation");
+    let authorization = token
+        .map(|token| format!("Authorization: Bearer {token}\r\n"))
+        .unwrap_or_default();
+    write!(
+        stream,
+        "GET {path} HTTP/1.1\r\nHost: {endpoint}\r\n{authorization}Connection: close\r\n\r\n"
+    )
+    .expect("write owner observation request");
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .expect("read owner observation response");
+    response
+}
+
+fn seed_bounded_feature_status(data_dir: &Path) {
+    let mut process = MasterProcess::acquire(data_dir).expect("acquire feature status seed");
+    let repository_id = Uuid::new_v4();
+    for (index, kind) in [
+        RepositoryGrantKind::Registration,
+        RepositoryGrantKind::CloudDisclosure,
+        RepositoryGrantKind::AutonomousPublication,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        process
+            .kernel_mut()
+            .record_repository_grant_revision(
+                &RepositoryGrantRevision {
+                    repository_id,
+                    kind,
+                    revision: 1,
+                    scope_sha256: Sha256::digest(format!("scope-{index}")).into(),
+                    owner_approval_sha256: Sha256::digest(format!("approval-{index}")).into(),
+                    expires_at_ms: None,
+                    revoked: false,
+                },
+                1,
+            )
+            .expect("record status seed grant");
+    }
+    let features = (0..=MAX_CONVEYOR_NONTERMINAL_FEATURES)
+        .map(|index| {
+            let feature_id = Uuid::new_v4();
+            let manifest = serde_json::json!({"feature_id": feature_id, "index": index});
+            let canonical = format!(r#"{{"feature_id":"{feature_id}","index":{index}}}"#);
+            ApprovedFeatureSpecification {
+                feature_id,
+                revision: 1,
+                repository_id,
+                manifest,
+                manifest_sha256: Sha256::digest(canonical).into(),
+                design_sha256: Sha256::digest(format!("design-{index}")).into(),
+                brainstorming_sha256: Sha256::digest(format!("brainstorming-{index}")).into(),
+                owner_approval_sha256: Sha256::digest(format!("owner-{index}")).into(),
+                grants: FeatureGrantRevisions {
+                    registration: 1,
+                    cloud_disclosure: 1,
+                    autonomous_publication: 1,
+                },
+                provider_id: "local.review".to_string(),
+                model_id: "review-v1".to_string(),
+                dependencies: vec![],
+            }
+        })
+        .collect::<Vec<_>>();
+    for (index, feature) in features
+        .iter()
+        .take(MAX_CONVEYOR_NONTERMINAL_FEATURES as usize)
+        .enumerate()
+    {
+        process
+            .kernel_mut()
+            .enqueue_approved_feature(feature, index as u64, 10 + index as u64)
+            .expect("enqueue status seed");
+    }
+    let claim = process
+        .kernel_mut()
+        .claim_next_feature(MAX_CONVEYOR_NONTERMINAL_FEATURES, 200)
+        .expect("claim status blocker");
+    process
+        .kernel_mut()
+        .cancel_active_feature(claim.feature_id, claim.lifecycle_revision, 201)
+        .expect("cancel status blocker");
+    process
+        .kernel_mut()
+        .enqueue_approved_feature(
+            features.last().expect("overflow status feature"),
+            MAX_CONVEYOR_NONTERMINAL_FEATURES + 1,
+            202,
+        )
+        .expect("enqueue bounded overflow feature");
+}
+
 fn response_json(response: &str) -> Value {
     let (_, body) = response
         .split_once("\r\n\r\n")
         .expect("HTTP response body delimiter");
     serde_json::from_str(body).expect("decode response JSON")
+}
+
+fn assert_exact_object_keys(value: &Value, expected: &[&str]) {
+    let object = value.as_object().expect("JSON object");
+    let mut actual = object.keys().map(String::as_str).collect::<Vec<_>>();
+    let mut expected = expected.to_vec();
+    actual.sort_unstable();
+    expected.sort_unstable();
+    assert_eq!(actual, expected);
+}
+
+fn assert_status_json_allowlist(value: &Value) {
+    assert_exact_object_keys(
+        value,
+        &[
+            "schema_version",
+            "queue_revision",
+            "startup_quarantine_count",
+            "counts_by_status",
+            "visible_feature_count",
+            "features_truncated",
+            "features",
+        ],
+    );
+    assert_exact_object_keys(
+        &value["counts_by_status"],
+        &[
+            "queued",
+            "implementing",
+            "validating",
+            "reviewing",
+            "publishing",
+            "verifying_main",
+            "succeeded",
+            "cancelled",
+            "abandoned",
+            "quarantined",
+        ],
+    );
+    for feature in value["features"].as_array().expect("status feature array") {
+        assert_exact_object_keys(
+            feature,
+            &[
+                "feature_id",
+                "specification_revision",
+                "lifecycle_revision",
+                "queue_position",
+                "status",
+                "lease_present",
+                "effect_possible",
+            ],
+        );
+    }
 }
 
 fn assert_success(output: &Output, operation: &str) {
