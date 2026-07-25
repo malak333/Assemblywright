@@ -157,6 +157,28 @@ struct JarvisMacAppTests {
         #expect(degraded.canStopCore)
     }
 
+    @Test("Menu bar badges every state that needs attention and only those")
+    func menuBarBadgesOnlyStatesNeedingAttention() {
+        #expect(JarvisMenuBarPresentation(mode: .stopped).showsStateBadge)
+        #expect(JarvisMenuBarPresentation(mode: .starting).showsStateBadge)
+        #expect(JarvisMenuBarPresentation(mode: .degraded(reason: "health check failed")).showsStateBadge)
+
+        // A healthy core shows the proofmark alone, with no badge competing with it.
+        #expect(!JarvisMenuBarPresentation(mode: .available).showsStateBadge)
+    }
+
+    @Test("Menu bar template art loads as template art when the bundle carries it")
+    func menuBarTemplateArtIsTemplateWhenBundled() {
+        #expect(JarvisBrandAssets.menuBarTemplateName == "menubar-template")
+
+        // Unbundled test runs have no Resources directory, so the lookup is
+        // expected to miss. When it does resolve, it must be template art or
+        // AppKit would paint raw black pixels into the menu bar.
+        if let template = JarvisBrandAssets.menuBarTemplate() {
+            #expect(template.isTemplate)
+        }
+    }
+
     @Test("Console synchronization never probes IPC after a pre-authority failure")
     func consoleSynchronizationPreservesSupervisorFailure() {
         let failure = "Assemblywright app signature validation failed; quit and reopen Assemblywright."

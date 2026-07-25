@@ -16,6 +16,13 @@ EXPECTED_MICROPHONE_USAGE_DESCRIPTION="Assemblywright uses microphone input only
 EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION="Assemblywright uses speech recognition only to turn your spoken command into a local assistant request."
 ENTITLEMENTS="$ROOT_DIR/packaging/Jarvis.entitlements"
 CORE_ENTITLEMENTS="$ROOT_DIR/packaging/JarvisCore.entitlements"
+BRAND_GENERATED_DIR="$ROOT_DIR/assets/brand/generated"
+APP_ICON_FILE="Assemblywright.icns"
+MENU_BAR_TEMPLATE_FILES=(
+  "menubar-template.png"
+  "menubar-template@2x.png"
+  "menubar-template@3x.png"
+)
 DIST_DIR="${JARVIS_DISTRIBUTION_DIR:-$ROOT_DIR/target/distribution}"
 APP_PATH="$DIST_DIR/$APP_NAME.app"
 ZIP_PATH="$DIST_DIR/$APP_NAME-$VERSION.zip"
@@ -201,16 +208,17 @@ PY
 
 validate_app_zip_payload() {
   local zip_path="$1"
-  python3 - "$zip_path" "$EXPECTED_MICROPHONE_USAGE_DESCRIPTION" "$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION" <<'PY'
+  python3 - "$zip_path" "$EXPECTED_MICROPHONE_USAGE_DESCRIPTION" "$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION" "$APP_ICON_FILE" <<'PY'
 import plistlib
 import sys
 import zipfile
 
-zip_path, expected_microphone, expected_speech = sys.argv[1:4]
+zip_path, expected_microphone, expected_speech, expected_icon = sys.argv[1:5]
 required_entries = (
     "Assemblywright.app/Contents/MacOS/JarvisMacApp",
     "Assemblywright.app/Contents/Resources/bin/jarvis-cli",
     "Assemblywright.app/Contents/Info.plist",
+    f"Assemblywright.app/Contents/Resources/{expected_icon}",
 )
 
 with zipfile.ZipFile(zip_path) as archive:
@@ -253,6 +261,13 @@ if actual_speech != expected_speech:
     raise SystemExit(
         "zip payload Info.plist NSSpeechRecognitionUsageDescription mismatch: "
         f"expected {expected_speech!r}, got {actual_speech!r}"
+    )
+
+actual_icon = info_plist.get("CFBundleIconFile")
+if actual_icon != expected_icon:
+    raise SystemExit(
+        "zip payload Info.plist CFBundleIconFile mismatch: "
+        f"expected {expected_icon!r}, got {actual_icon!r}"
     )
 PY
 }
@@ -938,11 +953,14 @@ SH
   chmod 755 "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
   printf '#!/usr/bin/env bash\nexit 0\n' >"$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME"
   chmod 755 "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME"
+  copy_brand_resources "$APP_PATH"
   cat >"$APP_PATH/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+  <key>CFBundleIconFile</key>
+  <string>$APP_ICON_FILE</string>
   <key>CFBundleIdentifier</key>
   <string>$BUNDLE_ID</string>
   <key>CFBundleShortVersionString</key>
@@ -1108,9 +1126,11 @@ zip_path = pathlib.Path(sys.argv[1])
 with zipfile.ZipFile(zip_path, "w") as archive:
     archive.writestr("Assemblywright.app/Contents/MacOS/JarvisMacApp", "")
     archive.writestr("Assemblywright.app/Contents/Resources/bin/jarvis-cli", "")
+    archive.writestr("Assemblywright.app/Contents/Resources/Assemblywright.icns", "")
     archive.writestr("Assemblywright.app/Contents/Info.plist", "")
     archive.writestr("payload/Assemblywright.app/Contents/MacOS/JarvisMacApp", "")
     archive.writestr("payload/Assemblywright.app/Contents/Resources/bin/jarvis-cli", "")
+    archive.writestr("payload/Assemblywright.app/Contents/Resources/Assemblywright.icns", "")
     archive.writestr("payload/Assemblywright.app/Contents/Info.plist", "")
 PY
   output="$(PATH="$stub_dir:$PATH" \
@@ -1206,6 +1226,36 @@ LOG
   printf 'Proof boundary: stubbed signed-provenance writer and Apple-tool output guards only; no app was signed, notarized, stapled, installed, launched, or manually validated.\n'
 }
 
+copy_brand_resources() {
+  local app_path="$1"
+  local resources="$app_path/Contents/Resources"
+  local source
+
+  source="$BRAND_GENERATED_DIR/$APP_ICON_FILE"
+  [[ -f "$source" ]] || fail "brand app icon missing: $source (run scripts/generate-brand-assets.sh)"
+  cp "$source" "$resources/$APP_ICON_FILE"
+
+  local template
+  for template in "${MENU_BAR_TEMPLATE_FILES[@]}"; do
+    source="$BRAND_GENERATED_DIR/$template"
+    [[ -f "$source" ]] || fail "brand menu bar template missing: $source (run scripts/generate-brand-assets.sh)"
+    cp "$source" "$resources/$template"
+  done
+}
+
+assert_brand_resources() {
+  local label="$1"
+  local app_path="$2"
+  local resources="$app_path/Contents/Resources"
+
+  [[ -f "$resources/$APP_ICON_FILE" ]] || fail "$label bundle is missing Contents/Resources/$APP_ICON_FILE"
+
+  local template
+  for template in "${MENU_BAR_TEMPLATE_FILES[@]}"; do
+    [[ -f "$resources/$template" ]] || fail "$label bundle is missing Contents/Resources/$template"
+  done
+}
+
 build_app_bundle() {
   assert_distribution_bundle_not_running
   rm -rf "$DIST_DIR"
@@ -1227,6 +1277,8 @@ build_app_bundle() {
   chmod 755 "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME" "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
   assert_bundled_core_version
 
+  copy_brand_resources "$APP_PATH"
+
   cat >"$APP_PATH/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -1238,6 +1290,8 @@ build_app_bundle() {
   <string>$APP_NAME</string>
   <key>CFBundleExecutable</key>
   <string>$APP_EXECUTABLE_NAME</string>
+  <key>CFBundleIconFile</key>
+  <string>$APP_ICON_FILE</string>
   <key>CFBundleIdentifier</key>
   <string>$BUNDLE_ID</string>
   <key>CFBundleInfoDictionaryVersion</key>
@@ -1272,6 +1326,9 @@ PLIST
   require_output_contains "Info.plist" "$INFO_PLIST_CONTENTS" "NSSpeechRecognitionUsageDescription"
   require_output_contains "Info.plist" "$INFO_PLIST_CONTENTS" "<string>$EXPECTED_MICROPHONE_USAGE_DESCRIPTION</string>"
   require_output_contains "Info.plist" "$INFO_PLIST_CONTENTS" "<string>$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION</string>"
+  require_output_contains "Info.plist" "$INFO_PLIST_CONTENTS" "CFBundleIconFile"
+  require_output_contains "Info.plist" "$INFO_PLIST_CONTENTS" "<string>$APP_ICON_FILE</string>"
+  assert_brand_resources "release app" "$APP_PATH"
 }
 
 validate_package_metadata() {
@@ -1418,6 +1475,8 @@ run_unsigned_structure_check() {
   require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Assemblywright.app/Contents/MacOS/$APP_EXECUTABLE_NAME"
   require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Assemblywright.app/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
   require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Assemblywright.app/Contents/Info.plist"
+  require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Assemblywright.app/Contents/Resources/$APP_ICON_FILE"
+  require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Assemblywright.app/Contents/Resources/menubar-template.png"
 
   printf '\nAssemblywright unsigned distribution structure check: ok\n'
   printf 'App: %s\n' "$APP_PATH"

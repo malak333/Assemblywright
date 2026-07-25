@@ -2225,6 +2225,35 @@ behavior. This is Swift scene/model contract coverage. It does not prove macOS
 menu rendering, window reopening through Finder/LaunchServices, or live
 lifecycle actions in a signed installed app; record those in manual release QA.
 
+The menu bar item draws the bundled proofmark template through
+`JarvisBrandAssets`, with a state badge beside it for every mode except
+available. The tests pin the badge policy and assert that a resolved template
+image is marked as template art. They cannot prove menu bar tinting or that the
+resource resolves inside a signed installed bundle: an unbundled `swift test`
+run has no `Contents/Resources`, so the lookup is expected to miss there and the
+label falls back to an SF Symbol. Confirm the rendered menu bar glyph in manual
+release QA.
+
+### Brand assets
+
+Every binary under `assets/brand/generated` is rasterized from the SVG sources
+in `assets/brand/svg`. Regenerate them after editing any source:
+
+```bash
+./scripts/generate-brand-assets.sh
+```
+
+Prove the committed binaries still match their sources:
+
+```bash
+./scripts/generate-brand-assets.sh --check
+```
+
+The generator needs `rsvg-convert` from `brew install librsvg`, plus `iconutil`
+and `python3`. `scripts/package-distribution.sh` copies the icon and menu bar
+templates into the app bundle and asserts their bundled paths, so a stale or
+missing generated asset fails the packaging gates rather than shipping.
+
 ### Trusted system-wake foundation
 
 ```bash

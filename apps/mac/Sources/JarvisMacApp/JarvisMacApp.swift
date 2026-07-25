@@ -207,10 +207,7 @@ struct JarvisMacApp: App {
                 modelConfiguration: modelConfiguration
             )
         } label: {
-            Label(
-                JarvisMenuBarContract.title,
-                systemImage: JarvisMenuBarPresentation(mode: supervisor.mode).systemImage
-            )
+            JarvisMenuBarLabel(presentation: JarvisMenuBarPresentation(mode: supervisor.mode))
         }
         .menuBarExtraStyle(.menu)
     }

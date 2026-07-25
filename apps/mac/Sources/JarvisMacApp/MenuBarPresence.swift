@@ -13,6 +13,10 @@ struct JarvisMenuBarPresentation: Equatable {
     let canStartCore: Bool
     let canStopCore: Bool
 
+    /// Whether the menu bar draws a state badge beside the proofmark. A healthy
+    /// core shows the mark alone; every other mode earns an indicator.
+    let showsStateBadge: Bool
+
     init(mode: JarvisCoreMode) {
         switch mode {
         case .stopped:
@@ -20,21 +24,25 @@ struct JarvisMenuBarPresentation: Equatable {
             systemImage = "circle"
             canStartCore = true
             canStopCore = false
+            showsStateBadge = true
         case .starting:
             statusLine = "Core starting"
             systemImage = "circle.dotted"
             canStartCore = false
             canStopCore = false
+            showsStateBadge = true
         case .available:
             statusLine = "Core available"
             systemImage = "checkmark.circle.fill"
             canStartCore = false
             canStopCore = true
+            showsStateBadge = false
         case .degraded:
             statusLine = "Core degraded"
             systemImage = "exclamationmark.triangle.fill"
             canStartCore = false
             canStopCore = true
+            showsStateBadge = true
         }
     }
 }

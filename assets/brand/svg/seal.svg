@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Assemblywright proof seal">
+  <title>Assemblywright proof seal</title>
+  <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M20 6 H44 L58 20 V44 L44 58 H20 L6 44 V20 Z" stroke-width="4"/>
+    <path d="M20 37 L32 20 L44 37" stroke-width="4.5"/>
+    <path d="M23 46 H41" stroke-width="4.5"/>
+  </g>
+</svg>
