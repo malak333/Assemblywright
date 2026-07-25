@@ -169,9 +169,12 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   readiness should come from `/release/readiness`, checked-in docs, and local
   verification output.
 - For each feature/phase, confirm the relevant docs were updated, durable
-  knowledge-base facts were added, and matching E2E or focused integration
-  coverage exists. If coverage does not exist, add it for behavior changes or
-  record the blocker before using broader readiness language.
+  knowledge-base facts were added, changed testable units received focused
+  happy/boundary/malformed/failure coverage, and matching E2E or focused
+  integration coverage exists. If browser/UI E2E is inapplicable, name the
+  closest executable boundary and why. If coverage does not exist, add it for
+  behavior changes or record the blocker before using broader readiness
+  language.
 - For the distributed protocol foundation, run
   `cargo test -p jarvis-protocol --test distributed_protocol_contract_e2e --locked`
   and confirm the serialized Windows-master/Mac-worker handshake, capability,
@@ -324,6 +327,32 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   evidence. A live fixture receipt requires the separately enrolled exact
   `fixture.reasoning` device/profile and owner-controlled `--run-fixture`
   ceremony; do not reuse or overwrite an `mlx.reasoning` enrollment.
+- For the default-inert Windows-master Durable Feature Conveyor schema-v5
+  kernel, run
+  `cargo test -p jarvis-master --lib feature_conveyor_unit --locked -- --nocapture`
+  and
+  `cargo test -p jarvis-master --test feature_conveyor_kernel --locked -- --nocapture`.
+  Confirm the unit lane rejects malformed grants, identities, manifests,
+  identifiers, sizes, and dependency shapes. Confirm the integration lane
+  completes a file-backed restart-to-verified-success owner journey with exact
+  redacted audit order, and that immutable
+  canonical manifest/digest rows reject update/delete, the 101st nonterminal
+  feature rolls back without an audit or specification row, stale reorder and
+  claim revisions fail, a dependency-blocked queue head cannot be skipped, one
+  active lease wins, lifecycle stages cannot be skipped, success requires
+  verified healthy `main`, cancellation retains the lease, safe owner
+  abandonment is distinct, and restart quarantine records
+  `effect_possible:true` with `automatic_retry:false`.
+- Confirm same-transaction audit-failure regressions roll back enqueue, claim,
+  lifecycle, cancellation, abandonment, and startup quarantine. Confirm
+  supported file-backed master v1-v4 upgrades to v5 require `MasterProcess`,
+  create and verify a backup under the owner lock, and restore through a
+  fsynced sibling plus atomic replacement after an injected migration-open
+  failure. Treat this as Windows-master persistence and
+  invariant proof only. There is no Feature Conveyor HTTP/API, coding worker,
+  repository executor, review transport, GitHub publication authority, Mac
+  queue UI, live-device path, unattended operation, or autonomous activation
+  in this slice.
 - Confirm the Mac transport accepts Hyper's bodyless no-work `204` without a
   `Content-Length`, rejects malformed or nonzero length, malformed field names,
   transfer encoding, and same-read hidden body bytes, then reconnects before
@@ -1088,8 +1117,10 @@ stage or when a PR needs focused evidence for one ownership slice.
   budget rejection paths.
 - For each new executable feature phase, confirm E2E coverage is either part of
   `local_ipc_e2e`, Swift package tests, a focused integration proof, or the
-  implemented packaged Mac smoke lane. Docs-only changes should still name the
-  existing proof boundary they preserve.
+  implemented packaged Mac smoke lane, and confirm changed testable units have
+  focused unit coverage for happy, boundary, malformed-input, and failure
+  paths. Docs-only changes should still name the existing proof boundary they
+  preserve.
 - For menu-bar changes, run `swift test --package-path apps/mac` and preserve
   contract coverage for the stable main-window scene route plus every
   supervisor lifecycle presentation state. Treat actual menu-bar rendering,
@@ -1137,8 +1168,9 @@ stage or when a PR needs focused evidence for one ownership slice.
 - Knowledge-base notes include public-repo status, worktree/branch/PR workflow,
   six-agent autonomous sweep expectations, phase-3 worktree names, E2E
   expectations, and proof boundaries without overclaiming production readiness.
-- Every phase summary records whether docs, KB facts, and E2E coverage were
-  followed; unresolved gaps are blockers for stronger production claims.
+- Every phase summary records whether docs, KB facts, unit-test analysis, and
+  E2E/focused integration coverage were followed; unresolved gaps are blockers
+  for stronger production claims.
 - Post-merge cleanup audit is recorded before stronger readiness language:
   `gh pr list --state open --json number,title,headRefName,baseRefName,url`,
   `gh run list --workflow release-local.yml --branch main --limit 5`,

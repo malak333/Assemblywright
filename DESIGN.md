@@ -182,7 +182,26 @@ owner-controlled development inputs rather than descriptor-backed immutable
 content or a malicious same-user process sandbox. Repository mutation, Git
 publication, Codex dispatch, bundled
 installation, general production job execution, and unattended operation
-remain unimplemented. A separate default-off diagnostic now exercises one
+remain unimplemented.
+
+The first Durable Feature Conveyor implementation slice lives only in the
+authoritative Windows `jarvis-master` as a default-inert schema-v5 repository
+kernel. It stores immutable owner-approved specification revisions and their
+exact manifest/design/brainstorming/approval digests, independent repository
+grant revisions, and snapshotted review provider/model identity. A
+100-nonterminal-item queue uses one global compare-and-set revision, strict
+owner order, dependency blocking, and a database-enforced singleton active
+lease. Every enqueue, reorder, claim, lifecycle transition, cancellation, safe
+abandonment, and restart quarantine commits redacted audit evidence in the same
+immediate transaction. Cancellation keeps the active lease and cannot advance
+the queue; only verified healthy-main success or explicit owner abandonment
+after proven-safe reconciliation releases it. Startup converts ambiguous active
+work to `quarantined` with `effect_possible:true` and never retries it
+automatically. This slice has no HTTP/API route, worker dispatcher, repository
+snapshot or mutation, Codex/review call, GitHub credential, publication intent,
+Mac UI, or autonomous activation.
+
+A separate default-off diagnostic now exercises one
 cross-device job path without claiming any of those capabilities: an enrolled
 device must advertise the exact `fixture.reasoning` descriptor, the Windows
 master alone enqueues a Public `synthetic_echo`, and the helper leases it over
@@ -760,8 +779,10 @@ The packaged Mac app launches, starts the Rust core, handles a command, writes a
 - Repo docs should include build/test commands, architecture map, plugin
   contract, safety rules, release checklist, and durable knowledge-base facts so
   agents can maintain the project.
-- Each feature or phase should update docs and knowledge-base facts, identify
-  the relevant end-to-end coverage, add missing E2E coverage when the feature
+- Each feature or phase should update docs and knowledge-base facts, analyze
+  changed testable units and add focused unit coverage for happy, boundary,
+  malformed-input, and failure paths, identify the relevant end-to-end
+  coverage, add missing E2E or focused integration coverage when the feature
   changes executable behavior, and clearly record any skipped or blocked gate.
 
 ## Historical Initial Implementation Handoff Outline

@@ -8,7 +8,9 @@ use jarvis_protocol::{
     MAX_JOB_CONTEXT_BYTES, MAX_LEASE_DURATION_MS, MAX_STEP_DEADLINE_MS,
     MLX_REASONING_CAPABILITY_ID, PROTOCOL_VERSION,
 };
-use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
+use rusqlite::{
+    params, Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -30,9 +32,11 @@ pub use identity::{
     SERVER_CERTIFICATE_LIFETIME_MS,
 };
 
-pub const MASTER_SCHEMA_VERSION: i64 = 4;
+pub const MASTER_SCHEMA_VERSION: i64 = 5;
 pub const MAX_QUEUED_OR_LEASED_STEPS: u64 = 256;
 pub const MAX_CONCURRENT_JOBS: u64 = 4;
+pub const MAX_CONVEYOR_NONTERMINAL_FEATURES: u64 = 100;
+pub const MAX_APPROVED_FEATURE_SPECIFICATION_BYTES: usize = 256 * 1024;
 
 const REASON_UNKNOWN_DEVICE: &str = "unknown_device";
 const REASON_REVOKED_DEVICE: &str = "revoked_device";
@@ -133,6 +137,38 @@ pub enum MasterError {
     DeviceCertificateNotFound,
     #[error("device registration does not declare one exact supported remote work capability")]
     InvalidRemoteWorkContract,
+    #[error("feature conveyor input is invalid: {0}")]
+    InvalidFeatureConveyorInput(String),
+    #[error("feature conveyor queue capacity has been reached")]
+    FeatureQueueFull,
+    #[error("feature conveyor queue revision is stale: expected {expected}, found {found}")]
+    StaleFeatureQueueRevision { expected: u64, found: u64 },
+    #[error("feature lifecycle revision is stale: expected {expected}, found {found}")]
+    StaleFeatureLifecycleRevision { expected: u64, found: u64 },
+    #[error("feature was not found")]
+    FeatureNotFound,
+    #[error("feature specification revision is immutable or already present")]
+    FeatureSpecificationImmutable,
+    #[error("repository grant revision is immutable or already present")]
+    RepositoryGrantImmutable,
+    #[error("repository grant is absent, revoked, expired, or does not match the approved specification")]
+    RepositoryGrantUnavailable,
+    #[error("the strict queue head is dependency-blocked")]
+    FeatureDependencyBlocked,
+    #[error("a feature already owns the singleton active lease")]
+    FeatureLeaseAlreadyActive,
+    #[error("the requested feature lifecycle transition is invalid")]
+    InvalidFeatureTransition,
+    #[error(
+        "feature cancellation retains the active lease and requires explicit safe abandonment"
+    )]
+    FeatureCancellationBlocksAdvancement,
+    #[error("verified healthy main evidence is required")]
+    VerifiedHealthyMainRequired,
+    #[error("feature migration backup failed: {0}")]
+    MigrationBackup(String),
+    #[error("feature migration failed and backup restoration also failed: migration={migration}; restore={restore}")]
+    MigrationAndRestoreFailed { migration: String, restore: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -335,9 +371,171 @@ pub struct AcceptedCancellation {
     pub status: StepStatus,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepositoryGrantKind {
+    Registration,
+    CloudDisclosure,
+    AutonomousPublication,
+}
+
+impl RepositoryGrantKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Registration => "registration",
+            Self::CloudDisclosure => "cloud_disclosure",
+            Self::AutonomousPublication => "autonomous_publication",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepositoryGrantRevision {
+    pub repository_id: Uuid,
+    pub kind: RepositoryGrantKind,
+    pub revision: u64,
+    pub scope_sha256: [u8; 32],
+    pub owner_approval_sha256: [u8; 32],
+    pub expires_at_ms: Option<u64>,
+    pub revoked: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureGrantRevisions {
+    pub registration: u64,
+    pub cloud_disclosure: u64,
+    pub autonomous_publication: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovedFeatureSpecification {
+    pub feature_id: Uuid,
+    pub revision: u64,
+    pub repository_id: Uuid,
+    pub manifest: Value,
+    pub manifest_sha256: [u8; 32],
+    pub design_sha256: [u8; 32],
+    pub brainstorming_sha256: [u8; 32],
+    pub owner_approval_sha256: [u8; 32],
+    pub grants: FeatureGrantRevisions,
+    pub provider_id: String,
+    pub model_id: String,
+    pub dependencies: Vec<Uuid>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureLifecycleStatus {
+    Queued,
+    Implementing,
+    Validating,
+    Reviewing,
+    Publishing,
+    VerifyingMain,
+    Succeeded,
+    Cancelled,
+    Abandoned,
+    Quarantined,
+}
+
+impl FeatureLifecycleStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Implementing => "implementing",
+            Self::Validating => "validating",
+            Self::Reviewing => "reviewing",
+            Self::Publishing => "publishing",
+            Self::VerifyingMain => "verifying_main",
+            Self::Succeeded => "succeeded",
+            Self::Cancelled => "cancelled",
+            Self::Abandoned => "abandoned",
+            Self::Quarantined => "quarantined",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self, MasterError> {
+        match value {
+            "queued" => Ok(Self::Queued),
+            "implementing" => Ok(Self::Implementing),
+            "validating" => Ok(Self::Validating),
+            "reviewing" => Ok(Self::Reviewing),
+            "publishing" => Ok(Self::Publishing),
+            "verifying_main" => Ok(Self::VerifyingMain),
+            "succeeded" => Ok(Self::Succeeded),
+            "cancelled" => Ok(Self::Cancelled),
+            "abandoned" => Ok(Self::Abandoned),
+            "quarantined" => Ok(Self::Quarantined),
+            other => Err(MasterError::InvalidStoredState(format!(
+                "unknown feature lifecycle status {other}"
+            ))),
+        }
+    }
+
+    fn is_active_execution(self) -> bool {
+        matches!(
+            self,
+            Self::Implementing
+                | Self::Validating
+                | Self::Reviewing
+                | Self::Publishing
+                | Self::VerifyingMain
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureTransitionEvidence {
+    pub repository_snapshot_sha256: [u8; 32],
+    pub accepted_evidence_sha256: [u8; 32],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VerifiedFeatureSuccess {
+    pub main_commit_sha256: [u8; 32],
+    pub post_merge_evidence_sha256: [u8; 32],
+    pub main_healthy: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureAbandonmentEvidence {
+    pub safe_reconciliation_sha256: [u8; 32],
+    pub merged: bool,
+    pub verified_healthy_main_sha256: Option<[u8; 32]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeatureSnapshot {
+    pub feature_id: Uuid,
+    pub specification_revision: u64,
+    pub status: FeatureLifecycleStatus,
+    pub lifecycle_revision: u64,
+    pub queue_position: u64,
+    pub active_lease_id: Option<Uuid>,
+    pub effect_possible: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FeatureClaim {
+    pub feature_id: Uuid,
+    pub specification_revision: u64,
+    pub lifecycle_revision: u64,
+    pub lease_id: Uuid,
+    pub provider_id: String,
+    pub model_id: String,
+    pub grants: FeatureGrantRevisions,
+}
+
 pub struct MasterKernel {
     connection: Connection,
     startup_reconciliation: StartupReconciliation,
+    feature_startup_quarantines: u64,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -356,6 +554,7 @@ pub struct MasterProcess {
     _owner_lock: File,
     data_dir: PathBuf,
     database_path: PathBuf,
+    migration_backup_path: Option<PathBuf>,
     kernel: MasterKernel,
 }
 
@@ -388,11 +587,28 @@ impl MasterProcess {
         owner_lock.flush()?;
 
         let database_path = data_dir.join("master.sqlite3");
-        let kernel = MasterKernel::open(&database_path)?;
+        let migration_backup_path = prepare_legacy_migration_backup(&database_path)?;
+        let kernel = match MasterKernel::open_after_verified_migration_backup(&database_path) {
+            Ok(kernel) => kernel,
+            Err(error) => {
+                if let Some(backup_path) = migration_backup_path.as_ref() {
+                    if let Err(restore_error) =
+                        restore_verified_migration_backup(&database_path, backup_path)
+                    {
+                        return Err(MasterError::MigrationAndRestoreFailed {
+                            migration: error.to_string(),
+                            restore: restore_error.to_string(),
+                        });
+                    }
+                }
+                return Err(error);
+            }
+        };
         Ok(Self {
             _owner_lock: owner_lock,
             data_dir,
             database_path,
+            migration_backup_path,
             kernel,
         })
     }
@@ -403,6 +619,10 @@ impl MasterProcess {
 
     pub fn database_path(&self) -> &Path {
         &self.database_path
+    }
+
+    pub fn migration_backup_path(&self) -> Option<&Path> {
+        self.migration_backup_path.as_deref()
     }
 
     pub fn kernel(&self) -> &MasterKernel {
@@ -416,6 +636,22 @@ impl MasterProcess {
 
 impl MasterKernel {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, MasterError> {
+        let path = path.as_ref();
+        if path.exists() {
+            let existing = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+            let version: i64 = existing.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+            if (1..MASTER_SCHEMA_VERSION).contains(&version) {
+                return Err(MasterError::MigrationBackup(
+                    "file-backed legacy master schemas must be opened through MasterProcess"
+                        .to_string(),
+                ));
+            }
+        }
+        let connection = Connection::open(path)?;
+        Self::initialize(connection)
+    }
+
+    fn open_after_verified_migration_backup(path: &Path) -> Result<Self, MasterError> {
         let connection = Connection::open(path)?;
         Self::initialize(connection)
     }
@@ -432,6 +668,7 @@ impl MasterKernel {
         let mut kernel = Self {
             connection,
             startup_reconciliation: StartupReconciliation::default(),
+            feature_startup_quarantines: 0,
         };
         kernel.migrate()?;
         kernel.connection.execute(
@@ -440,6 +677,8 @@ impl MasterKernel {
             [],
         )?;
         kernel.startup_reconciliation = kernel.reconcile_interrupted_state(current_time_ms()?)?;
+        kernel.feature_startup_quarantines =
+            kernel.reconcile_feature_conveyor_startup(current_time_ms()?)?;
         Ok(kernel)
     }
 
@@ -451,6 +690,10 @@ impl MasterKernel {
 
     pub fn startup_reconciliation(&self) -> StartupReconciliation {
         self.startup_reconciliation
+    }
+
+    pub fn feature_startup_quarantines(&self) -> u64 {
+        self.feature_startup_quarantines
     }
 
     pub fn emergency_paused(&self) -> Result<bool, MasterError> {
@@ -496,6 +739,816 @@ impl MasterKernel {
         }
         tx.commit()?;
         Ok(())
+    }
+
+    pub fn feature_queue_revision(&self) -> Result<u64, MasterError> {
+        let revision: i64 = self.connection.query_row(
+            "SELECT queue_revision FROM feature_conveyor_state WHERE singleton = 1",
+            [],
+            |row| row.get(0),
+        )?;
+        i64_to_u64(revision)
+    }
+
+    pub fn record_repository_grant_revision(
+        &mut self,
+        grant: &RepositoryGrantRevision,
+        now_ms: u64,
+    ) -> Result<(), MasterError> {
+        validate_repository_grant(grant)?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let inserted = tx.execute(
+            "INSERT INTO feature_repository_grants (
+               repository_id, grant_kind, revision, scope_sha256,
+               owner_approval_sha256, expires_at_ms, revoked, created_at_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                grant.repository_id.to_string(),
+                grant.kind.as_str(),
+                u64_to_i64(grant.revision)?,
+                grant.scope_sha256.as_slice(),
+                grant.owner_approval_sha256.as_slice(),
+                grant.expires_at_ms.map(u64_to_i64).transpose()?,
+                i64::from(grant.revoked),
+                u64_to_i64(now_ms)?,
+            ],
+        );
+        match inserted {
+            Ok(1) => {}
+            Ok(_) => {
+                return Err(MasterError::InvalidStoredState(
+                    "repository grant insert did not affect one row".to_string(),
+                ));
+            }
+            Err(error) if is_constraint_violation(&error) => {
+                return Err(MasterError::RepositoryGrantImmutable);
+            }
+            Err(error) => return Err(error.into()),
+        }
+        append_feature_audit_tx(
+            &tx,
+            "repository_grant_revision_recorded",
+            None,
+            now_ms,
+            serde_json::json!({
+                "grant_kind": grant.kind.as_str(),
+                "revision": grant.revision,
+                "revoked": grant.revoked,
+                "scope_digest_present": true,
+                "owner_approval_digest_present": true,
+                "side_effect_executed": false
+            }),
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn enqueue_approved_feature(
+        &mut self,
+        specification: &ApprovedFeatureSpecification,
+        expected_queue_revision: u64,
+        now_ms: u64,
+    ) -> Result<FeatureSnapshot, MasterError> {
+        let canonical_manifest = validate_approved_specification(specification)?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_queue_revision_tx(&tx, expected_queue_revision)?;
+        require_grants_tx(
+            &tx,
+            specification.repository_id,
+            specification.grants,
+            now_ms,
+        )?;
+        let nonterminal: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM feature_conveyor_features
+             WHERE status NOT IN ('succeeded', 'cancelled', 'abandoned')",
+            [],
+            |row| row.get(0),
+        )?;
+        if i64_to_u64(nonterminal)? >= MAX_CONVEYOR_NONTERMINAL_FEATURES {
+            return Err(MasterError::FeatureQueueFull);
+        }
+        for dependency_id in &specification.dependencies {
+            let exists: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM feature_conveyor_features WHERE feature_id = ?1)",
+                [dependency_id.to_string()],
+                |row| row.get(0),
+            )?;
+            if !exists {
+                return Err(MasterError::InvalidFeatureConveyorInput(
+                    "dependency does not identify an existing feature".to_string(),
+                ));
+            }
+        }
+        let position: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(queue_position), 0) + 1 FROM feature_conveyor_queue",
+            [],
+            |row| row.get(0),
+        )?;
+        let inserted = tx.execute(
+            "INSERT INTO feature_specification_revisions (
+               feature_id, revision, repository_id, canonical_manifest_json,
+               manifest_sha256, design_sha256, brainstorming_sha256,
+               owner_approval_sha256, registration_grant_revision,
+               cloud_disclosure_grant_revision, publication_grant_revision,
+               provider_id, model_id, approved_at_ms
+             ) VALUES (
+               ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14
+             )",
+            params![
+                specification.feature_id.to_string(),
+                u64_to_i64(specification.revision)?,
+                specification.repository_id.to_string(),
+                canonical_manifest,
+                specification.manifest_sha256.as_slice(),
+                specification.design_sha256.as_slice(),
+                specification.brainstorming_sha256.as_slice(),
+                specification.owner_approval_sha256.as_slice(),
+                u64_to_i64(specification.grants.registration)?,
+                u64_to_i64(specification.grants.cloud_disclosure)?,
+                u64_to_i64(specification.grants.autonomous_publication)?,
+                specification.provider_id,
+                specification.model_id,
+                u64_to_i64(now_ms)?,
+            ],
+        );
+        match inserted {
+            Ok(1) => {}
+            Err(error) if is_constraint_violation(&error) => {
+                return Err(MasterError::FeatureSpecificationImmutable);
+            }
+            Err(error) => return Err(error.into()),
+            Ok(_) => {
+                return Err(MasterError::InvalidStoredState(
+                    "feature specification insert did not affect one row".to_string(),
+                ));
+            }
+        }
+        tx.execute(
+            "INSERT INTO feature_conveyor_features (
+               feature_id, current_specification_revision, status,
+               lifecycle_revision, queue_position, effect_possible,
+               created_at_ms, updated_at_ms
+             ) VALUES (?1, ?2, 'queued', 1, ?3, 0, ?4, ?4)",
+            params![
+                specification.feature_id.to_string(),
+                u64_to_i64(specification.revision)?,
+                position,
+                u64_to_i64(now_ms)?,
+            ],
+        )?;
+        tx.execute(
+            "INSERT INTO feature_conveyor_queue (feature_id, queue_position)
+             VALUES (?1, ?2)",
+            params![specification.feature_id.to_string(), position],
+        )?;
+        for dependency_id in &specification.dependencies {
+            tx.execute(
+                "INSERT INTO feature_dependencies (feature_id, dependency_feature_id)
+                 VALUES (?1, ?2)",
+                params![
+                    specification.feature_id.to_string(),
+                    dependency_id.to_string()
+                ],
+            )?;
+        }
+        let next_queue_revision = increment_queue_revision_tx(&tx, expected_queue_revision)?;
+        append_feature_audit_tx(
+            &tx,
+            "feature_enqueued",
+            Some(specification.feature_id),
+            now_ms,
+            serde_json::json!({
+                "specification_revision": specification.revision,
+                "queue_revision": next_queue_revision,
+                "queue_position": position,
+                "dependency_count": specification.dependencies.len(),
+                "manifest_digest_present": true,
+                "design_digest_present": true,
+                "brainstorming_digest_present": true,
+                "owner_approval_digest_present": true,
+                "registration_grant_revision": specification.grants.registration,
+                "cloud_disclosure_grant_revision": specification.grants.cloud_disclosure,
+                "publication_grant_revision": specification.grants.autonomous_publication,
+                "provider_snapshot_present": true,
+                "side_effect_executed": false
+            }),
+        )?;
+        tx.commit()?;
+        self.feature_snapshot(specification.feature_id)
+    }
+
+    pub fn reorder_queued_features(
+        &mut self,
+        ordered_feature_ids: &[Uuid],
+        expected_queue_revision: u64,
+        now_ms: u64,
+    ) -> Result<u64, MasterError> {
+        if ordered_feature_ids.len() > MAX_CONVEYOR_NONTERMINAL_FEATURES as usize {
+            return Err(MasterError::InvalidFeatureConveyorInput(
+                "queue order exceeds the feature capacity".to_string(),
+            ));
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_queue_revision_tx(&tx, expected_queue_revision)?;
+        let mut statement = tx.prepare(
+            "SELECT q.feature_id FROM feature_conveyor_queue q
+             JOIN feature_conveyor_features f ON f.feature_id = q.feature_id
+             WHERE f.status = 'queued' ORDER BY q.queue_position ASC",
+        )?;
+        let current = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+        let requested = ordered_feature_ids
+            .iter()
+            .map(Uuid::to_string)
+            .collect::<Vec<_>>();
+        let mut current_sorted = current.clone();
+        let mut requested_sorted = requested.clone();
+        current_sorted.sort();
+        requested_sorted.sort();
+        if current_sorted != requested_sorted {
+            return Err(MasterError::InvalidFeatureConveyorInput(
+                "reorder must contain every queued feature exactly once".to_string(),
+            ));
+        }
+        let active_position: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(q.queue_position), 0) FROM feature_conveyor_queue q
+             JOIN feature_conveyor_features f ON f.feature_id = q.feature_id
+             WHERE f.status <> 'queued'",
+            [],
+            |row| row.get(0),
+        )?;
+        tx.execute(
+            "UPDATE feature_conveyor_queue
+             SET queue_position = queue_position + 1000000
+             WHERE feature_id IN (
+               SELECT feature_id FROM feature_conveyor_features WHERE status = 'queued'
+             )",
+            [],
+        )?;
+        tx.execute(
+            "UPDATE feature_conveyor_features
+             SET queue_position = queue_position + 1000000
+             WHERE status = 'queued'",
+            [],
+        )?;
+        for (offset, feature_id) in ordered_feature_ids.iter().enumerate() {
+            let position = active_position
+                .checked_add(i64::try_from(offset + 1).map_err(|_| MasterError::IntegerOutOfRange)?)
+                .ok_or(MasterError::IntegerOutOfRange)?;
+            tx.execute(
+                "UPDATE feature_conveyor_queue SET queue_position = ?1 WHERE feature_id = ?2",
+                params![position, feature_id.to_string()],
+            )?;
+            tx.execute(
+                "UPDATE feature_conveyor_features SET queue_position = ?1, updated_at_ms = ?2
+                 WHERE feature_id = ?3 AND status = 'queued'",
+                params![position, u64_to_i64(now_ms)?, feature_id.to_string()],
+            )?;
+        }
+        let next = increment_queue_revision_tx(&tx, expected_queue_revision)?;
+        append_feature_audit_tx(
+            &tx,
+            "feature_queue_reordered",
+            None,
+            now_ms,
+            serde_json::json!({
+                "queue_revision": next,
+                "queued_feature_count": ordered_feature_ids.len(),
+                "side_effect_executed": false
+            }),
+        )?;
+        tx.commit()?;
+        Ok(next)
+    }
+
+    pub fn claim_next_feature(
+        &mut self,
+        expected_queue_revision: u64,
+        now_ms: u64,
+    ) -> Result<FeatureClaim, MasterError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_queue_revision_tx(&tx, expected_queue_revision)?;
+        if emergency_paused_tx(&tx)? {
+            return Err(MasterError::EmergencyPaused);
+        }
+        let lease_exists: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM feature_active_lease WHERE singleton = 1)",
+            [],
+            |row| row.get(0),
+        )?;
+        if lease_exists {
+            return Err(MasterError::FeatureLeaseAlreadyActive);
+        }
+        let (feature_id, specification_revision): (String, i64) = tx
+            .query_row(
+                "SELECT f.feature_id, f.current_specification_revision
+                 FROM feature_conveyor_queue q
+                 JOIN feature_conveyor_features f ON f.feature_id = q.feature_id
+                 WHERE f.status = 'queued'
+                 ORDER BY q.queue_position ASC LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+            .ok_or(MasterError::FeatureNotFound)?;
+        let dependency_blocked: bool = tx.query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM feature_dependencies d
+               JOIN feature_conveyor_features dependency
+                 ON dependency.feature_id = d.dependency_feature_id
+               WHERE d.feature_id = ?1 AND dependency.status <> 'succeeded'
+             )",
+            [&feature_id],
+            |row| row.get(0),
+        )?;
+        if dependency_blocked {
+            return Err(MasterError::FeatureDependencyBlocked);
+        }
+        let (repository_id, registration, cloud_disclosure, publication, provider_id, model_id): (
+            String,
+            i64,
+            i64,
+            i64,
+            String,
+            String,
+        ) = tx.query_row(
+            "SELECT repository_id, registration_grant_revision,
+                    cloud_disclosure_grant_revision, publication_grant_revision,
+                    provider_id, model_id
+             FROM feature_specification_revisions
+             WHERE feature_id = ?1 AND revision = ?2",
+            params![feature_id, specification_revision],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )?;
+        let grants = FeatureGrantRevisions {
+            registration: i64_to_u64(registration)?,
+            cloud_disclosure: i64_to_u64(cloud_disclosure)?,
+            autonomous_publication: i64_to_u64(publication)?,
+        };
+        require_grants_tx(&tx, parse_uuid(&repository_id)?, grants, now_ms)?;
+        let feature_uuid = parse_uuid(&feature_id)?;
+        let lease_id = Uuid::new_v4();
+        tx.execute(
+            "INSERT INTO feature_active_lease (
+               singleton, feature_id, lease_id, claimed_at_ms
+             ) VALUES (1, ?1, ?2, ?3)",
+            params![feature_id, lease_id.to_string(), u64_to_i64(now_ms)?],
+        )?;
+        let changed = tx.execute(
+            "UPDATE feature_conveyor_features
+             SET status = 'implementing', lifecycle_revision = lifecycle_revision + 1,
+                 updated_at_ms = ?1
+             WHERE feature_id = ?2 AND status = 'queued'",
+            params![u64_to_i64(now_ms)?, feature_id],
+        )?;
+        if changed != 1 {
+            return Err(MasterError::InvalidFeatureTransition);
+        }
+        let lifecycle_revision = tx.query_row(
+            "SELECT lifecycle_revision FROM feature_conveyor_features WHERE feature_id = ?1",
+            [feature_uuid.to_string()],
+            |row| row.get::<_, i64>(0),
+        )?;
+        let next_queue_revision = increment_queue_revision_tx(&tx, expected_queue_revision)?;
+        append_feature_audit_tx(
+            &tx,
+            "feature_claimed",
+            Some(feature_uuid),
+            now_ms,
+            serde_json::json!({
+                "from_status": "queued",
+                "to_status": "implementing",
+                "lifecycle_revision": lifecycle_revision,
+                "queue_revision": next_queue_revision,
+                "lease_present": true,
+                "provider_snapshot_present": true,
+                "grant_snapshot_present": true,
+                "effect_possible": false,
+                "side_effect_executed": false
+            }),
+        )?;
+        tx.commit()?;
+        Ok(FeatureClaim {
+            feature_id: feature_uuid,
+            specification_revision: i64_to_u64(specification_revision)?,
+            lifecycle_revision: i64_to_u64(lifecycle_revision)?,
+            lease_id,
+            provider_id,
+            model_id,
+            grants,
+        })
+    }
+
+    pub fn advance_feature_lifecycle(
+        &mut self,
+        feature_id: Uuid,
+        expected_lifecycle_revision: u64,
+        next_status: FeatureLifecycleStatus,
+        evidence: FeatureTransitionEvidence,
+        now_ms: u64,
+    ) -> Result<FeatureSnapshot, MasterError> {
+        if evidence.repository_snapshot_sha256 == [0; 32]
+            || evidence.accepted_evidence_sha256 == [0; 32]
+        {
+            return Err(MasterError::InvalidFeatureConveyorInput(
+                "exact repository snapshot and accepted evidence digests are required".to_string(),
+            ));
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_active_lease_tx(&tx, feature_id)?;
+        if emergency_paused_tx(&tx)? {
+            return Err(MasterError::EmergencyPaused);
+        }
+        require_current_feature_grants_tx(&tx, feature_id, now_ms)?;
+        let current = feature_status_and_revision_tx(&tx, feature_id)?;
+        if current.1 != expected_lifecycle_revision {
+            return Err(MasterError::StaleFeatureLifecycleRevision {
+                expected: expected_lifecycle_revision,
+                found: current.1,
+            });
+        }
+        let valid = matches!(
+            (current.0, next_status),
+            (
+                FeatureLifecycleStatus::Implementing,
+                FeatureLifecycleStatus::Validating
+            ) | (
+                FeatureLifecycleStatus::Validating,
+                FeatureLifecycleStatus::Reviewing
+            ) | (
+                FeatureLifecycleStatus::Reviewing,
+                FeatureLifecycleStatus::Publishing
+            ) | (
+                FeatureLifecycleStatus::Publishing,
+                FeatureLifecycleStatus::VerifyingMain
+            )
+        );
+        if !valid {
+            return Err(MasterError::InvalidFeatureTransition);
+        }
+        let changed = tx.execute(
+            "UPDATE feature_conveyor_features
+             SET status = ?1, lifecycle_revision = lifecycle_revision + 1,
+                 effect_possible = ?2, updated_at_ms = ?3
+             WHERE feature_id = ?4 AND status = ?5 AND lifecycle_revision = ?6",
+            params![
+                next_status.as_str(),
+                i64::from(matches!(
+                    next_status,
+                    FeatureLifecycleStatus::Publishing | FeatureLifecycleStatus::VerifyingMain
+                )),
+                u64_to_i64(now_ms)?,
+                feature_id.to_string(),
+                current.0.as_str(),
+                u64_to_i64(expected_lifecycle_revision)?,
+            ],
+        )?;
+        if changed != 1 {
+            return Err(MasterError::InvalidFeatureTransition);
+        }
+        tx.execute(
+            "INSERT INTO feature_transition_evidence (
+               feature_id, lifecycle_revision, from_status, to_status,
+               repository_snapshot_sha256, accepted_evidence_sha256, recorded_at_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                feature_id.to_string(),
+                u64_to_i64(expected_lifecycle_revision + 1)?,
+                current.0.as_str(),
+                next_status.as_str(),
+                evidence.repository_snapshot_sha256.as_slice(),
+                evidence.accepted_evidence_sha256.as_slice(),
+                u64_to_i64(now_ms)?,
+            ],
+        )?;
+        append_feature_audit_tx(
+            &tx,
+            "feature_lifecycle_advanced",
+            Some(feature_id),
+            now_ms,
+            serde_json::json!({
+                "from_status": current.0.as_str(),
+                "to_status": next_status.as_str(),
+                "lifecycle_revision": expected_lifecycle_revision + 1,
+                "repository_snapshot_digest_present":
+                    true,
+                "accepted_evidence_digest_present":
+                    true,
+                "effect_possible": matches!(
+                    next_status,
+                    FeatureLifecycleStatus::Publishing
+                        | FeatureLifecycleStatus::VerifyingMain
+                ),
+                "side_effect_executed": false
+            }),
+        )?;
+        tx.commit()?;
+        self.feature_snapshot(feature_id)
+    }
+
+    pub fn cancel_active_feature(
+        &mut self,
+        feature_id: Uuid,
+        expected_lifecycle_revision: u64,
+        now_ms: u64,
+    ) -> Result<FeatureSnapshot, MasterError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_active_lease_tx(&tx, feature_id)?;
+        let (status, revision) = feature_status_and_revision_tx(&tx, feature_id)?;
+        if revision != expected_lifecycle_revision {
+            return Err(MasterError::StaleFeatureLifecycleRevision {
+                expected: expected_lifecycle_revision,
+                found: revision,
+            });
+        }
+        if !status.is_active_execution() {
+            return Err(MasterError::InvalidFeatureTransition);
+        }
+        tx.execute(
+            "UPDATE feature_conveyor_features
+             SET status = 'cancelled', lifecycle_revision = lifecycle_revision + 1,
+                 effect_possible = 1, updated_at_ms = ?1
+             WHERE feature_id = ?2",
+            params![u64_to_i64(now_ms)?, feature_id.to_string()],
+        )?;
+        append_feature_audit_tx(
+            &tx,
+            "feature_cancelled",
+            Some(feature_id),
+            now_ms,
+            serde_json::json!({
+                "from_status": status.as_str(),
+                "to_status": "cancelled",
+                "lifecycle_revision": revision + 1,
+                "lease_retained": true,
+                "advancement_authorized": false,
+                "effect_possible": true,
+                "side_effect_executed": false
+            }),
+        )?;
+        tx.commit()?;
+        self.feature_snapshot(feature_id)
+    }
+
+    pub fn mark_feature_succeeded(
+        &mut self,
+        feature_id: Uuid,
+        expected_lifecycle_revision: u64,
+        expected_queue_revision: u64,
+        success: VerifiedFeatureSuccess,
+        now_ms: u64,
+    ) -> Result<FeatureSnapshot, MasterError> {
+        if !success.main_healthy
+            || success.main_commit_sha256 == [0; 32]
+            || success.post_merge_evidence_sha256 == [0; 32]
+        {
+            return Err(MasterError::VerifiedHealthyMainRequired);
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_queue_revision_tx(&tx, expected_queue_revision)?;
+        require_active_lease_tx(&tx, feature_id)?;
+        require_current_feature_grants_tx(&tx, feature_id, now_ms)?;
+        let (status, revision) = feature_status_and_revision_tx(&tx, feature_id)?;
+        if revision != expected_lifecycle_revision {
+            return Err(MasterError::StaleFeatureLifecycleRevision {
+                expected: expected_lifecycle_revision,
+                found: revision,
+            });
+        }
+        if status != FeatureLifecycleStatus::VerifyingMain {
+            return Err(MasterError::InvalidFeatureTransition);
+        }
+        tx.execute(
+            "UPDATE feature_conveyor_features
+             SET status = 'succeeded', lifecycle_revision = lifecycle_revision + 1,
+                 effect_possible = 0, updated_at_ms = ?1
+             WHERE feature_id = ?2",
+            params![u64_to_i64(now_ms)?, feature_id.to_string()],
+        )?;
+        tx.execute(
+            "INSERT INTO feature_transition_evidence (
+               feature_id, lifecycle_revision, from_status, to_status,
+               verified_main_commit_sha256, post_merge_evidence_sha256, recorded_at_ms
+             ) VALUES (?1, ?2, 'verifying_main', 'succeeded', ?3, ?4, ?5)",
+            params![
+                feature_id.to_string(),
+                u64_to_i64(revision + 1)?,
+                success.main_commit_sha256.as_slice(),
+                success.post_merge_evidence_sha256.as_slice(),
+                u64_to_i64(now_ms)?,
+            ],
+        )?;
+        tx.execute(
+            "DELETE FROM feature_conveyor_queue WHERE feature_id = ?1",
+            [feature_id.to_string()],
+        )?;
+        tx.execute(
+            "DELETE FROM feature_active_lease WHERE singleton = 1 AND feature_id = ?1",
+            [feature_id.to_string()],
+        )?;
+        let next_queue_revision = increment_queue_revision_tx(&tx, expected_queue_revision)?;
+        append_feature_audit_tx(
+            &tx,
+            "feature_succeeded",
+            Some(feature_id),
+            now_ms,
+            serde_json::json!({
+                "from_status": "verifying_main",
+                "to_status": "succeeded",
+                "lifecycle_revision": revision + 1,
+                "queue_revision": next_queue_revision,
+                "verified_main_commit_digest_present": true,
+                "post_merge_evidence_digest_present": true,
+                "main_healthy": true,
+                "lease_released": true,
+                "effect_possible": false,
+                "side_effect_executed": false
+            }),
+        )?;
+        tx.commit()?;
+        self.feature_snapshot(feature_id)
+    }
+
+    pub fn abandon_and_advance(
+        &mut self,
+        feature_id: Uuid,
+        expected_lifecycle_revision: u64,
+        expected_queue_revision: u64,
+        evidence: FeatureAbandonmentEvidence,
+        now_ms: u64,
+    ) -> Result<FeatureSnapshot, MasterError> {
+        if evidence.safe_reconciliation_sha256 == [0; 32] {
+            return Err(MasterError::InvalidFeatureConveyorInput(
+                "safe reconciliation proof is required".to_string(),
+            ));
+        }
+        if evidence
+            .verified_healthy_main_sha256
+            .is_some_and(|digest| digest == [0; 32])
+        {
+            return Err(MasterError::InvalidFeatureConveyorInput(
+                "present healthy-main evidence must have an exact nonzero digest".to_string(),
+            ));
+        }
+        if evidence.merged
+            && evidence
+                .verified_healthy_main_sha256
+                .filter(|digest| *digest != [0; 32])
+                .is_none()
+        {
+            return Err(MasterError::VerifiedHealthyMainRequired);
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_queue_revision_tx(&tx, expected_queue_revision)?;
+        require_active_lease_tx(&tx, feature_id)?;
+        let (status, revision) = feature_status_and_revision_tx(&tx, feature_id)?;
+        if revision != expected_lifecycle_revision {
+            return Err(MasterError::StaleFeatureLifecycleRevision {
+                expected: expected_lifecycle_revision,
+                found: revision,
+            });
+        }
+        if !matches!(
+            status,
+            FeatureLifecycleStatus::Cancelled | FeatureLifecycleStatus::Quarantined
+        ) {
+            return Err(MasterError::InvalidFeatureTransition);
+        }
+        tx.execute(
+            "UPDATE feature_conveyor_features
+             SET status = 'abandoned', lifecycle_revision = lifecycle_revision + 1,
+                 effect_possible = 0, updated_at_ms = ?1
+             WHERE feature_id = ?2",
+            params![u64_to_i64(now_ms)?, feature_id.to_string()],
+        )?;
+        tx.execute(
+            "INSERT INTO feature_transition_evidence (
+               feature_id, lifecycle_revision, from_status, to_status,
+               safe_reconciliation_sha256, verified_healthy_main_sha256, recorded_at_ms
+             ) VALUES (?1, ?2, ?3, 'abandoned', ?4, ?5, ?6)",
+            params![
+                feature_id.to_string(),
+                u64_to_i64(revision + 1)?,
+                status.as_str(),
+                evidence.safe_reconciliation_sha256.as_slice(),
+                evidence
+                    .verified_healthy_main_sha256
+                    .as_ref()
+                    .map(|digest| digest.as_slice()),
+                u64_to_i64(now_ms)?,
+            ],
+        )?;
+        tx.execute(
+            "DELETE FROM feature_conveyor_queue WHERE feature_id = ?1",
+            [feature_id.to_string()],
+        )?;
+        tx.execute(
+            "DELETE FROM feature_active_lease WHERE singleton = 1 AND feature_id = ?1",
+            [feature_id.to_string()],
+        )?;
+        let next_queue_revision = increment_queue_revision_tx(&tx, expected_queue_revision)?;
+        append_feature_audit_tx(
+            &tx,
+            "feature_abandoned",
+            Some(feature_id),
+            now_ms,
+            serde_json::json!({
+                "from_status": status.as_str(),
+                "to_status": "abandoned",
+                "lifecycle_revision": revision + 1,
+                "queue_revision": next_queue_revision,
+                "safe_reconciliation_digest_present": true,
+                "merged": evidence.merged,
+                "verified_healthy_main_digest_present":
+                    evidence.verified_healthy_main_sha256.is_some(),
+                "lease_released": true,
+                "effect_possible": false,
+                "side_effect_executed": false
+            }),
+        )?;
+        tx.commit()?;
+        self.feature_snapshot(feature_id)
+    }
+
+    pub fn feature_snapshot(&self, feature_id: Uuid) -> Result<FeatureSnapshot, MasterError> {
+        self.connection
+            .query_row(
+                "SELECT f.current_specification_revision, f.status,
+                        f.lifecycle_revision, f.queue_position, f.effect_possible,
+                        l.lease_id
+                 FROM feature_conveyor_features f
+                 LEFT JOIN feature_active_lease l ON l.feature_id = f.feature_id
+                 WHERE f.feature_id = ?1",
+                [feature_id.to_string()],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                    ))
+                },
+            )
+            .optional()?
+            .map(
+                |(
+                    specification_revision,
+                    status,
+                    lifecycle_revision,
+                    queue_position,
+                    effect_possible,
+                    lease_id,
+                )| {
+                    Ok(FeatureSnapshot {
+                        feature_id,
+                        specification_revision: i64_to_u64(specification_revision)?,
+                        status: FeatureLifecycleStatus::parse(&status)?,
+                        lifecycle_revision: i64_to_u64(lifecycle_revision)?,
+                        queue_position: i64_to_u64(queue_position)?,
+                        active_lease_id: lease_id.map(|value| parse_uuid(&value)).transpose()?,
+                        effect_possible: match effect_possible {
+                            0 => false,
+                            1 => true,
+                            _ => {
+                                return Err(MasterError::InvalidStoredState(
+                                    "feature effect_possible is not boolean".to_string(),
+                                ));
+                            }
+                        },
+                    })
+                },
+            )
+            .transpose()?
+            .ok_or(MasterError::FeatureNotFound)
     }
 
     pub fn health_snapshot(&self) -> Result<MasterHealthSnapshot, MasterError> {
@@ -1727,7 +2780,6 @@ impl MasterKernel {
                  PRAGMA user_version = 4;\n\
                  COMMIT;",
             )?;
-            return Ok(());
         }
         if version == 1 {
             self.connection.execute_batch(
@@ -1812,8 +2864,184 @@ impl MasterKernel {
                  PRAGMA user_version = 4;\n\
                  COMMIT;",
             )?;
-            return Ok(());
         }
+        let version = self.schema_version()?;
+        if version == 4 {
+            self.connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 CREATE TABLE feature_conveyor_state (
+                   singleton INTEGER PRIMARY KEY NOT NULL CHECK (singleton = 1),
+                   queue_revision INTEGER NOT NULL CHECK (queue_revision >= 0)
+                 );
+                 INSERT INTO feature_conveyor_state (singleton, queue_revision)
+                   VALUES (1, 0);
+                 CREATE TABLE feature_repository_grants (
+                   repository_id TEXT NOT NULL,
+                   grant_kind TEXT NOT NULL CHECK (
+                     grant_kind IN (
+                       'registration', 'cloud_disclosure', 'autonomous_publication'
+                     )
+                   ),
+                   revision INTEGER NOT NULL CHECK (revision > 0),
+                   scope_sha256 BLOB NOT NULL CHECK (length(scope_sha256) = 32),
+                   owner_approval_sha256 BLOB NOT NULL
+                     CHECK (length(owner_approval_sha256) = 32),
+                   expires_at_ms INTEGER,
+                   revoked INTEGER NOT NULL CHECK (revoked IN (0, 1)),
+                   created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+                   PRIMARY KEY (repository_id, grant_kind, revision)
+                 );
+                 CREATE TABLE feature_specification_revisions (
+                   feature_id TEXT NOT NULL,
+                   revision INTEGER NOT NULL CHECK (revision > 0),
+                   repository_id TEXT NOT NULL,
+                   canonical_manifest_json TEXT NOT NULL
+                     CHECK (
+                       length(canonical_manifest_json) > 1
+                       AND length(CAST(canonical_manifest_json AS BLOB)) <= 262144
+                     ),
+                   manifest_sha256 BLOB NOT NULL CHECK (length(manifest_sha256) = 32),
+                   design_sha256 BLOB NOT NULL CHECK (length(design_sha256) = 32),
+                   brainstorming_sha256 BLOB NOT NULL
+                     CHECK (length(brainstorming_sha256) = 32),
+                   owner_approval_sha256 BLOB NOT NULL
+                     CHECK (length(owner_approval_sha256) = 32),
+                   registration_grant_revision INTEGER NOT NULL
+                     CHECK (registration_grant_revision > 0),
+                   cloud_disclosure_grant_revision INTEGER NOT NULL
+                     CHECK (cloud_disclosure_grant_revision > 0),
+                   publication_grant_revision INTEGER NOT NULL
+                     CHECK (publication_grant_revision > 0),
+                   provider_id TEXT NOT NULL CHECK (
+                     length(provider_id) BETWEEN 1 AND 128
+                   ),
+                   model_id TEXT NOT NULL CHECK (
+                     length(model_id) BETWEEN 1 AND 128
+                   ),
+                   approved_at_ms INTEGER NOT NULL CHECK (approved_at_ms >= 0),
+                   PRIMARY KEY (feature_id, revision)
+                 );
+                 CREATE TABLE feature_conveyor_features (
+                   feature_id TEXT PRIMARY KEY NOT NULL,
+                   current_specification_revision INTEGER NOT NULL
+                     CHECK (current_specification_revision > 0),
+                   status TEXT NOT NULL CHECK (
+                     status IN (
+                       'queued', 'implementing', 'validating', 'reviewing',
+                       'publishing', 'verifying_main', 'succeeded', 'cancelled',
+                       'abandoned', 'quarantined'
+                     )
+                   ),
+                   lifecycle_revision INTEGER NOT NULL CHECK (lifecycle_revision > 0),
+                   queue_position INTEGER NOT NULL CHECK (queue_position > 0),
+                   effect_possible INTEGER NOT NULL CHECK (effect_possible IN (0, 1)),
+                   created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
+                   updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= created_at_ms),
+                   FOREIGN KEY (feature_id, current_specification_revision)
+                     REFERENCES feature_specification_revisions(feature_id, revision)
+                 );
+                 CREATE TABLE feature_dependencies (
+                   feature_id TEXT NOT NULL REFERENCES feature_conveyor_features(feature_id),
+                   dependency_feature_id TEXT NOT NULL
+                     REFERENCES feature_conveyor_features(feature_id),
+                   PRIMARY KEY (feature_id, dependency_feature_id),
+                   CHECK (feature_id <> dependency_feature_id)
+                 );
+                 CREATE TABLE feature_conveyor_queue (
+                   feature_id TEXT PRIMARY KEY NOT NULL
+                     REFERENCES feature_conveyor_features(feature_id),
+                   queue_position INTEGER NOT NULL UNIQUE CHECK (queue_position > 0)
+                 );
+                 CREATE TABLE feature_active_lease (
+                   singleton INTEGER PRIMARY KEY NOT NULL CHECK (singleton = 1),
+                   feature_id TEXT NOT NULL UNIQUE
+                     REFERENCES feature_conveyor_features(feature_id),
+                   lease_id TEXT NOT NULL UNIQUE,
+                   claimed_at_ms INTEGER NOT NULL CHECK (claimed_at_ms >= 0)
+                 );
+                 CREATE TABLE feature_transition_evidence (
+                   feature_id TEXT NOT NULL
+                     REFERENCES feature_conveyor_features(feature_id),
+                   lifecycle_revision INTEGER NOT NULL CHECK (lifecycle_revision > 0),
+                   from_status TEXT NOT NULL,
+                   to_status TEXT NOT NULL,
+                   repository_snapshot_sha256 BLOB
+                     CHECK (
+                       repository_snapshot_sha256 IS NULL
+                       OR length(repository_snapshot_sha256) = 32
+                     ),
+                   accepted_evidence_sha256 BLOB
+                     CHECK (
+                       accepted_evidence_sha256 IS NULL
+                       OR length(accepted_evidence_sha256) = 32
+                     ),
+                   verified_main_commit_sha256 BLOB
+                     CHECK (
+                       verified_main_commit_sha256 IS NULL
+                       OR length(verified_main_commit_sha256) = 32
+                     ),
+                   post_merge_evidence_sha256 BLOB
+                     CHECK (
+                       post_merge_evidence_sha256 IS NULL
+                       OR length(post_merge_evidence_sha256) = 32
+                     ),
+                   safe_reconciliation_sha256 BLOB
+                     CHECK (
+                       safe_reconciliation_sha256 IS NULL
+                       OR length(safe_reconciliation_sha256) = 32
+                     ),
+                   verified_healthy_main_sha256 BLOB
+                     CHECK (
+                       verified_healthy_main_sha256 IS NULL
+                       OR length(verified_healthy_main_sha256) = 32
+                     ),
+                   recorded_at_ms INTEGER NOT NULL CHECK (recorded_at_ms >= 0),
+                   PRIMARY KEY (feature_id, lifecycle_revision)
+                 );
+                 CREATE TABLE feature_conveyor_audit (
+                   audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   event_kind TEXT NOT NULL CHECK (
+                     length(event_kind) BETWEEN 1 AND 96
+                   ),
+                   feature_id TEXT,
+                   occurred_at_ms INTEGER NOT NULL CHECK (occurred_at_ms >= 0),
+                   redacted_metadata_json TEXT NOT NULL CHECK (
+                     length(CAST(redacted_metadata_json AS BLOB)) <= 8192
+                   )
+                 );
+                 CREATE TRIGGER feature_specification_revisions_no_update
+                   BEFORE UPDATE ON feature_specification_revisions
+                   BEGIN SELECT RAISE(ABORT, 'immutable feature specification'); END;
+                 CREATE TRIGGER feature_specification_revisions_no_delete
+                   BEFORE DELETE ON feature_specification_revisions
+                   BEGIN SELECT RAISE(ABORT, 'immutable feature specification'); END;
+                 CREATE TRIGGER feature_repository_grants_no_update
+                   BEFORE UPDATE ON feature_repository_grants
+                   BEGIN SELECT RAISE(ABORT, 'immutable repository grant'); END;
+                 CREATE TRIGGER feature_repository_grants_no_delete
+                   BEFORE DELETE ON feature_repository_grants
+                   BEGIN SELECT RAISE(ABORT, 'immutable repository grant'); END;
+                 CREATE TRIGGER feature_conveyor_audit_no_update
+                   BEFORE UPDATE ON feature_conveyor_audit
+                   BEGIN SELECT RAISE(ABORT, 'append-only feature audit'); END;
+                 CREATE TRIGGER feature_conveyor_audit_no_delete
+                   BEFORE DELETE ON feature_conveyor_audit
+                   BEGIN SELECT RAISE(ABORT, 'append-only feature audit'); END;
+                 CREATE TRIGGER feature_transition_evidence_no_update
+                   BEFORE UPDATE ON feature_transition_evidence
+                   BEGIN SELECT RAISE(ABORT, 'immutable transition evidence'); END;
+                 CREATE TRIGGER feature_transition_evidence_no_delete
+                   BEFORE DELETE ON feature_transition_evidence
+                   BEGIN SELECT RAISE(ABORT, 'immutable transition evidence'); END;
+                 CREATE INDEX feature_conveyor_features_status_idx
+                   ON feature_conveyor_features(status, queue_position);
+                 CREATE INDEX feature_conveyor_audit_feature_idx
+                   ON feature_conveyor_audit(feature_id, audit_id);
+                 PRAGMA user_version = 5;
+                 COMMIT;",
+            )?;
+        }
+        let version = self.schema_version()?;
         if version != MASTER_SCHEMA_VERSION {
             return Err(MasterError::UnsupportedSchemaVersion {
                 expected: MASTER_SCHEMA_VERSION,
@@ -1821,6 +3049,66 @@ impl MasterKernel {
             });
         }
         Ok(())
+    }
+
+    fn reconcile_feature_conveyor_startup(&mut self, now_ms: u64) -> Result<u64, MasterError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let active = tx
+            .query_row(
+                "SELECT f.feature_id, f.status, f.lifecycle_revision
+                 FROM feature_active_lease l
+                 JOIN feature_conveyor_features f ON f.feature_id = l.feature_id
+                 WHERE l.singleton = 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let mut quarantined = 0;
+        if let Some((feature_id, status, revision)) = active {
+            let status = FeatureLifecycleStatus::parse(&status)?;
+            if status.is_active_execution() {
+                let changed = tx.execute(
+                    "UPDATE feature_conveyor_features
+                     SET status = 'quarantined',
+                         lifecycle_revision = lifecycle_revision + 1,
+                         effect_possible = 1, updated_at_ms = ?1
+                     WHERE feature_id = ?2 AND status = ?3
+                       AND lifecycle_revision = ?4",
+                    params![u64_to_i64(now_ms)?, feature_id, status.as_str(), revision],
+                )?;
+                if changed != 1 {
+                    return Err(MasterError::InvalidStoredState(
+                        "active feature changed during startup quarantine".to_string(),
+                    ));
+                }
+                append_feature_audit_tx(
+                    &tx,
+                    "feature_startup_quarantined",
+                    Some(parse_uuid(&feature_id)?),
+                    now_ms,
+                    serde_json::json!({
+                        "from_status": status.as_str(),
+                        "to_status": "quarantined",
+                        "lifecycle_revision": i64_to_u64(revision)? + 1,
+                        "lease_retained": true,
+                        "automatic_retry_authorized": false,
+                        "effect_possible": true,
+                        "side_effect_executed": false
+                    }),
+                )?;
+                quarantined = 1;
+            }
+        }
+        tx.commit()?;
+        Ok(quarantined)
     }
 
     fn reconcile_interrupted_state(
@@ -2710,9 +3998,626 @@ fn is_constraint_violation(error: &rusqlite::Error) -> bool {
     )
 }
 
+fn validate_repository_grant(grant: &RepositoryGrantRevision) -> Result<(), MasterError> {
+    if grant.repository_id.is_nil()
+        || grant.revision == 0
+        || grant.scope_sha256 == [0; 32]
+        || grant.owner_approval_sha256 == [0; 32]
+    {
+        return Err(MasterError::InvalidFeatureConveyorInput(
+            "grant identity, revision, scope digest, and owner approval digest are required"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_approved_specification(
+    specification: &ApprovedFeatureSpecification,
+) -> Result<String, MasterError> {
+    if specification.feature_id.is_nil()
+        || specification.repository_id.is_nil()
+        || specification.revision == 0
+        || specification.manifest_sha256 == [0; 32]
+        || specification.design_sha256 == [0; 32]
+        || specification.brainstorming_sha256 == [0; 32]
+        || specification.owner_approval_sha256 == [0; 32]
+        || specification.grants.registration == 0
+        || specification.grants.cloud_disclosure == 0
+        || specification.grants.autonomous_publication == 0
+    {
+        return Err(MasterError::InvalidFeatureConveyorInput(
+            "approved specification identity, revisions, and exact digests are required"
+                .to_string(),
+        ));
+    }
+    if !specification.manifest.is_object() {
+        return Err(MasterError::InvalidFeatureConveyorInput(
+            "approved specification manifest must be a JSON object".to_string(),
+        ));
+    }
+    validate_bounded_feature_identifier(&specification.provider_id, "provider")?;
+    validate_bounded_feature_identifier(&specification.model_id, "model")?;
+    if specification.dependencies.len() > MAX_CONVEYOR_NONTERMINAL_FEATURES as usize {
+        return Err(MasterError::InvalidFeatureConveyorInput(
+            "dependency count exceeds queue capacity".to_string(),
+        ));
+    }
+    let mut dependencies = specification.dependencies.clone();
+    dependencies.sort();
+    dependencies.dedup();
+    if dependencies.len() != specification.dependencies.len()
+        || dependencies
+            .iter()
+            .any(|dependency| dependency.is_nil() || *dependency == specification.feature_id)
+    {
+        return Err(MasterError::InvalidFeatureConveyorInput(
+            "dependencies must be unique, non-nil, and cannot reference the feature itself"
+                .to_string(),
+        ));
+    }
+    let canonical = canonical_json(&specification.manifest)?;
+    if canonical.len() > MAX_APPROVED_FEATURE_SPECIFICATION_BYTES {
+        return Err(MasterError::InvalidFeatureConveyorInput(
+            "approved specification exceeds the fixed review envelope".to_string(),
+        ));
+    }
+    let computed: [u8; 32] = Sha256::digest(canonical.as_bytes()).into();
+    if computed != specification.manifest_sha256 {
+        return Err(MasterError::InvalidFeatureConveyorInput(
+            "manifest digest does not match canonical JSON".to_string(),
+        ));
+    }
+    Ok(canonical)
+}
+
+fn validate_bounded_feature_identifier(value: &str, label: &str) -> Result<(), MasterError> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic() && byte != b'\\' && byte != b'"')
+    {
+        return Err(MasterError::InvalidFeatureConveyorInput(format!(
+            "{label} identity is not a bounded visible identifier"
+        )));
+    }
+    Ok(())
+}
+
+fn canonical_json(value: &Value) -> Result<String, MasterError> {
+    fn write_value(value: &Value, output: &mut String) -> Result<(), MasterError> {
+        match value {
+            Value::Null => output.push_str("null"),
+            Value::Bool(value) => output.push_str(if *value { "true" } else { "false" }),
+            Value::Number(value) => output.push_str(&value.to_string()),
+            Value::String(value) => output.push_str(&serde_json::to_string(value)?),
+            Value::Array(values) => {
+                output.push('[');
+                for (index, value) in values.iter().enumerate() {
+                    if index != 0 {
+                        output.push(',');
+                    }
+                    write_value(value, output)?;
+                }
+                output.push(']');
+            }
+            Value::Object(values) => {
+                output.push('{');
+                let mut keys = values.keys().collect::<Vec<_>>();
+                keys.sort();
+                for (index, key) in keys.into_iter().enumerate() {
+                    if index != 0 {
+                        output.push(',');
+                    }
+                    output.push_str(&serde_json::to_string(key)?);
+                    output.push(':');
+                    write_value(&values[key], output)?;
+                }
+                output.push('}');
+            }
+        }
+        Ok(())
+    }
+    let mut output = String::new();
+    write_value(value, &mut output)?;
+    Ok(output)
+}
+
+fn require_queue_revision_tx(
+    tx: &Transaction<'_>,
+    expected_queue_revision: u64,
+) -> Result<(), MasterError> {
+    let found: i64 = tx.query_row(
+        "SELECT queue_revision FROM feature_conveyor_state WHERE singleton = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    let found = i64_to_u64(found)?;
+    if found != expected_queue_revision {
+        return Err(MasterError::StaleFeatureQueueRevision {
+            expected: expected_queue_revision,
+            found,
+        });
+    }
+    Ok(())
+}
+
+fn increment_queue_revision_tx(
+    tx: &Transaction<'_>,
+    expected_queue_revision: u64,
+) -> Result<u64, MasterError> {
+    let next = expected_queue_revision
+        .checked_add(1)
+        .ok_or(MasterError::IntegerOutOfRange)?;
+    let changed = tx.execute(
+        "UPDATE feature_conveyor_state SET queue_revision = ?1
+         WHERE singleton = 1 AND queue_revision = ?2",
+        params![u64_to_i64(next)?, u64_to_i64(expected_queue_revision)?],
+    )?;
+    if changed != 1 {
+        let found: i64 = tx.query_row(
+            "SELECT queue_revision FROM feature_conveyor_state WHERE singleton = 1",
+            [],
+            |row| row.get(0),
+        )?;
+        return Err(MasterError::StaleFeatureQueueRevision {
+            expected: expected_queue_revision,
+            found: i64_to_u64(found)?,
+        });
+    }
+    Ok(next)
+}
+
+fn require_grants_tx(
+    tx: &Transaction<'_>,
+    repository_id: Uuid,
+    grants: FeatureGrantRevisions,
+    now_ms: u64,
+) -> Result<(), MasterError> {
+    for (kind, revision) in [
+        (RepositoryGrantKind::Registration, grants.registration),
+        (
+            RepositoryGrantKind::CloudDisclosure,
+            grants.cloud_disclosure,
+        ),
+        (
+            RepositoryGrantKind::AutonomousPublication,
+            grants.autonomous_publication,
+        ),
+    ] {
+        let row = tx
+            .query_row(
+                "SELECT revision, expires_at_ms, revoked
+                 FROM feature_repository_grants
+                 WHERE repository_id = ?1 AND grant_kind = ?2
+                 ORDER BY revision DESC LIMIT 1",
+                params![repository_id.to_string(), kind.as_str()],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, Option<i64>>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((current_revision, expires_at_ms, revoked)) = row else {
+            return Err(MasterError::RepositoryGrantUnavailable);
+        };
+        if i64_to_u64(current_revision)? != revision
+            || revoked != 0
+            || expires_at_ms
+                .map(i64_to_u64)
+                .transpose()?
+                .is_some_and(|expiry| expiry <= now_ms)
+        {
+            return Err(MasterError::RepositoryGrantUnavailable);
+        }
+    }
+    Ok(())
+}
+
+fn require_current_feature_grants_tx(
+    tx: &Transaction<'_>,
+    feature_id: Uuid,
+    now_ms: u64,
+) -> Result<(), MasterError> {
+    let (repository_id, registration, cloud_disclosure, publication): (String, i64, i64, i64) = tx
+        .query_row(
+            "SELECT s.repository_id, s.registration_grant_revision,
+                    s.cloud_disclosure_grant_revision, s.publication_grant_revision
+             FROM feature_conveyor_features f
+             JOIN feature_specification_revisions s
+               ON s.feature_id = f.feature_id
+              AND s.revision = f.current_specification_revision
+             WHERE f.feature_id = ?1",
+            [feature_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()?
+        .ok_or(MasterError::FeatureNotFound)?;
+    require_grants_tx(
+        tx,
+        parse_uuid(&repository_id)?,
+        FeatureGrantRevisions {
+            registration: i64_to_u64(registration)?,
+            cloud_disclosure: i64_to_u64(cloud_disclosure)?,
+            autonomous_publication: i64_to_u64(publication)?,
+        },
+        now_ms,
+    )
+}
+
+fn feature_status_and_revision_tx(
+    tx: &Transaction<'_>,
+    feature_id: Uuid,
+) -> Result<(FeatureLifecycleStatus, u64), MasterError> {
+    tx.query_row(
+        "SELECT status, lifecycle_revision FROM feature_conveyor_features
+         WHERE feature_id = ?1",
+        [feature_id.to_string()],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+    )
+    .optional()?
+    .map(|(status, revision)| {
+        Ok::<(FeatureLifecycleStatus, u64), MasterError>((
+            FeatureLifecycleStatus::parse(&status)?,
+            i64_to_u64(revision)?,
+        ))
+    })
+    .transpose()?
+    .ok_or(MasterError::FeatureNotFound)
+}
+
+fn require_active_lease_tx(tx: &Transaction<'_>, feature_id: Uuid) -> Result<(), MasterError> {
+    let matches: bool = tx.query_row(
+        "SELECT EXISTS(
+           SELECT 1 FROM feature_active_lease
+           WHERE singleton = 1 AND feature_id = ?1
+         )",
+        [feature_id.to_string()],
+        |row| row.get(0),
+    )?;
+    if !matches {
+        return Err(MasterError::InvalidFeatureTransition);
+    }
+    Ok(())
+}
+
+fn append_feature_audit_tx(
+    tx: &Transaction<'_>,
+    event_kind: &str,
+    feature_id: Option<Uuid>,
+    occurred_at_ms: u64,
+    redacted_metadata: Value,
+) -> Result<(), MasterError> {
+    if event_kind.is_empty() || event_kind.len() > 96 || !redacted_metadata.is_object() {
+        return Err(MasterError::InvalidFeatureConveyorInput(
+            "feature audit metadata is invalid".to_string(),
+        ));
+    }
+    let metadata_json = canonical_json(&redacted_metadata)?;
+    if metadata_json.len() > 8192 {
+        return Err(MasterError::InvalidFeatureConveyorInput(
+            "feature audit metadata exceeds the redacted bound".to_string(),
+        ));
+    }
+    tx.execute(
+        "INSERT INTO feature_conveyor_audit (
+           event_kind, feature_id, occurred_at_ms, redacted_metadata_json
+         ) VALUES (?1, ?2, ?3, ?4)",
+        params![
+            event_kind,
+            feature_id.map(|value| value.to_string()),
+            u64_to_i64(occurred_at_ms)?,
+            metadata_json,
+        ],
+    )?;
+    Ok(())
+}
+
+fn sqlite_integrity_ok(connection: &Connection) -> Result<bool, MasterError> {
+    let result: String = connection.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+    Ok(result == "ok")
+}
+
+fn prepare_legacy_migration_backup(database_path: &Path) -> Result<Option<PathBuf>, MasterError> {
+    if !database_path.exists() {
+        return Ok(None);
+    }
+    let source = Connection::open_with_flags(database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let version: i64 = source.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if !(1..MASTER_SCHEMA_VERSION).contains(&version) {
+        return Ok(None);
+    }
+    if !sqlite_integrity_ok(&source)? {
+        return Err(MasterError::MigrationBackup(format!(
+            "source v{version} database failed integrity_check"
+        )));
+    }
+    let backup_path =
+        database_path.with_file_name(format!("master.pre-v5.{}.sqlite3", Uuid::new_v4()));
+    source.execute("VACUUM INTO ?1", [backup_path.to_string_lossy().as_ref()])?;
+    drop(source);
+    restrict_backup_permissions(&backup_path)?;
+    sync_file_contents(&backup_path)?;
+    sync_parent_directory(&backup_path)?;
+    let backup = Connection::open_with_flags(&backup_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let backup_version: i64 = backup.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if backup_version != version || !sqlite_integrity_ok(&backup)? {
+        return Err(MasterError::MigrationBackup(
+            "copied legacy backup failed version or integrity verification".to_string(),
+        ));
+    }
+    Ok(Some(backup_path))
+}
+
+fn restore_verified_migration_backup(
+    database_path: &Path,
+    backup_path: &Path,
+) -> Result<(), MasterError> {
+    let backup = Connection::open_with_flags(backup_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let backup_version: i64 = backup.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if !(1..MASTER_SCHEMA_VERSION).contains(&backup_version) || !sqlite_integrity_ok(&backup)? {
+        return Err(MasterError::MigrationBackup(
+            "refusing to restore an unverified legacy backup".to_string(),
+        ));
+    }
+    drop(backup);
+    let restore_path =
+        database_path.with_file_name(format!(".master.restore.{}.sqlite3", Uuid::new_v4()));
+    fs::copy(backup_path, &restore_path)?;
+    restrict_backup_permissions(&restore_path)?;
+    sync_file_contents(&restore_path)?;
+    let staged = Connection::open_with_flags(&restore_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let staged_version: i64 = staged.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if staged_version != backup_version || !sqlite_integrity_ok(&staged)? {
+        return Err(MasterError::MigrationBackup(
+            "staged restore failed version or integrity verification".to_string(),
+        ));
+    }
+    drop(staged);
+    atomic_replace_file(&restore_path, database_path)?;
+    sync_parent_directory(database_path)?;
+    let restored = Connection::open_with_flags(database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let restored_version: i64 = restored.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if restored_version != backup_version || !sqlite_integrity_ok(&restored)? {
+        return Err(MasterError::MigrationBackup(
+            "restored database failed version or integrity verification".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn restrict_backup_permissions(path: &Path) -> Result<(), MasterError> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn restrict_backup_permissions(_path: &Path) -> Result<(), MasterError> {
+    Ok(())
+}
+
+fn sync_file_contents(path: &Path) -> Result<(), MasterError> {
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)?
+        .sync_all()?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn atomic_replace_file(source: &Path, destination: &Path) -> Result<(), MasterError> {
+    fs::rename(source, destination)?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn atomic_replace_file(source: &Path, destination: &Path) -> Result<(), MasterError> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let source = source
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let destination = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let succeeded = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if succeeded == 0 {
+        return Err(MasterError::Io(std::io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_parent_directory(path: &Path) -> Result<(), MasterError> {
+    let parent = path.parent().ok_or_else(|| {
+        MasterError::MigrationBackup("master database has no parent directory".to_string())
+    })?;
+    File::open(parent)?.sync_all()?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn sync_parent_directory(_path: &Path) -> Result<(), MasterError> {
+    Ok(())
+}
+
 pub fn current_time_ms() -> Result<u64, MasterError> {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| MasterError::InvalidSystemClock)?;
     u64::try_from(duration.as_millis()).map_err(|_| MasterError::InvalidSystemClock)
+}
+
+#[cfg(test)]
+mod feature_conveyor_unit_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn digest(label: &str) -> [u8; 32] {
+        Sha256::digest(label.as_bytes()).into()
+    }
+
+    fn valid_specification() -> ApprovedFeatureSpecification {
+        let manifest = json!({
+            "z_last": [true, null, 7],
+            "a_first": {"quoted": "value"}
+        });
+        let canonical = canonical_json(&manifest).unwrap();
+        ApprovedFeatureSpecification {
+            feature_id: Uuid::new_v4(),
+            revision: 1,
+            repository_id: Uuid::new_v4(),
+            manifest,
+            manifest_sha256: Sha256::digest(canonical.as_bytes()).into(),
+            design_sha256: digest("design"),
+            brainstorming_sha256: digest("brainstorming"),
+            owner_approval_sha256: digest("approval"),
+            grants: FeatureGrantRevisions {
+                registration: 1,
+                cloud_disclosure: 1,
+                autonomous_publication: 1,
+            },
+            provider_id: "local.review".to_string(),
+            model_id: "review-v1".to_string(),
+            dependencies: Vec::new(),
+        }
+    }
+
+    fn assert_invalid_specification(specification: &ApprovedFeatureSpecification) {
+        assert!(matches!(
+            validate_approved_specification(specification),
+            Err(MasterError::InvalidFeatureConveyorInput(_))
+        ));
+    }
+
+    #[test]
+    fn feature_conveyor_unit_canonical_json_is_order_stable_and_compact() {
+        let left: Value =
+            serde_json::from_str(r#"{"z":[3,{"b":2,"a":1}],"a":"quoted\"value"}"#).unwrap();
+        let right: Value =
+            serde_json::from_str(r#"{"a":"quoted\"value","z":[3,{"a":1,"b":2}]}"#).unwrap();
+
+        let expected = r#"{"a":"quoted\"value","z":[3,{"a":1,"b":2}]}"#;
+        assert_eq!(canonical_json(&left).unwrap(), expected);
+        assert_eq!(canonical_json(&right).unwrap(), expected);
+    }
+
+    #[test]
+    fn feature_conveyor_unit_grant_validation_requires_exact_identity_and_digests() {
+        let valid = RepositoryGrantRevision {
+            repository_id: Uuid::new_v4(),
+            kind: RepositoryGrantKind::Registration,
+            revision: 1,
+            scope_sha256: digest("scope"),
+            owner_approval_sha256: digest("approval"),
+            expires_at_ms: None,
+            revoked: false,
+        };
+        assert!(validate_repository_grant(&valid).is_ok());
+
+        for invalid in [
+            RepositoryGrantRevision {
+                repository_id: Uuid::nil(),
+                ..valid.clone()
+            },
+            RepositoryGrantRevision {
+                revision: 0,
+                ..valid.clone()
+            },
+            RepositoryGrantRevision {
+                scope_sha256: [0; 32],
+                ..valid.clone()
+            },
+            RepositoryGrantRevision {
+                owner_approval_sha256: [0; 32],
+                ..valid
+            },
+        ] {
+            assert!(matches!(
+                validate_repository_grant(&invalid),
+                Err(MasterError::InvalidFeatureConveyorInput(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn feature_conveyor_unit_specification_rejects_malformed_identity_and_manifest() {
+        let valid = valid_specification();
+        assert!(validate_approved_specification(&valid).is_ok());
+
+        let mut invalid = valid.clone();
+        invalid.feature_id = Uuid::nil();
+        assert_invalid_specification(&invalid);
+
+        let mut invalid = valid.clone();
+        invalid.revision = 0;
+        assert_invalid_specification(&invalid);
+
+        let mut invalid = valid.clone();
+        invalid.manifest = json!(["not", "an", "object"]);
+        assert_invalid_specification(&invalid);
+
+        let mut invalid = valid.clone();
+        invalid.manifest_sha256 = digest("wrong-manifest");
+        assert_invalid_specification(&invalid);
+
+        let mut invalid = valid.clone();
+        invalid.provider_id = "contains space".to_string();
+        assert_invalid_specification(&invalid);
+
+        let mut invalid = valid.clone();
+        invalid.model_id = r#"invalid\model"#.to_string();
+        assert_invalid_specification(&invalid);
+
+        let mut invalid = valid;
+        invalid.manifest =
+            json!({"oversized": "x".repeat(MAX_APPROVED_FEATURE_SPECIFICATION_BYTES)});
+        invalid.manifest_sha256 =
+            Sha256::digest(canonical_json(&invalid.manifest).unwrap().as_bytes()).into();
+        assert_invalid_specification(&invalid);
+    }
+
+    #[test]
+    fn feature_conveyor_unit_specification_rejects_ambiguous_dependencies() {
+        let valid = valid_specification();
+        let dependency = Uuid::new_v4();
+
+        let mut invalid = valid.clone();
+        invalid.dependencies = vec![dependency, dependency];
+        assert_invalid_specification(&invalid);
+
+        let mut invalid = valid.clone();
+        invalid.dependencies = vec![Uuid::nil()];
+        assert_invalid_specification(&invalid);
+
+        let mut invalid = valid.clone();
+        invalid.dependencies = vec![invalid.feature_id];
+        assert_invalid_specification(&invalid);
+
+        let mut invalid = valid;
+        invalid.dependencies = (0..=MAX_CONVEYOR_NONTERMINAL_FEATURES)
+            .map(|_| Uuid::new_v4())
+            .collect();
+        assert_invalid_specification(&invalid);
+    }
 }

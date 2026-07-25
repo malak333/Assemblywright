@@ -163,6 +163,17 @@ This is local LLM execution with frontier cloud review remaining a selective
 separate layer; it adds no remote enqueue, repository, tool, credential,
 network, Codex, Git, publication, or unattended authority.
 
+The first Durable Feature Conveyor implementation is a separate default-inert
+schema-v5 repository kernel owned by the Windows `jarvis-master`. It persists
+immutable digest-bound approved specifications, independent repository grant
+revisions, a 100-nonterminal-item owner-ordered queue, dependency blocking,
+compare-and-set revisions, one active lease, exact evidence-bound lifecycle
+advancement, cancellation without queue advancement, explicit safe
+abandonment, and restart quarantine with atomic redacted audits. It is not
+reachable through the local control or enrolled-device routers and grants no
+worker, repository, review, Codex, GitHub, publication, Mac UI, unattended, or
+autonomous authority.
+
 Emergency pause and deliberate resume are reachable only through the
 Windows-local bearer-authenticated loopback actions
 `POST /v1/development/emergency-pause/activate` and

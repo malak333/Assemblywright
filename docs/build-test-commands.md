@@ -143,6 +143,31 @@ swift test --disable-sandbox --package-path apps/mac --filter fixtureJobRelay
 swift test --disable-sandbox --package-path apps/mac --filter mlx
 ```
 
+The first Durable Feature Conveyor implementation slice is Windows-master
+repository-only and uses master schema v5. Run its focused invariant and
+migration gates with:
+
+```sh
+cargo test -p jarvis-master --lib feature_conveyor_unit --locked -- --nocapture
+cargo test -p jarvis-master --test feature_conveyor_kernel --locked -- --nocapture
+```
+
+The unit lane directly covers canonical JSON stability and malformed grant,
+identity, manifest, identifier, size, and dependency inputs. The integration
+lane proves a file-backed restart-to-verified-success owner journey with exact
+redacted audit order, canonical digest-bound immutable specification records,
+atomic rejection of the 101st nonterminal feature, stale queue-CAS denial,
+owner-order/dependency blocking, a singleton active lease, exact lifecycle
+order, verified-healthy-main success, cancellation without advancement,
+proven-safe abandonment, restart quarantine without automatic retry,
+same-transaction audit rollback, and the supported master schema v1-v4
+migrations through `MasterProcess`, including version/integrity-verified backup
+and fsynced atomic restore. Playwright/browser E2E is not applicable because
+this slice has no browser or UI surface. These tests do not prove an
+owner-authenticated HTTP/API, real coding workers, repository snapshots or
+mutation, local-model quality, Codex review, GitHub publication, Mac queue UI,
+two-device behavior, unattended reliability, or autonomous activation.
+
 The protocol gate rejects gaps, stream replacement, invalid identity shapes,
 unknown content fields, and oversized pages. The master gate proves schema-v4
 durability, bounded paging, context redaction, and transactional disconnect plus

@@ -4,8 +4,19 @@ Status: APPROVED by owner and structured multi-agent design review
 
 Date: 2026-07-24
 
-Scope: Design only. This document does not claim implementation, autonomous
-activation, live-device proof, or production readiness.
+Scope: Approved target design plus the bounded repository-kernel implementation
+status below. This document does not claim autonomous activation, live-device
+proof, or production readiness.
+
+Implementation status: the first default-inert Windows `jarvis-master`
+repository kernel is implemented as master schema v5. It covers immutable
+approved specification revisions, the bounded owner-ordered queue, dependency
+blocking, compare-and-set revisions, one active lease, exact lifecycle
+advancement, cancellation without advancement, explicit safe abandonment,
+startup quarantine, and same-transaction redacted audits. It intentionally
+exposes no HTTP/API, worker dispatcher, repository execution, review provider,
+publication coordinator, Mac UI, or autonomous activation. The remainder of
+this document is still target design.
 
 ## Understanding Summary
 
@@ -582,4 +593,6 @@ The Arbiter then returned `APPROVED`:
 
 ## Final Disposition
 
-APPROVED for implementation planning, not implementation.
+APPROVED. The Windows-master repository-kernel slice above is implemented; all
+execution, review, publication, UI, live-evidence, and activation layers remain
+design.

@@ -60,10 +60,13 @@ These notes capture durable facts for future agents working on this repository.
   can temporarily invoke `C:\Users\mike\.cargo\bin\cargo.exe` directly.
 - A feature or phase is not complete merely because its code passes focused
   tests. Before merge, update the applicable implementation and boundary docs,
-  add durable facts here, add or name matching E2E/focused integration proof,
-  and extend the docs-drift/workflow guards when a new proof lane is introduced.
-  If a broader E2E cannot exist yet, record the exact unimplemented boundary
-  instead of making a broader readiness claim.
+  add durable facts here, analyze changed testable units and cover their happy,
+  boundary, malformed-input, and failure paths, add or name matching
+  E2E/focused integration proof, and extend the docs-drift/workflow guards when
+  a new proof lane is introduced. If browser/UI automation is not applicable,
+  use the closest executable boundary and say why. If a broader E2E cannot
+  exist yet, record the exact unimplemented boundary instead of making a
+  broader readiness claim.
 - The product direction is a local-first macOS assistant foundation, legally
   distinct from Marvel/JARVIS branding and assets.
 - The current repo contains a Rust workspace with `jarvis-core` and
@@ -422,6 +425,41 @@ These notes capture durable facts for future agents working on this repository.
   before the next sample; cancellation no-work is instead exact
   `{"status":"no_cancellation"}` JSON with ordinary length framing and strict
   duplicate/escaped-equivalent top-level-key rejection.
+- The first Durable Feature Conveyor implementation is a default-inert
+  schema-v5 repository kernel in the authoritative Windows `jarvis-master`.
+  Its append-only approved specification revisions bind the canonical manifest,
+  design, brainstorming proof, owner approval, three independent repository
+  grant revisions, and snapshotted review provider/model. Queue and audit
+  projections omit manifest content and repository identity/path.
+- The master Conveyor admits at most 100 queued or active nonterminal features,
+  uses a singleton global queue revision for compare-and-set mutations, obeys
+  exact owner order, never skips a dependency-blocked head, and permits one
+  database active lease. Exact forward lifecycle transitions are
+  evidence-digest bound; reaching `succeeded` requires a recorded and verified
+  healthy `main`.
+- Feature cancellation is not advancement: it keeps the active lease until
+  explicit owner abandonment proves reconciliation safe, and if any commit
+  reached `main`, abandonment also requires verified healthy `main`. Startup
+  changes ambiguous active work to `quarantined`,
+  `effect_possible:true`, `automatic_retry:false`, retaining the lease.
+  Enqueue, reorder, claim, lifecycle, cancellation, abandonment, and quarantine
+  audits commit in the same immediate transaction or the state mutation rolls
+  back.
+- Supported master schema v1-v4 upgrades to v5 are backup-first under the
+  process owner lock: the copy is version/integrity verified before migration
+  and restored through a fsynced sibling plus atomic replacement if
+  migration-open fails. Direct legacy migration through file-backed
+  `MasterKernel::open` fails closed.
+  Focused proof is
+  `cargo test -p jarvis-master --lib feature_conveyor_unit --locked -- --nocapture`
+  plus
+  `cargo test -p jarvis-master --test feature_conveyor_kernel --locked -- --nocapture`.
+  The latter includes a file-backed restart-to-verified-success owner journey
+  and redacted audit-sequence assertion. Browser/Playwright E2E is inapplicable
+  because this slice exposes no browser or UI surface. This is persistence and
+  invariant evidence only; no HTTP/API, coding worker, repository snapshot or
+  mutation, review provider, GitHub publication, Mac queue UI, live-device
+  route, unattended reliability, or autonomous activation exists yet.
 - Signed helper teardown must remain bounded even when Foundation process
   notifications race with a killed child. Cancel and close the output reader,
   poll the launched `Process` through fixed TERM and KILL deadlines, require

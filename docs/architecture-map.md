@@ -23,6 +23,8 @@ flowchart LR
   Process --> Service["Windows SCM host: automatic start, bounded recovery, status, maintenance, uninstall"]
   Service --> Maintenance["Durable fail-closed marker blocks new enqueue and lease admission"]
   Master --> Durable["Registered devices, epochs, queue, attempts, cancellation, expiry, restart reconciliation, exact results"]
+  Master --> Conveyor["Default-inert schema-v5 Feature Conveyor repository kernel"]
+  Conveyor --> ConveyorSafety["Immutable approved specs and grants, strict CAS queue, one active lease, atomic redacted audit, and startup quarantine"]
   Protocol --> Feature["Dormant jarvis-core distributed-development feature"]
   Protocol --> Windows["Windows distributed format, clippy, protocol, and master-process gate"]
   Process --> Windows
@@ -46,7 +48,28 @@ a headless master executable. The contract seam provides protocol version 1, typ
 device/task/step/attempt/lease/cancellation identifiers, bounded capability
 advertisements, handshake messages, job and result envelopes, strict
 bound-before-decode JSON entry points, nil-identity rejection, and a golden
-compatibility fixture. `jarvis-master` schema version 4 persists explicitly
+compatibility fixture. `jarvis-master` schema version 5 preserves the
+schema-v4 distributed-device lifecycle and additionally persists the first
+default-inert Durable Feature Conveyor repository kernel. Its immutable
+owner-approved specification revisions bind canonical manifest and evidence
+digests, three independent repository-grant revisions, dependencies, and a
+snapshotted review provider/model. Its queue has a 100-item nonterminal ceiling,
+one global compare-and-set revision, strict head/dependency ordering, and one
+durable active lease. Enqueue, reorder, claim, lifecycle, cancellation,
+abandonment, and startup quarantine commit with redacted audit evidence in the
+same immediate transaction. Success releases the lease only with verified
+healthy-main evidence; cancellation retains it until explicit safe
+abandonment, and restart ambiguity is quarantined without automatic retry.
+Master-process upgrades from supported legacy schemas v1-v4 to v5 are
+backup-first under the owner lock, verify the versioned backup before migration,
+and restore through a fsynced sibling plus atomic replacement when
+migration-open fails. Direct file-backed legacy migration through
+`MasterKernel::open` fails closed. This persistence slice has no HTTP/API,
+coding worker, repository
+mutation, review-provider invocation, GitHub publication, Mac queue UI,
+live-device, unattended, or activation authority.
+
+The existing distributed-device portion of `jarvis-master` persists explicitly
 registered device metadata, active connection epoch and sequence state, queued
 steps, immutable leased job envelopes, attempts, cancellation/expiry outcome,
 accepted payload digests, the enrollment authority binding, digest-only grants,
@@ -211,9 +234,10 @@ general live cross-device reliability claim, supplied-password or
 owner-account remote-mTLS E2E, host hardening, upgrade/backup/restore automation,
 live scheduler loop, live inference worker, Codex dispatch, integration with
 the existing task/policy/audit/memory store, repository mutation, or Connection
-Setup UI. The new
-SQLite data is an isolated distributed lifecycle kernel, not the final unified
-Windows authority. Existing
+Setup UI. The distributed device and Feature Conveyor SQLite data remain
+bounded kernels inside the Windows master, not a claim that the existing local
+`jarvis-core` task, policy, tool, memory, or approval stores have been migrated.
+Existing
 Unix-domain-socket supervision and macOS release
 evidence remain unchanged. Future transport and runtime work must preserve
 fail-closed policy, planning/action separation, sensitivity and redaction,

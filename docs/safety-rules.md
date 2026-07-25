@@ -186,6 +186,33 @@ release requirements, not optional UX guidance.
   check. Live evidence therefore requires stable owner-only inputs and never
   upgrades to plugin trust, hostile-local-process containment, or release
   readiness.
+- The Windows `jarvis-master` schema-v5 Durable Feature Conveyor kernel is
+  default-inert and exposes no HTTP/API, worker, Codex, repository-mutation,
+  GitHub, publication, or automatic activation authority. Approved feature
+  manifests must be canonical bounded JSON with an exact SHA-256 binding; their
+  immutable numbered specification rows and owner-approval/design/brainstorming
+  proof digests are append-only. The three repository grant revisions remain
+  independent and one never implies another. The queue admits at most 100
+  queued or active nonterminal features, uses one compare-and-set queue
+  revision, never skips a blocked owner-ordered head, and permits only one
+  database-backed active lease.
+- Feature Conveyor state mutation and its redacted audit evidence must commit
+  in the same immediate SQLite transaction. Manifest content, repository
+  identity/path, brainstorming content, and owner reason must not enter audit
+  payloads. Audit failure rolls back enqueue, reorder, claim, lifecycle,
+  cancellation, abandonment, and quarantine. Emergency Pause blocks new feature
+  claims. Cancellation retains the active lease and never advances the queue.
+  Only exact healthy-main success, or an explicit owner abandonment after
+  proven-safe reconciliation and healthy-main verification when a commit
+  reached `main`, may release it.
+- A file-backed master schema upgrade that introduces or changes Feature
+  Conveyor state must run under the master owner lock, create and verify a
+  pre-migration backup before mutation, and restore that backup if migration
+  open fails. On startup, an active Feature Conveyor stage that might have
+  crossed a worker, repository, review, publication, or other effect boundary
+  becomes `quarantined` with `effect_possible:true`; it is never retried or
+  released automatically. Partial kernel mechanics must not be described as an
+  autonomous development system.
 - Remote raw-step enqueue is forbidden. Fixture work is queued only through the
   Windows-local authenticated development seam, then leased only to the
   authenticated device that registered the exact fixture capability. Result and

@@ -96,7 +96,19 @@ cleared, stdout is bounded, stderr is discarded, and cancellation, timeout, or
 emergency pause reaps the dedicated process group before suppressing output.
 This is local LLM execution, with frontier cloud review remaining selective;
 it is not a bundled helper, unattended background service, general production
-distributed-job runtime, repository executor, or Codex/Git path. Fixture
+distributed-job runtime, repository executor, or Codex/Git path.
+
+The approved Durable Feature Conveyor now has a default-inert schema-v5
+repository kernel in the authoritative Windows `jarvis-master`: immutable
+digest-bound specifications, a 100-nonterminal-item owner-ordered queue,
+dependency blocking, compare-and-set revisions, one active lease, exact
+lifecycle advancement, cancellation without advancement, explicit safe
+abandonment, and restart quarantine with atomic redacted audits. It has no
+HTTP/API, coding worker, repository execution, Codex/review transport, GitHub
+publication, Mac queue UI, or autonomous activation; see
+[Durable Feature Conveyor Design](docs/feature-conveyor-design.md).
+
+Fixture
 enrollment uses a second exact Keychain identity
 profile selected only by `--identity-profile fixture`; the original standard
 identity namespace and default monitor/relay commands remain unchanged. The

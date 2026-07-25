@@ -27,7 +27,7 @@ fn windows_master_process_owns_state_and_completes_cross_process_fixture() {
     let setup_receipt: Value = serde_json::from_slice(&setup.stdout).expect("setup JSON receipt");
     assert_eq!(setup_receipt["status"], "setup_complete");
     assert_eq!(setup_receipt["protocol_version"], 1);
-    assert_eq!(setup_receipt["schema_version"], 4);
+    assert_eq!(setup_receipt["schema_version"], 5);
     assert!(directory.path().join("master.sqlite3").is_file());
     assert!(directory.path().join("development.token").is_file());
     let development_token = std::fs::read_to_string(directory.path().join("development.token"))
