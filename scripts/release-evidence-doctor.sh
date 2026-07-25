@@ -85,10 +85,10 @@ Recommended next evidence commands:
   live-device template: ./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env
   live-device endpoint: set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' in target/release-live-device-qa.env
   live-device IPC auth: launch Assemblywright with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then confirm JARVIS_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path before IPC commands
-  live-device command evidence: cargo run -p jarvis-cli -- command "status check" --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}" --json
+  live-device command evidence: cargo run -p assemblywright-cli -- command "status check" --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}" --json
   live-device assertion: set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete
-  live-device evidence status: JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"
-  live-device readiness: JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"
+  live-device evidence status: JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"
+  live-device readiness: JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"
   final bundle template: ./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env
   final bundle: set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle
   final doctor assertion: ./scripts/release-evidence-doctor.sh --assert-complete
@@ -1356,7 +1356,7 @@ assert_cli_evidence_status_complete() {
     JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID="$EXPECTED_BUNDLE_ID" \
     JARVIS_EVIDENCE_EXPECTED_VERSION="$EXPECTED_VERSION" \
     JARVIS_QA_INSTALLED_APP_PATH="$EXPECTED_INSTALLED_APP_PATH" \
-    cargo run -q -p jarvis-cli -- release evidence-status --json "${endpoint_args[@]}" 2>&1)"; then
+    cargo run -q -p assemblywright-cli -- release evidence-status --json "${endpoint_args[@]}" 2>&1)"; then
     fail "release evidence doctor --assert-complete requires assemblywright release evidence-status --json to pass; output: $status_output"
   fi
 
@@ -1866,10 +1866,10 @@ PY
   for expected in \
     "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env" \
     "JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>'" \
-    "cargo run -p jarvis-cli -- command \"status check\" --endpoint \"\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\" --json" \
+    "cargo run -p assemblywright-cli -- command \"status check\" --endpoint \"\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\" --json" \
     "source target/release-live-device-qa.env" \
-    "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"" \
-    "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint \"\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"" \
+    "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint \"\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"" \
+    "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness --endpoint \"\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"" \
     "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env" \
     "source target/release-evidence-bundle.env" \
     "./scripts/release-evidence-doctor.sh --assert-complete" \

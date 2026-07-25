@@ -85,12 +85,12 @@ separate deployment evidence.
 ```text
 Mac                                      Windows
 ┌─────────────────────┐                 ┌──────────────────────────┐
-│ Assemblywright.app          │                 │ jarvis-master            │
+│ Assemblywright.app          │                 │ assemblywright-master            │
 │ Voice / UX / Apple  │                 │ Tasks / policy / audit   │
 └─────────┬───────────┘                 │ Memory / RAG / scheduler │
           │ Local UDS                    │ Repos / worktrees / Git  │
 ┌─────────▼───────────┐  Authenticated  │ Codex orchestration      │
-│ jarvis-agent        │◄───────────────►└────────────┬─────────────┘
+│ assemblywright-agent        │◄───────────────►└────────────┬─────────────┘
 │ Control bridge      │    overlay                    │ Loopback
 │ M1 inference worker │                      ┌────────▼─────────────┐
 └─────────────────────┘                      │ RTX inference worker │
@@ -99,7 +99,7 @@ Mac                                      Windows
 
 ### Windows Master
 
-`jarvis-master` is the sole authoritative service. It owns:
+`assemblywright-master` is the sole authoritative service. It owns:
 
 - SQLite tasks, memory, policy, audit, scheduler, repository registry, leases,
   and migration state.
@@ -116,7 +116,7 @@ Mac                                      Windows
 
 The Swift app remains the primary human interface and owns native Apple UX,
 voice, notification, and permission presentation. It communicates only with an
-app-supervised Rust `jarvis-agent` over the existing local UDS, bearer,
+app-supervised Rust `assemblywright-agent` over the existing local UDS, bearer,
 same-EUID, and Apple code-identity boundary.
 
 The signed Mac bridge helper maintains the outbound authenticated connection to
@@ -129,7 +129,7 @@ The current default-inert implementation now extends the Mac trust/transport
 foundation with a bounded Rust relay seam. Windows schema version 4 stores a
 metadata-only event journal with one server-issued stream ID and contiguous
 cursor. State transitions and their events commit atomically. The
-`jarvis-agent` executable stores only its last accepted cursor and serves
+`assemblywright-agent` executable stores only its last accepted cursor and serves
 authenticated health and event acceptance over the shared owner-only,
 same-EUID, Apple code-identity-checked UDS transport. Startup policy and its
 fresh bearer arrive through bounded stdin, and a direct-parent mismatch fails
@@ -164,7 +164,7 @@ separate layer; it adds no remote enqueue, repository, tool, credential,
 network, Codex, Git, publication, or unattended authority.
 
 The first Durable Feature Conveyor implementation is a separate default-inert
-schema-v5 repository kernel owned by the Windows `jarvis-master`. It persists
+schema-v5 repository kernel owned by the Windows `assemblywright-master`. It persists
 immutable digest-bound approved specifications, independent repository grant
 revisions, a 100-nonterminal-item owner-ordered queue, dependency blocking,
 compare-and-set revisions, one active lease, exact evidence-bound lifecycle

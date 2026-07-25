@@ -8,7 +8,7 @@ Scope: Approved target design plus the bounded repository-kernel implementation
 status below. This document does not claim autonomous activation, live-device
 proof, or production readiness.
 
-Implementation status: the first default-inert Windows `jarvis-master`
+Implementation status: the first default-inert Windows `assemblywright-master`
 repository kernel is implemented as master schema v5. It covers immutable
 approved specification revisions, the bounded owner-ordered queue, dependency
 blocking, compare-and-set revisions, one active lease, exact lifecycle
@@ -50,7 +50,7 @@ this document is still target design.
 | Area | Requirement or assumption |
 | --- | --- |
 | Owner | One authenticated owner. Models and workers may propose but cannot enqueue, reorder, cancel, abandon, grant authority, or rebind providers. |
-| Authority | The Windows `jarvis-master` is the sole durable Feature Conveyor, repository, policy, audit, and publication authority. The Mac app is the primary owner UI. |
+| Authority | The Windows `assemblywright-master` is the sole durable Feature Conveyor, repository, policy, audit, and publication authority. The Mac app is the primary owner UI. |
 | Queue scale | At most 100 queued plus active nonterminal features. Archived terminal records do not consume capacity. |
 | Feature concurrency | Exactly one active feature. Four total job slots: up to three implementation jobs and one reserved orchestration or interactive slot. Actual use may be lower when resources are unavailable. |
 | Worker placement | Implementation uses restricted local coding agents only. Codex never receives repository-write or implementation authority. |
@@ -98,7 +98,7 @@ Changing the global provider does not change these ceilings.
 
 ### Windows Master
 
-The Windows `jarvis-master` owns six Feature Conveyor components.
+The Windows `assemblywright-master` owns six Feature Conveyor components.
 
 #### Feature Registry
 

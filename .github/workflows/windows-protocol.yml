@@ -39,20 +39,20 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Lint portable protocol contracts
-        run: cargo clippy -p jarvis-protocol --all-targets --locked -- -D warnings
+        run: cargo clippy -p assemblywright-protocol --all-targets --locked -- -D warnings
 
       - name: Lint master process, identity, and transport
-        run: cargo clippy -p jarvis-master --all-targets --locked -- -D warnings
+        run: cargo clippy -p assemblywright-master --all-targets --locked -- -D warnings
 
       - name: Test portable protocol contracts
-        run: cargo test -p jarvis-protocol --locked
+        run: cargo test -p assemblywright-protocol --locked
 
       - name: Test master process, identity, and mTLS transport
-        run: cargo test -p jarvis-master --locked
+        run: cargo test -p assemblywright-master --locked
 
       - name: Test real Windows service lifecycle
         env:
           JARVIS_REQUIRE_WINDOWS_SERVICE_E2E: "1"
         run: |
-          cargo test -p jarvis-master --bin jarvis-master service_logon_right_is_ensured_for_current_account --locked -- --ignored --nocapture
-          cargo test -p jarvis-master --test windows_service_lifecycle_e2e --locked -- --ignored --nocapture
+          cargo test -p assemblywright-master --bin jarvis-master service_logon_right_is_ensured_for_current_account --locked -- --ignored --nocapture
+          cargo test -p assemblywright-master --test windows_service_lifecycle_e2e --locked -- --ignored --nocapture

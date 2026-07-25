@@ -512,7 +512,7 @@ write_env_template() {
 # to the running release core endpoint and JARVIS_IPC_TOKEN_FILE to the app-owned
 # handoff file, source this template, and capture the command evidence ID from
 # that same authenticated endpoint:
-#   cargo run -p jarvis-cli -- command "status check" --endpoint "\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}" --json
+#   cargo run -p assemblywright-cli -- command "status check" --endpoint "\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}" --json
 # Use the returned task ID as JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:<uuid>",
 # or use an audit ID from task-associated command/audit evidence as "audit:<uuid>".
 #
@@ -521,8 +521,8 @@ write_env_template() {
 #   source ./target/release-live-device-qa.env
 #   set +a
 #   ./scripts/release-live-device-qa.sh --assert-complete
-#   JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint "\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"
-#   JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint "\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"
+#   JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint "\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"
+#   JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness --endpoint "\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"
 #
 # Keep all validation flags false until that check has actually been observed
 # on the signed, notarized app installed in a clean macOS profile.
@@ -699,9 +699,9 @@ JSON
   require_file_contains "live QA env template" "$fixture_template" 'JARVIS_RELEASE_CORE_ENDPOINT=""'
   require_file_contains "live QA env template" "$fixture_template" 'JARVIS_IPC_TOKEN_FILE="$HOME/Library/Application Support/Jarvis/ipc-session-auth.json"'
   require_file_contains "live QA env template" "$fixture_template" './scripts/release-live-device-qa.sh --assert-complete'
-  require_file_contains "live QA env template" "$fixture_template" 'cargo run -p jarvis-cli -- command "status check" --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}" --json'
-  require_file_contains "live QA env template" "$fixture_template" 'JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"'
-  require_file_contains "live QA env template" "$fixture_template" 'JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"'
+  require_file_contains "live QA env template" "$fixture_template" 'cargo run -p assemblywright-cli -- command "status check" --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}" --json'
+  require_file_contains "live QA env template" "$fixture_template" 'JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"'
+  require_file_contains "live QA env template" "$fixture_template" 'JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"'
   require_file_contains "live QA env template" "$fixture_template" 'Do not set JARVIS_QA_SELF_TEST_FIXTURE in release evidence'
   if grep -F 'JARVIS_QA_CLEAN_PROFILE_VALIDATED=true' "$fixture_template" >/dev/null 2>&1; then
     fail "live QA self-test expected env template validation flags to default false"

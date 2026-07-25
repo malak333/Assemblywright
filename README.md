@@ -17,12 +17,12 @@ and the queue UI are still design.
 
 ## What Is Implemented
 
-**`jarvis-protocol`** — protocol version 1: typed device, task, step, attempt,
+**`assemblywright-protocol`** — protocol version 1: typed device, task, step, attempt,
 lease, and cancellation identifiers; bounded capability advertisements;
 handshake, job, and result envelopes; strict bound-before-decode JSON entry
 points; nil-identity rejection; and a golden compatibility fixture.
 
-**`jarvis-master`** — a portable schema-v5 SQLite kernel plus a headless
+**`assemblywright-master`** — a portable schema-v5 SQLite kernel plus a headless
 single-owner executable.
 
 - *Distributed device lifecycle*: registered device metadata, connection epochs
@@ -53,7 +53,7 @@ single-owner executable.
   attempts, and a durable fail-closed maintenance marker that blocks new
   enqueue and lease admission while already-started results settle.
 
-**`jarvis-agent`** — the Mac worker. It reuses the hardened local UDS
+**`assemblywright-agent`** — the Mac worker. It reuses the hardened local UDS
 transport, requires direct-parent supervision and a fresh startup-stdin bearer,
 and stores only stream ID, sequence, and update time under a single-owner lock.
 Its default-off fixture lane holds at most one synthetic echo attempt in
@@ -62,7 +62,7 @@ request with a cleared offline environment, prompt-only stdin, bounded stdout,
 null stderr, and dedicated process-group reaping. Cancellation, timeout,
 disconnect, or emergency pause dominates completion and suppresses late output.
 
-**`jarvis-core`** — the shared local foundation: the peer-identity Unix-socket
+**`assemblywright-core`** — the shared local foundation: the peer-identity Unix-socket
 transport, its startup validation, and read-only release readiness and evidence
 inspection. It holds no conversation, model, tool, memory, scheduler, plugin, or
 repository authority.
@@ -117,7 +117,7 @@ swift test --disable-sandbox --package-path apps/mac
 ```
 
 ```sh
-cargo run -p jarvis-cli -- release readiness
+cargo run -p assemblywright-cli -- release readiness
 ```
 
 The `assemblywright` CLI is a read-only release and evidence client. Its
@@ -145,6 +145,9 @@ Canonical commands and their exact proof boundaries live in
 ## License
 
 Assemblywright is licensed under the
-[Apache License 2.0](LICENSE). Internal `jarvis-*`, `JARVIS_*`, Keychain,
-storage, protocol, and code-signing identifiers remain compatibility contracts;
-they do not represent the product name.
+[Apache License 2.0](LICENSE). The crates are named `assemblywright-*`. A few
+`JARVIS_*` / `jarvis` identifiers survive deliberately as compatibility
+contracts: environment variable names, Keychain and Application Support
+namespaces, the `com.nobiletechnology.jarvis` code-signing identity, and the
+bundled CLI filename inside the app. Those bind installed state and signed
+artifacts; they are not the product name.

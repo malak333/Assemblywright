@@ -19,29 +19,29 @@ DISTRIBUTED_DESIGN="docs/distributed-developer-mode-design.md"
 FEATURE_CONVEYOR_DESIGN="docs/feature-conveyor-design.md"
 AGENT_WORKFLOW="docs/development-agent-workflow.md"
 
-IPC_TRANSPORT="crates/jarvis-core/src/ipc_transport.rs"
-CORE_STARTUP="crates/jarvis-core/src/startup.rs"
-CORE_RELEASE="crates/jarvis-core/src/release.rs"
-PROTOCOL_CRATE="crates/jarvis-protocol/src/lib.rs"
-MASTER_CRATE="crates/jarvis-master/src/lib.rs"
-MASTER_PROCESS="crates/jarvis-master/src/main.rs"
-MASTER_IDENTITY="crates/jarvis-master/src/identity.rs"
-MASTER_SERVICE_HOST="crates/jarvis-master/src/windows_service_host.rs"
-AGENT_CRATE="crates/jarvis-agent/src/lib.rs"
-AGENT_PROCESS="crates/jarvis-agent/src/main.rs"
-CLI_MAIN="crates/jarvis-cli/src/main.rs"
+IPC_TRANSPORT="crates/assemblywright-core/src/ipc_transport.rs"
+CORE_STARTUP="crates/assemblywright-core/src/startup.rs"
+CORE_RELEASE="crates/assemblywright-core/src/release.rs"
+PROTOCOL_CRATE="crates/assemblywright-protocol/src/lib.rs"
+MASTER_CRATE="crates/assemblywright-master/src/lib.rs"
+MASTER_PROCESS="crates/assemblywright-master/src/main.rs"
+MASTER_IDENTITY="crates/assemblywright-master/src/identity.rs"
+MASTER_SERVICE_HOST="crates/assemblywright-master/src/windows_service_host.rs"
+AGENT_CRATE="crates/assemblywright-agent/src/lib.rs"
+AGENT_PROCESS="crates/assemblywright-agent/src/main.rs"
+CLI_MAIN="crates/assemblywright-cli/src/main.rs"
 
-PROTOCOL_E2E="crates/jarvis-protocol/tests/distributed_protocol_contract_e2e.rs"
-PROTOCOL_EVENT_E2E="crates/jarvis-protocol/tests/distributed_event_cursor_contract.rs"
-PROTOCOL_MLX_E2E="crates/jarvis-protocol/tests/mlx_job_contract.rs"
-MASTER_E2E="crates/jarvis-master/tests/master_lifecycle_e2e.rs"
-MASTER_PROCESS_E2E="crates/jarvis-master/tests/master_process_e2e.rs"
-MASTER_IDENTITY_E2E="crates/jarvis-master/tests/enrollment_identity_e2e.rs"
-MASTER_REMOTE_MTLS_E2E="crates/jarvis-master/tests/remote_mtls_e2e.rs"
-MASTER_EVENT_E2E="crates/jarvis-master/tests/event_cursor_e2e.rs"
-MASTER_CONVEYOR_E2E="crates/jarvis-master/tests/feature_conveyor_kernel.rs"
-MASTER_SERVICE_E2E="crates/jarvis-master/tests/windows_service_lifecycle_e2e.rs"
-AGENT_E2E="crates/jarvis-agent/tests/local_relay_e2e.rs"
+PROTOCOL_E2E="crates/assemblywright-protocol/tests/distributed_protocol_contract_e2e.rs"
+PROTOCOL_EVENT_E2E="crates/assemblywright-protocol/tests/distributed_event_cursor_contract.rs"
+PROTOCOL_MLX_E2E="crates/assemblywright-protocol/tests/mlx_job_contract.rs"
+MASTER_E2E="crates/assemblywright-master/tests/master_lifecycle_e2e.rs"
+MASTER_PROCESS_E2E="crates/assemblywright-master/tests/master_process_e2e.rs"
+MASTER_IDENTITY_E2E="crates/assemblywright-master/tests/enrollment_identity_e2e.rs"
+MASTER_REMOTE_MTLS_E2E="crates/assemblywright-master/tests/remote_mtls_e2e.rs"
+MASTER_EVENT_E2E="crates/assemblywright-master/tests/event_cursor_e2e.rs"
+MASTER_CONVEYOR_E2E="crates/assemblywright-master/tests/feature_conveyor_kernel.rs"
+MASTER_SERVICE_E2E="crates/assemblywright-master/tests/windows_service_lifecycle_e2e.rs"
+AGENT_E2E="crates/assemblywright-agent/tests/local_relay_e2e.rs"
 
 MAC_BRIDGE="apps/mac/Sources/JarvisMacCore/DeveloperBridge.swift"
 MAC_BRIDGE_CLI="apps/mac/Sources/JarvisMacBridgeCLI/JarvisMacBridgeCLI.swift"
@@ -115,19 +115,19 @@ done
 # paths means a document or a change is describing a product that no longer
 # exists.
 for path in \
-  crates/jarvis-core/src/ipc.rs \
-  crates/jarvis-core/src/storage.rs \
-  crates/jarvis-core/src/runtime.rs \
-  crates/jarvis-core/src/model.rs \
-  crates/jarvis-core/src/router.rs \
-  crates/jarvis-core/src/policy.rs \
-  crates/jarvis-core/src/plugin.rs \
-  crates/jarvis-core/src/wasm_plugin.rs \
-  crates/jarvis-core/src/memory_index.rs \
-  crates/jarvis-core/src/scheduler.rs \
-  crates/jarvis-core/src/trusted_wake.rs \
-  crates/jarvis-core/src/workspace.rs \
-  crates/jarvis-cli/tests/local_ipc_e2e.rs \
+  crates/assemblywright-core/src/ipc.rs \
+  crates/assemblywright-core/src/storage.rs \
+  crates/assemblywright-core/src/runtime.rs \
+  crates/assemblywright-core/src/model.rs \
+  crates/assemblywright-core/src/router.rs \
+  crates/assemblywright-core/src/policy.rs \
+  crates/assemblywright-core/src/plugin.rs \
+  crates/assemblywright-core/src/wasm_plugin.rs \
+  crates/assemblywright-core/src/memory_index.rs \
+  crates/assemblywright-core/src/scheduler.rs \
+  crates/assemblywright-core/src/trusted_wake.rs \
+  crates/assemblywright-core/src/workspace.rs \
+  crates/assemblywright-cli/tests/local_ipc_e2e.rs \
   apps/mac/Sources/JarvisMacCore/VoiceAdapter.swift \
   apps/mac/Sources/JarvisMacCore/SpeechOutputAdapter.swift \
   apps/mac/Sources/JarvisMacCore/TrustedWake.swift \

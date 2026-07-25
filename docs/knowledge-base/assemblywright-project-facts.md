@@ -13,15 +13,24 @@ These notes capture durable facts for future agents working on this repository.
   the **Control Room**.
 - The repository license is Apache-2.0. The root `LICENSE` file and Cargo
   workspace metadata are authoritative.
-- Existing `jarvis-*`, `JARVIS_*`, Keychain, Application Support, protocol,
-  Windows service, and code-signing identifiers remain explicit compatibility
-  contracts. The product-facing app and release artifact names are
+- The Cargo crates are `assemblywright-protocol`, `assemblywright-master`,
+  `assemblywright-agent`, `assemblywright-core`, and `assemblywright-cli`. Their
+  binaries are `assemblywright`, `assemblywright-agent`, and
+  `assemblywright-master`; the legacy `jarvis*` binary aliases were removed.
+- A specific set of `JARVIS_*` / `jarvis` identifiers survives deliberately as
+  compatibility contracts, because they bind installed state or signed
+  artifacts: environment variable names, Keychain and Application Support
+  namespaces, the Windows service name, the `com.nobiletechnology.jarvis`
+  code-signing identity and its `.core` suffix, the `JarvisMacApp` executable
+  name inside the bundle, and the bundled `jarvis-cli` filename. Renaming any of
+  these changes code-signing identity or orphans installed state, so they are
+  not cosmetic. The product-facing app and release artifact names are
   `Assemblywright.app` and `Assemblywright-<version>.*`.
 - The GitHub repository was renamed from `Jarvis` to `Assemblywright`, so the
   canonical remote is `https://github.com/malak333/Assemblywright`. GitHub
   redirects the former `malak333/Jarvis` URL, so older clones keep fetching and
   pushing, but new references must use the current URL. The local working
-  directory is still named `Jarvis`; that is a checkout path, not a contract.
+  directory is `Assemblywright`.
 
 ## The Pivot
 
@@ -41,18 +50,18 @@ These notes capture durable facts for future agents working on this repository.
 
 ## Current Crate Boundaries
 
-- `jarvis-protocol` — versioned, bounded wire contracts. No I/O, no state.
-- `jarvis-master` — the durable Windows authority: distributed device
+- `assemblywright-protocol` — versioned, bounded wire contracts. No I/O, no state.
+- `assemblywright-master` — the durable Windows authority: distributed device
   lifecycle, the default-inert Feature Conveyor repository kernel, enrollment
   identity and mTLS, and the Windows SCM service host. Does not depend on
-  `jarvis-core`.
-- `jarvis-agent` — the Mac worker. Depends on `jarvis-protocol` for contracts
-  and on `jarvis-core` only for the peer-identity Unix-socket transport and its
+  `assemblywright-core`.
+- `assemblywright-agent` — the Mac worker. Depends on `assemblywright-protocol` for contracts
+  and on `assemblywright-core` only for the peer-identity Unix-socket transport and its
   startup validation.
-- `jarvis-core` — the shared local foundation: `ipc_transport`, `startup`,
+- `assemblywright-core` — the shared local foundation: `ipc_transport`, `startup`,
   `macos_code_identity`, and `release`. It holds no conversation, model, tool,
   memory, scheduler, plugin, or repository authority.
-- `jarvis-cli` — a read-only release and evidence client. Its only subcommand
+- `assemblywright-cli` — a read-only release and evidence client. Its only subcommand
   tree is `release`.
 - `apps/mac` — the SwiftUI Developer Mode client plus the separately signed
   bridge helper CLI.

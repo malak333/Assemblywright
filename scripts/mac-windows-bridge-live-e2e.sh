@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:---run}"
 PACKAGE_PATH="$ROOT_DIR/apps/mac"
-PRODUCT="jarvis-mac-bridge"
+PRODUCT="assemblywright-mac-bridge"
 DEFAULT_SIGNED_APP="$PACKAGE_PATH/.build/jarvis-mac-bridge-signed/Build/Products/Debug/jarvis-mac-bridge.app"
 DEFAULT_SIGNED_BIN="$DEFAULT_SIGNED_APP/Contents/MacOS/jarvis-mac-bridge"
 
@@ -29,13 +29,13 @@ case "$MODE" in
       || fail "missing Mac event relay"
     [[ -f "$PACKAGE_PATH/JarvisMacBridge.xcodeproj/project.pbxproj" ]] \
       || fail "missing provisioned Mac bridge Xcode project"
-    [[ -f "$ROOT_DIR/crates/jarvis-agent/src/main.rs" ]] \
+    [[ -f "$ROOT_DIR/crates/assemblywright-agent/src/main.rs" ]] \
       || fail "missing supervised Rust agent"
     [[ -f "$ROOT_DIR/packaging/JarvisMacBridge.entitlements" ]] \
       || fail "missing Mac bridge Keychain entitlement"
     bash -n "$ROOT_DIR/scripts/build-mac-bridge-signed.sh"
     swift build --package-path "$PACKAGE_PATH" --product "$PRODUCT"
-    cargo build --manifest-path "$ROOT_DIR/Cargo.toml" -p jarvis-agent --locked
+    cargo build --manifest-path "$ROOT_DIR/Cargo.toml" -p assemblywright-agent --locked
     printf 'Assemblywright Mac-Windows bridge live E2E harness: ready\n'
     exit 0
     ;;
@@ -202,8 +202,8 @@ if [[ "$MODE" == "--run-relay" || "$MODE" == "--run-fixture" || "$MODE" == "--ru
   if [[ -n "${JARVIS_MAC_AGENT_BIN:-}" ]]; then
     relay_agent_bin="$JARVIS_MAC_AGENT_BIN"
   else
-    cargo build --manifest-path "$ROOT_DIR/Cargo.toml" -p jarvis-agent --locked
-    relay_agent_bin="$ROOT_DIR/target/debug/jarvis-agent"
+    cargo build --manifest-path "$ROOT_DIR/Cargo.toml" -p assemblywright-agent --locked
+    relay_agent_bin="$ROOT_DIR/target/debug/assemblywright-agent"
   fi
   [[ -x "$relay_agent_bin" ]] \
     || fail "jarvis-agent executable is unavailable"

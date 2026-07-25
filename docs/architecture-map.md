@@ -6,9 +6,9 @@ Current implementation:
 
 ```mermaid
 flowchart LR
-  Fixture["Versioned JSON golden fixture"] --> Protocol["Portable jarvis-protocol crate"]
+  Fixture["Versioned JSON golden fixture"] --> Protocol["Portable assemblywright-protocol crate"]
   Protocol --> Bounds["Strict identifiers, unknown-field rejection, payload ceilings, leases, deadlines, and exact result identity"]
-  Protocol --> Master["Portable jarvis-master SQLite lifecycle kernel"]
+  Protocol --> Master["Portable assemblywright-master SQLite lifecycle kernel"]
   Master --> Process["Headless single-owner master process"]
   Process --> Local["Authenticated loopback development transport and fixture worker"]
   Process --> Identity["Windows enrollment CLI and DPAPI-protected P-256 CA"]
@@ -19,13 +19,13 @@ flowchart LR
   Master --> Events["Schema-v4 metadata event journal, cancellation state, and server-issued durable cursor"]
   Events --> Helper["Signed Swift bridge keeps Keychain identity and outbound mTLS"]
   Helper --> FixtureIdentity["Exact secondary fixture-only Keychain profile; standard identity unchanged"]
-  Helper --> Agent["Directly supervised Mac jarvis-agent owner-only cursor over mutually pinned local UDS"]
+  Helper --> Agent["Directly supervised Mac assemblywright-agent owner-only cursor over mutually pinned local UDS"]
   Process --> Service["Windows SCM host: automatic start, bounded recovery, status, maintenance, uninstall"]
   Service --> Maintenance["Durable fail-closed marker blocks new enqueue and lease admission"]
   Master --> Durable["Registered devices, epochs, queue, attempts, cancellation, expiry, restart reconciliation, exact results"]
   Master --> Conveyor["Default-inert schema-v5 Feature Conveyor repository kernel"]
   Conveyor --> ConveyorSafety["Immutable approved specs and grants, strict CAS queue, one active lease, atomic redacted audit, and startup quarantine"]
-  Protocol --> Feature["Dormant jarvis-core distributed-development feature"]
+  Protocol --> Feature["Dormant assemblywright-core distributed-development feature"]
   Protocol --> Windows["Windows distributed format, clippy, protocol, and master-process gate"]
   Process --> Windows
 ```
@@ -48,7 +48,7 @@ a headless master executable. The contract seam provides protocol version 1, typ
 device/task/step/attempt/lease/cancellation identifiers, bounded capability
 advertisements, handshake messages, job and result envelopes, strict
 bound-before-decode JSON entry points, nil-identity rejection, and a golden
-compatibility fixture. `jarvis-master` schema version 5 preserves the
+compatibility fixture. `assemblywright-master` schema version 5 preserves the
 schema-v4 distributed-device lifecycle and additionally persists the first
 default-inert Durable Feature Conveyor repository kernel. Its immutable
 owner-approved specification revisions bind canonical manifest and evidence
@@ -69,7 +69,7 @@ coding worker, repository
 mutation, review-provider invocation, GitHub publication, Mac queue UI,
 live-device, unattended, or activation authority.
 
-The existing distributed-device portion of `jarvis-master` persists explicitly
+The existing distributed-device portion of `assemblywright-master` persists explicitly
 registered device metadata, active connection epoch and sequence state, queued
 steps, immutable leased job envelopes, attempts, cancellation/expiry outcome,
 accepted payload digests, the enrollment authority binding, digest-only grants,
@@ -81,9 +81,9 @@ context/result limits, exact leased-attempt result identity, and durable
 abandon-before-reissue on disconnect or restart. Each authoritative enqueue,
 lease, terminal result, cancellation, disconnect, expiry, and restart
 reconciliation transition appends its event in the same transaction.
-`jarvis-core` re-exports the
+`assemblywright-core` re-exports the
 contracts only when the default-off `distributed-development` feature is
-selected; it does not yet consume `jarvis-master`.
+selected; it does not yet consume `assemblywright-master`.
 The `distributed_protocol_contract_e2e` test serializes the current seam from
 Mac capability advertisement through master acceptance, leased job, exact
 result acceptance, and wrong-lease rejection. The
@@ -99,7 +99,7 @@ expiry/replay denial, rotation, revocation, schema-v1-to-v4 migration, real
 Windows DPAPI round trips, and the real CLI stdin boundary.
 `event_cursor_e2e` proves bounded paging, durable resume, stream mismatch and
 future-cursor rejection, metadata redaction, plus disconnect and requeue events
-after restart. The Mac `jarvis-agent` reuses the hardened local UDS transport,
+after restart. The Mac `assemblywright-agent` reuses the hardened local UDS transport,
 requires direct-parent supervision and a fresh startup-stdin bearer, and stores
 only stream ID, sequence, and update time under a single-owner lock.
 Its default-off fixture adapter can hold at most one exact Public
@@ -236,7 +236,7 @@ live inference worker, Codex dispatch, repository mutation, or Connection
 Setup UI. The distributed device and Feature Conveyor SQLite data remain
 bounded kernels inside the Windows master.
 
-`jarvis-core` is no longer an assistant runtime. It retains only the hardened
+`assemblywright-core` is no longer an assistant runtime. It retains only the hardened
 peer-identity Unix-socket transport that the Mac agent consumes, its startup
 validation, and read-only release readiness/evidence inspection. The
 conversation runtime, model providers and routing, plugin host and wasm

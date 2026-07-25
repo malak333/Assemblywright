@@ -1,10 +1,10 @@
 [workspace]
 members = [
-  "crates/jarvis-protocol",
-  "crates/jarvis-master",
-  "crates/jarvis-agent",
-  "crates/jarvis-core",
-  "crates/jarvis-cli",
+  "crates/assemblywright-protocol",
+  "crates/assemblywright-master",
+  "crates/assemblywright-agent",
+  "crates/assemblywright-core",
+  "crates/assemblywright-cli",
 ]
 resolver = "2"
 

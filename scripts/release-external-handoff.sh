@@ -255,8 +255,8 @@ claim.
    \`JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true\` operator-mode opt-in, export
    \`JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>'\` and
    \`JARVIS_IPC_TOKEN_FILE='<app-owned-ipc-session-auth.json>'\`, then run
-   \`JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint "\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"\`
-   and \`JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint "\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"\`.
+   \`JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint "\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"\`
+   and \`JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness --endpoint "\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"\`.
 
 Proof boundary: these files are handoff scaffolding only. They do not prove that
 signing, notarization, stapling, installation, Finder launch, live-device QA,
@@ -416,11 +416,11 @@ write_handoff() {
   run ./scripts/release-live-device-qa.sh --write-template "$output_dir/release-live-device-qa.env"
   run ./scripts/release-evidence-bundle.sh --write-template "$output_dir/release-evidence-bundle.env"
 
-  run env JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -q -p jarvis-cli -- release readiness --json --endpoint "$ENDPOINT" >"$output_dir/release-readiness.json"
-  run cargo run -q -p jarvis-cli -- release evidence-status --json --endpoint "$ENDPOINT" >"$output_dir/release-evidence-status.json"
-  run cargo run -q -p jarvis-cli -- release signed-distribution-runbook --json --endpoint "$ENDPOINT" >"$output_dir/signed-distribution-runbook.json"
-  run cargo run -q -p jarvis-cli -- release live-device-runbook --json --endpoint "$ENDPOINT" >"$output_dir/live-device-runbook.json"
-  run cargo run -q -p jarvis-cli -- release evidence-bundle-runbook --json --endpoint "$ENDPOINT" >"$output_dir/evidence-bundle-runbook.json"
+  run env JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -q -p assemblywright-cli -- release readiness --json --endpoint "$ENDPOINT" >"$output_dir/release-readiness.json"
+  run cargo run -q -p assemblywright-cli -- release evidence-status --json --endpoint "$ENDPOINT" >"$output_dir/release-evidence-status.json"
+  run cargo run -q -p assemblywright-cli -- release signed-distribution-runbook --json --endpoint "$ENDPOINT" >"$output_dir/signed-distribution-runbook.json"
+  run cargo run -q -p assemblywright-cli -- release live-device-runbook --json --endpoint "$ENDPOINT" >"$output_dir/live-device-runbook.json"
+  run cargo run -q -p assemblywright-cli -- release evidence-bundle-runbook --json --endpoint "$ENDPOINT" >"$output_dir/evidence-bundle-runbook.json"
   write_evidence_checklist "$output_dir"
   write_readme "$output_dir"
   write_manifest "$output_dir"
@@ -451,8 +451,8 @@ self_test() {
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "./scripts/release-evidence-bundle.sh --bundle"
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "./scripts/release-evidence-doctor.sh --assert-complete"
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>'"
-  require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" 'JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"'
-  require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" 'JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"'
+  require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" 'JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"'
+  require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" 'JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"'
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "Proof boundary"
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "release-evidence-checklist.md"
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "release-handoff-manifest.json"

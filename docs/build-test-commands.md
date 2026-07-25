@@ -46,8 +46,8 @@ cargo build --workspace
 ./scripts/package-distribution.sh --running-app-guard-self-test
 ./scripts/package-distribution.sh --running-app-guard-e2e
 ./scripts/package-distribution.sh --unsigned-launch-check
-cargo run -p jarvis-cli -- release signed-distribution-runbook
-cargo run -p jarvis-cli -- release live-device-runbook
+cargo run -p assemblywright-cli -- release signed-distribution-runbook
+cargo run -p assemblywright-cli -- release live-device-runbook
 ./scripts/release-live-device-qa.sh --check
 ./scripts/release-live-device-qa.sh --self-test
 ./scripts/release-evidence-bundle.sh --check
@@ -85,16 +85,16 @@ executable changes as release evidence.
 | Rust format | `cargo fmt --check` |
 | Rust lint | `cargo clippy --workspace --all-targets -- -D warnings` |
 | Whole workspace | `cargo test --workspace` |
-| Protocol contract | `cargo test -p jarvis-protocol` |
-| Master kernel | `cargo test -p jarvis-master` |
-| Feature Conveyor kernel | `cargo test -p jarvis-master --test feature_conveyor_kernel` |
-| Master process E2E | `cargo test -p jarvis-master --test master_process_e2e` |
-| Enrollment and identity | `cargo test -p jarvis-master --test enrollment_identity_e2e` |
-| Remote mTLS | `cargo test -p jarvis-master --test remote_mtls_e2e` |
-| Event cursor | `cargo test -p jarvis-master --test event_cursor_e2e` |
-| Windows service lifecycle | `cargo test -p jarvis-master --test windows_service_lifecycle_e2e -- --ignored` |
-| Mac agent relay | `cargo test -p jarvis-agent --test local_relay_e2e` |
-| Local transport and release | `cargo test -p jarvis-core` |
+| Protocol contract | `cargo test -p assemblywright-protocol` |
+| Master kernel | `cargo test -p assemblywright-master` |
+| Feature Conveyor kernel | `cargo test -p assemblywright-master --test feature_conveyor_kernel` |
+| Master process E2E | `cargo test -p assemblywright-master --test master_process_e2e` |
+| Enrollment and identity | `cargo test -p assemblywright-master --test enrollment_identity_e2e` |
+| Remote mTLS | `cargo test -p assemblywright-master --test remote_mtls_e2e` |
+| Event cursor | `cargo test -p assemblywright-master --test event_cursor_e2e` |
+| Windows service lifecycle | `cargo test -p assemblywright-master --test windows_service_lifecycle_e2e -- --ignored` |
+| Mac agent relay | `cargo test -p assemblywright-agent --test local_relay_e2e` |
+| Local transport and release | `cargo test -p assemblywright-core` |
 | Swift package | `swift test --disable-sandbox --package-path apps/mac` |
 | One Swift test | `swift test --disable-sandbox --package-path apps/mac --filter <test>` |
 | Codex workflow | `./scripts/validate-codex-workflow.sh` |
@@ -106,23 +106,23 @@ The `assemblywright` CLI is read-only. Each subcommand prefers a configured IPC
 endpoint and falls back to local metadata or local file and report inspection.
 
 ```sh
-cargo run -p jarvis-cli -- release readiness
+cargo run -p assemblywright-cli -- release readiness
 ```
 
 ```sh
-cargo run -p jarvis-cli -- release evidence-status
+cargo run -p assemblywright-cli -- release evidence-status
 ```
 
 ```sh
-cargo run -p jarvis-cli -- release signed-distribution-runbook
+cargo run -p assemblywright-cli -- release signed-distribution-runbook
 ```
 
 ```sh
-cargo run -p jarvis-cli -- release live-device-runbook
+cargo run -p assemblywright-cli -- release live-device-runbook
 ```
 
 ```sh
-cargo run -p jarvis-cli -- release evidence-bundle-runbook
+cargo run -p assemblywright-cli -- release evidence-bundle-runbook
 ```
 
 Add `--json` for the exact structured payload, or `--all-commands` on

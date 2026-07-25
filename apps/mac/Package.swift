@@ -10,12 +10,13 @@ let package = Package(
     products: [
         .library(name: "AssemblywrightMacCore", targets: ["JarvisMacCore"]),
         .executable(name: "AssemblywrightMacApp", targets: ["JarvisMacApp"]),
-        .executable(name: "assemblywright-mac-bridge", targets: ["JarvisMacBridgeCLI"]),
-        // Legacy product aliases remain available during the compatibility window.
-        .library(name: "JarvisMacCore", targets: ["JarvisMacCore"]),
-        .executable(name: "JarvisMacApp", targets: ["JarvisMacApp"]),
-        .executable(name: "jarvis-mac-bridge", targets: ["JarvisMacBridgeCLI"])
+        .executable(name: "assemblywright-mac-bridge", targets: ["JarvisMacBridgeCLI"])
     ],
+    // Target names stay `Jarvis*` on purpose. The target name determines the
+    // built executable filename, and `JarvisMacApp` is recorded inside signed
+    // provenance, live-device QA reports, and the installed bundle layout at
+    // `Assemblywright.app/Contents/MacOS/JarvisMacApp`. Renaming it would change
+    // the signed app-executable path that release evidence binds to.
     targets: [
         .target(
             name: "JarvisMacCore",

@@ -123,7 +123,7 @@ release requirements, not optional UX guidance.
   a simultaneous or late result is suppressed. This lane grants no tool, file,
   repository, credential, network, Codex, Git, publication, or unattended
   authority.
-- The Windows `jarvis-master` schema-v5 Durable Feature Conveyor kernel is
+- The Windows `assemblywright-master` schema-v5 Durable Feature Conveyor kernel is
   default-inert and exposes no HTTP/API, worker, Codex, repository-mutation,
   GitHub, publication, or automatic activation authority. Approved feature
   manifests must be canonical bounded JSON with an exact SHA-256 binding; their

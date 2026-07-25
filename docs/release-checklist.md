@@ -89,7 +89,7 @@ Then produce the signed artifacts. This step requires Developer ID credentials
 and is not reproducible in CI:
 
 ```sh
-cargo run -p jarvis-cli -- release signed-distribution-runbook
+cargo run -p assemblywright-cli -- release signed-distribution-runbook
 ```
 
 ```sh
@@ -146,7 +146,7 @@ set -a && source target/release-evidence-bundle.env && set +a
 ## Readiness Confirmation
 
 ```sh
-JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness
+JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness
 ```
 
 `production_ready` stays false until signed distribution, notarization and

@@ -137,17 +137,21 @@ state; a badge means something needs attention.
 
 ## Compatibility Names
 
-The rebrand does not invalidate installed state. Existing `jarvis-*` crate and
-binary aliases, `JARVIS_*` environment variables, Keychain services,
-`~/Library/Application Support/Jarvis`, protocol labels such as
-`EXPORTER-Jarvis-Developer-Mode-v1`, plugin ABI identifiers, and signed code
-identifiers remain stable compatibility contracts until a separately designed
-and tested migration exists.
+The Cargo crates and their binaries are now `assemblywright-*`, and the legacy
+`jarvis*` binary aliases have been removed.
 
-New user-facing app bundles and release artifacts use `Assemblywright.app` and
-`Assemblywright-<version>.*`. The public CLI entry point is `assemblywright`;
-the legacy `jarvis` entry point remains available during the compatibility
-window.
+Identifiers that bind installed state or signed artifacts stay unchanged,
+because renaming them would change code-signing identity or orphan a user's
+existing installation: `JARVIS_*` environment variables, Keychain services,
+`~/Library/Application Support/Jarvis`, protocol labels such as
+`EXPORTER-Jarvis-Developer-Mode-v1`, the Windows service name, signed code
+identifiers such as `com.nobiletechnology.jarvis`, the `JarvisMacApp`
+executable name inside the bundle, and the bundled `jarvis-cli` filename. These
+remain stable compatibility contracts until a separately designed and tested
+migration exists.
+
+User-facing app bundles and release artifacts use `Assemblywright.app` and
+`Assemblywright-<version>.*`. The CLI entry point is `assemblywright`.
 
 ## License
 

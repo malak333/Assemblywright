@@ -59,7 +59,7 @@ accepted designs and take precedence within their scope:
 
 ### Windows master
 
-`jarvis-master` owns durable state and every authority decision. Its schema-v5
+`assemblywright-master` owns durable state and every authority decision. Its schema-v5
 SQLite database holds two kernels:
 
 - The distributed device lifecycle: registered devices, connection epochs,
@@ -83,7 +83,7 @@ recheck and TLS-exporter handshake binding.
 
 ### Mac worker
 
-`jarvis-agent` executes bounded jobs. It accepts no model, tool, file,
+`assemblywright-agent` executes bounded jobs. It accepts no model, tool, file,
 repository, credential, or Git input beyond its exact leased envelope. Its
 lanes are default-off and singleton. Cancellation dominates completion and
 suppresses late output.
@@ -99,9 +99,9 @@ is not bundled inside the app.
 
 ### Shared local foundation
 
-`jarvis-core` provides the hardened peer-identity Unix-socket transport used
+`assemblywright-core` provides the hardened peer-identity Unix-socket transport used
 between the helper and the agent, its startup validation, and read-only release
-readiness and evidence inspection. `jarvis-protocol` provides the versioned,
+readiness and evidence inspection. `assemblywright-protocol` provides the versioned,
 bounded wire contracts shared across every component.
 
 ## Authority Model
