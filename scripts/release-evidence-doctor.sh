@@ -1356,7 +1356,7 @@ assert_cli_evidence_status_complete() {
     ASSEMBLYWRIGHT_EVIDENCE_EXPECTED_BUNDLE_ID="$EXPECTED_BUNDLE_ID" \
     ASSEMBLYWRIGHT_EVIDENCE_EXPECTED_VERSION="$EXPECTED_VERSION" \
     ASSEMBLYWRIGHT_QA_INSTALLED_APP_PATH="$EXPECTED_INSTALLED_APP_PATH" \
-    cargo run -q -p assemblywright-cli -- release evidence-status --json "${endpoint_args[@]}" 2>&1)"; then
+    cargo run -q -p assemblywright-cli -- release evidence-status --json ${endpoint_args[@]+"${endpoint_args[@]}"} 2>&1)"; then
     fail "release evidence doctor --assert-complete requires assemblywright release evidence-status --json to pass; output: $status_output"
   fi
 

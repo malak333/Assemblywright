@@ -245,7 +245,7 @@ if [[ "$MODE" != "--run-fixture" && "$MODE" != "--run-mlx" ]] \
     ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_LIVE_E2E=true \
     ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE_BIN" \
     ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$bridge_team" \
-    "${app_lifecycle_environment[@]}" \
+    ${app_lifecycle_environment[@]+"${app_lifecycle_environment[@]}"} \
     swift test --disable-sandbox --package-path "$PACKAGE_PATH" \
       --filter liveSignedHelperAppLifecycleReachesWindowsMaster 2>&1
 )"; then
@@ -277,7 +277,7 @@ if [[ "$MODE" == "--run-relay" ]]; then
       ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_LIVE_E2E=true \
       ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE_BIN" \
       ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$bridge_team" \
-      "${app_lifecycle_environment[@]}" \
+      ${app_lifecycle_environment[@]+"${app_lifecycle_environment[@]}"} \
       swift test --disable-sandbox --package-path "$PACKAGE_PATH" \
         --filter liveSignedHelperAppLifecycleReachesWindowsMaster 2>&1
   )"; then
@@ -400,7 +400,7 @@ if [[ "$MODE" == "--run-mlx" ]]; then
     ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_COORDINATION_DIR="$mlx_coordination_directory" \
     ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE_BIN" \
     ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$bridge_team" \
-    "${app_lifecycle_environment[@]}" \
+    ${app_lifecycle_environment[@]+"${app_lifecycle_environment[@]}"} \
     swift test --disable-sandbox --package-path "$PACKAGE_PATH" \
       --filter liveSignedHelperAppLifecycleRunsMLXJob \
       >"$mlx_output" 2>&1 </dev/null &
@@ -499,7 +499,7 @@ if [[ "$MODE" == "--run-mlx" ]]; then
       ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_LIVE_E2E=true \
       ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE_BIN" \
       ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$bridge_team" \
-      "${app_lifecycle_environment[@]}" \
+      ${app_lifecycle_environment[@]+"${app_lifecycle_environment[@]}"} \
       swift test --disable-sandbox --package-path "$PACKAGE_PATH" \
         --filter liveSignedHelperAppLifecycleReachesWindowsMaster 2>&1
   )"; then
@@ -626,7 +626,7 @@ if [[ "$MODE" == "--run-fixture" ]]; then
     ASSEMBLYWRIGHT_MAC_DEVELOPER_FIXTURE_COORDINATION_DIR="$fixture_coordination_directory" \
     ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE_BIN" \
     ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$bridge_team" \
-    "${app_lifecycle_environment[@]}" \
+    ${app_lifecycle_environment[@]+"${app_lifecycle_environment[@]}"} \
     swift test --disable-sandbox --package-path "$PACKAGE_PATH" \
       --filter liveSignedHelperAppLifecycleRunsFixtureJob \
       >"$fixture_output" 2>&1 </dev/null &
@@ -724,7 +724,7 @@ if [[ "$MODE" == "--run-fixture" ]]; then
       ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_LIVE_E2E=true \
       ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_EXECUTABLE="$BRIDGE_BIN" \
       ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER="$bridge_team" \
-      "${app_lifecycle_environment[@]}" \
+      ${app_lifecycle_environment[@]+"${app_lifecycle_environment[@]}"} \
       swift test --disable-sandbox --package-path "$PACKAGE_PATH" \
         --filter liveSignedHelperAppLifecycleReachesWindowsMaster 2>&1
   )"; then
