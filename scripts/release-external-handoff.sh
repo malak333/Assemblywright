@@ -48,7 +48,7 @@ Optional:
 
 Proof boundary: this script generates operator handoff files, read-only
 snapshots, and a digest manifest only. It does not sign, notarize, staple, install, Finder-launch,
-validate live microphone/Speech/audio/notifications, run marketplace review,
+validate live-device behavior,
 scan malware, enforce an OS sandbox, enforce host-level egress, or archive final
 production evidence.
 USAGE
@@ -288,29 +288,17 @@ itself.
 ## Live Device QA Evidence
 
 Fill \`release-live-device-qa.env\` only after the clean release Mac has actually
-validated install, Finder/LaunchServices launch, microphone permission, Speech
-permission, spoken transcript handoff, live audio output, scheduler
-notification delivery, restart behavior, and manual release QA.
+validated install, Finder/LaunchServices launch, Developer Mode bridge status,
+restart behavior, and manual release QA.
 
-Required command/evidence binding:
+Required owner-recorded device evidence:
 
-- \`JARVIS_RELEASE_CORE_ENDPOINT\`: the same release core endpoint used for command
-  capture and post-report evidence-status/readiness checks.
-- \`JARVIS_IPC_TOKEN_FILE\`: the app-owned owner-only IPC credential-file path,
-  available only while the app is launched with the explicit
-  \`JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true\` operator-mode opt-in; export the
-  path only and never copy the bearer value into handoff evidence.
-- \`JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID\`: \`task:<uuid>\` or \`audit:<uuid>\`
-  returned by the live command evidence capture.
-
-Required scheduler notification observation:
-
-- \`JARVIS_QA_NOTIFICATION_KIND\`: one of \`due_now\`, \`failed\`, or
-  \`blocked_by_emergency_pause\`.
-- \`JARVIS_QA_NOTIFICATION_TITLE\`: observed notification title.
-- \`JARVIS_QA_NOTIFICATION_BODY\`: observed notification body.
-- \`JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER\`: \`jarvis.scheduler\`.
-- \`JARVIS_QA_NOTIFICATION_OBSERVED_AT\`: UTC timestamp ending in \`Z\`.
+- \`JARVIS_QA_OWNER_NAME\`, \`JARVIS_QA_DEVICE_LABEL\`, and
+  \`JARVIS_QA_PROFILE_LABEL\`: who validated, on which device, in which profile.
+- \`JARVIS_QA_DEVICE_CHECK_STARTED_AT\` and
+  \`JARVIS_QA_DEVICE_CHECK_COMPLETED_AT\`: UTC timestamps ending in \`Z\`.
+- Clean-profile, Finder launch, restart, and manual release QA evidence notes
+  must contain real observations, not placeholders.
 
 ## Final Evidence Bundle
 
@@ -410,10 +398,8 @@ This repo can prepare the operator handoff files, but production readiness still
 requires external evidence:
 - Developer ID signing, notarization, and stapling for app zip and installer.
 - Clean-profile /Applications install and Finder/LaunchServices launch.
-- Live microphone, Speech permission, transcript handoff, audio output,
-  structured scheduler notification observation, restart, and manual release QA
-  on a real Mac.
-- Marketplace review, malware scan, signed publisher policy, OS sandbox
+- Installed-app launch, Developer Mode bridge status, restart, and manual
+  release QA on a real Mac.
 - Durable archival of signed artifacts, reports, and supporting evidence.
 
 Write the handoff directory:
@@ -452,7 +438,7 @@ self_test() {
 
   require_file_contains "live-device template" "$tmp_dir/handoff/release-live-device-qa.env" "JARVIS_QA_CLEAN_PROFILE_VALIDATED=false"
   require_file_contains "live-device template" "$tmp_dir/handoff/release-live-device-qa.env" "JARVIS_RELEASE_CORE_ENDPOINT"
-  require_file_contains "live-device template" "$tmp_dir/handoff/release-live-device-qa.env" 'JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID=""'
+  require_file_contains "live-device template" "$tmp_dir/handoff/release-live-device-qa.env" 'JARVIS_QA_DEVICE_CHECK_STARTED_AT=""'
   require_file_contains "live-device template" "$tmp_dir/handoff/release-live-device-qa.env" "release evidence-status"
   require_file_contains "live-device template" "$tmp_dir/handoff/release-live-device-qa.env" "release readiness"
   require_file_contains "evidence-bundle template" "$tmp_dir/handoff/release-evidence-bundle.env" "JARVIS_EVIDENCE_SIGNED_DISTRIBUTION_VALIDATED=false"
@@ -470,8 +456,8 @@ self_test() {
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "Proof boundary"
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "release-evidence-checklist.md"
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "release-handoff-manifest.json"
-  require_file_contains "handoff checklist" "$tmp_dir/handoff/release-evidence-checklist.md" "JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER"
-  require_file_contains "handoff checklist" "$tmp_dir/handoff/release-evidence-checklist.md" "jarvis.scheduler"
+  require_file_contains "handoff checklist" "$tmp_dir/handoff/release-evidence-checklist.md" "JARVIS_QA_DEVICE_CHECK_STARTED_AT"
+  require_file_contains "handoff checklist" "$tmp_dir/handoff/release-evidence-checklist.md" "Developer Mode bridge status"
   require_file_contains "handoff checklist" "$tmp_dir/handoff/release-evidence-checklist.md" "JARVIS_EVIDENCE_REPORTS_ARCHIVE_URI"
   require_json_key "handoff manifest" "$tmp_dir/handoff/release-handoff-manifest.json" "files"
   require_json_string_contains "handoff manifest" "$tmp_dir/handoff/release-handoff-manifest.json" "evidence_type" "release_external_handoff_manifest"
