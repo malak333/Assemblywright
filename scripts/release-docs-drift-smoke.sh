@@ -198,6 +198,27 @@ require_text "local gate heartbeat" "$LOCAL_GATE" "still running after"
 require_text "local gate completion" "$LOCAL_GATE" "completed in"
 require_text "local gate failure" "$LOCAL_GATE" "command failed after"
 
+# The protocol version is declared independently in Rust and in Swift. Each
+# language's tests only ever compare against its own constant, so a mismatch
+# passes both suites and then fails on a live device: mTLS authenticates and the
+# application handshake is rejected. Compare the two declarations directly.
+rust_protocol_version="$(sed -n 's/^pub const PROTOCOL_VERSION: u16 = \([0-9]\{1,\}\);$/\1/p' \
+  "$PROTOCOL_CRATE" | head -n 1)"
+swift_protocol_version="$(sed -n 's/^ *public static let protocolVersion: UInt16 = \([0-9]\{1,\}\)$/\1/p' \
+  "$MAC_BRIDGE" | head -n 1)"
+[[ -n "$rust_protocol_version" ]] || fail "could not read PROTOCOL_VERSION from $PROTOCOL_CRATE"
+[[ -n "$swift_protocol_version" ]] || fail "could not read protocolVersion from $MAC_BRIDGE"
+if [[ "$rust_protocol_version" != "$swift_protocol_version" ]]; then
+  fail "protocol version mismatch across languages: $PROTOCOL_CRATE declares \
+$rust_protocol_version, $MAC_BRIDGE declares $swift_protocol_version"
+fi
+
+# The TLS exporter label is the same kind of duplicated wire constant.
+mac_exporter_label="$(sed -n 's/.*public static let exporterLabel = "\([^"]*\)".*/\1/p' \
+  "$MAC_BRIDGE" | head -n 1)"
+[[ -n "$mac_exporter_label" ]] || fail "could not read exporterLabel from $MAC_BRIDGE"
+require_text "master exporter label matches the Mac" "$MASTER_PROCESS" "$mac_exporter_label"
+
 require_text "safety rules fail closed" "$SAFETY_RULES" "fail"
 require_text "agent workflow roles" "$AGENT_WORKFLOW" "assemblywright-"
 require_text "agents build commands pointer" "$AGENTS" "docs/build-test-commands.md"

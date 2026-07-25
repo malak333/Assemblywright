@@ -440,7 +440,12 @@ actor AssemblywrightMacBridgeRequestGate {
 }
 
 public struct AssemblywrightMacMTLSBridgeTransport: Sendable {
-    public static let protocolVersion: UInt16 = 1
+    /// Must equal `PROTOCOL_VERSION` in `crates/assemblywright-protocol/src/lib.rs`.
+    /// The two are independent declarations of one wire contract, so
+    /// `release-docs-drift-smoke.sh` compares them: neither test suite can catch
+    /// a mismatch on its own, and a disagreement authenticates over mTLS and then
+    /// fails at the application handshake.
+    public static let protocolVersion: UInt16 = 2
     public static let exporterLabel = "EXPORTER-Assemblywright-Developer-Mode-v1"
     private let factory: any AssemblywrightMacAuthenticatedTLSChannelFactory
 

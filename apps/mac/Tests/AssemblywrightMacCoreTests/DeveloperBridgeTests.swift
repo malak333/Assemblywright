@@ -732,7 +732,7 @@ struct DeveloperBridgeTests {
     func handshakeIsExporterBound() async throws {
         let profile = sampleProfile()
         let responseData = Data(
-            #"{"protocol_version":1,"status":"accepted","connection_epoch":7,"accepted_registry_revision":3,"reason_code":null}"#.utf8
+            #"{"protocol_version":2,"status":"accepted","connection_epoch":7,"accepted_registry_revision":3,"reason_code":null}"#.utf8
         )
         let channel = FakeBridgeChannel(
             exporter: Data(repeating: 0x42, count: 32),
@@ -772,7 +772,7 @@ struct DeveloperBridgeTests {
             exporter: Data(repeating: 1, count: 32),
             response: AssemblywrightMacBridgeHTTPResponse(
                 status: 200,
-                body: Data(#"{"protocol_version":1,"status":"accepted","connection_epoch":7,"accepted_registry_revision":4,"reason_code":null}"#.utf8)
+                body: Data(#"{"protocol_version":2,"status":"accepted","connection_epoch":7,"accepted_registry_revision":4,"reason_code":null}"#.utf8)
             )
         )
         let mismatchedTransport = AssemblywrightMacMTLSBridgeTransport(
@@ -889,7 +889,7 @@ struct DeveloperBridgeTests {
         )
         let batch = Data(
             """
-            {"after_sequence":0,"events":[{"connection_epoch":null,"cursor":{"sequence":1,"stream_id":"\(streamID.uuidString.lowercased())"},"device_id":null,"kind":"step_queued","occurred_at_ms":1000,"protocol_version":1,"step_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","task_id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc"}],"has_more":false,"next_sequence":1,"protocol_version":1,"stream_id":"\(streamID.uuidString.lowercased())"}
+            {"after_sequence":0,"events":[{"connection_epoch":null,"cursor":{"sequence":1,"stream_id":"\(streamID.uuidString.lowercased())"},"device_id":null,"kind":"step_queued","occurred_at_ms":1000,"protocol_version":2,"step_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","task_id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc"}],"has_more":false,"next_sequence":1,"protocol_version":2,"stream_id":"\(streamID.uuidString.lowercased())"}
             """.utf8
         )
         let master = FakeSupervisorSession(
@@ -932,7 +932,7 @@ struct DeveloperBridgeTests {
             launcher: FakeDeveloperAgentLauncher(session: agent)
         )
         let malformed = Data(
-            #"{"after_sequence":0,"events":[],"has_more":false,"next_sequence":2,"protocol_version":1,"stream_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}"#.utf8
+            #"{"after_sequence":0,"events":[],"has_more":false,"next_sequence":2,"protocol_version":2,"stream_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}"#.utf8
         )
         let master = FakeSupervisorSession(
             connectionEpoch: 52,
@@ -1530,13 +1530,13 @@ struct DeveloperBridgeTests {
     @Test("App helper snapshots decode exact redacted connected and maintenance states")
     func appHelperSnapshotStrictDecoding() throws {
         let connected = Data(
-            #"{"connection_epoch":22,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#.utf8
+            #"{"connection_epoch":22,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":2,"schema_version":2}"#.utf8
         )
         let maintenance = Data(
-            #"{"connection_epoch":23,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":true,"master_endpoint":"100.64.23.14:7792","master_status":"maintenance","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#.utf8
+            #"{"connection_epoch":23,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":true,"master_endpoint":"100.64.23.14:7792","master_status":"maintenance","next_delay_ms":5000,"phase":"authenticated","protocol_version":2,"schema_version":2}"#.utf8
         )
         let paused = Data(
-            #"{"connection_epoch":24,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":true,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"paused","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#.utf8
+            #"{"connection_epoch":24,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":true,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"paused","next_delay_ms":5000,"phase":"authenticated","protocol_version":2,"schema_version":2}"#.utf8
         )
 
         let connectedStatus = try AssemblywrightDeveloperBridgeProcessLifecycle.status(from: connected)
@@ -1555,13 +1555,13 @@ struct DeveloperBridgeTests {
     @Test("App helper snapshots reject extra keys, invalid shapes, and oversized lines")
     func appHelperSnapshotRejectsUntrustedOutput() {
         let extra = Data(
-            #"{"connection_epoch":22,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2,"service_identity":"forbidden"}"#.utf8
+            #"{"connection_epoch":22,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":2,"schema_version":2,"service_identity":"forbidden"}"#.utf8
         )
         let contradictory = Data(
-            #"{"connection_epoch":22,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":true,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#.utf8
+            #"{"connection_epoch":22,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":true,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":2,"schema_version":2}"#.utf8
         )
         let duplicate = Data(
-            #"{"connection_epoch":22,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","\u0070hase":"authenticated","protocol_version":1,"schema_version":2}"#.utf8
+            #"{"connection_epoch":22,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","\u0070hase":"authenticated","protocol_version":2,"schema_version":2}"#.utf8
         )
         let oversized = Data(repeating: 0x61, count: AssemblywrightDeveloperBridgeProcessLifecycle.maximumLineBytes + 1)
 
@@ -1613,7 +1613,7 @@ struct DeveloperBridgeTests {
     @Test("App helper lifecycle publishes connected state and stops its child")
     func appHelperLifecyclePublishesAndStops() async {
         let line = Data(
-            #"{"connection_epoch":44,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#.utf8
+            #"{"connection_epoch":44,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":2,"schema_version":2}"#.utf8
         )
         let session = FakeBridgeProcessSession(lines: [line])
         let launcher = FakeBridgeProcessLauncher(session: session)
@@ -1644,7 +1644,7 @@ struct DeveloperBridgeTests {
     @Test("App helper lifecycle cleanup stops its child after cancellation")
     func appHelperLifecycleCleanupStopsAfterCancellation() async {
         let line = Data(
-            #"{"connection_epoch":44,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#.utf8
+            #"{"connection_epoch":44,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":2,"schema_version":2}"#.utf8
         )
         let session = FakeBridgeProcessSession(lines: [line])
         let lifecycle = AssemblywrightDeveloperBridgeProcessLifecycle(
@@ -1678,7 +1678,7 @@ struct DeveloperBridgeTests {
     @Test("Failed helper teardown retains ownership and blocks relaunch until retry")
     func appHelperTeardownFailureBlocksRelaunchUntilRetry() async {
         let line = Data(
-            #"{"connection_epoch":44,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#.utf8
+            #"{"connection_epoch":44,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":2,"schema_version":2}"#.utf8
         )
         let session = FakeBridgeProcessSession(lines: [line], stopFailures: 2)
         let launcher = FakeBridgeProcessLauncher(session: session)
@@ -1725,7 +1725,7 @@ struct DeveloperBridgeTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
         let executable = directory.appendingPathComponent("bridge-fixture")
-        let snapshot = #"{"connection_epoch":45,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#
+        let snapshot = #"{"connection_epoch":45,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":2,"schema_version":2}"#
         let script = "#!/bin/sh\nprintf '%s\\n' '\(snapshot)'\nexec /bin/sleep 30\n"
         try Data(script.utf8).write(to: executable, options: .atomic)
         try FileManager.default.setAttributes(
@@ -1762,7 +1762,7 @@ struct DeveloperBridgeTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
         let executable = directory.appendingPathComponent("bridge-fixture")
-        let snapshot = #"{"connection_epoch":46,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#
+        let snapshot = #"{"connection_epoch":46,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":2,"schema_version":2}"#
         let script = "#!/bin/sh\ni=0\nwhile [ $i -lt 1000 ]; do\n  printf '%s\\n' '\(snapshot)'\n  i=$((i + 1))\ndone\nexec /bin/sleep 30\n"
         try Data(script.utf8).write(to: executable, options: .atomic)
         try FileManager.default.setAttributes(
@@ -1798,7 +1798,7 @@ struct DeveloperBridgeTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
         let executable = directory.appendingPathComponent("bridge-fixture")
-        let snapshot = #"{"connection_epoch":47,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":1,"schema_version":2}"#
+        let snapshot = #"{"connection_epoch":47,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":2,"schema_version":2}"#
         let script = "#!/bin/sh\ntrap '' TERM\nprintf '%s\\n' '\(snapshot)'\nexec /bin/sleep 30\n"
         try Data(script.utf8).write(to: executable, options: .atomic)
         try FileManager.default.setAttributes(
@@ -2433,7 +2433,7 @@ private func fixtureJobDocuments(
     )
     let contextDigest = Array(SHA256.hash(data: contextData))
     let jobObject: [String: Any] = [
-        "protocol_version": 1,
+        "protocol_version": 2,
         "connection_epoch": NSNumber(value: connectionEpoch),
         "sequence": 10,
         "task_id": taskID,
@@ -2461,7 +2461,7 @@ private func fixtureJobDocuments(
     )
     let payloadDigest = Array(SHA256.hash(data: payloadData))
     let resultObject: [String: Any] = [
-        "protocol_version": 1,
+        "protocol_version": 2,
         "connection_epoch": NSNumber(value: connectionEpoch),
         "sequence": 11,
         "task_id": taskID,
@@ -2475,7 +2475,7 @@ private func fixtureJobDocuments(
         "payload": payload
     ]
     let cancellationObject: [String: Any] = [
-        "protocol_version": 1,
+        "protocol_version": 2,
         "connection_epoch": NSNumber(value: connectionEpoch),
         "sequence": 11,
         "task_id": taskID,
@@ -2486,7 +2486,7 @@ private func fixtureJobDocuments(
         "deadline_after_ms": 2_000
     ]
     let acknowledgementObject: [String: Any] = [
-        "protocol_version": 1,
+        "protocol_version": 2,
         "connection_epoch": NSNumber(value: connectionEpoch),
         "sequence": 12,
         "task_id": taskID,
@@ -2552,7 +2552,7 @@ private func mlxJobDocuments(connectionEpoch: UInt64) throws -> FixtureJobDocume
     )
     let contextDigest = Array(SHA256.hash(data: contextData))
     let jobObject: [String: Any] = [
-        "protocol_version": 1,
+        "protocol_version": 2,
         "connection_epoch": NSNumber(value: connectionEpoch),
         "sequence": 10,
         "task_id": taskID,
@@ -2580,7 +2580,7 @@ private func mlxJobDocuments(connectionEpoch: UInt64) throws -> FixtureJobDocume
     )
     let payloadDigest = Array(SHA256.hash(data: payloadData))
     let resultObject: [String: Any] = [
-        "protocol_version": 1,
+        "protocol_version": 2,
         "connection_epoch": NSNumber(value: connectionEpoch),
         "sequence": 11,
         "task_id": taskID,
@@ -2594,7 +2594,7 @@ private func mlxJobDocuments(connectionEpoch: UInt64) throws -> FixtureJobDocume
         "payload": payload
     ]
     let cancellationObject: [String: Any] = [
-        "protocol_version": 1,
+        "protocol_version": 2,
         "connection_epoch": NSNumber(value: connectionEpoch),
         "sequence": 11,
         "task_id": taskID,
@@ -2605,7 +2605,7 @@ private func mlxJobDocuments(connectionEpoch: UInt64) throws -> FixtureJobDocume
         "deadline_after_ms": 2_000
     ]
     let acknowledgementObject: [String: Any] = [
-        "protocol_version": 1,
+        "protocol_version": 2,
         "connection_epoch": NSNumber(value: connectionEpoch),
         "sequence": 12,
         "task_id": taskID,
@@ -2644,7 +2644,7 @@ private func mlxJobDocuments(connectionEpoch: UInt64) throws -> FixtureJobDocume
 
 private func emptyEventBatch() -> Data {
     Data(
-        #"{"after_sequence":0,"events":[],"has_more":false,"next_sequence":0,"protocol_version":1,"stream_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}"#.utf8
+        #"{"after_sequence":0,"events":[],"has_more":false,"next_sequence":0,"protocol_version":2,"stream_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}"#.utf8
     )
 }
 
@@ -2699,12 +2699,12 @@ private func sampleProfile() -> AssemblywrightMacBridgeProfile {
 
 private func validRemoteHealthData() -> Data {
     Data(
-        #"{"status":"ok","mode":"developer_remote_master","host_mode":"windows_service","service_identity":"MIKE-PC\\mike","maintenance_active":false,"maintenance_reason":null,"emergency_paused":false,"protocol_version":1,"schema_version":2,"process_id":43752,"started_at_ms":1784749559000,"startup_reconciliation":{"disconnected_connections":0,"abandoned_attempts":0,"requeued_steps":0},"state":{"registered_devices":1,"active_device_certificates":1,"unconsumed_enrollment_grants":2,"active_connections":1,"queued_steps":0,"leased_steps":0,"terminal_steps":0,"active_attempts":0},"boundary":"TLS 1.3 mutual authentication with enrolled-device certificate and durable revocation checks"}"#.utf8
+        #"{"status":"ok","mode":"developer_remote_master","host_mode":"windows_service","service_identity":"MIKE-PC\\mike","maintenance_active":false,"maintenance_reason":null,"emergency_paused":false,"protocol_version":2,"schema_version":2,"process_id":43752,"started_at_ms":1784749559000,"startup_reconciliation":{"disconnected_connections":0,"abandoned_attempts":0,"requeued_steps":0},"state":{"registered_devices":1,"active_device_certificates":1,"unconsumed_enrollment_grants":2,"active_connections":1,"queued_steps":0,"leased_steps":0,"terminal_steps":0,"active_attempts":0},"boundary":"TLS 1.3 mutual authentication with enrolled-device certificate and durable revocation checks"}"#.utf8
     )
 }
 
 private func pausedRemoteHealthData() -> Data {
     Data(
-        #"{"status":"paused","mode":"developer_remote_master","host_mode":"windows_service","service_identity":"MIKE-PC\\mike","maintenance_active":false,"maintenance_reason":null,"emergency_paused":true,"protocol_version":1,"schema_version":2,"process_id":43752,"started_at_ms":1784749559000,"startup_reconciliation":{"disconnected_connections":0,"abandoned_attempts":0,"requeued_steps":0},"state":{"registered_devices":1,"active_device_certificates":1,"unconsumed_enrollment_grants":2,"active_connections":1,"queued_steps":0,"leased_steps":1,"terminal_steps":0,"active_attempts":1},"boundary":"TLS 1.3 mutual authentication with enrolled-device certificate and durable revocation checks"}"#.utf8
+        #"{"status":"paused","mode":"developer_remote_master","host_mode":"windows_service","service_identity":"MIKE-PC\\mike","maintenance_active":false,"maintenance_reason":null,"emergency_paused":true,"protocol_version":2,"schema_version":2,"process_id":43752,"started_at_ms":1784749559000,"startup_reconciliation":{"disconnected_connections":0,"abandoned_attempts":0,"requeued_steps":0},"state":{"registered_devices":1,"active_device_certificates":1,"unconsumed_enrollment_grants":2,"active_connections":1,"queued_steps":0,"leased_steps":1,"terminal_steps":0,"active_attempts":1},"boundary":"TLS 1.3 mutual authentication with enrolled-device certificate and durable revocation checks"}"#.utf8
     )
 }
