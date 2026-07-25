@@ -365,7 +365,7 @@ fn release_readiness(endpoint: &str) -> anyhow::Result<String> {
     match request(endpoint, "GET", "/release/readiness", None) {
         Ok(response) => Ok(response),
         Err(error) if is_transport_unavailable(&error) => {
-            let readiness = jarvis_core::IpcState::new().release_readiness();
+            let readiness = jarvis_core::release_readiness();
             Ok(serde_json::to_string(&readiness)?)
         }
         Err(error) => Err(error),
@@ -376,7 +376,7 @@ fn release_evidence_status(endpoint: &str) -> anyhow::Result<String> {
     match request(endpoint, "GET", "/release/evidence-status", None) {
         Ok(response) => Ok(response),
         Err(error) if is_transport_unavailable(&error) => {
-            let status = jarvis_core::IpcState::new().release_evidence_status();
+            let status = jarvis_core::release_evidence_status();
             Ok(serde_json::to_string(&status)?)
         }
         Err(error) => Err(error),

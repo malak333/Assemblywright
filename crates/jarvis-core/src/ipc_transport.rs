@@ -2,7 +2,7 @@
 use crate::macos_code_identity::{CompiledPeerRequirement, PeerAuditToken};
 #[cfg(target_os = "macos")]
 use crate::startup::validate_peer_code_requirement;
-use crate::{router_with_auth, validate_unix_socket_path, IpcAuth, IpcState, PeerIdentityProfile};
+use crate::startup::{validate_unix_socket_path, PeerIdentityProfile};
 use anyhow::{anyhow, bail, Context};
 use axum::body::{to_bytes, Body};
 use axum::http::{header, HeaderValue, Method, Request, Uri};
@@ -104,46 +104,6 @@ impl Drop for KnownSocketCleanup {
     }
 }
 
-/// Serves the existing authenticated Axum router over a strict, bounded local
-/// frame protocol. Each accepted socket carries exactly one request/response.
-pub async fn serve_unix_socket(
-    socket_path: impl AsRef<Path>,
-    state: IpcState,
-    auth: IpcAuth,
-) -> anyhow::Result<()> {
-    let app = router_with_auth(state, Some(auth));
-    serve_unix_socket_inner(
-        socket_path.as_ref(),
-        app,
-        #[cfg(target_os = "macos")]
-        None,
-        #[cfg(test)]
-        None,
-    )
-    .await
-}
-
-/// Serves authenticated local IPC only after the connected process passes an
-/// Apple audit-token-bound code requirement. The requirement is compiled
-/// before the socket path is bound, so malformed policy fails startup closed.
-#[cfg(target_os = "macos")]
-pub async fn serve_unix_socket_with_peer_identity(
-    socket_path: impl AsRef<Path>,
-    state: IpcState,
-    auth: IpcAuth,
-    peer_code_requirement: &str,
-    peer_identity_profile: PeerIdentityProfile,
-) -> anyhow::Result<()> {
-    let app = router_with_auth(state, Some(auth));
-    serve_router_unix_socket_with_peer_identity(
-        socket_path,
-        app,
-        peer_code_requirement,
-        peer_identity_profile,
-    )
-    .await
-}
-
 /// Serves a caller-supplied Axum router over the same owner-only, same-EUID,
 /// Apple audit-token-bound Unix transport used by the app-supervised core.
 /// The caller remains responsible for applying per-route bearer authorization.
@@ -168,17 +128,6 @@ pub async fn serve_router_unix_socket_with_peer_identity(
         None,
     )
     .await
-}
-
-#[cfg(not(target_os = "macos"))]
-pub async fn serve_unix_socket_with_peer_identity(
-    _socket_path: impl AsRef<Path>,
-    _state: IpcState,
-    _auth: IpcAuth,
-    _peer_code_requirement: &str,
-    _peer_identity_profile: PeerIdentityProfile,
-) -> anyhow::Result<()> {
-    bail!("Apple peer code identity verification is supported only on macOS")
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -547,6 +496,33 @@ mod tests {
 
     const TEST_TOKEN: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
+    /// Minimal bearer-protected router standing in for a real consumer's
+    /// router. The transport must preserve its middleware and status codes.
+    fn test_router_with_auth(token: &'static str) -> Router {
+        Router::new()
+            .route(
+                "/health",
+                axum::routing::get(|| async { axum::Json(json!({ "status": "ok" })) }),
+            )
+            .layer(axum::middleware::from_fn(
+                move |request: axum::extract::Request, next: axum::middleware::Next| async move {
+                    let expected = format!("Bearer {token}");
+                    let presented = request
+                        .headers()
+                        .get(header::AUTHORIZATION)
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default()
+                        .to_string();
+                    if presented != expected {
+                        return axum::response::IntoResponse::into_response(
+                            axum::http::StatusCode::UNAUTHORIZED,
+                        );
+                    }
+                    next.run(request).await
+                },
+            ))
+    }
+
     #[test]
     fn concurrency_contract_remains_bounded() {
         assert_eq!(MAX_UNIX_IPC_CONNECTIONS, 32);
@@ -605,10 +581,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_whitelists_methods_and_preserves_auth_middleware() {
-        let app = router_with_auth(
-            IpcState::new(),
-            Some(IpcAuth::new(TEST_TOKEN, 1).expect("auth")),
-        );
+        let app = test_router_with_auth(TEST_TOKEN);
         let request = |method: &str, authorization: Option<&str>| {
             json!({
                 "version": 1,
@@ -648,10 +621,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_rejects_non_origin_or_control_bearing_paths() {
-        let app = router_with_auth(
-            IpcState::new(),
-            Some(IpcAuth::new(TEST_TOKEN, 1).expect("auth")),
-        );
+        let app = test_router_with_auth(TEST_TOKEN);
         for path in [
             "//host/health",
             "/health#fragment",
@@ -732,14 +702,7 @@ mod tests {
         );
         let result = timeout(
             Duration::from_secs(2),
-            handle_connection(
-                server,
-                router_with_auth(
-                    IpcState::new(),
-                    Some(IpcAuth::new(TEST_TOKEN, 1).expect("auth")),
-                ),
-                Some(requirement),
-            ),
+            handle_connection(server, test_router_with_auth(TEST_TOKEN), Some(requirement)),
         )
         .await
         .expect("identity rejection must precede the ten-second frame timeout")
@@ -778,12 +741,8 @@ mod tests {
         let socket_path = parent.join("core.sock");
         let server_path = socket_path.clone();
         let server = tokio::spawn(async move {
-            serve_unix_socket(
-                server_path,
-                IpcState::new(),
-                IpcAuth::new(TEST_TOKEN, 1).expect("auth"),
-            )
-            .await
+            serve_unix_socket_inner(&server_path, test_router_with_auth(TEST_TOKEN), None, None)
+                .await
         });
         for _ in 0..100 {
             if socket_path.exists() {
@@ -864,10 +823,7 @@ mod tests {
         let server = tokio::spawn(async move {
             serve_unix_socket_inner(
                 &server_path,
-                router_with_auth(
-                    IpcState::new(),
-                    Some(IpcAuth::new(TEST_TOKEN, 1).expect("auth")),
-                ),
+                test_router_with_auth(TEST_TOKEN),
                 None,
                 Some(server_accepted_connections),
             )
