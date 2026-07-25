@@ -1368,7 +1368,7 @@ release proof or signing/notary validation by itself.
 
 The production-readiness sweep is coordinated through isolated worktrees and
 topic branches against the public repository
-`https://github.com/malak333/Jarvis`. Phase-3 slices have landed for model-route
+`https://github.com/malak333/Assemblywright`. Phase-3 slices have landed for model-route
 persistence, installed plugin subprocess execution boundaries, voice input controls, packaged app
 release smoke, permission grants UX, docs architecture alignment, versioning,
 distribution packaging, Keychain credential launch injection, Swift memory

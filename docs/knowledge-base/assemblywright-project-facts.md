@@ -17,10 +17,11 @@ These notes capture durable facts for future agents working on this repository.
   plugin ABI, Windows service, and code-signing identifiers remain explicit
   compatibility contracts. The product-facing app and release artifact names
   are `Assemblywright.app` and `Assemblywright-<version>.*`.
-- The checked-out Git remote still uses the legacy
-  `https://github.com/malak333/Jarvis` URL until the repository is renamed
-  externally; documentation must not claim that an unperformed remote rename
-  already happened.
+- The GitHub repository was renamed from `Jarvis` to `Assemblywright`, so the
+  canonical remote is `https://github.com/malak333/Assemblywright`. GitHub
+  redirects the former `malak333/Jarvis` URL, so older clones keep fetching and
+  pushing, but new references must use the current URL. The local working
+  directory is still named `Jarvis`; that is a checkout path, not a contract.
 
 ## Apple Peer Identity Boundary
 
@@ -56,7 +57,7 @@ These notes capture durable facts for future agents working on this repository.
 
 ## Repository And Scope
 
-- The repository is public at `https://github.com/malak333/Jarvis`.
+- The repository is public at `https://github.com/malak333/Assemblywright`.
 - Production implementation work should assume public-repo hygiene: no secrets,
   no private-source material, no hidden readiness claims, and release evidence
   that can be reviewed from the branch/PR.
@@ -2060,7 +2061,7 @@ requires plugin-trust `generated_at`, `review_started_at`,
   readiness evidence; only checked-in code/docs, reviewed PRs, and verification
   output count as proof.
 - Durable facts from the May 21, 2026 production sweep: the repo is public at
-  `https://github.com/malak333/Jarvis`, work should be split across isolated
+  `https://github.com/malak333/Assemblywright`, work should be split across isolated
   worktrees and `codex/` topic branches, PRs should be reviewable and
   evidence-backed, docs-only workers must not edit Rust or Swift code, and
   readiness language must stay scoped to verified local foundation surfaces

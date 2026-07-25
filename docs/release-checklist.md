@@ -6,7 +6,7 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 ## Scope Check
 
 - Confirm the release target is this public repository
-  (`https://github.com/malak333/Jarvis`) and that the work is landing through a
+  (`https://github.com/malak333/Assemblywright`) and that the work is landing through a
   reviewable worktree/branch/PR slice.
 - Confirm `DESIGN.md` still matches the implementation scope.
 - Confirm release notes distinguish implemented Rust foundation and Swift shell

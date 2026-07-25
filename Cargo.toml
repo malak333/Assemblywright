@@ -11,7 +11,7 @@ resolver = "2"
 [workspace.package]
 edition = "2021"
 license = "Apache-2.0"
-repository = "https://github.com/malak333/Jarvis"
+repository = "https://github.com/malak333/Assemblywright"
 rust-version = "1.86"
 
 [workspace.dependencies]
