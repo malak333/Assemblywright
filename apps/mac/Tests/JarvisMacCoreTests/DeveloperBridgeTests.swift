@@ -619,6 +619,21 @@ struct DeveloperBridgeTests {
             standard.keyTag
                 == Data("com.nobiletechnology.jarvis.developer-bridge.p256-v1".utf8)
         )
+        // These Keychain service names scope items already stored on an installed
+        // Mac. Renaming them orphans the enrolled identity rather than migrating
+        // it, so the Assemblywright rename left them unchanged on purpose. See
+        // docs/brand.md "Compatibility Names".
+        #expect(
+            fixture.service == "com.nobiletechnology.jarvis.developer-bridge.fixture"
+        )
+        #expect(
+            fixture.certificateLabel
+                == "com.nobiletechnology.jarvis.developer-bridge.fixture.identity-v1"
+        )
+        #expect(
+            fixture.keyTag
+                == Data("com.nobiletechnology.jarvis.developer-bridge.fixture.p256-v1".utf8)
+        )
         #expect(fixture.service != standard.service)
         #expect(fixture.certificateLabel != standard.certificateLabel)
         #expect(fixture.keyTag != standard.keyTag)
@@ -865,8 +880,8 @@ struct DeveloperBridgeTests {
         let agent = FakeDeveloperAgentSession()
         let launcher = FakeDeveloperAgentLauncher(session: agent)
         let configuration = JarvisMacDeveloperEventRelayConfiguration(
-            agentExecutableURL: URL(fileURLWithPath: "/tmp/jarvis-agent"),
-            agentDataDirectoryURL: URL(fileURLWithPath: "/tmp/jarvis-agent-data")
+            agentExecutableURL: URL(fileURLWithPath: "/tmp/assemblywright-agent"),
+            agentDataDirectoryURL: URL(fileURLWithPath: "/tmp/assemblywright-agent-data")
         )
         let relay = JarvisMacDeveloperEventRelay(
             configuration: configuration,
@@ -911,8 +926,8 @@ struct DeveloperBridgeTests {
         let agent = FakeDeveloperAgentSession()
         let relay = JarvisMacDeveloperEventRelay(
             configuration: JarvisMacDeveloperEventRelayConfiguration(
-                agentExecutableURL: URL(fileURLWithPath: "/tmp/jarvis-agent"),
-                agentDataDirectoryURL: URL(fileURLWithPath: "/tmp/jarvis-agent-data")
+                agentExecutableURL: URL(fileURLWithPath: "/tmp/assemblywright-agent"),
+                agentDataDirectoryURL: URL(fileURLWithPath: "/tmp/assemblywright-agent-data")
             ),
             launcher: FakeDeveloperAgentLauncher(session: agent)
         )
@@ -937,8 +952,8 @@ struct DeveloperBridgeTests {
         let agent = FakeDeveloperAgentSession(fixtureResult: fixture.result)
         let relay = JarvisMacDeveloperEventRelay(
             configuration: JarvisMacDeveloperEventRelayConfiguration(
-                agentExecutableURL: URL(fileURLWithPath: "/tmp/jarvis-agent"),
-                agentDataDirectoryURL: URL(fileURLWithPath: "/tmp/jarvis-agent-data"),
+                agentExecutableURL: URL(fileURLWithPath: "/tmp/assemblywright-agent"),
+                agentDataDirectoryURL: URL(fileURLWithPath: "/tmp/assemblywright-agent-data"),
                 fixtureJobsEnabled: true
             ),
             deviceID: UUID(uuidString: "22222222-2222-4222-8222-222222222222"),
@@ -972,8 +987,8 @@ struct DeveloperBridgeTests {
         let agent = FakeDeveloperAgentSession(fixtureResult: fixture.result)
         let relay = JarvisMacDeveloperEventRelay(
             configuration: JarvisMacDeveloperEventRelayConfiguration(
-                agentExecutableURL: URL(fileURLWithPath: "/tmp/jarvis-agent"),
-                agentDataDirectoryURL: URL(fileURLWithPath: "/tmp/jarvis-agent-data"),
+                agentExecutableURL: URL(fileURLWithPath: "/tmp/assemblywright-agent"),
+                agentDataDirectoryURL: URL(fileURLWithPath: "/tmp/assemblywright-agent-data"),
                 fixtureJobsEnabled: true
             ),
             deviceID: UUID(uuidString: "22222222-2222-4222-8222-222222222222"),
@@ -1003,8 +1018,8 @@ struct DeveloperBridgeTests {
         )
         let relay = JarvisMacDeveloperEventRelay(
             configuration: JarvisMacDeveloperEventRelayConfiguration(
-                agentExecutableURL: URL(fileURLWithPath: "/tmp/jarvis-agent"),
-                agentDataDirectoryURL: URL(fileURLWithPath: "/tmp/jarvis-agent-data"),
+                agentExecutableURL: URL(fileURLWithPath: "/tmp/assemblywright-agent"),
+                agentDataDirectoryURL: URL(fileURLWithPath: "/tmp/assemblywright-agent-data"),
                 fixtureJobsEnabled: true
             ),
             deviceID: UUID(uuidString: "22222222-2222-4222-8222-222222222222"),
@@ -1039,8 +1054,8 @@ struct DeveloperBridgeTests {
         )
         let relay = JarvisMacDeveloperEventRelay(
             configuration: JarvisMacDeveloperEventRelayConfiguration(
-                agentExecutableURL: URL(fileURLWithPath: "/tmp/jarvis-agent"),
-                agentDataDirectoryURL: URL(fileURLWithPath: "/tmp/jarvis-agent-data"),
+                agentExecutableURL: URL(fileURLWithPath: "/tmp/assemblywright-agent"),
+                agentDataDirectoryURL: URL(fileURLWithPath: "/tmp/assemblywright-agent-data"),
                 fixtureJobsEnabled: true
             ),
             deviceID: UUID(uuidString: "22222222-2222-4222-8222-222222222222"),
@@ -1071,8 +1086,8 @@ struct DeveloperBridgeTests {
         let fixture = try fixtureJobDocuments(connectionEpoch: 63, delayMilliseconds: 0)
         let agent = FakeDeveloperAgentSession(fixtureResult: fixture.result)
         let configuration = JarvisMacDeveloperEventRelayConfiguration(
-            agentExecutableURL: URL(fileURLWithPath: "/tmp/jarvis-agent"),
-            agentDataDirectoryURL: URL(fileURLWithPath: "/tmp/jarvis-agent-data"),
+            agentExecutableURL: URL(fileURLWithPath: "/tmp/assemblywright-agent"),
+            agentDataDirectoryURL: URL(fileURLWithPath: "/tmp/assemblywright-agent-data"),
             fixtureJobsEnabled: true
         )
         let deviceID = UUID(uuidString: "22222222-2222-4222-8222-222222222222")
@@ -1184,9 +1199,9 @@ struct DeveloperBridgeTests {
             JarvisDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
                 "ABCDEFGHIJ",
             JarvisDeveloperBridgeProcessConfiguration.agentExecutableEnvironmentKey:
-                "/tmp/jarvis-agent",
+                "/tmp/assemblywright-agent",
             JarvisDeveloperBridgeProcessConfiguration.agentDataDirectoryEnvironmentKey:
-                "/tmp/jarvis-agent-data"
+                "/tmp/assemblywright-agent-data"
         ])
         let relay = try #require(complete.eventRelayConfiguration)
         let document = try relay.encodeStartupDocument()
@@ -1202,7 +1217,7 @@ struct DeveloperBridgeTests {
             JarvisDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
                 "ABCDEFGHIJ",
             JarvisDeveloperBridgeProcessConfiguration.agentExecutableEnvironmentKey:
-                "/tmp/jarvis-agent"
+                "/tmp/assemblywright-agent"
         ])
         #expect(partial.executableURL == nil)
         #expect(partial.eventRelayConfiguration == nil)
@@ -1213,9 +1228,9 @@ struct DeveloperBridgeTests {
             JarvisDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
                 "ABCDEFGHIJ",
             JarvisDeveloperBridgeProcessConfiguration.agentExecutableEnvironmentKey:
-                "/tmp/jarvis-agent",
+                "/tmp/assemblywright-agent",
             JarvisDeveloperBridgeProcessConfiguration.agentDataDirectoryEnvironmentKey:
-                "/tmp/jarvis-agent-data",
+                "/tmp/assemblywright-agent-data",
             JarvisDeveloperBridgeProcessConfiguration.fixtureJobsEnabledEnvironmentKey:
                 "true"
         ])
@@ -1266,9 +1281,9 @@ struct DeveloperBridgeTests {
             JarvisDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
                 "ABCDEFGHIJ",
             JarvisDeveloperBridgeProcessConfiguration.agentExecutableEnvironmentKey:
-                "/tmp/jarvis-agent",
+                "/tmp/assemblywright-agent",
             JarvisDeveloperBridgeProcessConfiguration.agentDataDirectoryEnvironmentKey:
-                "/tmp/jarvis-agent-data"
+                "/tmp/assemblywright-agent-data"
         ]
         var enabled = base
         enabled[JarvisDeveloperBridgeProcessConfiguration.mlxJobsEnabledEnvironmentKey] =
@@ -2510,8 +2525,8 @@ private func fixtureJobDocuments(
 
 private func mlxRelayConfiguration() -> JarvisMacDeveloperEventRelayConfiguration {
     JarvisMacDeveloperEventRelayConfiguration(
-        agentExecutableURL: URL(fileURLWithPath: "/tmp/jarvis-agent"),
-        agentDataDirectoryURL: URL(fileURLWithPath: "/tmp/jarvis-agent-data"),
+        agentExecutableURL: URL(fileURLWithPath: "/tmp/assemblywright-agent"),
+        agentDataDirectoryURL: URL(fileURLWithPath: "/tmp/assemblywright-agent-data"),
         mlxJobsEnabled: true,
         mlxExecutableURL: URL(fileURLWithPath: "/opt/jarvis/bin/mlx-runner"),
         mlxModelDirectoryURL: URL(fileURLWithPath: "/opt/jarvis/models/mlx-local"),

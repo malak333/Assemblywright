@@ -317,7 +317,7 @@ fn run(binary: &str, data_dir: &Path, arguments: &[&str]) -> Output {
         .arg(data_dir)
         .args(arguments)
         .output()
-        .expect("run jarvis-master service command")
+        .expect("run assemblywright-master service command")
 }
 
 fn decode(output: &Output) -> Value {

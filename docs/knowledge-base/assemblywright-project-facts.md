@@ -18,13 +18,32 @@ These notes capture durable facts for future agents working on this repository.
   binaries are `assemblywright`, `assemblywright-agent`, and
   `assemblywright-master`; the legacy `jarvis*` binary aliases were removed.
 - A specific set of `JARVIS_*` / `jarvis` identifiers survives deliberately as
-  compatibility contracts, because they bind installed state or signed
-  artifacts: environment variable names, Keychain and Application Support
-  namespaces, the Windows service name, the `com.nobiletechnology.jarvis`
-  code-signing identity and its `.core` suffix, the `JarvisMacApp` executable
-  name inside the bundle, and the bundled `jarvis-cli` filename. Renaming any of
-  these changes code-signing identity or orphans installed state, so they are
-  not cosmetic.
+  compatibility contracts, because they bind installed state, issued
+  credentials, or signed artifacts: environment variable names, Keychain and
+  Application Support namespaces, the Windows service name `JarvisMaster` and
+  its `%LOCALAPPDATA%\Jarvis\master` state directory, the
+  `com.nobiletechnology.jarvis` code-signing identity and its `.core` suffix,
+  the `JarvisMacApp` executable name inside the bundle, the bundled
+  `jarvis-cli` filename, the `EXPORTER-Jarvis-Developer-Mode-v1` TLS exporter
+  label, the `urn:jarvis:device:<uuid>` certificate SAN URI baked into every
+  issued device certificate, and the protocol-version-1 fixture capability
+  provider and model (`jarvis-fixture`, `jarvis-fixture-v1`). Renaming any of
+  these changes code-signing identity, voids issued certificates, breaks the
+  wire contract without a protocol version bump, or orphans installed state, so
+  they are not cosmetic.
+- `./scripts/release-naming-contract-smoke.sh` is the gate for that list. It
+  runs in `release-local.sh` as `--check` plus `--self-test` and fails in both
+  directions: if a legacy `jarvis*` crate, binary alias, or SwiftPM product
+  alias reappears, and if a preserved identifier is renamed or its documented
+  reason is dropped from `docs/brand.md` or this file. A rename pass that trips
+  it should change the contract and its migration, not the guard.
+- Prose, error messages, and CLI runbook output are *not* on that list. The
+  first rename pass left `cargo run -p jarvis-cli`, `` `jarvis-protocol` ``,
+  `` `jarvis-master` ``, and `jarvis-agent` in emitted runbooks, error strings,
+  and one `--bin jarvis-master` invocation in
+  `.github/workflows/windows-protocol.yml` that no longer resolved. When
+  renaming a crate, sweep emitted strings and CI invocations too, not just
+  manifests.
 - The SwiftPM product is `AssemblywrightMacApp`, and the built executable is
   named after the product, not the target. Packaging copies it into the bundle
   under the contract name via `SWIFT_APP_PRODUCT` in
@@ -36,6 +55,23 @@ These notes capture durable facts for future agents working on this repository.
   redirects the former `malak333/Jarvis` URL, so older clones keep fetching and
   pushing, but new references must use the current URL. The local working
   directory is `Assemblywright`.
+
+## Repository Housekeeping Already Completed
+
+- The rename is finished end to end: the crates are `assemblywright-*` with no
+  legacy binary aliases, `apps/mac/Package.swift` exports only
+  `Assemblywright*` products, the local working directory is
+  `~/Antigravity/Assemblywright`, and the canonical remote is
+  `malak333/Assemblywright`. Do not re-plan any of these as outstanding work.
+- The `.worktrees/` directory of finished-branch worktrees is gone, and
+  `git worktree list` should show only the primary checkout. If stale worktrees
+  reappear, prune them with `git worktree prune` before adding new ones.
+- The `codex/*` branches were deleted locally and on `origin` after their
+  squash-merge PRs landed. `origin` should carry `main` only. Their tip commits
+  are recorded in `~/Antigravity/codex-branch-cleanup-manifest.txt`, which is
+  outside the repository on purpose so a deleted branch stays recoverable with
+  `git push origin <sha>:refs/heads/<branch>`. That manifest is the only record;
+  do not delete it while any recovery might still be wanted.
 
 ## The Pivot
 

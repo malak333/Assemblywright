@@ -314,17 +314,17 @@ fn release_live_device_runbook_from(
                 .to_string(),
             "Launch Assemblywright with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true for this operator evidence session, then confirm JARVIS_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path before IPC commands"
                 .to_string(),
-            "cargo run -p jarvis-cli -- command \"status check\" --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\" --json"
+            "cargo run -p assemblywright-cli -- command \"status check\" --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\" --json"
                 .to_string(),
             "Record the returned task ID as JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>' or a task-associated audit ID as 'audit:<uuid>' in target/release-live-device-qa.env"
                 .to_string(),
             "set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete"
                 .to_string(),
-            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
+            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
                 .to_string(),
             "Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external"
                 .to_string(),
-            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
+            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
                 .to_string(),
         ],
         manual_checks: vec![
@@ -377,10 +377,10 @@ fn release_signed_distribution_runbook_from(
                 .to_string(),
             "Launch Assemblywright with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks"
                 .to_string(),
-            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
+            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
                 .to_string(),
             "./scripts/release-evidence-doctor.sh --check".to_string(),
-            "cargo run -p jarvis-cli -- release live-device-runbook".to_string(),
+            "cargo run -p assemblywright-cli -- release live-device-runbook".to_string(),
         ],
         manual_checks: vec![
             "Configure Developer ID Application and Installer identities plus either a notarytool keychain profile or Apple ID/team/app-specific password credentials on the release Mac."
@@ -433,11 +433,11 @@ fn release_evidence_bundle_runbook_from(
                 .to_string(),
             "Launch Assemblywright with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks"
                 .to_string(),
-            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
+            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
                 .to_string(),
             "Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external"
                 .to_string(),
-            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
+            "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
                 .to_string(),
         ],
         manual_checks: vec![
@@ -1955,20 +1955,20 @@ fn release_verification_commands() -> Vec<String> {
         "./scripts/release-ci-workflow-smoke.sh".to_string(),
         "./scripts/package-distribution.sh --check".to_string(),
         "./scripts/package-distribution.sh --unsigned-launch-check".to_string(),
-        "cargo run -p jarvis-cli -- release signed-distribution-runbook".to_string(),
+        "cargo run -p assemblywright-cli -- release signed-distribution-runbook".to_string(),
         "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh".to_string(),
         "./scripts/release-external-handoff.sh --write target/release-external-handoff".to_string(),
-        "cargo run -p jarvis-cli -- release live-device-runbook".to_string(),
+        "cargo run -p assemblywright-cli -- release live-device-runbook".to_string(),
         "./scripts/release-live-device-qa.sh --check".to_string(),
         "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env".to_string(),
         "set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
-        "cargo run -p jarvis-cli -- release evidence-bundle-runbook".to_string(),
+        "cargo run -p assemblywright-cli -- release evidence-bundle-runbook".to_string(),
         "./scripts/release-evidence-bundle.sh --check".to_string(),
         "./scripts/release-evidence-bundle.sh --write-template target/release-evidence-bundle.env".to_string(),
         "./scripts/release-evidence-doctor.sh --check".to_string(),
         "set -a && source target/release-evidence-bundle.env && set +a && ./scripts/release-evidence-bundle.sh --bundle".to_string(),
         "./scripts/release-evidence-doctor.sh --assert-complete".to_string(),
-        "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness".to_string(),
+        "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness".to_string(),
     ]
 }
 
@@ -1977,13 +1977,13 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "distributed_protocol_contract",
             "implemented",
-            "`jarvis-protocol` owns protocol version 1: typed device/task/step/attempt/lease/cancellation identifiers, bounded capability advertisements, handshake, job and result envelopes, strict bound-before-decode JSON entry points, nil-identity rejection, and a golden compatibility fixture.",
+            "`assemblywright-protocol` owns protocol version 1: typed device/task/step/attempt/lease/cancellation identifiers, bounded capability advertisements, handshake, job and result envelopes, strict bound-before-decode JSON entry points, nil-identity rejection, and a golden compatibility fixture.",
             "A versioned wire contract with golden-fixture coverage only; it is not proof of live two-device behavior.",
         ),
         feature(
             "distributed_master_kernel",
             "implemented",
-            "The portable `jarvis-master` schema-v5 SQLite kernel persists registered devices, connection epochs, queued steps, immutable leased job envelopes, attempts, cancellation and expiry outcomes, accepted payload digests, and a metadata-only event journal with one server-issued stream ID and contiguous sequence. It enforces the 256-step admission ceiling, four global leases, one live lease per device connection, exact leased-attempt result identity, and durable abandon-before-reissue.",
+            "The portable `assemblywright-master` schema-v5 SQLite kernel persists registered devices, connection epochs, queued steps, immutable leased job envelopes, attempts, cancellation and expiry outcomes, accepted payload digests, and a metadata-only event journal with one server-issued stream ID and contiguous sequence. It enforces the 256-step admission ceiling, four global leases, one live lease per device connection, exact leased-attempt result identity, and durable abandon-before-reissue.",
             "Durable single-owner state only; it is not the production runtime authority and carries no live cross-device reliability claim.",
         ),
         feature(

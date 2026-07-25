@@ -25,6 +25,7 @@
 | Agent relay E2E | `cargo test -p assemblywright-agent --test local_relay_e2e` |
 | Swift test | `swift test --disable-sandbox --package-path apps/mac --filter <test>` |
 | Docs contract | `./scripts/release-docs-drift-smoke.sh` |
+| Naming contract | `./scripts/release-naming-contract-smoke.sh --check` |
 | Full local gate | `./scripts/release-local.sh` |
 
 ## Delegation

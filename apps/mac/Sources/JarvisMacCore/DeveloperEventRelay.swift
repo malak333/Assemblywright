@@ -1673,7 +1673,7 @@ private actor FoundationJarvisMacDeveloperAgentSession:
     }
 
     private static func makeRuntimeDirectory() throws -> URL {
-        var template = Array("/tmp/jarvis-agent.XXXXXX".utf8CString)
+        var template = Array("/tmp/assemblywright-agent.XXXXXX".utf8CString)
         let path = template.withUnsafeMutableBufferPointer { buffer in
             mkdtemp(buffer.baseAddress)
         }

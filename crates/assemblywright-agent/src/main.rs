@@ -124,14 +124,14 @@ async fn serve(data_dir: PathBuf) -> anyhow::Result<()> {
     #[cfg(not(target_os = "macos"))]
     {
         let _ = data_dir;
-        bail!("jarvis-agent app supervision is supported only on macOS");
+        bail!("assemblywright-agent app supervision is supported only on macOS");
     }
 
     #[cfg(target_os = "macos")]
     {
         let mut startup_bytes = read_bounded_stdin()?;
         let mut startup: AgentStartupDocument = serde_json::from_slice(&startup_bytes)
-            .context("decode bounded jarvis-agent startup document")?;
+            .context("decode bounded assemblywright-agent startup document")?;
         startup_bytes.zeroize();
         validate_startup(&startup)?;
         verify_supervised_parent(startup.supervised_parent_pid)?;
@@ -185,16 +185,16 @@ fn read_bounded_stdin() -> anyhow::Result<Zeroizing<Vec<u8>>> {
     io::stdin()
         .take((MAX_AGENT_STARTUP_BYTES + 1) as u64)
         .read_to_end(&mut bytes)
-        .context("read jarvis-agent startup document")?;
+        .context("read assemblywright-agent startup document")?;
     if bytes.is_empty() || bytes.len() > MAX_AGENT_STARTUP_BYTES {
-        bail!("jarvis-agent startup document must contain 1 to {MAX_AGENT_STARTUP_BYTES} bytes");
+        bail!("assemblywright-agent startup document must contain 1 to {MAX_AGENT_STARTUP_BYTES} bytes");
     }
     Ok(bytes)
 }
 
 fn validate_startup(startup: &AgentStartupDocument) -> anyhow::Result<()> {
     if startup.version != AGENT_STARTUP_VERSION && startup.version != LEGACY_AGENT_STARTUP_VERSION {
-        bail!("unsupported jarvis-agent startup document version");
+        bail!("unsupported assemblywright-agent startup document version");
     }
     if startup.version == LEGACY_AGENT_STARTUP_VERSION
         && (startup.mlx_jobs_enabled
@@ -202,20 +202,20 @@ fn validate_startup(startup: &AgentStartupDocument) -> anyhow::Result<()> {
             || startup.mlx_model_path.is_some()
             || startup.mlx_model_id.is_some())
     {
-        bail!("legacy jarvis-agent startup documents cannot configure MLX jobs");
+        bail!("legacy assemblywright-agent startup documents cannot configure MLX jobs");
     }
     if startup.fixture_jobs_enabled && startup.mlx_jobs_enabled {
         bail!("fixture and MLX job runtimes cannot be enabled together");
     }
     if startup.supervised_parent_pid == 0 {
-        bail!("jarvis-agent requires a nonzero supervised parent PID");
+        bail!("assemblywright-agent requires a nonzero supervised parent PID");
     }
     validate_unix_socket_path(&startup.socket_path).map_err(anyhow::Error::new)?;
     if startup.peer_code_requirement.is_empty()
         || startup.peer_code_requirement.len() > MAX_PEER_CODE_REQUIREMENT_BYTES
         || startup.peer_code_requirement.as_bytes().contains(&0)
     {
-        bail!("jarvis-agent peer code requirement is invalid");
+        bail!("assemblywright-agent peer code requirement is invalid");
     }
     validate_peer_code_requirement(
         &startup.peer_code_requirement,
@@ -240,10 +240,10 @@ fn mlx_config_from_startup(
         (true, Some(executable), Some(model), Some(model_id)) => {
             MlxRuntimeConfig::validate(executable, model, model_id)
                 .map(Some)
-                .map_err(|_| anyhow::anyhow!("jarvis-agent MLX startup configuration is invalid"))
+                .map_err(|_| anyhow::anyhow!("assemblywright-agent MLX startup configuration is invalid"))
         }
         _ => bail!(
-            "jarvis-agent MLX paths and model identifier are required iff MLX jobs are enabled"
+            "assemblywright-agent MLX paths and model identifier are required iff MLX jobs are enabled"
         ),
     }
 }
@@ -254,15 +254,15 @@ fn digest_bearer_token(token: &str) -> anyhow::Result<[u8; 32]> {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
     {
-        bail!("jarvis-agent bearer token is invalid");
+        bail!("assemblywright-agent bearer token is invalid");
     }
     let decoded = Zeroizing::new(
         URL_SAFE_NO_PAD
             .decode(token)
-            .context("jarvis-agent bearer token is invalid")?,
+            .context("assemblywright-agent bearer token is invalid")?,
     );
     if decoded.len() != IPC_BEARER_TOKEN_BYTES {
-        bail!("jarvis-agent bearer token is invalid");
+        bail!("assemblywright-agent bearer token is invalid");
     }
     Ok(Sha256::digest(token.as_bytes()).into())
 }
@@ -271,7 +271,7 @@ fn digest_bearer_token(token: &str) -> anyhow::Result<[u8; 32]> {
 fn verify_supervised_parent(expected_parent_pid: u32) -> anyhow::Result<()> {
     let actual_parent_pid = unsafe { libc::getppid() };
     if actual_parent_pid <= 0 || actual_parent_pid as u32 != expected_parent_pid {
-        bail!("jarvis-agent direct parent does not match the startup document");
+        bail!("assemblywright-agent direct parent does not match the startup document");
     }
     Ok(())
 }

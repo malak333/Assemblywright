@@ -31,6 +31,8 @@ The gate runs, in order:
 ./scripts/release-version-consistency.sh --check
 ./scripts/release-ci-workflow-smoke.sh
 ./scripts/release-docs-drift-smoke.sh
+./scripts/release-naming-contract-smoke.sh --check
+./scripts/release-naming-contract-smoke.sh --self-test
 ./scripts/mac-windows-bridge-live-e2e.sh --check
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
@@ -95,10 +97,12 @@ executable changes as release evidence.
 | Windows service lifecycle | `cargo test -p assemblywright-master --test windows_service_lifecycle_e2e -- --ignored` |
 | Mac agent relay | `cargo test -p assemblywright-agent --test local_relay_e2e` |
 | Local transport and release | `cargo test -p assemblywright-core` |
+| CLI naming contract E2E | `cargo test -p assemblywright-cli --test naming_contract_e2e` |
 | Swift package | `swift test --disable-sandbox --package-path apps/mac` |
 | One Swift test | `swift test --disable-sandbox --package-path apps/mac --filter <test>` |
 | Codex workflow | `./scripts/validate-codex-workflow.sh` |
 | Docs contract | `./scripts/release-docs-drift-smoke.sh` |
+| Naming contract | `./scripts/release-naming-contract-smoke.sh --check` |
 
 ## Release Evidence Commands
 

@@ -115,7 +115,7 @@ pub enum MasterError {
     InvalidSystemClock,
     #[error("master filesystem error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("another jarvis-master process already owns {lock_path}")]
+    #[error("another assemblywright-master process already owns {lock_path}")]
     OwnerAlreadyActive { lock_path: PathBuf },
     #[error(transparent)]
     Identity(#[from] IdentityError),

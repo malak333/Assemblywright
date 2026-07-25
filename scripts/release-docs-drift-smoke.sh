@@ -42,6 +42,7 @@ MASTER_EVENT_E2E="crates/assemblywright-master/tests/event_cursor_e2e.rs"
 MASTER_CONVEYOR_E2E="crates/assemblywright-master/tests/feature_conveyor_kernel.rs"
 MASTER_SERVICE_E2E="crates/assemblywright-master/tests/windows_service_lifecycle_e2e.rs"
 AGENT_E2E="crates/assemblywright-agent/tests/local_relay_e2e.rs"
+CLI_NAMING_E2E="crates/assemblywright-cli/tests/naming_contract_e2e.rs"
 
 MAC_BRIDGE="apps/mac/Sources/JarvisMacCore/DeveloperBridge.swift"
 MAC_BRIDGE_CLI="apps/mac/Sources/JarvisMacBridgeCLI/JarvisMacBridgeCLI.swift"
@@ -59,6 +60,7 @@ WINDOWS_FIXTURE_LIVE_CONTROL="scripts/windows-fixture-live-control.ps1"
 WINDOWS_MLX_LIVE_CONTROL="scripts/windows-mlx-live-control.ps1"
 WINDOWS_PROTOCOL_WORKFLOW=".github/workflows/windows-protocol.yml"
 RELEASE_VERSION_SCRIPT="scripts/release-version.sh"
+NAMING_CONTRACT_SMOKE="scripts/release-naming-contract-smoke.sh"
 
 fail() {
   printf 'error: %s\n' "$1" >&2
@@ -101,13 +103,13 @@ for file in \
   "$PROTOCOL_E2E" "$PROTOCOL_EVENT_E2E" "$PROTOCOL_MLX_E2E" \
   "$MASTER_E2E" "$MASTER_PROCESS_E2E" "$MASTER_IDENTITY_E2E" \
   "$MASTER_REMOTE_MTLS_E2E" "$MASTER_EVENT_E2E" "$MASTER_CONVEYOR_E2E" \
-  "$MASTER_SERVICE_E2E" "$AGENT_E2E" \
+  "$MASTER_SERVICE_E2E" "$AGENT_E2E" "$CLI_NAMING_E2E" \
   "$MAC_BRIDGE" "$MAC_BRIDGE_CLI" "$MAC_BRIDGE_KEYCHAIN" "$MAC_BRIDGE_NETWORK" \
   "$MAC_BRIDGE_SUPERVISOR" "$MAC_BRIDGE_PROCESS" "$MAC_EVENT_RELAY" \
   "$MAC_APP" "$MAC_BRIDGE_TESTS" "$MAC_APP_TESTS" \
   "$MAC_BRIDGE_LIVE_E2E" "$WINDOWS_FIXTURE_LIVE_CONTROL" \
   "$WINDOWS_MLX_LIVE_CONTROL" "$WINDOWS_PROTOCOL_WORKFLOW" \
-  "$RELEASE_VERSION_SCRIPT"; do
+  "$RELEASE_VERSION_SCRIPT" "$NAMING_CONTRACT_SMOKE"; do
   require_file "$file"
 done
 
@@ -156,6 +158,9 @@ require_text "conveyor design approval" "$FEATURE_CONVEYOR_DESIGN" "Approve and 
 require_text "architecture conveyor kernel" "$ARCHITECTURE" "Feature Conveyor repository kernel"
 require_text "architecture core reduction" "$ARCHITECTURE" "no longer an assistant runtime"
 
+require_text "brand compatibility names" "$BRAND" "## Compatibility Names"
+require_text "knowledge base naming contract gate" "$KB" \
+  "release-naming-contract-smoke.sh"
 require_text "knowledge base pivot" "$KB" "## The Pivot"
 require_text "knowledge base crate boundaries" "$KB" "## Current Crate Boundaries"
 require_text "knowledge base proof boundaries" "$KB" "## Proof Boundaries"

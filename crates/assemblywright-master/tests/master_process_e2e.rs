@@ -261,7 +261,7 @@ fn run<const N: usize>(binary: &str, data_dir: &Path, arguments: [&str; N]) -> O
         .arg(data_dir)
         .args(arguments)
         .output()
-        .expect("run jarvis-master command")
+        .expect("run assemblywright-master command")
 }
 
 fn spawn_server(binary: &str, data_dir: &Path, endpoint: SocketAddr) -> ChildGuard {
@@ -274,7 +274,7 @@ fn spawn_server(binary: &str, data_dir: &Path, endpoint: SocketAddr) -> ChildGua
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn jarvis-master serve");
+        .expect("spawn assemblywright-master serve");
     ChildGuard { child }
 }
 

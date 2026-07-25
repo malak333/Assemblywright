@@ -854,7 +854,7 @@ fn validate_initialized_service_data(
         .context("validate exclusive access to initialized master data before installation")?;
     let token_path = process.data_dir().join(DEVELOPMENT_TOKEN_FILE);
     let _ = read_development_token(&token_path)
-        .context("service installation requires prior `jarvis-master setup`")?;
+        .context("service installation requires prior `assemblywright-master setup`")?;
     if remote_bind.is_some() {
         if !matches!(identity, CliServiceIdentity::OwnerAccount) {
             bail!("remote mTLS requires the owner-account service identity");
@@ -2264,7 +2264,7 @@ fn restrict_token_permissions(_path: &Path) -> anyhow::Result<()> {
 fn read_development_token(path: &Path) -> anyhow::Result<String> {
     let raw = fs::read_to_string(path).with_context(|| {
         format!(
-            "read development token at {}; run jarvis-master setup first",
+            "read development token at {}; run assemblywright-master setup first",
             path.display()
         )
     })?;
@@ -2465,5 +2465,29 @@ mod tests {
         registration.capabilities = vec![CapabilityDescriptor::fixture_reasoning()];
         registration.capabilities[0].model = "jarvis-fixture-v2".to_string();
         assert!(!registration_can_execute_fixture(&registration));
+    }
+
+    // The rename to Assemblywright deliberately left these two identifiers
+    // alone. The service name is what an installed Windows service is
+    // registered under, and the exporter label is a wire contract the Mac
+    // bridge asserts on its own side, so changing either orphans installed
+    // state or silently breaks channel binding against an older peer. Pin them
+    // so a future cosmetic rename pass fails here instead of in the field.
+    #[test]
+    fn windows_service_name_is_a_frozen_installed_state_contract() {
+        assert_eq!(DEFAULT_SERVICE_NAME, "JarvisMaster");
+    }
+
+    #[test]
+    fn tls_exporter_label_is_a_frozen_wire_contract() {
+        assert_eq!(TLS_EXPORTER_LABEL, b"EXPORTER-Jarvis-Developer-Mode-v1");
+        assert_eq!(TLS_EXPORTER_BYTES, 32);
+    }
+
+    #[test]
+    fn an_explicit_data_dir_overrides_the_installed_state_namespace() {
+        let resolved = resolve_data_dir(Some(PathBuf::from("/explicit/override")))
+            .expect("explicit data dir wins");
+        assert_eq!(resolved, PathBuf::from("/explicit/override"));
     }
 }

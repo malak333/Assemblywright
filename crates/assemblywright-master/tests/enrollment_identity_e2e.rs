@@ -130,9 +130,17 @@ fn enrollment_grants_issue_rotate_and_revoke_exact_device_identity() {
         .subject_alternative_name()
         .expect("decode SAN")
         .expect("issued SAN");
+    // The `urn:jarvis:device:` SAN prefix is a frozen credential contract, not
+    // leftover naming drift. It is baked into every certificate already issued to
+    // an enrolled device, and the master strips exactly this prefix when it
+    // verifies a presented client certificate, so renaming it voids those
+    // certificates and fails enrollment closed. The Assemblywright rename left it
+    // deliberately unchanged; see docs/brand.md "Compatibility Names".
+    let issued_uri = format!("urn:jarvis:device:{}", first.device_id.0);
+    assert!(issued_uri.starts_with("urn:jarvis:device:"));
     assert!(san.value.general_names.iter().any(|name| matches!(
         name,
-        GeneralName::URI(uri) if *uri == format!("urn:jarvis:device:{}", first.device_id.0)
+        GeneralName::URI(uri) if *uri == issued_uri
     )));
     assert!(master
         .certificate_is_active(first.device_id, &first.serial_hex, 2_000_003)

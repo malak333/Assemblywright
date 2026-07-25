@@ -86,7 +86,7 @@ fn specification(
     let manifest = json!({
         "feature_id": feature_id,
         "outcome": "bounded kernel test",
-        "allowed_paths": ["crates/jarvis-master/src/lib.rs"]
+        "allowed_paths": ["crates/assemblywright-master/src/lib.rs"]
     });
     let canonical = canonical_manifest(&manifest);
     ApprovedFeatureSpecification {

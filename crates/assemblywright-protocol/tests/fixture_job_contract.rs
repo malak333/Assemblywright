@@ -2,8 +2,8 @@ use assemblywright_protocol::{
     AttemptId, CancellationAcknowledgement, CancellationAcknowledgementStatus, CancellationId,
     CancellationInstruction, CapabilityDescriptor, ContextHandlingPolicy, JobEnvelope,
     JobResultEnvelope, JobResultStatus, LeaseId, ProtocolError, Sensitivity, StepId, TaskId,
-    CANCELLATION_ACK_DEADLINE_MS, FIXTURE_REASONING_MODEL, MAX_FIXTURE_INPUT_BYTES,
-    PROTOCOL_VERSION,
+    CANCELLATION_ACK_DEADLINE_MS, FIXTURE_REASONING_CAPABILITY_ID, FIXTURE_REASONING_MODEL,
+    FIXTURE_REASONING_PROVIDER, MAX_FIXTURE_INPUT_BYTES, PROTOCOL_VERSION,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -123,5 +123,40 @@ fn fixture_result_revalidates_the_stored_job_and_exact_output_contract() {
     assert_eq!(
         result.validate_fixture_reasoning_result(&job),
         Err(ProtocolError::InvalidFixtureJob)
+    );
+}
+
+// The fixture capability's provider and model are protocol-version-1 wire
+// values, not cosmetic names. An enrolled Mac agent advertises them verbatim and
+// the master rejects anything that does not match exactly, so renaming them is a
+// breaking wire change that needs a protocol version bump. The Assemblywright
+// rename deliberately left them alone; pin them so a later rename pass fails
+// here instead of against an enrolled device.
+#[test]
+fn fixture_capability_identity_is_a_frozen_protocol_v1_contract() {
+    assert_eq!(PROTOCOL_VERSION, 1);
+    assert_eq!(FIXTURE_REASONING_CAPABILITY_ID, "fixture.reasoning");
+    assert_eq!(FIXTURE_REASONING_PROVIDER, "jarvis-fixture");
+    assert_eq!(FIXTURE_REASONING_MODEL, "jarvis-fixture-v1");
+
+    let advertised = CapabilityDescriptor::fixture_reasoning();
+    assert_eq!(advertised.id, FIXTURE_REASONING_CAPABILITY_ID);
+    assert_eq!(advertised.provider, FIXTURE_REASONING_PROVIDER);
+    assert_eq!(advertised.model, FIXTURE_REASONING_MODEL);
+
+    advertised.validate().expect("frozen fixture capability");
+
+    // A renamed provider or model must fail closed rather than be tolerated.
+    let mut renamed_provider = CapabilityDescriptor::fixture_reasoning();
+    renamed_provider.provider = "assemblywright-fixture".to_string();
+    assert_eq!(
+        renamed_provider.validate(),
+        Err(ProtocolError::InvalidFixtureCapability)
+    );
+    let mut renamed_model = CapabilityDescriptor::fixture_reasoning();
+    renamed_model.model = "assemblywright-fixture-v1".to_string();
+    assert_eq!(
+        renamed_model.validate(),
+        Err(ProtocolError::InvalidFixtureCapability)
     );
 }

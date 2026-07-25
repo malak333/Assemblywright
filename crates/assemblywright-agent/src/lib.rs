@@ -940,7 +940,7 @@ pub enum AgentError {
     Io(#[from] std::io::Error),
     #[error("agent data directory must be an absolute owner-only directory")]
     UnsafeDataDirectory,
-    #[error("another jarvis-agent process already owns {lock_path}")]
+    #[error("another assemblywright-agent process already owns {lock_path}")]
     OwnerAlreadyActive { lock_path: PathBuf },
     #[error("event batch belongs to a different master stream")]
     EventStreamMismatch,

@@ -140,15 +140,24 @@ state; a badge means something needs attention.
 The Cargo crates and their binaries are now `assemblywright-*`, and the legacy
 `jarvis*` binary aliases have been removed.
 
-Identifiers that bind installed state or signed artifacts stay unchanged,
-because renaming them would change code-signing identity or orphan a user's
-existing installation: `JARVIS_*` environment variables, Keychain services,
+Identifiers that bind installed state, issued credentials, or signed artifacts
+stay unchanged, because renaming them would change code-signing identity, void
+an already-issued certificate, or orphan a user's existing installation:
+`JARVIS_*` environment variables, Keychain services,
 `~/Library/Application Support/Jarvis`, protocol labels such as
-`EXPORTER-Jarvis-Developer-Mode-v1`, the Windows service name, signed code
-identifiers such as `com.nobiletechnology.jarvis`, the `JarvisMacApp`
-executable name inside the bundle, and the bundled `jarvis-cli` filename. These
-remain stable compatibility contracts until a separately designed and tested
-migration exists.
+`EXPORTER-Jarvis-Developer-Mode-v1`, the `urn:jarvis:device:<uuid>` certificate
+subject-alternative-name URI, the protocol-version-1 fixture capability
+provider and model (`jarvis-fixture` and `jarvis-fixture-v1`), the
+`JarvisMaster` Windows service name and its `Jarvis\master` state directory,
+signed code identifiers such as `com.nobiletechnology.jarvis`, the
+`JarvisMacApp` executable name inside the bundle, and the bundled `jarvis-cli`
+filename. These remain stable compatibility contracts until a separately
+designed and tested migration exists.
+
+`./scripts/release-naming-contract-smoke.sh --check` enforces both directions:
+the product-facing names must be current, the legacy aliases must stay removed,
+and every identifier in the list above must stay exactly as it is. Do not "clean
+up" a name that gate protects; change the contract and its migration first.
 
 User-facing app bundles and release artifacts use `Assemblywright.app` and
 `Assemblywright-<version>.*`. The CLI entry point is `assemblywright`.

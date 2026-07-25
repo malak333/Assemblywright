@@ -206,9 +206,9 @@ if [[ "$MODE" == "--run-relay" || "$MODE" == "--run-fixture" || "$MODE" == "--ru
     relay_agent_bin="$ROOT_DIR/target/debug/assemblywright-agent"
   fi
   [[ -x "$relay_agent_bin" ]] \
-    || fail "jarvis-agent executable is unavailable"
+    || fail "assemblywright-agent executable is unavailable"
   codesign --verify --strict "$relay_agent_bin" >/dev/null 2>&1 \
-    || fail "jarvis-agent signature is invalid"
+    || fail "assemblywright-agent signature is invalid"
   relay_directory="$(mktemp -d -t jarvis-mac-agent-relay)"
   chmod 700 "$relay_directory"
   relay_data_directory="$relay_directory/data"
