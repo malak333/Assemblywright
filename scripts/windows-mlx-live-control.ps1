@@ -42,6 +42,9 @@ if ($token.Length -lt 32 -or $token.Length -gt 256 -or $token -notmatch "^[\x21-
 $headers = @{ Authorization = "Bearer $token" }
 $baseUri = "http://$Endpoint"
 $uuidPattern = "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+# Must equal PROTOCOL_VERSION in crates/assemblywright-protocol/src/lib.rs.
+# release-docs-drift-smoke.sh asserts that pairing.
+$protocolVersion = 2
 
 function Invoke-ExactPost {
     param(
@@ -94,7 +97,7 @@ function Wait-ExactMLXEvents {
     while ([DateTimeOffset]::UtcNow -lt $deadline) {
         $requestedAfter = if ($cursor) { [UInt64]$cursor.sequence } else { [UInt64]0 }
         $query = [ordered]@{
-            protocol_version = 1
+            protocol_version = $protocolVersion
             connection_epoch = 1
             after = $cursor
             limit = 64
@@ -103,7 +106,7 @@ function Wait-ExactMLXEvents {
             -Path "/v1/development/events/next" `
             -Body ($query | ConvertTo-Json -Compress -Depth 4)
         if (
-            $batch.protocol_version -ne 1 -or
+            $batch.protocol_version -ne $protocolVersion -or
             $batch.stream_id -notmatch $uuidPattern -or
             [UInt64]$batch.after_sequence -ne $requestedAfter -or
             [UInt64]$batch.next_sequence -lt $requestedAfter -or
@@ -208,7 +211,7 @@ function Wait-NoExactMLXEvent {
         $requestedAfter = [UInt64]$cursor.sequence
         $queryStartedAfterDeadline = [DateTimeOffset]::UtcNow -ge $deadline
         $query = [ordered]@{
-            protocol_version = 1
+            protocol_version = $protocolVersion
             connection_epoch = 1
             after = $cursor
             limit = 64
@@ -217,7 +220,7 @@ function Wait-NoExactMLXEvent {
             -Path "/v1/development/events/next" `
             -Body ($query | ConvertTo-Json -Compress -Depth 4)
         if (
-            $batch.protocol_version -ne 1 -or
+            $batch.protocol_version -ne $protocolVersion -or
             $batch.stream_id -ne $ExpectedStreamId -or
             [UInt64]$batch.after_sequence -ne $requestedAfter -or
             [UInt64]$batch.next_sequence -lt $requestedAfter -or

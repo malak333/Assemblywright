@@ -27,6 +27,7 @@
 | Docs contract | `./scripts/release-docs-drift-smoke.sh` |
 | Naming contract | `./scripts/release-naming-contract-smoke.sh --check` |
 | Shell portability | `./scripts/release-shell-portability-smoke.sh --check` |
+| Protocol version contract | `./scripts/release-protocol-version-contract-smoke.sh --check` |
 | Full local gate | `./scripts/release-local.sh` |
 
 ## Delegation

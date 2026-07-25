@@ -35,6 +35,8 @@ The gate runs, in order:
 ./scripts/release-naming-contract-smoke.sh --self-test
 ./scripts/release-shell-portability-smoke.sh --check
 ./scripts/release-shell-portability-smoke.sh --self-test
+./scripts/release-protocol-version-contract-smoke.sh --check
+./scripts/release-protocol-version-contract-smoke.sh --self-test
 ./scripts/mac-windows-bridge-live-e2e.sh --check
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
@@ -106,6 +108,7 @@ executable changes as release evidence.
 | Docs contract | `./scripts/release-docs-drift-smoke.sh` |
 | Naming contract | `./scripts/release-naming-contract-smoke.sh --check` |
 | Shell portability | `./scripts/release-shell-portability-smoke.sh --check` |
+| Protocol version contract | `./scripts/release-protocol-version-contract-smoke.sh --check` |
 
 ## Release Evidence Commands
 

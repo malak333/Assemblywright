@@ -34,6 +34,16 @@ ALLOWED_UNGUARDED=(
   "scripts/release-evidence-doctor.sh:MISSING_ITEMS"
   # Initialized from a non-empty literal manifest of expected gate commands.
   "scripts/release-ci-workflow-smoke.sh:expected_local_gate_commands"
+  # This contract script has to contain the forbidden spelling to describe and
+  # to test it: `name` appears in the comment that documents the rule, `empty`
+  # in the bash -c string the self-test executes to prove the 3.2 behavior, and
+  # `extra_arguments` in the deliberate-violation fixtures. None is an
+  # expansion this script ever performs. They are named individually rather
+  # than exempting the file, so a genuine unguarded expansion added here still
+  # fails. Its one live array, ALLOWED_UNGUARDED, is expanded guarded.
+  "scripts/release-shell-portability-smoke.sh:name"
+  "scripts/release-shell-portability-smoke.sh:empty"
+  "scripts/release-shell-portability-smoke.sh:extra_arguments"
 )
 
 fail() {

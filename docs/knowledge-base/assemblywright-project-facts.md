@@ -247,6 +247,13 @@ an old one.
   every tracked `.sh` that opts into nounset, with an allowlist of reviewed
   expansions that carry a written justification. `--self-test` proves the bash
   3.2 behavior itself and that the scanner detects a deliberate violation.
+- The contract script scans itself, and it has to contain the forbidden spelling
+  in order to document and to test the rule: in the explanatory comment, in the
+  `bash -c` string the self-test executes, and in the deliberate-violation
+  fixtures. Those three array names are allowlisted individually rather than
+  exempting the file, so a genuine unguarded expansion added there still fails.
+  Until that was fixed the gate flagged its own source, which meant
+  `release-local.sh` was red on `main` from the commit that introduced it.
 - This class hides from ordinary testing. A conditionally-populated array breaks
   only the code path that leaves it empty, and a self-test that asserts a
   nonzero exit cannot distinguish an intended failure from an unbound-variable
@@ -256,6 +263,61 @@ an old one.
   after every evidence check passed.
 - A script that fails in one mode but not others is this bug until proven
   otherwise. The first symptom read as the Windows master being unreachable.
+
+## Cross-Language Protocol Version
+
+- `PROTOCOL_VERSION` is declared four times and nothing derives one from
+  another: `crates/assemblywright-protocol/src/lib.rs`,
+  `apps/mac/Sources/AssemblywrightMacCore/DeveloperBridge.swift`, and
+  `$protocolVersion` in both `scripts/windows-*-live-control.ps1`.
+- Each language's tests only compare against its own declaration, so a partial
+  bump passes every suite. Both halves of that have already shipped. Missing the
+  Swift constant produced a live-device handshake rejection *after* mTLS had
+  authenticated. Missing both PowerShell control planes made every fixture and
+  MLX enqueue fail with `unsupported protocol version: expected 2, received 1`;
+  those scripts have no test suite at all, so only an owner-driven live run
+  could surface it.
+- `./scripts/release-protocol-version-contract-smoke.sh --check` compares all
+  four and rejects a hardcoded `protocol_version` literal in either PowerShell
+  script, since a literal at a request site drifts independently of the
+  declaration the gate reads. `--self-test` proves the comparator against
+  fixtures for each failure mode: stale Swift, stale PowerShell, hardcoded
+  literal, absent declaration, and one stale file beside an aligned one.
+- Both modes run inside `release-local.sh`, so adding them also required
+  updating `expected_local_gate_commands` in `release-ci-workflow-smoke.sh` and
+  the command list in this repository's build documentation.
+
+## Live Lane Enrollment Topology
+
+- Live lane status as of 2026-07-25: `--run`, `--run-relay`, `--run-outage`, and
+  `--run-fixture` all pass against the Windows master. `--run-mlx` cannot run.
+- The registry holds `owner-mac-bridge` (the standard Keychain profile) carrying
+  the **`fixture.reasoning`** capability, a stale pre-rename `owner-mac-bridge`,
+  and `owner-mac-fixture` (the fixture Keychain profile). `mlx.reasoning` is not
+  registered for any device.
+- `--run-mlx` needs the *standard* profile to carry `mlx.reasoning`, and that
+  cannot be arranged through the shipped CLI.
+  `KeychainDeveloperIdentity.stageIdentity` raises `bindingMismatch` for any
+  invitation whose device ID differs from the installed one, `enrollment remove`
+  is guarded to the fixture profile, and `enrollment rotate-grant` takes only
+  `--device-id` so it rotates keys without changing capabilities. The standard
+  identity is effectively write-once per Keychain namespace; the current
+  enrollment only succeeded because the rename moved the Keychain service name.
+  Treat re-pointing it as a product change, not an operator step.
+- `enrollment pair` reads the CSR to **EOF**, which an interactive terminal
+  never sends. Send the CSR line, then a separate Ctrl-Z (`ASCII character 26`).
+  Console line length is not the constraint — 541 characters round-trip intact.
+- The fixture lane's separate `EnqueueCancellation` and `Pause` are an operator
+  race the fixture job wins, because its synthetic delay is at most five
+  seconds. The MLX lane has a combined `EnqueueCancellationAndPause` for exactly
+  this reason. Chain both fixture actions into one PowerShell invocation.
+- If `Pause` throws, emergency pause stays active and every later run fails with
+  "timed out waiting for the exact fixture-profile connection". Run
+  `-Action Resume` before retrying.
+- The harness validates a control receipt's `succeeded_sequence` against the
+  agent's own cursor, which is a fresh temporary directory each run. A receipt
+  from an earlier run will therefore be accepted. Clear the Windows console
+  before each command rather than grepping scrollback.
 
 ## Safety Guardrails
 

@@ -61,6 +61,7 @@ WINDOWS_MLX_LIVE_CONTROL="scripts/windows-mlx-live-control.ps1"
 WINDOWS_PROTOCOL_WORKFLOW=".github/workflows/windows-protocol.yml"
 RELEASE_VERSION_SCRIPT="scripts/release-version.sh"
 NAMING_CONTRACT_SMOKE="scripts/release-naming-contract-smoke.sh"
+PROTOCOL_VERSION_CONTRACT_SMOKE="scripts/release-protocol-version-contract-smoke.sh"
 
 fail() {
   printf 'error: %s\n' "$1" >&2
@@ -203,20 +204,20 @@ require_text "local gate heartbeat" "$LOCAL_GATE" "still running after"
 require_text "local gate completion" "$LOCAL_GATE" "completed in"
 require_text "local gate failure" "$LOCAL_GATE" "command failed after"
 
-# The protocol version is declared independently in Rust and in Swift. Each
-# language's tests only ever compare against its own constant, so a mismatch
-# passes both suites and then fails on a live device: mTLS authenticates and the
-# application handshake is rejected. Compare the two declarations directly.
-rust_protocol_version="$(sed -n 's/^pub const PROTOCOL_VERSION: u16 = \([0-9]\{1,\}\);$/\1/p' \
-  "$PROTOCOL_CRATE" | head -n 1)"
-swift_protocol_version="$(sed -n 's/^ *public static let protocolVersion: UInt16 = \([0-9]\{1,\}\)$/\1/p' \
-  "$MAC_BRIDGE" | head -n 1)"
-[[ -n "$rust_protocol_version" ]] || fail "could not read PROTOCOL_VERSION from $PROTOCOL_CRATE"
-[[ -n "$swift_protocol_version" ]] || fail "could not read protocolVersion from $MAC_BRIDGE"
-if [[ "$rust_protocol_version" != "$swift_protocol_version" ]]; then
-  fail "protocol version mismatch across languages: $PROTOCOL_CRATE declares \
-$rust_protocol_version, $MAC_BRIDGE declares $swift_protocol_version"
-fi
+# The protocol version is declared four times across three languages. That
+# contract has its own gate, because comparing declarations is only half of it:
+# the rule has to be proven against fixtures, and this script has no self-test
+# mode. See scripts/release-protocol-version-contract-smoke.sh, which
+# release-local.sh runs in both --check and --self-test.
+require_file "$PROTOCOL_VERSION_CONTRACT_SMOKE"
+require_text "protocol version contract covers Rust" \
+  "$PROTOCOL_VERSION_CONTRACT_SMOKE" "$PROTOCOL_CRATE"
+require_text "protocol version contract covers Swift" \
+  "$PROTOCOL_VERSION_CONTRACT_SMOKE" "$MAC_BRIDGE"
+require_text "protocol version contract covers the fixture control plane" \
+  "$PROTOCOL_VERSION_CONTRACT_SMOKE" "$WINDOWS_FIXTURE_LIVE_CONTROL"
+require_text "protocol version contract covers the MLX control plane" \
+  "$PROTOCOL_VERSION_CONTRACT_SMOKE" "$WINDOWS_MLX_LIVE_CONTROL"
 
 # The TLS exporter label is the same kind of duplicated wire constant.
 mac_exporter_label="$(sed -n 's/.*public static let exporterLabel = "\([^"]*\)".*/\1/p' \
