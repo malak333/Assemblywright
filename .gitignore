@@ -1,6 +1,7 @@
-/target/
+target/
 /.build/
 **/.build/
+/.worktrees/
 /.DS_Store
 *.db
 *.db-shm
