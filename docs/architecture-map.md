@@ -44,9 +44,9 @@ flowchart LR
 ```
 
 The repository now owns a portable contract seam, a durable master kernel, and
-a headless master executable. The contract seam provides protocol version 1, typed
-device/task/step/attempt/lease/cancellation identifiers, bounded capability
-advertisements, handshake messages, job and result envelopes, strict
+a headless master executable. The contract seam provides the current protocol
+version, typed device/task/step/attempt/lease/cancellation identifiers, bounded
+capability advertisements, handshake messages, job and result envelopes, strict
 bound-before-decode JSON entry points, nil-identity rejection, and a golden
 compatibility fixture. `assemblywright-master` schema version 5 preserves the
 schema-v4 distributed-device lifecycle and additionally persists the first

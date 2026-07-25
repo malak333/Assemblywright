@@ -29,6 +29,11 @@ POWERSHELL_DECLARATIONS=(
   "scripts/windows-fixture-live-control.ps1"
   "scripts/windows-mlx-live-control.ps1"
 )
+PROTOCOL_PROSE_FILES=(
+  "README.md"
+  "docs/architecture-map.md"
+  "crates/assemblywright-core/src/release.rs"
+)
 
 fail() {
   printf 'error: %s\n' "$1" >&2
@@ -63,6 +68,10 @@ read_powershell_version() {
 # request or assertion site instead of referencing the single declaration.
 has_powershell_literal() {
   grep -Eq 'protocol_version (=|-ne) [0-9]' "$1"
+}
+
+has_protocol_version_prose_literal() {
+  grep -Eq 'protocol version [0-9]+' "$1"
 }
 
 # Compare one Rust file, one Swift file, and zero or more PowerShell files.
@@ -121,7 +130,8 @@ compare_declarations() {
 check_repository() {
   local path
   for path in "$RUST_DECLARATION" "$SWIFT_DECLARATION" \
-    ${POWERSHELL_DECLARATIONS[@]+"${POWERSHELL_DECLARATIONS[@]}"}; do
+    ${POWERSHELL_DECLARATIONS[@]+"${POWERSHELL_DECLARATIONS[@]}"} \
+    ${PROTOCOL_PROSE_FILES[@]+"${PROTOCOL_PROSE_FILES[@]}"}; do
     [[ -f "$ROOT_DIR/$path" ]] || fail "missing required file: $path"
   done
 
@@ -132,6 +142,11 @@ check_repository() {
 
   local declared
   declared="$(read_rust_version "$ROOT_DIR/$RUST_DECLARATION")"
+  for path in ${PROTOCOL_PROSE_FILES[@]+"${PROTOCOL_PROSE_FILES[@]}"}; do
+    if has_protocol_version_prose_literal "$ROOT_DIR/$path"; then
+      fail "$path hardcodes a protocol version in user-visible prose"
+    fi
+  done
   printf 'Assemblywright protocol version contract: ok (version %s in %s declarations)\n' \
     "$declared" "$((2 + ${#POWERSHELL_DECLARATIONS[@]}))"
 }
@@ -212,8 +227,17 @@ self_test() {
     fail "self-test: the comparator accepted one stale file beside an aligned one"
   fi
 
+  printf 'The current protocol version owns this seam.\n' >"$fixture_dir/prose.txt"
+  if has_protocol_version_prose_literal "$fixture_dir/prose.txt"; then
+    fail "self-test: the prose scanner rejected version-independent text"
+  fi
+  printf 'The protocol version 1 owns this seam.\n' >"$fixture_dir/prose.txt"
+  if ! has_protocol_version_prose_literal "$fixture_dir/prose.txt"; then
+    fail "self-test: the prose scanner accepted a hardcoded protocol version"
+  fi
+
   printf 'Assemblywright protocol version contract self-test: ok\n'
-  printf 'Proof boundary: declaration comparison only; no live peer, handshake, signing, notarization, or live-device evidence was produced.\n'
+  printf 'Proof boundary: declaration comparison and user-visible prose scanning only; no live peer, handshake, signing, notarization, or live-device evidence was produced.\n'
 }
 
 case "$MODE" in

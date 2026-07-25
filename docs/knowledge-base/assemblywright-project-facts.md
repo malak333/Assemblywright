@@ -280,9 +280,19 @@ an old one.
 - `./scripts/release-protocol-version-contract-smoke.sh --check` compares all
   four and rejects a hardcoded `protocol_version` literal in either PowerShell
   script, since a literal at a request site drifts independently of the
-  declaration the gate reads. `--self-test` proves the comparator against
-  fixtures for each failure mode: stale Swift, stale PowerShell, hardcoded
-  literal, absent declaration, and one stale file beside an aligned one.
+  declaration the gate reads. It also rejects numeric protocol-version prose in
+  the README, architecture map, and release-readiness feature proof; those
+  surfaces describe the current contract without duplicating its number.
+  `--self-test` proves the comparator and prose scanner against fixtures for
+  stale Swift, stale PowerShell, hardcoded request and prose literals, absent
+  declarations, and one stale file beside an aligned one.
+- The shell self-test is the unit boundary for the comparator and prose scanner.
+  The Rust unit test
+  `protocol_readiness_proof_is_version_independent` validates the feature
+  metadata directly, while `release_readiness_e2e` executes the shipped CLI,
+  parses `release readiness --json`, and validates the owner-visible proof.
+  Playwright, screenshots, and cross-browser matrices do not apply because
+  this surface is a native CLI and has no browser or DOM.
 - Both modes run inside `release-local.sh`, so adding them also required
   updating `expected_local_gate_commands` in `release-ci-workflow-smoke.sh` and
   the command list in this repository's build documentation.
@@ -314,6 +324,10 @@ an old one.
 - If `Pause` throws, emergency pause stays active and every later run fails with
   "timed out waiting for the exact fixture-profile connection". Run
   `-Action Resume` before retrying.
+- Take authenticated Windows health before and after a live fixture closeout.
+  A reconnect may expire an abandoned queued fixture from an interrupted prior
+  run; accept the closeout only when the final health is unpaused and reports
+  zero queued steps, leased steps, and active attempts.
 - The harness validates a control receipt's `succeeded_sequence` against the
   agent's own cursor, which is a fresh temporary directory each run. A receipt
   from an earlier run will therefore be accepted. Clear the Windows console

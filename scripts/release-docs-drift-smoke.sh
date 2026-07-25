@@ -43,6 +43,7 @@ MASTER_CONVEYOR_E2E="crates/assemblywright-master/tests/feature_conveyor_kernel.
 MASTER_SERVICE_E2E="crates/assemblywright-master/tests/windows_service_lifecycle_e2e.rs"
 AGENT_E2E="crates/assemblywright-agent/tests/local_relay_e2e.rs"
 CLI_NAMING_E2E="crates/assemblywright-cli/tests/naming_contract_e2e.rs"
+CLI_READINESS_E2E="crates/assemblywright-cli/tests/release_readiness_e2e.rs"
 
 MAC_BRIDGE="apps/mac/Sources/AssemblywrightMacCore/DeveloperBridge.swift"
 MAC_BRIDGE_CLI="apps/mac/Sources/AssemblywrightMacBridgeCLI/AssemblywrightMacBridgeCLI.swift"
@@ -105,6 +106,7 @@ for file in \
   "$MASTER_E2E" "$MASTER_PROCESS_E2E" "$MASTER_IDENTITY_E2E" \
   "$MASTER_REMOTE_MTLS_E2E" "$MASTER_EVENT_E2E" "$MASTER_CONVEYOR_E2E" \
   "$MASTER_SERVICE_E2E" "$AGENT_E2E" "$CLI_NAMING_E2E" \
+  "$CLI_READINESS_E2E" \
   "$MAC_BRIDGE" "$MAC_BRIDGE_CLI" "$MAC_BRIDGE_KEYCHAIN" "$MAC_BRIDGE_NETWORK" \
   "$MAC_BRIDGE_SUPERVISOR" "$MAC_BRIDGE_PROCESS" "$MAC_EVENT_RELAY" \
   "$MAC_APP" "$MAC_BRIDGE_TESTS" "$MAC_APP_TESTS" \
@@ -178,6 +180,10 @@ require_text "build docs evidence boundary" "$BUILD_DOCS" "## Release Evidence B
 require_text "build docs windows gate" "$BUILD_DOCS" "windows-protocol.yml"
 require_text "build docs shell portability gate" "$BUILD_DOCS" \
   "./scripts/release-shell-portability-smoke.sh --check"
+require_text "build docs readiness unit test" "$BUILD_DOCS" \
+  "cargo test -p assemblywright-core protocol_readiness_proof_is_version_independent"
+require_text "build docs readiness E2E" "$BUILD_DOCS" \
+  "cargo test -p assemblywright-cli --test release_readiness_e2e"
 
 # Documents must not advertise the removed assistant surface.
 for file in "$README" "$DESIGN" "$ARCHITECTURE" "$BUILD_DOCS" "$CHECKLIST" "$KB" "$AGENTS"; do
@@ -204,11 +210,12 @@ require_text "local gate heartbeat" "$LOCAL_GATE" "still running after"
 require_text "local gate completion" "$LOCAL_GATE" "completed in"
 require_text "local gate failure" "$LOCAL_GATE" "command failed after"
 
-# The protocol version is declared four times across three languages. That
-# contract has its own gate, because comparing declarations is only half of it:
-# the rule has to be proven against fixtures, and this script has no self-test
-# mode. See scripts/release-protocol-version-contract-smoke.sh, which
-# release-local.sh runs in both --check and --self-test.
+# The protocol version is declared four times across three languages, while
+# user-visible prose must not duplicate its numeric value. That contract has its
+# own gate because both rules have to be proven against fixtures, and this
+# script has no self-test mode. See
+# scripts/release-protocol-version-contract-smoke.sh, which release-local.sh
+# runs in both --check and --self-test.
 require_file "$PROTOCOL_VERSION_CONTRACT_SMOKE"
 require_text "protocol version contract covers Rust" \
   "$PROTOCOL_VERSION_CONTRACT_SMOKE" "$PROTOCOL_CRATE"
@@ -218,6 +225,12 @@ require_text "protocol version contract covers the fixture control plane" \
   "$PROTOCOL_VERSION_CONTRACT_SMOKE" "$WINDOWS_FIXTURE_LIVE_CONTROL"
 require_text "protocol version contract covers the MLX control plane" \
   "$PROTOCOL_VERSION_CONTRACT_SMOKE" "$WINDOWS_MLX_LIVE_CONTROL"
+require_text "protocol version contract covers README prose" \
+  "$PROTOCOL_VERSION_CONTRACT_SMOKE" "$README"
+require_text "protocol version contract covers architecture prose" \
+  "$PROTOCOL_VERSION_CONTRACT_SMOKE" "$ARCHITECTURE"
+require_text "protocol version contract covers readiness prose" \
+  "$PROTOCOL_VERSION_CONTRACT_SMOKE" "$CORE_RELEASE"
 
 # The TLS exporter label is the same kind of duplicated wire constant.
 mac_exporter_label="$(sed -n 's/.*public static let exporterLabel = "\([^"]*\)".*/\1/p' \

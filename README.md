@@ -17,10 +17,10 @@ and the queue UI are still design.
 
 ## What Is Implemented
 
-**`assemblywright-protocol`** — protocol version 1: typed device, task, step, attempt,
-lease, and cancellation identifiers; bounded capability advertisements;
-handshake, job, and result envelopes; strict bound-before-decode JSON entry
-points; nil-identity rejection; and a golden compatibility fixture.
+**`assemblywright-protocol`** — the current protocol version: typed device, task,
+step, attempt, lease, and cancellation identifiers; bounded capability
+advertisements; handshake, job, and result envelopes; strict bound-before-decode
+JSON entry points; nil-identity rejection; and a golden compatibility fixture.
 
 **`assemblywright-master`** — a portable schema-v5 SQLite kernel plus a headless
 single-owner executable.

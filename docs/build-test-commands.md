@@ -101,7 +101,9 @@ executable changes as release evidence.
 | Windows service lifecycle | `cargo test -p assemblywright-master --test windows_service_lifecycle_e2e -- --ignored` |
 | Mac agent relay | `cargo test -p assemblywright-agent --test local_relay_e2e` |
 | Local transport and release | `cargo test -p assemblywright-core` |
+| Readiness protocol proof unit | `cargo test -p assemblywright-core protocol_readiness_proof_is_version_independent` |
 | CLI naming contract E2E | `cargo test -p assemblywright-cli --test naming_contract_e2e` |
+| CLI readiness proof E2E | `cargo test -p assemblywright-cli --test release_readiness_e2e` |
 | Swift package | `swift test --disable-sandbox --package-path apps/mac` |
 | One Swift test | `swift test --disable-sandbox --package-path apps/mac --filter <test>` |
 | Codex workflow | `./scripts/validate-codex-workflow.sh` |

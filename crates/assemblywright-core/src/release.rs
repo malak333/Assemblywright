@@ -1978,7 +1978,7 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "distributed_protocol_contract",
             "implemented",
-            "`assemblywright-protocol` owns protocol version 1: typed device/task/step/attempt/lease/cancellation identifiers, bounded capability advertisements, handshake, job and result envelopes, strict bound-before-decode JSON entry points, nil-identity rejection, and a golden compatibility fixture.",
+            "`assemblywright-protocol` owns the current protocol version: typed device/task/step/attempt/lease/cancellation identifiers, bounded capability advertisements, handshake, job and result envelopes, strict bound-before-decode JSON entry points, nil-identity rejection, and a golden compatibility fixture.",
             "A versioned wire contract with golden-fixture coverage only; it is not proof of live two-device behavior.",
         ),
         feature(
@@ -2116,4 +2116,50 @@ pub fn release_signed_distribution_runbook() -> ReleaseRunbookResponse {
 
 pub fn release_evidence_bundle_runbook() -> ReleaseRunbookResponse {
     release_evidence_bundle_runbook_from(&release_readiness(), &release_evidence_status())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn normalized_tokens(text: &str) -> Vec<String> {
+        text.split_whitespace()
+            .map(|token| {
+                token
+                    .trim_matches(|character: char| !character.is_ascii_alphanumeric())
+                    .to_ascii_lowercase()
+            })
+            .collect()
+    }
+
+    fn contains_numeric_protocol_version(text: &str) -> bool {
+        normalized_tokens(text).windows(3).any(|tokens| {
+            tokens[0] == "protocol" && tokens[1] == "version" && tokens[2].parse::<u16>().is_ok()
+        })
+    }
+
+    #[test]
+    fn protocol_readiness_proof_is_version_independent() {
+        let features = contract_features();
+        let protocol_features = features
+            .iter()
+            .filter(|feature| feature.key == "distributed_protocol_contract")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            protocol_features.len(),
+            1,
+            "readiness must define exactly one distributed protocol feature"
+        );
+
+        let feature = protocol_features[0];
+        assert_eq!(feature.status, "implemented");
+        assert!(
+            feature.proof.contains("the current protocol version"),
+            "the proof must describe the authoritative declaration without copying its number"
+        );
+        assert!(
+            !contains_numeric_protocol_version(&feature.proof),
+            "the proof must not contain a numeric protocol version that can drift"
+        );
+    }
 }
