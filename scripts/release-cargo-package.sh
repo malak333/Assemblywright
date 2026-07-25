@@ -6,9 +6,9 @@ cd "$ROOT_DIR"
 
 version="$("$ROOT_DIR/scripts/release-version.sh")"
 package_dir="$ROOT_DIR/target/package"
-protocol_crate="$package_dir/jarvis-protocol-$version.crate"
-core_crate="$package_dir/jarvis-core-$version.crate"
-cli_crate="$package_dir/jarvis-cli-$version.crate"
+protocol_crate="$package_dir/assemblywright-protocol-$version.crate"
+core_crate="$package_dir/assemblywright-core-$version.crate"
+cli_crate="$package_dir/assemblywright-cli-$version.crate"
 
 cleanup=""
 if [[ "${1:-}" == "--keep-temp" ]]; then
@@ -17,7 +17,7 @@ else
   keep_temp=false
 fi
 
-tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/jarvis-package-verify.XXXXXX")"
+tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/assemblywright-package-verify.XXXXXX")"
 cleanup="$tmp_dir"
 trap 'if [[ -n "$cleanup" && "$keep_temp" != true ]]; then rm -rf "$cleanup"; fi' EXIT
 
@@ -47,9 +47,9 @@ tar -xzf "$protocol_crate" -C "$tmp_dir"
 tar -xzf "$core_crate" -C "$tmp_dir"
 tar -xzf "$cli_crate" -C "$tmp_dir"
 
-protocol_dir="$tmp_dir/jarvis-protocol-$version"
-cli_dir="$tmp_dir/jarvis-cli-$version"
-core_dir="$tmp_dir/jarvis-core-$version"
+protocol_dir="$tmp_dir/assemblywright-protocol-$version"
+cli_dir="$tmp_dir/assemblywright-cli-$version"
+core_dir="$tmp_dir/assemblywright-core-$version"
 
 if [[ ! -d "$protocol_dir" || ! -d "$cli_dir" || ! -d "$core_dir" ]]; then
   printf 'error: packaged crate extraction did not produce expected directories in %s\n' "$tmp_dir" >&2
@@ -59,13 +59,13 @@ fi
 cat >>"$core_dir/Cargo.toml" <<PATCH
 
 [patch.crates-io]
-jarvis-protocol = { path = "../jarvis-protocol-$version" }
+assemblywright-protocol = { path = "../assemblywright-protocol-$version" }
 PATCH
 
 cat >>"$cli_dir/Cargo.toml" <<PATCH
 
 [patch.crates-io]
-jarvis-core = { path = "../jarvis-core-$version" }
+assemblywright-core = { path = "../assemblywright-core-$version" }
 PATCH
 
 run cargo check --manifest-path "$core_dir/Cargo.toml" --all-targets --features distributed-development

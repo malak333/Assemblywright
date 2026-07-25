@@ -24,7 +24,12 @@ These notes capture durable facts for future agents working on this repository.
   code-signing identity and its `.core` suffix, the `JarvisMacApp` executable
   name inside the bundle, and the bundled `jarvis-cli` filename. Renaming any of
   these changes code-signing identity or orphans installed state, so they are
-  not cosmetic. The product-facing app and release artifact names are
+  not cosmetic.
+- The SwiftPM product is `AssemblywrightMacApp`, and the built executable is
+  named after the product, not the target. Packaging copies it into the bundle
+  under the contract name via `SWIFT_APP_PRODUCT` in
+  `scripts/package-distribution.sh`. Swift target names remain `Jarvis*`
+  because module names are internal. The product-facing app and release artifact names are
   `Assemblywright.app` and `Assemblywright-<version>.*`.
 - The GitHub repository was renamed from `Jarvis` to `Assemblywright`, so the
   canonical remote is `https://github.com/malak333/Assemblywright`. GitHub

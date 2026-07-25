@@ -10,7 +10,12 @@ VERSION="${JARVIS_PACKAGE_VERSION_OVERRIDE:-$("$ROOT_DIR/scripts/release-version
 BUNDLE_ID="com.nobiletechnology.jarvis"
 CORE_CODE_ID="${BUNDLE_ID}.core"
 APP_NAME="Assemblywright"
+# Name of the executable inside the bundle. This is a signed-identity and
+# release-evidence contract: signed provenance and live-device QA reports bind
+# `Assemblywright.app/Contents/MacOS/JarvisMacApp`. The SwiftPM product that
+# produces it is named separately below and may be renamed freely.
 APP_EXECUTABLE_NAME="JarvisMacApp"
+SWIFT_APP_PRODUCT="AssemblywrightMacApp"
 CORE_EXECUTABLE_NAME="jarvis-cli"
 ENTITLEMENTS="$ROOT_DIR/packaging/Jarvis.entitlements"
 CORE_ENTITLEMENTS="$ROOT_DIR/packaging/JarvisCore.entitlements"
@@ -1198,7 +1203,7 @@ build_app_bundle() {
   run swift build --disable-sandbox -c release --package-path apps/mac
 
   SWIFT_BIN_DIR="$(swift build --disable-sandbox -c release --package-path apps/mac --show-bin-path)"
-  SWIFT_EXECUTABLE="$SWIFT_BIN_DIR/$APP_EXECUTABLE_NAME"
+  SWIFT_EXECUTABLE="$SWIFT_BIN_DIR/$SWIFT_APP_PRODUCT"
   CORE_EXECUTABLE="$ROOT_DIR/target/release/assemblywright"
 
   [[ -x "$SWIFT_EXECUTABLE" ]] || fail "Swift release executable missing: $SWIFT_EXECUTABLE"

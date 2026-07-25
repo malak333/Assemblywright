@@ -12,11 +12,13 @@ let package = Package(
         .executable(name: "AssemblywrightMacApp", targets: ["JarvisMacApp"]),
         .executable(name: "assemblywright-mac-bridge", targets: ["JarvisMacBridgeCLI"])
     ],
-    // Target names stay `Jarvis*` on purpose. The target name determines the
-    // built executable filename, and `JarvisMacApp` is recorded inside signed
-    // provenance, live-device QA reports, and the installed bundle layout at
-    // `Assemblywright.app/Contents/MacOS/JarvisMacApp`. Renaming it would change
-    // the signed app-executable path that release evidence binds to.
+    // Target names stay `Jarvis*` because module names are internal and
+    // renaming them would touch every import for no external benefit. The
+    // built executable is named after the *product*, so packaging copies
+    // `AssemblywrightMacApp` into the bundle as `Contents/MacOS/JarvisMacApp`.
+    // That bundle-internal filename is a signed-identity and release-evidence
+    // contract: signed provenance and live-device QA reports bind it directly.
+    // See SWIFT_APP_PRODUCT in scripts/package-distribution.sh.
     targets: [
         .target(
             name: "JarvisMacCore",
