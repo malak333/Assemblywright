@@ -9,8 +9,6 @@ REPORT_PATH="${JARVIS_QA_REPORT_PATH:-$ROOT_DIR/target/release-live-device-qa-re
 EXPECTED_BUNDLE_ID="${JARVIS_QA_EXPECTED_BUNDLE_ID:-com.nobiletechnology.jarvis}"
 EXPECTED_VERSION="${JARVIS_QA_EXPECTED_VERSION:-$("$ROOT_DIR/scripts/release-version.sh")}"
 SIGNED_PROVENANCE_PATH="${JARVIS_QA_SIGNED_PROVENANCE_REPORT:-$ROOT_DIR/target/distribution/Assemblywright-$EXPECTED_VERSION-signed-provenance.json}"
-EXPECTED_MICROPHONE_USAGE_DESCRIPTION="Assemblywright uses microphone input only when you explicitly start local voice capture."
-EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION="Assemblywright uses speech recognition only to turn your spoken command into a local assistant request."
 CHECK_ONLY=false
 ASSERT_COMPLETE=false
 SELF_TEST=false
@@ -19,8 +17,6 @@ WRITE_TEMPLATE_PATH=""
 APP_BUNDLE_ID=""
 APP_SHORT_VERSION=""
 APP_BUILD_VERSION=""
-APP_MICROPHONE_USAGE=""
-APP_SPEECH_USAGE=""
 APP_BUNDLED_CORE_PATH=""
 APP_BUNDLED_CORE_VERSION=""
 APP_BUNDLED_CORE_SHA256=""
@@ -44,11 +40,6 @@ that must be performed on a clean Mac profile before any production-ready claim.
 explicitly recorded each live validation flag below as true:
   JARVIS_QA_CLEAN_PROFILE_VALIDATED=true
   JARVIS_QA_FINDER_LAUNCH_VALIDATED=true
-  JARVIS_QA_MICROPHONE_VALIDATED=true
-  JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true
-  JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true
-  JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true
-  JARVIS_QA_NOTIFICATION_VALIDATED=true
   JARVIS_QA_RESTART_VALIDATED=true
   JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true
 
@@ -56,37 +47,16 @@ The owner must also record non-empty live QA evidence notes:
   JARVIS_QA_OWNER_NAME
   JARVIS_QA_DEVICE_LABEL
   JARVIS_QA_PROFILE_LABEL
-  JARVIS_QA_VOICE_CHECK_STARTED_AT
-  JARVIS_QA_VOICE_CHECK_COMPLETED_AT
+  JARVIS_QA_DEVICE_CHECK_STARTED_AT
+  JARVIS_QA_DEVICE_CHECK_COMPLETED_AT
   JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE
   JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE
-  JARVIS_QA_MICROPHONE_EVIDENCE_NOTE
-  JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE
-  JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE
-  JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE
-  JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE
-  JARVIS_QA_NOTIFICATION_OBSERVED_AT
-  JARVIS_QA_NOTIFICATION_KIND
-  JARVIS_QA_NOTIFICATION_TITLE
-  JARVIS_QA_NOTIFICATION_BODY
-  JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER
   JARVIS_QA_RESTART_EVIDENCE_NOTE
   JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE
-  JARVIS_QA_VOICE_TEST_PHRASE
-  JARVIS_QA_OBSERVED_TRANSCRIPT
-  JARVIS_QA_EXPECTED_COMMAND_TEXT
-  JARVIS_QA_OBSERVED_COMMAND_TEXT
-  JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID
-  JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL
 
 Owner-recorded evidence notes must contain non-placeholder release evidence, not
 values such as `TODO`, `TBD`, `pending`, `n/a`, `fixture`, or `self-test
 fixture`. Other owner metadata fields must contain non-whitespace text.
-The observed transcript must match JARVIS_QA_VOICE_TEST_PHRASE after trimming,
-and the observed command text must match JARVIS_QA_EXPECTED_COMMAND_TEXT after
-trimming. JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID must be a `task:<uuid>` or
-`audit:<uuid>` reference from the live command. This keeps the spoken phrase,
-transcript, and command-path evidence bound together.
 
 --self-test builds a fake app fixture in a temporary directory and exercises
 the assertion/report mechanics without claiming live-device validation.
@@ -188,18 +158,6 @@ require_non_empty_env() {
   [[ -n "${value//[[:space:]]/}" ]] || fail "$name must be set to a non-empty owner-recorded evidence value"
 }
 
-require_notification_kind_env() {
-  local name="$1"
-  local value="${!name:-}"
-  require_non_empty_env "$name"
-  case "$value" in
-    due_now|failed|blocked_by_emergency_pause)
-      ;;
-    *)
-      fail "$name must be one of due_now, failed, or blocked_by_emergency_pause"
-      ;;
-  esac
-}
 
 require_env_equals() {
   local name="$1"
@@ -307,27 +265,6 @@ if expected.strip() != actual.strip():
 PY
 }
 
-require_observed_transcript_matches_phrase() {
-  require_trimmed_env_match JARVIS_QA_VOICE_TEST_PHRASE JARVIS_QA_OBSERVED_TRANSCRIPT
-}
-
-require_command_result_evidence_id_env() {
-  local name="$1"
-  local value="${!name:-}"
-  require_non_empty_env "$name"
-  require_command python3
-  python3 - "$name" "$value" <<'PY'
-import re
-import sys
-
-name, value = sys.argv[1:3]
-pattern = re.compile(
-    r"^(task|audit):[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
-)
-if not pattern.fullmatch(value.strip()):
-    raise SystemExit(f"{name} must be task:<uuid> or audit:<uuid> from the live command")
-PY
-}
 
 plist_value() {
   local plist_path="$1"
@@ -357,15 +294,11 @@ validate_installed_app_bundle_metadata() {
   APP_BUNDLE_ID="$(plist_value "$info_plist" CFBundleIdentifier)"
   APP_SHORT_VERSION="$(plist_value "$info_plist" CFBundleShortVersionString)"
   APP_BUILD_VERSION="$(plist_value "$info_plist" CFBundleVersion)"
-  APP_MICROPHONE_USAGE="$(plist_value "$info_plist" NSMicrophoneUsageDescription)"
-  APP_SPEECH_USAGE="$(plist_value "$info_plist" NSSpeechRecognitionUsageDescription)"
   APP_BUNDLED_CORE_PATH="$core_path"
 
   require_plist_value "CFBundleIdentifier" "$APP_BUNDLE_ID"
   require_plist_value "CFBundleShortVersionString" "$APP_SHORT_VERSION"
   require_plist_value "CFBundleVersion" "$APP_BUILD_VERSION"
-  require_plist_value_equals "NSMicrophoneUsageDescription" "$APP_MICROPHONE_USAGE" "$EXPECTED_MICROPHONE_USAGE_DESCRIPTION"
-  require_plist_value_equals "NSSpeechRecognitionUsageDescription" "$APP_SPEECH_USAGE" "$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION"
   [[ -x "$core_path" ]] || fail "installed app bundled core is missing or not executable: $core_path"
 
   [[ "$APP_BUNDLE_ID" == "$EXPECTED_BUNDLE_ID" ]] ||
@@ -457,8 +390,6 @@ write_report() {
   local escaped_bundle_id
   local escaped_short_version
   local escaped_build_version
-  local escaped_microphone_usage
-  local escaped_speech_usage
   local escaped_bundled_core_path
   local escaped_bundled_core_version
   local escaped_bundled_core_sha256
@@ -474,26 +405,10 @@ write_report() {
   local escaped_profile_label
   local escaped_started_at
   local escaped_completed_at
-  local escaped_microphone_note
-  local escaped_speech_note
-  local escaped_transcript_note
-  local escaped_audio_note
   local escaped_clean_profile_note
   local escaped_finder_launch_note
-  local escaped_notification_note
-  local escaped_notification_observed_at
-  local escaped_notification_kind
-  local escaped_notification_title
-  local escaped_notification_body
-  local escaped_notification_thread_identifier
   local escaped_restart_note
   local escaped_manual_release_qa_note
-  local escaped_voice_test_phrase
-  local escaped_observed_transcript
-  local escaped_expected_command_text
-  local escaped_observed_command_text
-  local escaped_command_result_evidence_id
-  local escaped_audio_output_device_label
   local escaped_boundary
   local self_test_fixture
   require_command python3
@@ -510,8 +425,6 @@ write_report() {
   escaped_bundle_id="$(json_escape "$APP_BUNDLE_ID")"
   escaped_short_version="$(json_escape "$APP_SHORT_VERSION")"
   escaped_build_version="$(json_escape "$APP_BUILD_VERSION")"
-  escaped_microphone_usage="$(json_escape "$APP_MICROPHONE_USAGE")"
-  escaped_speech_usage="$(json_escape "$APP_SPEECH_USAGE")"
   escaped_bundled_core_path="$(json_escape "$APP_BUNDLED_CORE_PATH")"
   escaped_bundled_core_version="$(json_escape "$APP_BUNDLED_CORE_VERSION")"
   escaped_bundled_core_sha256="$(json_escape "$APP_BUNDLED_CORE_SHA256")"
@@ -525,29 +438,13 @@ write_report() {
   escaped_owner_name="$(json_escape "$JARVIS_QA_OWNER_NAME")"
   escaped_device_label="$(json_escape "$JARVIS_QA_DEVICE_LABEL")"
   escaped_profile_label="$(json_escape "$JARVIS_QA_PROFILE_LABEL")"
-  escaped_started_at="$(json_escape "$JARVIS_QA_VOICE_CHECK_STARTED_AT")"
-  escaped_completed_at="$(json_escape "$JARVIS_QA_VOICE_CHECK_COMPLETED_AT")"
-  escaped_microphone_note="$(json_escape "$JARVIS_QA_MICROPHONE_EVIDENCE_NOTE")"
-  escaped_speech_note="$(json_escape "$JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE")"
-  escaped_transcript_note="$(json_escape "$JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE")"
-  escaped_audio_note="$(json_escape "$JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE")"
+  escaped_started_at="$(json_escape "$JARVIS_QA_DEVICE_CHECK_STARTED_AT")"
+  escaped_completed_at="$(json_escape "$JARVIS_QA_DEVICE_CHECK_COMPLETED_AT")"
   escaped_clean_profile_note="$(json_escape "$JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE")"
   escaped_finder_launch_note="$(json_escape "$JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE")"
-  escaped_notification_note="$(json_escape "$JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE")"
-  escaped_notification_observed_at="$(json_escape "$JARVIS_QA_NOTIFICATION_OBSERVED_AT")"
-  escaped_notification_kind="$(json_escape "$JARVIS_QA_NOTIFICATION_KIND")"
-  escaped_notification_title="$(json_escape "$JARVIS_QA_NOTIFICATION_TITLE")"
-  escaped_notification_body="$(json_escape "$JARVIS_QA_NOTIFICATION_BODY")"
-  escaped_notification_thread_identifier="$(json_escape "$JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER")"
   escaped_restart_note="$(json_escape "$JARVIS_QA_RESTART_EVIDENCE_NOTE")"
   escaped_manual_release_qa_note="$(json_escape "$JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE")"
-  escaped_voice_test_phrase="$(json_escape "$JARVIS_QA_VOICE_TEST_PHRASE")"
-  escaped_observed_transcript="$(json_escape "$JARVIS_QA_OBSERVED_TRANSCRIPT")"
-  escaped_expected_command_text="$(json_escape "$JARVIS_QA_EXPECTED_COMMAND_TEXT")"
-  escaped_observed_command_text="$(json_escape "$JARVIS_QA_OBSERVED_COMMAND_TEXT")"
-  escaped_command_result_evidence_id="$(json_escape "$JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID")"
-  escaped_audio_output_device_label="$(json_escape "$JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL")"
-  escaped_boundary="$(json_escape "Owner-recorded clean-profile install, Finder launch, microphone/Speech permission prompts, spoken transcript handoff into the command path, live audio output, notification, restart, and manual release QA flags bound at report generation to the exact installed app executable bytes and Developer ID code identity recorded by signed provenance. This is point-in-time candidate binding, not installation provenance, continuous filesystem integrity, App Store review, marketplace trust, malware analysis, or OS-level sandbox/egress enforcement.")"
+  escaped_boundary="$(json_escape "Owner-recorded clean-profile install, Finder launch, restart, and manual release QA flags bound at report generation to the exact installed app executable bytes and Developer ID code identity recorded by signed provenance. This is point-in-time candidate binding, not installation provenance, continuous filesystem integrity, App Store review, or OS-level sandbox/egress enforcement.")"
 
   mkdir -p "$(dirname "$REPORT_PATH")"
   cat >"$REPORT_PATH" <<EOF
@@ -560,9 +457,7 @@ write_report() {
   "app_bundle": {
     "bundle_identifier": "$escaped_bundle_id",
     "short_version": "$escaped_short_version",
-    "build_version": "$escaped_build_version",
-    "microphone_usage_description": "$escaped_microphone_usage",
-    "speech_recognition_usage_description": "$escaped_speech_usage"
+    "build_version": "$escaped_build_version"
   },
   "app_executable": {
     "executable_path": "$escaped_app_executable_path",
@@ -583,54 +478,19 @@ write_report() {
   "validation_flags": {
     "clean_profile": true,
     "finder_launch": true,
-    "microphone": true,
-    "speech_permission": true,
-    "transcript_handoff": true,
-    "audio_output": true,
-    "notification": true,
     "restart": true,
     "manual_release_qa": true
   },
-  "voice_loop": {
-    "microphone_permission_prompt": true,
-    "speech_permission_prompt": true,
-    "spoken_transcript_handoff": true,
-    "same_command_path": true,
-    "speech_output_playback": true
-  },
-  "owner_recorded_live_voice_evidence": {
+  "owner_recorded_device_evidence": {
     "owner_name": "$escaped_owner_name",
     "device_label": "$escaped_device_label",
     "profile_label": "$escaped_profile_label",
-    "voice_check_started_at": "$escaped_started_at",
-    "voice_check_completed_at": "$escaped_completed_at",
-    "microphone_evidence_note": "$escaped_microphone_note",
-    "speech_permission_evidence_note": "$escaped_speech_note",
-    "transcript_handoff_evidence_note": "$escaped_transcript_note",
-    "audio_output_evidence_note": "$escaped_audio_note"
-  },
-  "owner_recorded_non_voice_evidence": {
+    "device_check_started_at": "$escaped_started_at",
+    "device_check_completed_at": "$escaped_completed_at",
     "clean_profile_evidence_note": "$escaped_clean_profile_note",
     "finder_launch_evidence_note": "$escaped_finder_launch_note",
-    "notification_evidence_note": "$escaped_notification_note",
-    "notification_observed_at": "$escaped_notification_observed_at",
     "restart_evidence_note": "$escaped_restart_note",
     "manual_release_qa_evidence_note": "$escaped_manual_release_qa_note"
-  },
-  "notification_observation": {
-    "kind": "$escaped_notification_kind",
-    "title": "$escaped_notification_title",
-    "body": "$escaped_notification_body",
-    "thread_identifier": "$escaped_notification_thread_identifier",
-    "observed_at": "$escaped_notification_observed_at"
-  },
-  "voice_command_observation": {
-    "test_phrase": "$escaped_voice_test_phrase",
-    "observed_transcript": "$escaped_observed_transcript",
-    "expected_command_text": "$escaped_expected_command_text",
-    "observed_command_text": "$escaped_observed_command_text",
-    "command_result_evidence_id": "$escaped_command_result_evidence_id",
-    "audio_output_device_label": "$escaped_audio_output_device_label"
   },
   "proof_boundary": "$escaped_boundary"
 }
@@ -679,39 +539,18 @@ JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION"
 
 JARVIS_QA_CLEAN_PROFILE_VALIDATED=false
 JARVIS_QA_FINDER_LAUNCH_VALIDATED=false
-JARVIS_QA_MICROPHONE_VALIDATED=false
-JARVIS_QA_SPEECH_PERMISSION_VALIDATED=false
-JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=false
-JARVIS_QA_AUDIO_OUTPUT_VALIDATED=false
-JARVIS_QA_NOTIFICATION_VALIDATED=false
 JARVIS_QA_RESTART_VALIDATED=false
 JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=false
 
 JARVIS_QA_OWNER_NAME=""
 JARVIS_QA_DEVICE_LABEL=""
 JARVIS_QA_PROFILE_LABEL=""
-JARVIS_QA_VOICE_CHECK_STARTED_AT=""
-JARVIS_QA_VOICE_CHECK_COMPLETED_AT=""
+JARVIS_QA_DEVICE_CHECK_STARTED_AT=""
+JARVIS_QA_DEVICE_CHECK_COMPLETED_AT=""
 JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE=""
 JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE=""
-JARVIS_QA_MICROPHONE_EVIDENCE_NOTE=""
-JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE=""
-JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE=""
-JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE=""
-JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE=""
-JARVIS_QA_NOTIFICATION_OBSERVED_AT=""
-JARVIS_QA_NOTIFICATION_KIND=""
-JARVIS_QA_NOTIFICATION_TITLE=""
-JARVIS_QA_NOTIFICATION_BODY=""
-JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER="jarvis.scheduler"
 JARVIS_QA_RESTART_EVIDENCE_NOTE=""
 JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE=""
-JARVIS_QA_VOICE_TEST_PHRASE=""
-JARVIS_QA_OBSERVED_TRANSCRIPT=""
-JARVIS_QA_EXPECTED_COMMAND_TEXT=""
-JARVIS_QA_OBSERVED_COMMAND_TEXT=""
-JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="" # task:<uuid> or audit:<uuid> from the live command
-JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL=""
 EOF
 }
 
@@ -764,12 +603,6 @@ ENTITLEMENTS="$ROOT_DIR/packaging/Jarvis.entitlements"
 INFO_TEMPLATE_HINT="$ROOT_DIR/scripts/package-distribution.sh"
 
 plutil -lint "$ENTITLEMENTS" >/dev/null
-require_file_contains "distribution packaging script" "$INFO_TEMPLATE_HINT" "NSMicrophoneUsageDescription"
-require_file_contains "distribution packaging script" "$INFO_TEMPLATE_HINT" "NSSpeechRecognitionUsageDescription"
-require_file_contains "distribution packaging script" "$INFO_TEMPLATE_HINT" "$EXPECTED_MICROPHONE_USAGE_DESCRIPTION"
-require_file_contains "distribution packaging script" "$INFO_TEMPLATE_HINT" "$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION"
-require_file_contains "release checklist" "$ROOT_DIR/docs/release-checklist.md" "live microphone/Speech"
-require_file_contains "release checklist" "$ROOT_DIR/docs/release-checklist.md" "live audio-output"
 
 if [[ "$WRITE_TEMPLATE" == true ]]; then
   write_env_template "$WRITE_TEMPLATE_PATH"
@@ -801,10 +634,6 @@ if [[ "$SELF_TEST" == true ]]; then
   <string>$EXPECTED_VERSION</string>
   <key>CFBundleVersion</key>
   <string>$EXPECTED_VERSION</string>
-  <key>NSMicrophoneUsageDescription</key>
-  <string>$EXPECTED_MICROPHONE_USAGE_DESCRIPTION</string>
-  <key>NSSpeechRecognitionUsageDescription</key>
-  <string>$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION</string>
 </dict>
 </plist>
 PLIST
@@ -866,19 +695,11 @@ JSON
     fail "live QA self-test expected env template to materialize the expected version"
   fi
   require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_CLEAN_PROFILE_VALIDATED=false'
-  require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=false'
   require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE=""'
-  require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_NOTIFICATION_OBSERVED_AT=""'
-  require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_NOTIFICATION_KIND=""'
-  require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER="jarvis.scheduler"'
-  require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE=""'
-  require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_EXPECTED_COMMAND_TEXT=""'
-  require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_OBSERVED_COMMAND_TEXT=""'
   require_file_contains "live QA env template" "$fixture_template" 'JARVIS_RELEASE_CORE_ENDPOINT=""'
   require_file_contains "live QA env template" "$fixture_template" 'JARVIS_IPC_TOKEN_FILE="$HOME/Library/Application Support/Jarvis/ipc-session-auth.json"'
   require_file_contains "live QA env template" "$fixture_template" './scripts/release-live-device-qa.sh --assert-complete'
   require_file_contains "live QA env template" "$fixture_template" 'cargo run -p jarvis-cli -- command "status check" --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}" --json'
-  require_file_contains "live QA env template" "$fixture_template" 'JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:<uuid>"'
   require_file_contains "live QA env template" "$fixture_template" 'JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"'
   require_file_contains "live QA env template" "$fixture_template" 'JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"'
   require_file_contains "live QA env template" "$fixture_template" 'Do not set JARVIS_QA_SELF_TEST_FIXTURE in release evidence'
@@ -886,49 +707,24 @@ JSON
     fail "live QA self-test expected env template validation flags to default false"
   fi
 
-  export JARVIS_QA_NOTIFICATION_KIND="due_now"
-  export JARVIS_QA_NOTIFICATION_TITLE="Scheduler job ready: self-test release reminder"
-  export JARVIS_QA_NOTIFICATION_BODY="A scheduled Assemblywright job is due now."
-  export JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER="jarvis.scheduler"
-
+  export 
   JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
     JARVIS_QA_REPORT_PATH="$fixture_report" \
     JARVIS_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.jarvis.selftest" \
     JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
     JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
-    JARVIS_QA_MICROPHONE_VALIDATED=true \
-    JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true \
-    JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true \
-    JARVIS_QA_NOTIFICATION_VALIDATED=true \
     JARVIS_QA_RESTART_VALIDATED=true \
     JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
     JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
     JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
-    JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
-    JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
+    JARVIS_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
+    JARVIS_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
     JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE="Clean profile install observed in the controlled release QA lane." \
     JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE="Finder launch observed in the controlled release QA lane." \
-    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the controlled release QA lane." \
-    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
-    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the controlled release QA lane." \
-    JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE="Visible scheduler notification observed in the controlled release QA lane." \
-    JARVIS_QA_NOTIFICATION_OBSERVED_AT="2026-05-22T16:04:00Z" \
-    JARVIS_QA_NOTIFICATION_KIND="due_now" \
-    JARVIS_QA_NOTIFICATION_TITLE="Scheduler job ready: self-test release reminder" \
-    JARVIS_QA_NOTIFICATION_BODY="A scheduled Assemblywright job is due now." \
-    JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER="jarvis.scheduler" \
     JARVIS_QA_RESTART_EVIDENCE_NOTE="Restart recovery observed in the controlled release QA lane." \
     JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE="Manual release QA surfaces observed in the controlled release QA lane." \
-    JARVIS_QA_VOICE_TEST_PHRASE="Assemblywright status check." \
-    JARVIS_QA_OBSERVED_TRANSCRIPT="Assemblywright status check." \
-    JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
-    JARVIS_QA_OBSERVED_COMMAND_TEXT="status check" \
-    JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:00000000-0000-4000-8000-000000000001" \
-    JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL="self-test audio output" \
     JARVIS_QA_SELF_TEST_FIXTURE=true \
     "$0" --assert-complete >/dev/null
   require_file_contains "live QA self-test report" "$fixture_report" '"manual_release_qa": true'
@@ -936,9 +732,6 @@ JSON
   require_file_contains "live QA self-test report" "$fixture_report" '"evidence_type": "owner_recorded_live_device_qa"'
   require_file_contains "live QA self-test report" "$fixture_report" '"self_test_fixture": true'
   require_file_contains "live QA self-test report" "$fixture_report" '"bundle_identifier": "com.nobiletechnology.jarvis.selftest"'
-  require_file_contains "live QA self-test report" "$fixture_report" '"microphone_usage_description"'
-  require_file_contains "live QA self-test report" "$fixture_report" "$EXPECTED_MICROPHONE_USAGE_DESCRIPTION"
-  require_file_contains "live QA self-test report" "$fixture_report" "$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION"
   require_file_contains "live QA self-test report" "$fixture_report" '"bundled_core"'
   require_file_contains "live QA self-test report" "$fixture_report" '"app_executable"'
   require_file_contains "live QA self-test report" "$fixture_report" '"code_identifier": "com.nobiletechnology.jarvis.selftest"'
@@ -949,22 +742,8 @@ JSON
   require_file_contains "live QA self-test report" "$fixture_report" '"executable_path"'
   require_file_contains "live QA self-test report" "$fixture_report" "\"version\": \"assemblywright $EXPECTED_VERSION\""
   require_file_contains "live QA self-test report" "$fixture_report" '"sha256"'
-  require_file_contains "live QA self-test report" "$fixture_report" '"transcript_handoff": true'
-  require_file_contains "live QA self-test report" "$fixture_report" '"same_command_path": true'
-  require_file_contains "live QA self-test report" "$fixture_report" '"owner_recorded_live_voice_evidence"'
-  require_file_contains "live QA self-test report" "$fixture_report" '"owner_recorded_non_voice_evidence"'
   require_file_contains "live QA self-test report" "$fixture_report" '"clean_profile_evidence_note": "Clean profile install observed in the controlled release QA lane."'
-  require_file_contains "live QA self-test report" "$fixture_report" '"notification_observed_at": "2026-05-22T16:04:00Z"'
-  require_file_contains "live QA self-test report" "$fixture_report" '"notification_observation"'
-  require_file_contains "live QA self-test report" "$fixture_report" '"kind": "due_now"'
-  require_file_contains "live QA self-test report" "$fixture_report" '"title": "Scheduler job ready: self-test release reminder"'
-  require_file_contains "live QA self-test report" "$fixture_report" '"body": "A scheduled Assemblywright job is due now."'
-  require_file_contains "live QA self-test report" "$fixture_report" '"thread_identifier": "jarvis.scheduler"'
   require_file_contains "live QA self-test report" "$fixture_report" '"owner_name": "Assemblywright QA Self-Test"'
-  require_file_contains "live QA self-test report" "$fixture_report" '"voice_command_observation"'
-  require_file_contains "live QA self-test report" "$fixture_report" '"expected_command_text": "status check"'
-  require_file_contains "live QA self-test report" "$fixture_report" '"observed_command_text": "status check"'
-  require_file_contains "live QA self-test report" "$fixture_report" '"audio_output_evidence_note": "Observed speech output playback in the controlled release QA lane."'
   require_file_contains "live QA self-test report" "$fixture_report" '"proof_boundary"'
 
   run_fixture_assertion() {
@@ -977,38 +756,17 @@ JSON
       JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
       JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
       JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
-      JARVIS_QA_MICROPHONE_VALIDATED=true \
-      JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true \
-      JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true \
-      JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true \
-      JARVIS_QA_NOTIFICATION_VALIDATED=true \
       JARVIS_QA_RESTART_VALIDATED=true \
       JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
       JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
       JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
       JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
-      JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
-      JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
+      JARVIS_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
+      JARVIS_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
       JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE="Clean profile install observed in the controlled release QA lane." \
       JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE="Finder launch observed in the controlled release QA lane." \
-      JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the controlled release QA lane." \
-      JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
-      JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
-      JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the controlled release QA lane." \
-      JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE="Visible scheduler notification observed in the controlled release QA lane." \
-      JARVIS_QA_NOTIFICATION_OBSERVED_AT="2026-05-22T16:04:00Z" \
-      JARVIS_QA_NOTIFICATION_KIND="due_now" \
-      JARVIS_QA_NOTIFICATION_TITLE="Scheduler job ready: self-test release reminder" \
-      JARVIS_QA_NOTIFICATION_BODY="A scheduled Assemblywright job is due now." \
-      JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER="jarvis.scheduler" \
       JARVIS_QA_RESTART_EVIDENCE_NOTE="Restart recovery observed in the controlled release QA lane." \
       JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE="Manual release QA surfaces observed in the controlled release QA lane." \
-      JARVIS_QA_VOICE_TEST_PHRASE="Assemblywright status check." \
-      JARVIS_QA_OBSERVED_TRANSCRIPT="Assemblywright status check." \
-      JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
-      JARVIS_QA_OBSERVED_COMMAND_TEXT="status check" \
-      JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:00000000-0000-4000-8000-000000000001" \
-      JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL="self-test audio output" \
       JARVIS_QA_SELF_TEST_FIXTURE=true \
       "$@" \
       "$0" --assert-complete
@@ -1065,84 +823,12 @@ PY
   require_file_contains "live QA self-test mismatched signed provenance team error" \
     "$tmp_dir/mismatched-provenance-team.err" "TeamIdentifier does not match signed provenance"
 
-  set_fixture_plist_value NSMicrophoneUsageDescription "Assemblywright microphone fixture"
-  if run_fixture_assertion "$tmp_dir/mismatched-microphone-usage.json" >/dev/null 2>"$tmp_dir/mismatched-microphone-usage.err"; then
-    fail "live QA self-test expected mismatched microphone usage description to fail"
-  fi
-  require_file_contains "live QA self-test mismatched microphone usage error" \
-    "$tmp_dir/mismatched-microphone-usage.err" "NSMicrophoneUsageDescription mismatch"
-  set_fixture_plist_value NSMicrophoneUsageDescription "$EXPECTED_MICROPHONE_USAGE_DESCRIPTION"
-
-  set_fixture_plist_value NSSpeechRecognitionUsageDescription "Assemblywright speech fixture"
-  if run_fixture_assertion "$tmp_dir/mismatched-speech-usage.json" >/dev/null 2>"$tmp_dir/mismatched-speech-usage.err"; then
-    fail "live QA self-test expected mismatched Speech usage description to fail"
-  fi
-  require_file_contains "live QA self-test mismatched Speech usage error" \
-    "$tmp_dir/mismatched-speech-usage.err" "NSSpeechRecognitionUsageDescription mismatch"
-  set_fixture_plist_value NSSpeechRecognitionUsageDescription "$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION"
-
-  if run_fixture_assertion "$tmp_dir/placeholder-live-voice-evidence.json" \
-    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="TODO before release" >/dev/null 2>"$tmp_dir/placeholder-live-voice-evidence.err"; then
-    fail "live QA self-test expected placeholder live voice evidence note to fail"
-  fi
-  require_file_contains "live QA self-test placeholder live voice error" \
-    "$tmp_dir/placeholder-live-voice-evidence.err" "owner-recorded external evidence"
-
   if run_fixture_assertion "$tmp_dir/placeholder-non-voice-evidence.json" \
     JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE="self-test fixture" >/dev/null 2>"$tmp_dir/placeholder-non-voice-evidence.err"; then
     fail "live QA self-test expected placeholder non-voice evidence note to fail"
   fi
   require_file_contains "live QA self-test placeholder non-voice error" \
     "$tmp_dir/placeholder-non-voice-evidence.err" "owner-recorded external evidence"
-
-  if run_fixture_assertion "$tmp_dir/embedded-fixture-evidence.json" \
-    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the fake fixture." >/dev/null 2>"$tmp_dir/embedded-fixture-evidence.err"; then
-    fail "live QA self-test expected embedded fixture evidence note to fail"
-  fi
-  require_file_contains "live QA self-test embedded fixture evidence error" \
-    "$tmp_dir/embedded-fixture-evidence.err" "owner-recorded external evidence"
-
-  if run_fixture_assertion "$tmp_dir/invalid-notification-kind.json" \
-    JARVIS_QA_NOTIFICATION_KIND="reminder" >/dev/null 2>"$tmp_dir/invalid-notification-kind.err"; then
-    fail "live QA self-test expected invalid notification kind to fail"
-  fi
-  require_file_contains "live QA self-test invalid notification kind error" \
-    "$tmp_dir/invalid-notification-kind.err" "JARVIS_QA_NOTIFICATION_KIND must be one of"
-
-  if run_fixture_assertion "$tmp_dir/blank-notification-title.json" \
-    JARVIS_QA_NOTIFICATION_TITLE="   " >/dev/null 2>"$tmp_dir/blank-notification-title.err"; then
-    fail "live QA self-test expected blank notification title to fail"
-  fi
-  require_file_contains "live QA self-test blank notification title error" \
-    "$tmp_dir/blank-notification-title.err" "JARVIS_QA_NOTIFICATION_TITLE"
-
-  if run_fixture_assertion "$tmp_dir/blank-notification-body.json" \
-    JARVIS_QA_NOTIFICATION_BODY="   " >/dev/null 2>"$tmp_dir/blank-notification-body.err"; then
-    fail "live QA self-test expected blank notification body to fail"
-  fi
-  require_file_contains "live QA self-test blank notification body error" \
-    "$tmp_dir/blank-notification-body.err" "JARVIS_QA_NOTIFICATION_BODY"
-
-  if run_fixture_assertion "$tmp_dir/wrong-notification-thread.json" \
-    JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER="jarvis.other" >/dev/null 2>"$tmp_dir/wrong-notification-thread.err"; then
-    fail "live QA self-test expected wrong notification thread identifier to fail"
-  fi
-  require_file_contains "live QA self-test wrong notification thread error" \
-    "$tmp_dir/wrong-notification-thread.err" "JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER must be jarvis.scheduler"
-
-  if run_fixture_assertion "$tmp_dir/malformed-notification-timestamp.json" \
-    JARVIS_QA_NOTIFICATION_OBSERVED_AT="2026-05-22T16:04:00-04:00" >/dev/null 2>"$tmp_dir/malformed-notification-timestamp.err"; then
-    fail "live QA self-test expected malformed notification timestamp to fail"
-  fi
-  require_file_contains "live QA self-test malformed notification timestamp error" \
-    "$tmp_dir/malformed-notification-timestamp.err" "JARVIS_QA_NOTIFICATION_OBSERVED_AT must be a UTC RFC3339 timestamp"
-
-  if run_fixture_assertion "$tmp_dir/early-notification-timestamp.json" \
-    JARVIS_QA_NOTIFICATION_OBSERVED_AT="2026-05-22T15:59:00Z" >/dev/null 2>"$tmp_dir/early-notification-timestamp.err"; then
-    fail "live QA self-test expected notification timestamp before voice start to fail"
-  fi
-  require_file_contains "live QA self-test early notification timestamp error" \
-    "$tmp_dir/early-notification-timestamp.err" "JARVIS_QA_NOTIFICATION_OBSERVED_AT must be greater than or equal to JARVIS_QA_VOICE_CHECK_STARTED_AT"
 
   if env -u JARVIS_QA_INTERNAL_SELF_TEST \
     JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
@@ -1151,34 +837,17 @@ PY
     JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
     JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
-    JARVIS_QA_MICROPHONE_VALIDATED=true \
-    JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true \
-    JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true \
-    JARVIS_QA_NOTIFICATION_VALIDATED=true \
     JARVIS_QA_RESTART_VALIDATED=true \
     JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
     JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
     JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
-    JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
-    JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
+    JARVIS_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
+    JARVIS_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
     JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE="Clean profile install observed in the controlled release QA lane." \
     JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE="Finder launch observed in the controlled release QA lane." \
-    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the controlled release QA lane." \
-    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
-    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the controlled release QA lane." \
-    JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE="Visible scheduler notification observed in the controlled release QA lane." \
-    JARVIS_QA_NOTIFICATION_OBSERVED_AT="2026-05-22T16:04:00Z" \
     JARVIS_QA_RESTART_EVIDENCE_NOTE="Restart recovery observed in the controlled release QA lane." \
     JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE="Manual release QA surfaces observed in the controlled release QA lane." \
-    JARVIS_QA_VOICE_TEST_PHRASE="Assemblywright status check." \
-    JARVIS_QA_OBSERVED_TRANSCRIPT="Assemblywright status check." \
-    JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
-    JARVIS_QA_OBSERVED_COMMAND_TEXT="status check" \
-    JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:00000000-0000-4000-8000-000000000001" \
-    JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL="self-test audio output" \
     JARVIS_QA_SELF_TEST_FIXTURE=true \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "live QA self-test expected operator-authored self-test fixture reports to fail"
@@ -1190,34 +859,17 @@ PY
     JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
     JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
-    JARVIS_QA_MICROPHONE_VALIDATED=true \
-    JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true \
-    JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true \
-    JARVIS_QA_NOTIFICATION_VALIDATED=true \
     JARVIS_QA_RESTART_VALIDATED=true \
     JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
     JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
     JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
-    JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
-    JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
+    JARVIS_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
+    JARVIS_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
     JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE="   " \
     JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE="Finder launch observed in the controlled release QA lane." \
-    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the controlled release QA lane." \
-    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
-    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the controlled release QA lane." \
-    JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE="Visible scheduler notification observed in the controlled release QA lane." \
-    JARVIS_QA_NOTIFICATION_OBSERVED_AT="2026-05-22T16:04:00Z" \
     JARVIS_QA_RESTART_EVIDENCE_NOTE="Restart recovery observed in the controlled release QA lane." \
     JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE="Manual release QA surfaces observed in the controlled release QA lane." \
-    JARVIS_QA_VOICE_TEST_PHRASE="Assemblywright status check." \
-    JARVIS_QA_OBSERVED_TRANSCRIPT="Assemblywright status check." \
-    JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
-    JARVIS_QA_OBSERVED_COMMAND_TEXT="status check" \
-    JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:00000000-0000-4000-8000-000000000001" \
-    JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL="self-test audio output" \
     JARVIS_QA_SELF_TEST_FIXTURE=true \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "live QA self-test expected blank non-voice owner evidence to fail"
@@ -1229,28 +881,13 @@ PY
     JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
     JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
-    JARVIS_QA_MICROPHONE_VALIDATED=true \
-    JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true \
-    JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true \
-    JARVIS_QA_NOTIFICATION_VALIDATED=true \
     JARVIS_QA_RESTART_VALIDATED=true \
     JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
     JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
     JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
-    JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
-    JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
-    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the controlled release QA lane." \
-    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
-    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="   " \
-    JARVIS_QA_VOICE_TEST_PHRASE="Assemblywright status check." \
-    JARVIS_QA_OBSERVED_TRANSCRIPT="Assemblywright status check." \
-    JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
-    JARVIS_QA_OBSERVED_COMMAND_TEXT="status check" \
-    JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:00000000-0000-4000-8000-000000000001" \
-    JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL="self-test audio output" \
+    JARVIS_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
+    JARVIS_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
     JARVIS_QA_SELF_TEST_FIXTURE=true \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "live QA self-test expected whitespace-only owner evidence to fail"
@@ -1262,27 +899,13 @@ PY
     JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
     JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
-    JARVIS_QA_MICROPHONE_VALIDATED=true \
-    JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true \
-    JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true \
-    JARVIS_QA_NOTIFICATION_VALIDATED=true \
     JARVIS_QA_RESTART_VALIDATED=true \
     JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
     JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
     JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
-    JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
-    JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
-    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the controlled release QA lane." \
-    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
-    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the controlled release QA lane." \
-    JARVIS_QA_VOICE_TEST_PHRASE="Assemblywright status check." \
-    JARVIS_QA_OBSERVED_TRANSCRIPT="Assemblywright status check." \
-    JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
-    JARVIS_QA_OBSERVED_COMMAND_TEXT="status check" \
-    JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:00000000-0000-4000-8000-000000000001" \
-    JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL="self-test audio output" \
+    JARVIS_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
+    JARVIS_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
     JARVIS_QA_SELF_TEST_FIXTURE=true \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "live QA self-test expected missing transcript handoff validation to fail"
@@ -1294,27 +917,13 @@ PY
     JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
     JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
-    JARVIS_QA_MICROPHONE_VALIDATED=true \
-    JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true \
-    JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true \
-    JARVIS_QA_NOTIFICATION_VALIDATED=true \
     JARVIS_QA_RESTART_VALIDATED=true \
     JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
     JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
     JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
-    JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
-    JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
-    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the controlled release QA lane." \
-    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
-    JARVIS_QA_VOICE_TEST_PHRASE="Assemblywright status check." \
-    JARVIS_QA_OBSERVED_TRANSCRIPT="Assemblywright status check." \
-    JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
-    JARVIS_QA_OBSERVED_COMMAND_TEXT="status check" \
-    JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:00000000-0000-4000-8000-000000000001" \
-    JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL="self-test audio output" \
+    JARVIS_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
+    JARVIS_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
     JARVIS_QA_SELF_TEST_FIXTURE=true \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "live QA self-test expected missing owner-recorded audio evidence note to fail"
@@ -1326,27 +935,13 @@ PY
     JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
     JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
-    JARVIS_QA_MICROPHONE_VALIDATED=true \
-    JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true \
-    JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true \
-    JARVIS_QA_NOTIFICATION_VALIDATED=true \
     JARVIS_QA_RESTART_VALIDATED=true \
     JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
     JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
     JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
-    JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
-    JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
-    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the controlled release QA lane." \
-    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
-    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the controlled release QA lane." \
-    JARVIS_QA_VOICE_TEST_PHRASE="Assemblywright status check." \
-    JARVIS_QA_OBSERVED_TRANSCRIPT="Assemblywright status check." \
-    JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
-    JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:00000000-0000-4000-8000-000000000001" \
-    JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL="self-test audio output" \
+    JARVIS_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
+    JARVIS_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
     JARVIS_QA_SELF_TEST_FIXTURE=true \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "live QA self-test expected missing structured command observation to fail"
@@ -1358,28 +953,13 @@ PY
     JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
     JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
-    JARVIS_QA_MICROPHONE_VALIDATED=true \
-    JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true \
-    JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true \
-    JARVIS_QA_NOTIFICATION_VALIDATED=true \
     JARVIS_QA_RESTART_VALIDATED=true \
     JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
     JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
     JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
-    JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
-    JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
-    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the controlled release QA lane." \
-    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
-    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the controlled release QA lane." \
-    JARVIS_QA_VOICE_TEST_PHRASE="Assemblywright status check." \
-    JARVIS_QA_OBSERVED_TRANSCRIPT="Assemblywright stats check." \
-    JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
-    JARVIS_QA_OBSERVED_COMMAND_TEXT="status check" \
-    JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:00000000-0000-4000-8000-000000000001" \
-    JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL="self-test audio output" \
+    JARVIS_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
+    JARVIS_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
     JARVIS_QA_SELF_TEST_FIXTURE=true \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "live QA self-test expected mismatched observed transcript to fail"
@@ -1391,28 +971,13 @@ PY
     JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
     JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
-    JARVIS_QA_MICROPHONE_VALIDATED=true \
-    JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true \
-    JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true \
-    JARVIS_QA_NOTIFICATION_VALIDATED=true \
     JARVIS_QA_RESTART_VALIDATED=true \
     JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
     JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
     JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
-    JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
-    JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
-    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the controlled release QA lane." \
-    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
-    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the controlled release QA lane." \
-    JARVIS_QA_VOICE_TEST_PHRASE="Assemblywright status check." \
-    JARVIS_QA_OBSERVED_TRANSCRIPT="Assemblywright status check." \
-    JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
-    JARVIS_QA_OBSERVED_COMMAND_TEXT="different command" \
-    JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:00000000-0000-4000-8000-000000000001" \
-    JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL="self-test audio output" \
+    JARVIS_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
+    JARVIS_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
     JARVIS_QA_SELF_TEST_FIXTURE=true \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "live QA self-test expected mismatched command observation to fail"
@@ -1424,28 +989,13 @@ PY
     JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
     JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
-    JARVIS_QA_MICROPHONE_VALIDATED=true \
-    JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true \
-    JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true \
-    JARVIS_QA_NOTIFICATION_VALIDATED=true \
     JARVIS_QA_RESTART_VALIDATED=true \
     JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
     JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
     JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
-    JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
-    JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
-    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the controlled release QA lane." \
-    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
-    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the controlled release QA lane." \
-    JARVIS_QA_VOICE_TEST_PHRASE="Assemblywright status check." \
-    JARVIS_QA_OBSERVED_TRANSCRIPT="Assemblywright status check." \
-    JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
-    JARVIS_QA_OBSERVED_COMMAND_TEXT="status check" \
-    JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="looked good" \
-    JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL="self-test audio output" \
+    JARVIS_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
+    JARVIS_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:05:00Z" \
     JARVIS_QA_SELF_TEST_FIXTURE=true \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "live QA self-test expected malformed command result evidence id to fail"
@@ -1457,28 +1007,13 @@ PY
     JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION" \
     JARVIS_QA_CLEAN_PROFILE_VALIDATED=true \
     JARVIS_QA_FINDER_LAUNCH_VALIDATED=true \
-    JARVIS_QA_MICROPHONE_VALIDATED=true \
-    JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true \
-    JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true \
-    JARVIS_QA_NOTIFICATION_VALIDATED=true \
     JARVIS_QA_RESTART_VALIDATED=true \
     JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
     JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
     JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
-    JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:05:00Z" \
-    JARVIS_QA_VOICE_CHECK_COMPLETED_AT="2026-05-22T16:00:00Z" \
-    JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the controlled release QA lane." \
-    JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
-    JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
-    JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the controlled release QA lane." \
-    JARVIS_QA_VOICE_TEST_PHRASE="Assemblywright status check." \
-    JARVIS_QA_OBSERVED_TRANSCRIPT="Assemblywright status check." \
-    JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
-    JARVIS_QA_OBSERVED_COMMAND_TEXT="status check" \
-    JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:00000000-0000-4000-8000-000000000001" \
-    JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL="self-test audio output" \
+    JARVIS_QA_DEVICE_CHECK_STARTED_AT="2026-05-22T16:05:00Z" \
+    JARVIS_QA_DEVICE_CHECK_COMPLETED_AT="2026-05-22T16:00:00Z" \
     JARVIS_QA_SELF_TEST_FIXTURE=true \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "live QA self-test expected timestamp order validation to fail"
@@ -1521,9 +1056,6 @@ Manual release checks still required before production-ready language:
 - Launch Assemblywright through Finder or LaunchServices, not only from Terminal.
 - Confirm the app supervises the bundled core and command, audit, memory, scheduler,
   plugin, pause/resume, diagnostics, restart, and release-readiness surfaces work.
-- Start voice capture and verify microphone and Speech permission prompts.
-- Speak a command and verify transcript handoff reaches the same command path.
-- Play speech output and verify live audio output on the device.
 - Verify scheduler notification permission and at least one visible notification,
   then record its kind, title, body, thread identifier, and observed timestamp.
 - After validating on the release machine, generate and source the fillable
@@ -1547,43 +1079,19 @@ validate_installed_app_executable_binding
 
 require_true JARVIS_QA_CLEAN_PROFILE_VALIDATED
 require_true JARVIS_QA_FINDER_LAUNCH_VALIDATED
-require_true JARVIS_QA_MICROPHONE_VALIDATED
-require_true JARVIS_QA_SPEECH_PERMISSION_VALIDATED
-require_true JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED
-require_true JARVIS_QA_AUDIO_OUTPUT_VALIDATED
-require_true JARVIS_QA_NOTIFICATION_VALIDATED
 require_true JARVIS_QA_RESTART_VALIDATED
 require_true JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED
 require_non_empty_env JARVIS_QA_OWNER_NAME
 require_non_empty_env JARVIS_QA_DEVICE_LABEL
 require_non_empty_env JARVIS_QA_PROFILE_LABEL
-require_utc_timestamp_env JARVIS_QA_VOICE_CHECK_STARTED_AT
-require_utc_timestamp_env JARVIS_QA_VOICE_CHECK_COMPLETED_AT
-require_timestamp_order JARVIS_QA_VOICE_CHECK_STARTED_AT JARVIS_QA_VOICE_CHECK_COMPLETED_AT
-require_not_future_timestamp_env JARVIS_QA_VOICE_CHECK_COMPLETED_AT
+require_utc_timestamp_env JARVIS_QA_DEVICE_CHECK_STARTED_AT
+require_utc_timestamp_env JARVIS_QA_DEVICE_CHECK_COMPLETED_AT
+require_timestamp_order JARVIS_QA_DEVICE_CHECK_STARTED_AT JARVIS_QA_DEVICE_CHECK_COMPLETED_AT
+require_not_future_timestamp_env JARVIS_QA_DEVICE_CHECK_COMPLETED_AT
 require_owner_evidence_note_env JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE
 require_owner_evidence_note_env JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE
-require_owner_evidence_note_env JARVIS_QA_MICROPHONE_EVIDENCE_NOTE
-require_owner_evidence_note_env JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE
-require_owner_evidence_note_env JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE
-require_owner_evidence_note_env JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE
-require_owner_evidence_note_env JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE
-require_utc_timestamp_env JARVIS_QA_NOTIFICATION_OBSERVED_AT
-require_timestamp_order JARVIS_QA_VOICE_CHECK_STARTED_AT JARVIS_QA_NOTIFICATION_OBSERVED_AT
-require_not_future_timestamp_env JARVIS_QA_NOTIFICATION_OBSERVED_AT
-require_notification_kind_env JARVIS_QA_NOTIFICATION_KIND
-require_non_empty_env JARVIS_QA_NOTIFICATION_TITLE
-require_non_empty_env JARVIS_QA_NOTIFICATION_BODY
-require_env_equals JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER "jarvis.scheduler"
 require_owner_evidence_note_env JARVIS_QA_RESTART_EVIDENCE_NOTE
 require_owner_evidence_note_env JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE
-require_non_empty_env JARVIS_QA_VOICE_TEST_PHRASE
-require_non_empty_env JARVIS_QA_OBSERVED_TRANSCRIPT
-require_observed_transcript_matches_phrase
-require_trimmed_env_match JARVIS_QA_EXPECTED_COMMAND_TEXT JARVIS_QA_OBSERVED_COMMAND_TEXT
-require_non_empty_env JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID
-require_command_result_evidence_id_env JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID
-require_non_empty_env JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL
 write_report
 
 cat <<EOF

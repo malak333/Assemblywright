@@ -12,8 +12,6 @@ CORE_CODE_ID="${BUNDLE_ID}.core"
 APP_NAME="Assemblywright"
 APP_EXECUTABLE_NAME="JarvisMacApp"
 CORE_EXECUTABLE_NAME="jarvis-cli"
-EXPECTED_MICROPHONE_USAGE_DESCRIPTION="Assemblywright uses microphone input only when you explicitly start local voice capture."
-EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION="Assemblywright uses speech recognition only to turn your spoken command into a local assistant request."
 ENTITLEMENTS="$ROOT_DIR/packaging/Jarvis.entitlements"
 CORE_ENTITLEMENTS="$ROOT_DIR/packaging/JarvisCore.entitlements"
 BRAND_GENERATED_DIR="$ROOT_DIR/assets/brand/generated"
@@ -73,7 +71,6 @@ device validation.
 prints the required downstream signed-distribution, QA, evidence-bundle, and
 doctor handoff commands.
 --entitlements-policy-self-test verifies the app entitlement template keeps
-microphone access while the bundled core entitlement template does not.
 --version-consistency-self-test verifies package/crate version drift is rejected
 without signing, notarizing, or building distribution artifacts.
 --provenance-self-test verifies signed-provenance schema and semantic Apple
@@ -208,12 +205,12 @@ PY
 
 validate_app_zip_payload() {
   local zip_path="$1"
-  python3 - "$zip_path" "$EXPECTED_MICROPHONE_USAGE_DESCRIPTION" "$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION" "$APP_ICON_FILE" <<'PY'
+  python3 - "$zip_path" "$APP_ICON_FILE" <<'PY'
 import plistlib
 import sys
 import zipfile
 
-zip_path, expected_microphone, expected_speech, expected_icon = sys.argv[1:5]
+zip_path, expected_icon = sys.argv[1:3]
 required_entries = (
     "Assemblywright.app/Contents/MacOS/JarvisMacApp",
     "Assemblywright.app/Contents/Resources/bin/jarvis-cli",
@@ -249,19 +246,6 @@ if app_roots != {"Assemblywright.app/"}:
 with zipfile.ZipFile(zip_path) as archive:
     info_plist = plistlib.loads(archive.read("Assemblywright.app/Contents/Info.plist"))
 
-actual_microphone = info_plist.get("NSMicrophoneUsageDescription")
-if actual_microphone != expected_microphone:
-    raise SystemExit(
-        "zip payload Info.plist NSMicrophoneUsageDescription mismatch: "
-        f"expected {expected_microphone!r}, got {actual_microphone!r}"
-    )
-
-actual_speech = info_plist.get("NSSpeechRecognitionUsageDescription")
-if actual_speech != expected_speech:
-    raise SystemExit(
-        "zip payload Info.plist NSSpeechRecognitionUsageDescription mismatch: "
-        f"expected {expected_speech!r}, got {actual_speech!r}"
-    )
 
 actual_icon = info_plist.get("CFBundleIconFile")
 if actual_icon != expected_icon:
@@ -354,27 +338,6 @@ assert_bundled_core_version() {
   require_output_contains "bundled core version" "$output" "assemblywright $VERSION"
 }
 
-assert_app_audio_input_entitlement() {
-  local label="$1"
-  local output
-  output="$(codesign -d --entitlements :- "$APP_PATH" 2>/dev/null)"
-  if [[ "$output" != *"com.apple.security.device.audio-input"* ]]; then
-    printf 'error: %s entitlements do not include microphone access\n' "$label" >&2
-    printf '%s\n' "$output" >&2
-    exit 1
-  fi
-}
-
-assert_bundled_core_no_audio_input_entitlement() {
-  local label="$1"
-  local output
-  output="$(codesign -d --entitlements :- "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" 2>/dev/null)"
-  if [[ "$output" == *"com.apple.security.device.audio-input"* ]]; then
-    printf 'error: %s entitlements unexpectedly include microphone access\n' "$label" >&2
-    printf '%s\n' "$output" >&2
-    exit 1
-  fi
-}
 
 assert_code_identifier() {
   local label="$1"
@@ -748,10 +711,8 @@ with open(core_entitlements_path, "rb") as handle:
     core_entitlements = plistlib.load(handle)
 
 microphone_key = "com.apple.security.device.audio-input"
-if app_entitlements.get(microphone_key) is not True:
-    raise SystemExit("app entitlements must include microphone access")
-if microphone_key in core_entitlements:
-    raise SystemExit("bundled core entitlements must not include microphone access")
+if microphone_key in app_entitlements or microphone_key in core_entitlements:
+    raise SystemExit("entitlement templates must not request microphone access")
 
 for key in (
     "com.apple.security.cs.allow-jit",
@@ -967,10 +928,6 @@ SH
   <string>$VERSION</string>
   <key>CFBundleVersion</key>
   <string>$VERSION</string>
-  <key>NSMicrophoneUsageDescription</key>
-  <string>$EXPECTED_MICROPHONE_USAGE_DESCRIPTION</string>
-  <key>NSSpeechRecognitionUsageDescription</key>
-  <string>$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION</string>
 </dict>
 </plist>
 PLIST
@@ -1154,30 +1111,6 @@ with zipfile.ZipFile(zip_path, "w") as archive:
             archive.write(path, pathlib.Path("Assemblywright.app") / path.relative_to(app_path))
 PY
 
-  python3 - "$ZIP_PATH" <<'PY'
-import plistlib
-import pathlib
-import sys
-import zipfile
-
-zip_path = pathlib.Path(sys.argv[1])
-with zipfile.ZipFile(zip_path) as source:
-    entries = {name: source.read(name) for name in source.namelist()}
-info = plistlib.loads(entries["Assemblywright.app/Contents/Info.plist"])
-info["NSMicrophoneUsageDescription"] = "Assemblywright microphone fixture"
-entries["Assemblywright.app/Contents/Info.plist"] = plistlib.dumps(info)
-with zipfile.ZipFile(zip_path, "w") as archive:
-    for name, data in entries.items():
-        archive.writestr(name, data)
-PY
-  output="$(PATH="$stub_dir:$PATH" \
-    JARVIS_PACKAGE_STUB_BUNDLE_ID="$BUNDLE_ID" \
-    JARVIS_PACKAGE_STUB_VERSION="$VERSION" \
-    JARVIS_DEVELOPER_ID_APPLICATION="Developer ID Application: Assemblywright QA Fixture" \
-    JARVIS_DEVELOPER_ID_INSTALLER="Developer ID Installer: Assemblywright QA Fixture" \
-    write_signed_distribution_provenance 2>&1 || true)"
-  require_output_contains "signed provenance privacy prompt self-test" "$output" "NSMicrophoneUsageDescription mismatch"
-
   python3 - "$APP_PATH" "$ZIP_PATH" <<'PY'
 import pathlib
 import sys
@@ -1308,10 +1241,6 @@ build_app_bundle() {
   <string>14.0</string>
   <key>NSHighResolutionCapable</key>
   <true/>
-  <key>NSMicrophoneUsageDescription</key>
-  <string>$EXPECTED_MICROPHONE_USAGE_DESCRIPTION</string>
-  <key>NSSpeechRecognitionUsageDescription</key>
-  <string>$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION</string>
 </dict>
 </plist>
 PLIST
@@ -1322,10 +1251,6 @@ PLIST
   require_output_contains "Info.plist" "$INFO_PLIST_CONTENTS" "<string>$APP_EXECUTABLE_NAME</string>"
   require_output_contains "Info.plist" "$INFO_PLIST_CONTENTS" "<string>$BUNDLE_ID</string>"
   require_output_contains "Info.plist" "$INFO_PLIST_CONTENTS" "<string>APPL</string>"
-  require_output_contains "Info.plist" "$INFO_PLIST_CONTENTS" "NSMicrophoneUsageDescription"
-  require_output_contains "Info.plist" "$INFO_PLIST_CONTENTS" "NSSpeechRecognitionUsageDescription"
-  require_output_contains "Info.plist" "$INFO_PLIST_CONTENTS" "<string>$EXPECTED_MICROPHONE_USAGE_DESCRIPTION</string>"
-  require_output_contains "Info.plist" "$INFO_PLIST_CONTENTS" "<string>$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION</string>"
   require_output_contains "Info.plist" "$INFO_PLIST_CONTENTS" "CFBundleIconFile"
   require_output_contains "Info.plist" "$INFO_PLIST_CONTENTS" "<string>$APP_ICON_FILE</string>"
   assert_brand_resources "release app" "$APP_PATH"
@@ -1482,7 +1407,7 @@ run_unsigned_structure_check() {
   printf 'App: %s\n' "$APP_PATH"
   printf 'Pkg: %s\n' "$PKG_PATH"
   printf 'Signing: %s\n' "$SIGNING_STATUS"
-  printf 'Proof boundary: release app and unsigned installer payload structure only; no Developer ID signing, notarization, stapling, /Applications install, Finder launch, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store validation, or manual QA.\n'
+  printf 'Proof boundary: release app and unsigned installer payload structure only; no Developer ID signing, notarization, stapling, /Applications install, Finder launch, App Store validation, or manual QA.\n'
 }
 
 run_unsigned_launch_check() {
@@ -1498,8 +1423,6 @@ run_unsigned_launch_check() {
   run codesign --force --sign - --entitlements "$ENTITLEMENTS" "$APP_PATH"
   run codesign --verify --deep --strict "$APP_PATH"
   assert_app_core_code_identifiers "unsigned launch"
-  assert_app_audio_input_entitlement "unsigned launch app"
-  assert_bundled_core_no_audio_input_entitlement "unsigned launch bundled core"
   SIGNING_STATUS="ad-hoc signed with codesign -"
 
   PKG_PATH="$DIST_DIR/$APP_NAME-$VERSION-unsigned-launch.pkg"
@@ -1518,19 +1441,14 @@ run_unsigned_launch_check() {
   require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Assemblywright.app/Contents/Info.plist"
 
   # Keep the isolated HOME short enough for macOS sockaddr_un.sun_path (103 bytes).
-  LAUNCH_TMP_DIR="$(mktemp -d "/tmp/jarvis-dl.XXXXXX")"
+  LAUNCH_TMP_DIR="$(mktemp -d "/tmp/aw-dl.XXXXXX")"
   APP_PID=""
-  PORT="$(select_port)"
-  ENDPOINT="http://127.0.0.1:$PORT"
   CLEAN_HOME="$LAUNCH_TMP_DIR/h"
-  APP_DB="$CLEAN_HOME/Library/Application Support/Jarvis/jarvis.sqlite"
-  APP_IPC_AUTH_FILE="$CLEAN_HOME/Library/Application Support/Jarvis/ipc-session-auth.json"
-  APP_IPC_RUN_DIR="$CLEAN_HOME/Library/Application Support/Jarvis/run"
-  APP_LOG="$LAUNCH_TMP_DIR/JarvisMacApp-memory-only.log"
+  APP_LOG="$LAUNCH_TMP_DIR/AssemblywrightMacApp.log"
   mkdir -p "$CLEAN_HOME"
 
   stop_launch() {
-    local child_pids=()
+    local child_pids=("")
     local orphaned_child=false
     if [[ -n "$APP_PID" ]]; then
       while IFS= read -r pid; do
@@ -1547,8 +1465,8 @@ run_unsigned_launch_check() {
 
     for _ in {1..40}; do
       local child_alive=false
-      for pid in "${child_pids[@]}"; do
-        if kill -0 "$pid" 2>/dev/null; then
+      for pid in "${child_pids[@]:-}"; do
+        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
           child_alive=true
           break
         fi
@@ -1558,8 +1476,8 @@ run_unsigned_launch_check() {
       fi
       sleep 0.1
     done
-    for pid in "${child_pids[@]}"; do
-      if kill -0 "$pid" 2>/dev/null; then
+    for pid in "${child_pids[@]:-}"; do
+      if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
         orphaned_child=true
         kill "$pid" 2>/dev/null || true
         wait "$pid" 2>/dev/null || true
@@ -1568,20 +1486,7 @@ run_unsigned_launch_check() {
     if [[ "$orphaned_child" == true ]]; then
       return 1
     fi
-
-    while IFS= read -r pid; do
-      if [[ -n "$pid" ]]; then
-        kill "$pid" 2>/dev/null || true
-      fi
-    done < <(lsof -ti "tcp:$PORT" 2>/dev/null || true)
-
-    for _ in {1..40}; do
-      if ! nc -z 127.0.0.1 "$PORT" >/dev/null 2>&1; then
-        return
-      fi
-      sleep 0.1
-    done
-    return 1
+    return 0
   }
 
   cleanup_launch() {
@@ -1590,199 +1495,36 @@ run_unsigned_launch_check() {
   }
   trap cleanup_launch EXIT
 
-  printf '\n==> Launching release app with the default memory-only Unix-socket IPC credential\n'
-  env \
+  printf '\n==> Launching release app in an isolated HOME with Developer Mode default-off\n'
+  env -u JARVIS_MAC_DEVELOPER_BRIDGE_EXECUTABLE -u JARVIS_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER \
     HOME="$CLEAN_HOME" \
-    JARVIS_MAC_CORE_BIND_ADDRESS="127.0.0.1:$PORT" \
-    JARVIS_MAC_CORE_ENDPOINT="$ENDPOINT" \
-    JARVIS_MAC_CORE_DATABASE="$APP_DB" \
-    JARVIS_MAC_IPC_AUTH_FILE="$APP_IPC_AUTH_FILE" \
-    JARVIS_MAC_IPC_SOCKET_DIRECTORY="$APP_IPC_RUN_DIR" \
-    JARVIS_MAC_SCHEDULER_AUTOMATION_ENABLED="true" \
-    JARVIS_MAC_SCHEDULER_AUTOMATION_INTERVAL_MS="1000" \
-    JARVIS_MAC_RELEASE_SMOKE="true" \
     "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME" >"$APP_LOG" 2>&1 &
   APP_PID="$!"
 
-  DEFAULT_IPC_SOCKET=""
-  DEFAULT_ROUTE_SEQUENCE_VERIFIED=false
-  for _ in {1..60}; do
+  # The app must stay up on its own. With Developer Mode opt-in absent it must
+  # not spawn a helper child, open any listener, or write credential state.
+  for _ in {1..20}; do
     if ! kill -0 "$APP_PID" 2>/dev/null; then
-      printf 'error: release app exited before the memory-only core became reachable; app log follows\n' >&2
+      printf 'error: release app exited during the isolated-HOME launch check; app log follows\n' >&2
       cat "$APP_LOG" >&2 || true
       exit 1
-    fi
-    if [[ -e "$APP_IPC_AUTH_FILE" ]]; then
-      fail "default app launch persisted an IPC credential without explicit CLI handoff opt-in"
-    fi
-    if nc -z 127.0.0.1 "$PORT" >/dev/null 2>&1; then
-      fail "default app launch unexpectedly exposed loopback TCP IPC"
-    fi
-    DEFAULT_IPC_SOCKET="$(find "$APP_IPC_RUN_DIR" -maxdepth 1 -type s -print -quit 2>/dev/null || true)"
-    if grep -Fq "Assemblywright release smoke: default supervised Unix IPC route sequence verified" "$APP_LOG"; then
-      DEFAULT_ROUTE_SEQUENCE_VERIFIED=true
-    fi
-    if [[ -n "$DEFAULT_IPC_SOCKET" ]] && [[ "$DEFAULT_ROUTE_SEQUENCE_VERIFIED" == true ]]; then
-      break
     fi
     sleep 0.25
   done
 
-  if [[ -z "$DEFAULT_IPC_SOCKET" ]]; then
-    printf 'error: memory-only app core did not create its supervised Unix socket; app log follows\n' >&2
-    cat "$APP_LOG" >&2 || true
-    exit 1
-  fi
-  if [[ "$DEFAULT_ROUTE_SEQUENCE_VERIFIED" != true ]]; then
-    printf 'error: release app did not complete the authenticated Swift-to-Rust default Unix IPC route sequence; app log follows\n' >&2
-    cat "$APP_LOG" >&2 || true
-    exit 1
-  fi
-  CORE_PID="$(pgrep -P "$APP_PID" | head -n 1 || true)"
-  [[ -n "$CORE_PID" ]] || fail "default app launch did not retain an app-supervised core child"
-  CORE_COMMAND="$(ps -ww -o command= -p "$CORE_PID")"
-  require_output_contains "app-supervised core scheduler automation" "$CORE_COMMAND" "--scheduler-background"
-  require_output_contains "app-supervised core scheduler interval" "$CORE_COMMAND" "--scheduler-interval-ms 1000"
-  require_output_contains "app-supervised core scheduler limit" "$CORE_COMMAND" "--scheduler-limit 16"
-  require_output_contains "app-supervised core stale recovery" "$CORE_COMMAND" "--scheduler-recover-stale-on-startup"
-  require_output_contains "app-supervised core parent liveness" "$CORE_COMMAND" "--supervised-parent-pid $APP_PID"
-  [[ "$(stat -f '%Lp' "$APP_IPC_RUN_DIR")" == "700" ]] || fail "default app IPC run directory is not mode 0700"
-  [[ "$(stat -f '%Lp' "$DEFAULT_IPC_SOCKET")" == "600" ]] || fail "default app IPC socket is not mode 0600"
-  [[ "$(stat -f '%u' "$APP_IPC_RUN_DIR")" == "$(id -u)" ]] || fail "default app IPC run directory is not owned by the current user"
-  [[ "$(stat -f '%u' "$DEFAULT_IPC_SOCKET")" == "$(id -u)" ]] || fail "default app IPC socket is not owned by the current user"
-  if nc -z 127.0.0.1 "$PORT" >/dev/null 2>&1; then
-    fail "default app launch exposed loopback TCP IPC after Unix socket startup"
-  fi
-  [[ ! -e "$APP_IPC_AUTH_FILE" ]] || fail "default app launch persisted an IPC credential"
-  python3 - "$DEFAULT_IPC_SOCKET" <<'PY'
-import json
-import socket
-import struct
-import sys
+  CHILD_PIDS="$(pgrep -P "$APP_PID" 2>/dev/null || true)"
+  [[ -z "$CHILD_PIDS" ]] || fail "default app launch supervised a child process without Developer Mode opt-in"
+  LISTENERS="$(lsof -a -p "$APP_PID" -iTCP -sTCP:LISTEN -P -n 2>/dev/null || true)"
+  [[ -z "$LISTENERS" ]] || fail "default app launch exposed a TCP listener: $LISTENERS"
 
-socket_path = sys.argv[1]
-request = json.dumps(
-    {
-        "version": 1,
-        "method": "GET",
-        "path": "/health",
-        "authorization": None,
-        "accept": "application/json",
-        "content_type": "application/json",
-        "body_base64": "",
-    },
-    separators=(",", ":"),
-).encode("utf-8")
-
-peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-peer.settimeout(5)
-peer.connect(socket_path)
-try:
-    try:
-        peer.sendall(struct.pack(">I", len(request)) + request)
-        peer.shutdown(socket.SHUT_WR)
-    except (BrokenPipeError, ConnectionResetError):
-        pass
-    try:
-        response_prefix = peer.recv(4)
-    except (BrokenPipeError, ConnectionResetError):
-        response_prefix = b""
-finally:
-    peer.close()
-
-if response_prefix:
-    raise SystemExit(
-        "same-EUID wrong-code peer received a framed response instead of being rejected before request decoding"
-    )
-PY
-  kill -0 "$APP_PID" 2>/dev/null || fail "same-EUID wrong-code rejection destabilized the legitimate supervised app/core route"
-  DEFAULT_TASK_COUNT="$(sqlite3 "$APP_DB" "SELECT COUNT(*) FROM tasks;")"
-  DEFAULT_BLOCKED_TASK_COUNT="$(sqlite3 "$APP_DB" "SELECT COUNT(*) FROM tasks WHERE status = 'blocked';")"
-  DEFAULT_PAUSE_AUDIT_COUNT="$(sqlite3 "$APP_DB" "SELECT COUNT(*) FROM audit_entries WHERE event_type = 'emergency_pause_activated';")"
-  DEFAULT_BLOCK_AUDIT_COUNT="$(sqlite3 "$APP_DB" "SELECT COUNT(*) FROM audit_entries WHERE event_type = 'emergency_pause_blocked';")"
-  DEFAULT_PAUSE_STATE="$(sqlite3 "$APP_DB" "SELECT paused FROM emergency_pause WHERE id = 1;")"
-  (( DEFAULT_TASK_COUNT >= 2 )) || fail "default Unix IPC route sequence did not persist both command tasks"
-  (( DEFAULT_BLOCKED_TASK_COUNT >= 1 )) || fail "default Unix IPC route sequence did not persist an emergency-pause-blocked task"
-  (( DEFAULT_PAUSE_AUDIT_COUNT >= 1 )) || fail "default Unix IPC route sequence did not persist pause audit evidence"
-  (( DEFAULT_BLOCK_AUDIT_COUNT >= 1 )) || fail "default Unix IPC route sequence did not persist blocked-command audit evidence"
-  [[ "$DEFAULT_PAUSE_STATE" == "0" ]] || fail "default Unix IPC route sequence did not leave the durable emergency pause resumed"
-  stop_launch || fail "supervised core remained orphaned after abrupt app termination"
-  [[ ! -e "$DEFAULT_IPC_SOCKET" ]] || fail "default app supervised Unix socket was not cleaned up"
-
-  APP_LOG="$LAUNCH_TMP_DIR/JarvisMacApp-explicit-cli-handoff.log"
-  printf '\n==> Relaunching release app with explicit owner-only CLI handoff opt-in\n'
-  env \
-    HOME="$CLEAN_HOME" \
-    JARVIS_MAC_CORE_BIND_ADDRESS="127.0.0.1:$PORT" \
-    JARVIS_MAC_CORE_ENDPOINT="$ENDPOINT" \
-    JARVIS_MAC_CORE_DATABASE="$APP_DB" \
-    JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF="true" \
-    JARVIS_MAC_IPC_AUTH_FILE="$APP_IPC_AUTH_FILE" \
-    "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME" >"$APP_LOG" 2>&1 &
-  APP_PID="$!"
-
-  HEALTH_OUTPUT=""
-  for _ in {1..60}; do
-    if ! kill -0 "$APP_PID" 2>/dev/null; then
-      printf 'error: release app exited before core became healthy; app log follows\n' >&2
-      cat "$APP_LOG" >&2 || true
-      exit 1
-    fi
-
-    if HEALTH_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" --ipc-token-file "$APP_IPC_AUTH_FILE" health --endpoint "$ENDPOINT" 2>/dev/null)"; then
-      require_output_contains "release app health" "$HEALTH_OUTPUT" "jarvis-core: ok"
-      require_output_contains "release app health" "$HEALTH_OUTPUT" "runtime: routed-fake-local-model+first-party-plugins"
-      break
-    fi
-    sleep 0.25
-  done
-
-  if [[ -z "$HEALTH_OUTPUT" ]]; then
-    printf 'error: release app did not supervise a healthy core; app log follows\n' >&2
-    cat "$APP_LOG" >&2 || true
-    exit 1
-  fi
-
-  if [[ ! -f "$APP_IPC_AUTH_FILE" ]] || [[ "$(stat -f '%Lp' "$APP_IPC_AUTH_FILE")" != "600" ]]; then
-    printf 'error: app-owned IPC authentication file is missing or not mode 0600\n' >&2
-    exit 1
-  fi
-
-  COMMAND_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" --ipc-token-file "$APP_IPC_AUTH_FILE" command --json "status" --endpoint "$ENDPOINT")"
-  require_output_contains "release app command" "$COMMAND_OUTPUT" '"accepted":true'
-  require_output_contains "release app command" "$COMMAND_OUTPUT" '"status":"completed"'
-  require_output_contains "release app command" "$COMMAND_OUTPUT" '"event_type":"plugin_completed"'
-
-  AUDIT_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" --ipc-token-file "$APP_IPC_AUTH_FILE" tasks audit --json --endpoint "$ENDPOINT")"
-  require_output_contains "release app audit" "$AUDIT_OUTPUT" '"event_type":"plugin_completed"'
-  require_output_contains "release app audit" "$AUDIT_OUTPUT" '"event_type":"task_completed"'
-
-  DIAGNOSTICS_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" --ipc-token-file "$APP_IPC_AUTH_FILE" diagnostics export --endpoint "$ENDPOINT")"
-  require_output_contains "release app diagnostics" "$DIAGNOSTICS_OUTPUT" '"repository_backed":true'
-  require_output_contains "release app diagnostics" "$DIAGNOSTICS_OUTPUT" '"task_count":4'
-  require_output_contains "release app diagnostics" "$DIAGNOSTICS_OUTPUT" '"redaction":"diagnostics export omits command bodies'
-
-  PAUSE_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" --ipc-token-file "$APP_IPC_AUTH_FILE" pause --endpoint "$ENDPOINT" --reason "unsigned distribution launch smoke")"
-  require_output_contains "release app pause" "$PAUSE_OUTPUT" '"paused":true'
-
-  BLOCKED_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" --ipc-token-file "$APP_IPC_AUTH_FILE" command --json "status" --endpoint "$ENDPOINT" --dry-run)"
-  require_output_contains "release app blocked command" "$BLOCKED_OUTPUT" '"accepted":false'
-  require_output_contains "release app blocked command" "$BLOCKED_OUTPUT" '"status":"blocked"'
-
-  RESUME_OUTPUT="$("$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" --ipc-token-file "$APP_IPC_AUTH_FILE" resume --endpoint "$ENDPOINT")"
-  require_output_contains "release app resume" "$RESUME_OUTPUT" '"paused":false'
-
-  if [[ ! -s "$APP_DB" ]]; then
-    printf 'error: clean HOME database was not created at %s\n' "$APP_DB" >&2
-    exit 1
-  fi
+  stop_launch || fail "release app left an orphaned child after abrupt termination"
 
   printf '\nAssemblywright unsigned distribution launch check: ok\n'
   printf 'App: %s\n' "$APP_PATH"
   printf 'Pkg: %s\n' "$PKG_PATH"
   printf 'Signing: %s\n' "$SIGNING_STATUS"
-  printf 'Clean HOME database: %s\n' "$APP_DB"
-  printf 'Proof boundary: release-built app executable, bundled core, stable ad-hoc app/core identifiers, exact-build audit-token designated-requirement acceptance plus same-EUID wrong-code pre-frame rejection, unsigned installer payload structure, isolated HOME default owner-only Unix socket plus memory-only bearer launch with no TCP listener or CLI file, authenticated Swift-client health/command/task/audit/diagnostics/background-scheduler/pause/block/resume route sequence with durable scheduler completion, redacted audit, durable outbox suppression acknowledgement, abrupt app termination followed by supervised-core self-exit, UDS/database-owner-lease release and same-database relaunch, and explicit owner-only loopback TCP CLI handoff relaunch. The outbox proof is at-least-once app handoff only. Ad-hoc cdhash evidence does not prove Developer ID publisher identity, and this lane does not prove Developer ID signing, notarization, stapling, /Applications install, Finder/LaunchServices validation, device authentication, App Sandbox, live macOS notification display, exactly-once delivery, OS wake reliability, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, App Store validation, or manual QA.\n'
+  printf 'Clean HOME: %s\n' "$CLEAN_HOME"
+  printf 'Proof boundary: release-built app executable, bundled CLI, stable ad-hoc app/CLI identifiers, unsigned installer payload structure, and an isolated-HOME launch that stays up with Developer Mode default-off, spawns no helper child, opens no TCP listener, and leaves no orphan after abrupt termination. Ad-hoc cdhash evidence does not prove Developer ID publisher identity, and this lane does not prove Developer ID signing, notarization, stapling, /Applications install, Finder/LaunchServices validation, device authentication, App Sandbox, live Developer Mode bridge connectivity, or manual QA.\n'
 }
 
 if [[ "$UNSIGNED_STRUCTURE_CHECK" == true ]]; then
@@ -1859,4 +1601,4 @@ printf 'App: %s\n' "$APP_PATH"
 printf 'Zip: %s\n' "$ZIP_PATH"
 printf 'Pkg: %s\n' "$PKG_PATH"
 printf 'Signed provenance: %s\n' "$PROVENANCE_PATH"
-printf 'Proof boundary: signed, notarized app zip and signed, notarized installer package only; clean-profile install, Finder launch, live microphone/Speech validation, spoken transcript handoff, live audio-output validation, and App Store validation remain manual release checks.\n'
+printf 'Proof boundary: signed, notarized app zip and signed, notarized installer package only; clean-profile install, Finder launch, and App Store validation remain manual release checks.\n'

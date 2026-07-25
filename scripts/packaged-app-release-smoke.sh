@@ -13,8 +13,7 @@ Deprecated compatibility wrapper. The canonical local packaged-app launch proof 
   ./scripts/package-distribution.sh --unsigned-launch-check
 
 That command builds the release app layout, creates the unsigned installer
-payload, launches the release-built app executable with an isolated HOME, and
-verifies bundled-core IPC smoke through the distribution layout.
+payload, and launches the release-built app executable with an isolated HOME.
 USAGE
 }
 

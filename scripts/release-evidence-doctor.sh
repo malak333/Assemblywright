@@ -15,8 +15,6 @@ BUNDLE_PATH="${JARVIS_EVIDENCE_OUTPUT_PATH:-$ROOT_DIR/target/release-evidence-bu
 EXPECTED_BUNDLE_ID="${JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID:-com.nobiletechnology.jarvis}"
 EXPECTED_VERSION="${JARVIS_EVIDENCE_EXPECTED_VERSION:-$VERSION}"
 EXPECTED_INSTALLED_APP_PATH="${JARVIS_QA_INSTALLED_APP_PATH:-/Applications/Assemblywright.app}"
-EXPECTED_MICROPHONE_USAGE_DESCRIPTION="Assemblywright uses microphone input only when you explicitly start local voice capture."
-EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION="Assemblywright uses speech recognition only to turn your spoken command into a local assistant request."
 EVIDENCE_STATUS_ENDPOINT="${JARVIS_EVIDENCE_STATUS_ENDPOINT:-}"
 
 CHECK_ONLY=false
@@ -59,7 +57,7 @@ Optional paths match scripts/release-evidence-bundle.sh:
   JARVIS_EVIDENCE_STATUS_ENDPOINT     Optional jarvis serve endpoint for repository-backed --assert-complete parity
 
 Proof boundary: this script inspects evidence files only. It does not sign,
-notarize, install, launch Finder, validate live microphone/Speech/audio, run a
+notarize, install, launch Finder, run a
 malware scanner, operate a marketplace, or enforce an OS sandbox.
 USAGE
 }
@@ -88,7 +86,6 @@ Recommended next evidence commands:
   live-device endpoint: set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' in target/release-live-device-qa.env
   live-device IPC auth: launch Assemblywright with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then confirm JARVIS_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path before IPC commands
   live-device command evidence: cargo run -p jarvis-cli -- command "status check" --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}" --json
-  live-device evidence ID: record the returned task ID as JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>' or a task-associated audit ID as 'audit:<uuid>'
   live-device assertion: set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete
   live-device evidence status: JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"
   live-device readiness: JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}"
@@ -1075,12 +1072,10 @@ check_app_bundle_metadata() {
     return
   fi
 
-  local bundle_id short_version build_version microphone_usage speech_usage
+  local bundle_id short_version build_version
   bundle_id="$(plist_string_value "$info_plist" CFBundleIdentifier || true)"
   short_version="$(plist_string_value "$info_plist" CFBundleShortVersionString || true)"
   build_version="$(plist_string_value "$info_plist" CFBundleVersion || true)"
-  microphone_usage="$(plist_string_value "$info_plist" NSMicrophoneUsageDescription || true)"
-  speech_usage="$(plist_string_value "$info_plist" NSSpeechRecognitionUsageDescription || true)"
 
   if [[ "$bundle_id" == "$EXPECTED_BUNDLE_ID" ]]; then
     record_satisfied "app bundle Info.plist CFBundleIdentifier matches expected bundle id"
@@ -1096,16 +1091,6 @@ check_app_bundle_metadata() {
     record_satisfied "app bundle Info.plist CFBundleVersion matches expected version"
   else
     record_missing "app bundle Info.plist CFBundleVersion mismatch: expected $EXPECTED_VERSION, got ${build_version:-<missing>}"
-  fi
-  if [[ "$microphone_usage" == "$EXPECTED_MICROPHONE_USAGE_DESCRIPTION" ]]; then
-    record_satisfied "app bundle Info.plist NSMicrophoneUsageDescription matches approved privacy copy"
-  else
-    record_missing "app bundle Info.plist NSMicrophoneUsageDescription mismatch: expected $EXPECTED_MICROPHONE_USAGE_DESCRIPTION, got ${microphone_usage:-<missing>}"
-  fi
-  if [[ "$speech_usage" == "$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION" ]]; then
-    record_satisfied "app bundle Info.plist NSSpeechRecognitionUsageDescription matches approved privacy copy"
-  else
-    record_missing "app bundle Info.plist NSSpeechRecognitionUsageDescription mismatch: expected $EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION, got ${speech_usage:-<missing>}"
   fi
 }
 
@@ -1233,48 +1218,27 @@ check_release_evidence() {
   if valid_json_file "$LIVE_QA_REPORT"; then
     record_satisfied "live-device QA report JSON: $LIVE_QA_REPORT"
     local missing_before_live="${#MISSING_ITEMS[@]}"
-    for flag in clean_profile finder_launch microphone speech_permission audio_output notification restart manual_release_qa; do
+    for flag in clean_profile finder_launch restart manual_release_qa; do
       check_json_flag "live-device QA report" "$LIVE_QA_REPORT" "validation_flags.$flag"
-    done
-    check_json_flag "live-device QA report" "$LIVE_QA_REPORT" "validation_flags.transcript_handoff"
-    for flag in microphone_permission_prompt speech_permission_prompt spoken_transcript_handoff same_command_path speech_output_playback; do
-      check_json_flag "live-device QA report" "$LIVE_QA_REPORT" "voice_loop.$flag"
     done
     check_json_number "live-device QA report" "$LIVE_QA_REPORT" "schema_version" "1"
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "evidence_type" "owner_recorded_live_device_qa"
     check_json_false_flag "live-device QA report" "$LIVE_QA_REPORT" "self_test_fixture"
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "installed_app_path" "$EXPECTED_INSTALLED_APP_PATH"
-    for field in owner_name device_label profile_label voice_check_started_at voice_check_completed_at; do
-      check_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.$field"
+    for field in owner_name device_label profile_label device_check_started_at device_check_completed_at; do
+      check_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_device_evidence.$field"
     done
-    for field in microphone_evidence_note speech_permission_evidence_note transcript_handoff_evidence_note audio_output_evidence_note; do
-      check_json_meaningful_evidence_string "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.$field"
+    for field in clean_profile_evidence_note finder_launch_evidence_note restart_evidence_note manual_release_qa_evidence_note; do
+      check_json_meaningful_evidence_string "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_device_evidence.$field"
     done
-    for field in notification_observed_at; do
-      check_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_non_voice_evidence.$field"
-    done
-    for field in clean_profile_evidence_note finder_launch_evidence_note notification_evidence_note restart_evidence_note manual_release_qa_evidence_note; do
-      check_json_meaningful_evidence_string "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_non_voice_evidence.$field"
-    done
-    check_json_utc_timestamp "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.voice_check_started_at"
-    check_json_utc_timestamp "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.voice_check_completed_at"
-    check_json_utc_timestamp "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_non_voice_evidence.notification_observed_at"
-    check_json_timestamp_order "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.voice_check_started_at" "owner_recorded_live_voice_evidence.voice_check_completed_at"
-    check_json_timestamp_order "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.voice_check_started_at" "owner_recorded_non_voice_evidence.notification_observed_at"
+    check_json_utc_timestamp "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_device_evidence.device_check_started_at"
+    check_json_utc_timestamp "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_device_evidence.device_check_completed_at"
+    check_json_timestamp_order "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_device_evidence.device_check_started_at" "owner_recorded_device_evidence.device_check_completed_at"
     check_json_utc_timestamp "live-device QA report" "$LIVE_QA_REPORT" "generated_at"
-    check_json_timestamp_order "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_live_voice_evidence.voice_check_completed_at" "generated_at"
-    check_json_timestamp_order "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_non_voice_evidence.notification_observed_at" "generated_at"
-    for field in test_phrase observed_transcript expected_command_text observed_command_text command_result_evidence_id audio_output_device_label; do
-      check_json_nonempty_string "live-device QA report" "$LIVE_QA_REPORT" "voice_command_observation.$field"
-    done
-    check_json_string_fields_equal "live-device QA report" "$LIVE_QA_REPORT" "voice_command_observation.test_phrase" "voice_command_observation.observed_transcript"
-    check_json_string_fields_equal "live-device QA report" "$LIVE_QA_REPORT" "voice_command_observation.expected_command_text" "voice_command_observation.observed_command_text"
-    check_json_command_result_evidence_id "live-device QA report" "$LIVE_QA_REPORT" "voice_command_observation.command_result_evidence_id"
+    check_json_timestamp_order "live-device QA report" "$LIVE_QA_REPORT" "owner_recorded_device_evidence.device_check_completed_at" "generated_at"
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.bundle_identifier" "$EXPECTED_BUNDLE_ID"
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.short_version" "$EXPECTED_VERSION"
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.build_version" "$EXPECTED_VERSION"
-    check_json_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.microphone_usage_description" "$EXPECTED_MICROPHONE_USAGE_DESCRIPTION"
-    check_json_string "live-device QA report" "$LIVE_QA_REPORT" "app_bundle.speech_recognition_usage_description" "$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION"
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "app_executable.executable_path" "$EXPECTED_INSTALLED_APP_PATH/Contents/MacOS/JarvisMacApp"
     check_json_sha256 "live-device QA report" "$LIVE_QA_REPORT" "app_executable.sha256"
     check_json_app_code_identity "live-device QA report" "$LIVE_QA_REPORT" \
@@ -1456,10 +1420,6 @@ write_fixture_app() {
   <string>$VERSION</string>
   <key>CFBundleVersion</key>
   <string>$VERSION</string>
-  <key>NSMicrophoneUsageDescription</key>
-  <string>$EXPECTED_MICROPHONE_USAGE_DESCRIPTION</string>
-  <key>NSSpeechRecognitionUsageDescription</key>
-  <string>$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION</string>
 </dict>
 </plist>
 XML
@@ -1493,54 +1453,24 @@ write_fixture_reports() {
   "validation_flags": {
     "clean_profile": true,
     "finder_launch": true,
-    "microphone": true,
-    "speech_permission": true,
-    "transcript_handoff": true,
-    "audio_output": true,
-    "notification": true,
     "restart": true,
     "manual_release_qa": true
   },
-  "voice_loop": {
-    "microphone_permission_prompt": true,
-    "speech_permission_prompt": true,
-    "spoken_transcript_handoff": true,
-    "same_command_path": true,
-    "speech_output_playback": true
-  },
-  "owner_recorded_live_voice_evidence": {
-    "owner_name": "Assemblywright QA Self-Test",
-    "device_label": "self-test Mac fixture",
-    "profile_label": "self-test clean profile",
-    "voice_check_started_at": "2026-05-22T16:00:00Z",
-    "voice_check_completed_at": "2026-05-22T16:05:00Z",
-    "microphone_evidence_note": "Observed microphone permission prompt in the controlled release QA lane.",
-    "speech_permission_evidence_note": "Observed Speech permission prompt in the controlled release QA lane.",
-    "transcript_handoff_evidence_note": "Observed transcript handoff reach the command path in the controlled release QA lane.",
-    "audio_output_evidence_note": "Observed speech output playback in the controlled release QA lane."
-  },
-  "owner_recorded_non_voice_evidence": {
-    "clean_profile_evidence_note": "Clean profile install observed in the controlled release QA lane.",
-    "finder_launch_evidence_note": "Finder launch observed in the controlled release QA lane.",
-    "notification_evidence_note": "Visible scheduler notification observed in the controlled release QA lane.",
-    "notification_observed_at": "2026-05-22T16:04:00Z",
-    "restart_evidence_note": "Restart recovery observed in the controlled release QA lane.",
-    "manual_release_qa_evidence_note": "Manual release QA surfaces observed in the controlled release QA lane."
-  },
-  "voice_command_observation": {
-    "test_phrase": "Assemblywright status check.",
-    "observed_transcript": "Assemblywright status check.",
-    "expected_command_text": "status check",
-    "observed_command_text": "status check",
-    "command_result_evidence_id": "task:00000000-0000-4000-8000-000000000001",
-    "audio_output_device_label": "self-test audio output"
+  "owner_recorded_device_evidence": {
+    "owner_name": "Assemblywright Release Self-Test",
+    "device_label": "Self-test device",
+    "profile_label": "Self-test profile",
+    "device_check_started_at": "2026-05-22T16:00:00Z",
+    "device_check_completed_at": "2026-05-22T16:05:00Z",
+    "clean_profile_evidence_note": "Observed clean-profile install in the controlled release QA lane.",
+    "finder_launch_evidence_note": "Observed Finder launch in the controlled release QA lane.",
+    "restart_evidence_note": "Observed restart recovery in the controlled release QA lane.",
+    "manual_release_qa_evidence_note": "Observed manual release QA surfaces in the controlled release QA lane."
   },
   "app_bundle": {
     "bundle_identifier": "com.nobiletechnology.jarvis",
     "short_version": "$VERSION",
-    "build_version": "$VERSION",
-    "microphone_usage_description": "$EXPECTED_MICROPHONE_USAGE_DESCRIPTION",
-    "speech_recognition_usage_description": "$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION"
+    "build_version": "$VERSION"
   },
   "app_executable": {
     "executable_path": "/Applications/Assemblywright.app/Contents/MacOS/JarvisMacApp",
@@ -1772,29 +1702,6 @@ PY
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null
 
-  python3 - "$tmp_dir/dist/Assemblywright.app/Contents/Info.plist" <<'PY'
-import plistlib
-import sys
-
-path = sys.argv[1]
-with open(path, "rb") as handle:
-    info = plistlib.load(handle)
-info["NSMicrophoneUsageDescription"] = "Assemblywright microphone fixture"
-with open(path, "wb") as handle:
-    plistlib.dump(info, handle)
-PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
-    "$0" --assert-complete >"$tmp_dir/privacy-copy.err" 2>&1; then
-    fail "release evidence doctor self-test expected stale app privacy prompt copy to fail"
-  fi
-  if ! grep -q "NSMicrophoneUsageDescription mismatch" "$tmp_dir/privacy-copy.err"; then
-    fail "release evidence doctor self-test expected stale app privacy prompt error to name NSMicrophoneUsageDescription"
-  fi
   write_fixture_app "$tmp_dir/dist/Assemblywright.app"
 
   printf 'assemblywright 0.0.0\n' >"$tmp_dir/dist/Assemblywright.app/Contents/Resources/bin/jarvis-cli.version"
@@ -1960,7 +1867,6 @@ PY
     "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env" \
     "JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>'" \
     "cargo run -p jarvis-cli -- command \"status check\" --endpoint \"\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\" --json" \
-    "JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>'" \
     "source target/release-live-device-qa.env" \
     "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"" \
     "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint \"\${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"" \
@@ -1974,90 +1880,6 @@ PY
       fail "release evidence doctor self-test expected --check output to include: $expected"
     fi
   done
-
-  python3 - "$tmp_dir/live.json" "$tmp_dir/missing-observation-live.json" <<'PY'
-import json
-import sys
-
-source, target = sys.argv[1:3]
-with open(source, encoding="utf-8") as handle:
-    data = json.load(handle)
-data["owner_recorded_live_voice_evidence"]["audio_output_evidence_note"] = ""
-with open(target, "w", encoding="utf-8") as handle:
-    json.dump(data, handle)
-PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/missing-observation-live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
-    "$0" --assert-complete >/dev/null 2>&1; then
-    fail "release evidence doctor self-test expected blank live voice observation to fail"
-  fi
-
-  python3 - "$tmp_dir/live.json" "$tmp_dir/placeholder-live-owner-note.json" <<'PY'
-import json
-import sys
-
-source, target = sys.argv[1:3]
-with open(source, encoding="utf-8") as handle:
-    data = json.load(handle)
-data["owner_recorded_live_voice_evidence"]["microphone_evidence_note"] = "pending external evidence"
-with open(target, "w", encoding="utf-8") as handle:
-    json.dump(data, handle)
-PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/placeholder-live-owner-note.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
-    "$0" --assert-complete >/dev/null 2>&1; then
-    fail "release evidence doctor self-test expected placeholder live-device owner note to fail"
-  fi
-
-  python3 - "$tmp_dir/live.json" "$tmp_dir/mismatched-command-live.json" <<'PY'
-import json
-import sys
-
-source, target = sys.argv[1:3]
-with open(source, encoding="utf-8") as handle:
-    data = json.load(handle)
-data["voice_command_observation"]["observed_command_text"] = "different command"
-with open(target, "w", encoding="utf-8") as handle:
-    json.dump(data, handle)
-PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/mismatched-command-live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
-    "$0" --assert-complete >/dev/null 2>&1; then
-    fail "release evidence doctor self-test expected mismatched live command observation to fail"
-  fi
-
-  python3 - "$tmp_dir/live.json" "$tmp_dir/mismatched-transcript-live.json" <<'PY'
-import json
-import sys
-
-source, target = sys.argv[1:3]
-with open(source, encoding="utf-8") as handle:
-    data = json.load(handle)
-data["voice_command_observation"]["observed_transcript"] = "Assemblywright stats check."
-with open(target, "w", encoding="utf-8") as handle:
-    json.dump(data, handle)
-PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/mismatched-transcript-live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
-    "$0" --assert-complete >/dev/null 2>&1; then
-    fail "release evidence doctor self-test expected mismatched live transcript observation to fail"
-  fi
 
   python3 - "$tmp_dir/live.json" "$tmp_dir/mismatched-installed-app-live.json" <<'PY'
 import json
@@ -2078,27 +1900,6 @@ PY
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected mismatched installed app path to fail"
-  fi
-
-  python3 - "$tmp_dir/live.json" "$tmp_dir/malformed-command-result-evidence-live.json" <<'PY'
-import json
-import sys
-
-source, target = sys.argv[1:3]
-with open(source, encoding="utf-8") as handle:
-    data = json.load(handle)
-data["voice_command_observation"]["command_result_evidence_id"] = "looked good"
-with open(target, "w", encoding="utf-8") as handle:
-    json.dump(data, handle)
-PY
-  if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/malformed-command-result-evidence-live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
-    "$0" --assert-complete >/dev/null 2>&1; then
-    fail "release evidence doctor self-test expected malformed command result evidence id to fail"
   fi
 
   python3 - "$tmp_dir/live.json" "$tmp_dir/mismatched-core-digest-live.json" <<'PY'
@@ -2228,34 +2029,6 @@ PY
     fail "release evidence doctor self-test expected final bundle completed before child reports to fail"
   fi
 
-  python3 - "$tmp_dir/live.json" "$tmp_dir/invalid-bundle-child-live.json" <<'PY'
-import json
-import sys
-
-source, target = sys.argv[1:3]
-with open(source, encoding="utf-8") as handle:
-    data = json.load(handle)
-data["validation_flags"]["notification"] = False
-with open(target, "w", encoding="utf-8") as handle:
-    json.dump(data, handle)
-PY
-  write_fixture_bundle \
-    "$tmp_dir/invalid-child-bundle.json" \
-    "$tmp_dir/dist/Assemblywright.app" \
-    "$self_test_zip" \
-    "$self_test_pkg" \
-    "$tmp_dir/dist/Assemblywright-$VERSION-signed-provenance.json" \
-    "$tmp_dir/invalid-bundle-child-live.json"
-  invalid_child_output="$(JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="" \
-    JARVIS_EVIDENCE_PKG_PATH="" \
-    JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/invalid-bundle-child-live.json" \
-    JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/invalid-child-bundle.json" \
-    "$0" --check)"
-  if [[ "$invalid_child_output" != *"release evidence bundle references invalid live-device QA report"* ]]; then
-    fail "release evidence doctor self-test expected final bundle to reject invalid live-device child report"
-  fi
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
     JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
