@@ -71,6 +71,8 @@ expected_local_gate_commands=(
   "run ./scripts/release-docs-drift-smoke.sh"
   "run ./scripts/release-naming-contract-smoke.sh --check"
   "run ./scripts/release-naming-contract-smoke.sh --self-test"
+  "run ./scripts/release-shell-portability-smoke.sh --check"
+  "run ./scripts/release-shell-portability-smoke.sh --self-test"
   "run ./scripts/mac-windows-bridge-live-e2e.sh --check"
   "run cargo fmt --check"
   "run cargo clippy --workspace --all-targets -- -D warnings"
@@ -109,7 +111,7 @@ if [[ "${#actual_local_gate_commands[@]}" -ne "${#expected_local_gate_commands[@
   printf 'error: expected %s release-local run commands, found %s\n' \
     "${#expected_local_gate_commands[@]}" "${#actual_local_gate_commands[@]}" >&2
   printf 'actual release-local run command manifest:\n' >&2
-  printf '  %s\n' "${actual_local_gate_commands[@]}" >&2
+  printf '  %s\n' ${actual_local_gate_commands[@]+"${actual_local_gate_commands[@]}"} >&2
   exit 1
 fi
 

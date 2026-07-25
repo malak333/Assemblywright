@@ -234,6 +234,29 @@ an old one.
   knowledge-base updates, and E2E coverage.
 - Do not commit or push unless explicitly requested.
 
+## Shell Portability
+
+- Every `scripts/*.sh` runs under `set -euo pipefail` on the macOS system bash,
+  which is 3.2. There, expanding an empty array as `"${name[@]}"` aborts with
+  `name[@]: unbound variable` rather than expanding to nothing. Bash 4.4+ and
+  zsh do not, so the defect never reproduces on a modern shell.
+- Use `${name[@]+"${name[@]}"}` for any conditionally-populated array, or guard
+  the expansion with an explicit `${#name[@]}` length check. Both forms are
+  accepted; anything else fails the gate.
+- `./scripts/release-shell-portability-smoke.sh --check` enforces this across
+  every tracked `.sh` that opts into nounset, with an allowlist of reviewed
+  expansions that carry a written justification. `--self-test` proves the bash
+  3.2 behavior itself and that the scanner detects a deliberate violation.
+- This class hides from ordinary testing. A conditionally-populated array breaks
+  only the code path that leaves it empty, and a self-test that asserts a
+  nonzero exit cannot distinguish an intended failure from an unbound-variable
+  abort. Two instances shipped undetected: `--run` and `--run-outage` in
+  `mac-windows-bridge-live-e2e.sh`, and `endpoint_args` in
+  `release-evidence-doctor.sh --assert-complete`, which would have fired only
+  after every evidence check passed.
+- A script that fails in one mode but not others is this bug until proven
+  otherwise. The first symptom read as the Windows master being unreachable.
+
 ## Safety Guardrails
 
 - Fail closed. Ambiguity quarantines and blocks rather than guessing.

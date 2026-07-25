@@ -164,6 +164,9 @@ require_text "knowledge base naming contract gate" "$KB" \
 require_text "knowledge base pivot" "$KB" "## The Pivot"
 require_text "knowledge base crate boundaries" "$KB" "## Current Crate Boundaries"
 require_text "knowledge base proof boundaries" "$KB" "## Proof Boundaries"
+require_text "knowledge base shell portability" "$KB" "## Shell Portability"
+require_text "knowledge base shell portability gate" "$KB" \
+  "release-shell-portability-smoke.sh"
 
 require_text "release checklist live-device QA" "$CHECKLIST" "live-device QA"
 require_text "release checklist Developer ID" "$CHECKLIST" "Developer ID"
@@ -172,6 +175,8 @@ require_text "release checklist docs gate" "$CHECKLIST" "release-docs-drift-smok
 require_text "build docs local gate" "$BUILD_DOCS" "./scripts/release-local.sh"
 require_text "build docs evidence boundary" "$BUILD_DOCS" "## Release Evidence Boundary"
 require_text "build docs windows gate" "$BUILD_DOCS" "windows-protocol.yml"
+require_text "build docs shell portability gate" "$BUILD_DOCS" \
+  "./scripts/release-shell-portability-smoke.sh --check"
 
 # Documents must not advertise the removed assistant surface.
 for file in "$README" "$DESIGN" "$ARCHITECTURE" "$BUILD_DOCS" "$CHECKLIST" "$KB" "$AGENTS"; do

@@ -26,6 +26,7 @@
 | Swift test | `swift test --disable-sandbox --package-path apps/mac --filter <test>` |
 | Docs contract | `./scripts/release-docs-drift-smoke.sh` |
 | Naming contract | `./scripts/release-naming-contract-smoke.sh --check` |
+| Shell portability | `./scripts/release-shell-portability-smoke.sh --check` |
 | Full local gate | `./scripts/release-local.sh` |
 
 ## Delegation
