@@ -9,11 +9,11 @@ mkdir -p "$CLANG_MODULE_CACHE_PATH"
 VERSION="${JARVIS_PACKAGE_VERSION_OVERRIDE:-$("$ROOT_DIR/scripts/release-version.sh")}"
 BUNDLE_ID="com.nobiletechnology.jarvis"
 CORE_CODE_ID="${BUNDLE_ID}.core"
-APP_NAME="Jarvis"
+APP_NAME="Assemblywright"
 APP_EXECUTABLE_NAME="JarvisMacApp"
 CORE_EXECUTABLE_NAME="jarvis-cli"
-EXPECTED_MICROPHONE_USAGE_DESCRIPTION="Jarvis uses microphone input only when you explicitly start local voice capture."
-EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION="Jarvis uses speech recognition only to turn your spoken command into a local assistant request."
+EXPECTED_MICROPHONE_USAGE_DESCRIPTION="Assemblywright uses microphone input only when you explicitly start local voice capture."
+EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION="Assemblywright uses speech recognition only to turn your spoken command into a local assistant request."
 ENTITLEMENTS="$ROOT_DIR/packaging/Jarvis.entitlements"
 CORE_ENTITLEMENTS="$ROOT_DIR/packaging/JarvisCore.entitlements"
 DIST_DIR="${JARVIS_DISTRIBUTION_DIR:-$ROOT_DIR/target/distribution}"
@@ -35,7 +35,7 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/package-distribution.sh [--check] [--unsigned-structure-check] [--unsigned-launch-check] [--check-guidance-self-test] [--entitlements-policy-self-test] [--version-consistency-self-test] [--provenance-self-test] [--running-app-guard-self-test] [--running-app-guard-e2e]
 
-Build a distribution-shaped Jarvis.app bundle, sign it with Developer ID, zip it,
+Build a distribution-shaped Assemblywright.app bundle, sign it with Developer ID, zip it,
 submit it for notarization, staple the ticket, then build, sign, notarize, and
 staple a Developer ID Installer package for /Applications installation.
 
@@ -52,7 +52,7 @@ Required for notarization, choose one:
 
 Optional:
   JARVIS_DISTRIBUTION_DIR          Defaults to target/distribution
-  JARVIS_SIGNED_PROVENANCE_PATH    Defaults to target/distribution/Jarvis-<version>-signed-provenance.json
+  JARVIS_SIGNED_PROVENANCE_PATH    Defaults to target/distribution/Assemblywright-<version>-signed-provenance.json
 
 --check validates local tool/template preconditions without signing or notarizing.
 --unsigned-structure-check builds and inspects an unsigned app/pkg layout without
@@ -74,7 +74,7 @@ tool-output guards with stubbed local commands. It does not sign, notarize,
 staple, launch, install, or manually validate artifacts.
 --running-app-guard-self-test verifies that packaging refuses to replace the
 exact distribution bundle while its app or bundled core executable is running.
-It uses synthetic process records and does not launch or stop Jarvis.
+It uses synthetic process records and does not launch or stop Assemblywright.
 --running-app-guard-e2e launches harmless temporary app/core executable copies,
 proves the real process inspection refuses replacement, stops only those test
 processes, and proves the same temporary bundle is then accepted.
@@ -120,13 +120,13 @@ reject_running_distribution_processes() {
   [[ -z "$matches" ]] && return 0
 
   pids="$(printf '%s\n' "$matches" | awk -F '\t' '!seen[$1]++ { printf "%s%s", separator, $1; separator="," }')"
-  fail "refusing to replace $APP_PATH while Jarvis is running from that bundle (PID(s): $pids); quit Jarvis with Command-Q, then retry, or use a different JARVIS_DISTRIBUTION_DIR"
+  fail "refusing to replace $APP_PATH while Assemblywright is running from that bundle (PID(s): $pids); quit Assemblywright with Command-Q, then retry, or use a different JARVIS_DISTRIBUTION_DIR"
 }
 
 run_running_app_guard_self_test() {
-  local fixture_root="/tmp/Jarvis guard fixture"
-  local fixture_app="$fixture_root/Jarvis.app/Contents/MacOS/$APP_EXECUTABLE_NAME"
-  local fixture_core="$fixture_root/Jarvis.app/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
+  local fixture_root="/tmp/Assemblywright guard fixture"
+  local fixture_app="$fixture_root/Assemblywright.app/Contents/MacOS/$APP_EXECUTABLE_NAME"
+  local fixture_core="$fixture_root/Assemblywright.app/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
   local records
   local matches
   local output
@@ -140,7 +140,7 @@ ftxt
 n$fixture_core
 p103
 ftxt
-n$fixture_root/Jarvis.app.backup/Contents/MacOS/$APP_EXECUTABLE_NAME
+n$fixture_root/Assemblywright.app.backup/Contents/MacOS/$APP_EXECUTABLE_NAME
 p104
 ftxt
 n/bin/zsh
@@ -154,20 +154,20 @@ EOF
   fi
 
   output=""
-  if output="$(APP_PATH="$fixture_root/Jarvis.app" reject_running_distribution_processes "$matches" 2>&1)"; then
+  if output="$(APP_PATH="$fixture_root/Assemblywright.app" reject_running_distribution_processes "$matches" 2>&1)"; then
     fail "running app guard self-test expected an active distribution process to block replacement"
   fi
-  require_output_contains "running app guard rejection" "$output" "refusing to replace $fixture_root/Jarvis.app"
+  require_output_contains "running app guard rejection" "$output" "refusing to replace $fixture_root/Assemblywright.app"
   require_output_contains "running app guard rejection" "$output" "PID(s): 101,102"
-  require_output_contains "running app guard rejection" "$output" "quit Jarvis with Command-Q"
+  require_output_contains "running app guard rejection" "$output" "quit Assemblywright with Command-Q"
 
   reject_running_distribution_processes ""
-  printf '\nJarvis running app guard self-test: ok\n'
+  printf '\nAssemblywright running app guard self-test: ok\n'
   printf 'Proof boundary: synthetic active-executable detection and refusal messaging only; no app was built, replaced, launched, stopped, signed, notarized, stapled, installed, or manually validated.\n'
 }
 
 if [[ -n "${JARVIS_BUNDLE_ID:-}" && "$JARVIS_BUNDLE_ID" != "$BUNDLE_ID" ]]; then
-  fail "JARVIS_BUNDLE_ID overrides are unsupported; Jarvis code identity requires the fixed $BUNDLE_ID app identifier"
+  fail "JARVIS_BUNDLE_ID overrides are unsupported; Assemblywright code identity requires the fixed $BUNDLE_ID app identifier"
 fi
 
 require_output_contains() {
@@ -208,9 +208,9 @@ import zipfile
 
 zip_path, expected_microphone, expected_speech = sys.argv[1:4]
 required_entries = (
-    "Jarvis.app/Contents/MacOS/JarvisMacApp",
-    "Jarvis.app/Contents/Resources/bin/jarvis-cli",
-    "Jarvis.app/Contents/Info.plist",
+    "Assemblywright.app/Contents/MacOS/JarvisMacApp",
+    "Assemblywright.app/Contents/Resources/bin/jarvis-cli",
+    "Assemblywright.app/Contents/Info.plist",
 )
 
 with zipfile.ZipFile(zip_path) as archive:
@@ -223,23 +223,23 @@ if missing:
 nested = [
     name
     for name in names
-    if "/Jarvis.app/" in name and not name.startswith("Jarvis.app/")
+    if "/Assemblywright.app/" in name and not name.startswith("Assemblywright.app/")
 ]
 if nested:
-    raise SystemExit(f"zip payload contains nested Jarvis.app entries: {', '.join(nested[:3])}")
+    raise SystemExit(f"zip payload contains nested Assemblywright.app entries: {', '.join(nested[:3])}")
 
 app_roots = {
-    name.split("Jarvis.app/", 1)[0] + "Jarvis.app/"
+    name.split("Assemblywright.app/", 1)[0] + "Assemblywright.app/"
     for name in names
-    if "Jarvis.app/" in name
+    if "Assemblywright.app/" in name
 }
-if app_roots != {"Jarvis.app/"}:
+if app_roots != {"Assemblywright.app/"}:
     raise SystemExit(
-        f"zip payload must contain exactly one top-level Jarvis.app root, got: {', '.join(sorted(app_roots))}"
+        f"zip payload must contain exactly one top-level Assemblywright.app root, got: {', '.join(sorted(app_roots))}"
     )
 
 with zipfile.ZipFile(zip_path) as archive:
-    info_plist = plistlib.loads(archive.read("Jarvis.app/Contents/Info.plist"))
+    info_plist = plistlib.loads(archive.read("Assemblywright.app/Contents/Info.plist"))
 
 actual_microphone = info_plist.get("NSMicrophoneUsageDescription")
 if actual_microphone != expected_microphone:
@@ -334,9 +334,9 @@ assert_bundled_core_version() {
   local output
   [[ -x "$core_path" ]] || fail "bundled core executable missing: $core_path"
   [[ -f "$marker_path" ]] || fail "bundled core version marker missing: $marker_path; rerun this packaging command so the app bundle is rebuilt from the current jarvis-cli"
-  require_output_contains "bundled core version marker" "$(tr -d '\r\n' <"$marker_path")" "jarvis $VERSION"
+  require_output_contains "bundled core version marker" "$(tr -d '\r\n' <"$marker_path")" "assemblywright $VERSION"
   output="$("$core_path" --version)"
-  require_output_contains "bundled core version" "$output" "jarvis $VERSION"
+  require_output_contains "bundled core version" "$output" "assemblywright $VERSION"
 }
 
 assert_app_audio_input_entitlement() {
@@ -442,7 +442,7 @@ write_signed_distribution_provenance() {
   bundled_core_path="$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
   bundled_core_sha="$(file_sha256 "$bundled_core_path")"
   bundled_core_version="$("$bundled_core_path" --version)"
-  require_output_contains "bundled core version" "$bundled_core_version" "jarvis $VERSION"
+  require_output_contains "bundled core version" "$bundled_core_version" "assemblywright $VERSION"
   app_executable_path="$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME"
   app_executable_sha="$(file_sha256 "$app_executable_path")"
   app_codesign="$(codesign -dv --verbose=4 "$APP_PATH" 2>&1)"
@@ -685,7 +685,7 @@ if [[ "$CHECK_GUIDANCE_SELF_TEST" == true ]]; then
     printf '%s\n' "$CHECK_OUTPUT" >&2
     fail "package check guidance self-test expected --check to pass"
   fi
-  require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "Jarvis distribution packaging preflight: ok"
+  require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "Assemblywright distribution packaging preflight: ok"
   require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "Next release evidence commands:"
   require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "cargo run -p jarvis-cli -- release signed-distribution-runbook"
   require_output_contains "package check guidance self-test" "$CHECK_OUTPUT" "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh"
@@ -714,7 +714,7 @@ if [[ "$CHECK_GUIDANCE_SELF_TEST" == true ]]; then
     fail "package check guidance self-test expected a non-production bundle identifier to fail"
   fi
   require_output_contains "package bundle identifier self-test" "$OVERRIDE_OUTPUT" "JARVIS_BUNDLE_ID overrides are unsupported"
-  printf '\nJarvis package check guidance self-test: ok\n'
+  printf '\nAssemblywright package check guidance self-test: ok\n'
   printf 'Proof boundary: package --check guidance only; no app was built, signed, notarized, stapled, installed, launched, or manually validated.\n'
   exit 0
 fi
@@ -748,7 +748,7 @@ for key in (
     if core_entitlements.get(key) is not False:
         raise SystemExit(f"core entitlement {key} must be false")
 PY
-  printf '\nJarvis package entitlements policy self-test: ok\n'
+  printf '\nAssemblywright package entitlements policy self-test: ok\n'
   printf 'Proof boundary: entitlement template policy only; no app was built, signed, notarized, stapled, installed, launched, or manually validated.\n'
   exit 0
 fi
@@ -760,7 +760,7 @@ if [[ "$VERSION_CONSISTENCY_SELF_TEST" == true ]]; then
     fail "version consistency self-test expected mismatched package version to fail"
   fi
   require_output_contains "version consistency self-test" "$SELF_TEST_OUTPUT" "package version mismatch"
-  printf '\nJarvis package version consistency self-test: ok\n'
+  printf '\nAssemblywright package version consistency self-test: ok\n'
   printf 'Proof boundary: mismatch guard only; no app was built, signed, notarized, stapled, installed, launched, or manually validated.\n'
   exit 0
 fi
@@ -823,7 +823,7 @@ assert_distribution_bundle_not_running() {
     set -e
     if [[ "$probe_status" -ne 0 ]]; then
       if kill -0 "$pid" 2>/dev/null; then
-        fail "could not inspect candidate Jarvis process $pid before replacing $APP_PATH"
+        fail "could not inspect candidate Assemblywright process $pid before replacing $APP_PATH"
       fi
       continue
     fi
@@ -847,7 +847,7 @@ run_running_app_guard_e2e() (
   local attempt
 
   tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/jarvis-running-app-guard-e2e.XXXXXX")"
-  fixture_bundle="$tmp_dir/Jarvis.app"
+  fixture_bundle="$tmp_dir/Assemblywright.app"
   fixture_app="$fixture_bundle/Contents/MacOS/$APP_EXECUTABLE_NAME"
   fixture_core="$fixture_bundle/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
 
@@ -889,7 +889,7 @@ run_running_app_guard_e2e() (
   [[ "$detected" == true ]] || fail "running app guard E2E did not detect the temporary live bundle"
   require_output_contains "running app guard E2E app PID" "$output" "$app_pid"
   require_output_contains "running app guard E2E core PID" "$output" "$core_pid"
-  require_output_contains "running app guard E2E guidance" "$output" "quit Jarvis with Command-Q"
+  require_output_contains "running app guard E2E guidance" "$output" "quit Assemblywright with Command-Q"
 
   kill "$app_pid" "$core_pid"
   wait "$app_pid" 2>/dev/null || true
@@ -899,8 +899,8 @@ run_running_app_guard_e2e() (
 
   APP_PATH="$fixture_bundle" assert_distribution_bundle_not_running
 
-  printf '\nJarvis running app guard E2E: ok\n'
-  printf 'Proof boundary: real process-name and text-vnode inspection against temporary app/core stand-ins only; no Jarvis process or distribution artifact was launched, stopped, replaced, signed, notarized, stapled, installed, or manually validated.\n'
+  printf '\nAssemblywright running app guard E2E: ok\n'
+  printf 'Proof boundary: real process-name and text-vnode inspection against temporary app/core stand-ins only; no Assemblywright process or distribution artifact was launched, stopped, replaced, signed, notarized, stapled, installed, or manually validated.\n'
 )
 
 if [[ "$RUNNING_APP_GUARD_E2E" == true ]]; then
@@ -933,7 +933,7 @@ run_provenance_self_test() {
 
   cat >"$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME" <<'SH'
 #!/usr/bin/env bash
-printf 'jarvis %s\n' "${JARVIS_PACKAGE_STUB_VERSION:?}"
+printf 'assemblywright %s\n' "${JARVIS_PACKAGE_STUB_VERSION:?}"
 SH
   chmod 755 "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
   printf '#!/usr/bin/env bash\nexit 0\n' >"$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME"
@@ -966,7 +966,7 @@ zip_path = pathlib.Path(sys.argv[2])
 with zipfile.ZipFile(zip_path, "w") as archive:
     for path in sorted(app_path.rglob("*")):
         if path.is_file():
-            archive.write(path, pathlib.Path("Jarvis.app") / path.relative_to(app_path))
+            archive.write(path, pathlib.Path("Assemblywright.app") / path.relative_to(app_path))
 PY
   printf 'pkg artifact\n' >"$PKG_PATH"
   cat >"$ZIP_NOTARY_LOG" <<'LOG'
@@ -989,12 +989,12 @@ if [[ "${*: -1}" == *"/JarvisMacApp" ]]; then
 fi
 team_identifier="${JARVIS_PACKAGE_STUB_TEAM_IDENTIFIER:-9VZ742YKV4}"
 cdhash="${JARVIS_PACKAGE_STUB_CDHASH:-0123456789abcdef0123456789abcdef01234567}"
-printf 'Executable=/fixture\nIdentifier=%s\nAuthority=Developer ID Application: Jarvis QA Fixture\nTeamIdentifier=%s\nCDHash=%s\n' \
+printf 'Executable=/fixture\nIdentifier=%s\nAuthority=Developer ID Application: Assemblywright QA Fixture\nTeamIdentifier=%s\nCDHash=%s\n' \
   "$identifier" "$team_identifier" "$cdhash"
 SH
   cat >"$stub_dir/pkgutil" <<'SH'
 #!/usr/bin/env bash
-printf 'Status: signed by a developer certificate issued by Apple for distribution\nDeveloper ID Installer: Jarvis QA Fixture\n'
+printf 'Status: signed by a developer certificate issued by Apple for distribution\nDeveloper ID Installer: Assemblywright QA Fixture\n'
 SH
   cat >"$stub_dir/xcrun" <<'SH'
 #!/usr/bin/env bash
@@ -1018,8 +1018,8 @@ SH
   PATH="$stub_dir:$PATH" \
     JARVIS_PACKAGE_STUB_BUNDLE_ID="$BUNDLE_ID" \
     JARVIS_PACKAGE_STUB_VERSION="$VERSION" \
-    JARVIS_DEVELOPER_ID_APPLICATION="Developer ID Application: Jarvis QA Fixture" \
-    JARVIS_DEVELOPER_ID_INSTALLER="Developer ID Installer: Jarvis QA Fixture" \
+    JARVIS_DEVELOPER_ID_APPLICATION="Developer ID Application: Assemblywright QA Fixture" \
+    JARVIS_DEVELOPER_ID_INSTALLER="Developer ID Installer: Assemblywright QA Fixture" \
     write_signed_distribution_provenance
 
   python3 - "$PROVENANCE_PATH" "$VERSION" "$APP_PATH" "$ZIP_PATH" "$PKG_PATH" <<'PY'
@@ -1041,7 +1041,7 @@ assert data["artifacts"]["pkg_path"] == pkg_path
 assert data["artifacts"]["app_executable_path"] == f"{app_path}/Contents/MacOS/JarvisMacApp"
 with open(data["artifacts"]["app_executable_path"], "rb") as handle:
     assert data["artifacts"]["app_executable_sha256"] == hashlib.sha256(handle.read()).hexdigest()
-assert data["artifacts"]["bundled_core_version"] == f"jarvis {version}"
+assert data["artifacts"]["bundled_core_version"] == f"assemblywright {version}"
 assert data["signing"]["developer_id_application_identity"].startswith("Developer ID Application: ")
 assert data["signing"]["developer_id_installer_identity"].startswith("Developer ID Installer: ")
 for key in ("app_bundle_codesign", "app_executable_codesign", "bundled_core_codesign"):
@@ -1073,8 +1073,8 @@ PY
     JARVIS_PACKAGE_STUB_BUNDLE_ID="$BUNDLE_ID" \
     JARVIS_PACKAGE_STUB_VERSION="$VERSION" \
     JARVIS_PACKAGE_STUB_APP_EXECUTABLE_IDENTIFIER="com.example.WrongJarvis" \
-    JARVIS_DEVELOPER_ID_APPLICATION="Developer ID Application: Jarvis QA Fixture" \
-    JARVIS_DEVELOPER_ID_INSTALLER="Developer ID Installer: Jarvis QA Fixture" \
+    JARVIS_DEVELOPER_ID_APPLICATION="Developer ID Application: Assemblywright QA Fixture" \
+    JARVIS_DEVELOPER_ID_INSTALLER="Developer ID Installer: Assemblywright QA Fixture" \
     write_signed_distribution_provenance 2>&1)"
   set -e
   require_output_contains "signed provenance app executable identifier self-test" "$output" "app executable codesign identifier mismatch"
@@ -1084,8 +1084,8 @@ PY
     JARVIS_PACKAGE_STUB_BUNDLE_ID="$BUNDLE_ID" \
     JARVIS_PACKAGE_STUB_VERSION="$VERSION" \
     JARVIS_PACKAGE_STUB_TEAM_IDENTIFIER="missing" \
-    JARVIS_DEVELOPER_ID_APPLICATION="Developer ID Application: Jarvis QA Fixture" \
-    JARVIS_DEVELOPER_ID_INSTALLER="Developer ID Installer: Jarvis QA Fixture" \
+    JARVIS_DEVELOPER_ID_APPLICATION="Developer ID Application: Assemblywright QA Fixture" \
+    JARVIS_DEVELOPER_ID_INSTALLER="Developer ID Installer: Assemblywright QA Fixture" \
     write_signed_distribution_provenance 2>&1)"
   set -e
   require_output_contains "signed provenance app executable team self-test" "$output" "TeamIdentifier must be a 10-character Apple team identifier"
@@ -1094,8 +1094,8 @@ PY
     JARVIS_PACKAGE_STUB_BUNDLE_ID="$BUNDLE_ID" \
     JARVIS_PACKAGE_STUB_VERSION="$VERSION" \
     JARVIS_PACKAGE_STUB_GATEKEEPER_MODE=negated \
-    JARVIS_DEVELOPER_ID_APPLICATION="Developer ID Application: Jarvis QA Fixture" \
-    JARVIS_DEVELOPER_ID_INSTALLER="Developer ID Installer: Jarvis QA Fixture" \
+    JARVIS_DEVELOPER_ID_APPLICATION="Developer ID Application: Assemblywright QA Fixture" \
+    JARVIS_DEVELOPER_ID_INSTALLER="Developer ID Installer: Assemblywright QA Fixture" \
     write_signed_distribution_provenance 2>&1 || true)"
   require_output_contains "signed provenance negated Gatekeeper self-test" "$output" "Gatekeeper accepted result"
 
@@ -1106,20 +1106,20 @@ import zipfile
 
 zip_path = pathlib.Path(sys.argv[1])
 with zipfile.ZipFile(zip_path, "w") as archive:
-    archive.writestr("Jarvis.app/Contents/MacOS/JarvisMacApp", "")
-    archive.writestr("Jarvis.app/Contents/Resources/bin/jarvis-cli", "")
-    archive.writestr("Jarvis.app/Contents/Info.plist", "")
-    archive.writestr("payload/Jarvis.app/Contents/MacOS/JarvisMacApp", "")
-    archive.writestr("payload/Jarvis.app/Contents/Resources/bin/jarvis-cli", "")
-    archive.writestr("payload/Jarvis.app/Contents/Info.plist", "")
+    archive.writestr("Assemblywright.app/Contents/MacOS/JarvisMacApp", "")
+    archive.writestr("Assemblywright.app/Contents/Resources/bin/jarvis-cli", "")
+    archive.writestr("Assemblywright.app/Contents/Info.plist", "")
+    archive.writestr("payload/Assemblywright.app/Contents/MacOS/JarvisMacApp", "")
+    archive.writestr("payload/Assemblywright.app/Contents/Resources/bin/jarvis-cli", "")
+    archive.writestr("payload/Assemblywright.app/Contents/Info.plist", "")
 PY
   output="$(PATH="$stub_dir:$PATH" \
     JARVIS_PACKAGE_STUB_BUNDLE_ID="$BUNDLE_ID" \
     JARVIS_PACKAGE_STUB_VERSION="$VERSION" \
-    JARVIS_DEVELOPER_ID_APPLICATION="Developer ID Application: Jarvis QA Fixture" \
-    JARVIS_DEVELOPER_ID_INSTALLER="Developer ID Installer: Jarvis QA Fixture" \
+    JARVIS_DEVELOPER_ID_APPLICATION="Developer ID Application: Assemblywright QA Fixture" \
+    JARVIS_DEVELOPER_ID_INSTALLER="Developer ID Installer: Assemblywright QA Fixture" \
     write_signed_distribution_provenance 2>&1 || true)"
-  require_output_contains "signed provenance nested app zip self-test" "$output" "zip payload contains nested Jarvis.app entries"
+  require_output_contains "signed provenance nested app zip self-test" "$output" "zip payload contains nested Assemblywright.app entries"
 
   python3 - "$APP_PATH" "$ZIP_PATH" <<'PY'
 import pathlib
@@ -1131,7 +1131,7 @@ zip_path = pathlib.Path(sys.argv[2])
 with zipfile.ZipFile(zip_path, "w") as archive:
     for path in sorted(app_path.rglob("*")):
         if path.is_file():
-            archive.write(path, pathlib.Path("Jarvis.app") / path.relative_to(app_path))
+            archive.write(path, pathlib.Path("Assemblywright.app") / path.relative_to(app_path))
 PY
 
   python3 - "$ZIP_PATH" <<'PY'
@@ -1143,9 +1143,9 @@ import zipfile
 zip_path = pathlib.Path(sys.argv[1])
 with zipfile.ZipFile(zip_path) as source:
     entries = {name: source.read(name) for name in source.namelist()}
-info = plistlib.loads(entries["Jarvis.app/Contents/Info.plist"])
-info["NSMicrophoneUsageDescription"] = "Jarvis microphone fixture"
-entries["Jarvis.app/Contents/Info.plist"] = plistlib.dumps(info)
+info = plistlib.loads(entries["Assemblywright.app/Contents/Info.plist"])
+info["NSMicrophoneUsageDescription"] = "Assemblywright microphone fixture"
+entries["Assemblywright.app/Contents/Info.plist"] = plistlib.dumps(info)
 with zipfile.ZipFile(zip_path, "w") as archive:
     for name, data in entries.items():
         archive.writestr(name, data)
@@ -1153,8 +1153,8 @@ PY
   output="$(PATH="$stub_dir:$PATH" \
     JARVIS_PACKAGE_STUB_BUNDLE_ID="$BUNDLE_ID" \
     JARVIS_PACKAGE_STUB_VERSION="$VERSION" \
-    JARVIS_DEVELOPER_ID_APPLICATION="Developer ID Application: Jarvis QA Fixture" \
-    JARVIS_DEVELOPER_ID_INSTALLER="Developer ID Installer: Jarvis QA Fixture" \
+    JARVIS_DEVELOPER_ID_APPLICATION="Developer ID Application: Assemblywright QA Fixture" \
+    JARVIS_DEVELOPER_ID_INSTALLER="Developer ID Installer: Assemblywright QA Fixture" \
     write_signed_distribution_provenance 2>&1 || true)"
   require_output_contains "signed provenance privacy prompt self-test" "$output" "NSMicrophoneUsageDescription mismatch"
 
@@ -1168,7 +1168,7 @@ zip_path = pathlib.Path(sys.argv[2])
 with zipfile.ZipFile(zip_path, "w") as archive:
     for path in sorted(app_path.rglob("*")):
         if path.is_file():
-            archive.write(path, pathlib.Path("Jarvis.app") / path.relative_to(app_path))
+            archive.write(path, pathlib.Path("Assemblywright.app") / path.relative_to(app_path))
 PY
 
   cat >"$ZIP_NOTARY_LOG" <<'LOG'
@@ -1179,8 +1179,8 @@ LOG
   output="$(PATH="$stub_dir:$PATH" \
     JARVIS_PACKAGE_STUB_BUNDLE_ID="$BUNDLE_ID" \
     JARVIS_PACKAGE_STUB_VERSION="$VERSION" \
-    JARVIS_DEVELOPER_ID_APPLICATION="Developer ID Application: Jarvis QA Fixture" \
-    JARVIS_DEVELOPER_ID_INSTALLER="Developer ID Installer: Jarvis QA Fixture" \
+    JARVIS_DEVELOPER_ID_APPLICATION="Developer ID Application: Assemblywright QA Fixture" \
+    JARVIS_DEVELOPER_ID_INSTALLER="Developer ID Installer: Assemblywright QA Fixture" \
     write_signed_distribution_provenance 2>&1 || true)"
   require_output_contains "signed provenance bad-notary self-test" "$output" "app zip notary submission id must be a UUID"
 
@@ -1192,8 +1192,8 @@ LOG
   output="$(PATH="$stub_dir:$PATH" \
     JARVIS_PACKAGE_STUB_BUNDLE_ID="$BUNDLE_ID" \
     JARVIS_PACKAGE_STUB_VERSION="$VERSION" \
-    JARVIS_DEVELOPER_ID_APPLICATION="Developer ID Application: Jarvis QA Fixture" \
-    JARVIS_DEVELOPER_ID_INSTALLER="Developer ID Installer: Jarvis QA Fixture" \
+    JARVIS_DEVELOPER_ID_APPLICATION="Developer ID Application: Assemblywright QA Fixture" \
+    JARVIS_DEVELOPER_ID_INSTALLER="Developer ID Installer: Assemblywright QA Fixture" \
     write_signed_distribution_provenance 2>&1)"
   set -e
   require_output_contains "signed provenance rejected-notary self-test" "$output" "app zip notary status"
@@ -1202,7 +1202,7 @@ LOG
   PATH="$real_path"
   rm -rf "$tmp_dir"
 
-  printf '\nJarvis signed provenance self-test: ok\n'
+  printf '\nAssemblywright signed provenance self-test: ok\n'
   printf 'Proof boundary: stubbed signed-provenance writer and Apple-tool output guards only; no app was signed, notarized, stapled, installed, launched, or manually validated.\n'
 }
 
@@ -1223,7 +1223,7 @@ build_app_bundle() {
 
   cp "$SWIFT_EXECUTABLE" "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME"
   cp "$CORE_EXECUTABLE" "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
-  printf 'jarvis %s\n' "$VERSION" >"$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME.version"
+  printf 'assemblywright %s\n' "$VERSION" >"$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME.version"
   chmod 755 "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME" "$APP_PATH/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
   assert_bundled_core_version
 
@@ -1234,6 +1234,8 @@ build_app_bundle() {
 <dict>
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
+  <key>CFBundleDisplayName</key>
+  <string>$APP_NAME</string>
   <key>CFBundleExecutable</key>
   <string>$APP_EXECUTABLE_NAME</string>
   <key>CFBundleIdentifier</key>
@@ -1353,7 +1355,7 @@ if [[ "$CHECK_ONLY" == true ]]; then
   if [[ ${#notary_args[@]} -eq 0 ]]; then
     printf 'warning: notarization credentials are not set; full notarization will fail until configured.\n' >&2
   fi
-  printf '\nJarvis distribution packaging preflight: ok\n'
+  printf '\nAssemblywright distribution packaging preflight: ok\n'
   cat <<'CHECKLIST'
 
 Next release evidence commands:
@@ -1363,7 +1365,7 @@ Next release evidence commands:
   JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_APPLE_ID='apple-id@example.com' JARVIS_NOTARYTOOL_TEAM_ID='TEAMID1234' JARVIS_NOTARYTOOL_PASSWORD='app-specific-password' ./scripts/package-distribution.sh
   ./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env
   Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' in target/release-live-device-qa.env
-  Launch Jarvis with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true for the operator evidence session, then confirm JARVIS_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path before IPC commands
+  Launch Assemblywright with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true for the operator evidence session, then confirm JARVIS_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path before IPC commands
   set -a && source target/release-live-device-qa.env && set +a
   cargo run -p jarvis-cli -- command "status check" --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}" --json
   record the returned task ID as JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>' or a task-associated audit ID as 'audit:<uuid>'
@@ -1413,11 +1415,11 @@ run_unsigned_structure_check() {
 
   validate_package_metadata "$PKG_PATH" "$BUNDLE_ID.unsigned-structure.pkg" "unsigned structure package"
   PAYLOAD_OUTPUT="$(pkgutil --payload-files "$PKG_PATH")"
-  require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Jarvis.app/Contents/MacOS/$APP_EXECUTABLE_NAME"
-  require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Jarvis.app/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
-  require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Jarvis.app/Contents/Info.plist"
+  require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Assemblywright.app/Contents/MacOS/$APP_EXECUTABLE_NAME"
+  require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Assemblywright.app/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
+  require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Assemblywright.app/Contents/Info.plist"
 
-  printf '\nJarvis unsigned distribution structure check: ok\n'
+  printf '\nAssemblywright unsigned distribution structure check: ok\n'
   printf 'App: %s\n' "$APP_PATH"
   printf 'Pkg: %s\n' "$PKG_PATH"
   printf 'Signing: %s\n' "$SIGNING_STATUS"
@@ -1452,9 +1454,9 @@ run_unsigned_launch_check() {
 
   validate_package_metadata "$PKG_PATH" "$BUNDLE_ID.unsigned-launch.pkg" "unsigned launch package"
   PAYLOAD_OUTPUT="$(pkgutil --payload-files "$PKG_PATH")"
-  require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Jarvis.app/Contents/MacOS/$APP_EXECUTABLE_NAME"
-  require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Jarvis.app/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
-  require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Jarvis.app/Contents/Info.plist"
+  require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Assemblywright.app/Contents/MacOS/$APP_EXECUTABLE_NAME"
+  require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Assemblywright.app/Contents/Resources/bin/$CORE_EXECUTABLE_NAME"
+  require_output_contains "unsigned package payload" "$PAYLOAD_OUTPUT" "Assemblywright.app/Contents/Info.plist"
 
   # Keep the isolated HOME short enough for macOS sockaddr_un.sun_path (103 bytes).
   LAUNCH_TMP_DIR="$(mktemp -d "/tmp/jarvis-dl.XXXXXX")"
@@ -1558,7 +1560,7 @@ run_unsigned_launch_check() {
       fail "default app launch unexpectedly exposed loopback TCP IPC"
     fi
     DEFAULT_IPC_SOCKET="$(find "$APP_IPC_RUN_DIR" -maxdepth 1 -type s -print -quit 2>/dev/null || true)"
-    if grep -Fq "Jarvis release smoke: default supervised Unix IPC route sequence verified" "$APP_LOG"; then
+    if grep -Fq "Assemblywright release smoke: default supervised Unix IPC route sequence verified" "$APP_LOG"; then
       DEFAULT_ROUTE_SEQUENCE_VERIFIED=true
     fi
     if [[ -n "$DEFAULT_IPC_SOCKET" ]] && [[ "$DEFAULT_ROUTE_SEQUENCE_VERIFIED" == true ]]; then
@@ -1716,7 +1718,7 @@ PY
     exit 1
   fi
 
-  printf '\nJarvis unsigned distribution launch check: ok\n'
+  printf '\nAssemblywright unsigned distribution launch check: ok\n'
   printf 'App: %s\n' "$APP_PATH"
   printf 'Pkg: %s\n' "$PKG_PATH"
   printf 'Signing: %s\n' "$SIGNING_STATUS"
@@ -1793,7 +1795,7 @@ run xcrun stapler staple "$PKG_PATH"
 run xcrun stapler validate "$PKG_PATH"
 write_signed_distribution_provenance
 
-printf '\nJarvis distribution package: ok\n'
+printf '\nAssemblywright distribution package: ok\n'
 printf 'App: %s\n' "$APP_PATH"
 printf 'Zip: %s\n' "$ZIP_PATH"
 printf 'Pkg: %s\n' "$PKG_PATH"

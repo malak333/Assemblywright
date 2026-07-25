@@ -1,11 +1,13 @@
-# Jarvis Design
+# Assemblywright Design
 
 ## Understanding Summary
 
-- Jarvis is a local-first Mac desktop assistant inspired by cinematic AI assistants, without copying Marvel branding, names, exact UI, or copyrighted visuals.
-- Version 1 is a unified assistant shell, not a deep integration product yet.
+- Assemblywright is a local-first developer-agent product for moving approved
+  blueprints through coordinated model, implementation, and proof stages.
+- The current version combines that developer workflow with the existing
+  general macOS assistant shell; implemented boundaries must remain explicit.
 - The core priorities are voice-first interaction, local model routing, memory, permissions, audit logs, proactive routines and triggers, and a plugin architecture.
-- Jarvis should eventually support personal productivity, developer-agent workflows, and home/life automation, but v1 focuses on the foundation.
+- Assemblywright should eventually support personal productivity, developer-agent workflows, and home/life automation, but v1 focuses on the foundation.
 - Privacy posture is local-model first, with ChatGPT as the only approved cloud model.
 - Autonomy target is high, bounded by capability scopes, risk tiers, audit logs, cancellation, and an emergency pause control.
 - v1 is single-user only, but should be product-grade and maintainable by the user plus agents.
@@ -13,9 +15,10 @@
 ## Assumptions
 
 - The first product target is a native-feeling macOS desktop app.
-- Voice latency matters: Jarvis should acknowledge quickly and move longer tasks into background execution.
+- Voice latency matters: Assemblywright should acknowledge quickly and move longer tasks into background execution.
 - Product-grade v1 includes packaging, diagnostics, migrations, durable local state, and release discipline.
-- The UI can be polished and high-tech, but must remain practical, inspectable, and legally distinct from Marvel/JARVIS assets.
+- The UI can be polished and high-tech, but must remain practical, inspectable,
+  and original to the Assemblywright brand.
 - Smart-home control, autonomous external communication, and multi-user sync are deferred or heavily gated in v1.
 - ChatGPT usage is explicit, routed, minimized, policy-checked, and audited.
 - Production-readiness claims are evidence-scoped. The repo now has local
@@ -38,7 +41,7 @@
 ## Non-Goals For v1
 
 - No full smart-home control yet. Design the plugin boundary, but avoid controlling real devices in the first core shell.
-- No autonomous external communication. Jarvis may draft or prepare actions, but sending messages, inviting people, making purchases, or similar external actions require approval.
+- No autonomous external communication. Assemblywright may draft or prepare actions, but sending messages, inviting people, making purchases, or similar external actions require approval.
 - No multi-user account sync. v1 is strictly single-user and local to one Mac.
 - No third-party plugin marketplace. First-party plugins come first.
 - No cloud-first assistant behavior. Local models are the default.
@@ -52,14 +55,14 @@
 | Rust owns the assistant core | Swift-owned agent runtime | Keeps model routing, memory, tools, safety, plugins, scheduling, and audit logs in a portable, testable service. |
 | Swift owns the human-facing shell | Rust UI, web UI | Gives the best path to native voice, macOS permissions, notifications, menus, settings, and polished UI. |
 | App-supervised core first | LaunchAgent from day one | Reduces v1 complexity while preserving a path to stronger background reliability later. |
-| Keep app-supervised scheduler automation explicit and bounded | Always run persisted schedules whenever the app launches, or leave all due execution manual | A persisted user toggle enables the existing audited Rust background loop only while `Jarvis.app` supervises the core. Fixed interval/limit ceilings, bounded stale recovery, cancellable redacted attention polling, and separately authorized notifications preserve user intent without claiming LaunchAgent or OS-wake reliability. |
+| Keep app-supervised scheduler automation explicit and bounded | Always run persisted schedules whenever the app launches, or leave all due execution manual | A persisted user toggle enables the existing audited Rust background loop only while `Assemblywright.app` supervises the core. Fixed interval/limit ceilings, bounded stale recovery, cancellable redacted attention polling, and separately authorized notifications preserve user intent without claiming LaunchAgent or OS-wake reliability. |
 | Local-model first with ChatGPT as the only approved cloud model | Cloud-first routing, provider-agnostic cloud routing | Matches the privacy posture while allowing explicit escalation for harder reasoning tasks. |
 | Support both OpenAI API-key and logged-in Codex-account authentication inside the approved ChatGPT route | API-key only, unaudited general Codex agent execution | Account authentication avoids a second stored Platform key while retaining the same sensitivity gate, route evidence, configured cloud-approval policy, redacted request context, and failure audit. The Codex subprocess must ignore user/project rules, disable tool capabilities mechanically, minimize inherited environment, bound output, and fail closed when its constrained CLI contract is unavailable. |
 | Let an operator skip repeated approval for ordinary cloud conversation and select the Codex model plus reasoning effort | Require a one-shot decision for every typed prompt, hard-code one model/effort, or remove cloud safety gates | Explicit cloud-provider selection plus an `Ask before every cloud prompt` control is sufficient for ordinary Public, Workspace, and Personal conversation. Private and Credential-adjacent routes keep command-scoped approval, Restricted routes remain blocked, proactive routes cannot consume the grant, and tool/action approval is unchanged. Model and effort are runtime-verified through health; Codex-account execution passes the selected effort through strict CLI config while its internal approval policy stays `never` and tool features stay disabled. |
 | Capability scopes plus risk tiers | Simple allow/deny prompts, risk tiers only | High autonomy needs both explicit permission boundaries and per-action risk evaluation. |
 | SQLite as primary structured storage | Flat files only, external database | SQLite is durable, inspectable, easy to migrate, and enough for single-user v1. |
 | macOS Keychain for secrets | Store credentials in SQLite or config files | Secrets should use the platform credential store. |
-| Keep Developer Mode device keys in device-only Keychain items and pair through a secret-free public exchange | Export a PKCS#12 bundle, persist PEM keys, print the one-time grant, or treat Tailscale membership as device identity | The Windows master keeps the ten-minute grant secret in one confirmed local pairing process while the Mac returns only a signed CSR. The Mac validates and installs the issued certificate against the staged key, invitation identity, endpoint, and CA fingerprint before an outbound TLS 1.3 session can authenticate. Tailscale supplies reachability only; the exporter-bound mTLS handshake supplies Jarvis device authority. |
+| Keep Developer Mode device keys in device-only Keychain items and pair through a secret-free public exchange | Export a PKCS#12 bundle, persist PEM keys, print the one-time grant, or treat Tailscale membership as device identity | The Windows master keeps the ten-minute grant secret in one confirmed local pairing process while the Mac returns only a signed CSR. The Mac validates and installs the issued certificate against the staged key, invitation identity, endpoint, and CA fingerprint before an outbound TLS 1.3 session can authenticate. Tailscale supplies reachability only; the exporter-bound mTLS handshake supplies Assemblywright device authority. |
 | First-party plugins first | Third-party marketplace in v1 | The safety model and plugin contract need to prove themselves before third-party expansion. |
 | App-owned security-scoped bookmarks for workspace roots | Put root paths in app child arguments, store plain paths, or let the model select roots | Native user selection establishes an explicit local grant; opaque IDs and bounded startup stdin keep app-selected paths out of argv, environment, model input, and audit while Rust remains the descriptor authority. Bookmark tests do not prove App Sandbox enforcement or child sandbox-extension inheritance. |
 | App-supervised Unix-domain-socket IPC with Apple audit-token code identity, same-EUID, and per-launch bearer checks | Use loopback TCP by default, rely on socket filesystem permissions alone, persist every supervised credential, trust PID/path lookup, put transport authority in argv/environment, or silently reuse a legacy unauthenticated core | The default app launch creates an owner-only runtime directory and generation-random Unix socket, sends `ipc_transport:{kind:"unix_socket_peer_identity_v1",socket_path:"/absolute/path.sock",peer_code_requirement:"...",peer_identity_profile:"adhoc_exact|developer_id_hardened"}` plus a fresh 32-byte bearer only through bounded startup stdin, and requires `LOCAL_PEERTOKEN`/Security.framework requirement validation, current-EUID credentials, and the bearer before every request. Swift validates the connected core through the same audit-token mechanism. Exact `JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true` selects the explicitly weaker authenticated loopback TCP and owner-only token-file compatibility path. Ad-hoc requirements bind one exact build by cdhash and do not establish publisher identity; the Developer ID profile requires stable app/core identifiers, the same nonempty team, and hardened runtime. This is intended-process defense in depth, not device authentication, XPC, App Sandbox, notarization, or live-device proof. |
@@ -69,16 +72,16 @@
 | Give diagnostics a dedicated redacted health projection | Reuse the full `/health` response inside diagnostics, redact arbitrary reason text by convention, or remove pause visibility entirely | Explicit health and pause-status surfaces retain the operator-entered emergency-pause reason, but `/diagnostics/export` uses a distinct type that can carry only pause state, update time, `emergency_pause_reason_present`, and the fixed `redacted` compatibility marker. This makes accidental raw-reason export structurally unavailable while preserving useful support evidence and the additive v1 response shape. |
 | Give every interactive command an optional client-generated cancellation handle | Cancel by connection lifetime, cancel the newest task, wait until a task ID is returned, permit overlapping console submits, or reuse installed-plugin-only cancellation | Swift and CLI generate a bounded UUID before `POST /commands`; the Swift console serializes submissions before mutating its active handle. Rust registers the UUID for the full active request, binds it to only the created task, propagates it through provider and tool cancellation, and uses guard finalization as the result-acceptance linearization point. Authenticated cancellation reports `cancellation_requested` only while that exact handle is active and `not_found` otherwise. The 1,024 most recently consumed UUIDs remain bounded FIFO tombstones to reject recent reuse; clients still require fresh random UUIDs because tombstones are process-local and eventually evicted. Cancellation cannot undo an external effect that already happened. |
 | Terminate installed subprocess process groups on cancellation and abnormal exit | Discard only the eventual result, kill only the direct child, or wait for the manifest timeout | Every installed subprocess starts as a dedicated Unix process group. Active cancellation and emergency pause, plus timeout, output-limit, input/output failure, and leader exit, close the invocation by signaling that group, escalating from TERM to KILL after a bounded grace, and reaping the leader before returning. Concurrent stdin/output workers are joined with a bound. This stops members that remain in the group but cannot contain a process that deliberately escapes with `setsid`/`setpgid`, undo an effect already issued, or establish an OS sandbox or egress boundary. |
-| Auditability as an architectural requirement | Best-effort logs after the fact | Jarvis must be able to explain why it acted, what data it used, and what permissions were involved. |
+| Auditability as an architectural requirement | Best-effort logs after the fact | Assemblywright must be able to explain why it acted, what data it used, and what permissions were involved. |
 | Bind live-device QA to the exact signed app executable and code identity | Treat bundle metadata or bundled-core identity as sufficient, or accept independent valid-looking reports | Signed provenance records the app executable path/SHA-256 plus Identifier, TeamIdentifier, and CDHash. Live-device QA rechecks the installed executable and the signed-provenance report, while final bundle, doctor, and Rust evidence-status validation require the two reports to agree. This prevents artifact mixing but remains point-in-time evidence, not continuous integrity or proof that installation preserved every byte. |
 
 ## Architecture
 
-Jarvis v1 runs as two cooperating local processes.
+Assemblywright v1 runs as two cooperating local processes.
 
-### Jarvis.app
+### Assemblywright.app
 
-`Jarvis.app` is a Swift/SwiftUI macOS application. It owns the visible user experience, voice session, status controls, permission prompts, notifications, settings, activity history, memory management UI, plugin management UI, diagnostics export, and emergency pause.
+`Assemblywright.app` is a Swift/SwiftUI macOS application. It owns the visible user experience, voice session, status controls, permission prompts, notifications, settings, activity history, memory management UI, plugin management UI, diagnostics export, and emergency pause.
 
 The app should feel like a real Mac product: menu bar presence, command surface, settings, clear current activity, and predictable recovery from degraded modes.
 
@@ -118,12 +121,12 @@ invitation and retains the single-use grant secret only in that process. The
 Mac generates a non-exported P-256 key in a device-only Keychain item, returns
 only a signed CSR, and installs the issued client certificate and enrollment CA
 only after their device identity, role, registry revision, key, endpoint, and CA
-fingerprint match the staged invitation. Normal local Jarvis startup does not
+fingerprint match the staged invitation. Normal local Assemblywright startup does not
 read this material.
 
 An explicitly invoked outbound bridge connection pins the enrolled CA and
 expected master IP, presents the Keychain identity, requires TLS 1.3, derives
-the fixed Jarvis TLS exporter, and sends the exact registered handshake on that
+the fixed Assemblywright TLS exporter, and sends the exact registered handshake on that
 same connection. A missing exporter, expired or mismatched certificate,
 unexpected trust chain, rejected registry revision, or non-accepted handshake
 closes the connection and grants no distributed authority. Tailscale is the
@@ -139,7 +142,7 @@ executable, and distinct Keychain access group before launch, then revalidates
 the running child by PID and prevalidated CDHash before accepting output. It
 clears the child environment, bounds the snapshot
 queue, uses bounded TERM-to-KILL reaping, and fails closed on duplicate keys,
-malformed, oversized, extra, or terminated output. `Jarvis.app`
+malformed, oversized, extra, or terminated output. `Assemblywright.app`
 never reads the bridge identity. This proves the Mac-side development
 connection-supervision primitive. The live bridge E2E also
 deliberately closes one accepted session and requires the next signed production
@@ -266,7 +269,7 @@ validates that identifier against its direct parent before opening SQLite and
 then watches the relationship for the lifetime of the server. If the app exits
 or is killed, the core drops the server and releases its socket and database
 owner lease instead of surviving as an orphan that blocks the next launch.
-Manual or externally supervised `jarvis serve` processes do not opt into this
+Manual or externally supervised `assemblywright serve` processes do not opt into this
 parent binding and remain operator-owned.
 
 Packaging assigns stable code identifiers `com.nobiletechnology.jarvis` and
@@ -315,7 +318,7 @@ Primary design rule: Swift should not become the agent brain, and Rust should no
 
 ### Conversation Runtime
 
-Owns sessions, turns, tool-call orchestration, streaming status, task state, cancellation, and the current "what is Jarvis doing now" state.
+Owns sessions, turns, tool-call orchestration, streaming status, task state, cancellation, and the current "what is Assemblywright doing now" state.
 
 ### Model Router
 
@@ -474,7 +477,7 @@ in evidence-aware readiness mode.
 
 ### Activity And Audit View
 
-Human-readable timeline of what Jarvis did, why, which model was used, what tools ran, and which permissions were involved.
+Human-readable timeline of what Assemblywright did, why, which model was used, what tools ran, and which permissions were involved.
 
 ### Memory Manager
 
@@ -501,7 +504,7 @@ claim mechanism atomically writes a unique durable claim and redacted
 success, failure, cancellation, timeout, or an unresolved restart cannot reuse
 the approval. Terminal execution state, task state, and terminal audit evidence
 commit in one transaction. Because a post-claim interruption may have produced
-an external effect, Jarvis reports the outcome as ambiguous and requires an
+an external effect, Assemblywright reports the outcome as ambiguous and requires an
 operator to review evidence and create a new approval rather than retrying
 automatically.
 
@@ -523,13 +526,13 @@ The Unix lock file is opened with no-follow and close-on-exec, must be a regular
 single-link current-owner file with no group/other permissions, and uses a
 nonblocking exclusive advisory lock. Concurrent cores fail closed before
 opening SQLite; in-memory test repositories remain lease-free.
-This is a cooperating-Jarvis ownership boundary, not mandatory locking against
+This is a cooperating-Assemblywright ownership boundary, not mandatory locking against
 raw SQLite clients or other noncooperating file writers.
 
 CLI and Swift approved-execution clients generate a fresh cancellation UUID.
 Rust registers the handle, binds it to the approved task, and activates it at
 the claim boundary. Authenticated cancellation can target only that exact
-active run; when it wins output acceptance, Jarvis discards late output and
+active run; when it wins output acceptance, Assemblywright discards late output and
 atomically records cancelled claim and task state. This cooperative boundary
 cannot reverse an external effect already performed. The Approval Center owns
 that same handle while execution is active and presents a Cancel Run control.
@@ -589,7 +592,7 @@ Local model configuration, ChatGPT configuration with separate OpenAI API-key
 and logged-in Codex-account authentication choices inside the same approved,
 policy-checked cloud route, default routing policy, privacy controls, voice
 settings, and diagnostics export. Codex-account execution is response-only at
-the Jarvis boundary: shell, unified execution, code-host, app/plugin, browser,
+the Assemblywright boundary: shell, unified execution, code-host, app/plugin, browser,
 computer, web-search, image-generation, multi-agent, and workspace-dependency
 tool features are disabled before redacted context is sent.
 
@@ -627,7 +630,7 @@ existing reason contract and must not be treated as diagnostics exports.
 
 ## Command Data Flow
 
-1. User speaks or types into `Jarvis.app`.
+1. User speaks or types into `Assemblywright.app`.
 2. Swift captures the input, attaches UI/session context, and sends it to `jarvis-core`.
 3. Rust creates a task record and runs policy prechecks.
 4. The conversation runtime asks the model router for a model decision.
@@ -643,7 +646,7 @@ For proactive routines, the flow starts in the scheduler or trigger engine inste
 
 ## Safety And Error Handling
 
-- Fail closed for risky actions. If permissions, policy, identity, plugin validation, or model route checks are uncertain, Jarvis blocks or asks.
+- Fail closed for risky actions. If permissions, policy, identity, plugin validation, or model route checks are uncertain, Assemblywright blocks or asks.
 - Separate planning from acting. Plans can be generated freely, but side-effecting actions pass through the risk engine.
 - Support cancellation across tasks, tool calls, scheduled jobs, and proactive triggers.
 - Keep state recoverable. Task state, memory writes, plugin changes, and configuration changes should be transactional or rollback-friendly.
@@ -765,7 +768,7 @@ The packaged Mac app launches, starts the Rust core, handles a command, writes a
 
 ## Packaging And Operations
 
-- `Jarvis.app` bundles the release-built CLI executable at
+- `Assemblywright.app` bundles the release-built CLI executable at
   `Contents/Resources/bin/jarvis-cli`; the executable hosts the Rust
   `jarvis-core` library behind the local IPC contract.
 - The app supervises the core in v1; LaunchAgent support is deferred until needed.
@@ -888,4 +891,4 @@ reviewability, but it is not readiness evidence by itself.
 Readiness language must be tied to checked-in code, documented diagrams,
 knowledge-base updates, and the specific local/E2E checks that passed.
 
-Before implementation, the design should be reviewed through a multi-agent brainstorming pass because Jarvis is high-autonomy, security-sensitive, and product-grade.
+Before implementation, the design should be reviewed through a multi-agent brainstorming pass because Assemblywright is high-autonomy, security-sensitive, and product-grade.

@@ -1,6 +1,6 @@
 # Release Checklist
 
-Use this checklist before tagging or publishing any Jarvis release. Keep the
+Use this checklist before tagging or publishing any Assemblywright release. Keep the
 evidence local-first unless the user explicitly approves hosted infrastructure.
 
 ## Scope Check
@@ -56,7 +56,7 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
 - Confirm the current-vs-target implementation phase table is up to date before
   using any production-readiness language. Release notes may claim foundation
   readiness only for verified Rust/Swift surfaces, not full assistant readiness.
-- Confirm `jarvis release readiness` or `/release/readiness` reports the same
+- Confirm `assemblywright release readiness` or `/release/readiness` reports the same
   implemented feature proofs, pending feature boundaries, recommended
   verification commands, and manual production blockers as this checklist.
   The CLI command should default to operator-readable output and also return
@@ -72,9 +72,9 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   `/release/evidence-status` item is present, no missing or invalid evidence
   remains, and evidence-cleared features leave no pending readiness features.
   Treat this as validated owner-recorded release evidence, not proof that
-  Jarvis performed signing, notarization, stapling, installation,
+  Assemblywright performed signing, notarization, stapling, installation,
   live-device QA, marketplace review, malware scanning, or OS sandboxing.
-- Confirm `jarvis release evidence-status` or `/release/evidence-status` reports
+- Confirm `assemblywright release evidence-status` or `/release/evidence-status` reports
   the standard signed artifact, live-device QA report, plugin-trust QA report,
   and final evidence bundle inventory. The CLI command should default to
   operator-readable output and use `--json` or `JARVIS_CLI_JSON=1` for the
@@ -145,18 +145,18 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   and SHA-256 digests. All external validation flags must still default false.
   Treat this as operator handoff scaffolding only, not evidence that the
   external checks were completed.
-- Confirm `jarvis release plugin-trust-runbook` hands off from completed
+- Confirm `assemblywright release plugin-trust-runbook` hands off from completed
   plugin-trust QA into final evidence bundling and
   `release-evidence-doctor.sh --assert-complete`, not back to the signed
   distribution runbook.
-- Confirm `jarvis release evidence-bundle-runbook` and
+- Confirm `assemblywright release evidence-bundle-runbook` and
   `/release/evidence-bundle-runbook` expose the final read-only handoff for
   signed-distribution provenance, live-device QA, plugin-trust QA, and
   `release_evidence_bundle`, and that `release-external-handoff.sh --write`
   includes `evidence-bundle-runbook.json` in the manifest with byte count and
   SHA-256 digest coverage.
-- Confirm `jarvis release --help`, `jarvis release readiness --help`, and
-  `jarvis release evidence-status --help` preserve the same read-only,
+- Confirm `assemblywright release --help`, `assemblywright release readiness --help`, and
+  `assemblywright release evidence-status --help` preserve the same read-only,
   IPC-first/local-fallback, evidence-mode, and file/report-inspection
   boundaries as the JSON and operator-readable surfaces.
 - Confirm no Marvel branding, copyrighted visuals, or confusing product claims
@@ -243,7 +243,7 @@ evidence local-first unless the user explicitly approves hosted infrastructure.
   `JARVIS_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER`, and an opted-in development launch
   validates the separately signed helper, pins its prelaunch CDHash against the
   running PID, and shows read-only bridge state
-  without granting `Jarvis.app` the bridge Keychain group. Build
+  without granting `Assemblywright.app` the bridge Keychain group. Build
   `swift build --package-path apps/mac --product jarvis-mac-bridge` so the real
   Security/Keychain and Network.framework adapters compile. Run
   `./scripts/mac-windows-bridge-live-e2e.sh --check` in repository validation.
@@ -404,8 +404,8 @@ same gate on `macos-15` with SHA-pinned checkout/toolchain actions and Rust
 passing workflow as public PR evidence for the repo-owned local gate only; it
 is not external signing, notarization, clean-profile installation, Finder
 launch, live-device QA, or plugin marketplace trust evidence.
-Confirm `/contract`, `jarvis release readiness --json`,
-`jarvis release readiness --format json`, and the Swift Release tab expose this
+Confirm `/contract`, `assemblywright release readiness --json`,
+`assemblywright release readiness --format json`, and the Swift Release tab expose this
 as `release_ci_gate` with the same proof boundary before using CI-passing
 language in release notes. Release runbook commands keep the same JSON
 compatibility convention: `--json` is canonical, and `--format json` is accepted
@@ -668,7 +668,7 @@ stage or when a PR needs focused evidence for one ownership slice.
   and reason text must stay out of the audit payload.
 - Confirm approved first-party or installed-plugin approval execution requires
   a one-shot explicit
-  `/approvals/:id/execute` or `jarvis approvals execute <approval-id>` call,
+  `/approvals/:id/execute` or `assemblywright approvals execute <approval-id>` call,
   verifies the original task, action, risk, scope, input-schema, and current
   policy contract against the approval record, and requires matching
   approval_granted audit evidence before it uses schema v13 to
@@ -716,7 +716,7 @@ stage or when a PR needs focused evidence for one ownership slice.
   claim out of startup reconciliation until the first owner exits, then performs
   the v16 migration/reconciliation once. Do not claim this advisory lease blocks
   raw SQLite or other noncooperating writers.
-- Confirm `/permissions/grants` and `jarvis permissions grants` expose
+- Confirm `/permissions/grants` and `assemblywright permissions grants` expose
   read-only approval history/counts plus installed-plugin grant state,
   provenance integrity status, unverified plugin counts, and the
   `side_effects_require_approval` invariant. This inspection surface must not
@@ -866,7 +866,7 @@ stage or when a PR needs focused evidence for one ownership slice.
   guest-language confinement, not OS sandboxing, marketplace/publisher trust,
   malware analysis, same-user/process IPC isolation, signing/notarization, or
   live-device evidence.
-- Confirm `/permissions/policy-review` and `jarvis permissions review` expose
+- Confirm `/permissions/policy-review` and `assemblywright permissions review` expose
   read-only severity-ranked review items for pending approvals, high-risk
   plugin actions, unverified provenance, and unverified origin claims without
   enabling side effects, include network-capable plugin actions, and that
@@ -884,9 +884,9 @@ stage or when a PR needs focused evidence for one ownership slice.
   non-proactive plugin actions before side effects, and records redacted
   `plugin_execution_blocked` evidence.
 - Confirm scheduler stale-running recovery is bounded and redacted:
-  `/scheduler/recover-stale` or `jarvis scheduler recover-stale` marks stale
+  `/scheduler/recover-stale` or `assemblywright scheduler recover-stale` marks stale
   `Running` jobs failed with `automatic_recovery: false`; opt-in
-  `jarvis serve --scheduler-recover-stale-on-startup` uses the same recovery
+  `assemblywright serve --scheduler-recover-stale-on-startup` uses the same recovery
   path with `automatic_recovery: true`. Both paths must respect age/limit
   controls, return redacted diagnostic job fields, and append
   `scheduler_stale_running_recovered` without exposing scheduler command bodies
@@ -950,7 +950,7 @@ stage or when a PR needs focused evidence for one ownership slice.
 - Confirm `/contract` exposes compatibility policy plus feature proof/boundary
   metadata and Swift decodes it, so release notes can cite implemented surfaces
   without overclaiming pending manual gates.
-- Confirm `/release/readiness` and `jarvis release readiness` expose a
+- Confirm `/release/readiness` and `assemblywright release readiness` expose a
   read-only conservative readiness summary derived from contract feature
   metadata and release-checklist blockers, and that it does not perform or
   claim signing, notarization, stapling, installation, Finder/LaunchServices
@@ -958,7 +958,7 @@ stage or when a PR needs focused evidence for one ownership slice.
   audio-output validation, App Store review, marketplace plugin review, malware
   analysis, or OS sandbox enforcement. The CLI fallback for an unavailable local
   IPC server must keep the same conservative blocker set instead of claiming
-  server-backed proof. Confirm `jarvis release readiness --all-commands` is
+  server-backed proof. Confirm `assemblywright release readiness --all-commands` is
   ordered as a release execution runbook: local gates, unsigned distribution
   launch check, signed/notarized packaging, live-device QA, plugin-trust QA,
   final evidence bundle generation, evidence-doctor assertion, then external
@@ -1006,7 +1006,7 @@ stage or when a PR needs focused evidence for one ownership slice.
 - Confirm CLI E2E coverage still runs
   `release-plugin-trust-qa.sh --assert-complete` with owner-recorded
   archive URI/SHA-256 evidence fields, rebinds the generated report digest into
-  the final bundle fixture, and verifies `jarvis release evidence-status`
+  the final bundle fixture, and verifies `assemblywright release evidence-status`
   accepts the generated plugin-trust QA report and bundle as present. This
   proves script/status compatibility only, not real marketplace, malware,
   sandbox, or host-egress validation.
@@ -1034,7 +1034,7 @@ stage or when a PR needs focused evidence for one ownership slice.
   `./scripts/release-evidence-doctor.sh --assert-complete` after the bundle
   command as the final inventory assertion. Treat `--check`,
   `release-evidence-doctor.sh`, `/release/evidence-status`, and
-  `jarvis release evidence-status` as read-only present/missing/invalid
+  `assemblywright release evidence-status` as read-only present/missing/invalid
   inventory plus semantic validation for expected paths, app bundle `Info.plist`
   metadata, bundled-core marker metadata, JSON flags, non-future report
   timestamps, signed-distribution provenance, artifact/report digest bindings,
@@ -1062,7 +1062,7 @@ stage or when a PR needs focused evidence for one ownership slice.
   against the current artifact files and preserved notarytool logs, and write SHA-256 digests for the signed
   distribution artifacts, signed provenance, plus QA reports before writing evidence. The
   disabled-signature path is reserved for the fake self-test fixture.
-- Confirm `/release/evidence-status` and `jarvis release evidence-status` expose
+- Confirm `/release/evidence-status` and `assemblywright release evidence-status` expose
   the same standard release evidence inventory as structured, redacted status
   items with `present`, `missing`, or `invalid` state, including signed
   provenance JSON-report validation plus JSON-report
@@ -1131,13 +1131,13 @@ stage or when a PR needs focused evidence for one ownership slice.
   evidence until a Developer ID signed and notarized app exists.
   `./scripts/packaged-supervision-proof.sh`
   builds the Rust CLI, copies it into a temporary
-  `Jarvis.app/Contents/Resources/bin/jarvis-cli` layout, points Swift
+  `Assemblywright.app/Contents/Resources/bin/jarvis-cli` layout, points Swift
   supervisor tests at that executable, and starts the copied binary with a
   repository-backed database to verify health, command, audit, diagnostics,
   emergency pause, blocked command, pause status, and resume surfaces.
   `./scripts/package-distribution.sh --unsigned-launch-check` is the release
   distribution counterpart: it builds release Rust/Swift artifacts, assembles
-  `target/distribution/Jarvis.app`, creates an unsigned installer payload,
+  `target/distribution/Assemblywright.app`, creates an unsigned installer payload,
   launches the app executable from that release layout with an isolated HOME,
   and verifies that the app-owned Swift client completes bundled-core health,
   dry-run command, task/audit inspection, diagnostics, emergency pause, blocked
@@ -1187,7 +1187,7 @@ Current local gate:
 
 - Run `./scripts/package-distribution.sh --unsigned-launch-check`.
 - The command builds release Rust/Swift artifacts, assembles the
-  distribution-shaped `Jarvis.app`, creates an unsigned installer payload,
+  distribution-shaped `Assemblywright.app`, creates an unsigned installer payload,
   launches the app executable with isolated endpoint and database environment,
   and verifies health, dry-run command, task/audit inspection, diagnostics,
   emergency pause, blocked command, pause status, and resume through the
@@ -1260,7 +1260,7 @@ Clean-profile and manual production gates not proven by this local smoke:
   fake-fixture self-test rather than release evidence. `/release/evidence-status`
   enforces the same evidence-note checks before the report can clear
   `live_voice_loop`. The installed app path must match the
-  expected `/Applications/Jarvis.app` path unless explicitly overridden with
+  expected `/Applications/Assemblywright.app` path unless explicitly overridden with
   `JARVIS_QA_INSTALLED_APP_PATH`, the observed transcript must match the spoken
   test phrase after trimming, the expected command text must match the observed
   command text after trimming, `JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID` must be
@@ -1271,10 +1271,10 @@ Clean-profile and manual production gates not proven by this local smoke:
   command evidence as invalid; the live-device and bundle scripts preflight the
   ID shape before repository-backed evidence-status performs the durable lookup.
   The final `release-evidence-doctor.sh --assert-complete` check delegates to
-  `jarvis release evidence-status --json`, and `JARVIS_EVIDENCE_STATUS_ENDPOINT`
+  `assemblywright release evidence-status --json`, and `JARVIS_EVIDENCE_STATUS_ENDPOINT`
   can point that assertion at the release core so syntactically valid but
   unresolved task/audit evidence cannot pass. The
-  report must bind the installed bundled core path, `jarvis <version>` output,
+  report must bind the installed bundled core path, `assemblywright <version>` output,
   and SHA-256 digest. It must also bind the installed app executable path,
   SHA-256, code Identifier, TeamIdentifier, and CDHash to the exact
   signed-provenance report path/SHA-256 after local codesign, stapler, and
@@ -1288,15 +1288,15 @@ Clean-profile and manual production gates not proven by this local smoke:
   `target/release-live-device-qa-report.json`
   artifact, or the `JARVIS_QA_REPORT_PATH` override, with the release notes.
   The installed app metadata must match the approved `Info.plist` copy exactly:
-  `NSMicrophoneUsageDescription` is `Jarvis uses microphone input only when you explicitly start local voice capture.`, and
-  `NSSpeechRecognitionUsageDescription` is `Jarvis uses speech recognition only to turn your spoken command into a local assistant request.`.
+  `NSMicrophoneUsageDescription` is `Assemblywright uses microphone input only when you explicitly start local voice capture.`, and
+  `NSSpeechRecognitionUsageDescription` is `Assemblywright uses speech recognition only to turn your spoken command into a local assistant request.`.
   Preserve `notification_observation` fields for kind, title, body, thread
   identifier, and timestamp in the same report; the assertion path rejects
   blank title/body values, unsupported kinds, non-`jarvis.scheduler` threads,
   malformed timestamps, and notification observations before the voice-check
   start.
-  Then rerun `jarvis release evidence-status` and
-  `jarvis release readiness` against a core started or restarted with
+  Then rerun `assemblywright release evidence-status` and
+  `assemblywright release readiness` against a core started or restarted with
   `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external` and confirm the live
   voice/audio readiness item is cleared only from valid owner-recorded evidence.
 - Activity view shows current task state, active/status counts, redacted recent
@@ -1360,7 +1360,7 @@ Distribution packaging gate:
   stapling, installation, Finder/LaunchServices, live device, or manual QA
   proof.
 - Run `./scripts/package-distribution.sh --unsigned-launch-check` when a
-  packaging change should prove the release-built `Jarvis.app` executable can
+  packaging change should prove the release-built `Assemblywright.app` executable can
   supervise its bundled core from an isolated HOME. This also validates the
   unsigned package metadata. Confirm the default lane uses a `0700` owner-only
   run directory, `0600` generation-random socket, audit-token requirement plus
@@ -1380,7 +1380,7 @@ Distribution packaging gate:
   code-identity mechanics only; it does not prove Developer ID publisher
   identity, device authentication, XPC, App Sandbox, notarization, stapling,
   installation, Finder/LaunchServices, live device, or manual QA.
-- Confirm `jarvis --version` reports the canonical release version and that
+- Confirm `assemblywright --version` reports the canonical release version and that
   `release-evidence-doctor.sh` / `release-evidence-bundle.sh` accept the
   bundled `Contents/Resources/bin/jarvis-cli --version` output for the same
   version before treating local distribution artifacts as valid evidence.
@@ -1403,7 +1403,7 @@ Distribution packaging gate:
   owner-asserted validation flags, voice-loop evidence fields, owner-recorded
   live voice and non-voice evidence notes, structured spoken-command
   observation fields, installed-app metadata, schema identity, and proof boundary.
-  Confirm the same report is visible through `jarvis release evidence-status`
+  Confirm the same report is visible through `assemblywright release evidence-status`
   without missing, placeholder, or invalid live voice evidence fields before
   using evidence-aware readiness language. Missing required live voice evidence
   notes, the command-result evidence ID, the audio-output device label, the
@@ -1414,7 +1414,7 @@ Distribution packaging gate:
   Confirm CLI E2E coverage still runs
   `release-live-device-qa.sh --assert-complete` with a repository-backed
   command result, verifies the script-generated live-device QA report through
-  `jarvis release evidence-status`, and confirms external-mode readiness moves
+  `assemblywright release evidence-status`, and confirms external-mode readiness moves
   `live_voice_loop` to implemented while production readiness remains blocked by
   the remaining signed-distribution and final evidence gates. This is
   script/status/readiness compatibility for owner-recorded evidence only, not

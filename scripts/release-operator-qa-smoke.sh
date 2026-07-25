@@ -229,7 +229,7 @@ RESTART_DIAGNOSTICS_OUTPUT="$("$JARVIS" diagnostics export --endpoint "$ENDPOINT
 require_output_contains "operator QA restart diagnostics" "$RESTART_DIAGNOSTICS_OUTPUT" '"repository_backed":true'
 require_output_contains "operator QA restart diagnostics" "$RESTART_DIAGNOSTICS_OUTPUT" '"active_memory_item_count":1'
 
-printf '\nJarvis release operator QA smoke: ok\n'
+printf '\nAssemblywright release operator QA smoke: ok\n'
 printf 'Endpoint: %s\n' "$ENDPOINT"
 printf 'Database: %s\n' "$DB_PATH"
 printf 'Proof boundary: repository-backed CLI operator smoke for command, audit, model routes, memory create/update/review/delete/restore, scheduler attention/run-due, activity, permissions review, diagnostics, emergency pause, release readiness, and restart recovery; no Developer ID signing, notarization, installer/Finder validation, live microphone/Speech/audio-output validation, live OS notification delivery, App Store review, marketplace trust, malware analysis, or OS sandbox enforcement.\n'

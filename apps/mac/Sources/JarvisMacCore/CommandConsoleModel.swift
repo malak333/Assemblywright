@@ -125,7 +125,7 @@ public final class CommandConsoleModel: ObservableObject {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         guard !isDegraded else {
-            lastError = degradedReason ?? "Jarvis core is unavailable."
+            lastError = degradedReason ?? "Assemblywright core is unavailable."
             return
         }
         guard activeCancellationID == nil, !isWorking else {

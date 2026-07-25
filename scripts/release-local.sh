@@ -69,7 +69,7 @@ heartbeat_self_test() {
     printf 'error: release-local heartbeat self-test did not emit completion output\n' >&2
     exit 1
   fi
-  printf 'Jarvis release-local heartbeat self-test: ok\n'
+  printf 'Assemblywright release-local heartbeat self-test: ok\n'
 }
 
 if [[ "${1:-}" == "--heartbeat-self-test" ]]; then
@@ -120,4 +120,4 @@ fi
 run swift test --disable-sandbox --package-path apps/mac
 run swift build --disable-sandbox --package-path apps/mac
 
-printf '\nJarvis local release verification: ok\n'
+printf '\nAssemblywright local release verification: ok\n'

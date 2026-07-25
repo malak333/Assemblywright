@@ -37,9 +37,9 @@ const IPC_BEARER_TOKEN_LENGTH: usize = 43;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "jarvis-agent",
+    name = "assemblywright-agent",
     version,
-    about = "App-supervised Mac relay for Jarvis Developer Mode"
+    about = "App-supervised Mac relay for Assemblywright Developer Mode"
 )]
 struct Cli {
     /// Owner-only directory containing the durable local event cursor.

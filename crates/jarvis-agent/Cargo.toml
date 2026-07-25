@@ -1,12 +1,21 @@
 [package]
 name = "jarvis-agent"
 version = "0.1.4"
-description = "App-supervised Mac control-plane relay for Jarvis Developer Mode."
+description = "App-supervised Mac control-plane relay for Assemblywright Developer Mode."
+default-run = "assemblywright-agent"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 publish = false
+
+[[bin]]
+name = "assemblywright-agent"
+path = "src/bin/assemblywright-agent.rs"
+
+[[bin]]
+name = "jarvis-agent"
+path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true

@@ -4137,7 +4137,7 @@ impl SqliteRepository {
         let version = self.schema_version()?;
         if version > CURRENT_SCHEMA_VERSION {
             return Err(JarvisError::Storage(format!(
-                "database schema version {version} is newer than this Jarvis build supports ({CURRENT_SCHEMA_VERSION}); upgrade Jarvis before opening this database"
+                "database schema version {version} is newer than this Assemblywright build supports ({CURRENT_SCHEMA_VERSION}); upgrade Assemblywright before opening this database"
             )));
         }
         if version < 1 {
@@ -5242,7 +5242,7 @@ fn acquire_repository_lease(db_path: &Path) -> JarvisResult<RepositoryLease> {
             || error.raw_os_error() == Some(libc::EAGAIN)
         {
             return Err(JarvisError::Conflict(format!(
-                "database is already owned by another Jarvis core: {}",
+                "database is already owned by another Assemblywright core: {}",
                 db_path.display()
             )));
         }
@@ -7435,7 +7435,7 @@ mod tests {
 
         let error = SqliteRepository::open(db_path).unwrap_err();
         let message = error.to_string();
-        assert!(message.contains("newer than this Jarvis build supports"));
+        assert!(message.contains("newer than this Assemblywright build supports"));
     }
 
     #[test]
@@ -8943,7 +8943,7 @@ mod tests {
             name: "Local Registry Test".to_string(),
             version: "0.1.0".to_string(),
             source: crate::PluginSource::LocalDevelopment,
-            author: "Jarvis Test".to_string(),
+            author: "Assemblywright Test".to_string(),
             source_path: Some(source_path.to_string()),
             subprocess: None,
             wasm: None,

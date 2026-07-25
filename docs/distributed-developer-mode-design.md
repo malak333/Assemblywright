@@ -7,7 +7,7 @@ Scope: Design only; this document does not claim implementation or production re
 
 ## Understanding Summary
 
-- Jarvis will expose explicit Personal and Developer modes over one Rust-owned
+- Assemblywright will expose explicit Personal and Developer modes over one Rust-owned
   safety, policy, routing, audit, and unified-memory foundation.
 - A Windows machine is the single stateful master. It owns repositories,
   worktrees, memory, indexes, orchestration, policy, audit, scheduling,
@@ -19,7 +19,7 @@ Scope: Design only; this document does not claim implementation or production re
   local Mac IPC boundary, bridges to Windows, and provides stronger M1 local
   inference.
 - Codex uses the owner's authenticated ChatGPT account through Codex CLI, not
-  the OpenAI Platform API. Jarvis supports both response-only and full coding
+  the OpenAI Platform API. Assemblywright supports both response-only and full coding
   agent Codex roles.
 - Developer Mode may autonomously edit, validate, review, commit, push, open
   pull requests, and merge when an explicitly registered repository's policy,
@@ -66,7 +66,7 @@ Scope: Design only; this document does not claim implementation or production re
 | Responsiveness | Warm-path p95 Mac UI acknowledgement under one second and routing decision under two seconds, measured over at least 100 requests with payloads up to 32 KiB and overlay round-trip latency at or below 100 ms. Cold model loading is excluded and reported separately. |
 | Long work | Jobs may run for hours and must use durable master checkpoints and bounded attempts. |
 | Availability | Windows is mandatory. When it is unavailable, the Mac app accepts no commands, inference, memory changes, or actions. |
-| Connectivity | A private overlay supplies reachability; Jarvis independently authenticates devices and roles. |
+| Connectivity | A private overlay supplies reachability; Assemblywright independently authenticates devices and roles. |
 | Deployment | Matching versioned Mac and Windows builds are installed manually. Protocol mismatch blocks execution. |
 | Privacy | Workers retain model weights and runtime configuration but no prompts, retrieved passages, source snippets, results, or repository state. |
 | Cloud data | Registered repository context may reach Codex only after exclusions, sensitivity policy, and secret scanning. Personal or Private context requires exact task approval; Restricted context remains local. |
@@ -85,7 +85,7 @@ separate deployment evidence.
 ```text
 Mac                                      Windows
 ┌─────────────────────┐                 ┌──────────────────────────┐
-│ Jarvis.app          │                 │ jarvis-master            │
+│ Assemblywright.app          │                 │ jarvis-master            │
 │ Voice / UX / Apple  │                 │ Tasks / policy / audit   │
 └─────────┬───────────┘                 │ Memory / RAG / scheduler │
           │ Local UDS                    │ Repos / worktrees / Git  │
@@ -123,7 +123,7 @@ The signed Mac bridge helper maintains the outbound authenticated connection to
 Windows because it alone owns the non-exportable enrolled Keychain identity.
 The directly supervised Rust agent owns the durable event cursor and will later
 host eligible Apple capabilities and the M1 inference adapter. Neither holds
-authoritative Jarvis state.
+authoritative Assemblywright state.
 
 The current default-inert implementation now extends the Mac trust/transport
 foundation with a bounded Rust relay seam. Windows schema version 4 stores a
@@ -260,7 +260,7 @@ access. Future workers use the same capability and job protocol.
 
 ## Trust And Communication Model
 
-The private overlay is not an authorization boundary. Jarvis uses TLS 1.3
+The private overlay is not an authorization boundary. Assemblywright uses TLS 1.3
 mutual authentication with per-device certificates and a master-owned private
 enrollment CA.
 
@@ -367,7 +367,7 @@ The initial deterministic routing table is:
 | Codex full agent | Complex implementation, broad refactors, migrations, and difficult repair loops. |
 
 Ambiguous classification defaults to M1 planning. If the master still cannot
-derive a safe class, Jarvis asks for clarification. A manual override may
+derive a safe class, Assemblywright asks for clarification. A manual override may
 select another policy-eligible capability but cannot bypass sensitivity,
 authority, availability, or repository policy.
 
@@ -587,7 +587,7 @@ effects for review.
 A route override preview shows why the current capability was selected, the
 candidate's relative quality and latency class, context ceiling, and authority.
 It applies only to an unstarted step. A running step must first pause or cancel
-and then start a new attempt; Jarvis never moves live context between workers.
+and then start a new attempt; Assemblywright never moves live context between workers.
 
 Cold model loading is a visible `Loading Model` state with elapsed time and an
 estimate when the runtime can supply one. It is excluded only from the warm
@@ -704,7 +704,7 @@ one CPU-heavy indexing or build utility runs in the background by default.
 1. A deterministic fixture repository completes planning, distributed
    inference, isolated editing, validation, review, publication, and merge with
    stubbed external boundaries.
-2. An owner-supervised dogfood task performs one real Jarvis change through
+2. An owner-supervised dogfood task performs one real Assemblywright change through
    live Windows, Mac, Codex-account, and GitHub paths.
 3. Performance evidence covers acknowledgement latency, routing latency,
    reconnect recovery, and four-job concurrency.
@@ -728,7 +728,7 @@ reliability. Those require separately recorded evidence.
   sandbox alone is not sufficient proof.
 - Unified memory increases cross-context leakage risk; sensitivity and
   provenance remain authoritative despite the shared corpus.
-- Automatic merge amplifies policy mistakes. Jarvis never bypasses branch
+- Automatic merge amplifies policy mistakes. Assemblywright never bypasses branch
   protection, protected paths, required checks, exact-commit review, or secret
   scanning.
 - Windows is an accepted single point of failure. There is no failover or
@@ -765,9 +765,9 @@ reliability. Those require separately recorded evidence.
 | Up to four jobs and one full Codex session | Serialized execution; throughput-first fleet | Balances responsiveness and resource use for one owner and two machines. | No scoped objection; accepted by the Arbiter as owner-confirmed. |
 | Policy-controlled publication and merge | Approval before publication; approval before merge | Enables genuine autonomy while retaining exact repository gates and branch protection. | Skeptic objected that broad repository policy is not exact execution approval. Accepted: an explicit bounded automation grant plus one exact durable claim for every remote mutation replaces implicit standing authority. |
 | Fail closed when Windows is unavailable | Limited local mode; Mac failover | Preserves one source of truth and avoids reconciliation in the first release. | No scoped objection; accepted by the Arbiter as owner-confirmed. |
-| Private overlay plus Jarvis authentication | LAN-only; direct internet exposure | Supports remote personal use without treating network location as identity. | Skeptic found enrollment and replay handling conceptual. Accepted: TLS 1.3 mTLS, short-lived certificates, durable revocation, channel binding, connection epochs, monotonic sequences, rotation, and compromise recovery are now specified. |
+| Private overlay plus Assemblywright authentication | LAN-only; direct internet exposure | Supports remote personal use without treating network location as identity. | Skeptic found enrollment and replay handling conceptual. Accepted: TLS 1.3 mTLS, short-lived certificates, durable revocation, channel binding, connection epochs, monotonic sequences, rotation, and compromise recovery are now specified. |
 | Manual matching-version deployment | Master-pushed updates; independent tracks | Minimizes updater and compatibility complexity in the first release. | No scoped objection; accepted by the Arbiter as owner-confirmed. |
-| Registered repositories with declared workflows | Jarvis-only; language-limited support | Generalizes safely through explicit per-repository policy rather than language assumptions. | Skeptic objected that repository commands are untrusted. Accepted: exact command contracts run network-disabled under a restricted token, ACLs, Job Object, and no credentials; network-dependent repositories are initially ineligible for autonomous publication. |
+| Registered repositories with declared workflows | Assemblywright-only; language-limited support | Generalizes safely through explicit per-repository policy rather than language assumptions. | Skeptic objected that repository commands are untrusted. Accepted: exact command contracts run network-disabled under a restricted token, ACLs, Job Object, and no credentials; network-dependent repositories are initially ineligible for autonomous publication. |
 | Sandbox fixture plus supervised dogfood | Fixture-only; dogfood-only | Combines deterministic proof with one realistic end-to-end validation. | No scoped objection; accepted by the Arbiter as owner-confirmed. |
 
 ### Structured Review Resolutions

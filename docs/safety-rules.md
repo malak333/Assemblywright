@@ -1,6 +1,6 @@
 # Safety Rules
 
-Jarvis is designed for high autonomy with explicit boundaries. These rules are
+Assemblywright is designed for high autonomy with explicit boundaries. These rules are
 release requirements, not optional UX guidance.
 
 ## Policy Defaults
@@ -107,8 +107,8 @@ release requirements, not optional UX guidance.
   Missing channel binding, ordinary system trust without the pinned CA,
   certificate/key mismatch, expiry, revocation, role or capability drift,
   registry-revision mismatch, replay, or non-accepted handshake fails closed
-  and cancels the channel. Tailscale reachability is never Jarvis authority.
-- `Jarvis.app` may supervise the Mac bridge only through an explicit exact
+  and cancels the channel. Tailscale reachability is never Assemblywright authority.
+- `Assemblywright.app` may supervise the Mac bridge only through an explicit exact
   helper path plus an independently supplied Apple team. It must validate an
   Apple-anchored, pinned-team requirement, the
   fixed bridge identifier and exact executable, plus the bridge-only Keychain
@@ -335,7 +335,7 @@ release requirements, not optional UX guidance.
   identifiers are rejected because they cannot satisfy the fixed production
   code-identity contract.
 - The optional Developer Mode event relay keeps the enrolled private key and
-  TLS session inside the separately signed Swift helper. `Jarvis.app` may pass
+  TLS session inside the separately signed Swift helper. `Assemblywright.app` may pass
   only an absolute agent executable path and absolute agent data-directory path
   through one strict, bounded, secret-free helper startup document; a partial,
   relative, extra-field, oversized, or malformed opt-in disables the launch.
@@ -363,9 +363,9 @@ release requirements, not optional UX guidance.
   failure cancels the current mTLS session and enters fixed redacted backoff; it
   never authorizes a model, tool, file, repository, Codex, or Git action.
 - Artifact-producing distribution packaging must inspect the exact configured
-  `Jarvis.app` and bundled-core executable immediately before removing the
+  `Assemblywright.app` and bundled-core executable immediately before removing the
   distribution directory. If either executable is active, packaging fails
-  closed with guidance to quit Jarvis or use a different
+  closed with guidance to quit Assemblywright or use a different
   `JARVIS_DISTRIBUTION_DIR`; it must not terminate the app, replace the live
   bundle, or weaken dynamic signature validation. A signature failure remains
   degraded and actionable, and the command console must not append or send a
@@ -375,7 +375,7 @@ release requirements, not optional UX guidance.
   socket and database owner lease when that parent relationship disappears.
   The PID is non-secret launch metadata; bearer authority remains confined to
   startup stdin. A mismatched, init-owned, or otherwise invalid parent fails
-  closed before storage opens. Manual or externally supervised `jarvis serve`
+  closed before storage opens. Manual or externally supervised `assemblywright serve`
   processes are not silently adopted or killed. An early supervised-core exit
   must remain actionable in the UI, and the command console must stay gated
   instead of masking the primary failure as `credentialUnavailable`.
@@ -529,7 +529,7 @@ release requirements, not optional UX guidance.
   must commit atomically. Failure, cancellation, and timeout after the claim
   must record that an effect remains possible. A crash, restart, or persistence
   failure that leaves a claimed execution unresolved is likewise ambiguous.
-  Jarvis must never automatically retry a claimed approval; the operator must
+  Assemblywright must never automatically retry a claimed approval; the operator must
   review the evidence and create a new approval for any deliberate new attempt.
 - Repository-backed startup must project every pre-existing unresolved claim
   into the schema-v16 approval-execution attention ledger before serving IPC.
@@ -552,7 +552,7 @@ release requirements, not optional UX guidance.
   and accept one nonblocking exclusive Unix lock. Symlink, hard-link,
   permissive-mode, wrong-owner, unsupported-platform, and competing-owner
   states fail closed before SQLite mutation.
-  Treat this as coordination among cooperating Jarvis repositories only; never
+  Treat this as coordination among cooperating Assemblywright repositories only; never
   claim the advisory lease OS-blocks raw SQLite or noncooperating writers.
 - Direct installed-plugin execution must pass `PermissionEngine`. Contract dry
   runs remain non-executing and eligible Low/default-sensitivity invocations may

@@ -1,7 +1,7 @@
 [package]
 name = "jarvis-core"
 version = "0.1.4"
-description = "Local-first Rust core contracts and runtime foundation for Jarvis."
+description = "Local-first Rust core contracts and runtime foundation for Assemblywright."
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

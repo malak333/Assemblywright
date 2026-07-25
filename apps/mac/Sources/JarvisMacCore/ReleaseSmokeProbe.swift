@@ -25,11 +25,11 @@ public enum JarvisReleaseSmokeProbeError: Error, Equatable, Sendable {
 }
 
 public struct JarvisReleaseSmokeProbe: Sendable {
-    public static let successLine = "Jarvis release smoke: default supervised Unix IPC route sequence verified"
+    public static let successLine = "Assemblywright release smoke: default supervised Unix IPC route sequence verified"
 
-    private static let commandInput = "Jarvis release smoke deterministic dry-run check."
-    private static let pauseReason = "Jarvis release smoke emergency-pause check."
-    private static let schedulerCommand = "Jarvis release smoke scheduler background check."
+    private static let commandInput = "Assemblywright release smoke deterministic dry-run check."
+    private static let pauseReason = "Assemblywright release smoke emergency-pause check."
+    private static let schedulerCommand = "Assemblywright release smoke scheduler background check."
 
     private let client: any JarvisCoreClient
     private let timeout: Duration

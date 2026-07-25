@@ -1,11 +1,16 @@
 [package]
 name = "jarvis-cli"
 version = "0.1.4"
-description = "Command-line client and smoke runner for the local Jarvis core."
+description = "Command-line client and smoke runner for the local Assemblywright core."
+default-run = "assemblywright"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+
+[[bin]]
+name = "assemblywright"
+path = "src/bin/assemblywright.rs"
 
 [[bin]]
 name = "jarvis"

@@ -17,7 +17,7 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/release-plugin-trust-qa.sh [--check|--assert-complete|--self-test|--write-template PATH]
 
-Prepare or assert the installed-plugin trust release QA gate for Jarvis.
+Prepare or assert the installed-plugin trust release QA gate for Assemblywright.
 
 --check validates repo-owned plugin trust prerequisites and prints the manual
 marketplace, malware-analysis, OS sandbox, and egress checks required before
@@ -400,7 +400,7 @@ write_env_template() {
   local template_path="$1"
   mkdir -p "$(dirname "$template_path")"
   cat >"$template_path" <<'EOF'
-# Jarvis plugin trust QA evidence template.
+# Assemblywright plugin trust QA evidence template.
 # Edit this file on the validated release machine after marketplace review,
 # malware scan, signed publisher policy review, OS sandbox validation, and
 # host-level egress fixture validation have actually completed. Then run:
@@ -506,7 +506,7 @@ require_file_contains "cross-process E2E" "$ROOT_DIR/crates/jarvis-cli/tests/loc
 
 if [[ "$WRITE_TEMPLATE" == true ]]; then
   write_env_template "$WRITE_TEMPLATE_PATH"
-  printf 'Jarvis plugin trust QA env template written: %s\n' "$WRITE_TEMPLATE_PATH"
+  printf 'Assemblywright plugin trust QA env template written: %s\n' "$WRITE_TEMPLATE_PATH"
   printf 'Proof boundary: template generation only; no plugin trust validation was performed.\n'
   exit 0
 fi
@@ -559,7 +559,7 @@ if [[ "$SELF_TEST" == true ]]; then
     JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=true \
     JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED=true \
     JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED=true \
-    JARVIS_PLUGIN_QA_OWNER_NAME="Jarvis Plugin QA Self-Test" \
+    JARVIS_PLUGIN_QA_OWNER_NAME="Assemblywright Plugin QA Self-Test" \
     JARVIS_PLUGIN_QA_REVIEW_STARTED_AT="2026-05-22T16:10:00Z" \
     JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT="2026-05-22T16:20:00Z" \
     JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE="Marketplace review fixture was observed." \
@@ -612,7 +612,7 @@ if [[ "$SELF_TEST" == true ]]; then
     JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=true \
     JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED=true \
     JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED=true \
-    JARVIS_PLUGIN_QA_OWNER_NAME="Jarvis Plugin QA Self-Test" \
+    JARVIS_PLUGIN_QA_OWNER_NAME="Assemblywright Plugin QA Self-Test" \
     JARVIS_PLUGIN_QA_REVIEW_STARTED_AT="2026-05-22T16:10:00Z" \
     JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT="2026-05-22T16:20:00Z" \
     JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE="Marketplace review fixture was observed." \
@@ -652,7 +652,7 @@ if [[ "$SELF_TEST" == true ]]; then
     JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=true \
     JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED=true \
     JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED=true \
-    JARVIS_PLUGIN_QA_OWNER_NAME="Jarvis Plugin QA Self-Test" \
+    JARVIS_PLUGIN_QA_OWNER_NAME="Assemblywright Plugin QA Self-Test" \
     JARVIS_PLUGIN_QA_REVIEW_STARTED_AT="2026-05-22T16:10:00Z" \
     JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT="2026-05-22T16:20:00Z" \
     JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE="Marketplace review fixture was observed." \
@@ -691,7 +691,7 @@ if [[ "$SELF_TEST" == true ]]; then
     JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=true \
     JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED=true \
     JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED=true \
-    JARVIS_PLUGIN_QA_OWNER_NAME="Jarvis Plugin QA Self-Test" \
+    JARVIS_PLUGIN_QA_OWNER_NAME="Assemblywright Plugin QA Self-Test" \
     JARVIS_PLUGIN_QA_REVIEW_STARTED_AT="2026-05-22T16:10:00Z" \
     JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT="2026-05-22T16:20:00Z" \
     JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE="Marketplace review fixture was observed." \
@@ -743,7 +743,7 @@ if [[ "$SELF_TEST" == true ]]; then
     JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=true \
     JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED=true \
     JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED=true \
-    JARVIS_PLUGIN_QA_OWNER_NAME="Jarvis Plugin QA Self-Test" \
+    JARVIS_PLUGIN_QA_OWNER_NAME="Assemblywright Plugin QA Self-Test" \
     JARVIS_PLUGIN_QA_REVIEW_STARTED_AT="2026-05-22T16:10:00Z" \
     JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT="2026-05-22T16:20:00Z" \
     JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE="Marketplace review evidence archived in the controlled release lane." \
@@ -819,7 +819,7 @@ if [[ "$SELF_TEST" == true ]]; then
     JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=true \
     JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED=true \
     JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED=true \
-    JARVIS_PLUGIN_QA_OWNER_NAME="Jarvis Plugin QA Self-Test" \
+    JARVIS_PLUGIN_QA_OWNER_NAME="Assemblywright Plugin QA Self-Test" \
     JARVIS_PLUGIN_QA_REVIEW_STARTED_AT="2026-05-22T16:10:00Z" \
     JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT="2026-05-22T16:20:00Z" \
     JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE="Marketplace review evidence archived in the controlled release lane." \
@@ -843,7 +843,7 @@ if [[ "$SELF_TEST" == true ]]; then
     JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=true \
     JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED=true \
     JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED=true \
-    JARVIS_PLUGIN_QA_OWNER_NAME="Jarvis Plugin QA Self-Test" \
+    JARVIS_PLUGIN_QA_OWNER_NAME="Assemblywright Plugin QA Self-Test" \
     JARVIS_PLUGIN_QA_REVIEW_STARTED_AT="2026-05-22T16:10:00-04:00" \
     JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT="2026-05-22T16:20:00Z" \
     JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE="Marketplace review evidence archived in the controlled release lane." \
@@ -867,7 +867,7 @@ if [[ "$SELF_TEST" == true ]]; then
     JARVIS_PLUGIN_QA_EGRESS_ENFORCEMENT_VALIDATED=true \
     JARVIS_PLUGIN_QA_SIGNED_PUBLISHER_POLICY_VALIDATED=true \
     JARVIS_PLUGIN_QA_MANUAL_TRUST_REVIEW_VALIDATED=true \
-    JARVIS_PLUGIN_QA_OWNER_NAME="Jarvis Plugin QA Self-Test" \
+    JARVIS_PLUGIN_QA_OWNER_NAME="Assemblywright Plugin QA Self-Test" \
     JARVIS_PLUGIN_QA_REVIEW_STARTED_AT="2026-05-22T16:20:00Z" \
     JARVIS_PLUGIN_QA_REVIEW_COMPLETED_AT="2026-05-22T16:10:00Z" \
     JARVIS_PLUGIN_QA_MARKETPLACE_EVIDENCE_NOTE="Marketplace review evidence archived in the controlled release lane." \
@@ -907,14 +907,14 @@ if [[ "$SELF_TEST" == true ]]; then
       ;;
   esac
 
-  printf 'Jarvis plugin trust QA self-test: ok\n'
+  printf 'Assemblywright plugin trust QA self-test: ok\n'
   printf 'Proof boundary: fake flags and evidence notes validate assertion/report mechanics only; no marketplace, malware, sandbox, or egress validation was performed.\n'
   exit 0
 fi
 
 if [[ "$CHECK_ONLY" == true ]]; then
   cat <<'CHECKLIST'
-Jarvis plugin trust QA preflight: ok
+Assemblywright plugin trust QA preflight: ok
 
 Repo-owned plugin trust checks already covered by the local release gate:
 - Installed plugin manifests validate local metadata and provenance snapshots.
@@ -981,7 +981,7 @@ require_sha256_env JARVIS_PLUGIN_QA_MANUAL_REVIEW_ARTIFACT_SHA256
 write_report
 
 cat <<EOF
-Jarvis plugin trust QA assertion: complete
+Assemblywright plugin trust QA assertion: complete
 Report: $REPORT_PATH
 Proof boundary: owner-recorded marketplace review, malware scan, OS sandbox,
 egress enforcement, signed publisher policy, and manual trust review evidence

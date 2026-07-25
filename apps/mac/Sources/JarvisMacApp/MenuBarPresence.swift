@@ -4,7 +4,7 @@ import SwiftUI
 
 enum JarvisMenuBarContract {
     static let mainWindowID = "jarvis-main"
-    static let title = "Jarvis"
+    static let title = "Assemblywright"
 }
 
 struct JarvisMenuBarPresentation: Equatable {
@@ -50,7 +50,7 @@ struct JarvisMenuBarView: View {
     }
 
     var body: some View {
-        Button("Open Jarvis") {
+        Button("Open Assemblywright") {
             openWindow(id: JarvisMenuBarContract.mainWindowID)
             NSApp.setActivationPolicy(.regular)
             NSApp.activate(ignoringOtherApps: true)
@@ -88,17 +88,17 @@ struct JarvisMenuBarView: View {
         Button("Stop Core") {
             Task {
                 guard await supervisor.stop() else {
-                    console.markDegraded("Jarvis core did not stop before the shutdown timeout.")
+                    console.markDegraded("Assemblywright core did not stop before the shutdown timeout.")
                     return
                 }
-                console.markDegraded("Jarvis core was stopped from the menu bar.")
+                console.markDegraded("Assemblywright core was stopped from the menu bar.")
             }
         }
         .disabled(!presentation.canStopCore)
 
         Divider()
 
-        Button("Quit Jarvis") {
+        Button("Quit Assemblywright") {
             NSApplication.shared.terminate(nil)
         }
     }

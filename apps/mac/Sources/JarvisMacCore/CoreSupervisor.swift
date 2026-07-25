@@ -398,11 +398,11 @@ public final class JarvisCoreSupervisor: ObservableObject {
     static func degradedReason(for error: Error) -> String {
         if let identityError = error as? JarvisIPCPeerIdentityError,
            identityError == .invalidSignature {
-            return "Jarvis could not validate the app/core code signature. The app bundle may have been rebuilt or replaced while Jarvis was running. Quit Jarvis with Command-Q and reopen it; if the error remains, rebuild the app bundle."
+            return "Assemblywright could not validate the app/core code signature. The app bundle may have been rebuilt or replaced while Assemblywright was running. Quit Assemblywright with Command-Q and reopen it; if the error remains, rebuild the app bundle."
         }
         if let supervisorError = error as? JarvisCoreSupervisorError,
            supervisorError == .launchedProcessExited {
-            return "The Jarvis core exited during startup. An older Jarvis core may still own the database from a previous app session. Quit any older Jarvis process and press Start again; if the error remains, quit and reopen Jarvis."
+            return "The Assemblywright core exited during startup. An older Assemblywright core may still own the database from a previous app session. Quit any older Assemblywright process and press Start again; if the error remains, quit and reopen Assemblywright."
         }
         return String(describing: error)
     }
@@ -455,7 +455,7 @@ public final class JarvisCoreSupervisor: ObservableObject {
                !Self.health(lastHealth, matches: environmentOverrides)
             {
                 mode = .degraded(
-                    reason: "A different Jarvis core is already running at \(configuration.endpoint.baseURL.absoluteString). Stop that process before restarting with the selected model."
+                    reason: "A different Assemblywright core is already running at \(configuration.endpoint.baseURL.absoluteString). Stop that process before restarting with the selected model."
                 )
             } else {
                 mode = .available
@@ -465,7 +465,7 @@ public final class JarvisCoreSupervisor: ObservableObject {
 
         if process?.isRunning == true {
             mode = .degraded(
-                reason: "The previous app-supervised Jarvis core is still running but unavailable. Wait for it to exit before starting another core."
+                reason: "The previous app-supervised Assemblywright core is still running but unavailable. Wait for it to exit before starting another core."
             )
             return
         }
@@ -813,7 +813,7 @@ public final class JarvisCoreSupervisor: ObservableObject {
             activeIPCAuthorizationGeneration = nil
         }
         lastHealth = nil
-        mode = .degraded(reason: "the app-supervised Jarvis core exited unexpectedly")
+        mode = .degraded(reason: "the app-supervised Assemblywright core exited unexpectedly")
     }
 
     private func waitUntilHealthy(

@@ -1,4 +1,4 @@
-name: Jarvis Release Local Gate
+name: Assemblywright Release Local Gate
 
 on:
   pull_request:

@@ -140,7 +140,7 @@ struct JarvisMacApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("Jarvis", id: JarvisMenuBarContract.mainWindowID) {
+        WindowGroup("Assemblywright", id: JarvisMenuBarContract.mainWindowID) {
             JarvisShellView(
                 supervisor: supervisor,
                 console: console,
@@ -185,7 +185,7 @@ struct JarvisMacApp: App {
                 }
         }
         .commands {
-            CommandMenu("Jarvis") {
+            CommandMenu("Assemblywright") {
                 Button("Refresh Health") {
                     Task {
                         await supervisor.refreshHealth()
@@ -335,7 +335,7 @@ struct DeveloperBridgeStatusView: View {
 
                 if model.status.phase == .disabled {
                     Text(
-                        "Development opt-in is disabled. Set \(JarvisDeveloperBridgeProcessConfiguration.executableEnvironmentKey) to the exact separately signed helper and \(JarvisDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey) to its independently verified Apple team before launching Jarvis."
+                        "Development opt-in is disabled. Set \(JarvisDeveloperBridgeProcessConfiguration.executableEnvironmentKey) to the exact separately signed helper and \(JarvisDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey) to its independently verified Apple team before launching Assemblywright."
                     )
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -405,7 +405,7 @@ struct TrustedWakeView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     if status.attentionRequired {
-                        Text("\(status.ambiguousDispatchCount) ambiguous dispatch(es) require review; Jarvis will not retry them automatically.")
+                        Text("\(status.ambiguousDispatchCount) ambiguous dispatch(es) require review; Assemblywright will not retry them automatically.")
                             .foregroundStyle(.orange)
                     }
                 }
@@ -454,7 +454,7 @@ struct TrustedWakeView: View {
                         .foregroundStyle(.orange)
                 }
                 if let pending = model.status?.pendingKeyControl {
-                    Text("Pending \(pending.operation.rawValue) to generation \(pending.targetGeneration). The rule is quarantined disabled; Jarvis will not retry or enable it automatically.")
+                    Text("Pending \(pending.operation.rawValue) to generation \(pending.targetGeneration). The rule is quarantined disabled; Assemblywright will not retry or enable it automatically.")
                         .font(.caption)
                         .foregroundStyle(.orange)
                     HStack {
@@ -559,10 +559,10 @@ struct CoreStatusBanner: View {
             Button("Stop") {
                 Task {
                     guard await supervisor.stop() else {
-                        console.markDegraded("Jarvis core did not stop before the shutdown timeout.")
+                        console.markDegraded("Assemblywright core did not stop before the shutdown timeout.")
                         return
                     }
-                    console.markDegraded("Jarvis core was stopped from the main window.")
+                    console.markDegraded("Assemblywright core was stopped from the main window.")
                 }
             }
         }
@@ -612,10 +612,10 @@ struct CoreConsoleSynchronizationPresentation: Equatable {
             unavailableReason = reason
         case .stopped:
             shouldRefreshHealth = false
-            unavailableReason = "Jarvis core is stopped."
+            unavailableReason = "Assemblywright core is stopped."
         case .starting:
             shouldRefreshHealth = false
-            unavailableReason = "Jarvis core is still starting."
+            unavailableReason = "Assemblywright core is still starting."
         }
     }
 }
@@ -628,7 +628,7 @@ func synchronizeConsoleWithSupervisor(
 ) async {
     let presentation = CoreConsoleSynchronizationPresentation(mode: supervisor.mode)
     guard presentation.shouldRefreshHealth else {
-        console.markDegraded(presentation.unavailableReason ?? "Jarvis core is unavailable.")
+        console.markDegraded(presentation.unavailableReason ?? "Assemblywright core is unavailable.")
         modelConfiguration.applyHealth(nil)
         return
     }
@@ -673,7 +673,7 @@ struct CommandConsoleView: View {
             }
 
             HStack(spacing: 8) {
-                TextField("Ask Jarvis", text: $input)
+                TextField("Ask Assemblywright", text: $input)
                     .textFieldStyle(.roundedBorder)
                     .focused($inputFocused)
                     .onSubmit(send)
@@ -733,7 +733,7 @@ struct CommandConsoleView: View {
     private var statusBar: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Jarvis")
+                Text("Assemblywright")
                     .font(.headline)
                 Text(statusText)
                     .font(.caption)
@@ -1036,7 +1036,7 @@ struct ModelConfigurationView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Jarvis will upgrade the Homebrew-managed Ollama formula. If its Homebrew service is running, Jarvis will restart that service. Model downloads remain a separate action.")
+            Text("Assemblywright will upgrade the Homebrew-managed Ollama formula. If its Homebrew service is running, Assemblywright will restart that service. Model downloads remain a separate action.")
         }
     }
 
@@ -2085,7 +2085,7 @@ struct SchedulerJobsView: View {
             GroupBox("App-supervised automation") {
                 VStack(alignment: .leading, spacing: 8) {
                     Toggle(
-                        "Run approved scheduler jobs while Jarvis.app is open",
+                        "Run approved scheduler jobs while Assemblywright.app is open",
                         isOn: Binding(
                             get: { automation.isEnabled },
                             set: { automation.update(isEnabled: $0) }
@@ -2480,7 +2480,7 @@ struct ApprovalCenterView: View {
                             VStack(alignment: .leading, spacing: 5) {
                                 Label("Ambiguous approved execution", systemImage: "exclamationmark.triangle")
                                     .font(.subheadline)
-                                Text("A durable execution claim survived restart. An external effect may have occurred; Jarvis will not retry it automatically.")
+                                Text("A durable execution claim survived restart. An external effect may have occurred; Assemblywright will not retry it automatically.")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                 Text("execution: \(item.executionId.uuidString) | approval: \(item.approvalId.uuidString) | task: \(item.taskId.uuidString) | revision: \(item.revision) | detected: \(item.detectedAt)")
@@ -3318,7 +3318,7 @@ struct VoiceStateView: View {
     @ObservedObject var adapter: VoiceAdapterStateModel
     @ObservedObject var speechOutput: SpeechOutputStateModel
     @ObservedObject var console: CommandConsoleModel
-    @State private var speechPreview = "Jarvis voice output is ready."
+    @State private var speechPreview = "Assemblywright voice output is ready."
     private var speechOutputEvidence: SpeechOutputEvidencePresentation {
         SpeechOutputEvidencePresentation(
             statusText: speechOutput.statusText,

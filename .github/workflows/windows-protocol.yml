@@ -1,4 +1,4 @@
-name: Jarvis Windows Distributed Gate
+name: Assemblywright Windows Distributed Gate
 
 on:
   pull_request:

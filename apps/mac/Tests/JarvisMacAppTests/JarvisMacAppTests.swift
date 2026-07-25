@@ -4,7 +4,7 @@ import UserNotifications
 @testable import JarvisMacCore
 
 @MainActor
-@Suite("Jarvis Mac app release presentation")
+@Suite("Assemblywright Mac app release presentation")
 struct JarvisMacAppTests {
     @Test("Developer bridge presentation maps every read-only lifecycle state")
     func developerBridgePresentationMapsEveryLifecycleState() {
@@ -111,7 +111,7 @@ struct JarvisMacAppTests {
     @Test("Menu bar contract preserves the stable main-window route")
     func menuBarContractPreservesMainWindowRoute() {
         #expect(JarvisMenuBarContract.mainWindowID == "jarvis-main")
-        #expect(JarvisMenuBarContract.title == "Jarvis")
+        #expect(JarvisMenuBarContract.title == "Assemblywright")
     }
 
     @Test("Scheduler presentation surfaces durable notification acknowledgement failures")
@@ -159,7 +159,7 @@ struct JarvisMacAppTests {
 
     @Test("Console synchronization never probes IPC after a pre-authority failure")
     func consoleSynchronizationPreservesSupervisorFailure() {
-        let failure = "Jarvis app signature validation failed; quit and reopen Jarvis."
+        let failure = "Assemblywright app signature validation failed; quit and reopen Assemblywright."
         let available = CoreConsoleSynchronizationPresentation(mode: .available)
         let degraded = CoreConsoleSynchronizationPresentation(
             mode: .degraded(reason: failure)
@@ -171,7 +171,7 @@ struct JarvisMacAppTests {
         #expect(!degraded.shouldRefreshHealth)
         #expect(degraded.unavailableReason == failure)
         #expect(!stopped.shouldRefreshHealth)
-        #expect(stopped.unavailableReason == "Jarvis core is stopped.")
+        #expect(stopped.unavailableReason == "Assemblywright core is stopped.")
     }
 
     @Test("Model tab presentation gates start and download around installed state")
@@ -294,7 +294,7 @@ struct JarvisMacAppTests {
         let item = JarvisReleaseEvidenceStatusItem(
             key: "signed_app_zip",
             label: "Signed app zip path",
-            path: "target/distribution/Jarvis-0.1.4.zip",
+            path: "target/distribution/Assemblywright-0.1.4.zip",
             kind: "artifact",
             status: "present",
             requiredForProduction: true,
@@ -305,7 +305,7 @@ struct JarvisMacAppTests {
         let presentation = ReleaseEvidenceStatusPresentation(item: item)
 
         #expect(presentation.statusLine == "present; presence-only caveat")
-        #expect(presentation.pathLine == "Path: target/distribution/Jarvis-0.1.4.zip")
+        #expect(presentation.pathLine == "Path: target/distribution/Assemblywright-0.1.4.zip")
         #expect(presentation.detailLine == "Detail: file exists; presence only; signing, notarization, and stapling are not validated by evidence-status")
         #expect(presentation.requirementLine == "Required for production; manual evidence gate")
     }
@@ -483,7 +483,7 @@ struct JarvisMacAppTests {
         let request = JarvisSchedulerNotificationRequest(
             id: "scheduler-\(schedulerJobId.uuidString)-due_now",
             schedulerJobId: schedulerJobId,
-            title: "Jarvis scheduler job due",
+            title: "Assemblywright scheduler job due",
             body: "A scheduler job is due and ready for the app to surface.",
             notificationKind: "due_now",
             threadIdentifier: "jarvis.scheduler",
@@ -546,10 +546,10 @@ struct JarvisMacAppTests {
     func speechOutputEvidencePresentationIncludesLastSpokenText() {
         let presentation = SpeechOutputEvidencePresentation(
             statusText: "Speech output speaking.",
-            lastSpokenText: "  Jarvis status ready.  "
+            lastSpokenText: "  Assemblywright status ready.  "
         )
 
-        #expect(presentation.evidenceNoteField.contains("Observed playback for \"Jarvis status ready.\""))
+        #expect(presentation.evidenceNoteField.contains("Observed playback for \"Assemblywright status ready.\""))
         #expect(presentation.evidenceNoteField.contains("Speech output speaking."))
     }
 }

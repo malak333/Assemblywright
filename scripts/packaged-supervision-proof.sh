@@ -20,7 +20,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-APP_RESOURCES_BIN="$TMP_DIR/Jarvis.app/Contents/Resources/bin"
+APP_RESOURCES_BIN="$TMP_DIR/Assemblywright.app/Contents/Resources/bin"
 BUNDLED_CORE="$APP_RESOURCES_BIN/jarvis-cli"
 DB_PATH="$TMP_DIR/packaged-smoke.sqlite"
 SERVER_LOG="$TMP_DIR/packaged-core.log"
@@ -122,5 +122,5 @@ require_output_contains "packaged resume" "$RESUME_OUTPUT" '"paused":false'
 
 run cargo run -p jarvis-cli -- smoke
 
-printf '\nJarvis packaged supervision proof: ok (%s)\n' "$BUNDLED_CORE"
+printf '\nAssemblywright packaged supervision proof: ok (%s)\n' "$BUNDLED_CORE"
 printf 'Proof boundary: temporary packaged layout only; not signed, notarized, or a clean-profile app release.\n'

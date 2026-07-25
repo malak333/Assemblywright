@@ -3,11 +3,15 @@
 import PackageDescription
 
 let package = Package(
-    name: "JarvisMac",
+    name: "AssemblywrightMac",
     platforms: [
         .macOS(.v14)
     ],
     products: [
+        .library(name: "AssemblywrightMacCore", targets: ["JarvisMacCore"]),
+        .executable(name: "AssemblywrightMacApp", targets: ["JarvisMacApp"]),
+        .executable(name: "assemblywright-mac-bridge", targets: ["JarvisMacBridgeCLI"]),
+        // Legacy product aliases remain available during the compatibility window.
         .library(name: "JarvisMacCore", targets: ["JarvisMacCore"]),
         .executable(name: "JarvisMacApp", targets: ["JarvisMacApp"]),
         .executable(name: "jarvis-mac-bridge", targets: ["JarvisMacBridgeCLI"])

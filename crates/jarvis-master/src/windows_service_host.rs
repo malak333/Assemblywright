@@ -28,9 +28,9 @@ use windows_sys::Win32::Security::Authentication::Identity::{
 };
 use windows_sys::Win32::Security::{LookupAccountNameW, SID_NAME_USE};
 
-const SERVICE_DISPLAY_NAME: &str = "Jarvis Developer Mode Master";
+const SERVICE_DISPLAY_NAME: &str = "Assemblywright Developer Mode Master";
 const SERVICE_DESCRIPTION: &str =
-    "Headless Jarvis Developer Mode Windows master with durable reconciliation.";
+    "Headless Assemblywright Developer Mode Windows master with durable reconciliation.";
 const SERVICE_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
 const SERVICE_LOGON_RIGHT: &str = "SeServiceLogonRight";
 
@@ -61,7 +61,7 @@ pub fn run_dispatcher(config: ServiceRuntimeConfig) -> anyhow::Result<()> {
         .set(config)
         .map_err(|_| anyhow::anyhow!("Windows service runtime configuration was already set"))?;
     service_dispatcher::start(service_name, ffi_service_main)
-        .context("register Jarvis master with the Windows Service Control Manager")
+        .context("register Assemblywright master with the Windows Service Control Manager")
 }
 
 fn service_main(_arguments: Vec<OsString>) {
@@ -120,15 +120,15 @@ pub fn install(
 ) -> anyhow::Result<Value> {
     validate_service_name(service_name)?;
     let executable_path = std::env::current_exe()
-        .context("resolve the Jarvis master executable")?
+        .context("resolve the Assemblywright master executable")?
         .canonicalize()
-        .context("canonicalize the Jarvis master executable")?;
+        .context("canonicalize the Assemblywright master executable")?;
     if !executable_path.is_file() {
-        bail!("Jarvis master service executable is not a regular file");
+        bail!("Assemblywright master service executable is not a regular file");
     }
     let data_dir = data_dir
         .canonicalize()
-        .context("canonicalize the initialized Jarvis master data directory")?;
+        .context("canonicalize the initialized Assemblywright master data directory")?;
     let identity_label = account_name.unwrap_or("LocalSystem");
     let mut launch_arguments = vec![
         OsString::from("--data-dir"),
@@ -172,11 +172,11 @@ pub fn install(
         | ServiceAccess::DELETE;
     let service = manager
         .create_service(&service_info, access)
-        .context("install the Jarvis master Windows service")?;
+        .context("install the Assemblywright master Windows service")?;
     let configure = || -> anyhow::Result<()> {
         service
             .set_description(SERVICE_DESCRIPTION)
-            .context("set the Jarvis master service description")?;
+            .context("set the Assemblywright master service description")?;
         service
             .update_failure_actions(ServiceFailureActions {
                 reset_period: ServiceFailureResetPeriod::After(Duration::from_secs(24 * 60 * 60)),
@@ -201,15 +201,16 @@ pub fn install(
                     },
                 ]),
             })
-            .context("configure bounded Jarvis master service recovery")?;
+            .context("configure bounded Assemblywright master service recovery")?;
         service
             .set_failure_actions_on_non_crash_failures(true)
-            .context("enable Jarvis master recovery for non-zero service exits")?;
+            .context("enable Assemblywright master recovery for non-zero service exits")?;
         Ok(())
     };
     if let Err(error) = configure() {
         let _ = service.delete();
-        return Err(error).context("roll back incomplete Jarvis master service installation");
+        return Err(error)
+            .context("roll back incomplete Assemblywright master service installation");
     }
     if let Some(account_name) = account_name {
         if let Err(error) = ensure_service_logon_right(account_name) {
@@ -451,7 +452,7 @@ pub fn start(service_name: &str) -> anyhow::Result<Value> {
     if current.current_state == ServiceState::Stopped {
         service
             .start::<&OsStr>(&[])
-            .context("start Jarvis master service")?;
+            .context("start Assemblywright master service")?;
     }
     let status = wait_for_any_state(
         &service,
@@ -477,7 +478,9 @@ pub fn stop(service_name: &str) -> anyhow::Result<Value> {
     if current.current_state != ServiceState::Stopped
         && current.current_state != ServiceState::StopPending
     {
-        service.stop().context("stop Jarvis master service")?;
+        service
+            .stop()
+            .context("stop Assemblywright master service")?;
     }
     let status = wait_for_any_state(&service, &[ServiceState::Stopped], SERVICE_WAIT_TIMEOUT)?;
     Ok(status_receipt(
@@ -502,7 +505,7 @@ pub fn pause(service_name: &str) -> anyhow::Result<Value> {
         }
         service
             .pause()
-            .context("enter Jarvis master maintenance mode")?;
+            .context("enter Assemblywright master maintenance mode")?;
     }
     let status = wait_for_any_state(&service, &[ServiceState::Paused], SERVICE_WAIT_TIMEOUT)?;
     Ok(status_receipt(
@@ -527,7 +530,7 @@ pub fn resume(service_name: &str) -> anyhow::Result<Value> {
         }
         service
             .resume()
-            .context("exit Jarvis master maintenance mode")?;
+            .context("exit Assemblywright master maintenance mode")?;
     }
     let status = wait_for_any_state(&service, &[ServiceState::Running], SERVICE_WAIT_TIMEOUT)?;
     Ok(status_receipt(
@@ -545,10 +548,10 @@ pub fn status(service_name: &str) -> anyhow::Result<Value> {
     )?;
     let status = service
         .query_status()
-        .context("query Jarvis master service status")?;
+        .context("query Assemblywright master service status")?;
     let config = service
         .query_config()
-        .context("query Jarvis master service config")?;
+        .context("query Assemblywright master service config")?;
     Ok(
         status_receipt("service_status", service_name, &status, None)
             .as_object()
@@ -591,7 +594,7 @@ pub fn uninstall(service_name: &str) -> anyhow::Result<Value> {
             service_name,
             ServiceAccess::STOP | ServiceAccess::QUERY_STATUS | ServiceAccess::DELETE,
         )
-        .context("open the installed Jarvis master service")?;
+        .context("open the installed Assemblywright master service")?;
     let current = service
         .query_status()
         .context("query service before uninstall")?;
@@ -605,7 +608,7 @@ pub fn uninstall(service_name: &str) -> anyhow::Result<Value> {
     }
     service
         .delete()
-        .context("mark Jarvis master service for deletion")?;
+        .context("mark Assemblywright master service for deletion")?;
     drop(service);
 
     let deadline = Instant::now() + SERVICE_WAIT_TIMEOUT;
@@ -638,7 +641,7 @@ fn open_service(
         .context("open the local Windows Service Control Manager")?;
     manager
         .open_service(service_name, access)
-        .context("open the installed Jarvis master service")
+        .context("open the installed Assemblywright master service")
 }
 
 fn wait_for_any_state(
@@ -720,7 +723,7 @@ mod tests {
     fn service_name_is_bounded_and_shell_neutral() {
         assert!(validate_service_name("JarvisMaster-test_1").is_ok());
         assert!(validate_service_name("").is_err());
-        assert!(validate_service_name("Jarvis Master").is_err());
+        assert!(validate_service_name("Assemblywright Master").is_err());
         assert!(validate_service_name("JarvisMaster;Remove-Item").is_err());
         assert!(validate_service_name(&"x".repeat(65)).is_err());
     }

@@ -74,9 +74,9 @@ pub const MAX_ACTIVITY_EVENT_LIMIT: usize = 50;
 pub const IPC_BEARER_TOKEN_LENGTH: usize = 43;
 pub const IPC_BEARER_TOKEN_BYTES: usize = 32;
 const EXPECTED_MICROPHONE_USAGE_DESCRIPTION: &str =
-    "Jarvis uses microphone input only when you explicitly start local voice capture.";
+    "Assemblywright uses microphone input only when you explicitly start local voice capture.";
 const EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION: &str =
-    "Jarvis uses speech recognition only to turn your spoken command into a local assistant request.";
+    "Assemblywright uses speech recognition only to turn your spoken command into a local assistant request.";
 const LIVE_DEVICE_QA_REQUIRED_FIELDS: &[&str] = &[
     "schema_version",
     "evidence_type",
@@ -2022,7 +2022,7 @@ impl IpcState {
                 next_required_action: if candidates.is_empty() {
                     "none".to_string()
                 } else {
-                    "review candidates, then mark reviewed, restore, or purge outside Jarvis storage with operator approval".to_string()
+                    "review candidates, then mark reviewed, restore, or purge outside Assemblywright storage with operator approval".to_string()
                 },
                 automation_enabled: false,
                 value_redaction_required: true,
@@ -5784,7 +5784,7 @@ fn first_party_plugin_request(input: &str) -> Option<PluginCallRequest> {
 
     if matches!(
         trimmed,
-        "plugin status" | "core status" | "jarvis status" | "status"
+        "plugin status" | "core status" | "assemblywright status" | "status"
     ) {
         #[cfg(test)]
         let plugin_id = "fake_status";
@@ -7386,7 +7386,7 @@ fn release_live_device_runbook_from(
                 .to_string(),
             "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' in target/release-live-device-qa.env before collecting command evidence"
                 .to_string(),
-            "Launch Jarvis with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true for this operator evidence session, then confirm JARVIS_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path before IPC commands"
+            "Launch Assemblywright with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true for this operator evidence session, then confirm JARVIS_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path before IPC commands"
                 .to_string(),
             "cargo run -p jarvis-cli -- command \"status check\" --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\" --json"
                 .to_string(),
@@ -7404,7 +7404,7 @@ fn release_live_device_runbook_from(
         manual_checks: vec![
             "Install the signed, notarized package into /Applications on a clean Mac profile."
                 .to_string(),
-            "Launch Jarvis through Finder or LaunchServices.".to_string(),
+            "Launch Assemblywright through Finder or LaunchServices.".to_string(),
             "Verify microphone and Speech permission prompts during live voice capture.".to_string(),
             "Speak the test phrase and confirm the observed transcript reaches the command path."
                 .to_string(),
@@ -7449,7 +7449,7 @@ fn release_signed_distribution_runbook_from(
                 .to_string(),
             "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks"
                 .to_string(),
-            "Launch Jarvis with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks"
+            "Launch Assemblywright with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks"
                 .to_string(),
             "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
                 .to_string(),
@@ -7461,7 +7461,7 @@ fn release_signed_distribution_runbook_from(
                 .to_string(),
             "Run the full package-distribution lane and preserve the signed zip, signed installer package, signed provenance report, and notarytool logs referenced by that report."
                 .to_string(),
-            "Confirm the signed installer package metadata still targets the Jarvis package identifier, release version, and /Applications install location."
+            "Confirm the signed installer package metadata still targets the Assemblywright package identifier, release version, and /Applications install location."
                 .to_string(),
             "Confirm the signed app zip and installer package are notarized and stapled before clean-profile installation."
                 .to_string(),
@@ -7495,7 +7495,7 @@ fn release_plugin_trust_runbook_from(
                 .to_string(),
             "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks"
                 .to_string(),
-            "Launch Jarvis with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks"
+            "Launch Assemblywright with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks"
                 .to_string(),
             "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
                 .to_string(),
@@ -7559,7 +7559,7 @@ fn release_evidence_bundle_runbook_from(
             "./scripts/release-evidence-doctor.sh --assert-complete".to_string(),
             "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks"
                 .to_string(),
-            "Launch Jarvis with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks"
+            "Launch Assemblywright with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks"
                 .to_string(),
             "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
                 .to_string(),
@@ -7608,14 +7608,17 @@ fn release_evidence_status_from_env_with_repository(
     let version = std::env::var("JARVIS_EVIDENCE_VERSION")
         .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string());
     let dist_dir = env_path("JARVIS_EVIDENCE_DIST_DIR", "target/distribution");
-    let app_path = env_path_or("JARVIS_EVIDENCE_APP_PATH", dist_dir.join("Jarvis.app"));
+    let app_path = env_path_or(
+        "JARVIS_EVIDENCE_APP_PATH",
+        dist_dir.join("Assemblywright.app"),
+    );
     let zip_path = env_path_or(
         "JARVIS_EVIDENCE_ZIP_PATH",
-        dist_dir.join(format!("Jarvis-{version}.zip")),
+        dist_dir.join(format!("Assemblywright-{version}.zip")),
     );
     let pkg_path = env_path_or(
         "JARVIS_EVIDENCE_PKG_PATH",
-        dist_dir.join(format!("Jarvis-{version}.pkg")),
+        dist_dir.join(format!("Assemblywright-{version}.pkg")),
     );
     let live_qa_report = env_path_alias(
         "JARVIS_EVIDENCE_LIVE_QA_REPORT",
@@ -7633,7 +7636,7 @@ fn release_evidence_status_from_env_with_repository(
     );
     let signed_provenance_report = env_path_or(
         "JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT",
-        dist_dir.join(format!("Jarvis-{version}-signed-provenance.json")),
+        dist_dir.join(format!("Assemblywright-{version}-signed-provenance.json")),
     );
 
     let bundle_digest_paths = ReleaseEvidenceBundleDigestPaths {
@@ -8048,7 +8051,7 @@ fn inspect_release_bundled_core(path: &FsPath) -> (ReleaseEvidenceItemStatus, St
             )
         }
     };
-    let expected_version = format!("jarvis {}", expected_release_evidence_version());
+    let expected_version = format!("assemblywright {}", expected_release_evidence_version());
     if version.trim() != expected_version {
         return (
             ReleaseEvidenceItemStatus::Invalid,
@@ -8230,7 +8233,7 @@ fn validate_live_device_qa_report(
     require_json_string_value(value, "app_bundle.short_version", &expected_version)?;
     require_json_string_value(value, "app_bundle.build_version", &expected_version)?;
     let expected_installed_app_path = std::env::var("JARVIS_QA_INSTALLED_APP_PATH")
-        .unwrap_or_else(|_| "/Applications/Jarvis.app".to_string());
+        .unwrap_or_else(|_| "/Applications/Assemblywright.app".to_string());
     require_json_string_value(value, "installed_app_path", &expected_installed_app_path)?;
     require_json_string_value(
         value,
@@ -8251,7 +8254,7 @@ fn validate_live_device_qa_report(
     require_json_string_value(
         value,
         "bundled_core.version",
-        &format!("jarvis {expected_version}"),
+        &format!("assemblywright {expected_version}"),
     )?;
     require_json_sha256_value(value, "bundled_core.sha256")?;
     for field in [
@@ -8633,7 +8636,7 @@ fn validate_signed_distribution_provenance(value: &serde_json::Value) -> Result<
     require_json_string_value(value, "version", &expected_release_evidence_version())?;
     let expected_app_path = env_path_or(
         "JARVIS_EVIDENCE_APP_PATH",
-        env_path("JARVIS_EVIDENCE_DIST_DIR", "target/distribution").join("Jarvis.app"),
+        env_path("JARVIS_EVIDENCE_DIST_DIR", "target/distribution").join("Assemblywright.app"),
     );
     require_json_string_value(
         value,
@@ -8655,7 +8658,7 @@ fn validate_signed_distribution_provenance(value: &serde_json::Value) -> Result<
     require_json_string_value(
         value,
         "artifacts.bundled_core_version",
-        &format!("jarvis {}", expected_release_evidence_version()),
+        &format!("assemblywright {}", expected_release_evidence_version()),
     )?;
     require_json_string_value(
         value,
@@ -9473,7 +9476,7 @@ fn release_verification_commands() -> Vec<String> {
         "./scripts/release-live-device-qa.sh --check".to_string(),
         "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env".to_string(),
         "set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
-        "JARVIS_QA_CLEAN_PROFILE_VALIDATED=true JARVIS_QA_FINDER_LAUNCH_VALIDATED=true JARVIS_QA_MICROPHONE_VALIDATED=true JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true JARVIS_QA_NOTIFICATION_VALIDATED=true JARVIS_QA_RESTART_VALIDATED=true JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true JARVIS_QA_OWNER_NAME='Release Operator' JARVIS_QA_DEVICE_LABEL='Clean-profile release Mac' JARVIS_QA_PROFILE_LABEL='Clean macOS QA profile' JARVIS_QA_VOICE_CHECK_STARTED_AT='2026-05-22T16:00:00Z' JARVIS_QA_VOICE_CHECK_COMPLETED_AT='2026-05-22T16:05:00Z' JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE='Clean profile install observed' JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE='Finder launch observed' JARVIS_QA_MICROPHONE_EVIDENCE_NOTE='Microphone prompt and capture observed' JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE='Speech prompt and recognition observed' JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE='Spoken transcript reached the command path' JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE='Speech output playback observed' JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE='Scheduler notification observed' JARVIS_QA_NOTIFICATION_KIND='due_now' JARVIS_QA_NOTIFICATION_TITLE='Scheduler job ready: release verification' JARVIS_QA_NOTIFICATION_BODY='A scheduled Jarvis job is due now.' JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER='jarvis.scheduler' JARVIS_QA_NOTIFICATION_OBSERVED_AT='2026-05-22T16:04:00Z' JARVIS_QA_RESTART_EVIDENCE_NOTE='Restart recovery observed' JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE='Manual release QA surfaces observed' JARVIS_QA_VOICE_TEST_PHRASE='Jarvis status check' JARVIS_QA_OBSERVED_TRANSCRIPT='Jarvis status check' JARVIS_QA_EXPECTED_COMMAND_TEXT='status check' JARVIS_QA_OBSERVED_COMMAND_TEXT='status check' JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid-from-live-command>' JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL='Built-in speakers' ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
+        "JARVIS_QA_CLEAN_PROFILE_VALIDATED=true JARVIS_QA_FINDER_LAUNCH_VALIDATED=true JARVIS_QA_MICROPHONE_VALIDATED=true JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true JARVIS_QA_NOTIFICATION_VALIDATED=true JARVIS_QA_RESTART_VALIDATED=true JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true JARVIS_QA_OWNER_NAME='Release Operator' JARVIS_QA_DEVICE_LABEL='Clean-profile release Mac' JARVIS_QA_PROFILE_LABEL='Clean macOS QA profile' JARVIS_QA_VOICE_CHECK_STARTED_AT='2026-05-22T16:00:00Z' JARVIS_QA_VOICE_CHECK_COMPLETED_AT='2026-05-22T16:05:00Z' JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE='Clean profile install observed' JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE='Finder launch observed' JARVIS_QA_MICROPHONE_EVIDENCE_NOTE='Microphone prompt and capture observed' JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE='Speech prompt and recognition observed' JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE='Spoken transcript reached the command path' JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE='Speech output playback observed' JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE='Scheduler notification observed' JARVIS_QA_NOTIFICATION_KIND='due_now' JARVIS_QA_NOTIFICATION_TITLE='Scheduler job ready: release verification' JARVIS_QA_NOTIFICATION_BODY='A scheduled Assemblywright job is due now.' JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER='jarvis.scheduler' JARVIS_QA_NOTIFICATION_OBSERVED_AT='2026-05-22T16:04:00Z' JARVIS_QA_RESTART_EVIDENCE_NOTE='Restart recovery observed' JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE='Manual release QA surfaces observed' JARVIS_QA_VOICE_TEST_PHRASE='Assemblywright status check' JARVIS_QA_OBSERVED_TRANSCRIPT='Assemblywright status check' JARVIS_QA_EXPECTED_COMMAND_TEXT='status check' JARVIS_QA_OBSERVED_COMMAND_TEXT='status check' JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid-from-live-command>' JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL='Built-in speakers' ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
         "cargo run -p jarvis-cli -- release plugin-trust-runbook".to_string(),
         "./scripts/release-plugin-trust-qa.sh --check".to_string(),
         "./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env".to_string(),
@@ -9628,7 +9631,7 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "release_evidence_status",
             "implemented",
-            "`/release/evidence-status` and `jarvis release evidence-status` expose structured present, missing, or invalid status for standard signed artifacts, QA reports, and final evidence bundle paths, including app bundle metadata and approved privacy prompt copy matching, bundled core version-marker matching, signed-provenance core path/version/digest binding, signed-provenance artifact digest matching, live-device QA bundle/version/non-future timestamp and repository-backed command-result evidence checks, plugin-trust release-version, non-future timestamp, owner-review-source, host-egress policy and deny/allow fixture checks, and final-bundle path/digest/local-signature/archive-URI validation plus child-report semantic revalidation, with Rust, CLI E2E, and Swift model coverage.",
+            "`/release/evidence-status` and `assemblywright release evidence-status` expose structured present, missing, or invalid status for standard signed artifacts, QA reports, and final evidence bundle paths, including app bundle metadata and approved privacy prompt copy matching, bundled core version-marker matching, signed-provenance core path/version/digest binding, signed-provenance artifact digest matching, live-device QA bundle/version/non-future timestamp and repository-backed command-result evidence checks, plugin-trust release-version, non-future timestamp, owner-review-source, host-egress policy and deny/allow fixture checks, and final-bundle path/digest/local-signature/archive-URI validation plus child-report semantic revalidation, with Rust, CLI E2E, and Swift model coverage.",
             "Read-only file/report inventory plus report semantic validation only; it does not sign, notarize, staple, install, Finder-launch, execute release artifacts, run live-device QA, review marketplace trust, scan malware, or enforce OS sandboxing.",
         ),
         feature(
@@ -10795,7 +10798,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
     #[test]
     fn release_evidence_app_bundle_requires_matching_info_plist_metadata() {
         let temp_dir = tempfile::tempdir().expect("temp app bundle");
-        let app_dir = temp_dir.path().join("Jarvis.app");
+        let app_dir = temp_dir.path().join("Assemblywright.app");
         let contents_dir = app_dir.join("Contents");
         std::fs::create_dir_all(&contents_dir).expect("create Contents dir");
 
@@ -10849,9 +10852,9 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
   <key>CFBundleVersion</key>
   <string>0.1.4</string>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Jarvis uses microphone input only when you explicitly start local voice capture.</string>
+  <string>Assemblywright uses microphone input only when you explicitly start local voice capture.</string>
   <key>NSSpeechRecognitionUsageDescription</key>
-  <string>Jarvis uses speech recognition only to turn your spoken command into a local assistant request.</string>
+  <string>Assemblywright uses speech recognition only to turn your spoken command into a local assistant request.</string>
 </dict>
 </plist>
 "#,
@@ -10874,9 +10877,9 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
   <key>CFBundleVersion</key>
   <string>0.1.4</string>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Jarvis microphone fixture</string>
+  <string>Assemblywright microphone fixture</string>
   <key>NSSpeechRecognitionUsageDescription</key>
-  <string>Jarvis uses speech recognition only to turn your spoken command into a local assistant request.</string>
+  <string>Assemblywright uses speech recognition only to turn your spoken command into a local assistant request.</string>
 </dict>
 </plist>
 "#,
@@ -10899,9 +10902,9 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
   <key>CFBundleVersion</key>
   <string>0.1.4</string>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Jarvis uses microphone input only when you explicitly start local voice capture.</string>
+  <string>Assemblywright uses microphone input only when you explicitly start local voice capture.</string>
   <key>NSSpeechRecognitionUsageDescription</key>
-  <string>Jarvis speech fixture</string>
+  <string>Assemblywright speech fixture</string>
 </dict>
 </plist>
 "#,
@@ -10934,7 +10937,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
 
         std::fs::write(
             core_path.with_file_name("jarvis-cli.version"),
-            "jarvis 0.0.0\n",
+            "assemblywright 0.0.0\n",
         )
         .expect("write stale version marker");
         let (stale_status, stale_detail) = inspect_release_bundled_core(&core_path);
@@ -10944,7 +10947,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
 
         std::fs::write(
             core_path.with_file_name("jarvis-cli.version"),
-            format!("jarvis {}\n", env!("CARGO_PKG_VERSION")),
+            format!("assemblywright {}\n", env!("CARGO_PKG_VERSION")),
         )
         .expect("write matching version marker");
         let (present_status, present_detail) = inspect_release_bundled_core(&core_path);
@@ -10959,8 +10962,8 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         use std::os::unix::fs::PermissionsExt;
 
         let temp_dir = tempfile::tempdir().expect("temp release evidence path dir");
-        let app_dir = temp_dir.path().join("Jarvis.app");
-        let app_zip = temp_dir.path().join("Jarvis.app.zip");
+        let app_dir = temp_dir.path().join("Assemblywright.app");
+        let app_zip = temp_dir.path().join("Assemblywright.app.zip");
         let executable = temp_dir.path().join("jarvis");
         std::fs::create_dir(&app_dir).expect("create app dir");
         std::fs::write(&app_zip, "placeholder zip").expect("write app zip");
@@ -11015,7 +11018,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             "evidence_type": "owner_recorded_live_device_qa",
             "self_test_fixture": false,
             "generated_at": "2026-05-22T16:06:00Z",
-            "installed_app_path": "/Applications/Jarvis.app",
+            "installed_app_path": "/Applications/Assemblywright.app",
             "validation_flags": {
                 "clean_profile": true,
                 "finder_launch": true,
@@ -11042,19 +11045,19 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
                 "speech_recognition_usage_description": EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION
             },
             "app_executable": {
-                "executable_path": "/Applications/Jarvis.app/Contents/MacOS/JarvisMacApp",
+                "executable_path": "/Applications/Assemblywright.app/Contents/MacOS/JarvisMacApp",
                 "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
                 "code_identifier": "com.nobiletechnology.jarvis",
                 "team_identifier": "9VZ742YKV4",
                 "cdhash": "0123456789abcdef0123456789abcdef01234567"
             },
             "signed_provenance": {
-                "report_path": "target/distribution/Jarvis-0.1.4-signed-provenance.json",
+                "report_path": "target/distribution/Assemblywright-0.1.4-signed-provenance.json",
                 "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
             },
             "bundled_core": {
-                "executable_path": "/Applications/Jarvis.app/Contents/Resources/bin/jarvis-cli",
-                "version": "jarvis 0.1.4",
+                "executable_path": "/Applications/Assemblywright.app/Contents/Resources/bin/jarvis-cli",
+                "version": "assemblywright 0.1.4",
                 "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
             },
             "owner_recorded_live_voice_evidence": {
@@ -11079,13 +11082,13 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             "notification_observation": {
                 "kind": "due_now",
                 "title": "Scheduler job ready: Release reminder",
-                "body": "A scheduled Jarvis job is due now.",
+                "body": "A scheduled Assemblywright job is due now.",
                 "thread_identifier": "jarvis.scheduler",
                 "observed_at": "2026-05-22T16:04:00Z"
             },
             "voice_command_observation": {
-                "test_phrase": "Jarvis status check.",
-                "observed_transcript": "Jarvis status check.",
+                "test_phrase": "Assemblywright status check.",
+                "observed_transcript": "Assemblywright status check.",
                 "expected_command_text": "status check",
                 "observed_command_text": "status check",
                 "command_result_evidence_id": "task:00000000-0000-4000-8000-000000000001",
@@ -11218,19 +11221,19 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             "generated_at": "2026-05-22T17:00:00Z",
             "version": "0.1.4",
             "artifacts": {
-                "app_path": "target/distribution/Jarvis.app",
-                "zip_path": "target/distribution/Jarvis-0.1.4.zip",
-                "pkg_path": "target/distribution/Jarvis-0.1.4.pkg",
+                "app_path": "target/distribution/Assemblywright.app",
+                "zip_path": "target/distribution/Assemblywright-0.1.4.zip",
+                "pkg_path": "target/distribution/Assemblywright-0.1.4.pkg",
                 "zip_sha256": digest,
                 "pkg_sha256": digest,
-                "app_executable_path": "target/distribution/Jarvis.app/Contents/MacOS/JarvisMacApp",
+                "app_executable_path": "target/distribution/Assemblywright.app/Contents/MacOS/JarvisMacApp",
                 "app_executable_sha256": digest,
-                "bundled_core_path": "target/distribution/Jarvis.app/Contents/Resources/bin/jarvis-cli",
+                "bundled_core_path": "target/distribution/Assemblywright.app/Contents/Resources/bin/jarvis-cli",
                 "bundled_core_sha256": digest,
-                "bundled_core_version": "jarvis 0.1.4"
+                "bundled_core_version": "assemblywright 0.1.4"
             },
             "reports": {
-                "signed_distribution_provenance_report": "target/distribution/Jarvis-0.1.4-signed-provenance.json",
+                "signed_distribution_provenance_report": "target/distribution/Assemblywright-0.1.4-signed-provenance.json",
                 "live_device_qa_report": "target/release-live-device-qa-report.json",
                 "plugin_trust_qa_report": "target/release-plugin-trust-qa-report.json",
                 "signed_distribution_provenance_sha256": digest,
@@ -11335,7 +11338,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
     #[test]
     fn live_device_qa_report_rejects_wrong_installed_app_path() {
         let mut report = valid_live_device_qa_report_json();
-        report["installed_app_path"] = json!("/tmp/Jarvis.app");
+        report["installed_app_path"] = json!("/tmp/Assemblywright.app");
         let (status, detail) = inspect_live_device_qa_report_value(report);
         assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
         assert!(detail.contains("installed_app_path"), "{detail}");
@@ -11363,7 +11366,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
     #[test]
     fn live_device_qa_report_rejects_stale_bundled_core_binding() {
         let mut report = valid_live_device_qa_report_json();
-        report["bundled_core"]["version"] = json!("jarvis 9.9.9");
+        report["bundled_core"]["version"] = json!("assemblywright 9.9.9");
         let (status, detail) = inspect_live_device_qa_report_value(report);
         assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
         assert!(detail.contains("bundled_core.version"), "{detail}");
@@ -11456,12 +11459,12 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             (
                 "app_bundle.microphone_usage_description",
                 ["app_bundle", "microphone_usage_description"],
-                "Jarvis microphone fixture",
+                "Assemblywright microphone fixture",
             ),
             (
                 "app_bundle.speech_recognition_usage_description",
                 ["app_bundle", "speech_recognition_usage_description"],
-                "Jarvis speech fixture",
+                "Assemblywright speech fixture",
             ),
         ] {
             let mut report = valid_live_device_qa_report_json();
@@ -11651,7 +11654,8 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
     #[test]
     fn live_device_qa_report_rejects_mismatched_observed_transcript() {
         let mut report = valid_live_device_qa_report_json();
-        report["voice_command_observation"]["observed_transcript"] = json!("Jarvis stats check.");
+        report["voice_command_observation"]["observed_transcript"] =
+            json!("Assemblywright stats check.");
         let (status, detail) = inspect_live_device_qa_report_value(report);
         assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
         assert!(detail.contains("observed_transcript"), "{detail}");
@@ -12226,7 +12230,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .lock()
             .expect("release evidence artifact fixture lock");
         let temp_dir = tempfile::tempdir().expect("temp release evidence");
-        let app_path = PathBuf::from("target/distribution/Jarvis.app");
+        let app_path = PathBuf::from("target/distribution/Assemblywright.app");
         let app_executable_path = app_path.join("Contents/MacOS/JarvisMacApp");
         let bundled_core_path = app_path.join("Contents/Resources/bin/jarvis-cli");
         std::fs::create_dir_all(app_executable_path.parent().expect("app executable parent"))
@@ -12237,9 +12241,11 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .expect("write app executable artifact");
         std::fs::write(&bundled_core_path, "current bundled core")
             .expect("write bundled core artifact");
-        let zip_file = temp_dir.path().join("Jarvis-0.1.4.zip");
-        let pkg_file = temp_dir.path().join("Jarvis-0.1.4.pkg");
-        let signed_file = temp_dir.path().join("Jarvis-0.1.4-signed-provenance.json");
+        let zip_file = temp_dir.path().join("Assemblywright-0.1.4.zip");
+        let pkg_file = temp_dir.path().join("Assemblywright-0.1.4.pkg");
+        let signed_file = temp_dir
+            .path()
+            .join("Assemblywright-0.1.4-signed-provenance.json");
         let live_file = temp_dir.path().join("release-live-device-qa-report.json");
         let plugin_file = temp_dir.path().join("release-plugin-trust-qa-report.json");
         let app_notary_log = temp_dir.path().join("app-notarytool.log");
@@ -12346,7 +12352,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .lock()
             .expect("release evidence artifact fixture lock");
         let temp_dir = tempfile::tempdir().expect("temp release evidence");
-        let app_path = PathBuf::from("target/distribution/Jarvis.app");
+        let app_path = PathBuf::from("target/distribution/Assemblywright.app");
         let app_executable_path = app_path.join("Contents/MacOS/JarvisMacApp");
         let bundled_core_path = app_path.join("Contents/Resources/bin/jarvis-cli");
         std::fs::create_dir_all(app_executable_path.parent().expect("app executable parent"))
@@ -12357,9 +12363,11 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             .expect("write app executable artifact");
         std::fs::write(&bundled_core_path, "current bundled core")
             .expect("write bundled core artifact");
-        let zip_file = temp_dir.path().join("Jarvis-0.1.4.zip");
-        let pkg_file = temp_dir.path().join("Jarvis-0.1.4.pkg");
-        let signed_file = temp_dir.path().join("Jarvis-0.1.4-signed-provenance.json");
+        let zip_file = temp_dir.path().join("Assemblywright-0.1.4.zip");
+        let pkg_file = temp_dir.path().join("Assemblywright-0.1.4.pkg");
+        let signed_file = temp_dir
+            .path()
+            .join("Assemblywright-0.1.4-signed-provenance.json");
         let live_file = temp_dir.path().join("release-live-device-qa-report.json");
         let plugin_file = temp_dir.path().join("release-plugin-trust-qa-report.json");
         let app_notary_log = temp_dir.path().join("app-notarytool.log");
@@ -12494,27 +12502,27 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             "version": "0.1.4",
             "bundle_identifier": "com.nobiletechnology.jarvis",
             "artifacts": {
-                "app_path": "target/distribution/Jarvis.app",
-                "zip_path": "target/distribution/Jarvis-0.1.4.zip",
-                "pkg_path": "target/distribution/Jarvis-0.1.4.pkg",
+                "app_path": "target/distribution/Assemblywright.app",
+                "zip_path": "target/distribution/Assemblywright-0.1.4.zip",
+                "pkg_path": "target/distribution/Assemblywright-0.1.4.pkg",
                 "zip_sha256": digest,
                 "pkg_sha256": digest,
-                "app_executable_path": "target/distribution/Jarvis.app/Contents/MacOS/JarvisMacApp",
+                "app_executable_path": "target/distribution/Assemblywright.app/Contents/MacOS/JarvisMacApp",
                 "app_executable_sha256": digest,
-                "bundled_core_path": "target/distribution/Jarvis.app/Contents/Resources/bin/jarvis-cli",
+                "bundled_core_path": "target/distribution/Assemblywright.app/Contents/Resources/bin/jarvis-cli",
                 "bundled_core_sha256": digest,
-                "bundled_core_version": "jarvis 0.1.4"
+                "bundled_core_version": "assemblywright 0.1.4"
             },
             "signing": {
-                "developer_id_application_identity": "Developer ID Application: Jarvis QA Fixture",
-                "developer_id_installer_identity": "Developer ID Installer: Jarvis QA Fixture",
-                "app_bundle_codesign": "Authority=Developer ID Application: Jarvis QA Fixture",
-                "app_executable_codesign": "Authority=Developer ID Application: Jarvis QA Fixture",
+                "developer_id_application_identity": "Developer ID Application: Assemblywright QA Fixture",
+                "developer_id_installer_identity": "Developer ID Installer: Assemblywright QA Fixture",
+                "app_bundle_codesign": "Authority=Developer ID Application: Assemblywright QA Fixture",
+                "app_executable_codesign": "Authority=Developer ID Application: Assemblywright QA Fixture",
                 "app_executable_identifier": "com.nobiletechnology.jarvis",
                 "app_executable_team_identifier": "9VZ742YKV4",
                 "app_executable_cdhash": "0123456789abcdef0123456789abcdef01234567",
-                "bundled_core_codesign": "Authority=Developer ID Application: Jarvis QA Fixture",
-                "installer_pkg_signature": "Developer ID Installer: Jarvis QA Fixture"
+                "bundled_core_codesign": "Authority=Developer ID Application: Assemblywright QA Fixture",
+                "installer_pkg_signature": "Developer ID Installer: Assemblywright QA Fixture"
             },
             "notarization": {
                 "app_zip_submission_id": "00000000-0000-4000-8000-000000000001",
@@ -12620,7 +12628,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
     #[test]
     fn signed_distribution_provenance_rejects_wrong_bundled_core_version() {
         let mut report = valid_signed_distribution_provenance_json();
-        report["artifacts"]["bundled_core_version"] = json!("jarvis 9.9.9");
+        report["artifacts"]["bundled_core_version"] = json!("assemblywright 9.9.9");
         let (status, detail) = inspect_signed_distribution_provenance_value(report);
         assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
         assert!(
@@ -12633,7 +12641,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
     fn signed_distribution_provenance_rejects_non_developer_id_identity() {
         let mut report = valid_signed_distribution_provenance_json();
         report["signing"]["developer_id_application_identity"] =
-            json!("Apple Development: Jarvis QA Fixture");
+            json!("Apple Development: Assemblywright QA Fixture");
         let (status, detail) = inspect_signed_distribution_provenance_value(report);
         assert_eq!(status, ReleaseEvidenceItemStatus::Invalid);
         assert!(
@@ -12884,7 +12892,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
         let signed_provenance_item = ReleaseEvidenceStatusItem {
             key: "signed_distribution_provenance_report".to_string(),
             label: "Signed-distribution provenance report".to_string(),
-            path: "target/distribution/Jarvis-0.1.4-signed-provenance.json".to_string(),
+            path: "target/distribution/Assemblywright-0.1.4-signed-provenance.json".to_string(),
             kind: ReleaseEvidenceKind::JsonReport,
             status: ReleaseEvidenceItemStatus::Present,
             required_for_production: true,
@@ -14485,7 +14493,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             name: "Local Runner Test".to_string(),
             version: "0.1.0".to_string(),
             source: crate::PluginSource::LocalDevelopment,
-            author: "Jarvis Test".to_string(),
+            author: "Assemblywright Test".to_string(),
             source_path: Some(source_path.to_string()),
             subprocess: None,
             wasm: None,
@@ -14526,7 +14534,7 @@ json.dump({"path": request["input"]["path"]}, sys.stdout)
             name: "Local Runner Test".to_string(),
             version: "0.1.0".to_string(),
             source: crate::PluginSource::LocalSubprocess,
-            author: "Jarvis Test".to_string(),
+            author: "Assemblywright Test".to_string(),
             source_path: Some(source_path.to_string()),
             subprocess: Some(crate::PluginSubprocessManifest {
                 command: "plugin-runner.py".to_string(),

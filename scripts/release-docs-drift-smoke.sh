@@ -8,8 +8,10 @@ LOCAL_GATE="scripts/release-local.sh"
 BUILD_DOCS="docs/build-test-commands.md"
 CHECKLIST="docs/release-checklist.md"
 ARCHITECTURE="docs/architecture-map.md"
-KB="docs/knowledge-base/jarvis-project-facts.md"
+KB="docs/knowledge-base/assemblywright-project-facts.md"
 README="README.md"
+BRAND="docs/brand.md"
+LICENSE_FILE="LICENSE"
 CORE_IPC="crates/jarvis-core/src/ipc.rs"
 IPC_TRANSPORT="crates/jarvis-core/src/ipc_transport.rs"
 DESIGN="DESIGN.md"
@@ -85,6 +87,8 @@ require_file "$CHECKLIST"
 require_file "$ARCHITECTURE"
 require_file "$KB"
 require_file "$README"
+require_file "$BRAND"
+require_file "$LICENSE_FILE"
 require_file "$CORE_IPC"
 require_file "$IPC_TRANSPORT"
 require_file "$DESIGN"
@@ -122,6 +126,14 @@ require_file "$MAC_CORE_TESTS"
 require_file "$MAC_BRIDGE_LIVE_E2E"
 require_file "$WINDOWS_FIXTURE_LIVE_CONTROL"
 require_file "$WINDOWS_MLX_LIVE_CONTROL"
+
+require_text "README product name" "$README" "# Assemblywright"
+require_text "README Apache license" "$README" "Apache License 2.0"
+require_text "brand primary tagline" "$BRAND" "Orchestrated intelligence. Verified software."
+require_text "brand public CLI" "$BRAND" 'public CLI entry point is `assemblywright`'
+require_text "brand compatibility boundary" "$BRAND" '`EXPORTER-Jarvis-Developer-Mode-v1`'
+require_text "Apache license title" "$LICENSE_FILE" "Apache License"
+require_text "Apache license version" "$LICENSE_FILE" "Version 2.0, January 2004"
 
 for file in "$BUILD_DOCS" "$ARCHITECTURE" "$KB" "$README"; do
   require_text "distributed protocol crate" "$file" "jarvis-protocol"
@@ -475,9 +487,9 @@ require_text "architecture current readiness commit" "$ARCHITECTURE" '`main` com
 require_text "architecture current readiness run" "$ARCHITECTURE" '29344743720'
 require_text "architecture current readiness job" "$ARCHITECTURE" '87125361398'
 require_text "architecture current readiness refresh command" "$ARCHITECTURE" 'cargo run -p jarvis-cli -- release readiness --json'
-require_text "architecture current readiness refresh command" "$ARCHITECTURE" 'gh run list --branch main --workflow "Jarvis Release Local Gate"'
-require_text "architecture microphone privacy prompt" "$ARCHITECTURE" 'Jarvis uses microphone input only when you explicitly start local voice capture.'
-require_text "architecture Speech privacy prompt" "$ARCHITECTURE" 'Jarvis uses speech recognition only to turn your spoken command into a local assistant request.'
+require_text "architecture current readiness refresh command" "$ARCHITECTURE" 'gh run list --branch main --workflow "Assemblywright Release Local Gate"'
+require_text "architecture microphone privacy prompt" "$ARCHITECTURE" 'Assemblywright uses microphone input only when you explicitly start local voice capture.'
+require_text "architecture Speech privacy prompt" "$ARCHITECTURE" 'Assemblywright uses speech recognition only to turn your spoken command into a local assistant request.'
 forbid_text "architecture stale readiness commit" "$ARCHITECTURE" '`main` commit `051ec49`'
 forbid_text "architecture stale readiness run" "$ARCHITECTURE" '28041417362'
 forbid_text "architecture stale readiness job" "$ARCHITECTURE" '83008348690'
@@ -511,9 +523,9 @@ require_text "knowledge base current readiness baseline" "$KB" 'latest verified 
 require_text "knowledge base current readiness run" "$KB" '29344743720'
 require_text "knowledge base current readiness job" "$KB" '87125361398'
 require_text "knowledge base current readiness refresh command" "$KB" 'cargo run -p jarvis-cli -- release readiness --json'
-require_text "knowledge base current readiness refresh command" "$KB" 'gh run list --branch main --workflow "Jarvis Release Local Gate"'
-require_text "knowledge base microphone privacy prompt" "$KB" 'Jarvis uses microphone input only when you explicitly start local voice capture.'
-require_text "knowledge base Speech privacy prompt" "$KB" 'Jarvis uses speech recognition only to turn your spoken command into a local assistant request.'
+require_text "knowledge base current readiness refresh command" "$KB" 'gh run list --branch main --workflow "Assemblywright Release Local Gate"'
+require_text "knowledge base microphone privacy prompt" "$KB" 'Assemblywright uses microphone input only when you explicitly start local voice capture.'
+require_text "knowledge base Speech privacy prompt" "$KB" 'Assemblywright uses speech recognition only to turn your spoken command into a local assistant request.'
 forbid_text "knowledge base stale readiness baseline" "$KB" 'latest verified main baseline at `051ec49`'
 forbid_text "knowledge base stale readiness run" "$KB" '28041417362'
 forbid_text "knowledge base stale readiness job" "$KB" '83008348690'
@@ -608,4 +620,4 @@ require_text "architecture target app identity binding" "$ARCHITECTURE" "point-i
 require_text "knowledge base app identity binding" "$KB" "Signed distribution and live-device evidence are now joined by the exact app"
 require_text "core release proof boundary app identity" "$CORE_IPC" "exact app-executable SHA-256/code-identity"
 
-printf 'Jarvis release docs drift smoke: ok\n'
+printf 'Assemblywright release docs drift smoke: ok\n'

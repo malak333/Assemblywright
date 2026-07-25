@@ -61,9 +61,9 @@ const MAINTENANCE_MARKER_FILE: &str = "maintenance-mode.json";
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "jarvis-master",
+    name = "assemblywright-master",
     version,
-    about = "Headless Windows master foundation for Jarvis Developer Mode"
+    about = "Headless Windows master foundation for Assemblywright Developer Mode"
 )]
 struct Cli {
     /// Master state directory. Defaults to %LOCALAPPDATA%\Jarvis\master on Windows.
@@ -748,7 +748,7 @@ fn run_windows_service_runtime(
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .context("create the Jarvis master service runtime")?;
+        .context("create the Assemblywright master service runtime")?;
     let lifecycle = RuntimeLifecycle::load(
         &config.data_dir,
         "windows_service",
@@ -828,7 +828,7 @@ fn run_windows_service_runtime(
                         0,
                         Duration::default(),
                     ))
-                    .context("report the ready Jarvis master service state")
+                    .context("report the ready Assemblywright master service state")
             },
         );
         serve_runtime(
@@ -1422,9 +1422,9 @@ fn parse_device_certificate(certificate_der: &[u8]) -> anyhow::Result<(DeviceId,
         });
     let device_id = device_ids
         .next()
-        .context("enrolled device certificate omitted its Jarvis device URI")?;
+        .context("enrolled device certificate omitted its legacy Jarvis device URI")?;
     if device_ids.next().is_some() {
-        bail!("enrolled device certificate contains multiple Jarvis device URIs");
+        bail!("enrolled device certificate contains multiple legacy Jarvis device URIs");
     }
     let device_id =
         DeviceId::new(Uuid::parse_str(device_id).context("parse certificate device ID")?);

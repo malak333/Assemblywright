@@ -228,7 +228,7 @@ public final class TrustedWakeModel: ObservableObject {
                 return
             }
             guard !trustedWakeGrantIsExpired(pending.expiresAt) else {
-                errorMessage = "The pending one-shot grant expired. Cancel/reset it or prepare a new change; Jarvis did not stop the healthy core."
+                errorMessage = "The pending one-shot grant expired. Cancel/reset it or prepare a new change; Assemblywright did not stop the healthy core."
                 return
             }
             try await installKeyControlAction()
@@ -319,7 +319,7 @@ public final class TrustedWakeModel: ObservableObject {
                 JarvisCoreSupervisorError.trustedWakeLifecycleBusy {
             errorMessage = "Trusted wake bootstrap was not prepared, so the current core was left running and wake automation remains unavailable."
         } catch JarvisCoreSupervisorError.trustedWakeCoreChangedDuringPreparation {
-            errorMessage = "Trusted wake provisioning was cancelled because the supervised core changed during bootstrap preparation; Jarvis did not stop or restart the replacement core."
+            errorMessage = "Trusted wake provisioning was cancelled because the supervised core changed during bootstrap preparation; Assemblywright did not stop or restart the replacement core."
         } catch {
             errorMessage = "Trusted wake provisioning failed closed during stop or restart; the supervisor may be degraded and wake automation remains unavailable: \(error)"
         }

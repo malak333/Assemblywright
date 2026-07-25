@@ -40,7 +40,7 @@ ceilings fail closed beyond 200 visible list entries, 64 KiB per UTF-8 file,
 16 KiB per line, and 128 KiB cumulative tool output per task. These are runtime
 contracts, not hints.
 
-Jarvis plugins are executable capabilities behind an explicit manifest and the
+Assemblywright plugins are executable capabilities behind an explicit manifest and the
 same policy engine used for built-in tools. The implemented local plugin
 boundary supports first-party Rust modules, local subprocess plugins over JSON
 stdin/stdout, and `local_wasm` compute plugins under the no-import
@@ -57,7 +57,7 @@ compute runtime described below is implemented.
 points at one module under its canonical source root and declares
 `abi: jarvis_json_v1`. The module must export linear `memory`,
 `jarvis_alloc`, and `jarvis_run`; it may not import anything. In particular,
-Jarvis does not link WASI or expose environment, filesystem, network, clock,
+Assemblywright does not link WASI or expose environment, filesystem, network, clock,
 randomness, process, host-function, or application-memory APIs. Request and
 response values are bounded UTF-8 JSON and must match the action schemas.
 
@@ -80,7 +80,7 @@ IDs and an RAII guard consumes each ID on every exit path. Output acceptance
 atomically finalizes the ID and returns its cancellation state, so a later
 request cannot claim to have cancelled an already-published completion.
 Installed subprocess invocations use a dedicated Unix process group. Once
-active cancellation or emergency pause is observed, Jarvis signals the whole
+active cancellation or emergency pause is observed, Assemblywright signals the whole
 group, gives it a bounded TERM grace, escalates remaining processes to KILL,
 reaps the leader, joins the bounded stdin/stdout/stderr workers, and suppresses
 output before returning. Timeout, output-limit, pipe failure, and leader-exit
@@ -132,7 +132,7 @@ Each plugin manifest must declare:
   manifest path, manifest SHA-256, canonical source path, deterministic
   source-tree SHA-256 and file count, optional subprocess command path, optional
   subprocess command SHA-256, capture time, verification time, and integrity
-  status. Source-tree hashing rejects symlinks, ignores Jarvis-owned generated
+  status. Source-tree hashing rejects symlinks, ignores Assemblywright-owned generated
   artifact/cache paths, and fails closed if the manifest or subprocess
   entrypoint would be excluded. Origin claims remain unverified local labels
   until an operator pins the author claim or verifies a manifest signature
@@ -151,7 +151,7 @@ Each plugin manifest must declare:
   network sandbox.
 - `local_subprocess` manifests must declare a `subprocess` block with a command
   under `source_path`, optional argument array, and `stdin: json` /
-  `stdout: json`. Jarvis starts the command directly and never interpolates it
+  `stdout: json`. Assemblywright starts the command directly and never interpolates it
   through a shell.
 - `local_wasm` manifests must declare a module below `source_path`,
   `abi: jarvis_json_v1`, no network declaration, and compute-only actions. The
@@ -186,7 +186,7 @@ request received
 ## Local Update And Lifecycle History
 
 Installed-plugin update is an explicit local registry mutation, not remote
-discovery or marketplace installation. Jarvis treats the selected replacement
+discovery or marketplace installation. Assemblywright treats the selected replacement
 manifest, its source tree, and all publisher/version claims as untrusted input.
 New local installations require valid SemVer 2.0.0. The candidate must pass
 normal bounded manifest/provenance validation, retain the exact installed
@@ -276,7 +276,7 @@ to explain what happened:
   evidence. Imported reports, self-test review sources, wrong-version
   plugin-trust reports, and future-dated plugin-trust reports cannot clear
   readiness.
-  `/release/evidence-status`, `jarvis release evidence-status`,
+  `/release/evidence-status`, `assemblywright release evidence-status`,
   `release-evidence-doctor.sh`, and `release-evidence-bundle.sh` all reject
   wrong-version reports, non-owner review sources, and future-dated plugin
   trust evidence instead of treating report presence as sufficient proof.
@@ -372,11 +372,11 @@ to explain what happened:
   enabled without `subprocess_stdio_network` all fail closed with audit
   evidence. Non-network actions also fail closed while the installed plugin is
   enabled with `subprocess_stdio_network`; the network grant is not a superset
-  of plain stdio authority. Jarvis sends a JSON object containing `plugin_id`, `action`, and
+  of plain stdio authority. Assemblywright sends a JSON object containing `plugin_id`, `action`, and
   `input` to stdin and accepts only JSON stdout that matches the action output
   schema. Subprocess stdout is capped at 1 MiB and stderr is capped at 256 KiB;
   a stream that exceeds its cap is killed and fails closed before raw output is
-  parsed or audited. Jarvis clears the inherited process environment before
+  parsed or audited. Assemblywright clears the inherited process environment before
   spawn and exposes only a minimal allowlist: a deterministic `PATH` for
   interpreter resolution plus `JARVIS_PLUGIN_ID`, `JARVIS_PLUGIN_ACTION`, and
   `JARVIS_PLUGIN_SOURCE_PATH`. This prevents app/core secrets from reaching
@@ -391,7 +391,7 @@ to explain what happened:
   evidence.
 - Publisher signature verification uses
   `/plugins/installed/:id/publisher/signature/verify` or
-  `jarvis plugins verify-publisher-signature`. It fails closed until local
+  `assemblywright plugins verify-publisher-signature`. It fails closed until local
   provenance matches, requires the trusted key to match the manifest key,
   verifies the Ed25519 signature over the portable manifest identity with local
   `source_path` omitted, stores `origin_claim_verified: true`, and appends

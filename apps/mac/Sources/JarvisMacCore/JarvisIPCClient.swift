@@ -1992,7 +1992,7 @@ public struct JarvisPermissionSurfaceState: Equatable, Sendable {
         case .clear:
             return "No pending approvals. \(declaredScopes.count) declared permission scope(s) are visible."
         case .reviewRequired:
-            return "\(actionableApprovalCount) approval request(s) need a decision before Jarvis can continue."
+            return "\(actionableApprovalCount) approval request(s) need a decision before Assemblywright can continue."
         case .inspectionOnly:
             return "\(pendingApprovalCount) approval signal(s) are visible, but this core cannot accept decisions yet."
         }

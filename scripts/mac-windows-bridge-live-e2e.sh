@@ -36,7 +36,7 @@ case "$MODE" in
     bash -n "$ROOT_DIR/scripts/build-mac-bridge-signed.sh"
     swift build --package-path "$PACKAGE_PATH" --product "$PRODUCT"
     cargo build --manifest-path "$ROOT_DIR/Cargo.toml" -p jarvis-agent --locked
-    printf 'Jarvis Mac-Windows bridge live E2E harness: ready\n'
+    printf 'Assemblywright Mac-Windows bridge live E2E harness: ready\n'
     exit 0
     ;;
   --run)
@@ -839,7 +839,7 @@ if [[ "$MODE" == "--run-outage" ]]; then
   outage_epoch_before="$(tr -d '\r\n' <"$outage_directory/connected-before")"
   [[ "$outage_epoch_before" =~ ^[0-9]+$ && "$outage_epoch_before" -gt 0 ]] \
     || fail "outage lifecycle emitted an invalid initial epoch"
-  printf 'jarvis_mac_windows_outage_stop_required service=JarvisMaster connection_epoch=%s\n' \
+  printf 'jarvis_mac_windows_outage_stop_required service=AssemblywrightMaster connection_epoch=%s\n' \
     "$outage_epoch_before"
 
   wait_for_outage_marker "master-offline" 180 "Master Offline after the induced outage"
@@ -848,7 +848,7 @@ if [[ "$MODE" == "--run-outage" ]]; then
     || "$outage_error" == "connection_failed" \
     || "$outage_error" == "invalid_health" ]] \
     || fail "outage lifecycle emitted a non-redacted offline error"
-  printf 'jarvis_mac_windows_outage_start_required service=JarvisMaster offline_error=%s\n' \
+  printf 'jarvis_mac_windows_outage_start_required service=AssemblywrightMaster offline_error=%s\n' \
     "$outage_error"
 
   wait_for_outage_marker "connected-after" 240 "authenticated recovery"

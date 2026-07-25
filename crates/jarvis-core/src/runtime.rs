@@ -3611,7 +3611,7 @@ mod tests {
             name: "Installed Compute".to_string(),
             version: "1.0.0".to_string(),
             source: PluginSource::LocalWasm,
-            author: "Jarvis Tests".to_string(),
+            author: "Assemblywright Tests".to_string(),
             source_path: Some("/redacted".to_string()),
             subprocess: None,
             wasm: Some(crate::PluginWasmManifest {
@@ -3677,7 +3677,7 @@ mod tests {
                 name: self.plugin_id.to_string(),
                 version: "0.1.0".to_string(),
                 source: self.source,
-                author: "Jarvis Tests".to_string(),
+                author: "Assemblywright Tests".to_string(),
                 source_path: None,
                 subprocess: None,
                 wasm: None,

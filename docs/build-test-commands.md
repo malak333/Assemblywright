@@ -606,7 +606,7 @@ for its current runner account. The real lifecycle E2E remains LocalSystem and
 therefore does not prove an operator-supplied password or remote mTLS from an
 owner-account service. Uninstall preserves the account right because Windows
 rights may be shared by other services; review local policy explicitly before
-revoking it after Jarvis removal.
+revoking it after Assemblywright removal.
 
 Maintenance is durable across service restarts. Health reports host mode,
 service identity, active maintenance state, and its bounded reason. New enqueue
@@ -709,14 +709,14 @@ signing/notarization, or live-device behavior.
 
 ## Current Health Check
 
-`jarvis health` is a strict IPC liveness check. Strict IPC commands such as
-`jarvis command`, pause/resume, scheduler, task/audit/activity/route, memory,
+`assemblywright health` is a strict IPC liveness check. Strict IPC commands such as
+`assemblywright command`, pause/resume, scheduler, task/audit/activity/route, memory,
 approval, diagnostics, installed-plugin, and permission-center operations also
 require a reachable repository-backed core. If the endpoint is down, these
-commands exit non-zero with operator guidance to start `jarvis serve`, run the
-offline ephemeral `jarvis smoke` check, or use read-only fallback inspection
-commands such as `jarvis release readiness`, `jarvis plugins list`, and
-`jarvis tools list`, instead of returning a raw connection-refused error.
+commands exit non-zero with operator guidance to start `assemblywright serve`, run the
+offline ephemeral `assemblywright smoke` check, or use read-only fallback inspection
+commands such as `assemblywright release readiness`, `assemblywright plugins list`, and
+`assemblywright tools list`, instead of returning a raw connection-refused error.
 
 The packaged app defaults to a generation-random Unix domain socket with a
 fresh in-memory bearer. The strict startup document carries
@@ -750,7 +750,7 @@ versioned JSON document, rejects any resolved non-loopback endpoint, and sends
 only the bearer header. This opt-in is weaker because any process running as the
 same user can read the file while it exists. Do not print, copy,
 or pass the credential through argv or environment. A manually started legacy
-`jarvis serve` remains explicitly unauthenticated and rejects any Authorization
+`assemblywright serve` remains explicitly unauthenticated and rejects any Authorization
 header.
 
 When CLI handoff is explicitly enabled, an absolute `JARVIS_MAC_IPC_AUTH_FILE`
@@ -765,7 +765,7 @@ Authenticated app-supervised launches include the non-secret
 `--supervised-parent-pid <swift-app-pid>` argument. The core validates it is a
 non-init direct parent before opening SQLite and watches that relationship for
 the server lifetime. Abrupt app termination therefore drops the IPC server and
-releases the database owner lease; manual or externally supervised `jarvis
+releases the database owner lease; manual or externally supervised `assemblywright
 serve` processes omit this argument and remain operator-owned. Bearer authority
 continues to arrive only through bounded startup stdin.
 The unsigned launch lane sets exact `JARVIS_MAC_RELEASE_SMOKE=true` only on the
@@ -804,7 +804,7 @@ stable identifiers and exact-build cdhash mechanics but not Developer ID
 publisher identity. These lanes do not prove device authentication, XPC, App
 Sandbox, notarization, or live-device behavior.
 
-`jarvis smoke` starts an ephemeral loopback server and verifies the currently
+`assemblywright smoke` starts an ephemeral loopback server and verifies the currently
 implemented foundation surfaces: health, command execution, pause blocking,
 resume, plugin manifest listing, and repository-backed task plus explicit
 memory-management paths. Raw memory list/get endpoints are not advertised as
@@ -888,7 +888,7 @@ JARVIS_LOCAL_MODEL_TIMEOUT_MS=15000 \
 cargo run -p jarvis-cli -- serve
 ```
 
-For a cold Ollama model, warm it before starting Jarvis or increase the local
+For a cold Ollama model, warm it before starting Assemblywright or increase the local
 provider timeout:
 
 ```sh
@@ -906,7 +906,7 @@ Start only after the selected model is installed, loads or unloads the selected
 model through `/api/generate` keep-alive requests, and restarts the supervised
 core with `JARVIS_LOCAL_MODEL_PROVIDER`, `JARVIS_LOCAL_MODEL`,
 `JARVIS_OLLAMA_BASE_URL`, and `JARVIS_LOCAL_MODEL_TIMEOUT_MS` overrides. If
-another terminal already owns the core port, stop that external `jarvis serve`
+another terminal already owns the core port, stop that external `assemblywright serve`
 process before applying the Model tab restart.
 
 If a Model tab download fails with `pull model manifest: 412` and says the model
@@ -931,7 +931,7 @@ swift test --disable-sandbox --package-path apps/mac --filter ollamaUpgradeProce
 Live local testing with `llama3.2` has proven this Ollama route can complete
 real model commands. Local model behavior is still model-dependent, so the
 runtime derives the default provider-visible tool catalog from validated
-first-party manifests, exposes that redacted default through `jarvis tools
+first-party manifests, exposes that redacted default through `assemblywright tools
 list`, advertises it as an Ollama JSON allowlist and ChatGPT/OpenAI-compatible
 native tool definitions, and keeps validating every model-planned tool request
 before execution. A reactive local command may explicitly add eligible
@@ -1010,15 +1010,15 @@ Restart E2E also preserves unresolved historical `fake_*` approvals as
 critical `removed_fixture_approval` policy-review attention while proving the
 fixture action cannot execute; it never deletes approval history silently.
 
-The interactive CLI defaults to operator-readable text for `jarvis command`
-and its `jarvis ask` alias, `jarvis plugins list/get`, `jarvis tools list`,
-`jarvis tasks list/get/audit`, `jarvis routes list/get`,
-`jarvis activity summary`, `jarvis release readiness`, and
-`jarvis release evidence-status`. Use `--json` on those commands when a
+The interactive CLI defaults to operator-readable text for `assemblywright command`
+and its `assemblywright ask` alias, `assemblywright plugins list/get`, `assemblywright tools list`,
+`assemblywright tasks list/get/audit`, `assemblywright routes list/get`,
+`assemblywright activity summary`, `assemblywright release readiness`, and
+`assemblywright release evidence-status`. Use `--json` on those commands when a
 script, test, or debugging session needs the exact IPC payload with full audit,
 route, readiness, or evidence inventory details. For compatibility with older
-automation, `jarvis release readiness --format json` and
-`jarvis release evidence-status --format json` are accepted as aliases for the
+automation, `assemblywright release readiness --format json` and
+`assemblywright release evidence-status --format json` are accepted as aliases for the
 release inspection JSON payloads. The three release runbook commands also
 accept `--format json` as an alias for their structured summaries.
 `JARVIS_CLI_JSON=1` is available for test harnesses that need to keep all CLI
@@ -1030,7 +1030,7 @@ is running:
 ```sh
 cargo run -p jarvis-cli -- health
 cargo run -p jarvis-cli -- tools model --json
-cargo run -p jarvis-cli -- ask "Check Jarvis status and explain it in plain English."
+cargo run -p jarvis-cli -- ask "Check Assemblywright status and explain it in plain English."
 cargo run -p jarvis-cli -- command --json "plugin status"
 cargo run -p jarvis-cli -- routes list --json
 cargo run -p jarvis-cli -- diagnostics export
@@ -1078,7 +1078,7 @@ apply that flow to ordinary conversation. The approval
 is one-shot, accepted only for a non-proactive request over authenticated local
 IPC, and does not override the Restricted cloud block.
 
-Jarvis sends the redacted request to this subprocess over stdin, uses a private
+Assemblywright sends the redacted request to this subprocess over stdin, uses a private
 temporary final-message file, clears unrelated inherited environment values,
 ignores user config and project rules, disables approvals, and requests the
 Codex CLI read-only sandbox. It also uses strict config with web search disabled,
@@ -1086,12 +1086,12 @@ disables the current CLI tool/integration feature set, discards subprocess
 logs, kills the child if its private response file crosses 1 MiB, and repeats
 the size check before reading. Prompt delivery runs concurrently with timeout
 and response-file monitoring, so a child that never reads stdin cannot bypass
-either bound. The Jarvis request payload contains only
+either bound. The Assemblywright request payload contains only
 redacted route context, although Codex supplies its own runtime/system context.
 The configured CLI must support this full constrained argument contract; an
 older or incompatible CLI fails closed with update/login guidance before model
 execution. The CLI E2E suite exercises the real
-`jarvis serve` boundary with a stub Codex executable and verifies the expected
+`assemblywright serve` boundary with a stub Codex executable and verifies the expected
 argument contract, health auth-mode reporting, prompt stdin, environment
 minimization, response routing, and path/secret redaction. It also proves the
 Console approval contract across IPC: a Personal command first stops at
@@ -1146,7 +1146,7 @@ cargo run -p jarvis-cli -- serve \
   --scheduler-limit 16
 ```
 
-`Jarvis.app` exposes the same loop through the Scheduler tab's default-off
+`Assemblywright.app` exposes the same loop through the Scheduler tab's default-off
 automation setting. Apply the setting to restart the app-supervised core; the
 app clamps the interval to at least 1,000 ms and limits each tick and stale
 recovery batch to 64. Exact `JARVIS_MAC_SCHEDULER_AUTOMATION_ENABLED=true` is
@@ -1212,7 +1212,7 @@ Run these while `cargo run -p jarvis-cli -- serve` is active:
 
 ```sh
 cargo run -p jarvis-cli -- command --dry-run "status check"
-cargo run -p jarvis-cli -- ask "Check Jarvis status and explain it in plain English."
+cargo run -p jarvis-cli -- ask "Check Assemblywright status and explain it in plain English."
 cargo run -p jarvis-cli -- command --json "plugin status"
 cargo run -p jarvis-cli -- plugins list
 cargo run -p jarvis-cli -- plugins list --json
@@ -1259,7 +1259,7 @@ the permission engine: dry runs do not execute, eligible Low/default-sensitivity
 requests remain direct, and Confirm or sensitive requests persist approval
 without runtime entry. Granting an approval does not execute the side effect;
 approved first-party and installed-plugin actions require an explicit
-`jarvis approvals execute <approval-id>` replay, which verifies the original
+`assemblywright approvals execute <approval-id>` replay, which verifies the original
 task, action, risk, scope, input-schema, current-policy contract, and matching
 approval_granted audit evidence before
 schema v13 atomically creates a unique durable execution claim with redacted
@@ -1271,9 +1271,9 @@ a storage interruption after claim can leave the effect ambiguous, and
 automatic retry is forbidden. Inspect audit evidence and create a new approval
 when another attempt is appropriate. On restart, schema v16 projects a
 pre-existing unresolved claim into a separate redacted attention ledger before
-IPC starts. `jarvis approvals attention` lists unacknowledged rows without
+IPC starts. `assemblywright approvals attention` lists unacknowledged rows without
 action/input/reason/actor/path/digest data and distinguishes the true total from
-the returned count, 100-item limit, and truncation flag. `jarvis approvals
+the returned count, 100-item limit, and truncation flag. `assemblywright approvals
 acknowledge-without-retry <execution-id> --revision <observed-revision>` sends
 the exact revision plus the fixed `acknowledged_without_retry` disposition.
 The CAS records review but does not enter the plugin, alter/delete the consumed
@@ -1335,7 +1335,7 @@ and permanent replay consumption through the real CLI/IPC path.
 The authority-chain tests prove an approved row without a matching grant audit
 cannot claim or enter the plugin across restart, unrelated audits cannot be
 substituted, and the exact legacy raw-metadata audit shape remains compatible.
-`jarvis permissions grants` reads the combined local grant
+`assemblywright permissions grants` reads the combined local grant
 surface: approval counts/history, high-risk pending count, installed-plugin
 `metadata_only` grant records, and the invariant that side effects still
 require approval. Installed `local_subprocess` plugins remain disabled by
@@ -1358,18 +1358,18 @@ controls are covered by the Swift contract/model tests, including
 speech-output utterance identity so stale AVSpeech completion/cancel callbacks
 cannot make newer playback look idle.
 Local plugin install is metadata-only:
-`jarvis plugins install /absolute/path/to/jarvis-plugin.json` validates and
+`assemblywright plugins install /absolute/path/to/jarvis-plugin.json` validates and
 stores a disabled registry record with local provenance hashes when repository
-backing is enabled. Use `jarvis plugins verify-installed <id>` before enabling
+backing is enabled. Use `assemblywright plugins verify-installed <id>` before enabling
 local subprocess execution; enablement fails closed unless the manifest and
 subprocess command still match the install snapshot. Non-network subprocess
-plugins use the default `jarvis plugins enable-installed <id>` grant; plugins
+plugins use the default `assemblywright plugins enable-installed <id>` grant; plugins
 with network-declaring actions must use
-`jarvis plugins enable-installed <id> --grant subprocess_stdio_network`. Use
-`jarvis plugins verify-publisher <id> --trusted-origin "<manifest author>"`
+`assemblywright plugins enable-installed <id> --grant subprocess_stdio_network`. Use
+`assemblywright plugins verify-publisher <id> --trusted-origin "<manifest author>"`
 only after provenance matches to mark the manifest author claim as
 operator-reviewed. For signed manifests, use
-`jarvis plugins verify-publisher-signature <id> --trusted-public-key "<base64 ed25519 public key>"`
+`assemblywright plugins verify-publisher-signature <id> --trusted-public-key "<base64 ed25519 public key>"`
 after provenance matches; this verifies the portable manifest identity
 signature against the explicit trusted key with local `source_path` omitted,
 but still does not prove marketplace approval or malware safety.
@@ -1447,7 +1447,7 @@ and executable installed plugins with those actions require
 `subprocess_stdio_network`. This is runtime grant gating plus manifest
 governance, not OS-level network sandboxing or host-level egress filtering.
 Installed subprocess plugins can also emit bounded `jarvis_progress` stderr
-JSON frames. Jarvis exposes only parsed sequence/stage/message progress events
+JSON frames. Assemblywright exposes only parsed sequence/stage/message progress events
 and `installed_plugin_progress` audit entries. Model execution also emits
 model-step completion/failure audit evidence, and model-output chunk metadata.
 `/activity/events` projects these as redacted `activity_progress` frames; raw
@@ -1469,7 +1469,7 @@ swift test --package-path apps/mac --filter JarvisMacCoreTests/parsesActivityEve
 ./scripts/release-external-handoff.sh --self-test
 ```
 
-Background scheduler execution is opt-in on `jarvis serve`; it does not start
+Background scheduler execution is opt-in on `assemblywright serve`; it does not start
 for default smoke or manual inspection sessions unless `--scheduler-background`
 is passed.
 
@@ -1507,28 +1507,28 @@ cargo run -p jarvis-cli -- scheduler attention
 cargo run -p jarvis-cli -- diagnostics export
 ```
 
-`jarvis permissions review` includes pending approvals, plugin review items,
+`assemblywright permissions review` includes pending approvals, plugin review items,
 active scheduler triggers, unreviewed memory items, and deleted sensitive
-memory retained in local storage. `jarvis memory retention-plan` and the Swift
+memory retained in local storage. `assemblywright memory retention-plan` and the Swift
 Memory tab expose the memory-specific redacted operator queue for those
 retention actions while keeping purge/rewrite automation out of scope. Memory
 review items include category/key and
 sensitivity only; memory values stay out of policy review and diagnostics
-export. `jarvis diagnostics export` exposes aggregate active, unreviewed, and
+export. `assemblywright diagnostics export` exposes aggregate active, unreviewed, and
 sensitive memory counts when repository backing is enabled. Its dedicated
 health projection exposes `emergency_pause_reason_present` rather than arbitrary
 emergency-pause reason text and limits the legacy reason field to null or the
 fixed `redacted` compatibility marker; `/health`, pause, and pause-status remain
 explicit operator surfaces with their existing reason contract.
-`jarvis memory index-status` reports only projection state and counts;
-`jarvis memory index-rebuild` atomically replaces the versioned local manifest
+`assemblywright memory index-status` reports only projection state and counts;
+`assemblywright memory index-rebuild` atomically replaces the versioned local manifest
 from active SQLite records. They do not themselves perform retrieval or model
-routing. `jarvis command --memory-context` is a separate explicit opt-in. It
+routing. `assemblywright command --memory-context` is a separate explicit opt-in. It
 retrieves at most four reviewed active Public/Workspace/Personal records into a
 4 KiB untrusted context only after a local, non-proactive route is selected.
 Missing/stale/corrupt projections, high-sensitivity records, cloud routes, and
 proactive requests fail closed; audit and route evidence contain counts only.
-`jarvis release readiness` is read-only and summarizes implemented feature
+`assemblywright release readiness` is read-only and summarizes implemented feature
 proofs, pending feature boundaries, recommended verification commands, and
 manual production blockers. The default CLI output is operator-readable and
 falls back to conservative local metadata when loopback IPC is unavailable,
@@ -1540,7 +1540,7 @@ running core has `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external`, it can
 report `evidence_mode_enabled: true` and compute `production_ready: true` only when every required
 `/release/evidence-status` item is present, no missing or invalid evidence
 remains, and evidence-cleared features leave no pending readiness features.
-That is still owner-recorded external evidence, not proof that Jarvis performed
+That is still owner-recorded external evidence, not proof that Assemblywright performed
 signing, notarization, stapling, live-device QA, plugin trust QA, or manual
 release QA.
 The release command `--help` output is part of the operator contract: it should
@@ -1548,7 +1548,7 @@ preserve the read-only scope, IPC-first/local-fallback behavior, explicit
 external-mode opt-in on the running core, and file/report inspection plus
 semantic-validation boundary for evidence status. The
 `release_help_surfaces_current_evidence_boundaries` CLI E2E test keeps
-`jarvis release evidence-status --help` aligned with the default
+`assemblywright release evidence-status --help` aligned with the default
 operator-readable output, `--json` escape hatch, owner-asserted plugin-trust
 review-source requirement, host-egress evidence fields, final-bundle archive URI
 validation, and final-bundle local signature-validation check.
@@ -1564,12 +1564,12 @@ plus the matching archived artifact URI and SHA-256 digest for each plugin-trust
 category. The assertion path rejects artifact URIs that lack a URI scheme and
 location or point at placeholder, self-test, fixture, or temporary paths.
 The downstream evidence consumers apply the same durability rule: the bundle
-script, evidence doctor, and `jarvis release evidence-status` reject plugin-trust
+script, evidence doctor, and `assemblywright release evidence-status` reject plugin-trust
 reports whose `evidence_artifacts.*.uri` values are bare paths or temporary
 locations, even if the producer-side report was hand-edited after generation.
 CLI E2E now runs `release-plugin-trust-qa.sh --assert-complete` with
 owner-recorded archive URI/SHA-256 evidence fields and verifies the generated
-plugin-trust QA report is accepted by `jarvis release evidence-status`.
+plugin-trust QA report is accepted by `assemblywright release evidence-status`.
 The generated report carries `schema_version: 1` and
 `evidence_type: owner_recorded_plugin_trust_qa` plus the current release
 `version`; final operator evidence must also keep `self_test_fixture=false` and
@@ -1611,7 +1611,7 @@ The release readiness runbook also includes
 `set -a && source target/release-evidence-bundle.env && set +a &&
 ./scripts/release-evidence-bundle.sh --bundle` as the template-backed bundle
 path.
-`jarvis release readiness --all-commands` is ordered as a release execution
+`assemblywright release readiness --all-commands` is ordered as a release execution
 runbook: local gates, unsigned distribution launch check, signed-distribution
 runbook triage, signed/notarized packaging, live-device QA, plugin-trust
 runbook triage, plugin-trust QA, final evidence bundle generation,
@@ -1678,7 +1678,7 @@ live-device QA, plugin-trust QA, owner assertions, final bundle creation, or
 host-level egress enforcement. The real `--bundle` path also locally validates
 the app code signature, app stapling ticket, installer package signature,
 installer stapling ticket, and app zip payload before writing the manifest. It also requires the
-`Jarvis-<version>-signed-provenance.json` report generated by the full
+`Assemblywright-<version>-signed-provenance.json` report generated by the full
 packaging lane, including signing identities, notary submission IDs/log paths
 plus log SHA-256 digests, staple validation, Gatekeeper assessment, bundled
 core version, and artifact digests that match the current zip/pkg files. It rejects disabled
@@ -1719,7 +1719,7 @@ also binds live-device QA back to the signed distribution by requiring
 `artifacts.bundled_core_sha256`, requires the owner final-bundle completion time
 to sit after all child report generation timestamps and before final bundle
 generation, and rejects app zips that do not contain exactly one top-level
-`Jarvis.app` payload with `Info.plist`, the app executable, and the bundled
+`Assemblywright.app` payload with `Info.plist`, the app executable, and the bundled
 core. This matches the semantic floor exposed by `/release/evidence-status`.
 Its `--self-test` uses fake
 artifacts/reports to prove the inventory logic only; it is not a signing,
@@ -1739,7 +1739,7 @@ egress, signed-publisher, and manual-review artifact set.
 Production plugin-trust reports must carry
 `review_source=owner-asserted-manual-review`; imported reports and self-test
 review sources are rejected before they can clear evidence-aware readiness.
-`jarvis release evidence-status` exposes the same standard artifact/report
+`assemblywright release evidence-status` exposes the same standard artifact/report
 inventory through `/release/evidence-status`; the default CLI output is
 operator-readable, includes per-item paths and details for present, missing,
 or invalid evidence items when the structured payload provides them, and
@@ -1842,7 +1842,7 @@ state. It is local operator QA evidence only, not a clean-profile installed-app
 or live-device validation pass.
 `./scripts/packaged-supervision-proof.sh` is the focused Swift/Rust bridge
 proof for supervision changes: it builds `jarvis-cli`, copies it into a
-temporary `Jarvis.app/Contents/Resources/bin/` layout, runs the Swift supervisor
+temporary `Assemblywright.app/Contents/Resources/bin/` layout, runs the Swift supervisor
 coverage against that configured executable, starts the copied binary with a
 repository-backed database, verifies packaged-layout health, command, audit,
 diagnostics, emergency pause, blocked command, pause status, and resume
@@ -1883,7 +1883,7 @@ bounded interval, verifies the UDS is removed, and then relaunches against the
 same SQLite database. This is repository-owned proof that new app-supervised
 cores do not survive an abrupt app loss; it does not terminate or claim control
 over older/manual cores that were launched without the parent contract.
-Packaging now refuses to replace the exact configured `Jarvis.app` while its
+Packaging now refuses to replace the exact configured `Assemblywright.app` while its
 app or bundled-core executable is running, and tells the operator to quit the
 app or select a different `JARVIS_DISTRIBUTION_DIR`. This prevents a surviving
 process from observing a different on-disk signed bundle; it does not weaken
@@ -1905,7 +1905,7 @@ Apple ID/team/app-specific-password notarytool credentials. It signs the
 release bundle with hardened runtime and microphone entitlements, submits the
 app zip for notarization, staples the app, then creates a signed
 `/Applications` installer package at
-`target/distribution/Jarvis-<release-version>.pkg`,
+`target/distribution/Assemblywright-<release-version>.pkg`,
 validates its package identifier, version, and `/Applications` install-location
 metadata, checks its installer signature, submits it for notarization, and
 staples the package. The signed-provenance report records exact notary
@@ -1928,7 +1928,7 @@ machine, with `JARVIS_QA_EXPECTED_VERSION` materialized from the canonical
 Rust package release version at generation time. The template also includes a
 single sourceable `JARVIS_RELEASE_CORE_ENDPOINT` value, the app-owned
 `JARVIS_IPC_TOKEN_FILE` path (never the bearer value), the release-core
-`jarvis command ... --json` evidence capture that reuses that endpoint, the
+`assemblywright command ... --json` evidence capture that reuses that endpoint, the
 `JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:<uuid>"`/`"audit:<uuid>"` rule, and
 the external evidence-mode `release evidence-status` and `release readiness`
 checks to run against the same endpoint after report generation. The CLI/IPC
@@ -1968,7 +1968,7 @@ All owner-recorded evidence-note fields must contain non-placeholder text, not
 values such as `TODO`, `pending`, `n/a`, `fixture`, or `self-test fixture`, and
 `JARVIS_QA_SELF_TEST_FIXTURE=true` is reserved for the script's internal fake
 fixture self-test rather than release evidence. `--assert-complete`,
-`jarvis release evidence-status`, and `/release/evidence-status` enforce the
+`assemblywright release evidence-status`, and `/release/evidence-status` enforce the
 same non-empty and non-placeholder live-device QA report fields before that
 evidence can clear `live_voice_loop`. CLI E2E removes required live voice,
 command-observation, audio-output-device, and notification-observation fields
@@ -1976,7 +1976,7 @@ from owner-recorded reports and verifies evidence-status plus external-mode
 readiness fail closed.
 CLI E2E also runs `release-live-device-qa.sh --assert-complete` with a
 repository-backed command result, verifies the script-generated live-device QA
-report is accepted by `jarvis release evidence-status`, and confirms
+report is accepted by `assemblywright release evidence-status`, and confirms
 external-mode readiness moves `live_voice_loop` to implemented while production
 readiness stays blocked by the remaining signed distribution and final evidence
 bundle gates.
@@ -1988,7 +1988,7 @@ those fields plus the signed-provenance path/SHA-256. Final bundle, doctor, and
 Rust/CLI validators reject report substitution or executable identity drift.
 The observed transcript must match the spoken test phrase after trimming, the
 expected installed app path must match `JARVIS_QA_INSTALLED_APP_PATH` or
-`/Applications/Jarvis.app`, expected and observed command text must match after
+`/Applications/Assemblywright.app`, expected and observed command text must match after
 trimming, `JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID` must be `task:<uuid>` or
 `audit:<uuid>` from live command/audit evidence, and repository-backed
 `/release/evidence-status` must resolve it to an existing task or
@@ -1997,7 +1997,7 @@ UTC and no earlier than the completed voice check, but not future-dated.
 The notification observation timestamp must match
 `JARVIS_QA_NOTIFICATION_OBSERVED_AT`, must be UTC, and must be no earlier than
 `JARVIS_QA_VOICE_CHECK_STARTED_AT`. The shell assertion self-test,
-`jarvis release evidence-status`, and final bundle validation reject blank
+`assemblywright release evidence-status`, and final bundle validation reject blank
 notification title/body values, notification kinds outside `due_now`, `failed`,
 or `blocked_by_emergency_pause`, and any notification thread identifier other
 than `jarvis.scheduler`.
@@ -2020,14 +2020,14 @@ drift keeps both the live-device evidence item invalid and `live_voice_loop`
 pending even in external evidence mode; it does not perform real Developer ID
 signing, installation, or live-device QA.
 The installed app metadata must match the approved `Info.plist` copy exactly:
-`NSMicrophoneUsageDescription` is `Jarvis uses microphone input only when you explicitly start local voice capture.`, and
-`NSSpeechRecognitionUsageDescription` is `Jarvis uses speech recognition only to turn your spoken command into a local assistant request.`.
+`NSMicrophoneUsageDescription` is `Assemblywright uses microphone input only when you explicitly start local voice capture.`, and
+`NSSpeechRecognitionUsageDescription` is `Assemblywright uses speech recognition only to turn your spoken command into a local assistant request.`.
 After generating it, run `cargo run -p jarvis-cli -- release evidence-status`
 and `cargo run -p jarvis-cli -- release readiness` against a core started or
 restarted with `JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external`
 to confirm any live voice/audio blocker changes are backed by the report.
 The final `./scripts/release-evidence-doctor.sh --assert-complete` assertion
-also calls `jarvis release evidence-status --json`; set
+also calls `assemblywright release evidence-status --json`; set
 `JARVIS_EVIDENCE_STATUS_ENDPOINT` to the release core endpoint when proving
 repository-backed task/audit evidence during final release evidence review.
 Preserve that report with release notes when making a production-ready claim.
@@ -2043,7 +2043,7 @@ that prove the required docs and diagrams are still present:
 
 ```sh
 rg -n "Current Implementation And Evidence Boundary Diagram|End-Goal Production Architecture" docs/architecture-map.md
-rg -n "phase-3|phase3|six-agent|worktree|E2E|production-readiness|proof" docs/knowledge-base/jarvis-project-facts.md docs/release-checklist.md docs/build-test-commands.md README.md
+rg -n "phase-3|phase3|six-agent|worktree|E2E|production-readiness|proof" docs/knowledge-base/assemblywright-project-facts.md docs/release-checklist.md docs/build-test-commands.md README.md
 git diff --check
 ```
 

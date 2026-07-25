@@ -1,7 +1,7 @@
 [package]
 name = "jarvis-protocol"
 version = "0.1.4"
-description = "Versioned, bounded cross-platform contracts for Jarvis distributed development."
+description = "Versioned, bounded cross-platform contracts for Assemblywright distributed development."
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

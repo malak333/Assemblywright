@@ -405,7 +405,7 @@ impl HandshakeRequest {
 
 /// Cross-device handshake envelope bound to the authenticated TLS 1.3 session.
 ///
-/// The digest is SHA-256 over 32 bytes exported with the fixed Jarvis exporter
+/// The digest is SHA-256 over 32 bytes exported with the fixed legacy Jarvis exporter
 /// label. Keeping this value inside the bounded application handshake prevents
 /// a valid device handshake from being replayed on another TLS connection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

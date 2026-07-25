@@ -23,8 +23,8 @@ const MAX_IPC_TOKEN_FILE_BYTES: usize = 1024;
 static IPC_BEARER_TOKEN: OnceLock<String> = OnceLock::new();
 
 #[derive(Debug, Parser)]
-#[command(name = "jarvis")]
-#[command(about = "Local-first Jarvis core CLI")]
+#[command(name = "assemblywright")]
+#[command(about = "Local-first Assemblywright core CLI")]
 #[command(version = env!("CARGO_PKG_VERSION"))]
 struct Cli {
     /// Read IPC bearer credentials from a bounded owner-only JSON file.
@@ -2281,7 +2281,7 @@ fn format_command_response(response: &str) -> anyhow::Result<String> {
         .and_then(serde_json::Value::as_str)
         .unwrap_or("unknown");
     let mut lines = vec![
-        format!("Jarvis command: {status}"),
+        format!("Assemblywright command: {status}"),
         format!("Accepted: {accepted}"),
         format!("Task: {task_id}"),
     ];
@@ -2480,7 +2480,7 @@ fn format_plugin_manifest_list(response: &str) -> anyhow::Result<String> {
             }
         }
     }
-    lines.push("Model-visible tools: use `jarvis tools list` for exact plugin_id.action pairs models may request.".to_string());
+    lines.push("Model-visible tools: use `assemblywright tools list` for exact plugin_id.action pairs models may request.".to_string());
     lines.push("Raw JSON: rerun with --json for full manifest schemas.".to_string());
     Ok(lines.join("\n"))
 }
@@ -2515,7 +2515,7 @@ fn format_plugin_manifest_detail(response: &str) -> anyhow::Result<String> {
             ));
         }
     }
-    lines.push("Model-visible tools: use `jarvis tools list` for exact plugin_id.action pairs models may request.".to_string());
+    lines.push("Model-visible tools: use `assemblywright tools list` for exact plugin_id.action pairs models may request.".to_string());
     lines.push("Raw JSON: rerun with --json for full manifest schemas.".to_string());
     Ok(lines.join("\n"))
 }
@@ -2546,7 +2546,7 @@ fn format_task_list(response: &str) -> anyhow::Result<String> {
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("task list response was not an array"))?;
     let mut lines = vec![
-        "Jarvis tasks:".to_string(),
+        "Assemblywright tasks:".to_string(),
         format!("Total tasks: {}", tasks.len()),
     ];
     for task in tasks {
@@ -2559,7 +2559,7 @@ fn format_task_list(response: &str) -> anyhow::Result<String> {
 fn format_task_detail(response: &str) -> anyhow::Result<String> {
     let value: serde_json::Value = serde_json::from_str(response)?;
     let mut lines = vec![
-        "Jarvis task:".to_string(),
+        "Assemblywright task:".to_string(),
         format!("- {}", format_task_summary(&value)),
     ];
     if let Some(session_id) = json_string(&value, "session_id") {
@@ -2576,7 +2576,7 @@ fn format_audit_entries(response: &str) -> anyhow::Result<String> {
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("audit response was not an array"))?;
     let mut lines = vec![
-        "Jarvis audit entries:".to_string(),
+        "Assemblywright audit entries:".to_string(),
         format!("Total entries: {}", entries.len()),
     ];
     for entry in entries {
@@ -2602,7 +2602,7 @@ fn format_activity_summary(response: &str) -> anyhow::Result<String> {
     let audit_count = json_u64(&value, "audit_entry_count");
     let active_count = json_u64(&value, "active_task_count");
     let mut lines = vec![
-        "Jarvis activity summary:".to_string(),
+        "Assemblywright activity summary:".to_string(),
         format!("Repository backed: {repository_backed}"),
         format!("Tasks: {task_count} total, {active_count} active"),
         format!("Audit entries: {audit_count}"),
@@ -2655,7 +2655,7 @@ fn format_route_list(response: &str) -> anyhow::Result<String> {
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("route list response was not an array"))?;
     let mut lines = vec![
-        "Jarvis model routes:".to_string(),
+        "Assemblywright model routes:".to_string(),
         format!("Total routes: {}", routes.len()),
     ];
     for route in routes {
@@ -2668,7 +2668,7 @@ fn format_route_list(response: &str) -> anyhow::Result<String> {
 fn format_route_detail(response: &str) -> anyhow::Result<String> {
     let value: serde_json::Value = serde_json::from_str(response)?;
     let mut lines = vec![
-        "Jarvis model route:".to_string(),
+        "Assemblywright model route:".to_string(),
         format!("- {}", format_route_summary(&value)),
     ];
     if let Some(reason) = json_string(&value, "reason") {
@@ -2743,7 +2743,7 @@ fn format_release_readiness(response: &str, all_commands: bool) -> anyhow::Resul
         .unwrap_or(0);
 
     let mut lines = vec![
-        "Jarvis release readiness:".to_string(),
+        "Assemblywright release readiness:".to_string(),
         format!("Production ready: {production_ready}"),
         format!("External evidence mode: {evidence_mode_enabled}"),
         format!("Verified features: {verified_feature_count}"),
@@ -2852,7 +2852,7 @@ fn format_release_evidence_status(response: &str) -> anyhow::Result<String> {
         .unwrap_or(0);
 
     let mut lines = vec![
-        "Jarvis release evidence status:".to_string(),
+        "Assemblywright release evidence status:".to_string(),
         format!("Complete: {complete}"),
         format!("Missing evidence: {missing_count}"),
         format!("Invalid evidence: {invalid_count}"),
@@ -2941,7 +2941,7 @@ fn release_live_device_runbook_json(
             "./scripts/release-live-device-qa.sh --check",
             "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env",
             "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' in target/release-live-device-qa.env before collecting command evidence",
-            "Launch Jarvis with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true for this operator evidence session, then confirm JARVIS_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path before IPC commands",
+            "Launch Assemblywright with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true for this operator evidence session, then confirm JARVIS_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path before IPC commands",
             "cargo run -p jarvis-cli -- command \"status check\" --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\" --json",
             "Record the returned task ID as JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>' or a task-associated audit ID as 'audit:<uuid>' in target/release-live-device-qa.env",
             "set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete",
@@ -2951,7 +2951,7 @@ fn release_live_device_runbook_json(
         ],
         "manual_checks": [
             "Install the signed, notarized package into /Applications on a clean Mac profile.",
-            "Launch Jarvis through Finder or LaunchServices.",
+            "Launch Assemblywright through Finder or LaunchServices.",
             "Verify microphone and Speech permission prompts during live voice capture.",
             "Speak the test phrase and confirm the observed transcript reaches the command path.",
             "Verify live speech output, structured scheduler notification kind/title/body/thread evidence, restart behavior, and manual release QA.",
@@ -2997,7 +2997,7 @@ fn format_release_live_device_runbook(
         .unwrap_or("No live-device QA report detail was available.");
 
     Ok([
-        "Jarvis live-device QA runbook:".to_string(),
+        "Assemblywright live-device QA runbook:".to_string(),
         format!("Production ready: {}", readiness.get("production_ready").and_then(serde_json::Value::as_bool).unwrap_or(false)),
         format!("live_voice_loop: {live_voice_status}"),
         format!("live_device_qa_report: {evidence_status}"),
@@ -3006,7 +3006,7 @@ fn format_release_live_device_runbook(
         "- ./scripts/release-live-device-qa.sh --check".to_string(),
         "- ./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env".to_string(),
         "- Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' in target/release-live-device-qa.env before collecting command evidence".to_string(),
-        "- Launch Jarvis with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true for this operator evidence session, then confirm JARVIS_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path before IPC commands".to_string(),
+        "- Launch Assemblywright with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true for this operator evidence session, then confirm JARVIS_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path before IPC commands".to_string(),
         "- cargo run -p jarvis-cli -- command \"status check\" --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\" --json".to_string(),
         "- Record the returned task ID as JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>' or a task-associated audit ID as 'audit:<uuid>' in target/release-live-device-qa.env".to_string(),
         "- set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
@@ -3015,7 +3015,7 @@ fn format_release_live_device_runbook(
         "- JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"".to_string(),
         "Manual checks:".to_string(),
         "- Install the signed, notarized package into /Applications on a clean Mac profile.".to_string(),
-        "- Launch Jarvis through Finder or LaunchServices.".to_string(),
+        "- Launch Assemblywright through Finder or LaunchServices.".to_string(),
         "- Verify microphone and Speech permission prompts during live voice capture.".to_string(),
         "- Speak the test phrase and confirm the observed transcript reaches the command path.".to_string(),
         "- Verify live speech output, structured scheduler notification kind/title/body/thread evidence, restart behavior, and manual release QA.".to_string(),
@@ -3066,7 +3066,7 @@ fn release_signed_distribution_runbook_json(
             "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh",
             "JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_APPLE_ID='apple-id@example.com' JARVIS_NOTARYTOOL_TEAM_ID='TEAMID1234' JARVIS_NOTARYTOOL_PASSWORD='app-specific-password' ./scripts/package-distribution.sh",
             "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks",
-            "Launch Jarvis with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks",
+            "Launch Assemblywright with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks",
             "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"",
             "./scripts/release-evidence-doctor.sh --check",
             "cargo run -p jarvis-cli -- release live-device-runbook"
@@ -3074,7 +3074,7 @@ fn release_signed_distribution_runbook_json(
         "manual_checks": [
             "Configure Developer ID Application and Installer identities plus either a notarytool keychain profile or Apple ID/team/app-specific password credentials on the release Mac.",
             "Run the full package-distribution lane and preserve the signed zip, signed installer package, signed provenance report, and notarytool logs referenced by that report.",
-            "Confirm the signed installer package metadata still targets the Jarvis package identifier, release version, and /Applications install location.",
+            "Confirm the signed installer package metadata still targets the Assemblywright package identifier, release version, and /Applications install location.",
             "Confirm the signed app zip and installer package are notarized and stapled before clean-profile installation.",
             "Rerun evidence-status and evidence-doctor so missing or invalid signed artifact paths are visible before final bundling.",
             "Continue with live-device QA, plugin-trust QA, final evidence bundle generation, and external evidence-mode readiness."
@@ -3099,7 +3099,7 @@ fn format_release_signed_distribution_runbook(
         "signed_distribution_provenance_report",
     ];
     let mut lines = vec![
-        "Jarvis signed distribution runbook:".to_string(),
+        "Assemblywright signed distribution runbook:".to_string(),
         format!(
             "Production ready: {}",
             readiness
@@ -3138,14 +3138,14 @@ fn format_release_signed_distribution_runbook(
         "- JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh".to_string(),
         "- JARVIS_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' JARVIS_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' JARVIS_NOTARYTOOL_APPLE_ID='apple-id@example.com' JARVIS_NOTARYTOOL_TEAM_ID='TEAMID1234' JARVIS_NOTARYTOOL_PASSWORD='app-specific-password' ./scripts/package-distribution.sh".to_string(),
         "- Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks".to_string(),
-        "- Launch Jarvis with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks".to_string(),
+        "- Launch Assemblywright with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks".to_string(),
         "- JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"".to_string(),
         "- ./scripts/release-evidence-doctor.sh --check".to_string(),
         "- cargo run -p jarvis-cli -- release live-device-runbook".to_string(),
         "Manual checks:".to_string(),
         "- Configure Developer ID Application and Installer identities plus either a notarytool keychain profile or Apple ID/team/app-specific password credentials on the release Mac.".to_string(),
         "- Preserve the signed zip, signed installer package, signed provenance report, and notarytool logs referenced by that report.".to_string(),
-        "- Confirm the signed installer package metadata still targets the Jarvis package identifier, release version, and /Applications install location.".to_string(),
+        "- Confirm the signed installer package metadata still targets the Assemblywright package identifier, release version, and /Applications install location.".to_string(),
         "- Confirm notarization and stapling for both app and installer before clean-profile installation.".to_string(),
         "- Continue with live-device QA, plugin-trust QA, final evidence bundle generation, and external evidence-mode readiness.".to_string(),
         "Boundary: runbook and local evidence inspection only; no signing, notarization, stapling, Gatekeeper assessment, installation, live-device QA, or plugin-trust QA was performed.".to_string(),
@@ -3179,7 +3179,7 @@ fn release_plugin_trust_runbook_json(
             "./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env",
             "set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete",
             "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks",
-            "Launch Jarvis with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks",
+            "Launch Assemblywright with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks",
             "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"",
             "./scripts/release-evidence-doctor.sh --check",
             "./scripts/release-evidence-bundle.sh --check",
@@ -3227,7 +3227,7 @@ fn format_release_plugin_trust_runbook(
         .unwrap_or("No plugin-trust QA report detail was available.");
 
     Ok([
-        "Jarvis plugin-trust QA runbook:".to_string(),
+        "Assemblywright plugin-trust QA runbook:".to_string(),
         format!(
             "Production ready: {}",
             readiness
@@ -3242,7 +3242,7 @@ fn format_release_plugin_trust_runbook(
         "- ./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env".to_string(),
         "- set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete".to_string(),
         "- Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks".to_string(),
-        "- Launch Jarvis with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks".to_string(),
+        "- Launch Assemblywright with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks".to_string(),
         "- JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"".to_string(),
         "- ./scripts/release-evidence-doctor.sh --check".to_string(),
         "- ./scripts/release-evidence-bundle.sh --check".to_string(),
@@ -3313,7 +3313,7 @@ fn release_evidence_bundle_runbook_json(
             "./scripts/release-evidence-doctor.sh --check",
             "./scripts/release-evidence-doctor.sh --assert-complete",
             "Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks",
-            "Launch Jarvis with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks",
+            "Launch Assemblywright with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks",
             "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"",
             "Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external",
             "JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\""
@@ -3348,7 +3348,7 @@ fn format_release_evidence_bundle_runbook(
         .cloned()
         .unwrap_or_default();
     let mut lines = vec![
-        "Jarvis final evidence-bundle runbook:".to_string(),
+        "Assemblywright final evidence-bundle runbook:".to_string(),
         format!(
             "Production ready: {}",
             readiness
@@ -3383,7 +3383,7 @@ fn format_release_evidence_bundle_runbook(
         "- ./scripts/release-evidence-doctor.sh --check".to_string(),
         "- ./scripts/release-evidence-doctor.sh --assert-complete".to_string(),
         "- Set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks".to_string(),
-        "- Launch Jarvis with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks".to_string(),
+        "- Launch Assemblywright with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export JARVIS_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks".to_string(),
         "- JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release evidence-status --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"".to_string(),
         "- Start or restart the core with JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external".to_string(),
         "- JARVIS_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p jarvis-cli -- release readiness --endpoint \"${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}\"".to_string(),
@@ -3600,7 +3600,7 @@ async fn run_smoke() -> anyhow::Result<()> {
     persistent_server.abort();
     let _ = std::fs::remove_file(db_path);
 
-    println!("jarvis smoke: ok");
+    println!("assemblywright smoke: ok");
     Ok(())
 }
 
@@ -3655,7 +3655,7 @@ fn format_health(response_body: &str) -> anyhow::Result<String> {
 
 fn server_required_unavailable_error(endpoint: &str, source: &anyhow::Error) -> anyhow::Error {
     anyhow::anyhow!(
-        "jarvis-core is unavailable at {endpoint}. Start the IPC server with `cargo run -p jarvis-cli -- serve`, or run `cargo run -p jarvis-cli -- smoke` for an offline ephemeral health smoke. This command requires a running repository-backed core. Read-only inspection commands such as `jarvis release readiness`, `jarvis plugins list`, and `jarvis tools list` can still fall back to local metadata when the server is not running. Detail: {source}"
+        "jarvis-core is unavailable at {endpoint}. Start the IPC server with `cargo run -p jarvis-cli -- serve`, or run `cargo run -p jarvis-cli -- smoke` for an offline ephemeral health smoke. This command requires a running repository-backed core. Read-only inspection commands such as `assemblywright release readiness`, `assemblywright plugins list`, and `assemblywright tools list` can still fall back to local metadata when the server is not running. Detail: {source}"
     )
 }
 

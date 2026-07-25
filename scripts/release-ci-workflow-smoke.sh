@@ -28,7 +28,7 @@ require_file "$WORKFLOW"
 require_file "$WINDOWS_PROTOCOL_WORKFLOW"
 require_file "$LOCAL_GATE"
 
-require_text "name: Jarvis Release Local Gate" "$WORKFLOW"
+require_text "name: Assemblywright Release Local Gate" "$WORKFLOW"
 require_text "pull_request:" "$WORKFLOW"
 require_text "push:" "$WORKFLOW"
 require_text "workflow_dispatch:" "$WORKFLOW"
@@ -41,7 +41,7 @@ require_text "components: clippy,rustfmt" "$WORKFLOW"
 require_text "swift --version" "$WORKFLOW"
 require_text "JARVIS_RELEASE_LOCAL_HEARTBEAT_SECONDS: \"60\"" "$WORKFLOW"
 require_text "run: ./scripts/release-local.sh" "$WORKFLOW"
-require_text "name: Jarvis Windows Distributed Gate" "$WINDOWS_PROTOCOL_WORKFLOW"
+require_text "name: Assemblywright Windows Distributed Gate" "$WINDOWS_PROTOCOL_WORKFLOW"
 require_text "pull_request:" "$WINDOWS_PROTOCOL_WORKFLOW"
 require_text "push:" "$WINDOWS_PROTOCOL_WORKFLOW"
 require_text "workflow_dispatch:" "$WINDOWS_PROTOCOL_WORKFLOW"
@@ -126,4 +126,4 @@ for index in "${!expected_local_gate_commands[@]}"; do
   fi
 done
 
-printf 'Jarvis release CI workflow smoke: ok\n'
+printf 'Assemblywright release CI workflow smoke: ok\n'

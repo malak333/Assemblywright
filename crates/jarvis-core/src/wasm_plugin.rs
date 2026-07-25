@@ -311,7 +311,7 @@ mod tests {
             name: "WASM fixture".to_string(),
             version: "0.1.0".to_string(),
             source: PluginSource::LocalWasm,
-            author: "Jarvis Test".to_string(),
+            author: "Assemblywright Test".to_string(),
             source_path: None,
             subprocess: None,
             wasm: Some(PluginWasmManifest {

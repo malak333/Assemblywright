@@ -354,7 +354,7 @@ private final class FakeCredentialStore: JarvisCredentialStore, @unchecked Senda
     }
 }
 
-@Suite("Jarvis Mac core contracts", .serialized)
+@Suite("Assemblywright Mac core contracts", .serialized)
 struct JarvisMacCoreTests {
     @Test("Endpoint appends paths to the configured core URL")
     func endpointBuildsURL() {
@@ -1277,7 +1277,7 @@ struct JarvisMacCoreTests {
                 "name": "Fake Echo",
                 "version": "0.1.0",
                 "source": "first_party",
-                "author": "Jarvis",
+                "author": "Assemblywright",
                 "actions": [
                   {
                     "name": "echo",
@@ -2586,7 +2586,7 @@ struct JarvisMacCoreTests {
         #expect(summary.installedPluginGrants.first?.executionEnabled == false)
         #expect(summary.installedPluginGrants.first?.integrityStatus == "not_verified")
         #expect(summary.installedPluginGrants.first?.captureMethod == "local_manifest_snapshot")
-        #expect(summary.installedPluginGrants.first?.originClaim == "Jarvis Test")
+        #expect(summary.installedPluginGrants.first?.originClaim == "Assemblywright Test")
         #expect(summary.installedPluginGrants.first?.originClaimVerified == false)
         #expect(summary.installedPluginGrants.first?.needsProvenanceReview == true)
         #expect(summary.sideEffectsRequireApproval)
@@ -2868,7 +2868,7 @@ struct JarvisMacCoreTests {
     func commandConsoleRejectsSubmitWhileDegraded() async {
         let client = FakeCoreClient()
         let console = CommandConsoleModel(client: client)
-        let reason = "The app bundle changed while Jarvis was running."
+        let reason = "The app bundle changed while Assemblywright was running."
         console.markDegraded(reason)
 
         await console.submit(input: "you there?", dryRun: true)
@@ -3560,10 +3560,10 @@ struct JarvisMacCoreTests {
         let adapter = FakeSpeechOutputAdapter()
         let model = SpeechOutputStateModel(adapter: adapter)
 
-        await model.speak("  Jarvis is ready.  ")
+        await model.speak("  Assemblywright is ready.  ")
 
-        #expect(adapter.spokenTexts == ["Jarvis is ready."])
-        #expect(model.lastSpokenText == "Jarvis is ready.")
+        #expect(adapter.spokenTexts == ["Assemblywright is ready."])
+        #expect(model.lastSpokenText == "Assemblywright is ready.")
         #expect(model.phase == .speaking)
         #expect(model.isSpeaking)
         #expect(!model.canSpeak)
@@ -3576,10 +3576,10 @@ struct JarvisMacCoreTests {
         let adapter = FakeSpeechOutputAdapter()
         let model = SpeechOutputStateModel(adapter: adapter)
 
-        await model.speak("Jarvis is ready.")
+        await model.speak("Assemblywright is ready.")
         adapter.finishSpeech()
 
-        #expect(model.lastSpokenText == "Jarvis is ready.")
+        #expect(model.lastSpokenText == "Assemblywright is ready.")
         #expect(model.phase == .idle)
         #expect(!model.isSpeaking)
         #expect(model.canSpeak)
@@ -3662,11 +3662,11 @@ struct JarvisMacCoreTests {
             phases.append(phase)
         }
 
-        let result = await adapter.speak("  Jarvis status ready.  ")
+        let result = await adapter.speak("  Assemblywright status ready.  ")
 
         #expect(speechOutputSucceeded(result))
         #expect(synthesizer.delegate === adapter)
-        #expect(synthesizer.spokenUtterances.map(\.speechString) == ["Jarvis status ready."])
+        #expect(synthesizer.spokenUtterances.map(\.speechString) == ["Assemblywright status ready."])
         #expect(synthesizer.stopBoundaries.isEmpty)
         #expect(adapter.phase == .speaking)
         #expect(phases == [.speaking])
@@ -4773,7 +4773,7 @@ struct JarvisMacCoreTests {
             "name": "Swift Lifecycle E2E",
             "version": "0.1.0",
             "source": "local_subprocess",
-            "author": "Jarvis E2E",
+            "author": "Assemblywright E2E",
             "source_path": canonicalPluginDirectory.path,
             "subprocess": [
                 "command": "plugin-runner.sh",
@@ -5735,7 +5735,7 @@ struct JarvisMacCoreTests {
 
         #expect(launcher.launches.isEmpty)
         if case let .degraded(reason) = supervisor.mode {
-            #expect(reason.contains("different Jarvis core"))
+            #expect(reason.contains("different Assemblywright core"))
             #expect(reason.contains("selected model"))
         } else {
             Issue.record("expected degraded mode, got \(supervisor.mode)")
@@ -5826,7 +5826,7 @@ struct JarvisMacCoreTests {
 
         #expect(launcher.launches.isEmpty)
         if case let .degraded(reason) = supervisor.mode {
-            #expect(reason.contains("different Jarvis core"))
+            #expect(reason.contains("different Assemblywright core"))
         } else {
             Issue.record("expected degraded mode, got \(supervisor.mode)")
         }
@@ -6299,7 +6299,7 @@ struct JarvisMacCoreTests {
               "candidate_count": 1,
               "unreviewed_active_count": 0,
               "deleted_sensitive_retained_count": 1,
-              "next_required_action": "review candidates, then mark reviewed, restore, or purge outside Jarvis storage with operator approval",
+              "next_required_action": "review candidates, then mark reviewed, restore, or purge outside Assemblywright storage with operator approval",
               "automation_enabled": false,
               "value_redaction_required": true,
               "candidates": [
@@ -6588,7 +6588,7 @@ private func fakeMemoryRetentionPlanJSON(id: UUID) -> Data {
           "candidate_count": 1,
           "unreviewed_active_count": 0,
           "deleted_sensitive_retained_count": 1,
-          "next_required_action": "review candidates, then mark reviewed, restore, or purge outside Jarvis storage with operator approval",
+          "next_required_action": "review candidates, then mark reviewed, restore, or purge outside Assemblywright storage with operator approval",
           "automation_enabled": false,
           "value_redaction_required": true,
           "candidates": [
@@ -6863,7 +6863,7 @@ private func permissionGrantSummaryJSON(approvalId: UUID = UUID(), taskId: UUID 
               "integrity_status": "not_verified",
               "capture_method": "local_manifest_snapshot",
               "last_verified_at": null,
-              "origin_claim": "Jarvis Test",
+              "origin_claim": "Assemblywright Test",
               "origin_claim_verified": false,
               "installed_at": "2026-05-20T12:00:00Z",
               "action_count": 1,
@@ -6929,7 +6929,7 @@ private func releaseReadinessJSON() -> Data {
             {
               "key": "release_evidence_status",
               "status": "implemented",
-              "proof": "`/release/evidence-status` and `jarvis release evidence-status` validate release evidence inventory, repository-backed command-result evidence, host-egress policy fields, archive-URI validation, and child-report semantic revalidation.",
+              "proof": "`/release/evidence-status` and `assemblywright release evidence-status` validate release evidence inventory, repository-backed command-result evidence, host-egress policy fields, archive-URI validation, and child-report semantic revalidation.",
               "boundary": "Read-only file/report inventory plus report semantic validation only."
             },
             {
@@ -6963,7 +6963,7 @@ private func releaseReadinessJSON() -> Data {
             "./scripts/release-live-device-qa.sh --check",
             "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env",
             "set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete",
-            "JARVIS_QA_CLEAN_PROFILE_VALIDATED=true JARVIS_QA_FINDER_LAUNCH_VALIDATED=true JARVIS_QA_MICROPHONE_VALIDATED=true JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true JARVIS_QA_NOTIFICATION_VALIDATED=true JARVIS_QA_RESTART_VALIDATED=true JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true JARVIS_QA_OWNER_NAME='Release Operator' JARVIS_QA_DEVICE_LABEL='Clean-profile release Mac' JARVIS_QA_PROFILE_LABEL='Clean macOS QA profile' JARVIS_QA_VOICE_CHECK_STARTED_AT='2026-05-22T16:00:00Z' JARVIS_QA_VOICE_CHECK_COMPLETED_AT='2026-05-22T16:05:00Z' JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE='Clean profile install observed' JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE='Finder launch observed' JARVIS_QA_MICROPHONE_EVIDENCE_NOTE='Microphone prompt and capture observed' JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE='Speech prompt and recognition observed' JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE='Spoken transcript reached the command path' JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE='Speech output playback observed' JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE='Scheduler notification observed' JARVIS_QA_NOTIFICATION_OBSERVED_AT='2026-05-22T16:04:00Z' JARVIS_QA_RESTART_EVIDENCE_NOTE='Restart recovery observed' JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE='Manual release QA surfaces observed' JARVIS_QA_VOICE_TEST_PHRASE='Jarvis status check' JARVIS_QA_OBSERVED_TRANSCRIPT='Jarvis status check' JARVIS_QA_EXPECTED_COMMAND_TEXT='status check' JARVIS_QA_OBSERVED_COMMAND_TEXT='status check' JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid-from-live-command>' JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL='Built-in speakers' ./scripts/release-live-device-qa.sh --assert-complete",
+            "JARVIS_QA_CLEAN_PROFILE_VALIDATED=true JARVIS_QA_FINDER_LAUNCH_VALIDATED=true JARVIS_QA_MICROPHONE_VALIDATED=true JARVIS_QA_SPEECH_PERMISSION_VALIDATED=true JARVIS_QA_TRANSCRIPT_HANDOFF_VALIDATED=true JARVIS_QA_AUDIO_OUTPUT_VALIDATED=true JARVIS_QA_NOTIFICATION_VALIDATED=true JARVIS_QA_RESTART_VALIDATED=true JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true JARVIS_QA_OWNER_NAME='Release Operator' JARVIS_QA_DEVICE_LABEL='Clean-profile release Mac' JARVIS_QA_PROFILE_LABEL='Clean macOS QA profile' JARVIS_QA_VOICE_CHECK_STARTED_AT='2026-05-22T16:00:00Z' JARVIS_QA_VOICE_CHECK_COMPLETED_AT='2026-05-22T16:05:00Z' JARVIS_QA_CLEAN_PROFILE_EVIDENCE_NOTE='Clean profile install observed' JARVIS_QA_FINDER_LAUNCH_EVIDENCE_NOTE='Finder launch observed' JARVIS_QA_MICROPHONE_EVIDENCE_NOTE='Microphone prompt and capture observed' JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE='Speech prompt and recognition observed' JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE='Spoken transcript reached the command path' JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE='Speech output playback observed' JARVIS_QA_NOTIFICATION_EVIDENCE_NOTE='Scheduler notification observed' JARVIS_QA_NOTIFICATION_OBSERVED_AT='2026-05-22T16:04:00Z' JARVIS_QA_RESTART_EVIDENCE_NOTE='Restart recovery observed' JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE='Manual release QA surfaces observed' JARVIS_QA_VOICE_TEST_PHRASE='Assemblywright status check' JARVIS_QA_OBSERVED_TRANSCRIPT='Assemblywright status check' JARVIS_QA_EXPECTED_COMMAND_TEXT='status check' JARVIS_QA_OBSERVED_COMMAND_TEXT='status check' JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid-from-live-command>' JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL='Built-in speakers' ./scripts/release-live-device-qa.sh --assert-complete",
             "./scripts/release-plugin-trust-qa.sh --check",
             "./scripts/release-plugin-trust-qa.sh --write-template target/release-plugin-trust-qa.env",
             "set -a && source target/release-plugin-trust-qa.env && set +a && ./scripts/release-plugin-trust-qa.sh --assert-complete",
@@ -7046,7 +7046,7 @@ private func releaseEvidenceStatusJSON() -> Data {
             {
               "key": "signed_app_bundle",
               "label": "App bundle path",
-              "path": "target/distribution/Jarvis.app",
+              "path": "target/distribution/Assemblywright.app",
               "kind": "directory",
               "status": "present",
               "required_for_production": true,
@@ -7056,7 +7056,7 @@ private func releaseEvidenceStatusJSON() -> Data {
             {
               "key": "app_executable",
               "label": "App executable",
-              "path": "target/distribution/Jarvis.app/Contents/MacOS/JarvisMacApp",
+              "path": "target/distribution/Assemblywright.app/Contents/MacOS/JarvisMacApp",
               "kind": "executable",
               "status": "present",
               "required_for_production": true,
@@ -7066,7 +7066,7 @@ private func releaseEvidenceStatusJSON() -> Data {
             {
               "key": "bundled_core_executable",
               "label": "Bundled core executable",
-              "path": "target/distribution/Jarvis.app/Contents/Resources/bin/jarvis-cli",
+              "path": "target/distribution/Assemblywright.app/Contents/Resources/bin/jarvis-cli",
               "kind": "executable",
               "status": "present",
               "required_for_production": true,
@@ -7076,7 +7076,7 @@ private func releaseEvidenceStatusJSON() -> Data {
             {
               "key": "signed_app_zip",
               "label": "App zip path",
-              "path": "target/distribution/Jarvis-0.1.4.zip",
+              "path": "target/distribution/Assemblywright-0.1.4.zip",
               "kind": "file",
               "status": "missing",
               "required_for_production": true,
@@ -7086,7 +7086,7 @@ private func releaseEvidenceStatusJSON() -> Data {
             {
               "key": "signed_installer_package",
               "label": "Installer package path",
-              "path": "target/distribution/Jarvis-0.1.4.pkg",
+              "path": "target/distribution/Assemblywright-0.1.4.pkg",
               "kind": "file",
               "status": "missing",
               "required_for_production": true,
@@ -7116,7 +7116,7 @@ private func releaseEvidenceStatusJSON() -> Data {
             {
               "key": "signed_distribution_provenance_report",
               "label": "Signed-distribution provenance report",
-              "path": "target/distribution/Jarvis-0.1.4-signed-provenance.json",
+              "path": "target/distribution/Assemblywright-0.1.4-signed-provenance.json",
               "kind": "json_report",
               "status": "missing",
               "required_for_production": true,
@@ -7153,7 +7153,7 @@ private func completeReleaseEvidenceStatusJSON() -> Data {
             {
               "key": "signed_app_bundle",
               "label": "App bundle path",
-              "path": "target/distribution/Jarvis.app",
+              "path": "target/distribution/Assemblywright.app",
               "kind": "directory",
               "status": "present",
               "required_for_production": true,
@@ -7163,7 +7163,7 @@ private func completeReleaseEvidenceStatusJSON() -> Data {
             {
               "key": "app_executable",
               "label": "App executable",
-              "path": "target/distribution/Jarvis.app/Contents/MacOS/JarvisMacApp",
+              "path": "target/distribution/Assemblywright.app/Contents/MacOS/JarvisMacApp",
               "kind": "executable",
               "status": "present",
               "required_for_production": true,
@@ -7173,7 +7173,7 @@ private func completeReleaseEvidenceStatusJSON() -> Data {
             {
               "key": "bundled_core_executable",
               "label": "Bundled core executable",
-              "path": "target/distribution/Jarvis.app/Contents/Resources/bin/jarvis-cli",
+              "path": "target/distribution/Assemblywright.app/Contents/Resources/bin/jarvis-cli",
               "kind": "executable",
               "status": "present",
               "required_for_production": true,
@@ -7183,7 +7183,7 @@ private func completeReleaseEvidenceStatusJSON() -> Data {
             {
               "key": "signed_app_zip",
               "label": "App zip path",
-              "path": "target/distribution/Jarvis-0.1.4.zip",
+              "path": "target/distribution/Assemblywright-0.1.4.zip",
               "kind": "file",
               "status": "present",
               "required_for_production": true,
@@ -7193,7 +7193,7 @@ private func completeReleaseEvidenceStatusJSON() -> Data {
             {
               "key": "signed_installer_package",
               "label": "Installer package path",
-              "path": "target/distribution/Jarvis-0.1.4.pkg",
+              "path": "target/distribution/Assemblywright-0.1.4.pkg",
               "kind": "file",
               "status": "present",
               "required_for_production": true,
@@ -7203,7 +7203,7 @@ private func completeReleaseEvidenceStatusJSON() -> Data {
             {
               "key": "signed_distribution_provenance_report",
               "label": "Signed-distribution provenance report",
-              "path": "target/distribution/Jarvis-0.1.4-signed-provenance.json",
+              "path": "target/distribution/Assemblywright-0.1.4-signed-provenance.json",
               "kind": "json_report",
               "status": "present",
               "required_for_production": true,
@@ -7260,7 +7260,7 @@ private func releaseRunbookJSON(runbook: String) -> Data {
             {
               "key": "signed_app_bundle",
               "label": "Signed app bundle",
-              "path": "target/distribution/Jarvis.app",
+              "path": "target/distribution/Assemblywright.app",
               "kind": "file",
               "status": "present",
               "required_for_production": true,
@@ -7270,7 +7270,7 @@ private func releaseRunbookJSON(runbook: String) -> Data {
             {
               "key": "app_executable",
               "label": "App executable",
-              "path": "target/distribution/Jarvis.app/Contents/MacOS/Jarvis",
+              "path": "target/distribution/Assemblywright.app/Contents/MacOS/Assemblywright",
               "kind": "file",
               "status": "present",
               "required_for_production": true,
@@ -7280,7 +7280,7 @@ private func releaseRunbookJSON(runbook: String) -> Data {
             {
               "key": "bundled_core_executable",
               "label": "Bundled core executable",
-              "path": "target/distribution/Jarvis.app/Contents/Resources/bin/jarvis",
+              "path": "target/distribution/Assemblywright.app/Contents/Resources/bin/jarvis",
               "kind": "file",
               "status": "present",
               "required_for_production": true,
@@ -7290,7 +7290,7 @@ private func releaseRunbookJSON(runbook: String) -> Data {
             {
               "key": "signed_app_zip",
               "label": "Signed app zip",
-              "path": "target/distribution/Jarvis-0.1.4-signed.zip",
+              "path": "target/distribution/Assemblywright-0.1.4-signed.zip",
               "kind": "file",
               "status": "missing",
               "required_for_production": true,
@@ -7300,7 +7300,7 @@ private func releaseRunbookJSON(runbook: String) -> Data {
             {
               "key": "signed_installer_package",
               "label": "Signed installer package",
-              "path": "target/distribution/Jarvis-0.1.4.pkg",
+              "path": "target/distribution/Assemblywright-0.1.4.pkg",
               "kind": "file",
               "status": "missing",
               "required_for_production": true,
@@ -7310,7 +7310,7 @@ private func releaseRunbookJSON(runbook: String) -> Data {
             {
               "key": "signed_distribution_provenance_report",
               "label": "Signed-distribution provenance report",
-              "path": "target/distribution/Jarvis-0.1.4-signed-provenance.json",
+              "path": "target/distribution/Assemblywright-0.1.4-signed-provenance.json",
               "kind": "json_report",
               "status": "missing",
               "required_for_production": true,
@@ -7352,7 +7352,7 @@ private func releaseRunbookJSON(runbook: String) -> Data {
             {
               "key": "signed_distribution_provenance_report",
               "label": "Signed-distribution provenance report",
-              "path": "target/distribution/Jarvis-0.1.4-signed-provenance.json",
+              "path": "target/distribution/Assemblywright-0.1.4-signed-provenance.json",
               "kind": "json_report",
               "status": "missing",
               "required_for_production": true,
@@ -7471,7 +7471,7 @@ private func invalidLiveDeviceEvidenceStatusJSON() -> Data {
             {
               "key": "signed_app_bundle",
               "label": "App bundle path",
-              "path": "target/distribution/Jarvis.app",
+              "path": "target/distribution/Assemblywright.app",
               "kind": "directory",
               "status": "present",
               "required_for_production": true,
@@ -7587,7 +7587,7 @@ private func samplePluginManifest() -> JarvisPluginManifest {
         name: "Calendar",
         version: "0.1.0",
         source: "first-party",
-        author: "Jarvis",
+        author: "Assemblywright",
         actions: [
             JarvisPluginActionManifest(
                 name: "inspect_events",
@@ -7664,7 +7664,7 @@ private func installedPluginsJSON() -> Data {
               "name": "Local Runner Test",
               "version": "0.1.0",
               "source": "local_subprocess",
-              "author": "Jarvis Test",
+              "author": "Assemblywright Test",
               "actions": [
                 {
                   "name": "inspect",
@@ -7690,7 +7690,7 @@ private func installedPluginsJSON() -> Data {
               "captured_at": "2026-05-20T12:00:00Z",
               "last_verified_at": null,
               "integrity_status": "not_verified",
-              "origin_claim": "Jarvis Test",
+              "origin_claim": "Assemblywright Test",
               "origin_claim_verified": false
             },
             "execution_enabled": false,
@@ -7756,7 +7756,7 @@ private func installedWasmPluginJSON() -> Data {
               "name": "Local WASM Compute",
               "version": "0.1.0",
               "source": "local_wasm",
-              "author": "Jarvis Test",
+              "author": "Assemblywright Test",
               "actions": [
                 {
                   "name": "compute",
@@ -7782,7 +7782,7 @@ private func installedWasmPluginJSON() -> Data {
               "captured_at": "2026-07-13T12:00:00Z",
               "last_verified_at": "2026-07-13T12:01:00Z",
               "integrity_status": "matches_install_snapshot",
-              "origin_claim": "Jarvis Test",
+              "origin_claim": "Assemblywright Test",
               "origin_claim_verified": false
             },
             "execution_enabled": true,
@@ -7901,7 +7901,7 @@ struct ReleaseSmokeProbeTests {
         ).run()
 
         #expect(result == JarvisReleaseSmokeProbe.successLine)
-        #expect(result == "Jarvis release smoke: default supervised Unix IPC route sequence verified")
+        #expect(result == "Assemblywright release smoke: default supervised Unix IPC route sequence verified")
         #expect(client.releaseSmokeCalls == [
             "health",
             "submitInitial",
@@ -7923,11 +7923,11 @@ struct ReleaseSmokeProbeTests {
         ])
         #expect(client.submittedCommandsWithoutCancellationIDs == [
             JarvisCommandRequest(
-                input: "Jarvis release smoke deterministic dry-run check.",
+                input: "Assemblywright release smoke deterministic dry-run check.",
                 dryRun: true
             ),
             JarvisCommandRequest(
-                input: "Jarvis release smoke deterministic dry-run check.",
+                input: "Assemblywright release smoke deterministic dry-run check.",
                 dryRun: true
             )
         ])
@@ -8926,7 +8926,7 @@ struct IPCBearerAuthorizationTests {
             for: JarvisCoreSupervisorError.launchedProcessExited
         )
 
-        #expect(reason.contains("older Jarvis core"))
+        #expect(reason.contains("older Assemblywright core"))
         #expect(reason.contains("database"))
         #expect(reason.contains("press Start again"))
         #expect(!reason.contains("credentialUnavailable"))

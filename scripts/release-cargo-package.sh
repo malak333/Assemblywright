@@ -76,4 +76,4 @@ if [[ "$keep_temp" == true ]]; then
   cleanup=""
 fi
 
-printf '\nJarvis cargo packaging verification: ok\n'
+printf '\nAssemblywright cargo packaging verification: ok\n'

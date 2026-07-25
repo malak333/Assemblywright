@@ -6,18 +6,18 @@ cd "$ROOT_DIR"
 
 VERSION="${JARVIS_EVIDENCE_VERSION:-$("$ROOT_DIR/scripts/release-version.sh")}"
 DIST_DIR="${JARVIS_EVIDENCE_DIST_DIR:-$ROOT_DIR/target/distribution}"
-APP_PATH="${JARVIS_EVIDENCE_APP_PATH:-$DIST_DIR/Jarvis.app}"
-ZIP_PATH="${JARVIS_EVIDENCE_ZIP_PATH:-$DIST_DIR/Jarvis-$VERSION.zip}"
-PKG_PATH="${JARVIS_EVIDENCE_PKG_PATH:-$DIST_DIR/Jarvis-$VERSION.pkg}"
-SIGNED_PROVENANCE_REPORT="${JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT:-$DIST_DIR/Jarvis-$VERSION-signed-provenance.json}"
+APP_PATH="${JARVIS_EVIDENCE_APP_PATH:-$DIST_DIR/Assemblywright.app}"
+ZIP_PATH="${JARVIS_EVIDENCE_ZIP_PATH:-$DIST_DIR/Assemblywright-$VERSION.zip}"
+PKG_PATH="${JARVIS_EVIDENCE_PKG_PATH:-$DIST_DIR/Assemblywright-$VERSION.pkg}"
+SIGNED_PROVENANCE_REPORT="${JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT:-$DIST_DIR/Assemblywright-$VERSION-signed-provenance.json}"
 LIVE_QA_REPORT="${JARVIS_EVIDENCE_LIVE_QA_REPORT:-${JARVIS_QA_REPORT_PATH:-$ROOT_DIR/target/release-live-device-qa-report.json}}"
 PLUGIN_QA_REPORT="${JARVIS_EVIDENCE_PLUGIN_QA_REPORT:-${JARVIS_PLUGIN_QA_REPORT_PATH:-$ROOT_DIR/target/release-plugin-trust-qa-report.json}}"
 BUNDLE_PATH="${JARVIS_EVIDENCE_OUTPUT_PATH:-$ROOT_DIR/target/release-evidence-bundle.json}"
 EXPECTED_BUNDLE_ID="${JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID:-com.nobiletechnology.jarvis}"
 EXPECTED_VERSION="${JARVIS_EVIDENCE_EXPECTED_VERSION:-$VERSION}"
-EXPECTED_INSTALLED_APP_PATH="${JARVIS_QA_INSTALLED_APP_PATH:-/Applications/Jarvis.app}"
-EXPECTED_MICROPHONE_USAGE_DESCRIPTION="Jarvis uses microphone input only when you explicitly start local voice capture."
-EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION="Jarvis uses speech recognition only to turn your spoken command into a local assistant request."
+EXPECTED_INSTALLED_APP_PATH="${JARVIS_QA_INSTALLED_APP_PATH:-/Applications/Assemblywright.app}"
+EXPECTED_MICROPHONE_USAGE_DESCRIPTION="Assemblywright uses microphone input only when you explicitly start local voice capture."
+EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION="Assemblywright uses speech recognition only to turn your spoken command into a local assistant request."
 EVIDENCE_STATUS_ENDPOINT="${JARVIS_EVIDENCE_STATUS_ENDPOINT:-}"
 
 CHECK_ONLY=false
@@ -33,7 +33,7 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/release-evidence-doctor.sh [--check|--assert-complete|--self-test]
 
-Inspect the standard Jarvis release evidence paths and report which production
+Inspect the standard Assemblywright release evidence paths and report which production
 evidence gates are present or missing.
 
 --check prints a non-failing status summary. Missing external/manual evidence is
@@ -58,7 +58,7 @@ Optional paths match scripts/release-evidence-bundle.sh:
   JARVIS_EVIDENCE_OUTPUT_PATH
   JARVIS_EVIDENCE_EXPECTED_BUNDLE_ID
   JARVIS_EVIDENCE_EXPECTED_VERSION
-  JARVIS_QA_INSTALLED_APP_PATH        Defaults to /Applications/Jarvis.app and must match the live QA report
+  JARVIS_QA_INSTALLED_APP_PATH        Defaults to /Applications/Assemblywright.app and must match the live QA report
   JARVIS_EVIDENCE_STATUS_ENDPOINT     Optional jarvis serve endpoint for repository-backed --assert-complete parity
 
 Proof boundary: this script inspects evidence files only. It does not sign,
@@ -89,7 +89,7 @@ Recommended next evidence commands:
   external handoff directory: ./scripts/release-external-handoff.sh --write target/release-external-handoff
   live-device template: ./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env
   live-device endpoint: set JARVIS_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' in target/release-live-device-qa.env
-  live-device IPC auth: launch Jarvis with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then confirm JARVIS_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path before IPC commands
+  live-device IPC auth: launch Assemblywright with JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true, then confirm JARVIS_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path before IPC commands
   live-device command evidence: cargo run -p jarvis-cli -- command "status check" --endpoint "${JARVIS_RELEASE_CORE_ENDPOINT:?set JARVIS_RELEASE_CORE_ENDPOINT}" --json
   live-device evidence ID: record the returned task ID as JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>' or a task-associated audit ID as 'audit:<uuid>'
   live-device assertion: set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete
@@ -606,9 +606,9 @@ import zipfile
 
 zip_path = sys.argv[1]
 required_entries = (
-    "Jarvis.app/Contents/MacOS/JarvisMacApp",
-    "Jarvis.app/Contents/Resources/bin/jarvis-cli",
-    "Jarvis.app/Contents/Info.plist",
+    "Assemblywright.app/Contents/MacOS/JarvisMacApp",
+    "Assemblywright.app/Contents/Resources/bin/jarvis-cli",
+    "Assemblywright.app/Contents/Info.plist",
 )
 
 try:
@@ -619,15 +619,15 @@ except Exception:
 
 if any(entry not in names for entry in required_entries):
     raise SystemExit(1)
-if any("/Jarvis.app/" in name and not name.startswith("Jarvis.app/") for name in names):
+if any("/Assemblywright.app/" in name and not name.startswith("Assemblywright.app/") for name in names):
     raise SystemExit(1)
 
 app_roots = {
-    name.split("Jarvis.app/", 1)[0] + "Jarvis.app/"
+    name.split("Assemblywright.app/", 1)[0] + "Assemblywright.app/"
     for name in names
-    if "Jarvis.app/" in name
+    if "Assemblywright.app/" in name
 }
-raise SystemExit(0 if app_roots == {"Jarvis.app/"} else 1)
+raise SystemExit(0 if app_roots == {"Assemblywright.app/"} else 1)
 PY
 }
 
@@ -737,9 +737,9 @@ check_zip_payload() {
   fi
 
   if zip_payload_valid "$path"; then
-    record_satisfied "$label payload has exactly one top-level Jarvis.app"
+    record_satisfied "$label payload has exactly one top-level Assemblywright.app"
   else
-    record_missing "$label payload invalid: expected exactly one top-level Jarvis.app with Info.plist, app executable, and bundled core"
+    record_missing "$label payload invalid: expected exactly one top-level Assemblywright.app with Info.plist, app executable, and bundled core"
   fi
 }
 
@@ -1122,10 +1122,10 @@ check_bundled_core_version() {
     return 0
   fi
 
-  if [[ -f "$marker_path" ]] && [[ "$(tr -d '\r\n' <"$marker_path")" == "jarvis $EXPECTED_VERSION" ]]; then
+  if [[ -f "$marker_path" ]] && [[ "$(tr -d '\r\n' <"$marker_path")" == "assemblywright $EXPECTED_VERSION" ]]; then
     record_satisfied "bundled core version marker matches expected version"
   else
-    record_missing "bundled core version marker mismatch: expected jarvis $EXPECTED_VERSION from $marker_path; $remediation"
+    record_missing "bundled core version marker mismatch: expected assemblywright $EXPECTED_VERSION from $marker_path; $remediation"
   fi
 
   if [[ "$ASSERT_COMPLETE" != true ]]; then
@@ -1133,10 +1133,10 @@ check_bundled_core_version() {
   fi
 
   local output
-  if output="$("$core_path" --version 2>&1)" && [[ "$output" == *"jarvis $EXPECTED_VERSION"* ]]; then
+  if output="$("$core_path" --version 2>&1)" && [[ "$output" == *"assemblywright $EXPECTED_VERSION"* ]]; then
     record_satisfied "bundled core --version matches expected version"
   else
-    record_missing "bundled core --version mismatch: expected jarvis $EXPECTED_VERSION from $core_path; $remediation"
+    record_missing "bundled core --version mismatch: expected assemblywright $EXPECTED_VERSION from $core_path; $remediation"
   fi
 }
 
@@ -1191,7 +1191,7 @@ check_release_evidence() {
     check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.pkg_path" "$PKG_PATH"
     check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.app_executable_path" "$APP_PATH/Contents/MacOS/JarvisMacApp"
     check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.bundled_core_path" "$APP_PATH/Contents/Resources/bin/jarvis-cli"
-    check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.bundled_core_version" "jarvis $EXPECTED_VERSION"
+    check_json_string "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "artifacts.bundled_core_version" "assemblywright $EXPECTED_VERSION"
     for field in artifacts.zip_sha256 artifacts.pkg_sha256 artifacts.app_executable_sha256 artifacts.bundled_core_sha256; do
       check_json_sha256 "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT" "$field"
     done
@@ -1289,7 +1289,7 @@ check_release_evidence() {
     check_json_sha256 "live-device QA report" "$LIVE_QA_REPORT" "signed_provenance.sha256"
     check_json_sha256_matches_file "live-device QA report" "$LIVE_QA_REPORT" "signed_provenance.sha256" "signed-distribution provenance report" "$SIGNED_PROVENANCE_REPORT"
     check_json_string "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.executable_path" "$EXPECTED_INSTALLED_APP_PATH/Contents/Resources/bin/jarvis-cli"
-    check_json_string "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.version" "jarvis $EXPECTED_VERSION"
+    check_json_string "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.version" "assemblywright $EXPECTED_VERSION"
     check_json_sha256 "live-device QA report" "$LIVE_QA_REPORT" "bundled_core.sha256"
     if valid_json_file "$SIGNED_PROVENANCE_REPORT"; then
       check_json_fields_equal_across_files "live-device bundled-core digest" "$LIVE_QA_REPORT" "bundled_core.sha256" "$SIGNED_PROVENANCE_REPORT" "artifacts.bundled_core_sha256"
@@ -1402,7 +1402,7 @@ print_status() {
     status="complete"
   fi
 
-  printf 'Jarvis release evidence inventory: %s\n' "$status"
+  printf 'Assemblywright release evidence inventory: %s\n' "$status"
   printf 'Satisfied evidence items: %s\n' "${#SATISFIED_ITEMS[@]}"
   if [[ "${#SATISFIED_ITEMS[@]}" -gt 0 ]]; then
     for item in "${SATISFIED_ITEMS[@]}"; do
@@ -1443,7 +1443,7 @@ assert_cli_evidence_status_complete() {
     JARVIS_EVIDENCE_EXPECTED_VERSION="$EXPECTED_VERSION" \
     JARVIS_QA_INSTALLED_APP_PATH="$EXPECTED_INSTALLED_APP_PATH" \
     cargo run -q -p jarvis-cli -- release evidence-status --json "${endpoint_args[@]}" 2>&1)"; then
-    fail "release evidence doctor --assert-complete requires jarvis release evidence-status --json to pass; output: $status_output"
+    fail "release evidence doctor --assert-complete requires assemblywright release evidence-status --json to pass; output: $status_output"
   fi
 
   STATUS_JSON="$status_output" python3 - <<'PY'
@@ -1484,7 +1484,7 @@ else:
     problems.append("items=<not a list>")
 
 print(
-    "release evidence doctor --assert-complete requires jarvis release evidence-status --json "
+    "release evidence doctor --assert-complete requires assemblywright release evidence-status --json "
     "to report complete=true with zero missing/invalid evidence and all items present; "
     + "; ".join(problems),
     file=sys.stderr,
@@ -1517,12 +1517,12 @@ XML
   cat >"$app_path/Contents/Resources/bin/jarvis-cli" <<EOF
 #!/usr/bin/env bash
 if [[ "\${1:-}" == "--version" ]]; then
-  printf 'jarvis $VERSION\n'
+  printf 'assemblywright $VERSION\n'
   exit 0
 fi
 printf 'self-test jarvis-cli fixture\n'
 EOF
-  printf 'jarvis %s\n' "$VERSION" >"$app_path/Contents/Resources/bin/jarvis-cli.version"
+  printf 'assemblywright %s\n' "$VERSION" >"$app_path/Contents/Resources/bin/jarvis-cli.version"
   chmod 755 "$app_path/Contents/MacOS/JarvisMacApp" "$app_path/Contents/Resources/bin/jarvis-cli"
 }
 
@@ -1531,8 +1531,8 @@ write_fixture_reports() {
   local plugin_path="$2"
   local live_core_sha
   local live_app_executable_sha
-  live_core_sha="$(file_sha256 "$(dirname "$live_path")/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli")"
-  live_app_executable_sha="$(file_sha256 "$(dirname "$live_path")/dist/Jarvis.app/Contents/MacOS/JarvisMacApp")"
+  live_core_sha="$(file_sha256 "$(dirname "$live_path")/dist/Assemblywright.app/Contents/Resources/bin/jarvis-cli")"
+  live_app_executable_sha="$(file_sha256 "$(dirname "$live_path")/dist/Assemblywright.app/Contents/MacOS/JarvisMacApp")"
 
   cat >"$live_path" <<JSON
 {
@@ -1540,7 +1540,7 @@ write_fixture_reports() {
   "evidence_type": "owner_recorded_live_device_qa",
   "self_test_fixture": false,
   "generated_at": "2026-05-22T16:06:00Z",
-  "installed_app_path": "/Applications/Jarvis.app",
+  "installed_app_path": "/Applications/Assemblywright.app",
   "validation_flags": {
     "clean_profile": true,
     "finder_launch": true,
@@ -1560,7 +1560,7 @@ write_fixture_reports() {
     "speech_output_playback": true
   },
   "owner_recorded_live_voice_evidence": {
-    "owner_name": "Jarvis QA Self-Test",
+    "owner_name": "Assemblywright QA Self-Test",
     "device_label": "self-test Mac fixture",
     "profile_label": "self-test clean profile",
     "voice_check_started_at": "2026-05-22T16:00:00Z",
@@ -1579,8 +1579,8 @@ write_fixture_reports() {
     "manual_release_qa_evidence_note": "Manual release QA surfaces observed in the controlled release QA lane."
   },
   "voice_command_observation": {
-    "test_phrase": "Jarvis status check.",
-    "observed_transcript": "Jarvis status check.",
+    "test_phrase": "Assemblywright status check.",
+    "observed_transcript": "Assemblywright status check.",
     "expected_command_text": "status check",
     "observed_command_text": "status check",
     "command_result_evidence_id": "task:00000000-0000-4000-8000-000000000001",
@@ -1594,15 +1594,15 @@ write_fixture_reports() {
     "speech_recognition_usage_description": "$EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION"
   },
   "app_executable": {
-    "executable_path": "/Applications/Jarvis.app/Contents/MacOS/JarvisMacApp",
+    "executable_path": "/Applications/Assemblywright.app/Contents/MacOS/JarvisMacApp",
     "sha256": "$live_app_executable_sha",
     "code_identifier": "com.nobiletechnology.jarvis",
     "team_identifier": "9VZ742YKV4",
     "cdhash": "0123456789abcdef0123456789abcdef01234567"
   },
   "bundled_core": {
-    "executable_path": "/Applications/Jarvis.app/Contents/Resources/bin/jarvis-cli",
-    "version": "jarvis $VERSION",
+    "executable_path": "/Applications/Assemblywright.app/Contents/Resources/bin/jarvis-cli",
+    "version": "assemblywright $VERSION",
     "sha256": "$live_core_sha"
   },
   "proof_boundary": "self-test fixture"
@@ -1625,7 +1625,7 @@ JSON
     "manual_trust_review": true
   },
   "owner_recorded_plugin_trust_evidence": {
-    "owner_name": "Jarvis Plugin QA Self-Test",
+    "owner_name": "Assemblywright Plugin QA Self-Test",
     "review_started_at": "2026-05-22T16:10:00Z",
     "review_completed_at": "2026-05-22T16:20:00Z",
     "marketplace_evidence_note": "Marketplace review evidence was observed in the controlled release trust lane.",
@@ -1720,7 +1720,7 @@ write_fixture_bundle() {
     "local_signature_validation": true
   },
   "owner_recorded_release_evidence": {
-    "owner_name": "Jarvis Release Self-Test",
+    "owner_name": "Assemblywright Release Self-Test",
     "completed_at": "2026-05-22T16:45:00Z",
     "signed_distribution_note": "Signed distribution provenance fixture reviewed.",
     "notarization_note": "Notarization fixture reviewed.",
@@ -1775,16 +1775,16 @@ if [[ "$SELF_TEST" == true ]]; then
   export JARVIS_EVIDENCE_DOCTOR_SELF_TEST_SHAPE_ONLY=true
   tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/jarvis-release-evidence-doctor.XXXXXX")"
   trap 'rm -rf "$tmp_dir"' EXIT
-  self_test_zip="$tmp_dir/dist/Jarvis-$VERSION.zip"
-  self_test_pkg="$tmp_dir/dist/Jarvis-$VERSION.pkg"
+  self_test_zip="$tmp_dir/dist/Assemblywright-$VERSION.zip"
+  self_test_pkg="$tmp_dir/dist/Assemblywright-$VERSION.pkg"
   mkdir -p "$tmp_dir/dist"
-  write_fixture_app "$tmp_dir/dist/Jarvis.app"
-  (cd "$tmp_dir/dist" && zip -qr "$self_test_zip" Jarvis.app)
+  write_fixture_app "$tmp_dir/dist/Assemblywright.app"
+  (cd "$tmp_dir/dist" && zip -qr "$self_test_zip" Assemblywright.app)
   touch "$self_test_pkg"
   self_test_zip_sha="$(file_sha256 "$self_test_zip")"
   self_test_pkg_sha="$(file_sha256 "$self_test_pkg")"
-  self_test_app_executable_sha="$(file_sha256 "$tmp_dir/dist/Jarvis.app/Contents/MacOS/JarvisMacApp")"
-  self_test_core_sha="$(file_sha256 "$tmp_dir/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli")"
+  self_test_app_executable_sha="$(file_sha256 "$tmp_dir/dist/Assemblywright.app/Contents/MacOS/JarvisMacApp")"
+  self_test_core_sha="$(file_sha256 "$tmp_dir/dist/Assemblywright.app/Contents/Resources/bin/jarvis-cli")"
   cat >"$tmp_dir/app-zip-notarytool.log" <<'LOG'
 id: 00000000-0000-4000-8000-000000000001
 status: Accepted
@@ -1796,7 +1796,7 @@ LOG
   self_test_app_notary_log_sha="$(file_sha256 "$tmp_dir/app-zip-notarytool.log")"
   self_test_pkg_notary_log_sha="$(file_sha256 "$tmp_dir/installer-pkg-notarytool.log")"
   write_fixture_reports "$tmp_dir/live.json" "$tmp_dir/plugin.json"
-  cat >"$tmp_dir/dist/Jarvis-$VERSION-signed-provenance.json" <<JSON
+  cat >"$tmp_dir/dist/Assemblywright-$VERSION-signed-provenance.json" <<JSON
 {
   "schema_version": 1,
   "evidence_type": "signed_distribution_provenance",
@@ -1804,27 +1804,27 @@ LOG
   "version": "$VERSION",
   "bundle_identifier": "com.nobiletechnology.jarvis",
   "artifacts": {
-    "app_path": "$tmp_dir/dist/Jarvis.app",
+    "app_path": "$tmp_dir/dist/Assemblywright.app",
     "zip_path": "$self_test_zip",
     "pkg_path": "$self_test_pkg",
     "zip_sha256": "$self_test_zip_sha",
     "pkg_sha256": "$self_test_pkg_sha",
-    "app_executable_path": "$tmp_dir/dist/Jarvis.app/Contents/MacOS/JarvisMacApp",
+    "app_executable_path": "$tmp_dir/dist/Assemblywright.app/Contents/MacOS/JarvisMacApp",
     "app_executable_sha256": "$self_test_app_executable_sha",
-    "bundled_core_path": "$tmp_dir/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli",
+    "bundled_core_path": "$tmp_dir/dist/Assemblywright.app/Contents/Resources/bin/jarvis-cli",
     "bundled_core_sha256": "$self_test_core_sha",
-    "bundled_core_version": "jarvis $VERSION"
+    "bundled_core_version": "assemblywright $VERSION"
   },
   "signing": {
-    "developer_id_application_identity": "Developer ID Application: Jarvis QA Fixture",
-    "developer_id_installer_identity": "Developer ID Installer: Jarvis QA Fixture",
-    "app_bundle_codesign": "Authority=Developer ID Application: Jarvis QA Fixture",
-    "app_executable_codesign": "Authority=Developer ID Application: Jarvis QA Fixture",
+    "developer_id_application_identity": "Developer ID Application: Assemblywright QA Fixture",
+    "developer_id_installer_identity": "Developer ID Installer: Assemblywright QA Fixture",
+    "app_bundle_codesign": "Authority=Developer ID Application: Assemblywright QA Fixture",
+    "app_executable_codesign": "Authority=Developer ID Application: Assemblywright QA Fixture",
     "app_executable_identifier": "com.nobiletechnology.jarvis",
     "app_executable_team_identifier": "9VZ742YKV4",
     "app_executable_cdhash": "0123456789abcdef0123456789abcdef01234567",
-    "bundled_core_codesign": "Authority=Developer ID Application: Jarvis QA Fixture",
-    "installer_pkg_signature": "Developer ID Installer: Jarvis QA Fixture"
+    "bundled_core_codesign": "Authority=Developer ID Application: Assemblywright QA Fixture",
+    "installer_pkg_signature": "Developer ID Installer: Assemblywright QA Fixture"
   },
   "notarization": {
     "app_zip_submission_id": "00000000-0000-4000-8000-000000000001",
@@ -1858,8 +1858,8 @@ LOG
   "proof_boundary": "self-test fixture"
 }
 JSON
-  self_test_signed_provenance_sha="$(file_sha256 "$tmp_dir/dist/Jarvis-$VERSION-signed-provenance.json")"
-  python3 - "$tmp_dir/live.json" "$tmp_dir/dist/Jarvis-$VERSION-signed-provenance.json" "$self_test_signed_provenance_sha" <<'PY'
+  self_test_signed_provenance_sha="$(file_sha256 "$tmp_dir/dist/Assemblywright-$VERSION-signed-provenance.json")"
+  python3 - "$tmp_dir/live.json" "$tmp_dir/dist/Assemblywright-$VERSION-signed-provenance.json" "$self_test_signed_provenance_sha" <<'PY'
 import json
 import sys
 
@@ -1876,15 +1876,15 @@ with open(live_path, "w", encoding="utf-8") as handle:
 PY
   write_fixture_bundle \
     "$tmp_dir/bundle.json" \
-    "$tmp_dir/dist/Jarvis.app" \
+    "$tmp_dir/dist/Assemblywright.app" \
     "$self_test_zip" \
     "$self_test_pkg" \
-    "$tmp_dir/dist/Jarvis-$VERSION-signed-provenance.json" \
+    "$tmp_dir/dist/Assemblywright-$VERSION-signed-provenance.json" \
     "$tmp_dir/live.json" \
     "$tmp_dir/plugin.json"
 
   JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
@@ -1892,19 +1892,19 @@ PY
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
     "$0" --assert-complete >/dev/null
 
-  python3 - "$tmp_dir/dist/Jarvis.app/Contents/Info.plist" <<'PY'
+  python3 - "$tmp_dir/dist/Assemblywright.app/Contents/Info.plist" <<'PY'
 import plistlib
 import sys
 
 path = sys.argv[1]
 with open(path, "rb") as handle:
     info = plistlib.load(handle)
-info["NSMicrophoneUsageDescription"] = "Jarvis microphone fixture"
+info["NSMicrophoneUsageDescription"] = "Assemblywright microphone fixture"
 with open(path, "wb") as handle:
     plistlib.dump(info, handle)
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
@@ -1916,7 +1916,7 @@ PY
   if ! grep -q "NSMicrophoneUsageDescription mismatch" "$tmp_dir/privacy-copy.err"; then
     fail "release evidence doctor self-test expected stale app privacy prompt error to name NSMicrophoneUsageDescription"
   fi
-  write_fixture_app "$tmp_dir/dist/Jarvis.app"
+  write_fixture_app "$tmp_dir/dist/Assemblywright.app"
 
   python3 - "$tmp_dir/plugin.json" "$tmp_dir/invalid-plugin-artifact.json" <<'PY'
 import json
@@ -1930,7 +1930,7 @@ with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
@@ -1952,7 +1952,7 @@ with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
@@ -1977,7 +1977,7 @@ with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
@@ -1990,10 +1990,10 @@ PY
     fail "release evidence doctor self-test expected bare plugin artifact URI error to mention durable release evidence archive"
   fi
 
-  printf 'jarvis 0.0.0\n' >"$tmp_dir/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli.version"
+  printf 'assemblywright 0.0.0\n' >"$tmp_dir/dist/Assemblywright.app/Contents/Resources/bin/jarvis-cli.version"
   stale_marker_output=""
   stale_marker_output="$(JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
@@ -2007,7 +2007,7 @@ PY
     fail "release evidence doctor self-test expected next-step guidance to include package-distribution.sh --check"
   fi
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
@@ -2016,17 +2016,17 @@ PY
     "$0" --assert-complete >/dev/null 2>&1; then
     fail "release evidence doctor self-test expected stale bundled core version marker to fail"
   fi
-  printf 'jarvis %s\n' "$VERSION" >"$tmp_dir/dist/Jarvis.app/Contents/Resources/bin/jarvis-cli.version"
+  printf 'assemblywright %s\n' "$VERSION" >"$tmp_dir/dist/Assemblywright.app/Contents/Resources/bin/jarvis-cli.version"
 
-  nested_zip="$tmp_dir/dist/nested-Jarvis-$VERSION.zip"
+  nested_zip="$tmp_dir/dist/nested-Assemblywright-$VERSION.zip"
   mkdir -p "$tmp_dir/nested/payload"
-  cp -R "$tmp_dir/dist/Jarvis.app" "$tmp_dir/nested/payload/Jarvis.app"
-  (cd "$tmp_dir/nested" && zip -qr "$nested_zip" payload/Jarvis.app)
+  cp -R "$tmp_dir/dist/Assemblywright.app" "$tmp_dir/nested/payload/Assemblywright.app"
+  (cd "$tmp_dir/nested" && zip -qr "$nested_zip" payload/Assemblywright.app)
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="$nested_zip" \
     JARVIS_EVIDENCE_PKG_PATH="$self_test_pkg" \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/dist/Jarvis-$VERSION-signed-provenance.json" \
+    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/dist/Assemblywright-$VERSION-signed-provenance.json" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
     JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/bundle.json" \
@@ -2034,7 +2034,7 @@ PY
     fail "release evidence doctor self-test expected nested app zip payload to fail"
   fi
 
-  python3 - "$tmp_dir/dist/Jarvis-$VERSION-signed-provenance.json" "$tmp_dir/dist/stale-digest-signed-provenance.json" <<'PY'
+  python3 - "$tmp_dir/dist/Assemblywright-$VERSION-signed-provenance.json" "$tmp_dir/dist/stale-digest-signed-provenance.json" <<'PY'
 import json
 import sys
 
@@ -2046,7 +2046,7 @@ with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/dist/stale-digest-signed-provenance.json" \
@@ -2057,7 +2057,7 @@ PY
 	    fail "release evidence doctor self-test expected stale signed provenance digest to fail"
 	  fi
 
-  python3 - "$tmp_dir/dist/Jarvis-$VERSION-signed-provenance.json" "$tmp_dir/dist/stale-notary-log-signed-provenance.json" <<'PY'
+  python3 - "$tmp_dir/dist/Assemblywright-$VERSION-signed-provenance.json" "$tmp_dir/dist/stale-notary-log-signed-provenance.json" <<'PY'
 import json
 import sys
 
@@ -2069,7 +2069,7 @@ with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/dist/stale-notary-log-signed-provenance.json" \
@@ -2080,19 +2080,19 @@ PY
     fail "release evidence doctor self-test expected stale signed provenance notary log digest to fail"
   fi
 
-  python3 - "$tmp_dir/dist/Jarvis-$VERSION-signed-provenance.json" "$tmp_dir/dist/bad-apple-tool-signed-provenance.json" <<'PY'
+  python3 - "$tmp_dir/dist/Assemblywright-$VERSION-signed-provenance.json" "$tmp_dir/dist/bad-apple-tool-signed-provenance.json" <<'PY'
 import json
 import sys
 
 source, target = sys.argv[1:3]
 with open(source, encoding="utf-8") as handle:
     data = json.load(handle)
-data["signing"]["app_bundle_codesign"] = "Authority=Apple Development: Jarvis QA Fixture"
+data["signing"]["app_bundle_codesign"] = "Authority=Apple Development: Assemblywright QA Fixture"
 with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/dist/bad-apple-tool-signed-provenance.json" \
@@ -2103,7 +2103,7 @@ PY
     fail "release evidence doctor self-test expected non-Developer-ID signed provenance evidence to fail"
   fi
 
-  python3 - "$tmp_dir/dist/Jarvis-$VERSION-signed-provenance.json" "$tmp_dir/dist/negated-gatekeeper-signed-provenance.json" <<'PY'
+  python3 - "$tmp_dir/dist/Assemblywright-$VERSION-signed-provenance.json" "$tmp_dir/dist/negated-gatekeeper-signed-provenance.json" <<'PY'
 import json
 import sys
 
@@ -2115,7 +2115,7 @@ with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/dist/negated-gatekeeper-signed-provenance.json" \
@@ -2126,7 +2126,7 @@ PY
     fail "release evidence doctor self-test expected negated Gatekeeper acceptance to fail"
   fi
 
-  python3 - "$tmp_dir/dist/Jarvis-$VERSION-signed-provenance.json" "$tmp_dir/dist/rejected-notary-signed-provenance.json" <<'PY'
+  python3 - "$tmp_dir/dist/Assemblywright-$VERSION-signed-provenance.json" "$tmp_dir/dist/rejected-notary-signed-provenance.json" <<'PY'
 import json
 import sys
 
@@ -2138,7 +2138,7 @@ with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/dist/rejected-notary-signed-provenance.json" \
@@ -2150,10 +2150,10 @@ PY
   fi
 
   check_output="$(JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/missing-dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/missing-dist/Jarvis.app" \
-    JARVIS_EVIDENCE_ZIP_PATH="$tmp_dir/missing-dist/Jarvis-$VERSION.zip" \
-    JARVIS_EVIDENCE_PKG_PATH="$tmp_dir/missing-dist/Jarvis-$VERSION.pkg" \
-    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/missing-dist/Jarvis-$VERSION-signed-provenance.json" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/missing-dist/Assemblywright.app" \
+    JARVIS_EVIDENCE_ZIP_PATH="$tmp_dir/missing-dist/Assemblywright-$VERSION.zip" \
+    JARVIS_EVIDENCE_PKG_PATH="$tmp_dir/missing-dist/Assemblywright-$VERSION.pkg" \
+    JARVIS_EVIDENCE_SIGNED_PROVENANCE_REPORT="$tmp_dir/missing-dist/Assemblywright-$VERSION-signed-provenance.json" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/missing-live.json" \
     JARVIS_EVIDENCE_PLUGIN_QA_REPORT="$tmp_dir/missing-plugin.json" \
     JARVIS_EVIDENCE_OUTPUT_PATH="$tmp_dir/missing-bundle.json" \
@@ -2191,7 +2191,7 @@ with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/missing-observation-live.json" \
@@ -2213,7 +2213,7 @@ with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/placeholder-live-owner-note.json" \
@@ -2235,7 +2235,7 @@ with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/mismatched-command-live.json" \
@@ -2252,12 +2252,12 @@ import sys
 source, target = sys.argv[1:3]
 with open(source, encoding="utf-8") as handle:
     data = json.load(handle)
-data["voice_command_observation"]["observed_transcript"] = "Jarvis stats check."
+data["voice_command_observation"]["observed_transcript"] = "Assemblywright stats check."
 with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/mismatched-transcript-live.json" \
@@ -2274,12 +2274,12 @@ import sys
 source, target = sys.argv[1:3]
 with open(source, encoding="utf-8") as handle:
     data = json.load(handle)
-data["installed_app_path"] = "/tmp/Jarvis.app"
+data["installed_app_path"] = "/tmp/Assemblywright.app"
 with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/mismatched-installed-app-live.json" \
@@ -2301,7 +2301,7 @@ with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/malformed-command-result-evidence-live.json" \
@@ -2323,7 +2323,7 @@ with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/mismatched-core-digest-live.json" \
@@ -2345,7 +2345,7 @@ with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/pregenerated-live.json" \
@@ -2367,7 +2367,7 @@ with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
@@ -2389,7 +2389,7 @@ with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
@@ -2411,7 +2411,7 @@ with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
@@ -2433,7 +2433,7 @@ with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
@@ -2456,7 +2456,7 @@ with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
@@ -2479,7 +2479,7 @@ with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
@@ -2502,7 +2502,7 @@ with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
@@ -2524,7 +2524,7 @@ with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
@@ -2546,7 +2546,7 @@ with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
@@ -2568,7 +2568,7 @@ with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
@@ -2590,7 +2590,7 @@ with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
@@ -2613,14 +2613,14 @@ with open(target, "w", encoding="utf-8") as handle:
 PY
   write_fixture_bundle \
     "$tmp_dir/invalid-child-bundle.json" \
-    "$tmp_dir/dist/Jarvis.app" \
+    "$tmp_dir/dist/Assemblywright.app" \
     "$self_test_zip" \
     "$self_test_pkg" \
-    "$tmp_dir/dist/Jarvis-$VERSION-signed-provenance.json" \
+    "$tmp_dir/dist/Assemblywright-$VERSION-signed-provenance.json" \
     "$tmp_dir/invalid-bundle-child-live.json" \
     "$tmp_dir/plugin.json"
   invalid_child_output="$(JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/invalid-bundle-child-live.json" \
@@ -2631,7 +2631,7 @@ PY
     fail "release evidence doctor self-test expected final bundle to reject invalid live-device child report"
   fi
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/invalid-bundle-child-live.json" \
@@ -2653,7 +2653,7 @@ with open(target, "w", encoding="utf-8") as handle:
     json.dump(data, handle)
 PY
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
@@ -2665,7 +2665,7 @@ PY
 
   rm "$tmp_dir/plugin.json"
   if JARVIS_EVIDENCE_DIST_DIR="$tmp_dir/dist" \
-    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Jarvis.app" \
+    JARVIS_EVIDENCE_APP_PATH="$tmp_dir/dist/Assemblywright.app" \
     JARVIS_EVIDENCE_ZIP_PATH="" \
     JARVIS_EVIDENCE_PKG_PATH="" \
     JARVIS_EVIDENCE_LIVE_QA_REPORT="$tmp_dir/live.json" \
@@ -2675,7 +2675,7 @@ PY
     fail "release evidence doctor self-test expected missing plugin report to fail"
   fi
 
-  printf 'Jarvis release evidence doctor self-test: ok\n'
+  printf 'Assemblywright release evidence doctor self-test: ok\n'
   printf 'Proof boundary: fake artifacts and reports validate doctor status mechanics only; no production evidence was created.\n'
   exit 0
 fi

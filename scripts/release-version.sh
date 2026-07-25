@@ -10,7 +10,7 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/release-version.sh [--check]
 
-Print the canonical Jarvis release version from Rust package metadata.
+Print the canonical Assemblywright release version from Rust package metadata.
 
 --check validates that jarvis-protocol, jarvis-master, jarvis-core, jarvis-agent,
 jarvis-cli, and their local dependency constraints all agree before printing a
@@ -110,7 +110,7 @@ if [[ "$CORE_VERSION" != "$PROTOCOL_VERSION" ]] ||
 fi
 
 if [[ "$CHECK_ONLY" == true ]]; then
-  printf 'Jarvis release version consistency: ok (%s)\n' "$CORE_VERSION"
+  printf 'Assemblywright release version consistency: ok (%s)\n' "$CORE_VERSION"
   printf 'Proof boundary: Rust package metadata agreement only; no app was built, signed, notarized, stapled, installed, launched, or manually validated.\n'
 else
   printf '%s\n' "$CORE_VERSION"

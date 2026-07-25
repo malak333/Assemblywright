@@ -321,7 +321,7 @@ impl InProcessPlugin for WorkspaceInspectPlugin {
             name: "Workspace Inspect".to_string(),
             version: "1.0.0".to_string(),
             source: PluginSource::FirstParty,
-            author: "Jarvis".to_string(),
+            author: "Assemblywright".to_string(),
             source_path: None,
             subprocess: None,
             wasm: None,

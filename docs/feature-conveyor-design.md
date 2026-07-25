@@ -20,11 +20,11 @@ this document is still target design.
 
 ## Understanding Summary
 
-- Jarvis will add an owner-managed autonomous development queue for personal,
+- Assemblywright will add an owner-managed autonomous development queue for personal,
   registered repositories. The queue has a hard capacity of 100 approved
   nonterminal features and never generates or replenishes features
   automatically.
-- Every feature is manually scoped through a Jarvis-hosted brainstorming
+- Every feature is manually scoped through a Assemblywright-hosted brainstorming
   session. It enters the executable queue only after the owner confirms the
   Understanding Lock, accepts the final design, reviews the exact specification
   digest, and selects `Approve and Enqueue`.
@@ -63,7 +63,7 @@ this document is still target design.
 | Availability | Provider, worker, maintenance, and owner-requested pauses do not consume active-processing time. There is no automatic provider substitution or Windows failover. |
 | Recovery | Resume only work proven safe. Ambiguous repository, provider, external-effect, review, or publication boundaries quarantine the active feature and block the queue. |
 | Privacy | Credentials and detected secrets never reach Codex. Secret admission runs before planning context or review transport and again before publication. |
-| Cloud review context | The review packet contains only owner-approved, non-secret repository artifacts: the approved final specification, exact candidate diff, and implementation evidence. Raw brainstorming transcripts and canonical Jarvis memory are not reused in final review. |
+| Cloud review context | The review packet contains only owner-approved, non-secret repository artifacts: the approved final specification, exact candidate diff, and implementation evidence. Raw brainstorming transcripts and canonical Assemblywright memory are not reused in final review. |
 | Planning conversation | When Codex is the selected planner, each owner-authored hosted brainstorming turn is an explicit cloud interaction. The resulting raw transcript is not later attached to the review packet. |
 | Maintenance | Feature Conveyor schema changes use backup-first, versioned, transactional, fail-closed migrations. Rollback restores the verified pre-migration backup. |
 
@@ -141,7 +141,7 @@ Missing required evidence is a rejection rather than a warning.
 The gateway opens a fresh response-only session using the active feature's
 bound provider. It sends the approved final specification, exact candidate
 commit and diff, and bounded evidence manifest. It sends no implementation
-transcript, raw brainstorming transcript, or canonical Jarvis memory.
+transcript, raw brainstorming transcript, or canonical Assemblywright memory.
 
 #### Publication Coordinator
 
@@ -178,7 +178,7 @@ grants appear together with independent status and revision.
 
 Three independent owner grants exist per repository:
 
-1. **Registration grant:** authorizes Jarvis to recognize and inspect the
+1. **Registration grant:** authorizes Assemblywright to recognize and inspect the
    repository under declared path and workflow policy.
 2. **Cloud-content disclosure grant:** authorizes eligible non-secret repository
    artifacts to reach Codex for the hosted planning session or final review.
@@ -306,7 +306,7 @@ commits or patches into the master-owned feature integration worktree.
 
 Write packets run concurrently only when their declared path ownership does not
 overlap. Semantic or textual conflicts produce a new bounded local repair
-packet; Jarvis never silently chooses one result. Workers exchange no hidden
+packet; Assemblywright never silently chooses one result. Workers exchange no hidden
 peer-to-peer conversation or authority.
 
 Before final validation, all worker leases close, the integration worktree is
@@ -320,7 +320,7 @@ The Evidence Gate requires:
 - Coverage of every acceptance criterion.
 - Focused Rust and Swift unit tests for success, rejection, boundary,
   cancellation, concurrency, and recovery behavior.
-- Relevant E2E coverage across Jarvis's real boundaries: cross-process CLI,
+- Relevant E2E coverage across Assemblywright's real boundaries: cross-process CLI,
   distributed runtime, packaged app, Git fixture, or live device as applicable.
   Playwright is required only for an actual browser surface.
 - Required documentation changes and documentation-contract validation.
@@ -442,7 +442,7 @@ Git remote prove:
 4. Worker and provider outages pause without fallback or incorrect budget use.
 5. Restart at worker, review, migration, publication, and post-merge boundaries
    either resumes safely or quarantines.
-6. Raw brainstorming transcripts and canonical Jarvis memory cannot enter the
+6. Raw brainstorming transcripts and canonical Assemblywright memory cannot enter the
    final review packet.
 7. Changed commits, grants, provider bindings, or evidence invalidate approval.
 8. Cancellation does not advance; explicit abandonment does, but never while
@@ -502,7 +502,7 @@ Partial mechanics must not be presented as an autonomous development system.
 | Dedicated durable Feature Conveyor | Generic task graph; GitHub-backed queue | A feature carries approval and publication invariants that generic tasks obscure. | Accepted as the clearest auditable boundary. |
 | Capacity of 100 without automatic refill | Maintain 100 ready features; automatic planning | Automatic generation conflicts with manual brainstorming and owner scope control. | Only owner-approved features enter; full capacity fails atomically. |
 | One active feature with up to three local coding agents | One worker total; multiple active features | Head-of-line blocking reduces throughput. | Accepted to preserve exact final-review and publication sequencing. |
-| Jarvis-hosted manual brainstorming | Artifact import; automatic planning | Import could become error-prone; automatic planning violates owner control. | Hosted owner conversation produces the final preview and explicit approval. |
+| Assemblywright-hosted manual brainstorming | Artifact import; automatic planning | Import could become error-prone; automatic planning violates owner control. | Hosted owner conversation produces the final preview and explicit approval. |
 | Owner-approved specification before enqueue | Draft queue entries; automatic enqueue | Workers must not need clarification. | Immutable approved revisions are the execution boundary. |
 | One global planning/review provider | Per-feature provider; automatic routing | Outage blocks the queue and a weak owner-selected local model may review. | Predictability and owner choice were preferred; no silent fallback. |
 | Local implementation only | Codex full-agent implementation; same provider for all roles | Existing stateless workers cannot safely edit repositories. | Add a restricted local coding-agent capability; Codex never writes. |
@@ -524,7 +524,7 @@ Partial mechanics must not be presented as an autonomous development system.
 | Backup-first versioned migrations | Export/rebuild; forward-only repair | Durable queue recovery depends on compatible schema state. | Transactional migration and verified backup restore fail closed. |
 | Owner-controlled order and dependencies | FIFO; model reprioritization | A blocked head stops unrelated work. | Owner intent and strict sequencing take priority. |
 | Owner-only administration | Delegated admins; model-managed queue | Models must not manufacture authority. | All authority mutations require the authenticated owner. |
-| Native Jarvis E2E | Browser-first Playwright; unit-only proof | Playwright does not cover Rust/Swift distributed boundaries. | Use cross-process, distributed, packaged-app, Git, and live-device lanes; use Playwright only for a browser surface. |
+| Native Assemblywright E2E | Browser-first Playwright; unit-only proof | Playwright does not cover Rust/Swift distributed boundaries. | Use cross-process, distributed, packaged-app, Git, and live-device lanes; use Playwright only for a browser surface. |
 | Manual supervised bootstrap | Immediate dogfood; repository-only release | The conveyor cannot prove itself with its own unproven authority. | Existing human-controlled PR workflow, default-off mechanics, live proof, then explicit activation. |
 | Functional live activation evidence | Repository gates only; full Apple release evidence | Repo gates cannot prove provider, GitHub, or two-device behavior. | Require functional live proof; keep signing/notarization and production readiness separate. |
 
@@ -562,7 +562,7 @@ accepted and resolved:
 The User Advocate found two blocking usability gaps:
 
 - The manual brainstorming-to-enqueue flow was accepted and resolved through a
-  Jarvis-hosted owner session and digest-bound preview.
+  Assemblywright-hosted owner session and digest-bound preview.
 - The proposed mandatory pre-enqueue knowledge artifact was explicitly rejected
   by the owner. The final reviewer decides the knowledge-base outcome from the
   approved specification, exact diff, and implementation evidence. The

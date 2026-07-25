@@ -4,13 +4,13 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-APP_PATH="${JARVIS_QA_INSTALLED_APP_PATH:-/Applications/Jarvis.app}"
+APP_PATH="${JARVIS_QA_INSTALLED_APP_PATH:-/Applications/Assemblywright.app}"
 REPORT_PATH="${JARVIS_QA_REPORT_PATH:-$ROOT_DIR/target/release-live-device-qa-report.json}"
 EXPECTED_BUNDLE_ID="${JARVIS_QA_EXPECTED_BUNDLE_ID:-com.nobiletechnology.jarvis}"
 EXPECTED_VERSION="${JARVIS_QA_EXPECTED_VERSION:-$("$ROOT_DIR/scripts/release-version.sh")}"
-SIGNED_PROVENANCE_PATH="${JARVIS_QA_SIGNED_PROVENANCE_REPORT:-$ROOT_DIR/target/distribution/Jarvis-$EXPECTED_VERSION-signed-provenance.json}"
-EXPECTED_MICROPHONE_USAGE_DESCRIPTION="Jarvis uses microphone input only when you explicitly start local voice capture."
-EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION="Jarvis uses speech recognition only to turn your spoken command into a local assistant request."
+SIGNED_PROVENANCE_PATH="${JARVIS_QA_SIGNED_PROVENANCE_REPORT:-$ROOT_DIR/target/distribution/Assemblywright-$EXPECTED_VERSION-signed-provenance.json}"
+EXPECTED_MICROPHONE_USAGE_DESCRIPTION="Assemblywright uses microphone input only when you explicitly start local voice capture."
+EXPECTED_SPEECH_RECOGNITION_USAGE_DESCRIPTION="Assemblywright uses speech recognition only to turn your spoken command into a local assistant request."
 CHECK_ONLY=false
 ASSERT_COMPLETE=false
 SELF_TEST=false
@@ -35,7 +35,7 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/release-live-device-qa.sh [--check|--assert-complete|--self-test|--write-template PATH]
 
-Prepare or assert the live-device release QA gate for Jarvis.
+Prepare or assert the live-device release QA gate for Assemblywright.
 
 --check validates repo-owned live QA prerequisites and prints the manual checks
 that must be performed on a clean Mac profile before any production-ready claim.
@@ -96,10 +96,10 @@ JARVIS_QA_* field required by --assert-complete. Edit the template on the
 validated release machine, source it, and then run --assert-complete.
 
 Optional:
-  JARVIS_QA_INSTALLED_APP_PATH     Defaults to /Applications/Jarvis.app
+  JARVIS_QA_INSTALLED_APP_PATH     Defaults to /Applications/Assemblywright.app
   JARVIS_QA_REPORT_PATH            Defaults to target/release-live-device-qa-report.json
   JARVIS_QA_SIGNED_PROVENANCE_REPORT
-                                    Defaults to target/distribution/Jarvis-<version>-signed-provenance.json
+                                    Defaults to target/distribution/Assemblywright-<version>-signed-provenance.json
   JARVIS_QA_EXPECTED_BUNDLE_ID     Defaults to com.nobiletechnology.jarvis
   JARVIS_QA_EXPECTED_VERSION       Defaults to the Rust package release version
 
@@ -375,8 +375,8 @@ validate_installed_app_bundle_metadata() {
   [[ "$APP_BUILD_VERSION" == "$EXPECTED_VERSION" ]] ||
     fail "installed app build version mismatch: expected $EXPECTED_VERSION, got $APP_BUILD_VERSION"
   APP_BUNDLED_CORE_VERSION="$("$core_path" --version 2>&1)"
-  [[ "$APP_BUNDLED_CORE_VERSION" == *"jarvis $EXPECTED_VERSION"* ]] ||
-    fail "installed app bundled core version mismatch: expected jarvis $EXPECTED_VERSION, got $APP_BUNDLED_CORE_VERSION"
+  [[ "$APP_BUNDLED_CORE_VERSION" == *"assemblywright $EXPECTED_VERSION"* ]] ||
+    fail "installed app bundled core version mismatch: expected assemblywright $EXPECTED_VERSION, got $APP_BUNDLED_CORE_VERSION"
   require_command shasum
   APP_BUNDLED_CORE_SHA256="$(shasum -a 256 "$core_path" | awk '{print $1}')"
 }
@@ -642,12 +642,12 @@ write_env_template() {
   local template_path="$1"
   mkdir -p "$(dirname "$template_path")"
   cat >"$template_path" <<EOF
-# Jarvis live-device QA evidence template.
+# Assemblywright live-device QA evidence template.
 # Edit this file on the validated release machine after the signed, notarized
 # app has been installed into a clean macOS profile and launched through Finder
 # or LaunchServices.
 #
-# For the operator evidence session, launch Jarvis with the exact opt-in
+# For the operator evidence session, launch Assemblywright with the exact opt-in
 # JARVIS_MAC_ENABLE_IPC_CLI_HANDOFF=true. Then set JARVIS_RELEASE_CORE_ENDPOINT
 # to the running release core endpoint and JARVIS_IPC_TOKEN_FILE to the app-owned
 # handoff file, source this template, and capture the command evidence ID from
@@ -669,9 +669,9 @@ write_env_template() {
 # Do not set JARVIS_QA_SELF_TEST_FIXTURE in release evidence; it is reserved for
 # this script's internal fake-fixture self-test.
 
-JARVIS_QA_INSTALLED_APP_PATH="/Applications/Jarvis.app"
+JARVIS_QA_INSTALLED_APP_PATH="/Applications/Assemblywright.app"
 JARVIS_QA_REPORT_PATH="target/release-live-device-qa-report.json"
-JARVIS_QA_SIGNED_PROVENANCE_REPORT="target/distribution/Jarvis-$EXPECTED_VERSION-signed-provenance.json"
+JARVIS_QA_SIGNED_PROVENANCE_REPORT="target/distribution/Assemblywright-$EXPECTED_VERSION-signed-provenance.json"
 JARVIS_RELEASE_CORE_ENDPOINT="" # release core endpoint used for command evidence and external readiness checks
 JARVIS_IPC_TOKEN_FILE="\$HOME/Library/Application Support/Jarvis/ipc-session-auth.json" # path only; never copy the bearer value into this template
 JARVIS_QA_EXPECTED_BUNDLE_ID="com.nobiletechnology.jarvis"
@@ -773,7 +773,7 @@ require_file_contains "release checklist" "$ROOT_DIR/docs/release-checklist.md" 
 
 if [[ "$WRITE_TEMPLATE" == true ]]; then
   write_env_template "$WRITE_TEMPLATE_PATH"
-  printf 'Jarvis live-device QA env template written: %s\n' "$WRITE_TEMPLATE_PATH"
+  printf 'Assemblywright live-device QA env template written: %s\n' "$WRITE_TEMPLATE_PATH"
   printf 'Proof boundary: template generation only; no live device validation was performed.\n'
   exit 0
 fi
@@ -782,10 +782,10 @@ if [[ "$SELF_TEST" == true ]]; then
   tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/jarvis-live-qa-self-test.XXXXXX")"
   trap 'rm -rf "$tmp_dir"' EXIT
   export JARVIS_QA_INTERNAL_SELF_TEST=true
-  fixture_app="$tmp_dir/Jarvis.app"
+  fixture_app="$tmp_dir/Assemblywright.app"
   fixture_report="$tmp_dir/release-live-device-qa-report.json"
   fixture_template="$tmp_dir/release-live-device-qa.env"
-  fixture_signed_provenance="$tmp_dir/Jarvis-$EXPECTED_VERSION-signed-provenance.json"
+  fixture_signed_provenance="$tmp_dir/Assemblywright-$EXPECTED_VERSION-signed-provenance.json"
   stub_dir="$tmp_dir/bin"
   mkdir -p "$fixture_app/Contents/MacOS" "$fixture_app/Contents/Resources/bin" "$stub_dir"
   cat >"$fixture_app/Contents/Info.plist" <<PLIST
@@ -809,7 +809,7 @@ if [[ "$SELF_TEST" == true ]]; then
 </plist>
 PLIST
   touch "$fixture_app/Contents/MacOS/JarvisMacApp"
-  printf '#!/usr/bin/env sh\nprintf "jarvis %s\\n"\n' "$EXPECTED_VERSION" >"$fixture_app/Contents/Resources/bin/jarvis-cli"
+  printf '#!/usr/bin/env sh\nprintf "assemblywright %s\\n"\n' "$EXPECTED_VERSION" >"$fixture_app/Contents/Resources/bin/jarvis-cli"
   chmod 755 "$fixture_app/Contents/MacOS/JarvisMacApp" "$fixture_app/Contents/Resources/bin/jarvis-cli"
 
   cat >"$stub_dir/codesign" <<'SH'
@@ -820,7 +820,7 @@ fi
 identifier="${JARVIS_QA_STUB_APP_IDENTIFIER:-com.nobiletechnology.jarvis.selftest}"
 team_identifier="${JARVIS_QA_STUB_TEAM_IDENTIFIER:-9VZ742YKV4}"
 cdhash="${JARVIS_QA_STUB_CDHASH:-0123456789abcdef0123456789abcdef01234567}"
-printf 'Executable=/fixture/JarvisMacApp\nIdentifier=%s\nAuthority=Developer ID Application: Jarvis QA Fixture\nTeamIdentifier=%s\nCDHash=%s\n' \
+printf 'Executable=/fixture/JarvisMacApp\nIdentifier=%s\nAuthority=Developer ID Application: Assemblywright QA Fixture\nTeamIdentifier=%s\nCDHash=%s\n' \
   "$identifier" "$team_identifier" "$cdhash"
 SH
   cat >"$stub_dir/xcrun" <<'SH'
@@ -861,7 +861,7 @@ JSON
 
   "$0" --write-template "$fixture_template" >/dev/null
   require_file_contains "live QA env template" "$fixture_template" "JARVIS_QA_EXPECTED_VERSION=\"$EXPECTED_VERSION\""
-  require_file_contains "live QA env template" "$fixture_template" "JARVIS_QA_SIGNED_PROVENANCE_REPORT=\"target/distribution/Jarvis-$EXPECTED_VERSION-signed-provenance.json\""
+  require_file_contains "live QA env template" "$fixture_template" "JARVIS_QA_SIGNED_PROVENANCE_REPORT=\"target/distribution/Assemblywright-$EXPECTED_VERSION-signed-provenance.json\""
   if grep -F 'JARVIS_QA_EXPECTED_VERSION="$EXPECTED_VERSION"' "$fixture_template" >/dev/null 2>&1; then
     fail "live QA self-test expected env template to materialize the expected version"
   fi
@@ -888,7 +888,7 @@ JSON
 
   export JARVIS_QA_NOTIFICATION_KIND="due_now"
   export JARVIS_QA_NOTIFICATION_TITLE="Scheduler job ready: self-test release reminder"
-  export JARVIS_QA_NOTIFICATION_BODY="A scheduled Jarvis job is due now."
+  export JARVIS_QA_NOTIFICATION_BODY="A scheduled Assemblywright job is due now."
   export JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER="jarvis.scheduler"
 
   JARVIS_QA_INSTALLED_APP_PATH="$fixture_app" \
@@ -904,7 +904,7 @@ JSON
     JARVIS_QA_NOTIFICATION_VALIDATED=true \
     JARVIS_QA_RESTART_VALIDATED=true \
     JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
-    JARVIS_QA_OWNER_NAME="Jarvis QA Self-Test" \
+    JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
     JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
     JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
@@ -919,12 +919,12 @@ JSON
     JARVIS_QA_NOTIFICATION_OBSERVED_AT="2026-05-22T16:04:00Z" \
     JARVIS_QA_NOTIFICATION_KIND="due_now" \
     JARVIS_QA_NOTIFICATION_TITLE="Scheduler job ready: self-test release reminder" \
-    JARVIS_QA_NOTIFICATION_BODY="A scheduled Jarvis job is due now." \
+    JARVIS_QA_NOTIFICATION_BODY="A scheduled Assemblywright job is due now." \
     JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER="jarvis.scheduler" \
     JARVIS_QA_RESTART_EVIDENCE_NOTE="Restart recovery observed in the controlled release QA lane." \
     JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE="Manual release QA surfaces observed in the controlled release QA lane." \
-    JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
-    JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
+    JARVIS_QA_VOICE_TEST_PHRASE="Assemblywright status check." \
+    JARVIS_QA_OBSERVED_TRANSCRIPT="Assemblywright status check." \
     JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
     JARVIS_QA_OBSERVED_COMMAND_TEXT="status check" \
     JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:00000000-0000-4000-8000-000000000001" \
@@ -947,7 +947,7 @@ JSON
   require_file_contains "live QA self-test report" "$fixture_report" '"signed_provenance"'
   require_file_contains "live QA self-test report" "$fixture_report" "\"report_path\": \"$fixture_signed_provenance\""
   require_file_contains "live QA self-test report" "$fixture_report" '"executable_path"'
-  require_file_contains "live QA self-test report" "$fixture_report" "\"version\": \"jarvis $EXPECTED_VERSION\""
+  require_file_contains "live QA self-test report" "$fixture_report" "\"version\": \"assemblywright $EXPECTED_VERSION\""
   require_file_contains "live QA self-test report" "$fixture_report" '"sha256"'
   require_file_contains "live QA self-test report" "$fixture_report" '"transcript_handoff": true'
   require_file_contains "live QA self-test report" "$fixture_report" '"same_command_path": true'
@@ -958,9 +958,9 @@ JSON
   require_file_contains "live QA self-test report" "$fixture_report" '"notification_observation"'
   require_file_contains "live QA self-test report" "$fixture_report" '"kind": "due_now"'
   require_file_contains "live QA self-test report" "$fixture_report" '"title": "Scheduler job ready: self-test release reminder"'
-  require_file_contains "live QA self-test report" "$fixture_report" '"body": "A scheduled Jarvis job is due now."'
+  require_file_contains "live QA self-test report" "$fixture_report" '"body": "A scheduled Assemblywright job is due now."'
   require_file_contains "live QA self-test report" "$fixture_report" '"thread_identifier": "jarvis.scheduler"'
-  require_file_contains "live QA self-test report" "$fixture_report" '"owner_name": "Jarvis QA Self-Test"'
+  require_file_contains "live QA self-test report" "$fixture_report" '"owner_name": "Assemblywright QA Self-Test"'
   require_file_contains "live QA self-test report" "$fixture_report" '"voice_command_observation"'
   require_file_contains "live QA self-test report" "$fixture_report" '"expected_command_text": "status check"'
   require_file_contains "live QA self-test report" "$fixture_report" '"observed_command_text": "status check"'
@@ -984,7 +984,7 @@ JSON
       JARVIS_QA_NOTIFICATION_VALIDATED=true \
       JARVIS_QA_RESTART_VALIDATED=true \
       JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
-      JARVIS_QA_OWNER_NAME="Jarvis QA Self-Test" \
+      JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
       JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
       JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
       JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
@@ -999,12 +999,12 @@ JSON
       JARVIS_QA_NOTIFICATION_OBSERVED_AT="2026-05-22T16:04:00Z" \
       JARVIS_QA_NOTIFICATION_KIND="due_now" \
       JARVIS_QA_NOTIFICATION_TITLE="Scheduler job ready: self-test release reminder" \
-      JARVIS_QA_NOTIFICATION_BODY="A scheduled Jarvis job is due now." \
+      JARVIS_QA_NOTIFICATION_BODY="A scheduled Assemblywright job is due now." \
       JARVIS_QA_NOTIFICATION_THREAD_IDENTIFIER="jarvis.scheduler" \
       JARVIS_QA_RESTART_EVIDENCE_NOTE="Restart recovery observed in the controlled release QA lane." \
       JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE="Manual release QA surfaces observed in the controlled release QA lane." \
-      JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
-      JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
+      JARVIS_QA_VOICE_TEST_PHRASE="Assemblywright status check." \
+      JARVIS_QA_OBSERVED_TRANSCRIPT="Assemblywright status check." \
       JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
       JARVIS_QA_OBSERVED_COMMAND_TEXT="status check" \
       JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:00000000-0000-4000-8000-000000000001" \
@@ -1065,7 +1065,7 @@ PY
   require_file_contains "live QA self-test mismatched signed provenance team error" \
     "$tmp_dir/mismatched-provenance-team.err" "TeamIdentifier does not match signed provenance"
 
-  set_fixture_plist_value NSMicrophoneUsageDescription "Jarvis microphone fixture"
+  set_fixture_plist_value NSMicrophoneUsageDescription "Assemblywright microphone fixture"
   if run_fixture_assertion "$tmp_dir/mismatched-microphone-usage.json" >/dev/null 2>"$tmp_dir/mismatched-microphone-usage.err"; then
     fail "live QA self-test expected mismatched microphone usage description to fail"
   fi
@@ -1073,7 +1073,7 @@ PY
     "$tmp_dir/mismatched-microphone-usage.err" "NSMicrophoneUsageDescription mismatch"
   set_fixture_plist_value NSMicrophoneUsageDescription "$EXPECTED_MICROPHONE_USAGE_DESCRIPTION"
 
-  set_fixture_plist_value NSSpeechRecognitionUsageDescription "Jarvis speech fixture"
+  set_fixture_plist_value NSSpeechRecognitionUsageDescription "Assemblywright speech fixture"
   if run_fixture_assertion "$tmp_dir/mismatched-speech-usage.json" >/dev/null 2>"$tmp_dir/mismatched-speech-usage.err"; then
     fail "live QA self-test expected mismatched Speech usage description to fail"
   fi
@@ -1158,7 +1158,7 @@ PY
     JARVIS_QA_NOTIFICATION_VALIDATED=true \
     JARVIS_QA_RESTART_VALIDATED=true \
     JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
-    JARVIS_QA_OWNER_NAME="Jarvis QA Self-Test" \
+    JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
     JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
     JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
@@ -1173,8 +1173,8 @@ PY
     JARVIS_QA_NOTIFICATION_OBSERVED_AT="2026-05-22T16:04:00Z" \
     JARVIS_QA_RESTART_EVIDENCE_NOTE="Restart recovery observed in the controlled release QA lane." \
     JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE="Manual release QA surfaces observed in the controlled release QA lane." \
-    JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
-    JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
+    JARVIS_QA_VOICE_TEST_PHRASE="Assemblywright status check." \
+    JARVIS_QA_OBSERVED_TRANSCRIPT="Assemblywright status check." \
     JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
     JARVIS_QA_OBSERVED_COMMAND_TEXT="status check" \
     JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:00000000-0000-4000-8000-000000000001" \
@@ -1197,7 +1197,7 @@ PY
     JARVIS_QA_NOTIFICATION_VALIDATED=true \
     JARVIS_QA_RESTART_VALIDATED=true \
     JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
-    JARVIS_QA_OWNER_NAME="Jarvis QA Self-Test" \
+    JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
     JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
     JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
@@ -1212,8 +1212,8 @@ PY
     JARVIS_QA_NOTIFICATION_OBSERVED_AT="2026-05-22T16:04:00Z" \
     JARVIS_QA_RESTART_EVIDENCE_NOTE="Restart recovery observed in the controlled release QA lane." \
     JARVIS_QA_MANUAL_RELEASE_QA_EVIDENCE_NOTE="Manual release QA surfaces observed in the controlled release QA lane." \
-    JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
-    JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
+    JARVIS_QA_VOICE_TEST_PHRASE="Assemblywright status check." \
+    JARVIS_QA_OBSERVED_TRANSCRIPT="Assemblywright status check." \
     JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
     JARVIS_QA_OBSERVED_COMMAND_TEXT="status check" \
     JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:00000000-0000-4000-8000-000000000001" \
@@ -1236,7 +1236,7 @@ PY
     JARVIS_QA_NOTIFICATION_VALIDATED=true \
     JARVIS_QA_RESTART_VALIDATED=true \
     JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
-    JARVIS_QA_OWNER_NAME="Jarvis QA Self-Test" \
+    JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
     JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
     JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
@@ -1245,8 +1245,8 @@ PY
     JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
     JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
     JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="   " \
-    JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
-    JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
+    JARVIS_QA_VOICE_TEST_PHRASE="Assemblywright status check." \
+    JARVIS_QA_OBSERVED_TRANSCRIPT="Assemblywright status check." \
     JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
     JARVIS_QA_OBSERVED_COMMAND_TEXT="status check" \
     JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:00000000-0000-4000-8000-000000000001" \
@@ -1268,7 +1268,7 @@ PY
     JARVIS_QA_NOTIFICATION_VALIDATED=true \
     JARVIS_QA_RESTART_VALIDATED=true \
     JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
-    JARVIS_QA_OWNER_NAME="Jarvis QA Self-Test" \
+    JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
     JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
     JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
@@ -1277,8 +1277,8 @@ PY
     JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
     JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
     JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the controlled release QA lane." \
-    JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
-    JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
+    JARVIS_QA_VOICE_TEST_PHRASE="Assemblywright status check." \
+    JARVIS_QA_OBSERVED_TRANSCRIPT="Assemblywright status check." \
     JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
     JARVIS_QA_OBSERVED_COMMAND_TEXT="status check" \
     JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:00000000-0000-4000-8000-000000000001" \
@@ -1301,7 +1301,7 @@ PY
     JARVIS_QA_NOTIFICATION_VALIDATED=true \
     JARVIS_QA_RESTART_VALIDATED=true \
     JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
-    JARVIS_QA_OWNER_NAME="Jarvis QA Self-Test" \
+    JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
     JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
     JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
@@ -1309,8 +1309,8 @@ PY
     JARVIS_QA_MICROPHONE_EVIDENCE_NOTE="Observed microphone permission prompt in the controlled release QA lane." \
     JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
     JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
-    JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
-    JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
+    JARVIS_QA_VOICE_TEST_PHRASE="Assemblywright status check." \
+    JARVIS_QA_OBSERVED_TRANSCRIPT="Assemblywright status check." \
     JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
     JARVIS_QA_OBSERVED_COMMAND_TEXT="status check" \
     JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:00000000-0000-4000-8000-000000000001" \
@@ -1333,7 +1333,7 @@ PY
     JARVIS_QA_NOTIFICATION_VALIDATED=true \
     JARVIS_QA_RESTART_VALIDATED=true \
     JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
-    JARVIS_QA_OWNER_NAME="Jarvis QA Self-Test" \
+    JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
     JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
     JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
@@ -1342,8 +1342,8 @@ PY
     JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
     JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
     JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the controlled release QA lane." \
-    JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
-    JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
+    JARVIS_QA_VOICE_TEST_PHRASE="Assemblywright status check." \
+    JARVIS_QA_OBSERVED_TRANSCRIPT="Assemblywright status check." \
     JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
     JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:00000000-0000-4000-8000-000000000001" \
     JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL="self-test audio output" \
@@ -1365,7 +1365,7 @@ PY
     JARVIS_QA_NOTIFICATION_VALIDATED=true \
     JARVIS_QA_RESTART_VALIDATED=true \
     JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
-    JARVIS_QA_OWNER_NAME="Jarvis QA Self-Test" \
+    JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
     JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
     JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
@@ -1374,8 +1374,8 @@ PY
     JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
     JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
     JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the controlled release QA lane." \
-    JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
-    JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis stats check." \
+    JARVIS_QA_VOICE_TEST_PHRASE="Assemblywright status check." \
+    JARVIS_QA_OBSERVED_TRANSCRIPT="Assemblywright stats check." \
     JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
     JARVIS_QA_OBSERVED_COMMAND_TEXT="status check" \
     JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:00000000-0000-4000-8000-000000000001" \
@@ -1398,7 +1398,7 @@ PY
     JARVIS_QA_NOTIFICATION_VALIDATED=true \
     JARVIS_QA_RESTART_VALIDATED=true \
     JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
-    JARVIS_QA_OWNER_NAME="Jarvis QA Self-Test" \
+    JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
     JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
     JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
@@ -1407,8 +1407,8 @@ PY
     JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
     JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
     JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the controlled release QA lane." \
-    JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
-    JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
+    JARVIS_QA_VOICE_TEST_PHRASE="Assemblywright status check." \
+    JARVIS_QA_OBSERVED_TRANSCRIPT="Assemblywright status check." \
     JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
     JARVIS_QA_OBSERVED_COMMAND_TEXT="different command" \
     JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:00000000-0000-4000-8000-000000000001" \
@@ -1431,7 +1431,7 @@ PY
     JARVIS_QA_NOTIFICATION_VALIDATED=true \
     JARVIS_QA_RESTART_VALIDATED=true \
     JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
-    JARVIS_QA_OWNER_NAME="Jarvis QA Self-Test" \
+    JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
     JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
     JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:00:00Z" \
@@ -1440,8 +1440,8 @@ PY
     JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
     JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
     JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the controlled release QA lane." \
-    JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
-    JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
+    JARVIS_QA_VOICE_TEST_PHRASE="Assemblywright status check." \
+    JARVIS_QA_OBSERVED_TRANSCRIPT="Assemblywright status check." \
     JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
     JARVIS_QA_OBSERVED_COMMAND_TEXT="status check" \
     JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="looked good" \
@@ -1464,7 +1464,7 @@ PY
     JARVIS_QA_NOTIFICATION_VALIDATED=true \
     JARVIS_QA_RESTART_VALIDATED=true \
     JARVIS_QA_MANUAL_RELEASE_QA_VALIDATED=true \
-    JARVIS_QA_OWNER_NAME="Jarvis QA Self-Test" \
+    JARVIS_QA_OWNER_NAME="Assemblywright QA Self-Test" \
     JARVIS_QA_DEVICE_LABEL="self-test Mac fixture" \
     JARVIS_QA_PROFILE_LABEL="self-test clean profile" \
     JARVIS_QA_VOICE_CHECK_STARTED_AT="2026-05-22T16:05:00Z" \
@@ -1473,8 +1473,8 @@ PY
     JARVIS_QA_SPEECH_PERMISSION_EVIDENCE_NOTE="Observed Speech permission prompt in the controlled release QA lane." \
     JARVIS_QA_TRANSCRIPT_HANDOFF_EVIDENCE_NOTE="Observed transcript handoff reach the command path in the controlled release QA lane." \
     JARVIS_QA_AUDIO_OUTPUT_EVIDENCE_NOTE="Observed speech output playback in the controlled release QA lane." \
-    JARVIS_QA_VOICE_TEST_PHRASE="Jarvis status check." \
-    JARVIS_QA_OBSERVED_TRANSCRIPT="Jarvis status check." \
+    JARVIS_QA_VOICE_TEST_PHRASE="Assemblywright status check." \
+    JARVIS_QA_OBSERVED_TRANSCRIPT="Assemblywright status check." \
     JARVIS_QA_EXPECTED_COMMAND_TEXT="status check" \
     JARVIS_QA_OBSERVED_COMMAND_TEXT="status check" \
     JARVIS_QA_COMMAND_RESULT_EVIDENCE_ID="task:00000000-0000-4000-8000-000000000001" \
@@ -1507,18 +1507,18 @@ PY
       ;;
   esac
 
-  printf 'Jarvis live-device QA self-test: ok\n'
+  printf 'Assemblywright live-device QA self-test: ok\n'
   printf 'Proof boundary: fake app fixture validates assertion/report mechanics only; no live device validation was performed.\n'
   exit 0
 fi
 
 if [[ "$CHECK_ONLY" == true ]]; then
   cat <<'CHECKLIST'
-Jarvis live-device QA preflight: ok
+Assemblywright live-device QA preflight: ok
 
 Manual release checks still required before production-ready language:
 - Install the signed, notarized package into /Applications on a clean Mac profile.
-- Launch Jarvis through Finder or LaunchServices, not only from Terminal.
+- Launch Assemblywright through Finder or LaunchServices, not only from Terminal.
 - Confirm the app supervises the bundled core and command, audit, memory, scheduler,
   plugin, pause/resume, diagnostics, restart, and release-readiness surfaces work.
 - Start voice capture and verify microphone and Speech permission prompts.
@@ -1587,7 +1587,7 @@ require_non_empty_env JARVIS_QA_AUDIO_OUTPUT_DEVICE_LABEL
 write_report
 
 cat <<EOF
-Jarvis live-device QA assertion: complete
+Assemblywright live-device QA assertion: complete
 Installed app: $APP_PATH
 Bundle: $APP_BUNDLE_ID $APP_SHORT_VERSION ($APP_BUILD_VERSION)
 App executable SHA-256: $APP_EXECUTABLE_SHA256

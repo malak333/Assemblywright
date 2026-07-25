@@ -1,12 +1,21 @@
 [package]
 name = "jarvis-master"
 version = "0.1.4"
-description = "Portable durable state kernel for Jarvis distributed development."
+description = "Portable durable state kernel for Assemblywright distributed development."
+default-run = "assemblywright-master"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 publish = false
+
+[[bin]]
+name = "assemblywright-master"
+path = "src/bin/assemblywright-master/main.rs"
+
+[[bin]]
+name = "jarvis-master"
+path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
