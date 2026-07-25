@@ -73,6 +73,51 @@ These notes capture durable facts for future agents working on this repository.
   `git push origin <sha>:refs/heads/<branch>`. That manifest is the only record;
   do not delete it while any recovery might still be wanted.
 
+## Windows Service Upgrade After The Rename
+
+- The rename preserved the `JarvisMaster` service name and the
+  `%LOCALAPPDATA%\Jarvis\master` state directory, but it *did* change the
+  executable filename from `jarvis-master.exe` to `assemblywright-master.exe`.
+  An already-installed service keeps its original `BINARY_PATH_NAME`, so a
+  machine that pulls the renamed `main` and rebuilds does not pick up the new
+  binary.
+- This fails silently rather than loudly: `cargo build --release` writes
+  `assemblywright-master.exe` beside the pre-rename `jarvis-master.exe`, which
+  survives until `cargo clean`, so the service keeps running the stale
+  pre-rename executable and reports itself healthy.
+- `windows_service_host::install` derives the path from
+  `std::env::current_exe()` and calls `create_service`, which cannot rewrite an
+  existing service. Upgrading an enrolled machine is therefore an explicit
+  sequence, run elevated, after the rebuild:
+
+  ```text
+  assemblywright-master.exe service stop --service-name JarvisMaster
+  assemblywright-master.exe service uninstall --service-name JarvisMaster --confirm
+  assemblywright-master.exe --data-dir "%LOCALAPPDATA%\Jarvis\master" ^
+      service install --service-name JarvisMaster --bind 127.0.0.1:7791 ^
+      --remote-bind <overlay-ip>:7792 --identity owner-account ^
+      --credentials-stdin --confirm
+  assemblywright-master.exe service status --service-name JarvisMaster
+  ```
+
+  The subcommand is `service <verb>`, not `service-<verb>`; `service-run` is the
+  hidden SCM entry point and is never invoked by hand. `install` and `uninstall`
+  both require `--confirm`, and owner-account installation requires
+  `--credentials-stdin` because passwords must never appear in argv.
+- Uninstalling the service removes only the SCM registration, not
+  `%LOCALAPPDATA%\Jarvis\master`, so the SQLite kernel, enrollment identity, and
+  owner lock survive the reinstall. That is precisely why the state directory and
+  the service name were preserved while the executable filename was not.
+- Confirm the upgrade actually took effect with `sc qc JarvisMaster` and check
+  that `BINARY_PATH_NAME` names `assemblywright-master.exe`. A path still ending
+  in `jarvis-master.exe` means the reinstall did not happen.
+- Verified against the owner's Windows host on 2026-07-25: `JarvisMaster` was
+  `RUNNING` from `C:\Users\mike\Codex\Jarvis\target\release\jarvis-master.exe`
+  with live `master.sqlite3`, `identity`, `development.token`, and
+  `master.owner.lock` in `%LOCALAPPDATA%\Jarvis\master`. That checkout was still
+  on the pre-rename commit with the old `malak333/Jarvis` remote URL, so it needs
+  this sequence when it upgrades.
+
 ## The Pivot
 
 - The repository began as a local-first macOS assistant. It is now a
