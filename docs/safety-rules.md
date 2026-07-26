@@ -44,6 +44,36 @@ release requirements, not optional UX guidance.
   before promotion unless the signed leaf matches the staged public key and
   invitation device, role, registry revision, validity, endpoint, and pinned CA
   fingerprint. Pending enrollment material must not authorize a connection.
+- Standard-profile capability rebind is a separate confirmed two-phase
+  ceremony and may change only an exact stale singleton `fixture.reasoning`
+  registration into one exact singleton `mlx.reasoning` / `local_inference` /
+  `mlx` registration with fixed protocol bounds. Windows schema v6 must bind
+  the short-lived pending record to the grant, old and target registration
+  digests, target revision, certificate serial/digest, exact replacement CSR
+  P-256 public key, and expiry. A pending
+  certificate is absent from normal certificate authentication and lease
+  authority. The replacement key must sign a domain-separated acknowledgement
+  over the exact grant/device/revision/serial/certificate-digest binding.
+  Activation requires Emergency Pause to be clear, a disconnected device with no active attempt,
+  and atomically updates registration, activates the replacement, revokes old
+  certificates, and terminalizes evidence. Windows must CA-sign a separate
+  domain-separated activation transcript, and the Mac must verify it with the
+  staged pinned CA. Exact lost-output activation retries may reissue only the
+  original terminal timestamp and binding. Grant, pending issuance, activation,
+  and abort each require a same-transaction immutable metadata-only identity
+  audit row with no payload, certificate, path, or secret. The standard Mac identity remains
+  selected while a distinct replacement Secure Enclave key/certificate slot is
+  validated; only the exact CA-authenticated Windows activation receipt may
+  switch generations. Destructive Mac cancellation is allowed only before a
+  replacement certificate/acknowledgement is staged. After acknowledgement it
+  must refuse and preserve the key, certificate, and staged receipt for exact
+  activation-receipt recovery; cancellation after promotion must never delete
+  the selected replacement key or certificate. A prepare-only cancellation
+  following Windows issuance requires Windows abort to succeed first. Signed
+  acknowledgement digests must use exact lowercase canonical SHA-256 hex.
+  Fixture-profile
+  rebind, cross-profile mutation, mixed capabilities, general standard-profile
+  removal, stale/replayed activation, and automatic retry are forbidden.
 - The live fixture device must use a second device-only Keychain namespace.
   Absence of an exact `--identity-profile fixture` argument must keep using the
   existing standard accounts, key tag, certificate label, and installed
@@ -123,7 +153,7 @@ release requirements, not optional UX guidance.
   a simultaneous or late result is suppressed. This lane grants no tool, file,
   repository, credential, network, Codex, Git, publication, or unattended
   authority.
-- The Windows `assemblywright-master` schema-v5 Durable Feature Conveyor kernel is
+- The Windows `assemblywright-master` schema-v6 database retains the schema-v5 Durable Feature Conveyor kernel and is
   default-inert. Its only HTTP/API surface is the owner-token-authenticated,
   loopback-only `GET /v1/feature-conveyor/status`: a pure-SELECT, bounded,
   structurally redacted lifecycle-observation projection for current queue and

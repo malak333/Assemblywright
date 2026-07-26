@@ -11,7 +11,7 @@ private enum BridgeCLIError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .usage:
-            "Usage: assemblywright-mac-bridge enrollment prepare|install [--identity-profile fixture] | enrollment remove --confirm --identity-profile fixture | status|connect [--identity-profile fixture] | monitor|relay [--identity-profile fixture] [--samples COUNT] [--interval-ms MILLISECONDS] [--reconnect-between-samples]"
+            "Usage: assemblywright-mac-bridge enrollment prepare|install [--identity-profile fixture] | enrollment rebind prepare|stage|promote|cancel --confirm | enrollment remove --confirm --identity-profile fixture | status|connect [--identity-profile fixture] | monitor|relay [--identity-profile fixture] [--samples COUNT] [--interval-ms MILLISECONDS] [--reconnect-between-samples]"
         case .inputTooLarge:
             "Input exceeds the 64 KiB enrollment-document limit."
         case .notEnrolled:
@@ -61,6 +61,36 @@ private struct AssemblywrightMacBridgeCLI {
                 "registry_revision": profile.registryRevision,
                 "certificate_not_after_ms": profile.certificateNotAfterMilliseconds
             ])
+        case ["enrollment", "rebind", "prepare", "--confirm"]
+            where parsed.profile == .standard:
+            let invitation = try readBoundedStdin(
+                maximum: AssemblywrightMacEnrollmentCoordinator.maximumDocumentBytes
+            )
+            try writeStdout(coordinator.prepareCapabilityRebind(invitationData: invitation))
+        case ["enrollment", "rebind", "stage", "--confirm"]
+            where parsed.profile == .standard:
+            let receipt = try readBoundedStdin(
+                maximum: AssemblywrightMacEnrollmentCoordinator.maximumDocumentBytes
+            )
+            try writeStdout(coordinator.stageCapabilityRebind(issuedReceiptData: receipt))
+        case ["enrollment", "rebind", "promote", "--confirm"]
+            where parsed.profile == .standard:
+            let activation = try readBoundedStdin(
+                maximum: AssemblywrightMacEnrollmentCoordinator.maximumDocumentBytes
+            )
+            let profile = try coordinator.promoteCapabilityRebind(activationData: activation)
+            try writeJSON([
+                "status": "capability_rebind_promoted",
+                "device_id": profile.deviceID,
+                "device_name": profile.deviceName,
+                "master_endpoint": profile.masterEndpoint,
+                "registry_revision": profile.registryRevision,
+                "certificate_not_after_ms": profile.certificateNotAfterMilliseconds
+            ])
+        case ["enrollment", "rebind", "cancel", "--confirm"]
+            where parsed.profile == .standard:
+            try coordinator.cancelCapabilityRebind()
+            try writeJSON(["status": "capability_rebind_stage_removed"])
         case ["enrollment", "remove", "--confirm"]
             where parsed.profile == .fixtureReasoning:
             try identityStore.removeFixtureIdentity()

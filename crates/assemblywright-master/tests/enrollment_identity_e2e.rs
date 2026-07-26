@@ -1,13 +1,15 @@
 use assemblywright_master::{
-    EnrollmentGrantSpec, EnrollmentRequest, IdentityAuthority, IdentityError, MasterError,
-    MasterKernel, MasterProcess, SecretProtector, DEVICE_CERTIFICATE_LIFETIME_MS,
-    ENROLLMENT_GRANT_TTL_MS,
+    CapabilityRebindAcknowledgement, EnrollmentGrantSpec, EnrollmentRequest, IdentityAuthority,
+    IdentityError, MasterError, MasterKernel, MasterProcess, SecretProtector,
+    DEVICE_CERTIFICATE_LIFETIME_MS, ENROLLMENT_GRANT_TTL_MS,
 };
 use assemblywright_protocol::{
     CapabilityDescriptor, CapabilityKind, DeviceRole, DistributedEventBatchRequest,
     MAX_JOB_CONTEXT_BYTES, MAX_JOB_RESULT_BYTES, PROTOCOL_VERSION,
 };
-use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
+use base64::Engine as _;
+use p256::ecdsa::{signature::Verifier as _, Signature, VerifyingKey};
+use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair, SigningKey};
 use x509_parser::prelude::{FromDer, GeneralName, X509Certificate};
 
 #[derive(Debug, Clone, Copy)]
@@ -42,18 +44,49 @@ fn spec() -> EnrollmentGrantSpec {
     }
 }
 
+fn fixture_spec() -> EnrollmentGrantSpec {
+    EnrollmentGrantSpec {
+        device_name: "owner-mac-bridge".to_string(),
+        role: DeviceRole::MacBridge,
+        capabilities: vec![CapabilityDescriptor::fixture_reasoning()],
+    }
+}
+
 fn csr(common_name: &str) -> String {
+    csr_and_key(common_name).0
+}
+
+fn csr_and_key(common_name: &str) -> (String, KeyPair) {
     let key = KeyPair::generate().expect("generate client key");
     let mut params = CertificateParams::default();
     let mut name = DistinguishedName::new();
     name.push(DnType::CommonName, common_name);
     params.distinguished_name = name;
     params.is_ca = IsCa::NoCa;
-    params
+    let csr = params
         .serialize_request(&key)
         .expect("serialize signed CSR")
         .pem()
-        .expect("encode CSR PEM")
+        .expect("encode CSR PEM");
+    (csr, key)
+}
+
+fn sign_rebind_acknowledgement(
+    acknowledgement: &mut CapabilityRebindAcknowledgement,
+    key: &KeyPair,
+) {
+    let transcript = format!(
+        "Assemblywright-Capability-Rebind-Acknowledgement-v1\ngrant_id={}\ndevice_id={}\nregistry_revision={}\nserial_hex={}\ncertificate_sha256={}\n",
+        acknowledgement.grant_id,
+        acknowledgement.device_id.0,
+        acknowledgement.registry_revision,
+        acknowledgement.serial_hex,
+        acknowledgement.certificate_sha256
+    );
+    acknowledgement.signature_base64 = base64::engine::general_purpose::STANDARD.encode(
+        key.sign(transcript.as_bytes())
+            .expect("sign acknowledgement"),
+    );
 }
 
 #[test]
@@ -249,7 +282,449 @@ fn expired_grant_and_invalid_csr_fail_without_consuming_the_grant() {
 }
 
 #[test]
-fn schema_v1_migrates_transactionally_through_feature_conveyor_v5() {
+fn capability_rebind_is_two_phase_stale_safe_replay_closed_and_preserves_old_certificate() {
+    let directory = tempfile::tempdir().expect("rebind identity directory");
+    let authority =
+        IdentityAuthority::open_or_initialize(directory.path(), &TestProtector, 1_000_000)
+            .expect("initialize authority");
+    let mut master = MasterKernel::in_memory().expect("in-memory master");
+    master
+        .record_identity_authority(authority.receipt())
+        .expect("record authority");
+    let initial_grant = master
+        .create_enrollment_grant(fixture_spec(), 2_000_000)
+        .expect("create stale fixture enrollment");
+    let initial = master
+        .issue_device_certificate(
+            &authority,
+            &EnrollmentRequest {
+                grant_id: initial_grant.grant_id,
+                grant_secret: initial_grant.grant_secret,
+                csr_pem: csr("initial-fixture"),
+            },
+            2_000_001,
+        )
+        .expect("issue initial fixture certificate");
+
+    let target = spec().capabilities;
+    let mixed = vec![target[0].clone(), CapabilityDescriptor::fixture_reasoning()];
+    assert!(matches!(
+        master.create_capability_rebind_grant(initial.device_id, mixed, 2_100_000),
+        Err(MasterError::InvalidRemoteWorkContract) | Err(MasterError::InvalidEnrollmentGrant(_))
+    ));
+    let stale_grant = master
+        .create_capability_rebind_grant(initial.device_id, target.clone(), 2_100_001)
+        .expect("create stale replay probe");
+    let grant = master
+        .create_capability_rebind_grant(initial.device_id, target, 2_100_002)
+        .expect("create capability rebind");
+    assert_eq!(grant.registry_revision, initial.registry_revision + 1);
+    let (replacement_csr, replacement_key) = csr_and_key("replacement-mlx");
+    let pending = master
+        .issue_pending_capability_rebind(
+            &authority,
+            &EnrollmentRequest {
+                grant_id: grant.grant_id,
+                grant_secret: grant.grant_secret.clone(),
+                csr_pem: replacement_csr,
+            },
+            2_100_003,
+        )
+        .expect("issue registry-inactive pending certificate");
+    assert!(master
+        .certificate_is_active(initial.device_id, &initial.serial_hex, 2_100_004)
+        .expect("old certificate remains active"));
+    assert!(!master
+        .certificate_is_active(initial.device_id, &pending.serial_hex, 2_100_004)
+        .expect("pending certificate is not active"));
+    assert!(matches!(
+        master.issue_pending_capability_rebind(
+            &authority,
+            &EnrollmentRequest {
+                grant_id: grant.grant_id,
+                grant_secret: grant.grant_secret,
+                csr_pem: csr("replay"),
+            },
+            2_100_004,
+        ),
+        Err(MasterError::EnrollmentGrantConsumed)
+    ));
+
+    let mut acknowledgement = CapabilityRebindAcknowledgement {
+        status: "capability_rebind_certificate_staged".to_string(),
+        grant_id: pending.grant_id,
+        device_id: pending.device_id,
+        registry_revision: pending.registry_revision,
+        serial_hex: pending.serial_hex.clone(),
+        certificate_sha256: pending.certificate_sha256.clone(),
+        signature_algorithm: "ecdsa_p256_sha256_der".to_string(),
+        signature_base64: String::new(),
+    };
+    acknowledgement.certificate_sha256 = "00".repeat(32);
+    sign_rebind_acknowledgement(&mut acknowledgement, &replacement_key);
+    assert!(master
+        .activate_capability_rebind(&authority, &acknowledgement, 2_100_005)
+        .is_err());
+    assert!(master
+        .certificate_is_active(initial.device_id, &initial.serial_hex, 2_100_006)
+        .expect("bad acknowledgement preserves old certificate"));
+    acknowledgement.certificate_sha256 = pending.certificate_sha256.to_uppercase();
+    if acknowledgement.certificate_sha256 == pending.certificate_sha256 {
+        acknowledgement.certificate_sha256.replace_range(..1, "A");
+    }
+    sign_rebind_acknowledgement(&mut acknowledgement, &replacement_key);
+    assert!(matches!(
+        master.activate_capability_rebind(&authority, &acknowledgement, 2_100_006),
+        Err(MasterError::InvalidEnrollmentGrant(message))
+            if message == "capability rebind acknowledgement is invalid"
+    ));
+    assert!(master
+        .certificate_is_active(initial.device_id, &initial.serial_hex, 2_100_006)
+        .expect("uppercase digest preserves old certificate"));
+    assert!(!master
+        .certificate_is_active(initial.device_id, &pending.serial_hex, 2_100_006)
+        .expect("uppercase digest leaves replacement inactive"));
+    acknowledgement.certificate_sha256 = pending.certificate_sha256.clone();
+    let wrong_key = KeyPair::generate().expect("wrong replacement key");
+    sign_rebind_acknowledgement(&mut acknowledgement, &wrong_key);
+    assert!(master
+        .activate_capability_rebind(&authority, &acknowledgement, 2_100_007)
+        .is_err());
+    assert!(master
+        .certificate_is_active(initial.device_id, &initial.serial_hex, 2_100_007)
+        .expect("wrong-key acknowledgement preserves old certificate"));
+    sign_rebind_acknowledgement(&mut acknowledgement, &replacement_key);
+    let activated = master
+        .activate_capability_rebind(&authority, &acknowledgement, 2_100_008)
+        .expect("activate exact staged replacement");
+    assert_eq!(activated.registry_revision, initial.registry_revision + 1);
+    assert!(!master
+        .certificate_is_active(initial.device_id, &initial.serial_hex, 2_100_009)
+        .expect("old certificate revoked after activation"));
+    assert!(master
+        .certificate_is_active(initial.device_id, &pending.serial_hex, 2_100_009)
+        .expect("replacement certificate active after activation"));
+    let retried = master
+        .activate_capability_rebind(&authority, &acknowledgement, 2_100_010)
+        .expect("lost activation output can be reissued");
+    assert_eq!(retried.activated_at_ms, activated.activated_at_ms);
+    assert_eq!(retried.grant_id, activated.grant_id);
+    assert_ne!(retried.signature_base64, "");
+    let mut mismatched_retry = acknowledgement.clone();
+    mismatched_retry.certificate_sha256 = "11".repeat(32);
+    sign_rebind_acknowledgement(&mut mismatched_retry, &replacement_key);
+    assert!(master
+        .activate_capability_rebind(&authority, &mismatched_retry, 2_100_011)
+        .is_err());
+    assert_eq!(activated.signature_algorithm, "ecdsa_p256_sha256_der");
+    let (_, ca_pem) = x509_parser::pem::parse_x509_pem(initial.ca_certificate_pem.as_bytes())
+        .expect("parse activation CA");
+    let (_, ca) = X509Certificate::from_der(&ca_pem.contents).expect("parse activation CA DER");
+    let verifying_key = VerifyingKey::from_sec1_bytes(
+        ca.tbs_certificate
+            .subject_pki
+            .subject_public_key
+            .data
+            .as_ref(),
+    )
+    .expect("P-256 CA public key");
+    let activation_signature = Signature::from_der(
+        &base64::engine::general_purpose::STANDARD
+            .decode(&activated.signature_base64)
+            .expect("decode activation signature"),
+    )
+    .expect("parse activation signature");
+    let activation_transcript = format!(
+        "Assemblywright-Capability-Rebind-Activation-v1\ngrant_id={}\ndevice_id={}\nregistry_revision={}\nserial_hex={}\ncertificate_sha256={}\nactivated_at_ms={}\n",
+        activated.grant_id,
+        activated.device_id.0,
+        activated.registry_revision,
+        activated.serial_hex,
+        activated.certificate_sha256,
+        activated.activated_at_ms
+    );
+    verifying_key
+        .verify(activation_transcript.as_bytes(), &activation_signature)
+        .expect("activation receipt is signed by pinned CA");
+    assert!(matches!(
+        master.issue_pending_capability_rebind(
+            &authority,
+            &EnrollmentRequest {
+                grant_id: stale_grant.grant_id,
+                grant_secret: stale_grant.grant_secret,
+                csr_pem: csr("stale"),
+            },
+            2_100_012,
+        ),
+        Err(MasterError::InvalidEnrollmentGrant(_))
+    ));
+}
+
+#[test]
+fn expired_pending_capability_rebind_cannot_activate_or_disable_working_identity() {
+    let directory = tempfile::tempdir().expect("expired rebind identity directory");
+    let authority =
+        IdentityAuthority::open_or_initialize(directory.path(), &TestProtector, 1_000_000)
+            .expect("initialize authority");
+    let mut master = MasterKernel::in_memory().expect("in-memory master");
+    master
+        .record_identity_authority(authority.receipt())
+        .expect("record authority");
+    let enrolled = master
+        .create_enrollment_grant(fixture_spec(), 2_000_000)
+        .expect("create fixture enrollment");
+    let active = master
+        .issue_device_certificate(
+            &authority,
+            &EnrollmentRequest {
+                grant_id: enrolled.grant_id,
+                grant_secret: enrolled.grant_secret,
+                csr_pem: csr("active-fixture"),
+            },
+            2_000_001,
+        )
+        .expect("issue active fixture certificate");
+    let grant = master
+        .create_capability_rebind_grant(active.device_id, spec().capabilities, 2_100_000)
+        .expect("create rebind grant");
+    let expires_at_ms = grant.expires_at_ms;
+    let (expired_csr, expired_key) = csr_and_key("expired-pending");
+    let pending = master
+        .issue_pending_capability_rebind(
+            &authority,
+            &EnrollmentRequest {
+                grant_id: grant.grant_id,
+                grant_secret: grant.grant_secret,
+                csr_pem: expired_csr,
+            },
+            2_100_001,
+        )
+        .expect("issue pending replacement");
+    let mut acknowledgement = CapabilityRebindAcknowledgement {
+        status: "capability_rebind_certificate_staged".to_string(),
+        grant_id: pending.grant_id,
+        device_id: pending.device_id,
+        registry_revision: pending.registry_revision,
+        serial_hex: pending.serial_hex.clone(),
+        certificate_sha256: pending.certificate_sha256,
+        signature_algorithm: "ecdsa_p256_sha256_der".to_string(),
+        signature_base64: String::new(),
+    };
+    sign_rebind_acknowledgement(&mut acknowledgement, &expired_key);
+    master
+        .set_emergency_paused_at(true, 2_100_002)
+        .expect("pause before activation");
+    assert!(matches!(
+        master.activate_capability_rebind(&authority, &acknowledgement, 2_100_003),
+        Err(MasterError::EmergencyPaused)
+    ));
+    assert!(master
+        .certificate_is_active(active.device_id, &active.serial_hex, 2_100_003)
+        .expect("pause preserves working certificate"));
+    assert!(!master
+        .certificate_is_active(active.device_id, &pending.serial_hex, 2_100_003)
+        .expect("pause leaves pending certificate inactive"));
+    master
+        .set_emergency_paused_at(false, 2_100_004)
+        .expect("resume after activation rejection");
+    assert!(matches!(
+        master.activate_capability_rebind(&authority, &acknowledgement, expires_at_ms),
+        Err(MasterError::EnrollmentGrantExpired)
+    ));
+    assert!(master
+        .certificate_is_active(active.device_id, &active.serial_hex, expires_at_ms)
+        .expect("working certificate remains active"));
+    assert!(!master
+        .certificate_is_active(active.device_id, &pending.serial_hex, expires_at_ms)
+        .expect("expired pending certificate was never activated"));
+    master
+        .abort_capability_rebind(pending.grant_id, expires_at_ms + 1)
+        .expect("abort expired pending rebind");
+    assert!(master
+        .activate_capability_rebind(&authority, &acknowledgement, expires_at_ms + 2)
+        .is_err());
+    assert!(master
+        .certificate_is_active(active.device_id, &active.serial_hex, expires_at_ms + 2)
+        .expect("abort preserves working certificate"));
+}
+
+#[test]
+fn capability_rebind_audit_is_redacted_immutable_and_rolls_back_with_authority() {
+    let directory = tempfile::tempdir().expect("rebind audit directory");
+    let database = directory.path().join("master.sqlite3");
+    let authority =
+        IdentityAuthority::open_or_initialize(directory.path(), &TestProtector, 1_000_000)
+            .expect("initialize authority");
+    let mut master = MasterKernel::open(&database).expect("open master");
+    master
+        .record_identity_authority(authority.receipt())
+        .expect("record authority");
+
+    let enroll_fixture = |master: &mut MasterKernel, name: &str, now_ms: u64| {
+        let mut fixture = fixture_spec();
+        fixture.device_name = name.to_string();
+        let grant = master
+            .create_enrollment_grant(fixture, now_ms)
+            .expect("create fixture enrollment");
+        master
+            .issue_device_certificate(
+                &authority,
+                &EnrollmentRequest {
+                    grant_id: grant.grant_id,
+                    grant_secret: grant.grant_secret,
+                    csr_pem: csr(name),
+                },
+                now_ms + 1,
+            )
+            .expect("issue fixture identity")
+    };
+    let active_device = enroll_fixture(&mut master, "audit-active", 2_000_000);
+    let abort_device = enroll_fixture(&mut master, "audit-abort", 2_010_000);
+    let rollback_device = enroll_fixture(&mut master, "audit-rollback", 2_020_000);
+
+    let active_grant = master
+        .create_capability_rebind_grant(active_device.device_id, spec().capabilities, 2_100_000)
+        .expect("create audited activation grant");
+    let (active_csr, active_key) = csr_and_key("audit-active-replacement");
+    let active_pending = master
+        .issue_pending_capability_rebind(
+            &authority,
+            &EnrollmentRequest {
+                grant_id: active_grant.grant_id,
+                grant_secret: active_grant.grant_secret,
+                csr_pem: active_csr,
+            },
+            2_100_001,
+        )
+        .expect("issue audited pending certificate");
+    let mut active_ack = CapabilityRebindAcknowledgement {
+        status: "capability_rebind_certificate_staged".to_string(),
+        grant_id: active_pending.grant_id,
+        device_id: active_pending.device_id,
+        registry_revision: active_pending.registry_revision,
+        serial_hex: active_pending.serial_hex,
+        certificate_sha256: active_pending.certificate_sha256,
+        signature_algorithm: "ecdsa_p256_sha256_der".to_string(),
+        signature_base64: String::new(),
+    };
+    sign_rebind_acknowledgement(&mut active_ack, &active_key);
+    master
+        .activate_capability_rebind(&authority, &active_ack, 2_100_002)
+        .expect("activate with audit");
+
+    let abort_grant = master
+        .create_capability_rebind_grant(abort_device.device_id, spec().capabilities, 2_110_000)
+        .expect("create audited abort grant");
+    let abort_pending = master
+        .issue_pending_capability_rebind(
+            &authority,
+            &EnrollmentRequest {
+                grant_id: abort_grant.grant_id,
+                grant_secret: abort_grant.grant_secret,
+                csr_pem: csr("audit-abort-replacement"),
+            },
+            2_110_001,
+        )
+        .expect("issue abort pending certificate");
+    master
+        .abort_capability_rebind(abort_pending.grant_id, 2_110_002)
+        .expect("abort with audit");
+    drop(master);
+
+    let connection = rusqlite::Connection::open(&database).expect("inspect audit database");
+    let rows = connection
+        .prepare(
+            "SELECT event_kind, grant_id, device_id, registry_revision, occurred_at_ms
+             FROM master_identity_rebind_audit ORDER BY audit_id",
+        )
+        .expect("prepare audit query")
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+            ))
+        })
+        .expect("query audit")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect audit");
+    assert_eq!(
+        rows.iter().map(|row| row.0.as_str()).collect::<Vec<_>>(),
+        [
+            "grant_created",
+            "pending_issued",
+            "activated",
+            "grant_created",
+            "pending_issued",
+            "aborted"
+        ]
+    );
+    assert!(rows
+        .iter()
+        .all(|row| { !row.1.is_empty() && !row.2.is_empty() && row.3 > 1 && row.4 > 0 }));
+    let columns = connection
+        .prepare("PRAGMA table_info(master_identity_rebind_audit)")
+        .expect("prepare audit schema")
+        .query_map([], |row| row.get::<_, String>(1))
+        .expect("query audit schema")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("collect audit columns");
+    assert_eq!(
+        columns,
+        [
+            "audit_id",
+            "event_kind",
+            "grant_id",
+            "device_id",
+            "registry_revision",
+            "occurred_at_ms"
+        ]
+    );
+    assert!(connection
+        .execute(
+            "UPDATE master_identity_rebind_audit SET occurred_at_ms = 0 WHERE audit_id = 1",
+            [],
+        )
+        .is_err());
+    connection
+        .execute_batch(
+            "CREATE TRIGGER test_rebind_audit_insert_failure
+             BEFORE INSERT ON master_identity_rebind_audit
+             WHEN NEW.event_kind = 'grant_created'
+             BEGIN SELECT RAISE(ABORT, 'test audit failure'); END;",
+        )
+        .expect("install audit failure trigger");
+    let rebind_grants_before: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM master_enrollment_grants
+             WHERE operation = 'capability_rebind'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count rebind grants");
+    drop(connection);
+
+    let mut master = MasterKernel::open(&database).expect("reopen master");
+    assert!(master
+        .create_capability_rebind_grant(rollback_device.device_id, spec().capabilities, 2_120_000,)
+        .is_err());
+    drop(master);
+    let connection = rusqlite::Connection::open(&database).expect("verify rollback");
+    let rebind_grants_after: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM master_enrollment_grants
+             WHERE operation = 'capability_rebind'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count post-rollback rebind grants");
+    assert_eq!(rebind_grants_after, rebind_grants_before);
+}
+
+#[test]
+fn schema_v1_migrates_transactionally_through_capability_rebind_v6() {
     let directory = tempfile::tempdir().expect("migration directory");
     let database = directory.path().join("master.sqlite3");
     let connection = rusqlite::Connection::open(&database).expect("create v1 database");
@@ -322,7 +797,7 @@ fn schema_v1_migrates_transactionally_through_feature_conveyor_v5() {
 
     let process = MasterProcess::acquire(directory.path()).expect("migrate v1 database");
     let master = process.kernel();
-    assert_eq!(master.schema_version().expect("schema version"), 5);
+    assert_eq!(master.schema_version().expect("schema version"), 6);
     let health = master.health_snapshot().expect("migrated health");
     assert_eq!(health.registered_devices, 1);
     assert_eq!(health.active_device_certificates, 0);
@@ -531,7 +1006,7 @@ fn windows_enrollment_cli_uses_stdin_for_grant_secrets_and_emits_bounded_receipt
 
 #[cfg(windows)]
 #[test]
-fn windows_pair_cli_emits_no_secret_and_preserves_unconsumed_grant_on_mismatch() {
+fn windows_pair_and_rebind_cli_keep_secrets_on_stdin_and_activate_exact_replacement() {
     use assemblywright_protocol::{EnrollmentCsrReply, EnrollmentInvitation};
     use std::io::{BufRead as _, BufReader, Read as _, Write as _};
     use std::process::{Command, Stdio};
@@ -542,7 +1017,7 @@ fn windows_pair_cli_emits_no_secret_and_preserves_unconsumed_grant_on_mismatch()
     let capabilities_path = directory.path().join("capabilities.json");
     std::fs::write(
         &capabilities_path,
-        serde_json::to_vec(&spec().capabilities).expect("capability JSON"),
+        serde_json::to_vec(&fixture_spec().capabilities).expect("capability JSON"),
     )
     .expect("write capability fixture");
     let capabilities_path = capabilities_path.to_string_lossy().into_owned();
@@ -672,4 +1147,160 @@ fn windows_pair_cli_emits_no_secret_and_preserves_unconsumed_grant_on_mismatch()
     let health = master.health_snapshot().expect("pairing health");
     assert_eq!(health.registered_devices, 1);
     assert_eq!(health.unconsumed_enrollment_grants, 1);
+    drop(master);
+
+    let target_path = directory.path().join("mlx-capabilities.json");
+    std::fs::write(
+        &target_path,
+        serde_json::to_vec(&spec().capabilities).expect("MLX capability JSON"),
+    )
+    .expect("write MLX capability fixture");
+    let target_path = target_path.to_string_lossy().into_owned();
+    let device_id = issued["device_id"].as_str().expect("paired device id");
+    let mut rebind = Command::new(binary)
+        .args([
+            "--data-dir",
+            &data_dir,
+            "enrollment",
+            "rebind-pair",
+            "--device-id",
+            device_id,
+            "--capabilities-file",
+            &target_path,
+            "--master-endpoint",
+            "100.64.23.14:7792",
+            "--confirm",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn capability rebind pair");
+    let mut rebind_stdout = BufReader::new(rebind.stdout.take().expect("rebind stdout"));
+    let mut rebind_invitation_line = String::new();
+    rebind_stdout
+        .read_line(&mut rebind_invitation_line)
+        .expect("read rebind invitation");
+    assert!(!rebind_invitation_line.contains("grant_secret"));
+    let rebind_invitation = EnrollmentInvitation::decode_frame(rebind_invitation_line.as_bytes())
+        .expect("decode rebind invitation");
+    assert_eq!(rebind_invitation.device_id.0.to_string(), device_id);
+    assert_eq!(rebind_invitation.registry_revision, 2);
+    let (rebind_csr, rebind_key) = csr_and_key("rebind-replacement");
+    rebind
+        .stdin
+        .take()
+        .expect("rebind stdin")
+        .write_all(
+            &serde_json::to_vec(&EnrollmentCsrReply {
+                schema_version: 1,
+                status: "enrollment_csr_ready".to_string(),
+                grant_id: rebind_invitation.grant_id,
+                device_id: rebind_invitation.device_id,
+                csr_pem: rebind_csr,
+            })
+            .expect("rebind CSR"),
+        )
+        .expect("write rebind CSR");
+    let mut pending_line = String::new();
+    rebind_stdout
+        .read_to_string(&mut pending_line)
+        .expect("read pending rebind certificate");
+    assert!(rebind.wait().expect("wait for rebind pair").success());
+    let pending: serde_json::Value =
+        serde_json::from_str(&pending_line).expect("pending rebind receipt");
+    assert_eq!(pending["status"], "capability_rebind_certificate_pending");
+    let pending_probe_at = pending["issued_at_ms"]
+        .as_u64()
+        .expect("pending issued time")
+        + 1;
+    let pending_device = assemblywright_protocol::DeviceId::new(
+        uuid::Uuid::parse_str(device_id).expect("paired device UUID"),
+    );
+    let master =
+        MasterKernel::open(directory.path().join("master.sqlite3")).expect("open pending registry");
+    assert!(master
+        .certificate_is_active(
+            pending_device,
+            issued["serial_hex"].as_str().expect("old serial"),
+            pending_probe_at,
+        )
+        .expect("old certificate stays active before activation"));
+    assert!(!master
+        .certificate_is_active(
+            pending_device,
+            pending["serial_hex"].as_str().expect("pending serial"),
+            pending_probe_at,
+        )
+        .expect("pending certificate is not authenticating"));
+    drop(master);
+    let mut acknowledgement = CapabilityRebindAcknowledgement {
+        status: "capability_rebind_certificate_staged".to_string(),
+        grant_id: uuid::Uuid::parse_str(pending["grant_id"].as_str().expect("pending grant id"))
+            .expect("pending grant UUID"),
+        device_id: pending_device,
+        registry_revision: pending["registry_revision"]
+            .as_u64()
+            .expect("pending revision"),
+        serial_hex: pending["serial_hex"]
+            .as_str()
+            .expect("pending serial")
+            .to_string(),
+        certificate_sha256: pending["certificate_sha256"]
+            .as_str()
+            .expect("pending certificate digest")
+            .to_string(),
+        signature_algorithm: "ecdsa_p256_sha256_der".to_string(),
+        signature_base64: String::new(),
+    };
+    sign_rebind_acknowledgement(&mut acknowledgement, &rebind_key);
+    let mut activate = Command::new(binary)
+        .args([
+            "--data-dir",
+            &data_dir,
+            "enrollment",
+            "rebind-activate",
+            "--acknowledgement-stdin",
+            "--confirm",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn rebind activation");
+    activate
+        .stdin
+        .take()
+        .expect("activation stdin")
+        .write_all(&serde_json::to_vec(&acknowledgement).expect("acknowledgement JSON"))
+        .expect("write staged-certificate acknowledgement");
+    let activated = activate.wait_with_output().expect("wait for activation");
+    assert!(
+        activated.status.success(),
+        "activation failed: {}",
+        String::from_utf8_lossy(&activated.stderr)
+    );
+    let activation: serde_json::Value =
+        serde_json::from_slice(&activated.stdout).expect("activation receipt");
+    assert_eq!(activation["status"], "capability_rebind_activated");
+    assert_eq!(activation["registry_revision"], 2);
+    let activated_at = activation["activated_at_ms"]
+        .as_u64()
+        .expect("activation time");
+    let master = MasterKernel::open(directory.path().join("master.sqlite3"))
+        .expect("open activated registry");
+    assert!(!master
+        .certificate_is_active(
+            pending_device,
+            issued["serial_hex"].as_str().expect("old serial"),
+            activated_at + 1,
+        )
+        .expect("old certificate revoked"));
+    assert!(master
+        .certificate_is_active(
+            pending_device,
+            pending["serial_hex"].as_str().expect("replacement serial"),
+            activated_at + 1,
+        )
+        .expect("replacement certificate active"));
 }

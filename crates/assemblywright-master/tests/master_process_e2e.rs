@@ -43,7 +43,7 @@ fn feature_conveyor_status_is_owner_authenticated_bounded_and_redacted() {
     let empty = get_request(empty_endpoint, "/v1/feature-conveyor/status", Some(token));
     assert!(empty.starts_with("HTTP/1.1 200 OK"), "{empty}");
     let empty_json = response_json(&empty);
-    assert_eq!(empty_json["schema_version"], 5);
+    assert_eq!(empty_json["schema_version"], 6);
     assert_eq!(empty_json["queue_revision"], 0);
     assert_eq!(empty_json["startup_quarantine_count"], 0);
     assert_eq!(empty_json["visible_feature_count"], 0);
@@ -100,7 +100,7 @@ fn windows_master_process_owns_state_and_completes_cross_process_fixture() {
     let setup_receipt: Value = serde_json::from_slice(&setup.stdout).expect("setup JSON receipt");
     assert_eq!(setup_receipt["status"], "setup_complete");
     assert_eq!(setup_receipt["protocol_version"], 2);
-    assert_eq!(setup_receipt["schema_version"], 5);
+    assert_eq!(setup_receipt["schema_version"], 6);
     assert!(directory.path().join("master.sqlite3").is_file());
     assert!(directory.path().join("development.token").is_file());
     let development_token = std::fs::read_to_string(directory.path().join("development.token"))

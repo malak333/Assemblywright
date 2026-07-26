@@ -95,7 +95,7 @@ executable changes as release evidence.
 | Master kernel | `cargo test -p assemblywright-master` |
 | Feature Conveyor kernel and read-only projection | `cargo test -p assemblywright-master --test feature_conveyor_kernel` |
 | Master process E2E, including authenticated loopback Feature Conveyor status | `cargo test -p assemblywright-master --test master_process_e2e` |
-| Enrollment and identity | `cargo test -p assemblywright-master --test enrollment_identity_e2e` |
+| Enrollment, two-phase capability rebind, and identity | `cargo test -p assemblywright-master --test enrollment_identity_e2e` |
 | Remote mTLS | `cargo test -p assemblywright-master --test remote_mtls_e2e` |
 | Event cursor | `cargo test -p assemblywright-master --test event_cursor_e2e` |
 | Windows service lifecycle | `cargo test -p assemblywright-master --test windows_service_lifecycle_e2e -- --ignored` |
@@ -191,8 +191,11 @@ Deterministic cross-process coverage proves:
   absence from the enrolled-device remote mTLS router. The response does not
   establish claimability, dependency blockers, or owner-action guidance.
 - Enrollment identity: digest-only grants, signed-CSR issuance, expiry and
-  replay denial, rotation, revocation, schema migration, real Windows DPAPI
-  round trips, and the CLI stdin boundary.
+  replay denial, rotation, revocation, schema migration, two-phase pending
+  capability rebind with replacement-key acknowledgement verification,
+  CA-signed activation verification, exact lost-output retry, Emergency Pause,
+  immutable redacted audit rollback, stale/replay/expiry preservation, real
+  Windows DPAPI round trips, and the CLI stdin boundary.
 - Remote mTLS: mutual certificate authentication, durable certificate and
   device checks, pre-handshake health denial, exporter-bound replay denial,
   reconnect epoch advance, socket-close reconciliation, and revoked-certificate
@@ -211,3 +214,33 @@ It does not prove Developer ID signing, notarization, stapling, clean-profile
 installation, Finder or LaunchServices behavior, live cross-device reliability,
 autonomous dispatch, repository mutation, publication authority, or unattended
 operation. Those remain owner-recorded external evidence.
+
+## Owner-Confirmed Standard Capability Rebind
+
+The rebind is a four-receipt stdin ceremony, not one pipeline: keep each
+Windows process stopped/single-owner and pass only the emitted public document
+to the next command. Never place a CSR, acknowledgement, certificate, or raw
+grant secret in argv or a shell history.
+
+```text
+Windows: assemblywright-master ... enrollment rebind-pair --device-id UUID \
+  --capabilities-file mlx-capability.json --master-endpoint IP:PORT --confirm
+Mac:     assemblywright-mac-bridge enrollment rebind prepare --confirm
+Mac:     assemblywright-mac-bridge enrollment rebind stage --confirm
+Windows: assemblywright-master ... enrollment rebind-activate \
+  --acknowledgement-stdin --confirm
+Mac:     assemblywright-mac-bridge enrollment rebind promote --confirm
+```
+
+Mac `enrollment rebind cancel --confirm` is destructive only after `prepare`
+and before `stage` has persisted a certificate/acknowledgement. If abandoning
+in that window after Windows issuance, confirm Windows
+`enrollment rebind-abort --grant-id UUID --confirm` first, then cancel the Mac
+prepare-only stage. Once Mac `stage` emits the signed acknowledgement, local
+cancel refuses and preserves the replacement key, certificate, and staged
+receipt because Windows activation may already have committed; retry the exact
+Windows activation to recover its receipt and promote. After promotion, Mac
+cancellation recognizes the installed replacement generation and cannot delete
+its selected key or certificate. Repository tests
+do not prove the Xcode-provisioned Secure Enclave path, live Windows DPAPI CLI,
+cross-device promotion, reconnect under the higher revision, or MLX execution.

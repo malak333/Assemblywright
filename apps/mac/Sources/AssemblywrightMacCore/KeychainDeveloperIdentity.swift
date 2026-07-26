@@ -8,6 +8,9 @@ struct AssemblywrightMacBridgeKeychainNamespace: Equatable, Sendable {
     let installedAccount: String
     let certificateLabel: String
     let keyTag: Data
+    let replacementStagedAccount: String
+    let replacementCertificateLabel: String
+    let replacementKeyTag: Data
 
     static func identityProfile(_ profile: AssemblywrightMacBridgeIdentityProfile) -> Self {
         switch profile {
@@ -17,7 +20,13 @@ struct AssemblywrightMacBridgeKeychainNamespace: Equatable, Sendable {
                 stagedAccount: "enrollment-staged-v1",
                 installedAccount: "identity-installed-v1",
                 certificateLabel: "com.nobiletechnology.assemblywright.developer-bridge.identity-v1",
-                keyTag: Data("com.nobiletechnology.assemblywright.developer-bridge.p256-v1".utf8)
+                keyTag: Data("com.nobiletechnology.assemblywright.developer-bridge.p256-v1".utf8),
+                replacementStagedAccount: "capability-rebind-staged-v1",
+                replacementCertificateLabel:
+                    "com.nobiletechnology.assemblywright.developer-bridge.identity-replacement-v1",
+                replacementKeyTag: Data(
+                    "com.nobiletechnology.assemblywright.developer-bridge.p256-replacement-v1".utf8
+                )
             )
         case .fixtureReasoning:
             Self(
@@ -28,6 +37,12 @@ struct AssemblywrightMacBridgeKeychainNamespace: Equatable, Sendable {
                     "com.nobiletechnology.assemblywright.developer-bridge.fixture.identity-v1",
                 keyTag: Data(
                     "com.nobiletechnology.assemblywright.developer-bridge.fixture.p256-v1".utf8
+                ),
+                replacementStagedAccount: "capability-rebind-forbidden",
+                replacementCertificateLabel:
+                    "com.nobiletechnology.assemblywright.developer-bridge.fixture.rebind-forbidden",
+                replacementKeyTag: Data(
+                    "com.nobiletechnology.assemblywright.developer-bridge.fixture.rebind-forbidden".utf8
                 )
             )
         }
@@ -168,7 +183,10 @@ public struct KeychainAssemblywrightMacBridgeIdentityStore: AssemblywrightMacBri
                 throw AssemblywrightMacDeveloperBridgeError.identityUnavailable
             }
             try identityProfile.validate(profile: record.profile)
-            let privateKey = try loadPrivateKey()
+            let privateKey = try loadPrivateKey(
+                keyTag: record.keyGeneration == "replacement_v1"
+                    ? namespace.replacementKeyTag : namespace.keyTag
+            )
             let leafDER = try decodePEM(record.certificatePEM, label: "CERTIFICATE")
             let caDER = try decodePEM(record.caCertificatePEM, label: "CERTIFICATE")
             guard hex(SHA256.hash(data: caDER)) == record.caFingerprintSHA256,
@@ -203,7 +221,245 @@ public struct KeychainAssemblywrightMacBridgeIdentityStore: AssemblywrightMacBri
         }
     }
 
-    private func createSecureEnclaveKey() throws -> SecKey {
+    public func stageReplacementIdentity(
+        for invitation: AssemblywrightMacEnrollmentInvitation
+    ) throws -> AssemblywrightMacEnrollmentCSR {
+        guard identityProfile == .standard else {
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+        }
+        return try Self.lock.withLock {
+            guard let installed: InstalledRecord = try readRecord(
+                account: namespace.installedAccount
+            ), installed.profile.deviceID == invitation.deviceID,
+            installed.profile.deviceName == invitation.deviceName,
+            installed.profile.role == invitation.role,
+            installed.profile.masterEndpoint == invitation.masterEndpoint,
+            invitation.registryRevision > installed.profile.registryRevision,
+            installed.caFingerprintSHA256 == invitation.caFingerprintSHA256.lowercased()
+            else {
+                throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+            }
+            if let staged: ReplacementStagedRecord = try readRecord(
+                account: namespace.replacementStagedAccount
+            ) {
+                guard staged.invitation == invitation, staged.receipt == nil else {
+                    throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+                }
+                return try makeCSR(
+                    invitation: invitation,
+                    privateKey: loadPrivateKey(keyTag: namespace.replacementKeyTag)
+                )
+            }
+            guard try findPrivateKey(keyTag: namespace.replacementKeyTag) == nil,
+                  try findInstalledCertificate(label: namespace.replacementCertificateLabel) == nil
+            else {
+                throw AssemblywrightMacDeveloperBridgeError.identityUnavailable
+            }
+            let key = try createSecureEnclaveKey(keyTag: namespace.replacementKeyTag)
+            do {
+                let reply = try makeCSR(invitation: invitation, privateKey: key)
+                try saveRecord(
+                    ReplacementStagedRecord(invitation: invitation, receipt: nil),
+                    account: namespace.replacementStagedAccount
+                )
+                return reply
+            } catch {
+                try? deletePrivateKey(keyTag: namespace.replacementKeyTag)
+                throw error
+            }
+        }
+    }
+
+    public func loadStagedReplacementInvitation() throws -> AssemblywrightMacEnrollmentInvitation? {
+        guard identityProfile == .standard else {
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+        }
+        return try Self.lock.withLock {
+            let staged: ReplacementStagedRecord? = try readRecord(
+                account: namespace.replacementStagedAccount
+            )
+            return staged?.invitation
+        }
+    }
+
+    public func stageReplacementCertificate(
+        _ receipt: AssemblywrightMacPendingCapabilityRebindCertificate,
+        for invitation: AssemblywrightMacEnrollmentInvitation
+    ) throws -> AssemblywrightMacCapabilityRebindAcknowledgement {
+        guard identityProfile == .standard else {
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+        }
+        return try Self.lock.withLock {
+            let staged: ReplacementStagedRecord? = try readRecord(
+                account: namespace.replacementStagedAccount
+            )
+            guard staged?.invitation == invitation, staged?.receipt == nil else {
+                throw AssemblywrightMacDeveloperBridgeError.noStagedEnrollment
+            }
+            let privateKey = try loadPrivateKey(keyTag: namespace.replacementKeyTag)
+            let leafDER = try decodePEM(receipt.certificatePEM, label: "CERTIFICATE")
+            let caDER = try decodePEM(receipt.caCertificatePEM, label: "CERTIFICATE")
+            guard hex(SHA256.hash(data: leafDER)) == receipt.certificateSHA256.lowercased(),
+                  hex(SHA256.hash(data: caDER)) == invitation.caFingerprintSHA256.lowercased(),
+                  let leaf = SecCertificateCreateWithData(nil, leafDER as CFData),
+                  let ca = SecCertificateCreateWithData(nil, caDER as CFData) else {
+                throw AssemblywrightMacDeveloperBridgeError.certificateInvalid
+            }
+            try validateCertificate(
+                leaf: leaf,
+                leafDER: leafDER,
+                ca: ca,
+                privateKey: privateKey,
+                expectedDeviceID: invitation.deviceID,
+                expectedDeviceName: invitation.deviceName,
+                expectedSerialHex: receipt.serialHex,
+                expectedNotAfterMilliseconds: receipt.notAfterMilliseconds
+            )
+            do {
+                _ = try installCertificate(
+                    leaf,
+                    leafDER: leafDER,
+                    label: namespace.replacementCertificateLabel
+                )
+                _ = try loadIdentity(certificate: leaf)
+                try saveRecord(
+                    ReplacementStagedRecord(invitation: invitation, receipt: receipt),
+                    account: namespace.replacementStagedAccount
+                )
+            } catch {
+                try? deleteInstalledCertificate(label: namespace.replacementCertificateLabel)
+                try? deletePrivateKey(keyTag: namespace.replacementKeyTag)
+                try? deleteRecord(account: namespace.replacementStagedAccount)
+                throw error
+            }
+            let unsigned = AssemblywrightMacCapabilityRebindAcknowledgement(
+                status: "capability_rebind_certificate_staged",
+                grantID: receipt.grantID,
+                deviceID: receipt.deviceID,
+                registryRevision: receipt.registryRevision,
+                serialHex: receipt.serialHex,
+                certificateSHA256: receipt.certificateSHA256,
+                signatureAlgorithm: assemblywrightRebindSignatureAlgorithm,
+                signatureBase64: ""
+            )
+            var signatureError: Unmanaged<CFError>?
+            guard let signature = SecKeyCreateSignature(
+                privateKey,
+                .ecdsaSignatureMessageX962SHA256,
+                assemblywrightCapabilityRebindAcknowledgementTranscript(unsigned) as CFData,
+                &signatureError
+            ) as Data? else {
+                throw AssemblywrightMacDeveloperBridgeError.identityUnavailable
+            }
+            return AssemblywrightMacCapabilityRebindAcknowledgement(
+                status: unsigned.status,
+                grantID: unsigned.grantID,
+                deviceID: unsigned.deviceID,
+                registryRevision: unsigned.registryRevision,
+                serialHex: unsigned.serialHex,
+                certificateSHA256: unsigned.certificateSHA256,
+                signatureAlgorithm: unsigned.signatureAlgorithm,
+                signatureBase64: signature.base64EncodedString()
+            )
+        }
+    }
+
+    public func promoteReplacement(
+        _ activation: AssemblywrightMacCapabilityRebindActivation
+    ) throws -> AssemblywrightMacBridgeProfile {
+        guard identityProfile == .standard else {
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+        }
+        return try Self.lock.withLock {
+            guard let staged: ReplacementStagedRecord = try readRecord(
+                account: namespace.replacementStagedAccount
+            ), let receipt = staged.receipt,
+            activation.grantID == receipt.grantID,
+            activation.deviceID == receipt.deviceID,
+            activation.registryRevision == receipt.registryRevision,
+            activation.serialHex == receipt.serialHex,
+            activation.certificateSHA256 == receipt.certificateSHA256
+            else {
+                throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+            }
+            let profile = AssemblywrightMacBridgeProfile(
+                deviceID: receipt.deviceID,
+                deviceName: receipt.deviceName,
+                role: receipt.role,
+                registryRevision: receipt.registryRevision,
+                capabilities: staged.invitation.capabilities,
+                masterEndpoint: staged.invitation.masterEndpoint,
+                certificateNotAfterMilliseconds: receipt.notAfterMilliseconds
+            )
+            let record = InstalledRecord(
+                profile: profile,
+                certificatePEM: receipt.certificatePEM,
+                caCertificatePEM: receipt.caCertificatePEM,
+                caFingerprintSHA256: staged.invitation.caFingerprintSHA256.lowercased(),
+                keyGeneration: "replacement_v1"
+            )
+            let privateKey = try loadPrivateKey(keyTag: namespace.replacementKeyTag)
+            let leafDER = try decodePEM(receipt.certificatePEM, label: "CERTIFICATE")
+            let caDER = try decodePEM(receipt.caCertificatePEM, label: "CERTIFICATE")
+            guard hex(SHA256.hash(data: leafDER)) == receipt.certificateSHA256.lowercased(),
+                  hex(SHA256.hash(data: caDER))
+                    == staged.invitation.caFingerprintSHA256.lowercased(),
+                  let leaf = SecCertificateCreateWithData(nil, leafDER as CFData),
+                  let ca = SecCertificateCreateWithData(nil, caDER as CFData) else {
+                throw AssemblywrightMacDeveloperBridgeError.certificateInvalid
+            }
+            guard activation.signatureAlgorithm == assemblywrightRebindSignatureAlgorithm,
+                  let activationSignature = Data(base64Encoded: activation.signatureBase64),
+                  activationSignature.base64EncodedString() == activation.signatureBase64,
+                  let caPublicKey = SecCertificateCopyKey(ca),
+                  assemblywrightVerifyCapabilityRebindActivationSignature(
+                      activation,
+                      signature: activationSignature,
+                      caPublicKey: caPublicKey
+                  ) else {
+                throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+            }
+            try validateCertificate(
+                leaf: leaf,
+                leafDER: leafDER,
+                ca: ca,
+                privateKey: privateKey,
+                expectedDeviceID: receipt.deviceID,
+                expectedDeviceName: receipt.deviceName,
+                expectedSerialHex: receipt.serialHex,
+                expectedNotAfterMilliseconds: receipt.notAfterMilliseconds
+            )
+            _ = try loadIdentity(certificate: leaf)
+            try saveRecord(record, account: namespace.installedAccount)
+            try? deleteRecord(account: namespace.replacementStagedAccount)
+            return profile
+        }
+    }
+
+    public func cancelStagedReplacement() throws {
+        guard identityProfile == .standard else {
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+        }
+        try Self.lock.withLock {
+            let installed: InstalledRecord? = try readRecord(account: namespace.installedAccount)
+            let staged: ReplacementStagedRecord? = try readRecord(
+                account: namespace.replacementStagedAccount
+            )
+            let deleteMaterial = try assemblywrightReplacementCancellationDeletesMaterial(
+                installedRecordPresent: installed != nil,
+                installedKeyGeneration: installed?.keyGeneration,
+                stagedRecordPresent: staged != nil,
+                stagedReceiptPresent: staged?.receipt != nil
+            )
+            if deleteMaterial {
+                try deleteInstalledCertificate(label: namespace.replacementCertificateLabel)
+                try deletePrivateKey(keyTag: namespace.replacementKeyTag)
+            }
+            try deleteRecord(account: namespace.replacementStagedAccount)
+        }
+    }
+
+    private func createSecureEnclaveKey(keyTag: Data? = nil) throws -> SecKey {
         var accessError: Unmanaged<CFError>?
         guard let access = SecAccessControlCreateWithFlags(
             nil,
@@ -220,7 +476,7 @@ public struct KeychainAssemblywrightMacBridgeIdentityStore: AssemblywrightMacBri
             kSecUseDataProtectionKeychain as String: true,
             kSecPrivateKeyAttrs as String: [
                 kSecAttrIsPermanent as String: true,
-                kSecAttrApplicationTag as String: namespace.keyTag,
+                kSecAttrApplicationTag as String: keyTag ?? namespace.keyTag,
                 kSecAttrAccessControl as String: access
             ]
         ]
@@ -231,11 +487,11 @@ public struct KeychainAssemblywrightMacBridgeIdentityStore: AssemblywrightMacBri
         return key
     }
 
-    private func findPrivateKey() throws -> SecKey? {
+    private func findPrivateKey(keyTag: Data? = nil) throws -> SecKey? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassKey,
             kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
-            kSecAttrApplicationTag as String: namespace.keyTag,
+            kSecAttrApplicationTag as String: keyTag ?? namespace.keyTag,
             kSecReturnRef as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
             kSecUseDataProtectionKeychain as String: true
@@ -249,18 +505,18 @@ public struct KeychainAssemblywrightMacBridgeIdentityStore: AssemblywrightMacBri
         return key
     }
 
-    private func loadPrivateKey() throws -> SecKey {
-        guard let key = try findPrivateKey() else {
+    private func loadPrivateKey(keyTag: Data? = nil) throws -> SecKey {
+        guard let key = try findPrivateKey(keyTag: keyTag) else {
             throw AssemblywrightMacDeveloperBridgeError.identityUnavailable
         }
         return key
     }
 
-    private func deletePrivateKey() throws {
+    private func deletePrivateKey(keyTag: Data? = nil) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassKey,
             kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
-            kSecAttrApplicationTag as String: namespace.keyTag,
+            kSecAttrApplicationTag as String: keyTag ?? namespace.keyTag,
             kSecUseDataProtectionKeychain as String: true
         ]
         let status = SecItemDelete(query as CFDictionary)
@@ -269,14 +525,18 @@ public struct KeychainAssemblywrightMacBridgeIdentityStore: AssemblywrightMacBri
         }
     }
 
-    private func installCertificate(_ certificate: SecCertificate, leafDER: Data) throws -> Bool {
-        if let existing = try findInstalledCertificate() {
+    private func installCertificate(
+        _ certificate: SecCertificate,
+        leafDER: Data,
+        label: String? = nil
+    ) throws -> Bool {
+        if let existing = try findInstalledCertificate(label: label) {
             guard SecCertificateCopyData(existing) as Data == leafDER else {
                 throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
             }
             return false
         }
-        var query = installedCertificateQuery()
+        var query = installedCertificateQuery(label: label)
         query[kSecValueRef as String] = certificate
         let status = SecItemAdd(query as CFDictionary, nil)
         guard status == errSecSuccess else {
@@ -285,8 +545,8 @@ public struct KeychainAssemblywrightMacBridgeIdentityStore: AssemblywrightMacBri
         return true
     }
 
-    private func findInstalledCertificate() throws -> SecCertificate? {
-        var query = installedCertificateQuery()
+    private func findInstalledCertificate(label: String? = nil) throws -> SecCertificate? {
+        var query = installedCertificateQuery(label: label)
         query[kSecReturnRef as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: CFTypeRef?
@@ -298,17 +558,17 @@ public struct KeychainAssemblywrightMacBridgeIdentityStore: AssemblywrightMacBri
         return certificate
     }
 
-    private func deleteInstalledCertificate() throws {
-        let status = SecItemDelete(installedCertificateQuery() as CFDictionary)
+    private func deleteInstalledCertificate(label: String? = nil) throws {
+        let status = SecItemDelete(installedCertificateQuery(label: label) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw AssemblywrightMacDeveloperBridgeError.keychainFailure(status)
         }
     }
 
-    private func installedCertificateQuery() -> [String: Any] {
+    private func installedCertificateQuery(label: String? = nil) -> [String: Any] {
         [
             kSecClass as String: kSecClassCertificate,
-            kSecAttrLabel as String: namespace.certificateLabel,
+            kSecAttrLabel as String: label ?? namespace.certificateLabel,
             kSecUseDataProtectionKeychain as String: true
         ]
     }
@@ -479,6 +739,50 @@ public struct KeychainAssemblywrightMacBridgeIdentityStore: AssemblywrightMacBri
     }
 }
 
+func assemblywrightReplacementCancellationDeletesMaterial(
+    installedRecordPresent: Bool,
+    installedKeyGeneration: String?,
+    stagedRecordPresent: Bool,
+    stagedReceiptPresent: Bool
+) throws -> Bool {
+    guard !stagedReceiptPresent || stagedRecordPresent else {
+        throw AssemblywrightMacDeveloperBridgeError.identityUnavailable
+    }
+    if installedKeyGeneration == "replacement_v1" {
+        guard installedRecordPresent else {
+            throw AssemblywrightMacDeveloperBridgeError.identityUnavailable
+        }
+        return false
+    }
+    if installedKeyGeneration != nil {
+        throw AssemblywrightMacDeveloperBridgeError.identityUnavailable
+    }
+    guard installedRecordPresent else {
+        if stagedRecordPresent {
+            throw AssemblywrightMacDeveloperBridgeError.identityUnavailable
+        }
+        return false
+    }
+    if stagedReceiptPresent {
+        throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+    }
+    return stagedRecordPresent
+}
+
+func assemblywrightVerifyCapabilityRebindActivationSignature(
+    _ activation: AssemblywrightMacCapabilityRebindActivation,
+    signature: Data,
+    caPublicKey: SecKey
+) -> Bool {
+    SecKeyVerifySignature(
+        caPublicKey,
+        .ecdsaSignatureMessageX962SHA256,
+        assemblywrightCapabilityRebindActivationTranscript(activation) as CFData,
+        signature as CFData,
+        nil
+    )
+}
+
 struct AssemblywrightMacTLSIdentityMaterial: @unchecked Sendable {
     let identity: SecIdentity
     let caCertificate: SecCertificate
@@ -488,11 +792,31 @@ private struct StagedRecord: Codable {
     let invitation: AssemblywrightMacEnrollmentInvitation
 }
 
+private struct ReplacementStagedRecord: Codable {
+    let invitation: AssemblywrightMacEnrollmentInvitation
+    let receipt: AssemblywrightMacPendingCapabilityRebindCertificate?
+}
+
 private struct InstalledRecord: Codable {
     let profile: AssemblywrightMacBridgeProfile
     let certificatePEM: String
     let caCertificatePEM: String
     let caFingerprintSHA256: String
+    let keyGeneration: String?
+
+    init(
+        profile: AssemblywrightMacBridgeProfile,
+        certificatePEM: String,
+        caCertificatePEM: String,
+        caFingerprintSHA256: String,
+        keyGeneration: String? = nil
+    ) {
+        self.profile = profile
+        self.certificatePEM = certificatePEM
+        self.caCertificatePEM = caCertificatePEM
+        self.caFingerprintSHA256 = caFingerprintSHA256
+        self.keyGeneration = keyGeneration
+    }
 }
 
 private func decodePEM(_ value: String, label: String) throws -> Data {

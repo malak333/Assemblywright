@@ -236,7 +236,7 @@ fn abandon_feature(kernel: &mut MasterKernel, feature: &ApprovedFeatureSpecifica
 fn status_projection_is_empty_bounded_and_redacted() {
     let mut kernel = MasterKernel::in_memory().unwrap();
     let empty = kernel.feature_conveyor_status().unwrap();
-    assert_eq!(empty.schema_version, 5);
+    assert_eq!(empty.schema_version, 6);
     assert_eq!(empty.queue_revision, 0);
     assert_eq!(empty.startup_quarantine_count, 0);
     assert_eq!(empty.visible_feature_count, 0);
@@ -1003,6 +1003,12 @@ fn downgrade_v5_database_to_v4(path: &std::path::Path, sabotage: bool) {
              DROP TRIGGER feature_conveyor_audit_no_delete;
              DROP TRIGGER feature_transition_evidence_no_update;
              DROP TRIGGER feature_transition_evidence_no_delete;
+             DROP TRIGGER master_identity_rebind_audit_no_update;
+             DROP TRIGGER master_identity_rebind_audit_no_delete;
+             DROP TRIGGER master_pending_capability_rebinds_no_delete;
+             DROP TRIGGER master_pending_capability_rebinds_terminal_only;
+             DROP TABLE master_identity_rebind_audit;
+             DROP TABLE master_pending_capability_rebinds;
              DROP TABLE feature_conveyor_audit;
              DROP TABLE feature_transition_evidence;
              DROP TABLE feature_active_lease;
@@ -1036,7 +1042,7 @@ fn master_process_v4_backup_migration_reopen_and_restore_on_failure() {
     ));
     {
         let process = MasterProcess::acquire(directory.path()).unwrap();
-        assert_eq!(process.kernel().schema_version().unwrap(), 5);
+        assert_eq!(process.kernel().schema_version().unwrap(), 6);
         let backup = process.migration_backup_path().unwrap();
         assert!(backup.exists());
         let backup_connection = Connection::open(backup).unwrap();
@@ -1059,7 +1065,7 @@ fn master_process_v4_backup_migration_reopen_and_restore_on_failure() {
             .kernel()
             .schema_version()
             .unwrap(),
-        5
+        6
     );
 
     let failed_directory = tempdir().unwrap();
@@ -1100,7 +1106,7 @@ fn master_process_v4_backup_migration_reopen_and_restore_on_failure() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v5.")));
+            .starts_with("master.pre-v6.")));
 }
 
 #[test]
@@ -1110,7 +1116,7 @@ fn forward_schema_version_fails_closed_without_backup() {
     drop(MasterKernel::open(&database).unwrap());
     Connection::open(&database)
         .unwrap()
-        .execute_batch("PRAGMA user_version = 6;")
+        .execute_batch("PRAGMA user_version = 7;")
         .unwrap();
     let forward_error = match MasterProcess::acquire(directory.path()) {
         Ok(_) => panic!("forward schema unexpectedly opened"),
@@ -1119,8 +1125,8 @@ fn forward_schema_version_fails_closed_without_backup() {
     assert!(matches!(
         forward_error,
         MasterError::UnsupportedSchemaVersion {
-            expected: 5,
-            found: 6
+            expected: 6,
+            found: 7
         }
     ));
     assert!(!directory
@@ -1131,5 +1137,5 @@ fn forward_schema_version_fails_closed_without_backup() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v5.")));
+            .starts_with("master.pre-v6.")));
 }

@@ -212,6 +212,97 @@ public struct AssemblywrightMacIssuedDeviceCertificate: Codable, Equatable, Send
     }
 }
 
+public struct AssemblywrightMacPendingCapabilityRebindCertificate: Codable, Equatable, Sendable {
+    public let status: String
+    public let operation: String
+    public let grantID: String
+    public let deviceID: String
+    public let deviceName: String
+    public let role: String
+    public let registryRevision: UInt64
+    public let serialHex: String
+    public let issuedAtMilliseconds: UInt64
+    public let notAfterMilliseconds: UInt64
+    public let certificateSHA256: String
+    public let certificatePEM: String
+    public let caCertificatePEM: String
+
+    enum CodingKeys: String, CodingKey {
+        case status, operation, role
+        case grantID = "grant_id"
+        case deviceID = "device_id"
+        case deviceName = "device_name"
+        case registryRevision = "registry_revision"
+        case serialHex = "serial_hex"
+        case issuedAtMilliseconds = "issued_at_ms"
+        case notAfterMilliseconds = "not_after_ms"
+        case certificateSHA256 = "certificate_sha256"
+        case certificatePEM = "certificate_pem"
+        case caCertificatePEM = "ca_certificate_pem"
+    }
+
+    fileprivate func validate() throws {
+        guard status == "capability_rebind_certificate_pending",
+              operation == "capability_rebind",
+              validUUID(grantID), validUUID(deviceID),
+              !deviceName.isEmpty, deviceName.utf8.count <= 128,
+              role == "mac_bridge", registryRevision > 1,
+              validLowercaseHex(serialHex, minimum: 2, maximum: 40),
+              issuedAtMilliseconds < notAfterMilliseconds,
+              validLowercaseHex(certificateSHA256, count: 64),
+              validPEM(certificatePEM, label: "CERTIFICATE"),
+              validPEM(caCertificatePEM, label: "CERTIFICATE") else {
+            throw AssemblywrightMacDeveloperBridgeError.invalidDocument
+        }
+    }
+}
+
+public struct AssemblywrightMacCapabilityRebindAcknowledgement: Codable, Equatable, Sendable {
+    public let status: String
+    public let grantID: String
+    public let deviceID: String
+    public let registryRevision: UInt64
+    public let serialHex: String
+    public let certificateSHA256: String
+    public let signatureAlgorithm: String
+    public let signatureBase64: String
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case grantID = "grant_id"
+        case deviceID = "device_id"
+        case registryRevision = "registry_revision"
+        case serialHex = "serial_hex"
+        case certificateSHA256 = "certificate_sha256"
+        case signatureAlgorithm = "signature_algorithm"
+        case signatureBase64 = "signature_base64"
+    }
+}
+
+public struct AssemblywrightMacCapabilityRebindActivation: Codable, Equatable, Sendable {
+    public let status: String
+    public let grantID: String
+    public let deviceID: String
+    public let registryRevision: UInt64
+    public let serialHex: String
+    public let certificateSHA256: String
+    public let activatedAtMilliseconds: UInt64
+    public let signatureAlgorithm: String
+    public let signatureBase64: String
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case grantID = "grant_id"
+        case deviceID = "device_id"
+        case registryRevision = "registry_revision"
+        case serialHex = "serial_hex"
+        case certificateSHA256 = "certificate_sha256"
+        case activatedAtMilliseconds = "activated_at_ms"
+        case signatureAlgorithm = "signature_algorithm"
+        case signatureBase64 = "signature_base64"
+    }
+}
+
 public struct AssemblywrightMacBridgeProfile: Codable, Equatable, Sendable {
     public let deviceID: String
     public let deviceName: String
@@ -282,6 +373,18 @@ public protocol AssemblywrightMacBridgeIdentityStore: Sendable {
         for invitation: AssemblywrightMacEnrollmentInvitation
     ) throws -> AssemblywrightMacBridgeProfile
     func loadInstalledProfile() throws -> AssemblywrightMacBridgeProfile?
+    func stageReplacementIdentity(
+        for invitation: AssemblywrightMacEnrollmentInvitation
+    ) throws -> AssemblywrightMacEnrollmentCSR
+    func loadStagedReplacementInvitation() throws -> AssemblywrightMacEnrollmentInvitation?
+    func stageReplacementCertificate(
+        _ receipt: AssemblywrightMacPendingCapabilityRebindCertificate,
+        for invitation: AssemblywrightMacEnrollmentInvitation
+    ) throws -> AssemblywrightMacCapabilityRebindAcknowledgement
+    func promoteReplacement(
+        _ activation: AssemblywrightMacCapabilityRebindActivation
+    ) throws -> AssemblywrightMacBridgeProfile
+    func cancelStagedReplacement() throws
 }
 
 public struct AssemblywrightMacEnrollmentCoordinator: Sendable {
@@ -359,6 +462,160 @@ public struct AssemblywrightMacEnrollmentCoordinator: Sendable {
         }
         return profile
     }
+
+    public func prepareCapabilityRebind(invitationData: Data) throws -> Data {
+        guard identityProfile == .standard else {
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+        }
+        let invitation: AssemblywrightMacEnrollmentInvitation = try decodeExact(
+            invitationData,
+            keys: [
+                "schema_version", "status", "grant_id", "device_id", "device_name", "role",
+                "registry_revision", "expires_at_ms", "capabilities", "master_endpoint",
+                "ca_fingerprint_sha256"
+            ]
+        )
+        try invitation.validate(nowMilliseconds: nowMilliseconds())
+        guard let installed = try identityStore.loadInstalledProfile(),
+              installed.deviceID == invitation.deviceID,
+              installed.deviceName == invitation.deviceName,
+              installed.role == invitation.role,
+              installed.masterEndpoint == invitation.masterEndpoint,
+              invitation.registryRevision > installed.registryRevision,
+              installed.capabilities == [Self.fixtureCapability],
+              Self.isExactMLXSingleton(invitation.capabilities) else {
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+        }
+        let reply = try identityStore.stageReplacementIdentity(for: invitation)
+        guard reply.schemaVersion == 1,
+              reply.status == "enrollment_csr_ready",
+              reply.grantID == invitation.grantID,
+              reply.deviceID == invitation.deviceID,
+              validPEM(reply.csrPEM, label: "CERTIFICATE REQUEST") else {
+            try? identityStore.cancelStagedReplacement()
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+        }
+        return try strictEncoder.encode(reply)
+    }
+
+    public func stageCapabilityRebind(issuedReceiptData: Data) throws -> Data {
+        guard identityProfile == .standard else {
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+        }
+        let receipt: AssemblywrightMacPendingCapabilityRebindCertificate = try decodeExact(
+            issuedReceiptData,
+            keys: [
+                "status", "operation", "grant_id", "device_id", "device_name", "role",
+                "registry_revision", "serial_hex", "issued_at_ms", "not_after_ms",
+                "certificate_sha256", "certificate_pem", "ca_certificate_pem"
+            ]
+        )
+        try receipt.validate()
+        guard let invitation = try identityStore.loadStagedReplacementInvitation(),
+              (try? invitation.validate(nowMilliseconds: nowMilliseconds())) != nil,
+              receipt.grantID == invitation.grantID,
+              receipt.deviceID == invitation.deviceID,
+              receipt.deviceName == invitation.deviceName,
+              receipt.role == invitation.role,
+              receipt.registryRevision == invitation.registryRevision else {
+            try? identityStore.cancelStagedReplacement()
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+        }
+        do {
+            return try strictEncoder.encode(
+                identityStore.stageReplacementCertificate(receipt, for: invitation)
+            )
+        } catch {
+            try? identityStore.cancelStagedReplacement()
+            throw error
+        }
+    }
+
+    public func promoteCapabilityRebind(activationData: Data) throws -> AssemblywrightMacBridgeProfile {
+        guard identityProfile == .standard else {
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+        }
+        let activation: AssemblywrightMacCapabilityRebindActivation = try decodeExact(
+            activationData,
+            keys: [
+                "status", "grant_id", "device_id", "registry_revision", "serial_hex",
+                "certificate_sha256", "activated_at_ms", "signature_algorithm",
+                "signature_base64"
+            ]
+        )
+        guard activation.status == "capability_rebind_activated",
+              validUUID(activation.grantID), validUUID(activation.deviceID),
+              activation.registryRevision > 1,
+              validLowercaseHex(activation.serialHex, minimum: 2, maximum: 40),
+              validLowercaseHex(activation.certificateSHA256, count: 64),
+              activation.activatedAtMilliseconds > 0,
+              activation.signatureAlgorithm == assemblywrightRebindSignatureAlgorithm,
+              validCapabilityRebindSignatureBase64(activation.signatureBase64) else {
+            throw AssemblywrightMacDeveloperBridgeError.invalidDocument
+        }
+        return try identityStore.promoteReplacement(activation)
+    }
+
+    public func cancelCapabilityRebind() throws {
+        guard identityProfile == .standard else {
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+        }
+        try identityStore.cancelStagedReplacement()
+    }
+
+    private static let fixtureCapability = AssemblywrightMacBridgeCapability(
+        id: "fixture.reasoning",
+        kind: "local_inference",
+        provider: "assemblywright-fixture",
+        model: "assemblywright-fixture-v1",
+        maxContextBytes: 8 * 1_024,
+        maxResultBytes: 8 * 1_024
+    )
+
+    private static func isExactMLXSingleton(
+        _ capabilities: [AssemblywrightMacBridgeCapability]
+    ) -> Bool {
+        guard capabilities.count == 1, let capability = capabilities.first else { return false }
+        return capability.id == "mlx.reasoning"
+            && capability.kind == "local_inference"
+            && capability.provider == "mlx"
+            && !capability.model.isEmpty
+            && capability.maxContextBytes == 256 * 1_024
+            && capability.maxResultBytes == 768 * 1_024
+    }
+}
+
+let assemblywrightRebindSignatureAlgorithm = "ecdsa_p256_sha256_der"
+
+func assemblywrightCapabilityRebindAcknowledgementTranscript(
+    _ acknowledgement: AssemblywrightMacCapabilityRebindAcknowledgement
+) -> Data {
+    let value = "Assemblywright-Capability-Rebind-Acknowledgement-v1\n"
+        + "grant_id=\(acknowledgement.grantID.lowercased())\n"
+        + "device_id=\(acknowledgement.deviceID.lowercased())\n"
+        + "registry_revision=\(acknowledgement.registryRevision)\n"
+        + "serial_hex=\(acknowledgement.serialHex)\n"
+        + "certificate_sha256=\(acknowledgement.certificateSHA256)\n"
+    return Data(value.utf8)
+}
+
+func assemblywrightCapabilityRebindActivationTranscript(
+    _ activation: AssemblywrightMacCapabilityRebindActivation
+) -> Data {
+    let value = "Assemblywright-Capability-Rebind-Activation-v1\n"
+        + "grant_id=\(activation.grantID.lowercased())\n"
+        + "device_id=\(activation.deviceID.lowercased())\n"
+        + "registry_revision=\(activation.registryRevision)\n"
+        + "serial_hex=\(activation.serialHex)\n"
+        + "certificate_sha256=\(activation.certificateSHA256)\n"
+        + "activated_at_ms=\(activation.activatedAtMilliseconds)\n"
+    return Data(value.utf8)
+}
+
+private func validCapabilityRebindSignatureBase64(_ value: String) -> Bool {
+    guard let decoded = Data(base64Encoded: value),
+          (8...80).contains(decoded.count) else { return false }
+    return decoded.base64EncodedString() == value
 }
 
 public struct AssemblywrightMacBridgeHTTPRequest: Equatable, Sendable {

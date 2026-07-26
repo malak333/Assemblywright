@@ -1,9 +1,9 @@
 use anyhow::{bail, Context};
 use assemblywright_master::{
-    current_time_ms, AcceptedCancellation, AcceptedResult, DeviceRegistration, EnrollmentGrantSpec,
-    EnrollmentRequest, EphemeralServerIdentity, FeatureConveyorStatus, IdentityAuthority,
-    MasterHealthSnapshot, MasterProcess, NewStep, PlatformSecretProtector, RemoteWorkContract,
-    StartupReconciliation,
+    current_time_ms, AcceptedCancellation, AcceptedResult, CapabilityRebindAcknowledgement,
+    DeviceRegistration, EnrollmentGrantSpec, EnrollmentRequest, EphemeralServerIdentity,
+    FeatureConveyorStatus, IdentityAuthority, MasterHealthSnapshot, MasterProcess, NewStep,
+    PlatformSecretProtector, RemoteWorkContract, StartupReconciliation,
 };
 #[cfg(test)]
 use assemblywright_protocol::CapabilityKind;
@@ -269,6 +269,37 @@ enum EnrollmentCommand {
         #[arg(long)]
         master_endpoint: SocketAddr,
         /// Confirm this local operator enrollment action.
+        #[arg(long)]
+        confirm: bool,
+    },
+    /// Stage a same-device capability replacement without disabling its active certificate.
+    RebindPair {
+        #[arg(long)]
+        device_id: Uuid,
+        /// JSON file containing the exact singleton mlx.reasoning descriptor.
+        #[arg(long)]
+        capabilities_file: PathBuf,
+        /// Existing concrete local or private-overlay master endpoint.
+        #[arg(long)]
+        master_endpoint: SocketAddr,
+        /// Confirm this local operator capability-rebind staging action.
+        #[arg(long)]
+        confirm: bool,
+    },
+    /// Atomically activate a Mac-staged capability replacement acknowledgement from stdin.
+    RebindActivate {
+        /// Required acknowledgement that the public staged-certificate binding is on stdin.
+        #[arg(long)]
+        acknowledgement_stdin: bool,
+        /// Confirm this local operator activation action.
+        #[arg(long)]
+        confirm: bool,
+    },
+    /// Abort an unactivated capability replacement without changing the active identity.
+    RebindAbort {
+        #[arg(long)]
+        grant_id: Uuid,
+        /// Confirm this local operator abort action.
         #[arg(long)]
         confirm: bool,
     },
@@ -959,6 +990,20 @@ fn enrollment(data_dir: &Path, command: EnrollmentCommand) -> anyhow::Result<()>
                 confirm,
             );
         }
+        EnrollmentCommand::RebindPair {
+            device_id,
+            capabilities_file,
+            master_endpoint,
+            confirm,
+        } => {
+            return enrollment_rebind_pair(
+                data_dir,
+                DeviceId::new(device_id),
+                capabilities_file,
+                master_endpoint,
+                confirm,
+            );
+        }
         command => command,
     };
     let now_ms = current_time_ms()?;
@@ -1023,7 +1068,40 @@ fn enrollment(data_dir: &Path, command: EnrollmentCommand) -> anyhow::Result<()>
                 .issue_device_certificate(&authority, &request, now_ms)?;
             println!("{}", serde_json::to_string(&certificate)?);
         }
-        EnrollmentCommand::Pair { .. } => {
+        EnrollmentCommand::RebindActivate {
+            acknowledgement_stdin,
+            confirm,
+        } => {
+            require_operator_confirmation(confirm, "capability rebind activation")?;
+            if !acknowledgement_stdin {
+                bail!("rebind activation requires --acknowledgement-stdin");
+            }
+            let bytes = read_bounded_stdin()?;
+            let acknowledgement: CapabilityRebindAcknowledgement =
+                serde_json::from_slice(&bytes)
+                    .context("decode strict capability rebind acknowledgement from stdin")?;
+            let activation = process.kernel_mut().activate_capability_rebind(
+                &authority,
+                &acknowledgement,
+                now_ms,
+            )?;
+            println!("{}", serde_json::to_string(&activation)?);
+        }
+        EnrollmentCommand::RebindAbort { grant_id, confirm } => {
+            require_operator_confirmation(confirm, "capability rebind abort")?;
+            process
+                .kernel_mut()
+                .abort_capability_rebind(grant_id, now_ms)?;
+            println!(
+                "{}",
+                serde_json::to_string(&json!({
+                    "status": "capability_rebind_aborted",
+                    "grant_id": grant_id,
+                    "aborted_at_ms": now_ms,
+                }))?
+            );
+        }
+        EnrollmentCommand::Pair { .. } | EnrollmentCommand::RebindPair { .. } => {
             unreachable!("pairing commands are handled before authority acquisition")
         }
         EnrollmentCommand::Revoke {
@@ -1154,6 +1232,82 @@ fn enrollment_pair(
     let certificate = certificate?;
     write_json_line(std::io::stdout().lock(), &certificate).context(
         "certificate issuance committed but the receipt could not be written; treat enrollment as ambiguous and inspect or revoke the device before retrying",
+    )?;
+    Ok(())
+}
+
+fn enrollment_rebind_pair(
+    data_dir: &Path,
+    device_id: DeviceId,
+    capabilities_file: PathBuf,
+    master_endpoint: SocketAddr,
+    confirm: bool,
+) -> anyhow::Result<()> {
+    require_operator_confirmation(confirm, "Mac capability rebind staging")?;
+    require_concrete_remote_bind(master_endpoint)
+        .context("validate the existing master endpoint before capability rebind")?;
+    let capabilities_bytes = read_bounded_file(&capabilities_file)?;
+    let capabilities: Vec<CapabilityDescriptor> = serde_json::from_slice(&capabilities_bytes)
+        .with_context(|| {
+            format!(
+                "decode capability array from {}",
+                capabilities_file.display()
+            )
+        })?;
+    let started_at_ms = current_time_ms()?;
+    let mut process = MasterProcess::acquire(data_dir)
+        .context("acquire the stopped Windows master authority for capability rebind")?;
+    let protector = PlatformSecretProtector;
+    let authority =
+        IdentityAuthority::open_existing(process.data_dir(), &protector, started_at_ms)?;
+    process
+        .kernel_mut()
+        .record_identity_authority(authority.receipt())?;
+    let mut grant = process.kernel_mut().create_capability_rebind_grant(
+        device_id,
+        capabilities.clone(),
+        started_at_ms,
+    )?;
+    let mut grant_secret = Zeroizing::new(std::mem::take(&mut grant.grant_secret));
+    let invitation = EnrollmentInvitation {
+        schema_version: ENROLLMENT_PAIRING_SCHEMA_VERSION,
+        status: ENROLLMENT_INVITATION_READY_STATUS.to_string(),
+        grant_id: grant.grant_id,
+        device_id: grant.device_id,
+        device_name: grant.device_name,
+        role: grant.role,
+        registry_revision: grant.registry_revision,
+        expires_at_ms: grant.expires_at_ms,
+        capabilities,
+        master_endpoint,
+        ca_fingerprint_sha256: authority.receipt().ca_fingerprint_sha256.clone(),
+    };
+    invitation.validate_at(started_at_ms)?;
+    write_json_line(std::io::stdout().lock(), &invitation)?;
+    eprintln!(
+        "capability rebind invitation ready: the active registration and certificate remain unchanged until a separately confirmed rebind-activate"
+    );
+    let reply_bytes = read_bounded_stdin_with_limit(
+        MAX_ENROLLMENT_PAIRING_FRAME_BYTES,
+        "capability rebind CSR reply",
+    )?;
+    let reply = EnrollmentCsrReply::decode_frame(&reply_bytes)
+        .context("decode strict capability rebind CSR reply from stdin")?;
+    let issue_at_ms = current_time_ms()?;
+    validate_pairing_reply(&invitation, &reply, issue_at_ms)?;
+    let mut request = EnrollmentRequest {
+        grant_id: reply.grant_id,
+        grant_secret: std::mem::take(&mut *grant_secret),
+        csr_pem: reply.csr_pem,
+    };
+    let pending =
+        process
+            .kernel_mut()
+            .issue_pending_capability_rebind(&authority, &request, issue_at_ms);
+    request.grant_secret.zeroize();
+    let pending = pending?;
+    write_json_line(std::io::stdout().lock(), &pending).context(
+        "pending rebind certificate committed but its receipt could not be written; the active identity is unchanged and the owner must inspect or abort the pending rebind",
     )?;
     Ok(())
 }

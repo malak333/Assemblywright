@@ -25,14 +25,15 @@ use fs2::FileExt;
 mod identity;
 
 pub use identity::{
-    EnrollmentGrantReceipt, EnrollmentGrantSpec, EnrollmentOperation, EnrollmentRequest,
-    EphemeralServerIdentity, IdentityAuthority, IdentityAuthorityReceipt, IdentityError,
-    IssuedDeviceCertificate, PlatformSecretProtector, SecretProtector,
+    CapabilityRebindAcknowledgement, CapabilityRebindActivation, EnrollmentGrantReceipt,
+    EnrollmentGrantSpec, EnrollmentOperation, EnrollmentRequest, EphemeralServerIdentity,
+    IdentityAuthority, IdentityAuthorityReceipt, IdentityError, IssuedDeviceCertificate,
+    PendingCapabilityRebindCertificate, PlatformSecretProtector, SecretProtector,
     DEVICE_CERTIFICATE_LIFETIME_MS, ENROLLMENT_GRANT_TTL_MS, MAX_ENROLLED_DEVICES,
     SERVER_CERTIFICATE_LIFETIME_MS,
 };
 
-pub const MASTER_SCHEMA_VERSION: i64 = 5;
+pub const MASTER_SCHEMA_VERSION: i64 = 6;
 pub const MAX_QUEUED_OR_LEASED_STEPS: u64 = 256;
 pub const MAX_CONCURRENT_JOBS: u64 = 4;
 pub const MAX_CONVEYOR_NONTERMINAL_FEATURES: u64 = 100;
@@ -3218,6 +3219,144 @@ impl MasterKernel {
             )?;
         }
         let version = self.schema_version()?;
+        if version == 5 {
+            self.connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 ALTER TABLE master_enrollment_grants
+                   RENAME TO master_enrollment_grants_v5;
+                 CREATE TABLE master_enrollment_grants (
+                   grant_id TEXT PRIMARY KEY NOT NULL,
+                   operation TEXT NOT NULL
+                     CHECK (operation IN ('enroll', 'rotate', 'capability_rebind')),
+                   secret_sha256 BLOB NOT NULL CHECK (length(secret_sha256) = 32),
+                   device_id TEXT NOT NULL,
+                   device_name TEXT NOT NULL,
+                   role_json TEXT NOT NULL,
+                   registry_revision INTEGER NOT NULL CHECK (registry_revision > 0),
+                   capabilities_json TEXT NOT NULL,
+                   source_registration_sha256 BLOB
+                     CHECK (
+                       source_registration_sha256 IS NULL
+                       OR length(source_registration_sha256) = 32
+                     ),
+                   created_at_ms INTEGER NOT NULL,
+                   expires_at_ms INTEGER NOT NULL,
+                   consumed_at_ms INTEGER,
+                   CHECK (expires_at_ms > created_at_ms),
+                   CHECK (
+                     (operation = 'capability_rebind' AND source_registration_sha256 IS NOT NULL)
+                     OR
+                     (operation <> 'capability_rebind' AND source_registration_sha256 IS NULL)
+                   )
+                 );
+                 INSERT INTO master_enrollment_grants
+                   (grant_id, operation, secret_sha256, device_id, device_name, role_json,
+                    registry_revision, capabilities_json, source_registration_sha256,
+                    created_at_ms, expires_at_ms,
+                    consumed_at_ms)
+                 SELECT grant_id, operation, secret_sha256, device_id, device_name, role_json,
+                        registry_revision, capabilities_json, NULL, created_at_ms, expires_at_ms,
+                        consumed_at_ms
+                 FROM master_enrollment_grants_v5;
+                 DROP TABLE master_enrollment_grants_v5;
+                 CREATE INDEX master_enrollment_grants_pending_idx
+                   ON master_enrollment_grants(consumed_at_ms, expires_at_ms);
+                 CREATE TABLE master_pending_capability_rebinds (
+                   grant_id TEXT PRIMARY KEY NOT NULL
+                     REFERENCES master_enrollment_grants(grant_id),
+                   device_id TEXT NOT NULL REFERENCES master_devices(device_id),
+                   current_registration_sha256 BLOB NOT NULL
+                     CHECK (length(current_registration_sha256) = 32),
+                   target_registration_json TEXT NOT NULL,
+                   target_registration_sha256 BLOB NOT NULL
+                     CHECK (length(target_registration_sha256) = 32),
+                   certificate_serial_hex TEXT NOT NULL UNIQUE,
+                   certificate_sha256 BLOB NOT NULL UNIQUE
+                     CHECK (length(certificate_sha256) = 32),
+                   replacement_public_key_x963 BLOB NOT NULL
+                     CHECK (
+                       length(replacement_public_key_x963) = 65
+                       AND hex(substr(replacement_public_key_x963, 1, 1)) = '04'
+                     ),
+                   issued_at_ms INTEGER NOT NULL,
+                   certificate_not_after_ms INTEGER NOT NULL,
+                   expires_at_ms INTEGER NOT NULL,
+                   status TEXT NOT NULL
+                     CHECK (status IN ('pending', 'activated', 'aborted')),
+                   terminal_at_ms INTEGER,
+                   acknowledgement_sha256 BLOB
+                     CHECK (
+                       acknowledgement_sha256 IS NULL
+                       OR length(acknowledgement_sha256) = 32
+                     ),
+                   CHECK (certificate_not_after_ms > issued_at_ms),
+                   CHECK (expires_at_ms > issued_at_ms),
+                   CHECK (length(CAST(target_registration_json AS BLOB)) <= 65536),
+                   CHECK (
+                     (status = 'pending' AND terminal_at_ms IS NULL
+                       AND acknowledgement_sha256 IS NULL) OR
+                     (status = 'activated' AND terminal_at_ms IS NOT NULL
+                       AND acknowledgement_sha256 IS NOT NULL) OR
+                     (status = 'aborted' AND terminal_at_ms IS NOT NULL
+                       AND acknowledgement_sha256 IS NULL)
+                   )
+                 );
+                 CREATE TABLE master_identity_rebind_audit (
+                   audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   event_kind TEXT NOT NULL CHECK (
+                     event_kind IN (
+                       'grant_created', 'pending_issued', 'activated', 'aborted'
+                     )
+                   ),
+                   grant_id TEXT NOT NULL,
+                   device_id TEXT NOT NULL,
+                   registry_revision INTEGER NOT NULL CHECK (registry_revision > 0),
+                   occurred_at_ms INTEGER NOT NULL CHECK (occurred_at_ms >= 0)
+                 );
+                 CREATE TRIGGER master_identity_rebind_audit_no_update
+                   BEFORE UPDATE ON master_identity_rebind_audit
+                   BEGIN SELECT RAISE(ABORT, 'append-only identity rebind audit'); END;
+                 CREATE TRIGGER master_identity_rebind_audit_no_delete
+                   BEFORE DELETE ON master_identity_rebind_audit
+                   BEGIN SELECT RAISE(ABORT, 'append-only identity rebind audit'); END;
+                 CREATE INDEX master_identity_rebind_audit_grant_idx
+                   ON master_identity_rebind_audit(grant_id, audit_id);
+                 CREATE UNIQUE INDEX master_pending_capability_rebinds_device_pending_idx
+                   ON master_pending_capability_rebinds(device_id)
+                   WHERE status = 'pending';
+                 CREATE TRIGGER master_pending_capability_rebinds_no_delete
+                   BEFORE DELETE ON master_pending_capability_rebinds
+                   BEGIN SELECT RAISE(ABORT, 'durable capability rebind evidence'); END;
+                 CREATE TRIGGER master_pending_capability_rebinds_terminal_only
+                   BEFORE UPDATE ON master_pending_capability_rebinds
+                   WHEN OLD.status <> 'pending'
+                     OR NEW.grant_id <> OLD.grant_id
+                     OR NEW.device_id <> OLD.device_id
+                     OR NEW.current_registration_sha256 <> OLD.current_registration_sha256
+                     OR NEW.target_registration_json <> OLD.target_registration_json
+                     OR NEW.target_registration_sha256 <> OLD.target_registration_sha256
+                     OR NEW.certificate_serial_hex <> OLD.certificate_serial_hex
+                     OR NEW.certificate_sha256 <> OLD.certificate_sha256
+                     OR NEW.replacement_public_key_x963 <> OLD.replacement_public_key_x963
+                     OR NEW.issued_at_ms <> OLD.issued_at_ms
+                     OR NEW.certificate_not_after_ms <> OLD.certificate_not_after_ms
+                     OR NEW.expires_at_ms <> OLD.expires_at_ms
+                     OR NEW.status NOT IN ('activated', 'aborted')
+                     OR NEW.terminal_at_ms IS NULL
+                     OR (
+                       NEW.status = 'activated'
+                       AND NEW.acknowledgement_sha256 IS NULL
+                     )
+                     OR (
+                       NEW.status = 'aborted'
+                       AND NEW.acknowledgement_sha256 IS NOT NULL
+                     )
+                   BEGIN SELECT RAISE(ABORT, 'invalid capability rebind evidence transition'); END;
+                 PRAGMA user_version = 6;
+                 COMMIT;",
+            )?;
+        }
+        let version = self.schema_version()?;
         if version != MASTER_SCHEMA_VERSION {
             return Err(MasterError::UnsupportedSchemaVersion {
                 expected: MASTER_SCHEMA_VERSION,
@@ -3543,7 +3682,7 @@ fn require_emergency_unpaused_tx(tx: &Transaction<'_>) -> Result<(), MasterError
     }
 }
 
-fn emergency_paused_tx(tx: &Transaction<'_>) -> Result<bool, MasterError> {
+pub(crate) fn emergency_paused_tx(tx: &Transaction<'_>) -> Result<bool, MasterError> {
     let value: i64 = tx.query_row(
         "SELECT integer_value FROM master_metadata WHERE key = 'emergency_paused'",
         [],
@@ -4523,7 +4662,7 @@ fn prepare_legacy_migration_backup(database_path: &Path) -> Result<Option<PathBu
         )));
     }
     let backup_path =
-        database_path.with_file_name(format!("master.pre-v5.{}.sqlite3", Uuid::new_v4()));
+        database_path.with_file_name(format!("master.pre-v6.{}.sqlite3", Uuid::new_v4()));
     source.execute("VACUUM INTO ?1", [backup_path.to_string_lossy().as_ref()])?;
     drop(source);
     restrict_backup_permissions(&backup_path)?;

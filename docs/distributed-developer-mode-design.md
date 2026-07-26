@@ -164,7 +164,7 @@ separate layer; it adds no remote enqueue, repository, tool, credential,
 network, Codex, Git, publication, or unattended authority.
 
 The first Durable Feature Conveyor implementation is a separate default-inert
-schema-v5 repository kernel owned by the Windows `assemblywright-master`. It persists
+schema-v5 repository kernel retained by the schema-v6 Windows `assemblywright-master`. It persists
 immutable digest-bound approved specifications, independent repository grant
 revisions, a 100-nonterminal-item owner-ordered queue, dependency blocking,
 compare-and-set revisions, one active lease, exact evidence-bound lifecycle
@@ -229,6 +229,35 @@ tail fails closed. The harness then proves same-cursor helper/agent
 restart and a fresh authenticated standard-profile connection, and emits only a
 payload-free receipt.
 Revocation and confirmed fixture-profile removal are explicit owner cleanup.
+
+The standard profile now has one narrowly scoped repair path for the observed
+stale exact fixture registration. `enrollment rebind-pair --confirm` retains the
+raw grant secret only in the stopped Windows CLI process, snapshots the current
+same-device/name/role registration, and permits only a strictly higher exact
+singleton MLX target. Certificate issuance creates schema-v6 pending evidence;
+it neither changes the active registry nor authorizes the new certificate. The
+Mac `enrollment rebind prepare|stage --confirm` commands use a separate standard
+replacement Secure Enclave key, certificate label, and staged record, validate
+the same endpoint and pinned CA plus all certificate/public-key bindings. The
+replacement key signs a domain-separated grant/device/revision/serial/
+certificate-digest acknowledgement, and Windows verifies it against the exact
+P-256 CSR public key held in pending evidence. A separate Windows
+`rebind-activate --acknowledgement-stdin --confirm` transaction rechecks the
+registration snapshot, short expiry, Emergency Pause, disconnected/no-attempt state, and exact
+acknowledgement before updating the registration, inserting the replacement
+certificate, revoking old certificates, and terminalizing the pending row.
+It commits a metadata-only immutable audit row with every grant, issuance,
+activation, or abort. The CA signs a separate domain-separated activation
+transcript; only a receipt verified with the staged pinned CA allows Mac
+`rebind promote --confirm` to select the replacement generation. Exact
+lost-output retries reissue the original terminal timestamp, while mismatches
+and non-canonical uppercase digests remain rejected. Mac destructive cancel is
+limited to prepare-only state; after Windows issuance the owner aborts Windows
+first. Once the Mac has staged and acknowledged the certificate, cancel refuses
+and preserves all recovery material because activation may already have
+committed. Post-promotion cancel cannot delete the selected replacement. This adds no automatic
+capability change, fixture-profile mutation, model enablement, enqueue,
+planning, repository, Codex, Git, publication, or unattended authority.
 
 The separately invoked `--run-mlx` harness uses the existing exact standard
 `mlx.reasoning` enrollment and requires the executable, model directory, and

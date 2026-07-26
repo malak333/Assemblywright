@@ -13,6 +13,8 @@ flowchart LR
   Process --> Local["Authenticated loopback development transport and fixture worker"]
   Process --> Identity["Windows enrollment CLI and DPAPI-protected P-256 CA"]
   Identity --> Grants["Ten-minute single-use digest-only grants and verified CSRs"]
+  Grants --> Rebind["Schema-v6 two-phase pending capability rebind: inactive cert, exact digests, explicit activation or abort"]
+  Rebind --> Replacement["Separate standard Secure Enclave replacement generation; old identity selected until activation"]
   Grants --> Certificates["30-day device certificates, rotation, and revocation"]
   Certificates --> Remote["Optional TLS 1.3 mTLS listener with exact-IP ephemeral server identity"]
   Remote --> Binding["Certificate registry checks, TLS exporter binding, role and epoch enforcement"]
@@ -48,8 +50,9 @@ a headless master executable. The contract seam provides the current protocol
 version, typed device/task/step/attempt/lease/cancellation identifiers, bounded
 capability advertisements, handshake messages, job and result envelopes, strict
 bound-before-decode JSON entry points, nil-identity rejection, and a golden
-compatibility fixture. `assemblywright-master` schema version 5 preserves the
-schema-v4 distributed-device lifecycle and additionally persists the first
+compatibility fixture. `assemblywright-master` schema version 6 preserves the
+schema-v4 distributed-device lifecycle, the schema-v5 Feature Conveyor, and
+adds dedicated pending capability-rebind evidence. The Feature Conveyor persists the first
 default-inert Durable Feature Conveyor repository kernel. Its immutable
 owner-approved specification revisions bind canonical manifest and evidence
 digests, three independent repository-grant revisions, dependencies, and a
@@ -60,7 +63,7 @@ abandonment, and startup quarantine commit with redacted audit evidence in the
 same immediate transaction. Success releases the lease only with verified
 healthy-main evidence; cancellation retains it until explicit safe
 abandonment, and restart ambiguity is quarantined without automatic retry.
-Master-process upgrades from supported legacy schemas v1-v4 to v5 are
+Master-process upgrades from supported legacy schemas v1-v5 to v6 are
 backup-first under the owner lock, verify the versioned backup before migration,
 and restore through a fsynced sibling plus atomic replacement when
 migration-open fails. Direct file-backed legacy migration through
@@ -100,8 +103,14 @@ fixture-worker child processes, proves one-owner database exclusion, bearer
 non-disclosure, unauthorized and oversized-body denial, authenticated loopback
 health and job completion, and restart reconciliation.
 `enrollment_identity_e2e` proves digest-only grants, signed-CSR issuance,
-expiry/replay denial, rotation, revocation, schema-v1-to-v4 migration, real
-Windows DPAPI round trips, and the real CLI stdin boundary.
+expiry/replay denial, rotation, revocation, schema-v1-to-v6 migration, and the
+two-phase same-device capability rebind: pending certificates cannot
+authenticate, the replacement-key acknowledgement and CA activation receipt
+are independently authenticated, exact lost-output activation is idempotent,
+Emergency Pause and stale/mixed/replayed/expired activation fail, immutable
+redacted audit rolls back with authority state, and failed or aborted staging
+preserves the active registration and certificate. It also
+covers real Windows DPAPI round trips and the real CLI stdin boundary.
 `event_cursor_e2e` proves bounded paging, durable resume, stream mismatch and
 future-cursor rejection, metadata redaction, plus disconnect and requeue events
 after restart. The Mac `assemblywright-agent` reuses the hardened local UDS transport,
@@ -127,6 +136,16 @@ device-only Keychain service, Secure Enclave key tag, certificate label, and
 staged/installed records; absence of the argument preserves the original
 standard profile and command behavior. The fixture profile rejects every
 capability other than exact `fixture.reasoning` before staging or connecting.
+The standard profile alone can repair the observed stale exact fixture
+registration through confirmed rebind prepare/stage/promote commands. It uses
+a separate replacement key tag, certificate label, and staged record, requires
+the same device/name/role/endpoint/CA and a higher revision with one exact MLX
+descriptor, and retains the working installed record until an exact Windows
+CA-signed activation receipt is validated. Cancellation checks the installed
+generation and cannot delete promoted replacement material; once a certificate
+acknowledgement exists it also preserves the entire pre-promotion recovery
+record because Windows activation may already be terminal. There is no general destructive
+standard-profile remove command.
 The standard profile can separately enable an exact singleton
 `mlx.reasoning` / `local_inference` / `mlx` lane. Its absolute runtime and model
 paths arrive through bounded startup stdin; one Public, no-retention request

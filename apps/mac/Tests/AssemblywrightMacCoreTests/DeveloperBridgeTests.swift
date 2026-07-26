@@ -1,6 +1,7 @@
 import Darwin
 import CryptoKit
 import Foundation
+import Security
 import Testing
 @testable import AssemblywrightMacCore
 
@@ -10,6 +11,10 @@ private final class FakeBridgeIdentityStore: AssemblywrightMacBridgeIdentityStor
     var csrPEM = "-----BEGIN CERTIFICATE REQUEST-----\nZmFrZQ==\n-----END CERTIFICATE REQUEST-----\n"
     var publicKeySHA256 = String(repeating: "a", count: 64)
     var installedProfile: AssemblywrightMacBridgeProfile?
+    var stagedReplacement: AssemblywrightMacEnrollmentInvitation?
+    var stagedReplacementReceipt: AssemblywrightMacPendingCapabilityRebindCertificate?
+    var replacementCancelled = false
+    var replacementPromoted = false
 
     func stageIdentity(for invitation: AssemblywrightMacEnrollmentInvitation) throws -> AssemblywrightMacEnrollmentCSR {
         staged = invitation
@@ -43,6 +48,76 @@ private final class FakeBridgeIdentityStore: AssemblywrightMacBridgeIdentityStor
     }
 
     func loadInstalledProfile() throws -> AssemblywrightMacBridgeProfile? { installedProfile }
+
+    func stageReplacementIdentity(
+        for invitation: AssemblywrightMacEnrollmentInvitation
+    ) throws -> AssemblywrightMacEnrollmentCSR {
+        stagedReplacement = invitation
+        return AssemblywrightMacEnrollmentCSR(
+            schemaVersion: 1,
+            status: "enrollment_csr_ready",
+            grantID: invitation.grantID,
+            deviceID: invitation.deviceID,
+            csrPEM: csrPEM
+        )
+    }
+
+    func loadStagedReplacementInvitation() throws -> AssemblywrightMacEnrollmentInvitation? {
+        stagedReplacement
+    }
+
+    func stageReplacementCertificate(
+        _ receipt: AssemblywrightMacPendingCapabilityRebindCertificate,
+        for _: AssemblywrightMacEnrollmentInvitation
+    ) throws -> AssemblywrightMacCapabilityRebindAcknowledgement {
+        stagedReplacementReceipt = receipt
+        return AssemblywrightMacCapabilityRebindAcknowledgement(
+            status: "capability_rebind_certificate_staged",
+            grantID: receipt.grantID,
+            deviceID: receipt.deviceID,
+            registryRevision: receipt.registryRevision,
+            serialHex: receipt.serialHex,
+            certificateSHA256: receipt.certificateSHA256,
+            signatureAlgorithm: assemblywrightRebindSignatureAlgorithm,
+            signatureBase64: "AQEBAQEBAQE="
+        )
+    }
+
+    func promoteReplacement(
+        _ activation: AssemblywrightMacCapabilityRebindActivation
+    ) throws -> AssemblywrightMacBridgeProfile {
+        guard let invitation = stagedReplacement, let receipt = stagedReplacementReceipt,
+              activation.grantID == receipt.grantID,
+              activation.deviceID == receipt.deviceID,
+              activation.registryRevision == receipt.registryRevision,
+              activation.serialHex == receipt.serialHex,
+              activation.certificateSHA256 == receipt.certificateSHA256 else {
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+        }
+        let profile = AssemblywrightMacBridgeProfile(
+            deviceID: receipt.deviceID,
+            deviceName: receipt.deviceName,
+            role: receipt.role,
+            registryRevision: receipt.registryRevision,
+            capabilities: invitation.capabilities,
+            masterEndpoint: invitation.masterEndpoint,
+            certificateNotAfterMilliseconds: receipt.notAfterMilliseconds
+        )
+        installedProfile = profile
+        replacementPromoted = true
+        stagedReplacement = nil
+        stagedReplacementReceipt = nil
+        return profile
+    }
+
+    func cancelStagedReplacement() throws {
+        if stagedReplacementReceipt != nil, !replacementPromoted {
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+        }
+        replacementCancelled = true
+        stagedReplacement = nil
+        stagedReplacementReceipt = nil
+    }
 }
 
 private actor FakeBridgeChannel: AssemblywrightMacAuthenticatedTLSChannel {
@@ -571,6 +646,240 @@ struct DeveloperBridgeTests {
         #expect(store.staged?.masterEndpoint == "100.64.23.14:7792")
     }
 
+    @Test("Capability rebind stages and promotes a separate standard replacement only after activation")
+    func capabilityRebindPreservesWorkingIdentityUntilActivation() throws {
+        let store = FakeBridgeIdentityStore()
+        store.installedProfile = staleFixtureProfile()
+        let coordinator = AssemblywrightMacEnrollmentCoordinator(identityStore: store)
+        let invitation = try rebindInvitationData()
+
+        _ = try coordinator.prepareCapabilityRebind(invitationData: invitation)
+        #expect(store.installedProfile == staleFixtureProfile())
+        #expect(store.stagedReplacement?.registryRevision == 4)
+
+        let acknowledgementData = try coordinator.stageCapabilityRebind(
+            issuedReceiptData: try pendingRebindReceiptData()
+        )
+        let acknowledgement = try #require(
+            JSONSerialization.jsonObject(with: acknowledgementData) as? [String: Any]
+        )
+        #expect(acknowledgement["status"] as? String == "capability_rebind_certificate_staged")
+        #expect(acknowledgement["signature_algorithm"] as? String == "ecdsa_p256_sha256_der")
+        #expect(store.installedProfile == staleFixtureProfile())
+
+        var wrongActivation = try #require(
+            JSONSerialization.jsonObject(with: rebindActivationData()) as? [String: Any]
+        )
+        wrongActivation["certificate_sha256"] = String(repeating: "0", count: 64)
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.bindingMismatch) {
+            _ = try coordinator.promoteCapabilityRebind(
+                activationData: try JSONSerialization.data(withJSONObject: wrongActivation)
+            )
+        }
+        #expect(store.installedProfile == staleFixtureProfile())
+
+        let promoted = try coordinator.promoteCapabilityRebind(
+            activationData: rebindActivationData()
+        )
+        #expect(promoted.deviceID == staleFixtureProfile().deviceID)
+        #expect(promoted.registryRevision == 4)
+        #expect(promoted.capabilities.first?.id == "mlx.reasoning")
+        try coordinator.cancelCapabilityRebind()
+        #expect(store.installedProfile == promoted)
+    }
+
+    @Test("Capability rebind prepare-only cancellation destructively removes only unacknowledged staging")
+    func capabilityRebindPrepareOnlyCancellationIsDestructive() throws {
+        let store = FakeBridgeIdentityStore()
+        store.installedProfile = staleFixtureProfile()
+        let coordinator = AssemblywrightMacEnrollmentCoordinator(identityStore: store)
+        _ = try coordinator.prepareCapabilityRebind(invitationData: rebindInvitationData())
+        try coordinator.cancelCapabilityRebind()
+        #expect(store.replacementCancelled)
+        #expect(store.stagedReplacement == nil)
+        #expect(store.stagedReplacementReceipt == nil)
+        #expect(try !assemblywrightReplacementCancellationDeletesMaterial(
+            installedRecordPresent: true,
+            installedKeyGeneration: "replacement_v1",
+            stagedRecordPresent: false,
+            stagedReceiptPresent: false
+        ))
+        #expect(try assemblywrightReplacementCancellationDeletesMaterial(
+            installedRecordPresent: true,
+            installedKeyGeneration: nil,
+            stagedRecordPresent: true,
+            stagedReceiptPresent: false
+        ))
+    }
+
+    @Test("Capability rebind cancel refuses after staging and preserves acknowledgement recovery")
+    func capabilityRebindStagedCancellationPreservesRecovery() throws {
+        let store = FakeBridgeIdentityStore()
+        store.installedProfile = staleFixtureProfile()
+        let coordinator = AssemblywrightMacEnrollmentCoordinator(identityStore: store)
+        _ = try coordinator.prepareCapabilityRebind(invitationData: rebindInvitationData())
+        _ = try coordinator.stageCapabilityRebind(
+            issuedReceiptData: pendingRebindReceiptData()
+        )
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.bindingMismatch) {
+            try coordinator.cancelCapabilityRebind()
+        }
+        #expect(!store.replacementCancelled)
+        #expect(store.stagedReplacement != nil)
+        #expect(store.stagedReplacementReceipt != nil)
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.bindingMismatch) {
+            _ = try assemblywrightReplacementCancellationDeletesMaterial(
+                installedRecordPresent: true,
+                installedKeyGeneration: nil,
+                stagedRecordPresent: true,
+                stagedReceiptPresent: true
+            )
+        }
+    }
+
+    @Test("Capability rebind cancel preserves post-activation pre-promotion ambiguity")
+    func capabilityRebindAmbiguousActivationCancellationPreservesRecovery() throws {
+        let store = FakeBridgeIdentityStore()
+        store.installedProfile = staleFixtureProfile()
+        let coordinator = AssemblywrightMacEnrollmentCoordinator(identityStore: store)
+        _ = try coordinator.prepareCapabilityRebind(invitationData: rebindInvitationData())
+        _ = try coordinator.stageCapabilityRebind(
+            issuedReceiptData: pendingRebindReceiptData()
+        )
+        // Windows may already have activated while its receipt was lost; local state is identical.
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.bindingMismatch) {
+            try coordinator.cancelCapabilityRebind()
+        }
+        #expect(store.stagedReplacementReceipt?.grantID
+            == "11111111-1111-4111-8111-111111111111")
+        #expect(store.installedProfile == staleFixtureProfile())
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.identityUnavailable) {
+            _ = try assemblywrightReplacementCancellationDeletesMaterial(
+                installedRecordPresent: true,
+                installedKeyGeneration: "unknown",
+                stagedRecordPresent: true,
+                stagedReceiptPresent: false
+            )
+        }
+    }
+
+    @Test("Capability rebind activation proof rejects transcript tampering and a different CA")
+    func capabilityRebindActivationProofIsPinnedAndTamperClosed() throws {
+        let attributes: [String: Any] = [
+            kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
+            kSecAttrKeySizeInBits as String: 256
+        ]
+        let caPrivateKey = try #require(
+            SecKeyCreateRandomKey(attributes as CFDictionary, nil)
+        )
+        let wrongCAPrivateKey = try #require(
+            SecKeyCreateRandomKey(attributes as CFDictionary, nil)
+        )
+        let caPublicKey = try #require(SecKeyCopyPublicKey(caPrivateKey))
+        let wrongCAPublicKey = try #require(SecKeyCopyPublicKey(wrongCAPrivateKey))
+        let unsigned = AssemblywrightMacCapabilityRebindActivation(
+            status: "capability_rebind_activated",
+            grantID: "11111111-1111-4111-8111-111111111111",
+            deviceID: "22222222-2222-4222-8222-222222222222",
+            registryRevision: 4,
+            serialHex: "02",
+            certificateSHA256: String(repeating: "c", count: 64),
+            activatedAtMilliseconds: 2_000,
+            signatureAlgorithm: assemblywrightRebindSignatureAlgorithm,
+            signatureBase64: ""
+        )
+        let signature = try #require(
+            SecKeyCreateSignature(
+                caPrivateKey,
+                .ecdsaSignatureMessageX962SHA256,
+                assemblywrightCapabilityRebindActivationTranscript(unsigned) as CFData,
+                nil
+            ) as Data?
+        )
+        #expect(assemblywrightVerifyCapabilityRebindActivationSignature(
+            unsigned,
+            signature: signature,
+            caPublicKey: caPublicKey
+        ))
+        #expect(!assemblywrightVerifyCapabilityRebindActivationSignature(
+            unsigned,
+            signature: signature,
+            caPublicKey: wrongCAPublicKey
+        ))
+        let tampered = AssemblywrightMacCapabilityRebindActivation(
+            status: unsigned.status,
+            grantID: unsigned.grantID,
+            deviceID: unsigned.deviceID,
+            registryRevision: unsigned.registryRevision + 1,
+            serialHex: unsigned.serialHex,
+            certificateSHA256: unsigned.certificateSHA256,
+            activatedAtMilliseconds: unsigned.activatedAtMilliseconds,
+            signatureAlgorithm: unsigned.signatureAlgorithm,
+            signatureBase64: unsigned.signatureBase64
+        )
+        #expect(!assemblywrightVerifyCapabilityRebindActivationSignature(
+            tampered,
+            signature: signature,
+            caPublicKey: caPublicKey
+        ))
+    }
+
+    @Test("Capability rebind rejects mixed, cross-profile, stale, and failed staging without deleting installed identity")
+    func capabilityRebindRejectsUnsafeMutationAndRollsBackStage() throws {
+        let store = FakeBridgeIdentityStore()
+        store.installedProfile = staleFixtureProfile()
+        let coordinator = AssemblywrightMacEnrollmentCoordinator(identityStore: store)
+        var mixed = try #require(
+            JSONSerialization.jsonObject(with: rebindInvitationData()) as? [String: Any]
+        )
+        var capabilities = try #require(mixed["capabilities"] as? [[String: Any]])
+        capabilities.append([
+            "id": "fixture.reasoning", "kind": "local_inference",
+            "provider": "assemblywright-fixture", "model": "assemblywright-fixture-v1",
+            "max_context_bytes": 8_192, "max_result_bytes": 8_192
+        ])
+        mixed["capabilities"] = capabilities
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.bindingMismatch) {
+            _ = try coordinator.prepareCapabilityRebind(
+                invitationData: try JSONSerialization.data(withJSONObject: mixed)
+            )
+        }
+        #expect(store.installedProfile == staleFixtureProfile())
+
+        let fixtureCoordinator = AssemblywrightMacEnrollmentCoordinator(
+            identityStore: store,
+            identityProfile: .fixtureReasoning
+        )
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.bindingMismatch) {
+            _ = try fixtureCoordinator.prepareCapabilityRebind(
+                invitationData: rebindInvitationData()
+            )
+        }
+
+        var stale = try #require(
+            JSONSerialization.jsonObject(with: rebindInvitationData()) as? [String: Any]
+        )
+        stale["registry_revision"] = 3
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.bindingMismatch) {
+            _ = try coordinator.prepareCapabilityRebind(
+                invitationData: try JSONSerialization.data(withJSONObject: stale)
+            )
+        }
+
+        _ = try coordinator.prepareCapabilityRebind(invitationData: rebindInvitationData())
+        var wrongReceipt = try #require(
+            JSONSerialization.jsonObject(with: pendingRebindReceiptData()) as? [String: Any]
+        )
+        wrongReceipt["device_name"] = "other-device"
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.bindingMismatch) {
+            _ = try coordinator.stageCapabilityRebind(
+                issuedReceiptData: try JSONSerialization.data(withJSONObject: wrongReceipt)
+            )
+        }
+        #expect(store.replacementCancelled)
+        #expect(store.installedProfile == staleFixtureProfile())
+    }
+
     @Test("Fixture enrollment is exact and isolated from the standard profile")
     func fixtureEnrollmentIsExactAndProfileIsolated() throws {
         let rejectedStore = FakeBridgeIdentityStore()
@@ -637,6 +946,9 @@ struct DeveloperBridgeTests {
         #expect(fixture.service != standard.service)
         #expect(fixture.certificateLabel != standard.certificateLabel)
         #expect(fixture.keyTag != standard.keyTag)
+        #expect(standard.replacementKeyTag != standard.keyTag)
+        #expect(standard.replacementCertificateLabel != standard.certificateLabel)
+        #expect(standard.replacementStagedAccount != standard.stagedAccount)
         #expect(AssemblywrightMacBridgeIdentityProfile(selector: "fixture") == .fixtureReasoning)
         #expect(AssemblywrightMacBridgeIdentityProfile(selector: "mlx") == nil)
     }
@@ -2673,6 +2985,47 @@ private func fixtureInvitationData() throws -> Data {
 private func validIssuedReceiptData() throws -> Data {
     Data(
         #"{"status":"device_certificate_issued","operation":"enroll","device_id":"22222222-2222-4222-8222-222222222222","device_name":"owner-mac-bridge","role":"mac_bridge","registry_revision":3,"serial_hex":"01","issued_at_ms":1000,"not_after_ms":4102444800000,"certificate_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","certificate_pem":"-----BEGIN CERTIFICATE-----\nZmFrZQ==\n-----END CERTIFICATE-----\n","ca_certificate_pem":"-----BEGIN CERTIFICATE-----\nZmFrZQ==\n-----END CERTIFICATE-----\n"}"#.utf8
+    )
+}
+
+private func rebindInvitationData() throws -> Data {
+    var invitation = try #require(
+        JSONSerialization.jsonObject(with: validInvitationData()) as? [String: Any]
+    )
+    invitation["registry_revision"] = 4
+    return try JSONSerialization.data(withJSONObject: invitation, options: [.sortedKeys])
+}
+
+private func pendingRebindReceiptData() throws -> Data {
+    Data(
+        #"{"status":"capability_rebind_certificate_pending","operation":"capability_rebind","grant_id":"11111111-1111-4111-8111-111111111111","device_id":"22222222-2222-4222-8222-222222222222","device_name":"owner-mac-bridge","role":"mac_bridge","registry_revision":4,"serial_hex":"02","issued_at_ms":1000,"not_after_ms":4102444800000,"certificate_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","certificate_pem":"-----BEGIN CERTIFICATE-----\nZmFrZQ==\n-----END CERTIFICATE-----\n","ca_certificate_pem":"-----BEGIN CERTIFICATE-----\nZmFrZQ==\n-----END CERTIFICATE-----\n"}"#.utf8
+    )
+}
+
+private func rebindActivationData() -> Data {
+    Data(
+        #"{"status":"capability_rebind_activated","grant_id":"11111111-1111-4111-8111-111111111111","device_id":"22222222-2222-4222-8222-222222222222","registry_revision":4,"serial_hex":"02","certificate_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","activated_at_ms":2000,"signature_algorithm":"ecdsa_p256_sha256_der","signature_base64":"AQEBAQEBAQE="}"#.utf8
+    )
+}
+
+private func staleFixtureProfile() -> AssemblywrightMacBridgeProfile {
+    AssemblywrightMacBridgeProfile(
+        deviceID: "22222222-2222-4222-8222-222222222222",
+        deviceName: "owner-mac-bridge",
+        role: "mac_bridge",
+        registryRevision: 3,
+        capabilities: [
+            AssemblywrightMacBridgeCapability(
+                id: "fixture.reasoning",
+                kind: "local_inference",
+                provider: "assemblywright-fixture",
+                model: "assemblywright-fixture-v1",
+                maxContextBytes: 8_192,
+                maxResultBytes: 8_192
+            )
+        ],
+        masterEndpoint: "100.64.23.14:7792",
+        certificateNotAfterMilliseconds: 4_102_444_800_000
     )
 }
 

@@ -329,15 +329,31 @@ an old one.
   the **`fixture.reasoning`** capability, a stale pre-rename `owner-mac-bridge`,
   and `owner-mac-fixture` (the fixture Keychain profile). `mlx.reasoning` is not
   registered for any device.
-- `--run-mlx` needs the *standard* profile to carry `mlx.reasoning`, and that
-  cannot be arranged through the shipped CLI.
-  `KeychainDeveloperIdentity.stageIdentity` raises `bindingMismatch` for any
-  invitation whose device ID differs from the installed one, `enrollment remove`
-  is guarded to the fixture profile, and `enrollment rotate-grant` takes only
-  `--device-id` so it rotates keys without changing capabilities. The standard
-  identity is effectively write-once per Keychain namespace; the current
-  enrollment only succeeded because the rename moved the Keychain service name.
-  Treat re-pointing it as a product change, not an operator step.
+- `--run-mlx` needs the *standard* profile to carry `mlx.reasoning`. The shipped
+  repair path is now an explicit owner-confirmed two-phase rebind, not rotation
+  or destructive removal. Windows `rebind-pair` snapshots the exact stale
+  fixture registration and exact singleton MLX target; schema v6 keeps the new
+  certificate outside normal authentication until a staged-certificate
+  acknowledgement signed by the exact replacement CSR key is separately
+  confirmed. Activation atomically advances the
+  registry revision, inserts the replacement certificate, revokes old serials,
+  terminalizes the pending evidence, and emits a CA-signed receipt. Exact
+  lost-output retries preserve the first activation timestamp; Emergency Pause
+  blocks activation. All four rebind transitions commit immutable metadata-only
+  audit evidence in the authority transaction. The Mac uses a separate replacement
+  Secure Enclave key/certificate slot and changes the selected installed
+  generation only after verifying the activation receipt against the staged
+  pinned CA. Mac cancel can delete only prepare-only staging; after a signed
+  acknowledgement it refuses and retains the replacement key, certificate,
+  and receipt so an already-committed Windows activation can be retried and
+  promoted. If abandoning after Windows issuance but before Mac staging, abort
+  Windows first and then cancel locally. Fixture-profile rebind and general
+  standard-profile removal remain forbidden.
+- Repository tests do not establish live capability repair. Owner/device proof
+  must still show the Xcode-provisioned helper can stage in Keychain, the old
+  identity remains usable before activation, the replacement authenticates at
+  the higher revision after promotion, the old serial is rejected, and
+  `--run-mlx` completes its existing success/cancellation closeout.
 - `enrollment pair` reads the CSR to **EOF**, which an interactive terminal
   never sends. Send the CSR line, then a separate Ctrl-Z (`ASCII character 26`).
   Console line length is not the constraint — 541 characters round-trip intact.

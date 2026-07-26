@@ -59,7 +59,7 @@ accepted designs and take precedence within their scope:
 
 ### Windows master
 
-`assemblywright-master` owns durable state and every authority decision. Its schema-v5
+`assemblywright-master` owns durable state and every authority decision. Its schema-v6
 SQLite database holds two kernels:
 
 - The distributed device lifecycle: registered devices, connection epochs,
@@ -83,6 +83,29 @@ digest-only single-use grants, verified client CSRs, short-lived device
 certificates, rotation, and revocation. Remote access is an explicit opt-in
 TLS 1.3 mTLS listener bound to a concrete IP, with per-request revocation
 recheck and TLS-exporter handshake binding.
+
+Capability repair for the installed standard Mac identity is an explicit,
+owner-confirmed two-phase rebind, not enrollment or rotation. A ten-minute
+digest-only grant snapshots the exact stale fixture registration and exact
+singleton MLX target. Issuance records a digest-bound pending certificate that
+is absent from the authenticating certificate registry, leaving the active
+registration and certificate unchanged. After the Mac validates and stages
+that certificate under a separate Secure Enclave generation, a second
+owner-confirmed Windows activation atomically advances the registry revision,
+inserts the replacement certificate, revokes prior certificates, and makes the
+pending evidence terminal. The replacement Secure Enclave key signs a
+domain-separated acknowledgement verified against the exact CSR public key
+retained in pending evidence; the CA separately signs the activation receipt
+verified against the staged pinned CA. Exact activation-output retries reissue
+the original `activated_at` receipt, while mismatch and Emergency Pause fail
+closed. Every grant, issuance, activation, and abort commits an immutable
+metadata-only audit row in the same transaction. Only that authenticated
+activation receipt permits local promotion. Local destructive cancellation is
+limited to prepare-only state; a staged acknowledgement is preserved for
+ambiguous lost-receipt recovery, and post-promotion cancellation cannot remove
+selected material. Stale, expired, replayed, mixed,
+cross-profile, connected, or actively leased state fails closed; abort
+preserves the working identity.
 
 ### Mac worker
 

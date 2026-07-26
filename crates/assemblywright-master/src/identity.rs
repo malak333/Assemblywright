@@ -4,10 +4,11 @@ use assemblywright_protocol::{
     PROTOCOL_VERSION,
 };
 use base64::Engine as _;
+use p256::ecdsa::{signature::Verifier as _, Signature, VerifyingKey};
 use rcgen::{
     BasicConstraints, CertificateParams, CertificateSigningRequestParams, CertifiedIssuer,
     DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair, KeyUsagePurpose,
-    SanType, SerialNumber, PKCS_ECDSA_P256_SHA256,
+    PublicKeyData, SanType, SerialNumber, SigningKey, PKCS_ECDSA_P256_SHA256,
 };
 use rusqlite::{params, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
@@ -32,6 +33,9 @@ const IDENTITY_DIRECTORY: &str = "identity";
 const CA_CERTIFICATE_FILE: &str = "ca.pem";
 const PROTECTED_CA_KEY_FILE: &str = "ca-key.protected";
 const AUTHORITY_METADATA_FILE: &str = "authority.json";
+const REBIND_SIGNATURE_ALGORITHM: &str = "ecdsa_p256_sha256_der";
+const REBIND_ACKNOWLEDGEMENT_DOMAIN: &str = "Assemblywright-Capability-Rebind-Acknowledgement-v1";
+const REBIND_ACTIVATION_DOMAIN: &str = "Assemblywright-Capability-Rebind-Activation-v1";
 
 #[derive(Debug, thiserror::Error)]
 pub enum IdentityError {
@@ -189,6 +193,7 @@ pub struct IdentityAuthorityReceipt {
 pub enum EnrollmentOperation {
     Enroll,
     Rotate,
+    CapabilityRebind,
 }
 
 impl EnrollmentOperation {
@@ -196,6 +201,7 @@ impl EnrollmentOperation {
         match self {
             Self::Enroll => "enroll",
             Self::Rotate => "rotate",
+            Self::CapabilityRebind => "capability_rebind",
         }
     }
 
@@ -203,6 +209,7 @@ impl EnrollmentOperation {
         match value {
             "enroll" => Ok(Self::Enroll),
             "rotate" => Ok(Self::Rotate),
+            "capability_rebind" => Ok(Self::CapabilityRebind),
             other => Err(MasterError::InvalidEnrollmentGrant(format!(
                 "unknown operation {other}"
             ))),
@@ -255,6 +262,51 @@ pub struct IssuedDeviceCertificate {
     pub certificate_sha256: String,
     pub certificate_pem: String,
     pub ca_certificate_pem: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PendingCapabilityRebindCertificate {
+    pub status: String,
+    pub operation: EnrollmentOperation,
+    pub grant_id: Uuid,
+    pub device_id: DeviceId,
+    pub device_name: String,
+    pub role: DeviceRole,
+    pub registry_revision: u64,
+    pub serial_hex: String,
+    pub issued_at_ms: u64,
+    pub not_after_ms: u64,
+    pub certificate_sha256: String,
+    pub certificate_pem: String,
+    pub ca_certificate_pem: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CapabilityRebindAcknowledgement {
+    pub status: String,
+    pub grant_id: Uuid,
+    pub device_id: DeviceId,
+    pub registry_revision: u64,
+    pub serial_hex: String,
+    pub certificate_sha256: String,
+    pub signature_algorithm: String,
+    pub signature_base64: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CapabilityRebindActivation {
+    pub status: String,
+    pub grant_id: Uuid,
+    pub device_id: DeviceId,
+    pub registry_revision: u64,
+    pub serial_hex: String,
+    pub certificate_sha256: String,
+    pub activated_at_ms: u64,
+    pub signature_algorithm: String,
+    pub signature_base64: String,
 }
 
 pub struct EphemeralServerIdentity {
@@ -488,6 +540,7 @@ impl IdentityAuthority {
         device_name: &str,
         now_ms: u64,
         csr_pem: &str,
+        require_p256: bool,
     ) -> Result<IssuedMaterial, IdentityError> {
         self.require_current(now_ms)?;
         if csr_pem.is_empty() || csr_pem.len() > MAX_ENROLLMENT_CSR_PEM_BYTES {
@@ -495,6 +548,14 @@ impl IdentityAuthority {
         }
         let csr = CertificateSigningRequestParams::from_pem(csr_pem)
             .map_err(|_| IdentityError::InvalidCertificateRequest)?;
+        if require_p256
+            && (csr.public_key.algorithm() != &PKCS_ECDSA_P256_SHA256
+                || csr.public_key.der_bytes().len() != 65
+                || csr.public_key.der_bytes().first() != Some(&0x04))
+        {
+            return Err(IdentityError::InvalidCertificateRequest);
+        }
+        let public_key_x963 = csr.public_key.der_bytes().to_vec();
         let issued_at_ms = now_ms;
         let requested_not_after_ms = now_ms
             .checked_add(DEVICE_CERTIFICATE_LIFETIME_MS)
@@ -527,7 +588,19 @@ impl IdentityAuthority {
             not_after_ms,
             certificate_sha256: Sha256::digest(certificate_der.as_ref()).into(),
             certificate_pem: certificate.pem(),
+            public_key_x963,
         })
+    }
+
+    fn sign_capability_rebind_activation(
+        &self,
+        activation: &CapabilityRebindActivation,
+    ) -> Result<String, IdentityError> {
+        let signature = self
+            .issuer
+            .key()
+            .sign(&capability_rebind_activation_transcript(activation))?;
+        Ok(base64::engine::general_purpose::STANDARD.encode(signature))
     }
 }
 
@@ -537,14 +610,31 @@ struct IssuedMaterial {
     not_after_ms: u64,
     certificate_sha256: [u8; 32],
     certificate_pem: String,
+    public_key_x963: Vec<u8>,
 }
 
 struct StoredGrant {
     operation: EnrollmentOperation,
     secret_sha256: [u8; 32],
     registration: DeviceRegistration,
+    source_registration_sha256: Option<[u8; 32]>,
     expires_at_ms: u64,
     consumed_at_ms: Option<u64>,
+}
+
+struct StoredPendingRebind {
+    current_registration_sha256: [u8; 32],
+    target_registration_json: String,
+    target_registration_sha256: [u8; 32],
+    serial_hex: String,
+    certificate_sha256: [u8; 32],
+    replacement_public_key_x963: Vec<u8>,
+    issued_at_ms: u64,
+    certificate_not_after_ms: u64,
+    expires_at_ms: u64,
+    status: String,
+    terminal_at_ms: Option<u64>,
+    acknowledgement_sha256: Option<[u8; 32]>,
 }
 
 impl MasterKernel {
@@ -631,7 +721,7 @@ impl MasterKernel {
         {
             return Err(MasterError::EnrolledDeviceLimit);
         }
-        let receipt = insert_grant(&tx, EnrollmentOperation::Enroll, registration, now_ms)?;
+        let receipt = insert_grant(&tx, EnrollmentOperation::Enroll, registration, None, now_ms)?;
         tx.commit()?;
         Ok(receipt)
     }
@@ -645,9 +735,377 @@ impl MasterKernel {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let registration = load_registration(&tx, device_id, false)?;
-        let receipt = insert_grant(&tx, EnrollmentOperation::Rotate, registration, now_ms)?;
+        let receipt = insert_grant(&tx, EnrollmentOperation::Rotate, registration, None, now_ms)?;
         tx.commit()?;
         Ok(receipt)
+    }
+
+    pub fn create_capability_rebind_grant(
+        &mut self,
+        device_id: DeviceId,
+        capabilities: Vec<CapabilityDescriptor>,
+        now_ms: u64,
+    ) -> Result<EnrollmentGrantReceipt, MasterError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = load_registration(&tx, device_id, false)?;
+        require_rebind_source_and_target(&current, &capabilities)?;
+        require_device_quiescent(&tx, device_id)?;
+        let source_digest = registration_digest(&current)?;
+        let target = DeviceRegistration {
+            device_id,
+            device_name: current.device_name,
+            role: current.role,
+            registry_revision: current
+                .registry_revision
+                .checked_add(1)
+                .ok_or(MasterError::IntegerOutOfRange)?,
+            capabilities,
+        };
+        validate_registration(&target)?;
+        let pending: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM master_pending_capability_rebinds
+             WHERE device_id = ?1 AND status = 'pending'",
+            [device_id.0.to_string()],
+            |row| row.get(0),
+        )?;
+        if pending != 0 {
+            return Err(MasterError::InvalidEnrollmentGrant(
+                "device already has a pending capability rebind".to_string(),
+            ));
+        }
+        let receipt = insert_grant(
+            &tx,
+            EnrollmentOperation::CapabilityRebind,
+            target,
+            Some(source_digest),
+            now_ms,
+        )?;
+        append_identity_rebind_audit(
+            &tx,
+            "grant_created",
+            receipt.grant_id,
+            receipt.device_id,
+            receipt.registry_revision,
+            now_ms,
+        )?;
+        tx.commit()?;
+        Ok(receipt)
+    }
+
+    pub fn issue_pending_capability_rebind(
+        &mut self,
+        authority: &IdentityAuthority,
+        request: &EnrollmentRequest,
+        now_ms: u64,
+    ) -> Result<PendingCapabilityRebindCertificate, MasterError> {
+        if request.grant_id.is_nil() || !valid_grant_secret(&request.grant_secret) {
+            return Err(MasterError::InvalidEnrollmentGrantSecret);
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let grant = load_grant(&tx, request.grant_id)?;
+        if grant.operation != EnrollmentOperation::CapabilityRebind {
+            return Err(MasterError::InvalidEnrollmentGrant(
+                "grant is not a capability rebind".to_string(),
+            ));
+        }
+        if grant.consumed_at_ms.is_some() {
+            return Err(MasterError::EnrollmentGrantConsumed);
+        }
+        if now_ms >= grant.expires_at_ms {
+            return Err(MasterError::EnrollmentGrantExpired);
+        }
+        let candidate_digest: [u8; 32] = Sha256::digest(request.grant_secret.as_bytes()).into();
+        if !constant_time_equal(&candidate_digest, &grant.secret_sha256) {
+            return Err(MasterError::InvalidEnrollmentGrantSecret);
+        }
+        let current = load_registration(&tx, grant.registration.device_id, false)?;
+        require_rebind_snapshot(&current, &grant.registration)?;
+        if grant.source_registration_sha256 != Some(registration_digest(&current)?) {
+            return Err(MasterError::InvalidEnrollmentGrant(
+                "capability rebind grant source digest is stale".to_string(),
+            ));
+        }
+        require_device_quiescent(&tx, current.device_id)?;
+        let material = authority.issue(
+            current.device_id,
+            &current.device_name,
+            now_ms,
+            &request.csr_pem,
+            true,
+        )?;
+        let current_digest = registration_digest(&current)?;
+        let target_json = serde_json::to_string(&grant.registration)?;
+        let target_digest: [u8; 32] = Sha256::digest(target_json.as_bytes()).into();
+        tx.execute(
+            "INSERT INTO master_pending_capability_rebinds
+             (grant_id, device_id, current_registration_sha256, target_registration_json,
+              target_registration_sha256, certificate_serial_hex, certificate_sha256,
+              replacement_public_key_x963, issued_at_ms, certificate_not_after_ms, expires_at_ms,
+              status, terminal_at_ms, acknowledgement_sha256)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'pending', NULL, NULL)",
+            params![
+                request.grant_id.to_string(),
+                current.device_id.0.to_string(),
+                current_digest.as_slice(),
+                target_json,
+                target_digest.as_slice(),
+                material.serial_hex,
+                material.certificate_sha256.as_slice(),
+                material.public_key_x963,
+                u64_to_i64(material.issued_at_ms)?,
+                u64_to_i64(material.not_after_ms)?,
+                u64_to_i64(grant.expires_at_ms)?,
+            ],
+        )?;
+        let consumed = tx.execute(
+            "UPDATE master_enrollment_grants SET consumed_at_ms = ?1
+             WHERE grant_id = ?2 AND consumed_at_ms IS NULL",
+            params![u64_to_i64(now_ms)?, request.grant_id.to_string()],
+        )?;
+        if consumed != 1 {
+            return Err(MasterError::EnrollmentGrantConsumed);
+        }
+        append_identity_rebind_audit(
+            &tx,
+            "pending_issued",
+            request.grant_id,
+            current.device_id,
+            grant.registration.registry_revision,
+            now_ms,
+        )?;
+        tx.commit()?;
+        Ok(PendingCapabilityRebindCertificate {
+            status: "capability_rebind_certificate_pending".to_string(),
+            operation: grant.operation,
+            grant_id: request.grant_id,
+            device_id: current.device_id,
+            device_name: current.device_name,
+            role: current.role,
+            registry_revision: grant.registration.registry_revision,
+            serial_hex: material.serial_hex,
+            issued_at_ms: material.issued_at_ms,
+            not_after_ms: material.not_after_ms,
+            certificate_sha256: hex(&material.certificate_sha256),
+            certificate_pem: material.certificate_pem,
+            ca_certificate_pem: authority.ca_certificate_pem.clone(),
+        })
+    }
+
+    pub fn activate_capability_rebind(
+        &mut self,
+        authority: &IdentityAuthority,
+        acknowledgement: &CapabilityRebindAcknowledgement,
+        now_ms: u64,
+    ) -> Result<CapabilityRebindActivation, MasterError> {
+        validate_rebind_acknowledgement(acknowledgement)?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let grant = load_grant(&tx, acknowledgement.grant_id)?;
+        if grant.operation != EnrollmentOperation::CapabilityRebind
+            || grant.consumed_at_ms.is_none()
+        {
+            return Err(MasterError::InvalidEnrollmentGrant(
+                "capability rebind was not issued".to_string(),
+            ));
+        }
+        let pending = load_pending_rebind(&tx, acknowledgement.grant_id)?;
+        verify_rebind_acknowledgement(acknowledgement, &pending)?;
+        let acknowledgement_sha256: [u8; 32] =
+            Sha256::digest(serde_json::to_vec(acknowledgement)?).into();
+        if pending.status == "activated" {
+            if pending.acknowledgement_sha256 != Some(acknowledgement_sha256) {
+                return Err(MasterError::InvalidEnrollmentGrant(
+                    "capability rebind activation retry acknowledgement mismatch".to_string(),
+                ));
+            }
+            let activated_at_ms = pending.terminal_at_ms.ok_or_else(|| {
+                MasterError::InvalidEnrollmentGrant(
+                    "activated capability rebind is missing terminal evidence".to_string(),
+                )
+            })?;
+            let mut activation = CapabilityRebindActivation {
+                status: "capability_rebind_activated".to_string(),
+                grant_id: acknowledgement.grant_id,
+                device_id: acknowledgement.device_id,
+                registry_revision: acknowledgement.registry_revision,
+                serial_hex: acknowledgement.serial_hex.clone(),
+                certificate_sha256: acknowledgement.certificate_sha256.clone(),
+                activated_at_ms,
+                signature_algorithm: REBIND_SIGNATURE_ALGORITHM.to_string(),
+                signature_base64: String::new(),
+            };
+            activation.signature_base64 =
+                authority.sign_capability_rebind_activation(&activation)?;
+            return Ok(activation);
+        }
+        if pending.status != "pending" {
+            return Err(MasterError::InvalidEnrollmentGrant(
+                "capability rebind is already terminal".to_string(),
+            ));
+        }
+        if crate::emergency_paused_tx(&tx)? {
+            return Err(MasterError::EmergencyPaused);
+        }
+        if now_ms >= pending.expires_at_ms {
+            return Err(MasterError::EnrollmentGrantExpired);
+        }
+        if acknowledgement.device_id != grant.registration.device_id
+            || acknowledgement.registry_revision != grant.registration.registry_revision
+            || acknowledgement.serial_hex != pending.serial_hex
+            || decode_hex_digest(&acknowledgement.certificate_sha256)? != pending.certificate_sha256
+        {
+            return Err(MasterError::InvalidEnrollmentGrant(
+                "capability rebind acknowledgement binding mismatch".to_string(),
+            ));
+        }
+        let current = load_registration(&tx, grant.registration.device_id, false)?;
+        require_rebind_snapshot(&current, &grant.registration)?;
+        if grant.source_registration_sha256 != Some(registration_digest(&current)?) {
+            return Err(MasterError::InvalidEnrollmentGrant(
+                "capability rebind grant source digest is stale".to_string(),
+            ));
+        }
+        if registration_digest(&current)? != pending.current_registration_sha256
+            || Sha256::digest(pending.target_registration_json.as_bytes()).as_slice()
+                != pending.target_registration_sha256
+            || serde_json::from_str::<DeviceRegistration>(&pending.target_registration_json)?
+                != grant.registration
+        {
+            return Err(MasterError::InvalidEnrollmentGrant(
+                "capability rebind durable snapshot mismatch".to_string(),
+            ));
+        }
+        require_device_quiescent(&tx, current.device_id)?;
+        let updated = tx.execute(
+            "UPDATE master_devices
+             SET registry_revision = ?1, capabilities_json = ?2
+             WHERE device_id = ?3 AND device_name = ?4 AND role_json = ?5
+               AND registry_revision = ?6 AND capabilities_json = ?7 AND revoked = 0",
+            params![
+                u64_to_i64(grant.registration.registry_revision)?,
+                serde_json::to_string(&grant.registration.capabilities)?,
+                current.device_id.0.to_string(),
+                current.device_name,
+                serde_json::to_string(&current.role)?,
+                u64_to_i64(current.registry_revision)?,
+                serde_json::to_string(&current.capabilities)?,
+            ],
+        )?;
+        if updated != 1 {
+            return Err(MasterError::InvalidEnrollmentGrant(
+                "device registry changed during capability rebind".to_string(),
+            ));
+        }
+        tx.execute(
+            "INSERT INTO master_device_certificates
+             (serial_hex, device_id, certificate_sha256, issued_at_ms, not_after_ms,
+              revoked_at_ms, revocation_reason, replaced_by_serial_hex)
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, NULL)",
+            params![
+                pending.serial_hex,
+                current.device_id.0.to_string(),
+                pending.certificate_sha256.as_slice(),
+                u64_to_i64(pending.issued_at_ms)?,
+                u64_to_i64(pending.certificate_not_after_ms)?,
+            ],
+        )?;
+        tx.execute(
+            "UPDATE master_device_certificates
+             SET revoked_at_ms = ?1, revocation_reason = 'capability_rebind',
+                 replaced_by_serial_hex = ?2
+             WHERE device_id = ?3 AND serial_hex <> ?2 AND revoked_at_ms IS NULL",
+            params![
+                u64_to_i64(now_ms)?,
+                pending.serial_hex,
+                current.device_id.0.to_string(),
+            ],
+        )?;
+        let terminal = tx.execute(
+            "UPDATE master_pending_capability_rebinds
+             SET status = 'activated', terminal_at_ms = ?1, acknowledgement_sha256 = ?2
+             WHERE grant_id = ?3 AND status = 'pending'",
+            params![
+                u64_to_i64(now_ms)?,
+                acknowledgement_sha256.as_slice(),
+                acknowledgement.grant_id.to_string()
+            ],
+        )?;
+        if terminal != 1 {
+            return Err(MasterError::InvalidEnrollmentGrant(
+                "capability rebind terminal state changed".to_string(),
+            ));
+        }
+        append_identity_rebind_audit(
+            &tx,
+            "activated",
+            acknowledgement.grant_id,
+            acknowledgement.device_id,
+            acknowledgement.registry_revision,
+            now_ms,
+        )?;
+        tx.commit()?;
+        let mut activation = CapabilityRebindActivation {
+            status: "capability_rebind_activated".to_string(),
+            grant_id: acknowledgement.grant_id,
+            device_id: acknowledgement.device_id,
+            registry_revision: acknowledgement.registry_revision,
+            serial_hex: acknowledgement.serial_hex.clone(),
+            certificate_sha256: acknowledgement.certificate_sha256.clone(),
+            activated_at_ms: now_ms,
+            signature_algorithm: REBIND_SIGNATURE_ALGORITHM.to_string(),
+            signature_base64: String::new(),
+        };
+        activation.signature_base64 = authority.sign_capability_rebind_activation(&activation)?;
+        Ok(activation)
+    }
+
+    pub fn abort_capability_rebind(
+        &mut self,
+        grant_id: Uuid,
+        now_ms: u64,
+    ) -> Result<(), MasterError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let grant = load_grant(&tx, grant_id)?;
+        if grant.operation != EnrollmentOperation::CapabilityRebind {
+            return Err(MasterError::InvalidEnrollmentGrant(
+                "grant is not a capability rebind".to_string(),
+            ));
+        }
+        if grant.consumed_at_ms.is_none() {
+            tx.execute(
+                "UPDATE master_enrollment_grants SET consumed_at_ms = ?1
+                 WHERE grant_id = ?2 AND consumed_at_ms IS NULL",
+                params![u64_to_i64(now_ms)?, grant_id.to_string()],
+            )?;
+        }
+        let pending = tx.execute(
+            "UPDATE master_pending_capability_rebinds
+             SET status = 'aborted', terminal_at_ms = ?1
+             WHERE grant_id = ?2 AND status = 'pending'",
+            params![u64_to_i64(now_ms)?, grant_id.to_string()],
+        )?;
+        if grant.consumed_at_ms.is_some() && pending != 1 {
+            return Err(MasterError::InvalidEnrollmentGrant(
+                "issued capability rebind is already terminal".to_string(),
+            ));
+        }
+        append_identity_rebind_audit(
+            &tx,
+            "aborted",
+            grant_id,
+            grant.registration.device_id,
+            grant.registration.registry_revision,
+            now_ms,
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn issue_device_certificate(
@@ -678,6 +1136,7 @@ impl MasterKernel {
             &grant.registration.device_name,
             now_ms,
             &request.csr_pem,
+            false,
         )?;
         match grant.operation {
             EnrollmentOperation::Enroll => {
@@ -695,6 +1154,11 @@ impl MasterKernel {
                         "device registry changed after rotation grant creation".to_string(),
                     ));
                 }
+            }
+            EnrollmentOperation::CapabilityRebind => {
+                return Err(MasterError::InvalidEnrollmentGrant(
+                    "capability rebind requires pending issuance".to_string(),
+                ));
             }
         }
         tx.execute(
@@ -801,6 +1265,7 @@ fn insert_grant(
     tx: &rusqlite::Transaction<'_>,
     operation: EnrollmentOperation,
     registration: DeviceRegistration,
+    source_registration_sha256: Option<[u8; 32]>,
     now_ms: u64,
 ) -> Result<EnrollmentGrantReceipt, MasterError> {
     let outstanding: i64 = tx.query_row(
@@ -817,8 +1282,11 @@ fn insert_grant(
     let expires_at_ms = now_ms
         .checked_add(ENROLLMENT_GRANT_TTL_MS)
         .ok_or(MasterError::IntegerOutOfRange)?;
+    let source_registration_sha256 = source_registration_sha256
+        .as_ref()
+        .map(|digest| digest.as_slice());
     tx.execute(
-        "INSERT INTO master_enrollment_grants\n         (grant_id, operation, secret_sha256, device_id, device_name, role_json,\n          registry_revision, capabilities_json, created_at_ms, expires_at_ms, consumed_at_ms)\n         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL)",
+        "INSERT INTO master_enrollment_grants\n         (grant_id, operation, secret_sha256, device_id, device_name, role_json,\n          registry_revision, capabilities_json, source_registration_sha256, created_at_ms,\n          expires_at_ms, consumed_at_ms)\n         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, NULL)",
         params![
             grant_id.to_string(),
             operation.as_str(),
@@ -828,6 +1296,7 @@ fn insert_grant(
             serde_json::to_string(&registration.role)?,
             u64_to_i64(registration.registry_revision)?,
             serde_json::to_string(&registration.capabilities)?,
+            source_registration_sha256,
             u64_to_i64(now_ms)?,
             u64_to_i64(expires_at_ms)?,
         ],
@@ -848,7 +1317,7 @@ fn insert_grant(
 fn load_grant(tx: &rusqlite::Transaction<'_>, grant_id: Uuid) -> Result<StoredGrant, MasterError> {
     let stored = tx
         .query_row(
-            "SELECT operation, secret_sha256, device_id, device_name, role_json,\n                    registry_revision, capabilities_json, expires_at_ms, consumed_at_ms\n             FROM master_enrollment_grants WHERE grant_id = ?1",
+            "SELECT operation, secret_sha256, device_id, device_name, role_json,\n                    registry_revision, capabilities_json, source_registration_sha256,\n                    expires_at_ms, consumed_at_ms\n             FROM master_enrollment_grants WHERE grant_id = ?1",
             [grant_id.to_string()],
             |row| {
                 Ok((
@@ -859,8 +1328,9 @@ fn load_grant(tx: &rusqlite::Transaction<'_>, grant_id: Uuid) -> Result<StoredGr
                     row.get::<_, String>(4)?,
                     row.get::<_, i64>(5)?,
                     row.get::<_, String>(6)?,
-                    row.get::<_, i64>(7)?,
-                    row.get::<_, Option<i64>>(8)?,
+                    row.get::<_, Option<Vec<u8>>>(7)?,
+                    row.get::<_, i64>(8)?,
+                    row.get::<_, Option<i64>>(9)?,
                 ))
             },
         )
@@ -876,8 +1346,59 @@ fn load_grant(tx: &rusqlite::Transaction<'_>, grant_id: Uuid) -> Result<StoredGr
             registry_revision: i64_to_u64(stored.5)?,
             capabilities: serde_json::from_str(&stored.6)?,
         },
-        expires_at_ms: i64_to_u64(stored.7)?,
-        consumed_at_ms: stored.8.map(i64_to_u64).transpose()?,
+        source_registration_sha256: stored.7.map(|digest| digest_array(&digest)).transpose()?,
+        expires_at_ms: i64_to_u64(stored.8)?,
+        consumed_at_ms: stored.9.map(i64_to_u64).transpose()?,
+    })
+}
+
+fn load_pending_rebind(
+    tx: &rusqlite::Transaction<'_>,
+    grant_id: Uuid,
+) -> Result<StoredPendingRebind, MasterError> {
+    tx.query_row(
+        "SELECT current_registration_sha256, target_registration_json,
+                target_registration_sha256, certificate_serial_hex, certificate_sha256,
+                replacement_public_key_x963, issued_at_ms, certificate_not_after_ms,
+                expires_at_ms, status, terminal_at_ms, acknowledgement_sha256
+         FROM master_pending_capability_rebinds WHERE grant_id = ?1",
+        [grant_id.to_string()],
+        |row| {
+            Ok((
+                row.get::<_, Vec<u8>>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Vec<u8>>(4)?,
+                row.get::<_, Vec<u8>>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, i64>(7)?,
+                row.get::<_, i64>(8)?,
+                row.get::<_, String>(9)?,
+                row.get::<_, Option<i64>>(10)?,
+                row.get::<_, Option<Vec<u8>>>(11)?,
+            ))
+        },
+    )
+    .optional()?
+    .ok_or_else(|| {
+        MasterError::InvalidEnrollmentGrant("pending capability rebind was not found".to_string())
+    })
+    .and_then(|stored| {
+        Ok(StoredPendingRebind {
+            current_registration_sha256: digest_array(&stored.0)?,
+            target_registration_json: stored.1,
+            target_registration_sha256: digest_array(&stored.2)?,
+            serial_hex: stored.3,
+            certificate_sha256: digest_array(&stored.4)?,
+            replacement_public_key_x963: stored.5,
+            issued_at_ms: i64_to_u64(stored.6)?,
+            certificate_not_after_ms: i64_to_u64(stored.7)?,
+            expires_at_ms: i64_to_u64(stored.8)?,
+            status: stored.9,
+            terminal_at_ms: stored.10.map(i64_to_u64).transpose()?,
+            acknowledgement_sha256: stored.11.map(|digest| digest_array(&digest)).transpose()?,
+        })
     })
 }
 
@@ -949,6 +1470,228 @@ fn validate_registration(registration: &DeviceRegistration) -> Result<(), Master
         capabilities: registration.capabilities.clone(),
     }
     .validate()?;
+    Ok(())
+}
+
+fn require_rebind_source_and_target(
+    current: &DeviceRegistration,
+    capabilities: &[CapabilityDescriptor],
+) -> Result<(), MasterError> {
+    if current.role != DeviceRole::MacBridge
+        || current.capabilities != [CapabilityDescriptor::fixture_reasoning()]
+    {
+        return Err(MasterError::InvalidEnrollmentGrant(
+            "capability rebind source must be the exact stale fixture descriptor on a Mac bridge"
+                .to_string(),
+        ));
+    }
+    let target = DeviceRegistration {
+        device_id: current.device_id,
+        device_name: current.device_name.clone(),
+        role: current.role,
+        registry_revision: current
+            .registry_revision
+            .checked_add(1)
+            .ok_or(MasterError::IntegerOutOfRange)?,
+        capabilities: capabilities.to_vec(),
+    };
+    match crate::RemoteWorkContract::from_registration(&target)? {
+        crate::RemoteWorkContract::Mlx(capability)
+            if capability.max_context_bytes
+                == assemblywright_protocol::MAX_JOB_CONTEXT_BYTES as u32
+                && capability.max_result_bytes
+                    == assemblywright_protocol::MAX_JOB_RESULT_BYTES as u32 =>
+        {
+            Ok(())
+        }
+        crate::RemoteWorkContract::Mlx(_) => Err(MasterError::InvalidEnrollmentGrant(
+            "capability rebind target MLX bounds are not exact".to_string(),
+        )),
+        crate::RemoteWorkContract::Fixture => Err(MasterError::InvalidEnrollmentGrant(
+            "capability rebind target must be the exact singleton mlx descriptor".to_string(),
+        )),
+    }
+}
+
+fn require_rebind_snapshot(
+    current: &DeviceRegistration,
+    target: &DeviceRegistration,
+) -> Result<(), MasterError> {
+    require_rebind_source_and_target(current, &target.capabilities)?;
+    if current.device_id != target.device_id
+        || current.device_name != target.device_name
+        || current.role != target.role
+        || current.registry_revision.checked_add(1) != Some(target.registry_revision)
+    {
+        return Err(MasterError::InvalidEnrollmentGrant(
+            "device registry changed after capability rebind grant creation".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn require_device_quiescent(
+    tx: &rusqlite::Transaction<'_>,
+    device_id: DeviceId,
+) -> Result<(), MasterError> {
+    let active_connection: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM master_connections WHERE device_id = ?1 AND active = 1",
+        [device_id.0.to_string()],
+        |row| row.get(0),
+    )?;
+    let active_attempt: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM master_attempts
+         WHERE device_id = ?1 AND status IN ('leased', 'cancellation_pending')",
+        [device_id.0.to_string()],
+        |row| row.get(0),
+    )?;
+    if active_connection != 0 || active_attempt != 0 {
+        return Err(MasterError::InvalidEnrollmentGrant(
+            "capability rebind requires a disconnected device with no active attempt".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn registration_digest(registration: &DeviceRegistration) -> Result<[u8; 32], MasterError> {
+    Ok(Sha256::digest(serde_json::to_vec(registration)?).into())
+}
+
+fn validate_rebind_acknowledgement(
+    acknowledgement: &CapabilityRebindAcknowledgement,
+) -> Result<(), MasterError> {
+    if acknowledgement.status != "capability_rebind_certificate_staged"
+        || acknowledgement.grant_id.is_nil()
+        || acknowledgement.device_id.0.is_nil()
+        || acknowledgement.registry_revision == 0
+        || acknowledgement.serial_hex.is_empty()
+        || acknowledgement.serial_hex.len() > 40
+        || !acknowledgement
+            .serial_hex
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        || acknowledgement.certificate_sha256.len() != 64
+        || !acknowledgement
+            .certificate_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || acknowledgement.signature_algorithm != REBIND_SIGNATURE_ALGORITHM
+    {
+        return Err(MasterError::InvalidEnrollmentGrant(
+            "capability rebind acknowledgement is invalid".to_string(),
+        ));
+    }
+    decode_hex_digest(&acknowledgement.certificate_sha256)?;
+    let signature = base64::engine::general_purpose::STANDARD
+        .decode(&acknowledgement.signature_base64)
+        .map_err(|_| {
+            MasterError::InvalidEnrollmentGrant(
+                "capability rebind acknowledgement signature is invalid".to_string(),
+            )
+        })?;
+    if !(8..=80).contains(&signature.len())
+        || base64::engine::general_purpose::STANDARD.encode(&signature)
+            != acknowledgement.signature_base64
+    {
+        return Err(MasterError::InvalidEnrollmentGrant(
+            "capability rebind acknowledgement signature is invalid".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn verify_rebind_acknowledgement(
+    acknowledgement: &CapabilityRebindAcknowledgement,
+    pending: &StoredPendingRebind,
+) -> Result<(), MasterError> {
+    let verifying_key = VerifyingKey::from_sec1_bytes(&pending.replacement_public_key_x963)
+        .map_err(|_| {
+            MasterError::InvalidEnrollmentGrant(
+                "pending capability rebind public key is invalid".to_string(),
+            )
+        })?;
+    let signature_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&acknowledgement.signature_base64)
+        .map_err(|_| {
+            MasterError::InvalidEnrollmentGrant(
+                "capability rebind acknowledgement signature is invalid".to_string(),
+            )
+        })?;
+    let signature = Signature::from_der(&signature_bytes).map_err(|_| {
+        MasterError::InvalidEnrollmentGrant(
+            "capability rebind acknowledgement signature is invalid".to_string(),
+        )
+    })?;
+    verifying_key
+        .verify(
+            &capability_rebind_acknowledgement_transcript(acknowledgement),
+            &signature,
+        )
+        .map_err(|_| {
+            MasterError::InvalidEnrollmentGrant(
+                "capability rebind acknowledgement signature verification failed".to_string(),
+            )
+        })
+}
+
+fn capability_rebind_acknowledgement_transcript(
+    acknowledgement: &CapabilityRebindAcknowledgement,
+) -> Vec<u8> {
+    format!(
+        "{REBIND_ACKNOWLEDGEMENT_DOMAIN}\ngrant_id={}\ndevice_id={}\nregistry_revision={}\nserial_hex={}\ncertificate_sha256={}\n",
+        acknowledgement.grant_id,
+        acknowledgement.device_id.0,
+        acknowledgement.registry_revision,
+        acknowledgement.serial_hex,
+        acknowledgement.certificate_sha256
+    )
+    .into_bytes()
+}
+
+fn capability_rebind_activation_transcript(activation: &CapabilityRebindActivation) -> Vec<u8> {
+    format!(
+        "{REBIND_ACTIVATION_DOMAIN}\ngrant_id={}\ndevice_id={}\nregistry_revision={}\nserial_hex={}\ncertificate_sha256={}\nactivated_at_ms={}\n",
+        activation.grant_id,
+        activation.device_id.0,
+        activation.registry_revision,
+        activation.serial_hex,
+        activation.certificate_sha256,
+        activation.activated_at_ms
+    )
+    .into_bytes()
+}
+
+fn append_identity_rebind_audit(
+    tx: &rusqlite::Transaction<'_>,
+    event_kind: &str,
+    grant_id: Uuid,
+    device_id: DeviceId,
+    registry_revision: u64,
+    occurred_at_ms: u64,
+) -> Result<(), MasterError> {
+    if !matches!(
+        event_kind,
+        "grant_created" | "pending_issued" | "activated" | "aborted"
+    ) || grant_id.is_nil()
+        || device_id.0.is_nil()
+        || registry_revision == 0
+    {
+        return Err(MasterError::InvalidEnrollmentGrant(
+            "identity rebind audit metadata is invalid".to_string(),
+        ));
+    }
+    tx.execute(
+        "INSERT INTO master_identity_rebind_audit
+         (event_kind, grant_id, device_id, registry_revision, occurred_at_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            event_kind,
+            grant_id.to_string(),
+            device_id.0.to_string(),
+            u64_to_i64(registry_revision)?,
+            u64_to_i64(occurred_at_ms)?
+        ],
+    )?;
     Ok(())
 }
 
