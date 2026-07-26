@@ -323,12 +323,13 @@ an old one.
 
 ## Live Lane Enrollment Topology
 
-- Live lane status as of 2026-07-25: `--run`, `--run-relay`, `--run-outage`, and
-  `--run-fixture` all pass against the Windows master. `--run-mlx` cannot run.
-- The registry holds `owner-mac-bridge` (the standard Keychain profile) carrying
-  the **`fixture.reasoning`** capability, a stale pre-rename `owner-mac-bridge`,
-  and `owner-mac-fixture` (the fixture Keychain profile). `mlx.reasoning` is not
-  registered for any device.
+- Live lane status as of 2026-07-25: `--run`, `--run-relay`, `--run-outage`,
+  `--run-fixture`, and `--run-mlx` all pass against the Windows master.
+- The registry now holds two active devices and two active certificates:
+  `owner-mac-bridge` uses the standard Keychain profile with the exact singleton
+  `mlx.reasoning` capability, and `owner-mac-fixture` retains the separate exact
+  fixture profile. The rebind advanced the standard registration to revision 2;
+  it did not mutate the fixture profile.
 - `--run-mlx` needs the *standard* profile to carry `mlx.reasoning`. The shipped
   repair path is now an explicit owner-confirmed two-phase rebind, not rotation
   or destructive removal. Windows `rebind-pair` snapshots the exact stale
@@ -349,11 +350,17 @@ an old one.
   promoted. If abandoning after Windows issuance but before Mac staging, abort
   Windows first and then cancel locally. Fixture-profile rebind and general
   standard-profile removal remain forbidden.
-- Repository tests do not establish live capability repair. Owner/device proof
-  must still show the Xcode-provisioned helper can stage in Keychain, the old
-  identity remains usable before activation, the replacement authenticates at
-  the higher revision after promotion, the old serial is rejected, and
-  `--run-mlx` completes its existing success/cancellation closeout.
+- Repository tests alone do not establish live capability repair. The
+  2026-07-25 owner/device closeout additionally proved the Xcode-provisioned
+  helper staged and promoted a replacement Secure Enclave identity, that the
+  replacement authenticated at the higher revision, and that `--run-mlx`
+  completed one real local-inference success plus pause-dominated cancellation,
+  seven-second late-output suppression, durable cursor restart, and a fresh
+  authenticated connection. The exact terminal event sequences were success
+  `560/562/563`, cancellation `577/579/580/581/582`, and restart `584`.
+  Deterministic tests prove revoked-certificate rejection, but the retained old
+  Secure Enclave identity was not directly reused for a negative live
+  connection after activation; keep that narrower boundary explicit.
 - `enrollment pair` reads the CSR to **EOF**, which an interactive terminal
   never sends. Send the CSR line, then a separate Ctrl-Z (`ASCII character 26`).
   Console line length is not the constraint — 541 characters round-trip intact.
@@ -364,6 +371,16 @@ an old one.
 - If `Pause` throws, emergency pause stays active and every later run fails with
   "timed out waiting for the exact fixture-profile connection". Run
   `-Action Resume` before retrying.
+- An SSH login that presents
+  `mike@MIKE-PC C:\Users\mike\Codex\Assemblywright>` is Windows `cmd.exe`, not
+  PowerShell. Backticks do not continue a command there, and a literal
+  `<printed-id>` is parsed as input redirection, producing "The system cannot
+  find the file specified." Invoke the script on one line through
+  `powershell -NoProfile -ExecutionPolicy Bypass -File
+  .\scripts\windows-mlx-live-control.ps1 ...`, replacing the placeholder with
+  the emitted device UUID. The same form with
+  `-Action Resume -ConfirmAction` returns the strict
+  `mlx_emergency_resumed` receipt.
 - Take authenticated Windows health before and after a live fixture closeout.
   A reconnect may expire an abandoned queued fixture from an interrupted prior
   run; accept the closeout only when the final health is unpaused and reports
