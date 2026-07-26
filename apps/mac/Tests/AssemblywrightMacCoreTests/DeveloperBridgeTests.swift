@@ -2736,12 +2736,12 @@ private func fixtureJobDocuments(
     let cancellationID = "55555555-5555-4555-8555-555555555555"
     let context: [String: Any] = [
         "operation": "synthetic_echo",
-        "input": "fixture-public-input",
+        "input": "fixture/public-input",
         "delay_ms": NSNumber(value: delayMilliseconds)
     ]
     let contextData = try JSONSerialization.data(
         withJSONObject: context,
-        options: [.sortedKeys]
+        options: [.sortedKeys, .withoutEscapingSlashes]
     )
     let contextDigest = Array(SHA256.hash(data: contextData))
     let jobObject: [String: Any] = [
@@ -2764,12 +2764,12 @@ private func fixtureJobDocuments(
     ]
     let payload: [String: Any] = [
         "operation": "synthetic_echo",
-        "output": "fixture-public-input",
+        "output": "fixture/public-input",
         "synthetic": true
     ]
     let payloadData = try JSONSerialization.data(
         withJSONObject: payload,
-        options: [.sortedKeys]
+        options: [.sortedKeys, .withoutEscapingSlashes]
     )
     let payloadDigest = Array(SHA256.hash(data: payloadData))
     let resultObject: [String: Any] = [
@@ -2842,7 +2842,7 @@ private func mlxRelayConfiguration() -> AssemblywrightMacDeveloperEventRelayConf
         mlxJobsEnabled: true,
         mlxExecutableURL: URL(fileURLWithPath: "/opt/assemblywright/bin/mlx-runner"),
         mlxModelDirectoryURL: URL(fileURLWithPath: "/opt/assemblywright/models/mlx-local"),
-        mlxModelID: "mlx-local"
+        mlxModelID: "mlx-community/mlx-local"
     )
 }
 
@@ -2854,13 +2854,13 @@ private func mlxJobDocuments(connectionEpoch: UInt64) throws -> FixtureJobDocume
     let cancellationID = "55555555-5555-4555-8555-555555555555"
     let context: [String: Any] = [
         "operation": "generate_text",
-        "prompt": "Explain the local-first boundary.",
+        "prompt": "Explain the local/first boundary.",
         "max_tokens": 128,
         "temperature_milli": 700
     ]
     let contextData = try JSONSerialization.data(
         withJSONObject: context,
-        options: [.sortedKeys]
+        options: [.sortedKeys, .withoutEscapingSlashes]
     )
     let contextDigest = Array(SHA256.hash(data: contextData))
     let jobObject: [String: Any] = [
@@ -2873,7 +2873,7 @@ private func mlxJobDocuments(connectionEpoch: UInt64) throws -> FixtureJobDocume
         "lease_id": leaseID,
         "cancellation_id": cancellationID,
         "capability_id": "mlx.reasoning",
-        "selected_model": "mlx-local",
+        "selected_model": "mlx-community/mlx-local",
         "sensitivity": "public",
         "context_handling": "ephemeral_no_retention",
         "lease_duration_ms": 10_000,
@@ -2884,11 +2884,11 @@ private func mlxJobDocuments(connectionEpoch: UInt64) throws -> FixtureJobDocume
     let payload: [String: Any] = [
         "operation": "generate_text",
         "output": "Local inference stays on the enrolled Mac worker.",
-        "model": "mlx-local"
+        "model": "mlx-community/mlx-local"
     ]
     let payloadData = try JSONSerialization.data(
         withJSONObject: payload,
-        options: [.sortedKeys]
+        options: [.sortedKeys, .withoutEscapingSlashes]
     )
     let payloadDigest = Array(SHA256.hash(data: payloadData))
     let resultObject: [String: Any] = [

@@ -158,7 +158,10 @@ clears inherited environment, forces offline and telemetry-disabled operation,
 passes the prompt on stdin, bounds stdout, and discards stderr. One process
 group and one in-memory attempt are permitted. Timeout, cancellation, pause,
 lease loss, or disconnect owns TERM-to-KILL reaping and suppresses simultaneous
-or late output. No prompt or output enters the durable cursor or event journal.
+or late output. Cross-language context and payload digests bind sorted-key
+UTF-8 JSON with forward slashes left unescaped, matching the Rust
+`serde_json` representation even for slash-bearing model identifiers and
+bounded text. No prompt or output enters the durable cursor or event journal.
 This is local LLM execution with frontier cloud review remaining a selective
 separate layer; it adds no remote enqueue, repository, tool, credential,
 network, Codex, Git, publication, or unattended authority.

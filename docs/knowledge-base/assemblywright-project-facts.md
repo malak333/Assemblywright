@@ -372,6 +372,13 @@ an old one.
   agent's own cursor, which is a fresh temporary directory each run. A receipt
   from an earlier run will therefore be accepted. Clear the Windows console
   before each command rather than grepping scrollback.
+- Foundation `JSONSerialization` escapes forward slashes unless
+  `.withoutEscapingSlashes` is requested, while Rust `serde_json` does not.
+  Because Developer Mode hashes sorted JSON bytes, slash-bearing MLX model IDs
+  can otherwise make the Mac reject a valid agent result before Windows sees
+  it. Use sorted keys plus unescaped slashes for every Swift recomputation of a
+  Rust-owned context or payload digest, and retain slash-bearing fixture and
+  MLX regression cases.
 
 ## Safety Guardrails
 

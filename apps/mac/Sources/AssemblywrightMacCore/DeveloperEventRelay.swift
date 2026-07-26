@@ -781,10 +781,7 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
               input.utf8.count <= 4_096,
               let delay = strictInteger(context["delay_ms"]),
               delay <= 5_000,
-              let contextData = try? JSONSerialization.data(
-                  withJSONObject: context,
-                  options: [.sortedKeys]
-              ),
+              let contextData = try? protocolDigestJSON(context),
               contextData.count <= 8_192,
               Array(SHA256.hash(data: contextData)) == contextDigest else {
             throw AssemblywrightMacDeveloperEventRelayError.fixtureJobRejected
@@ -835,10 +832,7 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
               payload["operation"] as? String == "synthetic_echo",
               payload["output"] as? String == job.input,
               payload["synthetic"] as? Bool == true,
-              let payloadData = try? JSONSerialization.data(
-                  withJSONObject: payload,
-                  options: [.sortedKeys]
-              ),
+              let payloadData = try? protocolDigestJSON(payload),
               payloadData.count <= 8_192,
               Array(SHA256.hash(data: payloadData)) == payloadDigest else {
             throw AssemblywrightMacDeveloperEventRelayError.fixtureJobRejected
@@ -892,10 +886,7 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
               (1 ... 512).contains(maxTokens),
               let temperature = strictInteger(context["temperature_milli"]),
               temperature <= 2_000,
-              let contextData = try? JSONSerialization.data(
-                  withJSONObject: context,
-                  options: [.sortedKeys]
-              ),
+              let contextData = try? protocolDigestJSON(context),
               contextData.count <= 40 * 1_024,
               Array(SHA256.hash(data: contextData)) == contextDigest else {
             throw AssemblywrightMacDeveloperEventRelayError.mlxJobRejected
@@ -948,10 +939,7 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
               !output.isEmpty,
               output.utf8.count <= 768 * 1_024,
               payload["model"] as? String == job.selectedModel,
-              let payloadData = try? JSONSerialization.data(
-                  withJSONObject: payload,
-                  options: [.sortedKeys]
-              ),
+              let payloadData = try? protocolDigestJSON(payload),
               payloadData.count <= 800 * 1_024,
               Array(SHA256.hash(data: payloadData)) == payloadDigest else {
             throw AssemblywrightMacDeveloperEventRelayError.mlxJobRejected
@@ -1094,6 +1082,16 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
             digest.append(parsed)
         }
         return digest
+    }
+
+    private static func protocolDigestJSON(_ object: [String: Any]) throws -> Data {
+        // Rust's serde_json leaves forward slashes unescaped. The protocol
+        // digest binds those exact sorted JSON bytes, so Foundation must do
+        // the same even when a model identifier or bounded text contains "/".
+        try JSONSerialization.data(
+            withJSONObject: object,
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        )
     }
 
     private static func eventRequest(

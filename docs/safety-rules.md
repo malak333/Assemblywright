@@ -142,7 +142,10 @@ release requirements, not optional UX guidance.
   nonempty prompt of at most 32 KiB, request 1 to 512 tokens, and use a
   temperature from 0 to 2000 milli-units. The agent may hold only one active
   attempt in memory and must persist no prompt, output, job, result,
-  cancellation, or acknowledgement.
+  cancellation, or acknowledgement. Mac validation of Rust-owned context and
+  payload digests must hash sorted-key UTF-8 JSON with forward slashes
+  unescaped; serializer-specific slash escaping must not reject an otherwise
+  exact leased result.
 - The MLX executable and model directory must be absolute, canonical, local
   startup-stdin configuration. The executable must be a regular executable
   file rather than a symlink. The agent must clear inherited environment,
