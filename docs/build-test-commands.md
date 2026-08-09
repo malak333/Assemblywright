@@ -152,6 +152,10 @@ gate and are recorded as external evidence.
 ```
 
 ```sh
+./scripts/mac-windows-bridge-live-e2e.sh --run
+```
+
+```sh
 ./scripts/mac-windows-bridge-live-e2e.sh --run-fixture
 ```
 

@@ -188,6 +188,16 @@ require_text "conveyor read-only Mac presentation" "$MAC_APP" \
   "Guidance is not an approval or callable action"
 require_text "conveyor Swift negative-path regression" "$MAC_BRIDGE_TESTS" \
   "Supervisor rejects drifted, inconsistent, duplicate, and oversized Conveyor data"
+require_text "conveyor live observer requires signed helper" "$MAC_BRIDGE_LIVE_E2E" \
+  'codesign --verify --strict "$BRIDGE_BIN"'
+require_text "conveyor live observer requires schema marker" "$MAC_BRIDGE_LIVE_E2E" \
+  'feature_conveyor_schema=7'
+require_text "conveyor live observer requires repeated monitor samples" \
+  "$MAC_BRIDGE_LIVE_E2E" "bridge monitor did not emit exactly two bounded samples"
+require_text "conveyor live observer requires reconnect advance" "$MAC_BRIDGE_LIVE_E2E" \
+  "bridge reconnect diagnostic did not advance the connection epoch"
+require_text "conveyor base live observer command" "$BUILD_DOCS" \
+  "./scripts/mac-windows-bridge-live-e2e.sh --run"
 
 require_text "architecture conveyor kernel" "$ARCHITECTURE" "Feature Conveyor repository kernel"
 require_text "architecture core reduction" "$ARCHITECTURE" "no longer an assistant runtime"
@@ -206,6 +216,8 @@ require_text "knowledge base conveyor guidance boundary" "$KB" \
   'fixed-enum `owner_guidance`'
 require_text "knowledge base conveyor pause revision" "$KB" \
   '`emergency_pause_revision`'
+require_text "knowledge base conveyor live observer proof" "$KB" \
+  '`feature_conveyor_schema=7`'
 require_text "knowledge base feature closeout" "$KB" \
   "Every feature or phase uses the closeout contract"
 require_text "knowledge base native E2E boundary" "$KB" \

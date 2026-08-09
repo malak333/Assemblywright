@@ -46,6 +46,40 @@ struct AssemblywrightMacAppTests {
         #expect(presentation.currentFeatureLabel == "aaaaaaaa · queued")
     }
 
+    @Test("Feature Conveyor presentation maps every fixed state and owner-action label")
+    func featureConveyorPresentationMapsEveryFixedLabel() {
+        let stateCases: [(AssemblywrightMacFeatureConveyorGuidanceState, String)] = [
+            (.idle, "Idle"),
+            (.ready, "Ready"),
+            (.blocked, "Blocked"),
+            (.inProgress, "In progress")
+        ]
+        let actionCases: [(AssemblywrightMacFeatureConveyorNextOwnerAction, String)] = [
+            (.prepareApprovedFeature, "Prepare an approved feature"),
+            (.awaitOwnerControlSurface, "Await owner control surface"),
+            (.resolveHeadDependency, "Resolve the head dependency"),
+            (.wait, "Wait"),
+            (.reconcileActiveFeature, "Reconcile the active feature"),
+            (.resumeEmergencyPause, "Resume Emergency Pause deliberately")
+        ]
+
+        for (state, expectedLabel) in stateCases {
+            let presentation = FeatureConveyorStatusPresentation(
+                status: featureConveyorStatus(state: state)
+            )
+            #expect(presentation.stateLabel == expectedLabel)
+            #expect(presentation.currentFeatureLabel == nil)
+        }
+
+        for (action, expectedLabel) in actionCases {
+            let presentation = FeatureConveyorStatusPresentation(
+                status: featureConveyorStatus(nextOwnerAction: action)
+            )
+            #expect(presentation.guidanceLabel == expectedLabel)
+            #expect(presentation.currentFeatureLabel == nil)
+        }
+    }
+
     @Test("Menu bar contract preserves the stable main-window route")
     func menuBarContractPreservesMainWindowRoute() {
         #expect(AssemblywrightMenuBarContract.mainWindowID == "assemblywright-main")
@@ -109,4 +143,40 @@ struct AssemblywrightMacAppTests {
             #expect(template.isTemplate)
         }
     }
+}
+
+private func featureConveyorStatus(
+    state: AssemblywrightMacFeatureConveyorGuidanceState = .idle,
+    nextOwnerAction: AssemblywrightMacFeatureConveyorNextOwnerAction = .prepareApprovedFeature
+) -> AssemblywrightMacFeatureConveyorStatus {
+    AssemblywrightMacFeatureConveyorStatus(
+        schemaVersion: 7,
+        queueRevision: 0,
+        startupQuarantineCount: 0,
+        countsByStatus: .init(
+            queued: 0,
+            implementing: 0,
+            validating: 0,
+            reviewing: 0,
+            publishing: 0,
+            verifyingMain: 0,
+            succeeded: 0,
+            cancelled: 0,
+            abandoned: 0,
+            quarantined: 0
+        ),
+        visibleFeatureCount: 0,
+        featuresTruncated: false,
+        features: [],
+        ownerGuidance: .init(
+            state: state,
+            reasonCode: .queueEmpty,
+            nextOwnerAction: nextOwnerAction,
+            featureID: nil,
+            specificationRevision: nil,
+            lifecycleRevision: nil,
+            queueRevision: 0,
+            emergencyPauseRevision: 0
+        )
+    )
 }

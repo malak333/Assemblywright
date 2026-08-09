@@ -244,8 +244,18 @@ an old one.
 - The Mac agent's fixture and MLX lanes are default-off, singleton, and
   no-retention. They add no remote planning, repository, tool, credential,
   network, Codex, Git, publication, or unattended authority.
-- Live closeouts (`mac-windows-bridge-live-e2e.sh --run-fixture` and
+- Live closeouts (`mac-windows-bridge-live-e2e.sh --run`, `--run-fixture`, and
   `--run-mlx`) are owner-controlled external evidence, not release evidence.
+  The base `--run` lane is the native E2E for the read-only Feature Conveyor
+  observer: it requires the separately Apple-signed helper, an authenticated
+  MacBridge session to the live Windows service, repeated monitor and reconnect
+  samples, and a production Swift lifecycle marker bound to
+  `feature_conveyor_schema=7`. A successful source pull is not this proof: stop,
+  rebuild, and restart the configured Windows release service, confirm its
+  health reports the expected schema and a fresh process, then run the Mac lane.
+  The owner-token file is in `%LOCALAPPDATA%\Assemblywright\master`; the legacy
+  namespace is only a one-time adoption source and must not be used for current
+  control-plane requests.
 
 ## Workflow
 
