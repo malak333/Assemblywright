@@ -33,7 +33,7 @@ pub use identity::{
     SERVER_CERTIFICATE_LIFETIME_MS,
 };
 
-pub const MASTER_SCHEMA_VERSION: i64 = 6;
+pub const MASTER_SCHEMA_VERSION: i64 = 7;
 pub const MAX_QUEUED_OR_LEASED_STEPS: u64 = 256;
 pub const MAX_CONCURRENT_JOBS: u64 = 4;
 pub const MAX_CONVEYOR_NONTERMINAL_FEATURES: u64 = 100;
@@ -603,6 +603,50 @@ pub struct FeatureConveyorStatusEntry {
     pub effect_possible: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureConveyorGuidanceState {
+    Idle,
+    Ready,
+    Blocked,
+    InProgress,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureConveyorGuidanceReason {
+    QueueEmpty,
+    HeadDependencySatisfied,
+    HeadDependencyUnsatisfied,
+    ActiveFeatureLeased,
+    ActiveRequiresReconciliation,
+    EmergencyPaused,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureConveyorNextOwnerAction {
+    PrepareApprovedFeature,
+    AwaitOwnerControlSurface,
+    ResolveHeadDependency,
+    Wait,
+    ReconcileActiveFeature,
+    ResumeEmergencyPause,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorOwnerGuidance {
+    pub state: FeatureConveyorGuidanceState,
+    pub reason_code: FeatureConveyorGuidanceReason,
+    pub next_owner_action: FeatureConveyorNextOwnerAction,
+    pub feature_id: Option<Uuid>,
+    pub specification_revision: Option<u64>,
+    pub lifecycle_revision: Option<u64>,
+    pub queue_revision: u64,
+    pub emergency_pause_revision: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FeatureConveyorStatus {
@@ -613,6 +657,7 @@ pub struct FeatureConveyorStatus {
     pub visible_feature_count: u64,
     pub features_truncated: bool,
     pub features: Vec<FeatureConveyorStatusEntry>,
+    pub owner_guidance: FeatureConveyorOwnerGuidance,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -765,11 +810,6 @@ impl MasterKernel {
             feature_startup_quarantines: 0,
         };
         kernel.migrate()?;
-        kernel.connection.execute(
-            "INSERT OR IGNORE INTO master_metadata (key, integer_value)\n\
-             VALUES ('emergency_paused', 0)",
-            [],
-        )?;
         kernel.startup_reconciliation = kernel.reconcile_interrupted_state(current_time_ms()?)?;
         kernel.feature_startup_quarantines =
             kernel.reconcile_feature_conveyor_startup(current_time_ms()?)?;
@@ -791,18 +831,33 @@ impl MasterKernel {
     }
 
     pub fn emergency_paused(&self) -> Result<bool, MasterError> {
-        let value: i64 = self.connection.query_row(
-            "SELECT integer_value FROM master_metadata WHERE key = 'emergency_paused'",
+        Ok(self.emergency_pause_snapshot()?.0)
+    }
+
+    pub fn emergency_pause_revision(&self) -> Result<u64, MasterError> {
+        Ok(self.emergency_pause_snapshot()?.1)
+    }
+
+    fn emergency_pause_snapshot(&self) -> Result<(bool, u64), MasterError> {
+        let (paused, revision): (i64, i64) = self.connection.query_row(
+            "SELECT paused.integer_value, revision.integer_value
+             FROM master_metadata paused
+             JOIN master_metadata revision
+               ON revision.key = 'emergency_pause_revision'
+             WHERE paused.key = 'emergency_paused'",
             [],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
-        match value {
-            0 => Ok(false),
-            1 => Ok(true),
-            _ => Err(MasterError::InvalidStoredState(
-                "emergency pause state is not boolean".to_string(),
-            )),
-        }
+        let paused = match paused {
+            0 => false,
+            1 => true,
+            _ => {
+                return Err(MasterError::InvalidStoredState(
+                    "emergency pause state is not boolean".to_string(),
+                ));
+            }
+        };
+        Ok((paused, i64_to_u64(revision)?))
     }
 
     pub fn set_emergency_paused(&mut self, paused: bool) -> Result<(), MasterError> {
@@ -831,6 +886,22 @@ impl MasterKernel {
                 "emergency pause state is missing".to_string(),
             ));
         }
+        if paused != was_paused {
+            let revision = emergency_pause_revision_tx(&tx)?;
+            let next_revision = revision.checked_add(1).ok_or_else(|| {
+                MasterError::InvalidStoredState("emergency pause revision overflowed".to_string())
+            })?;
+            let changed = tx.execute(
+                "UPDATE master_metadata SET integer_value = ?1
+                 WHERE key = 'emergency_pause_revision' AND integer_value = ?2",
+                params![u64_to_i64(next_revision)?, u64_to_i64(revision)?],
+            )?;
+            if changed != 1 {
+                return Err(MasterError::InvalidStoredState(
+                    "emergency pause revision is missing or changed".to_string(),
+                ));
+            }
+        }
         tx.commit()?;
         Ok(())
     }
@@ -847,6 +918,12 @@ impl MasterKernel {
     pub fn feature_conveyor_status(&self) -> Result<FeatureConveyorStatus, MasterError> {
         let schema_version = self.schema_version()?;
         let queue_revision = self.feature_queue_revision()?;
+        let (emergency_paused, emergency_pause_revision) = self.emergency_pause_snapshot()?;
+        let owner_guidance = self.feature_conveyor_owner_guidance(
+            queue_revision,
+            emergency_paused,
+            emergency_pause_revision,
+        )?;
         let counts = self
             .connection
             .query_row(FEATURE_CONVEYOR_STATUS_COUNTS_SQL, [], |row| {
@@ -924,6 +1001,154 @@ impl MasterKernel {
             visible_feature_count,
             features_truncated: visible_feature_count > features.len() as u64,
             features,
+            owner_guidance,
+        })
+    }
+
+    fn feature_conveyor_owner_guidance(
+        &self,
+        queue_revision: u64,
+        emergency_paused: bool,
+        emergency_pause_revision: u64,
+    ) -> Result<FeatureConveyorOwnerGuidance, MasterError> {
+        if emergency_paused {
+            return Ok(FeatureConveyorOwnerGuidance {
+                state: FeatureConveyorGuidanceState::Blocked,
+                reason_code: FeatureConveyorGuidanceReason::EmergencyPaused,
+                next_owner_action: FeatureConveyorNextOwnerAction::ResumeEmergencyPause,
+                feature_id: None,
+                specification_revision: None,
+                lifecycle_revision: None,
+                queue_revision,
+                emergency_pause_revision,
+            });
+        }
+
+        let active = self
+            .connection
+            .query_row(
+                "SELECT f.feature_id, f.current_specification_revision,
+                        f.lifecycle_revision, f.status
+                 FROM feature_active_lease l
+                 JOIN feature_conveyor_features f ON f.feature_id = l.feature_id
+                 WHERE l.singleton = 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .optional()?;
+        if let Some((feature_id, specification_revision, lifecycle_revision, status)) = active {
+            let status = FeatureLifecycleStatus::parse(&status)?;
+            let (state, reason_code, next_owner_action) = match status {
+                FeatureLifecycleStatus::Cancelled | FeatureLifecycleStatus::Quarantined => (
+                    FeatureConveyorGuidanceState::Blocked,
+                    FeatureConveyorGuidanceReason::ActiveRequiresReconciliation,
+                    FeatureConveyorNextOwnerAction::ReconcileActiveFeature,
+                ),
+                status if status.is_active_execution() => (
+                    FeatureConveyorGuidanceState::InProgress,
+                    FeatureConveyorGuidanceReason::ActiveFeatureLeased,
+                    FeatureConveyorNextOwnerAction::Wait,
+                ),
+                _ => {
+                    return Err(MasterError::InvalidStoredState(
+                        "active Feature Conveyor lease has an invalid lifecycle status".to_string(),
+                    ));
+                }
+            };
+            return Ok(FeatureConveyorOwnerGuidance {
+                state,
+                reason_code,
+                next_owner_action,
+                feature_id: Some(parse_uuid(&feature_id)?),
+                specification_revision: Some(i64_to_u64(specification_revision)?),
+                lifecycle_revision: Some(i64_to_u64(lifecycle_revision)?),
+                queue_revision,
+                emergency_pause_revision,
+            });
+        }
+
+        let head = self
+            .connection
+            .query_row(
+                "SELECT f.feature_id, f.current_specification_revision,
+                        f.lifecycle_revision, f.status,
+                        EXISTS(
+                          SELECT 1 FROM feature_dependencies d
+                          JOIN feature_conveyor_features dependency
+                            ON dependency.feature_id = d.dependency_feature_id
+                          WHERE d.feature_id = f.feature_id
+                            AND dependency.status <> 'succeeded'
+                        )
+                 FROM feature_conveyor_queue q
+                 JOIN feature_conveyor_features f ON f.feature_id = q.feature_id
+                 ORDER BY q.queue_position ASC, f.feature_id ASC
+                 LIMIT 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, i64>(4)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((
+            feature_id,
+            specification_revision,
+            lifecycle_revision,
+            status,
+            dependency_blocked,
+        )) = head
+        else {
+            return Ok(FeatureConveyorOwnerGuidance {
+                state: FeatureConveyorGuidanceState::Idle,
+                reason_code: FeatureConveyorGuidanceReason::QueueEmpty,
+                next_owner_action: FeatureConveyorNextOwnerAction::PrepareApprovedFeature,
+                feature_id: None,
+                specification_revision: None,
+                lifecycle_revision: None,
+                queue_revision,
+                emergency_pause_revision,
+            });
+        };
+        if FeatureLifecycleStatus::parse(&status)? != FeatureLifecycleStatus::Queued {
+            return Err(MasterError::InvalidStoredState(
+                "unleased Feature Conveyor queue head is not queued".to_string(),
+            ));
+        }
+        let dependency_blocked =
+            parse_stored_boolean(dependency_blocked, "feature dependency blocker")?;
+        Ok(FeatureConveyorOwnerGuidance {
+            state: if dependency_blocked {
+                FeatureConveyorGuidanceState::Blocked
+            } else {
+                FeatureConveyorGuidanceState::Ready
+            },
+            reason_code: if dependency_blocked {
+                FeatureConveyorGuidanceReason::HeadDependencyUnsatisfied
+            } else {
+                FeatureConveyorGuidanceReason::HeadDependencySatisfied
+            },
+            next_owner_action: if dependency_blocked {
+                FeatureConveyorNextOwnerAction::ResolveHeadDependency
+            } else {
+                FeatureConveyorNextOwnerAction::AwaitOwnerControlSurface
+            },
+            feature_id: Some(parse_uuid(&feature_id)?),
+            specification_revision: Some(i64_to_u64(specification_revision)?),
+            lifecycle_revision: Some(i64_to_u64(lifecycle_revision)?),
+            queue_revision,
+            emergency_pause_revision,
         })
     }
 
@@ -3357,6 +3582,18 @@ impl MasterKernel {
             )?;
         }
         let version = self.schema_version()?;
+        if version == 6 {
+            self.connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 INSERT OR IGNORE INTO master_metadata (key, integer_value)
+                   VALUES ('emergency_paused', 0);
+                 INSERT OR REPLACE INTO master_metadata (key, integer_value)
+                   VALUES ('emergency_pause_revision', 0);
+                 PRAGMA user_version = 7;
+                 COMMIT;",
+            )?;
+        }
+        let version = self.schema_version()?;
         if version != MASTER_SCHEMA_VERSION {
             return Err(MasterError::UnsupportedSchemaVersion {
                 expected: MASTER_SCHEMA_VERSION,
@@ -3695,6 +3932,15 @@ pub(crate) fn emergency_paused_tx(tx: &Transaction<'_>) -> Result<bool, MasterEr
             "emergency pause state is not boolean".to_string(),
         )),
     }
+}
+
+fn emergency_pause_revision_tx(tx: &Transaction<'_>) -> Result<u64, MasterError> {
+    let value: i64 = tx.query_row(
+        "SELECT integer_value FROM master_metadata WHERE key = 'emergency_pause_revision'",
+        [],
+        |row| row.get(0),
+    )?;
+    i64_to_u64(value)
 }
 
 fn request_active_remote_work_cancellations_tx(
@@ -4661,8 +4907,11 @@ fn prepare_legacy_migration_backup(database_path: &Path) -> Result<Option<PathBu
             "source v{version} database failed integrity_check"
         )));
     }
-    let backup_path =
-        database_path.with_file_name(format!("master.pre-v6.{}.sqlite3", Uuid::new_v4()));
+    let backup_path = database_path.with_file_name(format!(
+        "master.pre-v{}.{}.sqlite3",
+        MASTER_SCHEMA_VERSION,
+        Uuid::new_v4()
+    ));
     source.execute("VACUUM INTO ?1", [backup_path.to_string_lossy().as_ref()])?;
     drop(source);
     restrict_backup_permissions(&backup_path)?;

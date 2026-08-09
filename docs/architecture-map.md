@@ -50,9 +50,10 @@ a headless master executable. The contract seam provides the current protocol
 version, typed device/task/step/attempt/lease/cancellation identifiers, bounded
 capability advertisements, handshake messages, job and result envelopes, strict
 bound-before-decode JSON entry points, nil-identity rejection, and a golden
-compatibility fixture. `assemblywright-master` schema version 6 preserves the
+compatibility fixture. `assemblywright-master` schema version 7 preserves the
 schema-v4 distributed-device lifecycle, the schema-v5 Feature Conveyor, and
-adds dedicated pending capability-rebind evidence. The Feature Conveyor persists the first
+schema-v6 dedicated pending capability-rebind evidence, then adds the durable
+Emergency Pause revision. The Feature Conveyor persists the first
 default-inert Durable Feature Conveyor repository kernel. Its immutable
 owner-approved specification revisions bind canonical manifest and evidence
 digests, three independent repository-grant revisions, dependencies, and a
@@ -71,9 +72,12 @@ migration-open fails. Direct file-backed legacy migration through
 owner-token-authenticated loopback-only
 `GET /v1/feature-conveyor/status` observation seam. Its pure-SELECT projection
 returns only bounded lifecycle metadata and aggregate lifecycle counts for the
-current queue and retained lease. It cannot determine claimability, dependency
-blockers, or owner action and must not drive owner action. The route is absent
-from the enrolled-device remote mTLS router. It has no
+current queue and retained lease. A fixed-enum advisory object bound to queue,
+Emergency Pause, and optional feature lifecycle revisions identifies the
+queue-head dependency blocker or retained-lease/pause state and
+one display-only next owner action. It does not determine claimability or
+authorize that action. The route is absent from the enrolled-device remote
+mTLS router. It has no
 mutation, coding worker, Codex, repository, review-provider invocation, GitHub
 publication, Mac queue UI, live-device, unattended, or activation authority.
 

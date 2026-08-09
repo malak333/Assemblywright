@@ -16,9 +16,12 @@ Before starting a release pass, confirm the claim you intend to make.
 - Confirm `docs/feature-conveyor-design.md` still marks the implemented slice
   accurately. The repository kernel is default-inert and exposes only the
   owner-token-authenticated loopback read-only
-  `GET /v1/feature-conveyor/status` observation seam. It exposes no remote
-  Feature Conveyor API, worker dispatcher, repository execution, review
-  provider, publication coordinator, Mac queue UI, or autonomous activation.
+  `GET /v1/feature-conveyor/status` observation seam. Its queue-, pause-, and
+  optional feature-lifecycle-revision-bound owner-guidance labels remain
+  display-only and do not establish claimability.
+  It exposes no remote Feature Conveyor API, worker dispatcher, repository
+  execution, review provider, publication coordinator, Mac queue UI, or
+  autonomous activation.
 - Confirm `docs/architecture-map.md` matches the code for any surface that
   changed in this cycle.
 - Confirm the version is consistent:

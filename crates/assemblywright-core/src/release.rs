@@ -1984,14 +1984,14 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "distributed_master_kernel",
             "implemented",
-            "The portable `assemblywright-master` schema-v5 SQLite kernel persists registered devices, connection epochs, queued steps, immutable leased job envelopes, attempts, cancellation and expiry outcomes, accepted payload digests, and a metadata-only event journal with one server-issued stream ID and contiguous sequence. It enforces the 256-step admission ceiling, four global leases, one live lease per device connection, exact leased-attempt result identity, and durable abandon-before-reissue.",
+            "The portable `assemblywright-master` schema-v7 SQLite database retains the schema-v4 distributed-device kernel and persists registered devices, connection epochs, queued steps, immutable leased job envelopes, attempts, cancellation and expiry outcomes, accepted payload digests, and a metadata-only event journal with one server-issued stream ID and contiguous sequence. It enforces the 256-step admission ceiling, four global leases, one live lease per device connection, exact leased-attempt result identity, and durable abandon-before-reissue.",
             "Durable single-owner state only; it is not the production runtime authority and carries no live cross-device reliability claim.",
         ),
         feature(
             "feature_conveyor_repository_kernel",
             "implemented",
-            "The default-inert schema-v5 Feature Conveyor kernel persists immutable owner-approved specification revisions, three independent repository-grant revisions, a bounded owner-ordered queue with strict head/dependency ordering, compare-and-set revisions, one durable active lease, exact lifecycle advancement, cancellation without advancement, explicit safe abandonment, startup quarantine, and same-transaction redacted audits.",
-            "Persistence only. It exposes no HTTP/API, worker dispatcher, repository execution, review provider, publication coordinator, Mac queue UI, or autonomous activation.",
+            "The default-inert schema-v5 Feature Conveyor kernel persists immutable owner-approved specification revisions, three independent repository-grant revisions, a bounded owner-ordered queue with strict head/dependency ordering, compare-and-set revisions, one durable active lease, exact lifecycle advancement, cancellation without advancement, explicit safe abandonment, startup quarantine, and same-transaction redacted audits. Its owner-authenticated loopback read-only status route adds bounded lifecycle observation and fixed-enum owner guidance bound to queue, Emergency Pause, and optional feature lifecycle revisions.",
+            "Observation only. The guidance labels are display-only, do not establish claimability, and expose no remote route, mutation, worker dispatcher, repository execution, review provider, publication coordinator, Mac queue UI, or autonomous activation.",
         ),
         feature(
             "enrollment_identity_and_mtls",
@@ -2161,5 +2161,29 @@ mod tests {
             !contains_numeric_protocol_version(&feature.proof),
             "the proof must not contain a numeric protocol version that can drift"
         );
+    }
+
+    #[test]
+    fn feature_conveyor_readiness_proof_preserves_guidance_authority_boundary() {
+        let feature = contract_features()
+            .into_iter()
+            .find(|feature| feature.key == "feature_conveyor_repository_kernel")
+            .expect("Feature Conveyor readiness feature");
+        assert!(feature.proof.contains("loopback read-only status route"));
+        assert!(feature.proof.contains(
+            "owner guidance bound to queue, Emergency Pause, and optional feature lifecycle revisions"
+        ));
+        assert!(feature.boundary.contains("display-only"));
+        assert!(feature.boundary.contains("do not establish claimability"));
+        for forbidden in [
+            "mutation authority",
+            "repository execution authority",
+            "publication authority",
+        ] {
+            assert!(
+                !feature.proof.contains(forbidden),
+                "readiness proof broadened authority: {forbidden}"
+            );
+        }
     }
 }

@@ -22,8 +22,10 @@ step, attempt, lease, and cancellation identifiers; bounded capability
 advertisements; handshake, job, and result envelopes; strict bound-before-decode
 JSON entry points; nil-identity rejection; and a golden compatibility fixture.
 
-**`assemblywright-master`** — a portable schema-v5 SQLite kernel plus a headless
-single-owner executable.
+**`assemblywright-master`** — a portable schema-v7 SQLite database retaining
+the schema-v4 device lifecycle, schema-v5 Feature Conveyor, schema-v6
+capability rebind evidence, and schema-v7 Emergency Pause revision, plus a
+headless single-owner executable.
 
 - *Distributed device lifecycle*: registered device metadata, connection epochs
   and sequence high-water marks, queued steps, immutable leased job envelopes,
@@ -43,10 +45,14 @@ single-owner executable.
   evidence; cancellation retains it until explicit safe abandonment. One
   owner-token-authenticated loopback-only `GET /v1/feature-conveyor/status`
   exposes bounded, redacted lifecycle observation for current queue and
-  retained-lease entries. It does not report dependencies, blocker reasons,
-  claimability, or owner-action guidance and must not drive owner action. It is
-  absent from the enrolled-device remote mTLS router and grants no mutation,
-  execution, review, repository, Git, publication, or activation authority.
+  retained-lease entries plus one fixed-enum owner-guidance summary bound to
+  queue, Emergency Pause, and optional feature lifecycle revisions. The
+  guidance distinguishes the queue head, dependency blocking,
+  retained-lease reconciliation, and Emergency Pause without exposing
+  dependency identifiers or asserting claimability. Its action labels are
+  display-only. The route is absent from the enrolled-device remote mTLS router
+  and grants no mutation, execution, review, repository, Git, publication, or
+  activation authority.
 - *Identity*: a DPAPI-current-user protected ECDSA P-256 enrollment CA,
   ten-minute single-use digest-only grants, verified client CSRs, 30-day client
   certificates bound to a server-selected device ID, rotation, and immediate

@@ -188,8 +188,14 @@ Deterministic cross-process coverage proves:
   loopback-only `GET /v1/feature-conveyor/status`, empty state, deterministic
   current-lifecycle counts and ordering, exclusion of terminal history, the
   100-entry cap with explicit truncation, exact JSON-key allowlists, and
-  absence from the enrolled-device remote mTLS router. The response does not
-  establish claimability, dependency blockers, or owner-action guidance.
+  absence from the enrolled-device remote mTLS router. Kernel coverage proves
+  the fixed-enum owner-guidance precedence for idle, ready,
+  dependency-blocked, active, reconciliation-required, and Emergency Pause
+  states, including queue/lifecycle/pause revision binding and malformed-state
+  rejection. The real-process E2E proves authenticated serialization,
+  boundedness, redaction, and the idle and reconciliation-required states; the
+  Windows remote-mTLS E2E proves the route remains absent remotely. The
+  display labels do not establish claimability or callable owner authority.
 - Enrollment identity: digest-only grants, signed-CSR issuance, expiry and
   replay denial, rotation, revocation, schema migration, two-phase pending
   capability rebind with replacement-key acknowledgement verification,

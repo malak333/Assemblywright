@@ -154,6 +154,7 @@ require_text "README non-claims" "$README" "Autonomous dispatch"
 require_text "DESIGN conveyor pointer" "$DESIGN" "docs/feature-conveyor-design.md"
 require_text "DESIGN distributed pointer" "$DESIGN" "docs/distributed-developer-mode-design.md"
 require_text "DESIGN assistant non-goal" "$DESIGN" "No general-purpose assistant surface."
+require_text "DESIGN current master schema" "$DESIGN" "schema-v7"
 
 require_text "conveyor design status" "$FEATURE_CONVEYOR_DESIGN" "default-inert"
 require_text "conveyor design approval" "$FEATURE_CONVEYOR_DESIGN" "Approve and Enqueue"
@@ -161,12 +162,16 @@ require_text "conveyor loopback status route" "$FEATURE_CONVEYOR_DESIGN" \
   "GET /v1/feature-conveyor/status"
 require_text "conveyor remote route absence" "$FEATURE_CONVEYOR_DESIGN" \
   "the enrolled-device remote mTLS router and grants no"
-require_text "conveyor lifecycle observation limit" "$FEATURE_CONVEYOR_DESIGN" \
-  "This is lifecycle observation only"
-require_text "conveyor owner action limit" "$FEATURE_CONVEYOR_DESIGN" \
-  "must not drive owner action"
+require_text "conveyor advisory observation limit" "$FEATURE_CONVEYOR_DESIGN" \
+  "This remains advisory observation only"
+require_text "conveyor claimability limit" "$FEATURE_CONVEYOR_DESIGN" \
+  "establish claimability"
 require_text "conveyor local status implementation" "$MASTER_PROCESS" \
   '"/v1/feature-conveyor/status"'
+require_text "conveyor owner guidance implementation" "$MASTER_CRATE" \
+  "owner_guidance"
+require_text "conveyor pause revision implementation" "$MASTER_CRATE" \
+  "emergency_pause_revision"
 require_text "conveyor remote route regression" "$MASTER_REMOTE_MTLS_E2E" \
   "Feature Conveyor owner status leaked onto the enrolled-device router"
 
@@ -181,6 +186,10 @@ require_text "knowledge base crate boundaries" "$KB" "## Current Crate Boundarie
 require_text "knowledge base proof boundaries" "$KB" "## Proof Boundaries"
 require_text "knowledge base conveyor status boundary" "$KB" \
   "owner-token-authenticated loopback-only"
+require_text "knowledge base conveyor guidance boundary" "$KB" \
+  'fixed-enum `owner_guidance`'
+require_text "knowledge base conveyor pause revision" "$KB" \
+  '`emergency_pause_revision`'
 require_text "knowledge base feature closeout" "$KB" \
   "Every feature or phase uses the closeout contract"
 require_text "knowledge base native E2E boundary" "$KB" \

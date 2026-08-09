@@ -218,10 +218,15 @@ an old one.
   redacted current queue or retained-lease lifecycle entries, excludes terminal
   history, includes current aggregate lifecycle counts and an explicit
   visible-total/truncation signal, and is absent from the enrolled-device
-  remote mTLS router. It is insufficient to determine claimability, dependency
-  blockers, blocker reasons, or owner action and must not drive owner action.
-  Later UI/control work must add exact blocker guidance before representing a
-  blocked state. It grants no enqueue, mutation, worker,
+  remote mTLS router. Its fixed-enum `owner_guidance` object is snapshot-bound
+  to queue, Emergency Pause, and optional feature lifecycle revisions and
+  applies a strict precedence: Emergency
+  Pause, retained-lease reconciliation, normal active work, empty queue,
+  queue-head dependency blocking, then ready head. It contains no free text or
+  dependency, repository, provider, grant, evidence, or audit identifiers.
+  `queue_revision` and `emergency_pause_revision` always bind the snapshot. The
+  labeled next action is display-only and is not claimability or authorization.
+  It grants no enqueue, mutation, worker,
   Codex, repository, Git, review, publication, Mac queue UI, or autonomous
   activation authority.
 - The Mac agent's fixture and MLX lanes are default-off, singleton, and

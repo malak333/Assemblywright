@@ -59,7 +59,7 @@ accepted designs and take precedence within their scope:
 
 ### Windows master
 
-`assemblywright-master` owns durable state and every authority decision. Its schema-v6
+`assemblywright-master` owns durable state and every authority decision. Its schema-v7
 SQLite database holds two kernels:
 
 - The distributed device lifecycle: registered devices, connection epochs,
@@ -70,9 +70,13 @@ SQLite database holds two kernels:
   specification revisions, three independent repository grants, the bounded
   owner-ordered queue, one active lease, exact lifecycle advancement, and
   startup quarantine. Its only API is an owner-token-authenticated,
-  loopback-only, bounded and redacted lifecycle-observation projection. It is
-  insufficient to determine claimability, dependency blockers, or owner action
-  and is not registered on the enrolled-device remote mTLS router.
+  loopback-only, bounded and redacted lifecycle-observation projection. A
+  fixed-enum guidance object bound to queue, Emergency Pause, and optional
+  feature lifecycle revisions distinguishes idle, ready,
+  dependency-blocked, active, reconciliation-required, and emergency-paused
+  states and names one display-only next owner action. It does not establish
+  claimability or expose a callable action, and it is not registered on the
+  enrolled-device remote mTLS router.
 
 Every authoritative transition commits its redacted audit event in the same
 transaction. Migrations from supported legacy schemas are backup-first under

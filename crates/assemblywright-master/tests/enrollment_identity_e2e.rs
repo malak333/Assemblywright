@@ -724,7 +724,7 @@ fn capability_rebind_audit_is_redacted_immutable_and_rolls_back_with_authority()
 }
 
 #[test]
-fn schema_v1_migrates_transactionally_through_capability_rebind_v6() {
+fn schema_v1_migrates_transactionally_through_capability_rebind_v7() {
     let directory = tempfile::tempdir().expect("migration directory");
     let database = directory.path().join("master.sqlite3");
     let connection = rusqlite::Connection::open(&database).expect("create v1 database");
@@ -797,7 +797,7 @@ fn schema_v1_migrates_transactionally_through_capability_rebind_v6() {
 
     let process = MasterProcess::acquire(directory.path()).expect("migrate v1 database");
     let master = process.kernel();
-    assert_eq!(master.schema_version().expect("schema version"), 6);
+    assert_eq!(master.schema_version().expect("schema version"), 7);
     let health = master.health_snapshot().expect("migrated health");
     assert_eq!(health.registered_devices, 1);
     assert_eq!(health.active_device_certificates, 0);

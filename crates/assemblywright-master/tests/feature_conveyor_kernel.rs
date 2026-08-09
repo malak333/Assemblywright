@@ -1,5 +1,6 @@
 use assemblywright_master::{
-    ApprovedFeatureSpecification, FeatureAbandonmentEvidence, FeatureGrantRevisions,
+    ApprovedFeatureSpecification, FeatureAbandonmentEvidence, FeatureConveyorGuidanceReason,
+    FeatureConveyorGuidanceState, FeatureConveyorNextOwnerAction, FeatureGrantRevisions,
     FeatureLifecycleStatus, FeatureTransitionEvidence, MasterError, MasterKernel, MasterProcess,
     RepositoryGrantKind, RepositoryGrantRevision, VerifiedFeatureSuccess,
     MAX_CONVEYOR_NONTERMINAL_FEATURES, MAX_CONVEYOR_STATUS_FEATURES,
@@ -129,6 +130,7 @@ fn assert_status_json_allowlist(value: &Value) {
             "visible_feature_count",
             "features_truncated",
             "features",
+            "owner_guidance",
         ],
     );
     assert_exact_object_keys(
@@ -160,6 +162,19 @@ fn assert_status_json_allowlist(value: &Value) {
             ],
         );
     }
+    assert_exact_object_keys(
+        &value["owner_guidance"],
+        &[
+            "state",
+            "reason_code",
+            "next_owner_action",
+            "feature_id",
+            "specification_revision",
+            "lifecycle_revision",
+            "queue_revision",
+            "emergency_pause_revision",
+        ],
+    );
 }
 
 fn complete_feature(kernel: &mut MasterKernel, feature: &ApprovedFeatureSpecification, now: u64) {
@@ -236,13 +251,28 @@ fn abandon_feature(kernel: &mut MasterKernel, feature: &ApprovedFeatureSpecifica
 fn status_projection_is_empty_bounded_and_redacted() {
     let mut kernel = MasterKernel::in_memory().unwrap();
     let empty = kernel.feature_conveyor_status().unwrap();
-    assert_eq!(empty.schema_version, 6);
+    assert_eq!(empty.schema_version, 7);
     assert_eq!(empty.queue_revision, 0);
     assert_eq!(empty.startup_quarantine_count, 0);
     assert_eq!(empty.visible_feature_count, 0);
     assert!(!empty.features_truncated);
     assert!(empty.features.is_empty());
     assert_eq!(empty.counts_by_status, Default::default());
+    assert_eq!(
+        empty.owner_guidance.state,
+        FeatureConveyorGuidanceState::Idle
+    );
+    assert_eq!(
+        empty.owner_guidance.reason_code,
+        FeatureConveyorGuidanceReason::QueueEmpty
+    );
+    assert_eq!(
+        empty.owner_guidance.next_owner_action,
+        FeatureConveyorNextOwnerAction::PrepareApprovedFeature
+    );
+    assert_eq!(empty.owner_guidance.feature_id, None);
+    assert_eq!(empty.owner_guidance.queue_revision, 0);
+    assert_eq!(empty.owner_guidance.emergency_pause_revision, 0);
     assert_status_json_allowlist(&serde_json::to_value(&empty).unwrap());
 
     let repository_id = Uuid::new_v4();
@@ -291,6 +321,20 @@ fn status_projection_is_empty_bounded_and_redacted() {
     assert_eq!(status.counts_by_status.cancelled, 1);
     assert_eq!(status.counts_by_status.implementing, 0);
     assert_eq!(
+        status.owner_guidance.state,
+        FeatureConveyorGuidanceState::Blocked
+    );
+    assert_eq!(
+        status.owner_guidance.reason_code,
+        FeatureConveyorGuidanceReason::ActiveRequiresReconciliation
+    );
+    assert_eq!(
+        status.owner_guidance.next_owner_action,
+        FeatureConveyorNextOwnerAction::ReconcileActiveFeature
+    );
+    assert_eq!(status.owner_guidance.feature_id, Some(claim.feature_id));
+    assert_eq!(status.owner_guidance.queue_revision, status.queue_revision);
+    assert_eq!(
         kernel.feature_conveyor_status().unwrap(),
         status,
         "read-only projection changed durable Feature Conveyor state"
@@ -306,6 +350,118 @@ fn status_projection_is_empty_bounded_and_redacted() {
     );
 
     assert_status_json_allowlist(&serde_json::to_value(&status).unwrap());
+}
+
+#[test]
+fn owner_guidance_reports_ready_dependency_blocked_and_pause_precedence() {
+    let mut kernel = MasterKernel::in_memory().unwrap();
+    let repository_id = Uuid::new_v4();
+    install_grants(&mut kernel, repository_id);
+    let dependency = specification(Uuid::new_v4(), repository_id, vec![]);
+    let dependent = specification(Uuid::new_v4(), repository_id, vec![dependency.feature_id]);
+    kernel.enqueue_approved_feature(&dependency, 0, 10).unwrap();
+    let ready = kernel.feature_conveyor_status().unwrap();
+    assert_eq!(ready.owner_guidance.emergency_pause_revision, 0);
+    assert_eq!(
+        ready.owner_guidance.state,
+        FeatureConveyorGuidanceState::Ready
+    );
+    assert_eq!(
+        ready.owner_guidance.reason_code,
+        FeatureConveyorGuidanceReason::HeadDependencySatisfied
+    );
+    assert_eq!(
+        ready.owner_guidance.next_owner_action,
+        FeatureConveyorNextOwnerAction::AwaitOwnerControlSurface
+    );
+    assert_eq!(ready.owner_guidance.feature_id, Some(dependency.feature_id));
+    assert_eq!(ready.owner_guidance.specification_revision, Some(1));
+    assert_eq!(ready.owner_guidance.lifecycle_revision, Some(1));
+
+    kernel.enqueue_approved_feature(&dependent, 1, 11).unwrap();
+    kernel
+        .reorder_queued_features(&[dependent.feature_id, dependency.feature_id], 2, 12)
+        .unwrap();
+    let blocked = kernel.feature_conveyor_status().unwrap();
+    assert_eq!(
+        blocked.owner_guidance.state,
+        FeatureConveyorGuidanceState::Blocked
+    );
+    assert_eq!(
+        blocked.owner_guidance.reason_code,
+        FeatureConveyorGuidanceReason::HeadDependencyUnsatisfied
+    );
+    assert_eq!(
+        blocked.owner_guidance.next_owner_action,
+        FeatureConveyorNextOwnerAction::ResolveHeadDependency
+    );
+    assert_eq!(
+        blocked.owner_guidance.feature_id,
+        Some(dependent.feature_id)
+    );
+    assert_eq!(blocked.owner_guidance.queue_revision, 3);
+
+    kernel.set_emergency_paused_at(true, 13).unwrap();
+    let paused = kernel.feature_conveyor_status().unwrap();
+    assert_eq!(
+        paused.owner_guidance.state,
+        FeatureConveyorGuidanceState::Blocked
+    );
+    assert_eq!(
+        paused.owner_guidance.reason_code,
+        FeatureConveyorGuidanceReason::EmergencyPaused
+    );
+    assert_eq!(
+        paused.owner_guidance.next_owner_action,
+        FeatureConveyorNextOwnerAction::ResumeEmergencyPause
+    );
+    assert_eq!(paused.owner_guidance.feature_id, None);
+    assert_eq!(paused.owner_guidance.queue_revision, 3);
+    assert_eq!(paused.owner_guidance.emergency_pause_revision, 1);
+    kernel.set_emergency_paused_at(true, 14).unwrap();
+    assert_eq!(kernel.emergency_pause_revision().unwrap(), 1);
+    kernel.set_emergency_paused_at(false, 15).unwrap();
+    let resumed = kernel.feature_conveyor_status().unwrap();
+    assert_eq!(resumed.owner_guidance.emergency_pause_revision, 2);
+    assert_eq!(resumed.owner_guidance.queue_revision, 3);
+    assert_eq!(
+        resumed.owner_guidance.reason_code,
+        FeatureConveyorGuidanceReason::HeadDependencyUnsatisfied
+    );
+    assert_eq!(
+        kernel.feature_conveyor_status().unwrap(),
+        resumed,
+        "owner guidance changed durable Feature Conveyor state"
+    );
+    assert_status_json_allowlist(&serde_json::to_value(resumed).unwrap());
+}
+
+#[test]
+fn owner_guidance_fails_closed_on_impossible_unleased_queue_state() {
+    let directory = tempdir().unwrap();
+    let database = directory.path().join("master.sqlite3");
+    let repository_id = Uuid::new_v4();
+    let feature = specification(Uuid::new_v4(), repository_id, vec![]);
+    {
+        let mut kernel = MasterKernel::open(&database).unwrap();
+        install_grants(&mut kernel, repository_id);
+        kernel.enqueue_approved_feature(&feature, 0, 10).unwrap();
+    }
+    Connection::open(&database)
+        .unwrap()
+        .execute(
+            "UPDATE feature_conveyor_features SET status = 'cancelled'
+             WHERE feature_id = ?1",
+            [feature.feature_id.to_string()],
+        )
+        .unwrap();
+
+    let kernel = MasterKernel::open(&database).unwrap();
+    assert!(matches!(
+        kernel.feature_conveyor_status(),
+        Err(MasterError::InvalidStoredState(message))
+            if message == "unleased Feature Conveyor queue head is not queued"
+    ));
 }
 
 #[test]
@@ -358,6 +514,20 @@ fn feature_conveyor_owner_journey_persists_end_to_end() {
         let claim = process.kernel_mut().claim_next_feature(1, 20).unwrap();
         assert_eq!(claim.feature_id, feature.feature_id);
         assert_eq!(claim.provider_id, feature.provider_id);
+        let active = process.kernel().feature_conveyor_status().unwrap();
+        assert_eq!(
+            active.owner_guidance.state,
+            FeatureConveyorGuidanceState::InProgress
+        );
+        assert_eq!(
+            active.owner_guidance.reason_code,
+            FeatureConveyorGuidanceReason::ActiveFeatureLeased
+        );
+        assert_eq!(
+            active.owner_guidance.next_owner_action,
+            FeatureConveyorNextOwnerAction::Wait
+        );
+        assert_eq!(active.owner_guidance.feature_id, Some(feature.feature_id));
         assert_eq!(claim.model_id, feature.model_id);
 
         let evidence = FeatureTransitionEvidence {
@@ -945,6 +1115,20 @@ fn restart_quarantines_ambiguous_active_feature_without_retry() {
     assert_eq!(snapshot.status, FeatureLifecycleStatus::Quarantined);
     assert!(snapshot.effect_possible);
     assert_eq!(snapshot.active_lease_id, Some(lease_id));
+    let status = kernel.feature_conveyor_status().unwrap();
+    assert_eq!(
+        status.owner_guidance.state,
+        FeatureConveyorGuidanceState::Blocked
+    );
+    assert_eq!(
+        status.owner_guidance.reason_code,
+        FeatureConveyorGuidanceReason::ActiveRequiresReconciliation
+    );
+    assert_eq!(
+        status.owner_guidance.next_owner_action,
+        FeatureConveyorNextOwnerAction::ReconcileActiveFeature
+    );
+    assert_eq!(status.owner_guidance.feature_id, Some(feature.feature_id));
 }
 
 #[test]
@@ -1042,7 +1226,7 @@ fn master_process_v4_backup_migration_reopen_and_restore_on_failure() {
     ));
     {
         let process = MasterProcess::acquire(directory.path()).unwrap();
-        assert_eq!(process.kernel().schema_version().unwrap(), 6);
+        assert_eq!(process.kernel().schema_version().unwrap(), 7);
         let backup = process.migration_backup_path().unwrap();
         assert!(backup.exists());
         let backup_connection = Connection::open(backup).unwrap();
@@ -1065,7 +1249,7 @@ fn master_process_v4_backup_migration_reopen_and_restore_on_failure() {
             .kernel()
             .schema_version()
             .unwrap(),
-        6
+        7
     );
 
     let failed_directory = tempdir().unwrap();
@@ -1106,7 +1290,54 @@ fn master_process_v4_backup_migration_reopen_and_restore_on_failure() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v6.")));
+            .starts_with("master.pre-v7.")));
+}
+
+#[test]
+fn master_process_v6_backup_migration_binds_emergency_pause_revision() {
+    let directory = tempdir().unwrap();
+    let database = directory.path().join("master.sqlite3");
+    drop(MasterKernel::open(&database).unwrap());
+    Connection::open(&database)
+        .unwrap()
+        .execute_batch(
+            "DELETE FROM master_metadata WHERE key = 'emergency_pause_revision';
+             PRAGMA user_version = 6;",
+        )
+        .unwrap();
+
+    assert!(matches!(
+        MasterKernel::open(&database),
+        Err(MasterError::MigrationBackup(_))
+    ));
+
+    let process = MasterProcess::acquire(directory.path()).unwrap();
+    assert_eq!(process.kernel().schema_version().unwrap(), 7);
+    assert_eq!(process.kernel().emergency_pause_revision().unwrap(), 0);
+    let backup = process.migration_backup_path().unwrap();
+    assert!(backup
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .starts_with("master.pre-v7."));
+    let backup = Connection::open(backup).unwrap();
+    assert_eq!(
+        backup
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        6
+    );
+    assert_eq!(
+        backup
+            .query_row(
+                "SELECT COUNT(*) FROM master_metadata
+                 WHERE key = 'emergency_pause_revision'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
 }
 
 #[test]
@@ -1116,7 +1347,7 @@ fn forward_schema_version_fails_closed_without_backup() {
     drop(MasterKernel::open(&database).unwrap());
     Connection::open(&database)
         .unwrap()
-        .execute_batch("PRAGMA user_version = 7;")
+        .execute_batch("PRAGMA user_version = 8;")
         .unwrap();
     let forward_error = match MasterProcess::acquire(directory.path()) {
         Ok(_) => panic!("forward schema unexpectedly opened"),
@@ -1125,8 +1356,8 @@ fn forward_schema_version_fails_closed_without_backup() {
     assert!(matches!(
         forward_error,
         MasterError::UnsupportedSchemaVersion {
-            expected: 6,
-            found: 7
+            expected: 7,
+            found: 8
         }
     ));
     assert!(!directory
@@ -1137,5 +1368,5 @@ fn forward_schema_version_fails_closed_without_backup() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v6.")));
+            .starts_with("master.pre-v7.")));
 }

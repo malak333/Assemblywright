@@ -21,15 +21,22 @@ lifecycle counts, and at most 100 current queue or retained-lease entries
 containing only feature ID, specification and lifecycle revisions, queue
 position, status, lease presence, and effect-possible state. It reports the
 current visible total and whether entries were truncated. Historical terminal
-rows are excluded. This is lifecycle observation only: it is insufficient to
-determine claimability, dependency blockers, blocker reasons, or an exact owner
-action and must not drive owner action. Later UI/control work must add exact
-blocker guidance before representing a blocked state. The route is absent from
-the enrolled-device remote mTLS router and grants no enqueue, execution, review,
-repository, Git, publication, or activation authority. No worker dispatcher,
-repository execution, review provider, publication coordinator, Mac UI, or
-autonomous activation is implemented. The remainder of this document is still
-target design.
+rows are excluded. One fixed-enum `owner_guidance` object adds a state bound to
+the queue, Emergency Pause, and optional current feature lifecycle revisions;
+a reason code; a display-only next owner action; and optional current
+feature/specification/lifecycle identity. Its exact precedence is
+Emergency Pause; cancelled or quarantined retained lease; normal active lease;
+empty queue; unsatisfied queue-head dependency; ready queue head. It exposes no
+dependency identifiers, repository/provider/grant data, free text, evidence,
+or audit metadata. `queue_revision` and `emergency_pause_revision` always bind
+the advisory snapshot; feature guidance also binds `lifecycle_revision`.
+This remains advisory observation only: it does not establish claimability,
+authorize its labeled action, or add a control route.
+The route is absent from the enrolled-device remote mTLS router and grants no
+enqueue, execution, review, repository, Git, publication, or activation
+authority. No worker dispatcher, repository execution, review provider,
+publication coordinator, Mac UI, or autonomous activation is implemented. The
+remainder of this document is still target design.
 
 ## Understanding Summary
 
@@ -418,6 +425,10 @@ migrations. Upgrade behavior is:
 Migration failure blocks startup. Rollback restores the pre-migration backup
 instead of attempting reverse writes. Existing RPO, RTO, backup-custody, and
 restore-drill proof boundaries remain authoritative.
+
+Schema v7 adds the durable `emergency_pause_revision` under this backup-first
+path so schema-v6 binaries reject the forward database instead of changing
+pause state without advancing the advisory snapshot revision.
 
 Emergency Pause blocks new leases and publication, cancels safe active work,
 and marks potentially effectful interruptions for review.

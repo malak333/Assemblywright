@@ -156,15 +156,24 @@ release requirements, not optional UX guidance.
   a simultaneous or late result is suppressed. This lane grants no tool, file,
   repository, credential, network, Codex, Git, publication, or unattended
   authority.
-- The Windows `assemblywright-master` schema-v6 database retains the schema-v5 Durable Feature Conveyor kernel and is
+- The Windows `assemblywright-master` schema-v7 database retains the schema-v5
+  Durable Feature Conveyor kernel and is
   default-inert. Its only HTTP/API surface is the owner-token-authenticated,
   loopback-only `GET /v1/feature-conveyor/status`: a pure-SELECT, bounded,
   structurally redacted lifecycle-observation projection for current queue and
-  retained-lease entries. It is insufficient to determine claimability,
-  dependency blockers, or owner action, must not drive owner action, and is
-  absent from the enrolled-device remote mTLS router. It exposes no mutation,
-  worker, Codex, repository, GitHub, publication, or automatic activation
-  authority. Approved feature manifests must be canonical bounded JSON with an
+  retained-lease entries. Its single fixed-enum `owner_guidance` object must be
+  derived with this precedence: Emergency Pause; cancelled or quarantined
+  retained lease; normal active lease; empty queue; unsatisfied queue-head
+  dependency; ready queue head. The object is bound to explicit queue,
+  Emergency Pause, and optional feature lifecycle revisions, contains no free
+  text or dependency, repository, provider, grant, evidence, or audit data, and
+  labels only a display action. Its `queue_revision` and
+  `emergency_pause_revision` always bind the advisory snapshot. It must not be
+  treated as claimability or a callable authorization. The route is absent
+  from the enrolled-device remote
+  mTLS router and exposes no mutation, worker, Codex, repository, GitHub,
+  publication, or automatic activation authority. Approved feature manifests
+  must be canonical bounded JSON with an
   exact SHA-256 binding; their
   immutable numbered specification rows and owner-approval/design/brainstorming
   proof digests are append-only. The three repository grant revisions remain

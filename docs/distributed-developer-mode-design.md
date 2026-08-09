@@ -167,7 +167,8 @@ separate layer; it adds no remote enqueue, repository, tool, credential,
 network, Codex, Git, publication, or unattended authority.
 
 The first Durable Feature Conveyor implementation is a separate default-inert
-schema-v5 repository kernel retained by the schema-v6 Windows `assemblywright-master`. It persists
+schema-v5 repository kernel retained by the schema-v7 Windows
+`assemblywright-master`. It persists
 immutable digest-bound approved specifications, independent repository grant
 revisions, a 100-nonterminal-item owner-ordered queue, dependency blocking,
 compare-and-set revisions, one active lease, exact evidence-bound lifecycle
@@ -237,7 +238,8 @@ The standard profile now has one narrowly scoped repair path for the observed
 stale exact fixture registration. `enrollment rebind-pair --confirm` retains the
 raw grant secret only in the stopped Windows CLI process, snapshots the current
 same-device/name/role registration, and permits only a strictly higher exact
-singleton MLX target. Certificate issuance creates schema-v6 pending evidence;
+singleton MLX target. Certificate issuance creates schema-v6 pending evidence
+retained by schema v7;
 it neither changes the active registry nor authorizes the new certificate. The
 Mac `enrollment rebind prepare|stage --confirm` commands use a separate standard
 replacement Secure Enclave key, certificate label, and staged record, validate

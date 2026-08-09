@@ -43,7 +43,7 @@ fn feature_conveyor_status_is_owner_authenticated_bounded_and_redacted() {
     let empty = get_request(empty_endpoint, "/v1/feature-conveyor/status", Some(token));
     assert!(empty.starts_with("HTTP/1.1 200 OK"), "{empty}");
     let empty_json = response_json(&empty);
-    assert_eq!(empty_json["schema_version"], 6);
+    assert_eq!(empty_json["schema_version"], 7);
     assert_eq!(empty_json["queue_revision"], 0);
     assert_eq!(empty_json["startup_quarantine_count"], 0);
     assert_eq!(empty_json["visible_feature_count"], 0);
@@ -51,6 +51,15 @@ fn feature_conveyor_status_is_owner_authenticated_bounded_and_redacted() {
     assert_eq!(empty_json["features"], serde_json::json!([]));
     assert_eq!(empty_json["counts_by_status"]["queued"], 0);
     assert_eq!(empty_json["counts_by_status"]["quarantined"], 0);
+    assert_eq!(empty_json["owner_guidance"]["state"], "idle");
+    assert_eq!(empty_json["owner_guidance"]["reason_code"], "queue_empty");
+    assert_eq!(
+        empty_json["owner_guidance"]["next_owner_action"],
+        "prepare_approved_feature"
+    );
+    assert_eq!(empty_json["owner_guidance"]["feature_id"], Value::Null);
+    assert_eq!(empty_json["owner_guidance"]["queue_revision"], 0);
+    assert_eq!(empty_json["owner_guidance"]["emergency_pause_revision"], 0);
     assert_status_json_allowlist(&empty_json);
 
     empty_server.child.kill().expect("stop empty master");
@@ -87,6 +96,27 @@ fn feature_conveyor_status_is_owner_authenticated_bounded_and_redacted() {
     assert_eq!(populated_json["features"][0]["status"], "cancelled");
     assert_eq!(populated_json["features"][0]["lease_present"], true);
     assert_eq!(populated_json["features"][0]["effect_possible"], true);
+    assert_eq!(populated_json["owner_guidance"]["state"], "blocked");
+    assert_eq!(
+        populated_json["owner_guidance"]["reason_code"],
+        "active_requires_reconciliation"
+    );
+    assert_eq!(
+        populated_json["owner_guidance"]["next_owner_action"],
+        "reconcile_active_feature"
+    );
+    assert_eq!(
+        populated_json["owner_guidance"]["feature_id"],
+        populated_json["features"][0]["feature_id"]
+    );
+    assert_eq!(
+        populated_json["owner_guidance"]["queue_revision"],
+        populated_json["queue_revision"]
+    );
+    assert_eq!(
+        populated_json["owner_guidance"]["emergency_pause_revision"],
+        0
+    );
     assert_status_json_allowlist(&populated_json);
 }
 
@@ -100,7 +130,7 @@ fn windows_master_process_owns_state_and_completes_cross_process_fixture() {
     let setup_receipt: Value = serde_json::from_slice(&setup.stdout).expect("setup JSON receipt");
     assert_eq!(setup_receipt["status"], "setup_complete");
     assert_eq!(setup_receipt["protocol_version"], 2);
-    assert_eq!(setup_receipt["schema_version"], 6);
+    assert_eq!(setup_receipt["schema_version"], 7);
     assert!(directory.path().join("master.sqlite3").is_file());
     assert!(directory.path().join("development.token").is_file());
     let development_token = std::fs::read_to_string(directory.path().join("development.token"))
@@ -549,6 +579,7 @@ fn assert_status_json_allowlist(value: &Value) {
             "visible_feature_count",
             "features_truncated",
             "features",
+            "owner_guidance",
         ],
     );
     assert_exact_object_keys(
@@ -580,6 +611,19 @@ fn assert_status_json_allowlist(value: &Value) {
             ],
         );
     }
+    assert_exact_object_keys(
+        &value["owner_guidance"],
+        &[
+            "state",
+            "reason_code",
+            "next_owner_action",
+            "feature_id",
+            "specification_revision",
+            "lifecycle_revision",
+            "queue_revision",
+            "emergency_pause_revision",
+        ],
+    );
 }
 
 fn assert_success(output: &Output, operation: &str) {
