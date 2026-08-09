@@ -173,10 +173,13 @@ immutable digest-bound approved specifications, independent repository grant
 revisions, a 100-nonterminal-item owner-ordered queue, dependency blocking,
 compare-and-set revisions, one active lease, exact evidence-bound lifecycle
 advancement, cancellation without queue advancement, explicit safe
-abandonment, and restart quarantine with atomic redacted audits. It is not
-reachable through the local control or enrolled-device routers and grants no
-worker, repository, review, Codex, GitHub, publication, Mac UI, unattended, or
-autonomous authority.
+abandonment, and restart quarantine with atomic redacted audits. Its exact
+bounded projection is reachable through the owner-authenticated local route and
+through `GET /v1/distributed/feature-conveyor/status` only after an accepted
+exporter-bound MacBridge session. The latter accepts no owner token, denies
+other roles, and is decoded into authenticated read-only Mac app state. It
+grants no worker, repository, review, Codex, GitHub, publication, control UI,
+unattended, or autonomous authority.
 
 Emergency pause and deliberate resume are reachable only through the
 Windows-local bearer-authenticated loopback actions

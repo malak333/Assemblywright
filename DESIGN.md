@@ -69,14 +69,18 @@ SQLite database holds two kernels:
 - The default-inert Feature Conveyor repository kernel: immutable approved
   specification revisions, three independent repository grants, the bounded
   owner-ordered queue, one active lease, exact lifecycle advancement, and
-  startup quarantine. Its only API is an owner-token-authenticated,
-  loopback-only, bounded and redacted lifecycle-observation projection. A
+  startup quarantine. Its bounded and redacted lifecycle-observation
+  projection is available through the owner-token-authenticated loopback
+  `GET /v1/feature-conveyor/status` and, without an owner token, through the
+  dedicated `GET /v1/distributed/feature-conveyor/status` only after an
+  exporter-bound application session is accepted for an enrolled MacBridge. A
   fixed-enum guidance object bound to queue, Emergency Pause, and optional
   feature lifecycle revisions distinguishes idle, ready,
   dependency-blocked, active, reconciliation-required, and emergency-paused
   states and names one display-only next owner action. It does not establish
-  claimability or expose a callable action, and it is not registered on the
-  enrolled-device remote mTLS router.
+  claimability or expose a callable action. Other enrolled-device roles are
+  denied, and neither route adds mutation, audit, worker, repository, provider,
+  publication, or owner-action authority.
 
 Every authoritative transition commits its redacted audit event in the same
 transaction. Migrations from supported legacy schemas are backup-first under
@@ -125,7 +129,12 @@ helper holds the Secure Enclave Keychain identity and the outbound mTLS
 session, directly supervises the pinned agent over a mutually
 code-identity-pinned local socket, and forwards authenticated metadata pages
 into a durable cursor. The enrolled key never leaves the helper, and the helper
-is not bundled inside the app.
+is not bundled inside the app. After health succeeds, the helper fetches the
+exact schema-v7 Feature Conveyor projection on the same authenticated session,
+strictly validates and bounds it, and includes it only in authenticated app
+snapshots. The SwiftUI app renders queue state and guidance as compact read-only
+text; a malformed or drifted projection cancels the session and no stale status
+is retained.
 
 ### Shared local foundation
 

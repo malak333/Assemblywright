@@ -160,20 +160,34 @@ require_text "conveyor design status" "$FEATURE_CONVEYOR_DESIGN" "default-inert"
 require_text "conveyor design approval" "$FEATURE_CONVEYOR_DESIGN" "Approve and Enqueue"
 require_text "conveyor loopback status route" "$FEATURE_CONVEYOR_DESIGN" \
   "GET /v1/feature-conveyor/status"
-require_text "conveyor remote route absence" "$FEATURE_CONVEYOR_DESIGN" \
-  "the enrolled-device remote mTLS router and grants no"
+require_text "conveyor MacBridge-only remote route" "$FEATURE_CONVEYOR_DESIGN" \
+  "GET /v1/distributed/feature-conveyor/status"
 require_text "conveyor advisory observation limit" "$FEATURE_CONVEYOR_DESIGN" \
   "This remains advisory observation only"
 require_text "conveyor claimability limit" "$FEATURE_CONVEYOR_DESIGN" \
   "establish claimability"
 require_text "conveyor local status implementation" "$MASTER_PROCESS" \
   '"/v1/feature-conveyor/status"'
+require_text "conveyor remote status implementation" "$MASTER_PROCESS" \
+  '"/v1/distributed/feature-conveyor/status"'
 require_text "conveyor owner guidance implementation" "$MASTER_CRATE" \
   "owner_guidance"
 require_text "conveyor pause revision implementation" "$MASTER_CRATE" \
   "emergency_pause_revision"
-require_text "conveyor remote route regression" "$MASTER_REMOTE_MTLS_E2E" \
-  "Feature Conveyor owner status leaked onto the enrolled-device router"
+require_text "conveyor pre-handshake remote denial" "$MASTER_REMOTE_MTLS_E2E" \
+  "pre-handshake client reached Feature Conveyor status"
+require_text "conveyor non-MacBridge remote denial" "$MASTER_REMOTE_MTLS_E2E" \
+  "non-MacBridge reached Feature Conveyor status"
+require_text "conveyor local owner route remote absence" "$MASTER_REMOTE_MTLS_E2E" \
+  "owner-token local status route leaked onto the remote router"
+require_text "conveyor Swift strict decoder" "$MAC_BRIDGE_SUPERVISOR" \
+  "invalid_feature_conveyor_status"
+require_text "conveyor authenticated snapshot only" "$MAC_BRIDGE_SUPERVISOR" \
+  'case featureConveyor = "feature_conveyor"'
+require_text "conveyor read-only Mac presentation" "$MAC_APP" \
+  "Guidance is not an approval or callable action"
+require_text "conveyor Swift negative-path regression" "$MAC_BRIDGE_TESTS" \
+  "Supervisor rejects drifted, inconsistent, duplicate, and oversized Conveyor data"
 
 require_text "architecture conveyor kernel" "$ARCHITECTURE" "Feature Conveyor repository kernel"
 require_text "architecture core reduction" "$ARCHITECTURE" "no longer an assistant runtime"
@@ -186,6 +200,8 @@ require_text "knowledge base crate boundaries" "$KB" "## Current Crate Boundarie
 require_text "knowledge base proof boundaries" "$KB" "## Proof Boundaries"
 require_text "knowledge base conveyor status boundary" "$KB" \
   "owner-token-authenticated loopback-only"
+require_text "knowledge base conveyor remote observer" "$KB" \
+  "GET /v1/distributed/feature-conveyor/status"
 require_text "knowledge base conveyor guidance boundary" "$KB" \
   'fixed-enum `owner_guidance`'
 require_text "knowledge base conveyor pause revision" "$KB" \
@@ -203,6 +219,8 @@ require_text "release checklist Developer ID" "$CHECKLIST" "Developer ID"
 require_text "release checklist docs gate" "$CHECKLIST" "release-docs-drift-smoke.sh"
 require_text "release checklist conveyor observation seam" "$CHECKLIST" \
   "GET /v1/feature-conveyor/status"
+require_text "release checklist conveyor remote observation" "$CHECKLIST" \
+  "GET /v1/distributed/feature-conveyor/status"
 require_text "release checklist feature closeout" "$CHECKLIST" \
   "docs/development-agent-workflow.md"
 

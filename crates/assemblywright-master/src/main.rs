@@ -1637,6 +1637,10 @@ fn remote_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(remote_get_health))
         .route(
+            "/v1/distributed/feature-conveyor/status",
+            get(remote_get_feature_conveyor_status),
+        )
+        .route(
             "/v1/distributed/connections/accept",
             post(remote_accept_handshake),
         )
@@ -1691,6 +1695,21 @@ async fn remote_get_health(
         boundary: "TLS 1.3 mutual authentication with enrolled-device certificate and durable revocation checks"
             .to_string(),
     }))
+}
+
+async fn remote_get_feature_conveyor_status(
+    State(state): State<AppState>,
+    Extension(session): Extension<RemoteSession>,
+) -> ApiResult<FeatureConveyorStatus> {
+    let registration = require_remote_application_session(&state, &session, None)?;
+    if registration.role != DeviceRole::MacBridge {
+        return Err(unauthorized());
+    }
+    let status = lock_process(&state)?
+        .kernel()
+        .feature_conveyor_status()
+        .map_err(api_error)?;
+    Ok(Json(status))
 }
 
 async fn remote_accept_handshake(

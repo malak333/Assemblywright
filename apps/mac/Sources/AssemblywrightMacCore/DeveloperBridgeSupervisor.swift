@@ -30,6 +30,177 @@ public enum AssemblywrightMacBridgeSupervisorPhase: String, Codable, Equatable, 
     case stopped
 }
 
+public enum AssemblywrightMacFeatureConveyorLifecycleStatus: String, Codable, Equatable, Sendable {
+    case queued
+    case implementing
+    case validating
+    case reviewing
+    case publishing
+    case verifyingMain = "verifying_main"
+    case succeeded
+    case cancelled
+    case abandoned
+    case quarantined
+}
+
+public enum AssemblywrightMacFeatureConveyorGuidanceState: String, Codable, Equatable, Sendable {
+    case idle
+    case ready
+    case blocked
+    case inProgress = "in_progress"
+}
+
+public enum AssemblywrightMacFeatureConveyorGuidanceReason: String, Codable, Equatable, Sendable {
+    case queueEmpty = "queue_empty"
+    case headDependencySatisfied = "head_dependency_satisfied"
+    case headDependencyUnsatisfied = "head_dependency_unsatisfied"
+    case activeFeatureLeased = "active_feature_leased"
+    case activeRequiresReconciliation = "active_requires_reconciliation"
+    case emergencyPaused = "emergency_paused"
+}
+
+public enum AssemblywrightMacFeatureConveyorNextOwnerAction: String, Codable, Equatable, Sendable {
+    case prepareApprovedFeature = "prepare_approved_feature"
+    case awaitOwnerControlSurface = "await_owner_control_surface"
+    case resolveHeadDependency = "resolve_head_dependency"
+    case wait
+    case reconcileActiveFeature = "reconcile_active_feature"
+    case resumeEmergencyPause = "resume_emergency_pause"
+}
+
+public struct AssemblywrightMacFeatureConveyorStatus: Codable, Equatable, Sendable {
+    public static let expectedSchemaVersion: UInt64 = 7
+    public static let maximumFeatures = 100
+    public static let maximumVisibleFeatures: UInt64 = 101
+
+    public struct Counts: Codable, Equatable, Sendable {
+        public let queued: UInt64
+        public let implementing: UInt64
+        public let validating: UInt64
+        public let reviewing: UInt64
+        public let publishing: UInt64
+        public let verifyingMain: UInt64
+        public let succeeded: UInt64
+        public let cancelled: UInt64
+        public let abandoned: UInt64
+        public let quarantined: UInt64
+
+        enum CodingKeys: String, CodingKey, CaseIterable {
+            case queued, implementing, validating, reviewing, publishing
+            case verifyingMain = "verifying_main"
+            case succeeded, cancelled, abandoned, quarantined
+        }
+
+        fileprivate var orderedValues: [UInt64] {
+            [
+                queued, implementing, validating, reviewing, publishing,
+                verifyingMain, succeeded, cancelled, abandoned, quarantined
+            ]
+        }
+
+        fileprivate func count(for status: AssemblywrightMacFeatureConveyorLifecycleStatus) -> UInt64 {
+            switch status {
+            case .queued: queued
+            case .implementing: implementing
+            case .validating: validating
+            case .reviewing: reviewing
+            case .publishing: publishing
+            case .verifyingMain: verifyingMain
+            case .succeeded: succeeded
+            case .cancelled: cancelled
+            case .abandoned: abandoned
+            case .quarantined: quarantined
+            }
+        }
+    }
+
+    public struct Feature: Codable, Equatable, Sendable {
+        public let featureID: UUID
+        public let specificationRevision: UInt64
+        public let lifecycleRevision: UInt64
+        public let queuePosition: UInt64
+        public let status: AssemblywrightMacFeatureConveyorLifecycleStatus
+        public let leasePresent: Bool
+        public let effectPossible: Bool
+
+        enum CodingKeys: String, CodingKey, CaseIterable {
+            case featureID = "feature_id"
+            case specificationRevision = "specification_revision"
+            case lifecycleRevision = "lifecycle_revision"
+            case queuePosition = "queue_position"
+            case status
+            case leasePresent = "lease_present"
+            case effectPossible = "effect_possible"
+        }
+    }
+
+    public struct OwnerGuidance: Codable, Equatable, Sendable {
+        public let state: AssemblywrightMacFeatureConveyorGuidanceState
+        public let reasonCode: AssemblywrightMacFeatureConveyorGuidanceReason
+        public let nextOwnerAction: AssemblywrightMacFeatureConveyorNextOwnerAction
+        public let featureID: UUID?
+        public let specificationRevision: UInt64?
+        public let lifecycleRevision: UInt64?
+        public let queueRevision: UInt64
+        public let emergencyPauseRevision: UInt64
+
+        enum CodingKeys: String, CodingKey, CaseIterable {
+            case state
+            case reasonCode = "reason_code"
+            case nextOwnerAction = "next_owner_action"
+            case featureID = "feature_id"
+            case specificationRevision = "specification_revision"
+            case lifecycleRevision = "lifecycle_revision"
+            case queueRevision = "queue_revision"
+            case emergencyPauseRevision = "emergency_pause_revision"
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(state, forKey: .state)
+            try container.encode(reasonCode, forKey: .reasonCode)
+            try container.encode(nextOwnerAction, forKey: .nextOwnerAction)
+            if let featureID {
+                try container.encode(featureID, forKey: .featureID)
+            } else {
+                try container.encodeNil(forKey: .featureID)
+            }
+            if let specificationRevision {
+                try container.encode(specificationRevision, forKey: .specificationRevision)
+            } else {
+                try container.encodeNil(forKey: .specificationRevision)
+            }
+            if let lifecycleRevision {
+                try container.encode(lifecycleRevision, forKey: .lifecycleRevision)
+            } else {
+                try container.encodeNil(forKey: .lifecycleRevision)
+            }
+            try container.encode(queueRevision, forKey: .queueRevision)
+            try container.encode(emergencyPauseRevision, forKey: .emergencyPauseRevision)
+        }
+    }
+
+    public let schemaVersion: UInt64
+    public let queueRevision: UInt64
+    public let startupQuarantineCount: UInt64
+    public let countsByStatus: Counts
+    public let visibleFeatureCount: UInt64
+    public let featuresTruncated: Bool
+    public let features: [Feature]
+    public let ownerGuidance: OwnerGuidance
+
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case schemaVersion = "schema_version"
+        case queueRevision = "queue_revision"
+        case startupQuarantineCount = "startup_quarantine_count"
+        case countsByStatus = "counts_by_status"
+        case visibleFeatureCount = "visible_feature_count"
+        case featuresTruncated = "features_truncated"
+        case features
+        case ownerGuidance = "owner_guidance"
+    }
+}
+
 public struct AssemblywrightMacBridgeSupervisorSnapshot: Codable, Equatable, Sendable {
     public let phase: AssemblywrightMacBridgeSupervisorPhase
     public let deviceID: String
@@ -42,6 +213,7 @@ public struct AssemblywrightMacBridgeSupervisorSnapshot: Codable, Equatable, Sen
     public let emergencyPaused: Bool?
     public let protocolVersion: UInt16?
     public let schemaVersion: Int64?
+    public let featureConveyor: AssemblywrightMacFeatureConveyorStatus?
     public let errorCode: String?
 
     enum CodingKeys: String, CodingKey {
@@ -56,18 +228,23 @@ public struct AssemblywrightMacBridgeSupervisorSnapshot: Codable, Equatable, Sen
         case emergencyPaused = "emergency_paused"
         case protocolVersion = "protocol_version"
         case schemaVersion = "schema_version"
+        case featureConveyor = "feature_conveyor"
         case errorCode = "error_code"
     }
 
     public static func decodeStrict(_ data: Data) throws -> Self {
+        guard !data.isEmpty,
+              data.count <= AssemblywrightDeveloperBridgeProcessLifecycle.maximumLineBytes else {
+            throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
+        }
+        var duplicateScanner = AssemblywrightStrictJSONObjectKeyScanner(data: data)
+        try duplicateScanner.validateNoDuplicateObjectKeysRecursively()
         var keyScanner = AssemblywrightStrictJSONObjectKeyScanner(data: data)
         let rawKeys = try keyScanner.scanTopLevelKeys()
         guard Set(rawKeys).count == rawKeys.count else {
             throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
         }
-        guard !data.isEmpty,
-              data.count <= AssemblywrightDeveloperBridgeProcessLifecycle.maximumLineBytes,
-              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let phaseText = object["phase"] as? String,
               let phase = AssemblywrightMacBridgeSupervisorPhase(rawValue: phaseText) else {
             throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
@@ -76,7 +253,7 @@ public struct AssemblywrightMacBridgeSupervisorSnapshot: Codable, Equatable, Sen
             "phase", "device_id", "master_endpoint", "connection_epoch",
             "consecutive_failures", "next_delay_ms", "master_status",
             "maintenance_active", "emergency_paused", "protocol_version",
-            "schema_version"
+            "schema_version", "feature_conveyor"
         ])
         let backingOff = Set([
             "phase", "device_id", "master_endpoint", "consecutive_failures",
@@ -110,6 +287,14 @@ public struct AssemblywrightMacBridgeSupervisorSnapshot: Codable, Equatable, Sen
         }
         switch snapshot.phase {
         case .authenticated:
+            guard let featureObject = object["feature_conveyor"] as? [String: Any],
+                  let featureConveyor = snapshot.featureConveyor else {
+                throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
+            }
+            try AssemblywrightMacRemoteFeatureConveyorStatus.validate(
+                featureConveyor,
+                object: featureObject
+            )
             guard snapshot.connectionEpoch.map({ $0 > 0 }) == true,
                   snapshot.consecutiveFailures == 0,
                   snapshot.nextDelayMilliseconds > 0,
@@ -123,6 +308,7 @@ public struct AssemblywrightMacBridgeSupervisorSnapshot: Codable, Equatable, Sen
                   ),
                   snapshot.protocolVersion == AssemblywrightMacMTLSBridgeTransport.protocolVersion,
                   snapshot.schemaVersion.map({ $0 > 0 }) == true,
+                  snapshot.schemaVersion == Int64(featureConveyor.schemaVersion),
                   snapshot.errorCode == nil else {
                 throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
             }
@@ -133,14 +319,15 @@ public struct AssemblywrightMacBridgeSupervisorSnapshot: Codable, Equatable, Sen
                     .contains(snapshot.nextDelayMilliseconds),
                   [
                       "invalid_health", "bridge_unavailable", "connection_failed",
-                      "event_relay_failed"
+                      "event_relay_failed", "invalid_feature_conveyor_status"
                   ]
                     .contains(snapshot.errorCode),
                   snapshot.masterStatus == nil,
                   snapshot.maintenanceActive == nil,
                   snapshot.emergencyPaused == nil,
                   snapshot.protocolVersion == nil,
-                  snapshot.schemaVersion == nil else {
+                  snapshot.schemaVersion == nil,
+                  snapshot.featureConveyor == nil else {
                 throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
             }
         case .stopped:
@@ -151,6 +338,7 @@ public struct AssemblywrightMacBridgeSupervisorSnapshot: Codable, Equatable, Sen
                   snapshot.emergencyPaused == nil,
                   snapshot.protocolVersion == nil,
                   snapshot.schemaVersion == nil,
+                  snapshot.featureConveyor == nil,
                   snapshot.errorCode == nil else {
                 throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
             }
@@ -189,6 +377,64 @@ struct AssemblywrightStrictJSONObjectKeyScanner {
             skipWhitespace()
             try requireEnd()
             return keys
+        }
+    }
+
+    mutating func validateNoDuplicateObjectKeysRecursively() throws {
+        skipWhitespace()
+        try scanValueRejectingDuplicateObjectKeys()
+        skipWhitespace()
+        try requireEnd()
+    }
+
+    private mutating func scanValueRejectingDuplicateObjectKeys() throws {
+        skipWhitespace()
+        guard index < bytes.count else {
+            throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
+        }
+        switch bytes[index] {
+        case 0x7b:
+            try consume(0x7b)
+            skipWhitespace()
+            var keys = Set<String>()
+            if consumeIfPresent(0x7d) { return }
+            while true {
+                skipWhitespace()
+                let key = try parseString()
+                guard keys.insert(key).inserted else {
+                    throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
+                }
+                skipWhitespace()
+                try consume(0x3a)
+                try scanValueRejectingDuplicateObjectKeys()
+                skipWhitespace()
+                if consumeIfPresent(0x2c) { continue }
+                try consume(0x7d)
+                return
+            }
+        case 0x5b:
+            try consume(0x5b)
+            skipWhitespace()
+            if consumeIfPresent(0x5d) { return }
+            while true {
+                try scanValueRejectingDuplicateObjectKeys()
+                skipWhitespace()
+                if consumeIfPresent(0x2c) { continue }
+                try consume(0x5d)
+                return
+            }
+        case 0x22:
+            _ = try parseString()
+        default:
+            let start = index
+            while index < bytes.count,
+                  !Self.isWhitespace(bytes[index]),
+                  ![0x2c, 0x7d, 0x5d].contains(bytes[index]) {
+                index += 1
+            }
+            guard index > start else {
+                throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
+            }
         }
     }
 
@@ -563,7 +809,9 @@ struct AssemblywrightMacMLXControlReceipt: Equatable, Sendable {
 
 public actor AssemblywrightMacBridgeSupervisor {
     public static let healthPath = "/health"
+    public static let featureConveyorPath = "/v1/distributed/feature-conveyor/status"
     public static let healthMaximumBytes = 64 * 1_024
+    public static let featureConveyorMaximumBytes = 64 * 1_024
     public static let normalPollDelayMilliseconds: UInt64 = 5_000
     public static let maximumBackoffMilliseconds: UInt64 = 30_000
 
@@ -598,6 +846,20 @@ public actor AssemblywrightMacBridgeSupervisor {
                 AssemblywrightMacBridgeHTTPRequest(method: "GET", path: Self.healthPath)
             )
             let health = try AssemblywrightMacRemoteMasterHealth.decode(response)
+            let featureResponse = try await activeSession.send(
+                AssemblywrightMacBridgeHTTPRequest(
+                    method: "GET",
+                    path: Self.featureConveyorPath
+                )
+            )
+            let featureConveyor = try AssemblywrightMacRemoteFeatureConveyorStatus.decode(
+                featureResponse
+            )
+            guard health.schemaVersion == Int64(featureConveyor.schemaVersion),
+                  health.emergencyPaused
+                    == (featureConveyor.ownerGuidance.reasonCode == .emergencyPaused) else {
+                throw AssemblywrightMacRemoteFeatureConveyorStatusError.invalid
+            }
             if let eventRelay {
                 let progress = try await eventRelay.relayEvents(using: activeSession)
                 if progress.requiresFreshConnection {
@@ -618,6 +880,7 @@ public actor AssemblywrightMacBridgeSupervisor {
                 emergencyPaused: health.emergencyPaused,
                 protocolVersion: health.protocolVersion,
                 schemaVersion: health.schemaVersion,
+                featureConveyor: featureConveyor,
                 errorCode: nil
             )
         } catch is CancellationError {
@@ -639,6 +902,7 @@ public actor AssemblywrightMacBridgeSupervisor {
                 emergencyPaused: nil,
                 protocolVersion: nil,
                 schemaVersion: nil,
+                featureConveyor: nil,
                 errorCode: Self.redactedErrorCode(for: error)
             )
         }
@@ -677,12 +941,16 @@ public actor AssemblywrightMacBridgeSupervisor {
             emergencyPaused: nil,
             protocolVersion: nil,
             schemaVersion: nil,
+            featureConveyor: nil,
             errorCode: nil
         )
     }
 
     private static func redactedErrorCode(for error: Error) -> String {
         if error is AssemblywrightMacRemoteMasterHealthError { return "invalid_health" }
+        if error is AssemblywrightMacRemoteFeatureConveyorStatusError {
+            return "invalid_feature_conveyor_status"
+        }
         if error is AssemblywrightMacDeveloperBridgeError { return "bridge_unavailable" }
         if error is AssemblywrightMacDeveloperEventRelayError { return "event_relay_failed" }
         return "connection_failed"
@@ -691,6 +959,269 @@ public actor AssemblywrightMacBridgeSupervisor {
 
 private enum AssemblywrightMacRemoteMasterHealthError: Error {
     case invalid
+}
+
+private enum AssemblywrightMacRemoteFeatureConveyorStatusError: Error {
+    case invalid
+}
+
+private enum AssemblywrightMacRemoteFeatureConveyorStatus {
+    static func decode(
+        _ response: AssemblywrightMacBridgeHTTPResponse
+    ) throws -> AssemblywrightMacFeatureConveyorStatus {
+        guard response.status == 200,
+              !response.body.isEmpty,
+              response.body.count <= AssemblywrightMacBridgeSupervisor.featureConveyorMaximumBytes else {
+            throw AssemblywrightMacRemoteFeatureConveyorStatusError.invalid
+        }
+        do {
+            var scanner = AssemblywrightStrictJSONObjectKeyScanner(data: response.body)
+            try scanner.validateNoDuplicateObjectKeysRecursively()
+        } catch {
+            throw AssemblywrightMacRemoteFeatureConveyorStatusError.invalid
+        }
+        guard let object = try? JSONSerialization.jsonObject(with: response.body) as? [String: Any]
+        else {
+            throw AssemblywrightMacRemoteFeatureConveyorStatusError.invalid
+        }
+        let status: AssemblywrightMacFeatureConveyorStatus
+        do {
+            status = try JSONDecoder().decode(
+                AssemblywrightMacFeatureConveyorStatus.self,
+                from: response.body
+            )
+            try validate(status, object: object)
+        } catch {
+            throw AssemblywrightMacRemoteFeatureConveyorStatusError.invalid
+        }
+        return status
+    }
+
+    static func validate(
+        _ status: AssemblywrightMacFeatureConveyorStatus,
+        object: [String: Any]
+    ) throws {
+        guard Set(object.keys) == Set(AssemblywrightMacFeatureConveyorStatus.CodingKeys.all),
+              strictInteger(object["schema_version"])
+                == AssemblywrightMacFeatureConveyorStatus.expectedSchemaVersion,
+              strictInteger(object["queue_revision"]) == status.queueRevision,
+              strictInteger(object["startup_quarantine_count"])
+                == status.startupQuarantineCount,
+              strictInteger(object["visible_feature_count"]) == status.visibleFeatureCount,
+              strictBoolean(object["features_truncated"]) == status.featuresTruncated,
+              let countObject = object["counts_by_status"] as? [String: Any],
+              let featureObjects = object["features"] as? [[String: Any]],
+              let guidanceObject = object["owner_guidance"] as? [String: Any],
+              Set(countObject.keys)
+                == Set(AssemblywrightMacFeatureConveyorStatus.Counts.CodingKeys.all),
+              featureObjects.count == status.features.count,
+              Set(guidanceObject.keys)
+                == Set(AssemblywrightMacFeatureConveyorStatus.OwnerGuidance.CodingKeys.all),
+              status.schemaVersion
+                == AssemblywrightMacFeatureConveyorStatus.expectedSchemaVersion,
+              status.startupQuarantineCount <= 1,
+              status.visibleFeatureCount
+                <= AssemblywrightMacFeatureConveyorStatus.maximumVisibleFeatures,
+              status.features.count <= AssemblywrightMacFeatureConveyorStatus.maximumFeatures,
+              status.featuresTruncated
+                == (status.visibleFeatureCount > UInt64(status.features.count)),
+              !status.featuresTruncated
+                || status.features.count == AssemblywrightMacFeatureConveyorStatus.maximumFeatures,
+              status.featuresTruncated || status.visibleFeatureCount == UInt64(status.features.count),
+              status.countsByStatus.succeeded == 0,
+              status.countsByStatus.abandoned == 0 else {
+            throw AssemblywrightMacRemoteFeatureConveyorStatusError.invalid
+        }
+
+        for (key, expected) in zip(
+            AssemblywrightMacFeatureConveyorStatus.Counts.CodingKeys.all,
+            status.countsByStatus.orderedValues
+        ) where strictInteger(countObject[key]) != expected {
+            throw AssemblywrightMacRemoteFeatureConveyorStatusError.invalid
+        }
+        var total: UInt64 = 0
+        for value in status.countsByStatus.orderedValues {
+            let addition = total.addingReportingOverflow(value)
+            guard !addition.overflow else {
+                throw AssemblywrightMacRemoteFeatureConveyorStatusError.invalid
+            }
+            total = addition.partialValue
+        }
+        guard total == status.visibleFeatureCount,
+              total - status.countsByStatus.queued <= 1 else {
+            throw AssemblywrightMacRemoteFeatureConveyorStatusError.invalid
+        }
+
+        var featureIDs = Set<UUID>()
+        var previousQueuePosition: UInt64?
+        var observedCounts: [AssemblywrightMacFeatureConveyorLifecycleStatus: UInt64] = [:]
+        for (feature, featureObject) in zip(status.features, featureObjects) {
+            guard Set(featureObject.keys)
+                    == Set(AssemblywrightMacFeatureConveyorStatus.Feature.CodingKeys.all),
+                  strictUUID(featureObject["feature_id"]) == feature.featureID,
+                  strictInteger(featureObject["specification_revision"])
+                    == feature.specificationRevision,
+                  strictInteger(featureObject["lifecycle_revision"]) == feature.lifecycleRevision,
+                  strictInteger(featureObject["queue_position"]) == feature.queuePosition,
+                  featureObject["status"] as? String == feature.status.rawValue,
+                  strictBoolean(featureObject["lease_present"]) == feature.leasePresent,
+                  strictBoolean(featureObject["effect_possible"]) == feature.effectPossible,
+                  feature.specificationRevision > 0,
+                  feature.lifecycleRevision > 0,
+                  feature.queuePosition > 0,
+                  previousQueuePosition.map({ $0 < feature.queuePosition }) ?? true,
+                  featureIDs.insert(feature.featureID).inserted else {
+                throw AssemblywrightMacRemoteFeatureConveyorStatusError.invalid
+            }
+            switch feature.status {
+            case .queued:
+                guard !feature.leasePresent, !feature.effectPossible else {
+                    throw AssemblywrightMacRemoteFeatureConveyorStatusError.invalid
+                }
+            case .implementing, .validating, .reviewing, .publishing, .verifyingMain:
+                guard feature.leasePresent else {
+                    throw AssemblywrightMacRemoteFeatureConveyorStatusError.invalid
+                }
+            case .cancelled, .quarantined:
+                guard feature.leasePresent, feature.effectPossible else {
+                    throw AssemblywrightMacRemoteFeatureConveyorStatusError.invalid
+                }
+            case .succeeded, .abandoned:
+                throw AssemblywrightMacRemoteFeatureConveyorStatusError.invalid
+            }
+            observedCounts[feature.status, default: 0] += 1
+            previousQueuePosition = feature.queuePosition
+        }
+        for (observedStatus, observedCount) in observedCounts {
+            guard observedCount <= status.countsByStatus.count(for: observedStatus) else {
+                throw AssemblywrightMacRemoteFeatureConveyorStatusError.invalid
+            }
+        }
+        if !status.featuresTruncated {
+            for lifecycleStatus in [
+                AssemblywrightMacFeatureConveyorLifecycleStatus.queued,
+                .implementing, .validating, .reviewing, .publishing, .verifyingMain,
+                .cancelled, .quarantined
+            ] {
+                guard observedCounts[lifecycleStatus, default: 0]
+                        == status.countsByStatus.count(for: lifecycleStatus) else {
+                    throw AssemblywrightMacRemoteFeatureConveyorStatusError.invalid
+                }
+            }
+        }
+
+        let guidance = status.ownerGuidance
+        guard guidance.queueRevision == status.queueRevision,
+              strictInteger(guidanceObject["queue_revision"]) == guidance.queueRevision,
+              strictInteger(guidanceObject["emergency_pause_revision"])
+                == guidance.emergencyPauseRevision,
+              guidanceObject["state"] as? String == guidance.state.rawValue,
+              guidanceObject["reason_code"] as? String == guidance.reasonCode.rawValue,
+              guidanceObject["next_owner_action"] as? String
+                == guidance.nextOwnerAction.rawValue,
+              strictOptionalUUID(guidanceObject["feature_id"]) == guidance.featureID,
+              strictOptionalInteger(guidanceObject["specification_revision"])
+                == guidance.specificationRevision,
+              strictOptionalInteger(guidanceObject["lifecycle_revision"])
+                == guidance.lifecycleRevision else {
+            throw AssemblywrightMacRemoteFeatureConveyorStatusError.invalid
+        }
+
+        let hasNoIdentity = guidance.featureID == nil
+            && guidance.specificationRevision == nil
+            && guidance.lifecycleRevision == nil
+        let hasCompleteIdentity = guidance.featureID != nil
+            && guidance.specificationRevision.map({ $0 > 0 }) == true
+            && guidance.lifecycleRevision.map({ $0 > 0 }) == true
+        switch (guidance.state, guidance.reasonCode, guidance.nextOwnerAction) {
+        case (.idle, .queueEmpty, .prepareApprovedFeature):
+            guard hasNoIdentity, status.visibleFeatureCount == 0 else {
+                throw AssemblywrightMacRemoteFeatureConveyorStatusError.invalid
+            }
+        case (.blocked, .emergencyPaused, .resumeEmergencyPause):
+            guard hasNoIdentity else {
+                throw AssemblywrightMacRemoteFeatureConveyorStatusError.invalid
+            }
+        case (.ready, .headDependencySatisfied, .awaitOwnerControlSurface),
+             (.blocked, .headDependencyUnsatisfied, .resolveHeadDependency):
+            guard hasCompleteIdentity,
+                  let feature = status.features.first,
+                  feature.featureID == guidance.featureID,
+                  feature.specificationRevision == guidance.specificationRevision,
+                  feature.lifecycleRevision == guidance.lifecycleRevision,
+                  feature.status == .queued,
+                  !feature.leasePresent else {
+                throw AssemblywrightMacRemoteFeatureConveyorStatusError.invalid
+            }
+        case (.blocked, .activeRequiresReconciliation, .reconcileActiveFeature):
+            guard hasCompleteIdentity,
+                  let feature = status.features.first,
+                  feature.featureID == guidance.featureID,
+                  feature.specificationRevision == guidance.specificationRevision,
+                  feature.lifecycleRevision == guidance.lifecycleRevision,
+                  [.cancelled, .quarantined].contains(feature.status),
+                  feature.leasePresent,
+                  feature.effectPossible else {
+                throw AssemblywrightMacRemoteFeatureConveyorStatusError.invalid
+            }
+        case (.inProgress, .activeFeatureLeased, .wait):
+            guard hasCompleteIdentity,
+                  let feature = status.features.first,
+                  feature.featureID == guidance.featureID,
+                  feature.specificationRevision == guidance.specificationRevision,
+                  feature.lifecycleRevision == guidance.lifecycleRevision,
+                  [
+                      AssemblywrightMacFeatureConveyorLifecycleStatus.implementing,
+                      .validating, .reviewing, .publishing, .verifyingMain
+                  ].contains(feature.status),
+                  feature.leasePresent else {
+                throw AssemblywrightMacRemoteFeatureConveyorStatusError.invalid
+            }
+        default:
+            throw AssemblywrightMacRemoteFeatureConveyorStatusError.invalid
+        }
+    }
+
+    private static func strictBoolean(_ value: Any?) -> Bool? {
+        guard let number = value as? NSNumber,
+              CFGetTypeID(number) == CFBooleanGetTypeID() else {
+            return nil
+        }
+        return number.boolValue
+    }
+
+    private static func strictInteger(_ value: Any?) -> UInt64? {
+        guard let number = value as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID() else {
+            return nil
+        }
+        let text = number.stringValue
+        guard let parsed = UInt64(text), String(parsed) == text else { return nil }
+        return parsed
+    }
+
+    private static func strictOptionalInteger(_ value: Any?) -> UInt64?? {
+        if value is NSNull { return .some(nil) }
+        guard let integer = strictInteger(value) else { return nil }
+        return .some(integer)
+    }
+
+    private static func strictUUID(_ value: Any?) -> UUID? {
+        guard let text = value as? String,
+              text == text.lowercased(),
+              let uuid = UUID(uuidString: text),
+              uuid.uuidString.lowercased() == text,
+              uuid != UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) else {
+            return nil
+        }
+        return uuid
+    }
+
+    private static func strictOptionalUUID(_ value: Any?) -> UUID?? {
+        if value is NSNull { return .some(nil) }
+        guard let uuid = strictUUID(value) else { return nil }
+        return .some(uuid)
+    }
 }
 
 private struct AssemblywrightMacRemoteMasterHealth: Decodable {

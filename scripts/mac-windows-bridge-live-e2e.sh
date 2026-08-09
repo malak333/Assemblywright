@@ -20,6 +20,24 @@ json_value() {
     || fail "bridge receipt omitted or invalidated $key"
 }
 
+assert_feature_conveyor_sample() {
+  local sample="$1"
+  local label="$2"
+  local schema queue_revision guidance_state next_owner_action
+  schema="$(json_value "$sample" feature_conveyor.schema_version)"
+  queue_revision="$(json_value "$sample" feature_conveyor.queue_revision)"
+  guidance_state="$(json_value "$sample" feature_conveyor.owner_guidance.state)"
+  next_owner_action="$(json_value "$sample" feature_conveyor.owner_guidance.next_owner_action)"
+  [[ "$schema" == "7" ]] \
+    || fail "$label Feature Conveyor schema was not v7"
+  [[ "$queue_revision" =~ ^[0-9]+$ ]] \
+    || fail "$label Feature Conveyor queue revision was invalid"
+  [[ "$guidance_state" =~ ^(idle|ready|blocked|in_progress)$ ]] \
+    || fail "$label Feature Conveyor guidance state was invalid"
+  [[ "$next_owner_action" =~ ^(prepare_approved_feature|await_owner_control_surface|resolve_head_dependency|wait|reconcile_active_feature|resume_emergency_pause)$ ]] \
+    || fail "$label Feature Conveyor guidance action was invalid"
+}
+
 case "$MODE" in
   --check)
     [[ -f "$PACKAGE_PATH/Package.swift" ]] || fail "missing Mac Swift package"
@@ -159,7 +177,9 @@ monitor_second_epoch="$(json_value "$monitor_second" connection_epoch)"
   || fail "first bridge monitor epoch was invalid"
 [[ "$monitor_first_epoch" == "$monitor_second_epoch" ]] \
   || fail "bridge monitor did not reuse one authenticated connection"
-for forbidden in grant_secret certificate_pem ca_certificate_pem maintenance_reason boundary service_identity; do
+assert_feature_conveyor_sample "$monitor_first" "first bridge monitor sample"
+assert_feature_conveyor_sample "$monitor_second" "second bridge monitor sample"
+for forbidden in grant_secret certificate_pem ca_certificate_pem maintenance_reason boundary service_identity repository_id provider_id model_id owner_token; do
   [[ "$monitor_json" != *"$forbidden"* ]] \
     || fail "live monitor exposed forbidden field: $forbidden"
 done
@@ -182,7 +202,9 @@ reconnect_second_epoch="$(json_value "$reconnect_second" connection_epoch)"
 [[ "$reconnect_first_epoch" =~ ^[0-9]+$ && "$reconnect_second_epoch" =~ ^[0-9]+$ \
   && "$reconnect_second_epoch" -gt "$reconnect_first_epoch" ]] \
   || fail "bridge reconnect diagnostic did not advance the connection epoch"
-for forbidden in grant_secret certificate_pem ca_certificate_pem maintenance_reason boundary service_identity; do
+assert_feature_conveyor_sample "$reconnect_first" "first bridge reconnect sample"
+assert_feature_conveyor_sample "$reconnect_second" "second bridge reconnect sample"
+for forbidden in grant_secret certificate_pem ca_certificate_pem maintenance_reason boundary service_identity repository_id provider_id model_id owner_token; do
   [[ "$reconnect_json" != *"$forbidden"* ]] \
     || fail "live reconnect diagnostic exposed forbidden field: $forbidden"
 done
@@ -255,6 +277,8 @@ fi
 if [[ "$MODE" != "--run-fixture" && "$MODE" != "--run-mlx" ]]; then
   [[ "$app_lifecycle_output" == *"assemblywright_mac_app_bridge_live_e2e_ok"* ]] \
     || fail "production app bridge lifecycle omitted its live E2E marker"
+  [[ "$app_lifecycle_output" == *"feature_conveyor_schema=7"* ]] \
+    || fail "production app bridge lifecycle omitted schema-v7 Feature Conveyor proof"
 fi
 
 if [[ "$MODE" == "--run-relay" ]]; then

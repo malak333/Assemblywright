@@ -19,9 +19,12 @@ Before starting a release pass, confirm the claim you intend to make.
   `GET /v1/feature-conveyor/status` observation seam. Its queue-, pause-, and
   optional feature-lifecycle-revision-bound owner-guidance labels remain
   display-only and do not establish claimability.
-  It exposes no remote Feature Conveyor API, worker dispatcher, repository
-  execution, review provider, publication coordinator, Mac queue UI, or
-  autonomous activation.
+  The dedicated remote `GET /v1/distributed/feature-conveyor/status` is
+  read-only, requires an accepted exporter-bound MacBridge session, denies
+  other roles, and forwards no owner token. The Mac renders it as text, never a
+  callable owner action. It exposes no worker dispatcher, repository execution,
+  review provider, publication coordinator, Mac control UI, or autonomous
+  activation.
 - Confirm `docs/architecture-map.md` matches the code for any surface that
   changed in this cycle.
 - Confirm the version is consistent:

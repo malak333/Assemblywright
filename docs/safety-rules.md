@@ -158,8 +158,10 @@ release requirements, not optional UX guidance.
   authority.
 - The Windows `assemblywright-master` schema-v7 database retains the schema-v5
   Durable Feature Conveyor kernel and is
-  default-inert. Its only HTTP/API surface is the owner-token-authenticated,
-  loopback-only `GET /v1/feature-conveyor/status`: a pure-SELECT, bounded,
+  default-inert. The owner-token-authenticated loopback
+  `GET /v1/feature-conveyor/status` and the dedicated enrolled-device
+  `GET /v1/distributed/feature-conveyor/status` must return the same
+  pure-SELECT, bounded,
   structurally redacted lifecycle-observation projection for current queue and
   retained-lease entries. Its single fixed-enum `owner_guidance` object must be
   derived with this precedence: Emergency Pause; cancelled or quarantined
@@ -169,10 +171,12 @@ release requirements, not optional UX guidance.
   text or dependency, repository, provider, grant, evidence, or audit data, and
   labels only a display action. Its `queue_revision` and
   `emergency_pause_revision` always bind the advisory snapshot. It must not be
-  treated as claimability or a callable authorization. The route is absent
-  from the enrolled-device remote
-  mTLS router and exposes no mutation, worker, Codex, repository, GitHub,
-  publication, or automatic activation authority. Approved feature manifests
+  treated as claimability or a callable authorization. The distributed route
+  is permitted only after an exporter-bound application session is accepted
+  for an exact `MacBridge`; pre-handshake, revoked, drifted, or non-MacBridge
+  sessions fail closed. It accepts no owner token and exposes no mutation,
+  worker, Codex, repository, GitHub, publication, audit-event, or automatic
+  activation authority. Approved feature manifests
   must be canonical bounded JSON with an
   exact SHA-256 binding; their
   immutable numbered specification rows and owner-approval/design/brainstorming
@@ -289,8 +293,12 @@ release requirements, not optional UX guidance.
   and exact CDHash before framing; the agent must reject any requirement text
   that is not canonical for its declared profile before opening durable state.
   The agent cursor may store only stream ID, sequence, and update time.
-- By default the helper may request only the authenticated MacBridge metadata
-  event route and may forward only its exact bounded response body to the agent.
+- By default the helper may request only authenticated MacBridge health, the
+  exact bounded Feature Conveyor observation route, and the metadata event
+  route. Feature Conveyor status is strictly decoded as schema v7, may appear
+  only in authenticated supervisor/app snapshots, and is never forwarded to
+  the agent. Unknown, duplicate, extra, oversized, inconsistent, or drifted
+  status cancels the session and clears the observation.
   The separate exact fixture opt-in may additionally use only lease, result,
   cancellation-poll, and cancellation-acknowledgement routes for the registered
   Public synthetic fixture contract. The agent

@@ -166,16 +166,30 @@ private struct FakeSupervisorError: Error {}
 private actor FakeSupervisorSession: AssemblywrightMacBridgeSession {
     nonisolated let connectionEpoch: UInt64
     private var outcomes: [FakeSupervisorOutcome]
+    private let featureConveyorOutcome: FakeSupervisorOutcome
     private(set) var requests: [AssemblywrightMacBridgeHTTPRequest] = []
     private(set) var cancelled = false
 
-    init(connectionEpoch: UInt64, outcomes: [FakeSupervisorOutcome]) {
+    init(
+        connectionEpoch: UInt64,
+        outcomes: [FakeSupervisorOutcome],
+        featureConveyorOutcome: FakeSupervisorOutcome = .response(
+            .init(status: 200, body: validFeatureConveyorData())
+        )
+    ) {
         self.connectionEpoch = connectionEpoch
         self.outcomes = outcomes
+        self.featureConveyorOutcome = featureConveyorOutcome
     }
 
     func send(_ request: AssemblywrightMacBridgeHTTPRequest) async throws -> AssemblywrightMacBridgeHTTPResponse {
         requests.append(request)
+        if request.path == AssemblywrightMacBridgeSupervisor.featureConveyorPath {
+            switch featureConveyorOutcome {
+            case let .response(response): return response
+            case .failure: throw FakeSupervisorError()
+            }
+        }
         guard !outcomes.isEmpty else { throw FakeSupervisorError() }
         switch outcomes.removeFirst() {
         case let .response(response):
@@ -1121,13 +1135,37 @@ struct DeveloperBridgeTests {
         let first = await supervisor.sample()
         let second = await supervisor.sample()
 
+        let encodedSnapshot = try JSONEncoder().encode(first)
+        let strictlyDecodedSnapshot = try AssemblywrightMacBridgeSupervisorSnapshot.decodeStrict(
+            encodedSnapshot
+        )
+        let encodedObject = try #require(
+            JSONSerialization.jsonObject(with: encodedSnapshot) as? [String: Any]
+        )
+        let encodedFeatureConveyor = try #require(
+            encodedObject["feature_conveyor"] as? [String: Any]
+        )
+        let encodedGuidance = try #require(
+            encodedFeatureConveyor["owner_guidance"] as? [String: Any]
+        )
+
         #expect(first.phase == .authenticated)
         #expect(first.connectionEpoch == 41)
         #expect(first.masterStatus == "ok")
+        #expect(first.featureConveyor?.ownerGuidance.state == .idle)
         #expect(first.errorCode == nil)
+        #expect(strictlyDecodedSnapshot == first)
+        #expect(encodedGuidance["feature_id"] is NSNull)
+        #expect(encodedGuidance["specification_revision"] is NSNull)
+        #expect(encodedGuidance["lifecycle_revision"] is NSNull)
         #expect(second.phase == .authenticated)
         #expect(await connector.connectCount == 1)
-        #expect(await session.requests.count == 2)
+        #expect(await session.requests.map(\.path) == [
+            AssemblywrightMacBridgeSupervisor.healthPath,
+            AssemblywrightMacBridgeSupervisor.featureConveyorPath,
+            AssemblywrightMacBridgeSupervisor.healthPath,
+            AssemblywrightMacBridgeSupervisor.featureConveyorPath
+        ])
         #expect(await session.cancelled == false)
         await supervisor.stop()
         #expect(await session.cancelled)
@@ -1137,7 +1175,10 @@ struct DeveloperBridgeTests {
     func supervisorAcceptsPausedHealth() async {
         let session = FakeSupervisorSession(
             connectionEpoch: 42,
-            outcomes: [.response(.init(status: 200, body: pausedRemoteHealthData()))]
+            outcomes: [.response(.init(status: 200, body: pausedRemoteHealthData()))],
+            featureConveyorOutcome: .response(
+                .init(status: 200, body: pausedFeatureConveyorData())
+            )
         )
         let supervisor = AssemblywrightMacBridgeSupervisor(
             profile: sampleProfile(),
@@ -1150,8 +1191,129 @@ struct DeveloperBridgeTests {
         #expect(snapshot.masterStatus == "paused")
         #expect(snapshot.maintenanceActive == false)
         #expect(snapshot.emergencyPaused == true)
+        #expect(snapshot.featureConveyor?.ownerGuidance.reasonCode == .emergencyPaused)
         #expect(!(await session.cancelled))
         await supervisor.stop()
+    }
+
+    @Test("Supervisor strictly accepts bounded nonempty and reconciliation Conveyor shapes")
+    func supervisorAcceptsBoundedFeatureConveyorShapes() async {
+        for (data, expectedState, expectedReason, expectedFeatureCount) in [
+            (
+                readyFeatureConveyorData(),
+                AssemblywrightMacFeatureConveyorGuidanceState.ready,
+                AssemblywrightMacFeatureConveyorGuidanceReason.headDependencySatisfied,
+                1
+            ),
+            (
+                reconciliationFeatureConveyorData(),
+                AssemblywrightMacFeatureConveyorGuidanceState.blocked,
+                AssemblywrightMacFeatureConveyorGuidanceReason.activeRequiresReconciliation,
+                1
+            ),
+            (
+                maximumFeatureConveyorData(),
+                AssemblywrightMacFeatureConveyorGuidanceState.ready,
+                AssemblywrightMacFeatureConveyorGuidanceReason.headDependencySatisfied,
+                100
+            ),
+            (
+                truncatedFeatureConveyorData(),
+                AssemblywrightMacFeatureConveyorGuidanceState.blocked,
+                AssemblywrightMacFeatureConveyorGuidanceReason.activeRequiresReconciliation,
+                100
+            )
+        ] {
+            let session = FakeSupervisorSession(
+                connectionEpoch: 43,
+                outcomes: [.response(.init(status: 200, body: validRemoteHealthData()))],
+                featureConveyorOutcome: .response(.init(status: 200, body: data))
+            )
+            let supervisor = AssemblywrightMacBridgeSupervisor(
+                profile: sampleProfile(),
+                connector: FakeSupervisorConnector(sessions: [session])
+            )
+
+            let snapshot = await supervisor.sample()
+
+            #expect(snapshot.phase == .authenticated)
+            #expect(snapshot.featureConveyor?.ownerGuidance.state == expectedState)
+            #expect(snapshot.featureConveyor?.ownerGuidance.reasonCode == expectedReason)
+            #expect(snapshot.featureConveyor?.features.count == expectedFeatureCount)
+            #expect(!(await session.cancelled))
+            await supervisor.stop()
+        }
+    }
+
+    @Test("Supervisor rejects drifted, inconsistent, duplicate, and oversized Conveyor data")
+    func supervisorRejectsInvalidFeatureConveyorData() async {
+        let idle = String(data: validFeatureConveyorData(), encoding: .utf8)!
+        let ready = String(data: readyFeatureConveyorData(), encoding: .utf8)!
+        let invalidBodies = [
+            Data((String(idle.dropLast()) + #", "repository_id":"forbidden"}"#).utf8),
+            Data(idle.replacingOccurrences(
+                of: #""queued":0"#,
+                with: #""queued":0,"\u0071ueued":0"#
+            ).utf8),
+            Data(idle.replacingOccurrences(of: #""state":"idle""#, with: #""state":"drifted""#).utf8),
+            Data(idle.replacingOccurrences(of: #""visible_feature_count":0"#, with: #""visible_feature_count":102"#).utf8),
+            Data(idle.replacingOccurrences(of: #""queued":0"#, with: #""queued":1"#).utf8),
+            Data(ready.replacingOccurrences(of: #""status":"queued""#, with: #""status":"unknown""#).utf8),
+            Data(ready.replacingOccurrences(
+                of: #""specification_revision":1,"lifecycle_revision":1,"queue_revision":1"#,
+                with: #""specification_revision":null,"lifecycle_revision":1,"queue_revision":1"#
+            ).utf8),
+            Data(ready.replacingOccurrences(
+                of: #""queue_revision":1,"emergency_pause_revision":0"#,
+                with: #""queue_revision":2,"emergency_pause_revision":0"#
+            ).utf8),
+            Data(repeating: 0x61, count: AssemblywrightMacBridgeSupervisor.featureConveyorMaximumBytes + 1)
+        ]
+
+        for body in invalidBodies {
+            let session = FakeSupervisorSession(
+                connectionEpoch: 44,
+                outcomes: [.response(.init(status: 200, body: validRemoteHealthData()))],
+                featureConveyorOutcome: .response(.init(status: 200, body: body))
+            )
+            let supervisor = AssemblywrightMacBridgeSupervisor(
+                profile: sampleProfile(),
+                connector: FakeSupervisorConnector(sessions: [session])
+            )
+
+            let snapshot = await supervisor.sample()
+
+            #expect(snapshot.phase == .backingOff)
+            #expect(snapshot.featureConveyor == nil)
+            #expect(snapshot.errorCode == "invalid_feature_conveyor_status")
+            #expect(await session.cancelled)
+        }
+    }
+
+    @Test("Feature status failure stops request ordering before event relay")
+    func supervisorFeatureStatusFailureCancelsBeforeRelay() async {
+        let session = FakeSupervisorSession(
+            connectionEpoch: 45,
+            outcomes: [.response(.init(status: 200, body: validRemoteHealthData()))],
+            featureConveyorOutcome: .response(.init(status: 500, body: Data()))
+        )
+        let relay = FakeBridgeEventRelay()
+        let supervisor = AssemblywrightMacBridgeSupervisor(
+            profile: sampleProfile(),
+            connector: FakeSupervisorConnector(sessions: [session]),
+            eventRelay: relay
+        )
+
+        let snapshot = await supervisor.sample()
+
+        #expect(snapshot.phase == .backingOff)
+        #expect(snapshot.errorCode == "invalid_feature_conveyor_status")
+        #expect(await session.requests.map(\.path) == [
+            AssemblywrightMacBridgeSupervisor.healthPath,
+            AssemblywrightMacBridgeSupervisor.featureConveyorPath
+        ])
+        #expect(await relay.epochs.isEmpty)
+        #expect(await session.cancelled)
     }
 
     @Test("Supervisor rejects malformed health, cancels, and reconnects")
@@ -1841,14 +2003,15 @@ struct DeveloperBridgeTests {
 
     @Test("App helper snapshots decode exact redacted connected and maintenance states")
     func appHelperSnapshotStrictDecoding() throws {
-        let connected = Data(
-            #"{"connection_epoch":22,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":2,"schema_version":2}"#.utf8
+        let connected = authenticatedSnapshotData(connectionEpoch: 22)
+        let maintenance = authenticatedSnapshotData(
+            connectionEpoch: 23,
+            maintenanceActive: true
         )
-        let maintenance = Data(
-            #"{"connection_epoch":23,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":true,"master_endpoint":"100.64.23.14:7792","master_status":"maintenance","next_delay_ms":5000,"phase":"authenticated","protocol_version":2,"schema_version":2}"#.utf8
-        )
-        let paused = Data(
-            #"{"connection_epoch":24,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":true,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"paused","next_delay_ms":5000,"phase":"authenticated","protocol_version":2,"schema_version":2}"#.utf8
+        let paused = authenticatedSnapshotData(
+            connectionEpoch: 24,
+            emergencyPaused: true,
+            featureConveyor: pausedFeatureConveyorData()
         )
 
         let connectedStatus = try AssemblywrightDeveloperBridgeProcessLifecycle.status(from: connected)
@@ -1858,6 +2021,7 @@ struct DeveloperBridgeTests {
         #expect(connectedStatus.phase == .connected)
         #expect(connectedStatus.masterEndpoint == "100.64.23.14:7792")
         #expect(connectedStatus.connectionEpoch == 22)
+        #expect(connectedStatus.featureConveyor?.ownerGuidance.state == .idle)
         #expect(maintenanceStatus.phase == .maintenance)
         #expect(maintenanceStatus.connectionEpoch == 23)
         #expect(pausedStatus.phase == .paused)
@@ -1866,14 +2030,17 @@ struct DeveloperBridgeTests {
 
     @Test("App helper snapshots reject extra keys, invalid shapes, and oversized lines")
     func appHelperSnapshotRejectsUntrustedOutput() {
-        let extra = Data(
-            #"{"connection_epoch":22,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":2,"schema_version":2,"service_identity":"forbidden"}"#.utf8
+        let valid = authenticatedSnapshotJSON(connectionEpoch: 22)
+        let extra = Data((String(valid.dropLast()) + #", "service_identity":"forbidden"}"#).utf8)
+        let contradictory = authenticatedSnapshotData(
+            connectionEpoch: 22,
+            maintenanceActive: true,
+            masterStatus: "ok"
         )
-        let contradictory = Data(
-            #"{"connection_epoch":22,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":true,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":2,"schema_version":2}"#.utf8
-        )
-        let duplicate = Data(
-            #"{"connection_epoch":22,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","\u0070hase":"authenticated","protocol_version":2,"schema_version":2}"#.utf8
+        let duplicate = Data((String(valid.dropLast()) + #", "\u0070hase":"authenticated"}"#).utf8)
+        let wrongPhase = Data(
+            (#"{"phase":"backing_off","device_id":"22222222-2222-4222-8222-222222222222","master_endpoint":"100.64.23.14:7792","consecutive_failures":1,"next_delay_ms":1000,"error_code":"connection_failed","feature_conveyor":"#
+                + String(data: validFeatureConveyorData(), encoding: .utf8)! + "}").utf8
         )
         let oversized = Data(repeating: 0x61, count: AssemblywrightDeveloperBridgeProcessLifecycle.maximumLineBytes + 1)
 
@@ -1885,6 +2052,9 @@ struct DeveloperBridgeTests {
         }
         #expect(throws: AssemblywrightDeveloperBridgeProcessError.invalidSnapshot) {
             try AssemblywrightDeveloperBridgeProcessLifecycle.status(from: duplicate)
+        }
+        #expect(throws: AssemblywrightDeveloperBridgeProcessError.invalidSnapshot) {
+            try AssemblywrightDeveloperBridgeProcessLifecycle.status(from: wrongPhase)
         }
         #expect(throws: AssemblywrightDeveloperBridgeProcessError.invalidSnapshot) {
             try AssemblywrightDeveloperBridgeProcessLifecycle.status(from: oversized)
@@ -1924,9 +2094,7 @@ struct DeveloperBridgeTests {
     @MainActor
     @Test("App helper lifecycle publishes connected state and stops its child")
     func appHelperLifecyclePublishesAndStops() async {
-        let line = Data(
-            #"{"connection_epoch":44,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":2,"schema_version":2}"#.utf8
-        )
+        let line = authenticatedSnapshotData(connectionEpoch: 44)
         let session = FakeBridgeProcessSession(lines: [line])
         let launcher = FakeBridgeProcessLauncher(session: session)
         let lifecycle = AssemblywrightDeveloperBridgeProcessLifecycle(
@@ -1945,6 +2113,7 @@ struct DeveloperBridgeTests {
 
         #expect(lifecycle.status.phase == .connected)
         #expect(lifecycle.status.connectionEpoch == 44)
+        #expect(lifecycle.status.featureConveyor?.ownerGuidance.state == .idle)
         lifecycle.start()
         #expect(await launcher.launchCount == 1)
         await lifecycle.stop()
@@ -1955,9 +2124,7 @@ struct DeveloperBridgeTests {
     @MainActor
     @Test("App helper lifecycle cleanup stops its child after cancellation")
     func appHelperLifecycleCleanupStopsAfterCancellation() async {
-        let line = Data(
-            #"{"connection_epoch":44,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":2,"schema_version":2}"#.utf8
-        )
+        let line = authenticatedSnapshotData(connectionEpoch: 44)
         let session = FakeBridgeProcessSession(lines: [line])
         let lifecycle = AssemblywrightDeveloperBridgeProcessLifecycle(
             configuration: .init(environment: [
@@ -1989,9 +2156,7 @@ struct DeveloperBridgeTests {
     @MainActor
     @Test("Failed helper teardown retains ownership and blocks relaunch until retry")
     func appHelperTeardownFailureBlocksRelaunchUntilRetry() async {
-        let line = Data(
-            #"{"connection_epoch":44,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":2,"schema_version":2}"#.utf8
-        )
+        let line = authenticatedSnapshotData(connectionEpoch: 44)
         let session = FakeBridgeProcessSession(lines: [line], stopFailures: 2)
         let launcher = FakeBridgeProcessLauncher(session: session)
         let lifecycle = AssemblywrightDeveloperBridgeProcessLifecycle(
@@ -2037,7 +2202,7 @@ struct DeveloperBridgeTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
         let executable = directory.appendingPathComponent("bridge-fixture")
-        let snapshot = #"{"connection_epoch":45,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":2,"schema_version":2}"#
+        let snapshot = authenticatedSnapshotJSON(connectionEpoch: 45)
         let script = "#!/bin/sh\nprintf '%s\\n' '\(snapshot)'\nexec /bin/sleep 30\n"
         try Data(script.utf8).write(to: executable, options: .atomic)
         try FileManager.default.setAttributes(
@@ -2074,7 +2239,7 @@ struct DeveloperBridgeTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
         let executable = directory.appendingPathComponent("bridge-fixture")
-        let snapshot = #"{"connection_epoch":46,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":2,"schema_version":2}"#
+        let snapshot = authenticatedSnapshotJSON(connectionEpoch: 46)
         let script = "#!/bin/sh\ni=0\nwhile [ $i -lt 1000 ]; do\n  printf '%s\\n' '\(snapshot)'\n  i=$((i + 1))\ndone\nexec /bin/sleep 30\n"
         try Data(script.utf8).write(to: executable, options: .atomic)
         try FileManager.default.setAttributes(
@@ -2110,7 +2275,7 @@ struct DeveloperBridgeTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: directory) }
         let executable = directory.appendingPathComponent("bridge-fixture")
-        let snapshot = #"{"connection_epoch":47,"consecutive_failures":0,"device_id":"22222222-2222-4222-8222-222222222222","emergency_paused":false,"maintenance_active":false,"master_endpoint":"100.64.23.14:7792","master_status":"ok","next_delay_ms":5000,"phase":"authenticated","protocol_version":2,"schema_version":2}"#
+        let snapshot = authenticatedSnapshotJSON(connectionEpoch: 47)
         let script = "#!/bin/sh\ntrap '' TERM\nprintf '%s\\n' '\(snapshot)'\nexec /bin/sleep 30\n"
         try Data(script.utf8).write(to: executable, options: .atomic)
         try FileManager.default.setAttributes(
@@ -2232,11 +2397,23 @@ struct DeveloperBridgeTests {
         #expect(liveStatus.phase == .connected || liveStatus.phase == .maintenance)
         #expect(liveStatus.masterEndpoint?.isEmpty == false)
         #expect(liveStatus.connectionEpoch.map { $0 > 0 } == true)
+        let featureConveyor = try #require(liveStatus.featureConveyor)
+        #expect(
+            featureConveyor.schemaVersion
+                == AssemblywrightMacFeatureConveyorStatus.expectedSchemaVersion
+        )
+        #expect(
+            featureConveyor.ownerGuidance.queueRevision
+                == featureConveyor.queueRevision
+        )
         #expect(lifecycle.status.phase == .stopped)
         print(
             "assemblywright_mac_app_bridge_live_e2e_ok "
                 + "endpoint=\(liveStatus.masterEndpoint ?? "missing") "
-                + "connection_epoch=\(liveStatus.connectionEpoch ?? 0)"
+                + "connection_epoch=\(liveStatus.connectionEpoch ?? 0) "
+                + "feature_conveyor_schema=\(featureConveyor.schemaVersion) "
+                + "feature_conveyor_queue_revision=\(featureConveyor.queueRevision) "
+                + "feature_conveyor_guidance=\(featureConveyor.ownerGuidance.state.rawValue)"
         )
     }
 
@@ -3052,12 +3229,175 @@ private func sampleProfile() -> AssemblywrightMacBridgeProfile {
 
 private func validRemoteHealthData() -> Data {
     Data(
-        #"{"status":"ok","mode":"developer_remote_master","host_mode":"windows_service","service_identity":"MIKE-PC\\mike","maintenance_active":false,"maintenance_reason":null,"emergency_paused":false,"protocol_version":2,"schema_version":2,"process_id":43752,"started_at_ms":1784749559000,"startup_reconciliation":{"disconnected_connections":0,"abandoned_attempts":0,"requeued_steps":0},"state":{"registered_devices":1,"active_device_certificates":1,"unconsumed_enrollment_grants":2,"active_connections":1,"queued_steps":0,"leased_steps":0,"terminal_steps":0,"active_attempts":0},"boundary":"TLS 1.3 mutual authentication with enrolled-device certificate and durable revocation checks"}"#.utf8
+        #"{"status":"ok","mode":"developer_remote_master","host_mode":"windows_service","service_identity":"MIKE-PC\\mike","maintenance_active":false,"maintenance_reason":null,"emergency_paused":false,"protocol_version":2,"schema_version":7,"process_id":43752,"started_at_ms":1784749559000,"startup_reconciliation":{"disconnected_connections":0,"abandoned_attempts":0,"requeued_steps":0},"state":{"registered_devices":1,"active_device_certificates":1,"unconsumed_enrollment_grants":2,"active_connections":1,"queued_steps":0,"leased_steps":0,"terminal_steps":0,"active_attempts":0},"boundary":"TLS 1.3 mutual authentication with enrolled-device certificate and durable revocation checks"}"#.utf8
     )
 }
 
 private func pausedRemoteHealthData() -> Data {
     Data(
-        #"{"status":"paused","mode":"developer_remote_master","host_mode":"windows_service","service_identity":"MIKE-PC\\mike","maintenance_active":false,"maintenance_reason":null,"emergency_paused":true,"protocol_version":2,"schema_version":2,"process_id":43752,"started_at_ms":1784749559000,"startup_reconciliation":{"disconnected_connections":0,"abandoned_attempts":0,"requeued_steps":0},"state":{"registered_devices":1,"active_device_certificates":1,"unconsumed_enrollment_grants":2,"active_connections":1,"queued_steps":0,"leased_steps":1,"terminal_steps":0,"active_attempts":1},"boundary":"TLS 1.3 mutual authentication with enrolled-device certificate and durable revocation checks"}"#.utf8
+        #"{"status":"paused","mode":"developer_remote_master","host_mode":"windows_service","service_identity":"MIKE-PC\\mike","maintenance_active":false,"maintenance_reason":null,"emergency_paused":true,"protocol_version":2,"schema_version":7,"process_id":43752,"started_at_ms":1784749559000,"startup_reconciliation":{"disconnected_connections":0,"abandoned_attempts":0,"requeued_steps":0},"state":{"registered_devices":1,"active_device_certificates":1,"unconsumed_enrollment_grants":2,"active_connections":1,"queued_steps":0,"leased_steps":1,"terminal_steps":0,"active_attempts":1},"boundary":"TLS 1.3 mutual authentication with enrolled-device certificate and durable revocation checks"}"#.utf8
     )
+}
+
+private func validFeatureConveyorData() -> Data {
+    Data(
+        #"{"schema_version":7,"queue_revision":0,"startup_quarantine_count":0,"counts_by_status":{"queued":0,"implementing":0,"validating":0,"reviewing":0,"publishing":0,"verifying_main":0,"succeeded":0,"cancelled":0,"abandoned":0,"quarantined":0},"visible_feature_count":0,"features_truncated":false,"features":[],"owner_guidance":{"state":"idle","reason_code":"queue_empty","next_owner_action":"prepare_approved_feature","feature_id":null,"specification_revision":null,"lifecycle_revision":null,"queue_revision":0,"emergency_pause_revision":0}}"#.utf8
+    )
+}
+
+private func readyFeatureConveyorData() -> Data {
+    Data(
+        #"{"schema_version":7,"queue_revision":1,"startup_quarantine_count":0,"counts_by_status":{"queued":1,"implementing":0,"validating":0,"reviewing":0,"publishing":0,"verifying_main":0,"succeeded":0,"cancelled":0,"abandoned":0,"quarantined":0},"visible_feature_count":1,"features_truncated":false,"features":[{"feature_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","specification_revision":1,"lifecycle_revision":1,"queue_position":1,"status":"queued","lease_present":false,"effect_possible":false}],"owner_guidance":{"state":"ready","reason_code":"head_dependency_satisfied","next_owner_action":"await_owner_control_surface","feature_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","specification_revision":1,"lifecycle_revision":1,"queue_revision":1,"emergency_pause_revision":0}}"#.utf8
+    )
+}
+
+private func reconciliationFeatureConveyorData() -> Data {
+    Data(
+        #"{"schema_version":7,"queue_revision":2,"startup_quarantine_count":0,"counts_by_status":{"queued":0,"implementing":0,"validating":0,"reviewing":0,"publishing":0,"verifying_main":0,"succeeded":0,"cancelled":1,"abandoned":0,"quarantined":0},"visible_feature_count":1,"features_truncated":false,"features":[{"feature_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","specification_revision":1,"lifecycle_revision":3,"queue_position":1,"status":"cancelled","lease_present":true,"effect_possible":true}],"owner_guidance":{"state":"blocked","reason_code":"active_requires_reconciliation","next_owner_action":"reconcile_active_feature","feature_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","specification_revision":1,"lifecycle_revision":3,"queue_revision":2,"emergency_pause_revision":0}}"#.utf8
+    )
+}
+
+private func maximumFeatureConveyorData() -> Data {
+    let features: [[String: Any]] = (1 ... 100).map { index in
+        [
+            "feature_id": String(
+                format: "%08x-0000-4000-8000-%012x",
+                index,
+                index
+            ),
+            "specification_revision": 1,
+            "lifecycle_revision": 1,
+            "queue_position": index,
+            "status": "queued",
+            "lease_present": false,
+            "effect_possible": false
+        ]
+    }
+    let firstID = features[0]["feature_id"]!
+    let object: [String: Any] = [
+        "schema_version": 7,
+        "queue_revision": 100,
+        "startup_quarantine_count": 0,
+        "counts_by_status": [
+            "queued": 100,
+            "implementing": 0,
+            "validating": 0,
+            "reviewing": 0,
+            "publishing": 0,
+            "verifying_main": 0,
+            "succeeded": 0,
+            "cancelled": 0,
+            "abandoned": 0,
+            "quarantined": 0
+        ],
+        "visible_feature_count": 100,
+        "features_truncated": false,
+        "features": features,
+        "owner_guidance": [
+            "state": "ready",
+            "reason_code": "head_dependency_satisfied",
+            "next_owner_action": "await_owner_control_surface",
+            "feature_id": firstID,
+            "specification_revision": 1,
+            "lifecycle_revision": 1,
+            "queue_revision": 100,
+            "emergency_pause_revision": 0
+        ]
+    ]
+    return try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+}
+
+private func truncatedFeatureConveyorData() -> Data {
+    let activeID = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+    var features: [[String: Any]] = [[
+        "feature_id": activeID,
+        "specification_revision": 1,
+        "lifecycle_revision": 3,
+        "queue_position": 1,
+        "status": "cancelled",
+        "lease_present": true,
+        "effect_possible": true
+    ]]
+    features.append(contentsOf: (2 ... 100).map { index in
+        [
+            "feature_id": String(
+                format: "%08x-0000-4000-8000-%012x",
+                index,
+                index
+            ),
+            "specification_revision": 1,
+            "lifecycle_revision": 1,
+            "queue_position": index,
+            "status": "queued",
+            "lease_present": false,
+            "effect_possible": false
+        ]
+    })
+    let object: [String: Any] = [
+        "schema_version": 7,
+        "queue_revision": 101,
+        "startup_quarantine_count": 0,
+        "counts_by_status": [
+            "queued": 100,
+            "implementing": 0,
+            "validating": 0,
+            "reviewing": 0,
+            "publishing": 0,
+            "verifying_main": 0,
+            "succeeded": 0,
+            "cancelled": 1,
+            "abandoned": 0,
+            "quarantined": 0
+        ],
+        "visible_feature_count": 101,
+        "features_truncated": true,
+        "features": features,
+        "owner_guidance": [
+            "state": "blocked",
+            "reason_code": "active_requires_reconciliation",
+            "next_owner_action": "reconcile_active_feature",
+            "feature_id": activeID,
+            "specification_revision": 1,
+            "lifecycle_revision": 3,
+            "queue_revision": 101,
+            "emergency_pause_revision": 0
+        ]
+    ]
+    return try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+}
+
+private func pausedFeatureConveyorData() -> Data {
+    Data(
+        #"{"schema_version":7,"queue_revision":0,"startup_quarantine_count":0,"counts_by_status":{"queued":0,"implementing":0,"validating":0,"reviewing":0,"publishing":0,"verifying_main":0,"succeeded":0,"cancelled":0,"abandoned":0,"quarantined":0},"visible_feature_count":0,"features_truncated":false,"features":[],"owner_guidance":{"state":"blocked","reason_code":"emergency_paused","next_owner_action":"resume_emergency_pause","feature_id":null,"specification_revision":null,"lifecycle_revision":null,"queue_revision":0,"emergency_pause_revision":1}}"#.utf8
+    )
+}
+
+private func authenticatedSnapshotData(
+    connectionEpoch: UInt64,
+    maintenanceActive: Bool = false,
+    emergencyPaused: Bool = false,
+    masterStatus: String? = nil,
+    featureConveyor: Data = validFeatureConveyorData()
+) -> Data {
+    let featureObject = try! JSONSerialization.jsonObject(with: featureConveyor)
+    let object: [String: Any] = [
+        "phase": "authenticated",
+        "device_id": "22222222-2222-4222-8222-222222222222",
+        "master_endpoint": "100.64.23.14:7792",
+        "connection_epoch": connectionEpoch,
+        "consecutive_failures": 0,
+        "next_delay_ms": 5_000,
+        "master_status": masterStatus
+            ?? (maintenanceActive ? "maintenance" : emergencyPaused ? "paused" : "ok"),
+        "maintenance_active": maintenanceActive,
+        "emergency_paused": emergencyPaused,
+        "protocol_version": 2,
+        "schema_version": 7,
+        "feature_conveyor": featureObject
+    ]
+    return try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+}
+
+private func authenticatedSnapshotJSON(connectionEpoch: UInt64) -> String {
+    String(data: authenticatedSnapshotData(connectionEpoch: connectionEpoch), encoding: .utf8)!
 }

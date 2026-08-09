@@ -86,8 +86,55 @@ struct DeveloperBridgeStatusView: View {
                     .foregroundStyle(.secondary)
                 }
             }
+
+            if let status = model.status.featureConveyor {
+                let conveyor = FeatureConveyorStatusPresentation(status: status)
+                Section("Feature Conveyor") {
+                    LabeledContent("Queue", value: conveyor.queueLabel)
+                    LabeledContent("State", value: conveyor.stateLabel)
+                    LabeledContent("Guidance", value: conveyor.guidanceLabel)
+                    if let currentFeatureLabel = conveyor.currentFeatureLabel {
+                        LabeledContent("Current feature", value: currentFeatureLabel)
+                    }
+                    Text("Read-only observation. Guidance is not an approval or callable action.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
         .formStyle(.grouped)
+    }
+}
+
+struct FeatureConveyorStatusPresentation: Equatable {
+    let queueLabel: String
+    let stateLabel: String
+    let guidanceLabel: String
+    let currentFeatureLabel: String?
+
+    init(status: AssemblywrightMacFeatureConveyorStatus) {
+        queueLabel = "\(status.countsByStatus.queued) queued · \(status.visibleFeatureCount) visible"
+        switch status.ownerGuidance.state {
+        case .idle: stateLabel = "Idle"
+        case .ready: stateLabel = "Ready"
+        case .blocked: stateLabel = "Blocked"
+        case .inProgress: stateLabel = "In progress"
+        }
+        switch status.ownerGuidance.nextOwnerAction {
+        case .prepareApprovedFeature: guidanceLabel = "Prepare an approved feature"
+        case .awaitOwnerControlSurface: guidanceLabel = "Await owner control surface"
+        case .resolveHeadDependency: guidanceLabel = "Resolve the head dependency"
+        case .wait: guidanceLabel = "Wait"
+        case .reconcileActiveFeature: guidanceLabel = "Reconcile the active feature"
+        case .resumeEmergencyPause: guidanceLabel = "Resume Emergency Pause deliberately"
+        }
+        if let featureID = status.ownerGuidance.featureID,
+           let feature = status.features.first(where: { $0.featureID == featureID }) {
+            let identifier = String(featureID.uuidString.lowercased().prefix(8))
+            currentFeatureLabel = "\(identifier) · \(feature.status.rawValue)"
+        } else {
+            currentFeatureLabel = nil
+        }
     }
 }
 

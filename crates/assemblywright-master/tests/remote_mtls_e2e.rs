@@ -136,6 +136,18 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
         pre_handshake_health.starts_with("HTTP/1.1 401 Unauthorized"),
         "{pre_handshake_health}"
     );
+    let (pre_handshake_status, _) = tls_request(
+        remote_endpoint,
+        valid.config.clone(),
+        "GET",
+        "/v1/distributed/feature-conveyor/status",
+        None::<&Value>,
+    )
+    .await;
+    assert!(
+        pre_handshake_status.starts_with("HTTP/1.1 401 Unauthorized"),
+        "pre-handshake client reached Feature Conveyor status: {pre_handshake_status}"
+    );
 
     let (health_handshake, health) = authenticated_application_request(
         remote_endpoint,
@@ -154,14 +166,91 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
         remote_endpoint,
         &valid,
         "GET",
-        "/v1/feature-conveyor/status",
+        "/v1/distributed/feature-conveyor/status",
         &serde_json::json!({}),
     )
     .await;
     assert_eq!(status_handshake.status, HandshakeStatus::Accepted);
     assert!(
-        remote_feature_status.starts_with("HTTP/1.1 404 Not Found"),
-        "Feature Conveyor owner status leaked onto the enrolled-device router: {remote_feature_status}"
+        remote_feature_status.starts_with("HTTP/1.1 200 OK"),
+        "authenticated MacBridge could not observe Feature Conveyor status: {remote_feature_status}"
+    );
+    let remote_feature_status: Value = response_json(&remote_feature_status);
+    assert_exact_object_keys(
+        &remote_feature_status,
+        &[
+            "schema_version",
+            "queue_revision",
+            "startup_quarantine_count",
+            "counts_by_status",
+            "visible_feature_count",
+            "features_truncated",
+            "features",
+            "owner_guidance",
+        ],
+    );
+    assert_exact_object_keys(
+        &remote_feature_status["counts_by_status"],
+        &[
+            "queued",
+            "implementing",
+            "validating",
+            "reviewing",
+            "publishing",
+            "verifying_main",
+            "succeeded",
+            "cancelled",
+            "abandoned",
+            "quarantined",
+        ],
+    );
+    assert_exact_object_keys(
+        &remote_feature_status["owner_guidance"],
+        &[
+            "state",
+            "reason_code",
+            "next_owner_action",
+            "feature_id",
+            "specification_revision",
+            "lifecycle_revision",
+            "queue_revision",
+            "emergency_pause_revision",
+        ],
+    );
+    assert_eq!(remote_feature_status["schema_version"], 7);
+    assert_eq!(remote_feature_status["visible_feature_count"], 0);
+    assert_eq!(remote_feature_status["features"], serde_json::json!([]));
+    let redacted = serde_json::to_string(&remote_feature_status).expect("serialize status");
+    for forbidden in [
+        "repository_id",
+        "provider_id",
+        "model_id",
+        "manifest",
+        "grant",
+        "audit",
+        "evidence",
+        "lease_id",
+        "owner_token",
+    ] {
+        assert!(
+            !redacted.contains(forbidden),
+            "remote status leaked forbidden field {forbidden}: {redacted}"
+        );
+    }
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let (local_status_handshake, local_status_over_remote) = authenticated_application_request(
+        remote_endpoint,
+        &valid,
+        "GET",
+        "/v1/feature-conveyor/status",
+        &serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(local_status_handshake.status, HandshakeStatus::Accepted);
+    assert!(
+        local_status_over_remote.starts_with("HTTP/1.1 404 Not Found"),
+        "owner-token local status route leaked onto the remote router: {local_status_over_remote}"
     );
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -303,6 +392,19 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
         worker_events.starts_with("HTTP/1.1 401 Unauthorized"),
         "inference worker reached MacBridge-only event route: {worker_events}"
     );
+    let (worker_status_handshake, worker_status) = authenticated_application_request(
+        remote_endpoint,
+        &inference_worker,
+        "GET",
+        "/v1/distributed/feature-conveyor/status",
+        &serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(worker_status_handshake.status, HandshakeStatus::Accepted);
+    assert!(
+        worker_status.starts_with("HTTP/1.1 401 Unauthorized"),
+        "non-MacBridge reached Feature Conveyor status: {worker_status}"
+    );
 
     let revoked_result = try_tls_request(
         remote_endpoint,
@@ -318,6 +420,15 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
             .unwrap_or(true),
         "revoked enrolled certificate reached remote health"
     );
+}
+
+fn assert_exact_object_keys(value: &Value, expected: &[&str]) {
+    let object = value.as_object().expect("JSON object");
+    let mut actual = object.keys().map(String::as_str).collect::<Vec<_>>();
+    let mut expected = expected.to_vec();
+    actual.sort_unstable();
+    expected.sort_unstable();
+    assert_eq!(actual, expected);
 }
 
 #[tokio::test(flavor = "multi_thread")]

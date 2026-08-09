@@ -13,9 +13,10 @@ repository kernel is implemented as master schema v5. It covers immutable
 approved specification revisions, the bounded owner-ordered queue, dependency
 blocking, compare-and-set revisions, one active lease, exact lifecycle
 advancement, cancellation without advancement, explicit safe abandonment,
-startup quarantine, and same-transaction redacted audits. It intentionally
-exposes only one owner-token-authenticated loopback read-only API:
-`GET /v1/feature-conveyor/status`. That pure-SELECT projection returns the
+startup quarantine, and same-transaction redacted audits. It exposes the exact
+same read-only projection through the owner-token-authenticated loopback
+`GET /v1/feature-conveyor/status` and the accepted-session, MacBridge-only
+remote route described below. The pure-SELECT projection returns the
 schema and queue revisions, startup-quarantine count, zero-inclusive aggregate
 lifecycle counts, and at most 100 current queue or retained-lease entries
 containing only feature ID, specification and lifecycle revisions, queue
@@ -32,11 +33,18 @@ or audit metadata. `queue_revision` and `emergency_pause_revision` always bind
 the advisory snapshot; feature guidance also binds `lifecycle_revision`.
 This remains advisory observation only: it does not establish claimability,
 authorize its labeled action, or add a control route.
-The route is absent from the enrolled-device remote mTLS router and grants no
-enqueue, execution, review, repository, Git, publication, or activation
-authority. No worker dispatcher, repository execution, review provider,
-publication coordinator, Mac UI, or autonomous activation is implemented. The
-remainder of this document is still target design.
+A dedicated `GET /v1/distributed/feature-conveyor/status` returns the exact same
+projection only after the TLS-exporter-bound application handshake is accepted
+for an enrolled `MacBridge`; pre-handshake and non-MacBridge requests are
+denied, and no owner token crosses the device boundary. The Swift helper
+strictly decodes the bounded schema-v7 allowlist, cancels on drift, and includes
+the projection only in authenticated snapshots. The app renders a compact
+read-only queue/guidance section and never presents `next_owner_action` as a
+button. Neither observation route grants enqueue, execution, review,
+repository, Git, publication, audit-event, or activation authority. No worker
+dispatcher, repository execution, review provider, publication coordinator,
+Mac control UI, or autonomous activation is implemented. The remainder of this
+document is still target design.
 
 ## Understanding Summary
 

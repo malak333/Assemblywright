@@ -13,7 +13,7 @@ This repository is foundation work. The durable contracts, the master kernel,
 the enrollment and mTLS identity path, the Windows service lifecycle, the Mac
 bridge and worker agent, and the release gate are implemented. Autonomous
 dispatch, repository execution, review-provider invocation, GitHub publication,
-and the queue UI are still design.
+and the queue control UI are still design.
 
 ## What Is Implemented
 
@@ -50,9 +50,12 @@ headless single-owner executable.
   guidance distinguishes the queue head, dependency blocking,
   retained-lease reconciliation, and Emergency Pause without exposing
   dependency identifiers or asserting claimability. Its action labels are
-  display-only. The route is absent from the enrolled-device remote mTLS router
-  and grants no mutation, execution, review, repository, Git, publication, or
-  activation authority.
+  display-only. A dedicated
+  `GET /v1/distributed/feature-conveyor/status` returns that same projection
+  only after an exporter-bound application session is accepted for an enrolled
+  MacBridge; other device roles are denied and no owner token is forwarded.
+  Neither route grants mutation, execution, review, repository, Git,
+  publication, activation, or callable owner-action authority.
 - *Identity*: a DPAPI-current-user protected ECDSA P-256 enrollment CA,
   ten-minute single-use digest-only grants, verified client CSRs, 30-day client
   certificates bound to a server-selected device ID, rotation, and immediate
@@ -83,7 +86,9 @@ repository authority.
 exact separately signed bridge helper; the helper keeps the Secure Enclave
 Keychain identity and the outbound mTLS session, directly supervises the pinned
 agent, and forwards authenticated metadata pages into a durable cursor. The
-enrolled key and mTLS session never leave the helper.
+enrolled key and mTLS session never leave the helper. The helper also strictly
+decodes the bounded schema-v7 Feature Conveyor projection and the app renders
+its queue/guidance summary as read-only text only in authenticated state.
 
 ## Current Scope
 
@@ -95,7 +100,8 @@ Not yet implemented, and not claimed:
 - Autonomous dispatch, repository mutation, or publication of any kind.
 - Worker execution against real repositories, review-provider invocation, or
   GitHub branch/PR/merge authority.
-- The Mac queue UI, hosted brainstorming, or `Approve and Enqueue`.
+- Mac Feature Conveyor controls, hosted brainstorming, or `Approve and Enqueue`.
+  The implemented Mac surface is observation only.
 - Developer ID signing, notarization, stapling, clean-profile installation, or
   Finder/LaunchServices validation.
 - Live cross-device reliability, host hardening, or unattended operation.

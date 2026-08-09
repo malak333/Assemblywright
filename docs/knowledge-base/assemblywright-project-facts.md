@@ -217,8 +217,11 @@ an old one.
   `GET /v1/feature-conveyor/status`. Its pure-SELECT response is bounded to 100
   redacted current queue or retained-lease lifecycle entries, excludes terminal
   history, includes current aggregate lifecycle counts and an explicit
-  visible-total/truncation signal, and is absent from the enrolled-device
-  remote mTLS router. Its fixed-enum `owner_guidance` object is snapshot-bound
+  visible-total/truncation signal. The exact same projection is available at
+  `GET /v1/distributed/feature-conveyor/status` only after an accepted
+  exporter-bound application session for an enrolled MacBridge; other roles
+  are denied and no owner token is forwarded. Its fixed-enum `owner_guidance`
+  object is snapshot-bound
   to queue, Emergency Pause, and optional feature lifecycle revisions and
   applies a strict precedence: Emergency
   Pause, retained-lease reconciliation, normal active work, empty queue,
@@ -226,9 +229,18 @@ an old one.
   dependency, repository, provider, grant, evidence, or audit identifiers.
   `queue_revision` and `emergency_pause_revision` always bind the snapshot. The
   labeled next action is display-only and is not claimability or authorization.
-  It grants no enqueue, mutation, worker,
-  Codex, repository, Git, review, publication, Mac queue UI, or autonomous
-  activation authority.
+  The Swift helper fetches health then status on the same session, rejects
+  nested duplicates, extra keys, enum drift, oversize and cross-field
+  inconsistency, and publishes status only in authenticated snapshots. The app
+  presents compact queue/guidance text; failure cancels the session and clears
+  the sample. It grants no enqueue, mutation, worker, Codex, repository, Git,
+  review, publication, Mac control UI, or autonomous activation authority.
+- Rust serializes absent Feature Conveyor guidance identity as explicit JSON
+  `null`, while Swift's synthesized `JSONEncoder` normally omits nil optional
+  properties. Any Swift snapshot that must preserve the strict Rust allowlist
+  therefore uses explicit `encodeNil(forKey:)` calls and an actual
+  encode-to-strict-decode round-trip regression. Fixtures built only through
+  `JSONSerialization` can mask this cross-language wire mismatch.
 - The Mac agent's fixture and MLX lanes are default-off, singleton, and
   no-retention. They add no remote planning, repository, tool, credential,
   network, Codex, Git, publication, or unattended authority.
@@ -259,8 +271,8 @@ an old one.
   browser UI. Native Rust/Swift HTTP, process, protocol, service, packaged-app,
   and Mac/Windows flows use native E2E. For the Feature Conveyor status slice,
   `master_process_e2e` proves the authenticated loopback HTTP path and the
-  Windows-only `remote_mtls_e2e` proves the route is absent from the enrolled
-  device router.
+  Windows-only `remote_mtls_e2e` proves pre-handshake and non-MacBridge denial
+  plus exact MacBridge read-only success on the enrolled-device router.
 - Do not commit or push unless explicitly requested.
 
 ## Shell Portability

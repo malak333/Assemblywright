@@ -95,6 +95,8 @@ executable changes as release evidence.
 | Master kernel | `cargo test -p assemblywright-master` |
 | Feature Conveyor kernel and read-only projection | `cargo test -p assemblywright-master --test feature_conveyor_kernel` |
 | Master process E2E, including authenticated loopback Feature Conveyor status | `cargo test -p assemblywright-master --test master_process_e2e` |
+| Windows remote mTLS MacBridge-only Feature Conveyor observer | `cargo test -p assemblywright-master --test remote_mtls_e2e remote_listener_requires_enrollment_tls13_and_channel_bound_identity -- --nocapture` |
+| Swift strict Feature Conveyor observer and helper lifecycle | `swift test --disable-sandbox --package-path apps/mac --filter DeveloperBridgeTests` |
 | Enrollment, two-phase capability rebind, and identity | `cargo test -p assemblywright-master --test enrollment_identity_e2e` |
 | Remote mTLS | `cargo test -p assemblywright-master --test remote_mtls_e2e` |
 | Event cursor | `cargo test -p assemblywright-master --test event_cursor_e2e` |
@@ -163,6 +165,12 @@ real local completion and a pause-dominated cancellation. Neither is
 model-quality, OS-sandbox, repository, Git, unattended, signing, notarization,
 or release evidence.
 
+The base `--run` lane additionally requires the signed helper monitor and the
+production app lifecycle to receive and strictly decode the schema-v7 Feature
+Conveyor snapshot over the accepted MacBridge session. This proves live
+read-only observation only; it grants no queue mutation or owner-action
+authority.
+
 ## Release Evidence Boundary
 
 Passing `./scripts/release-local.sh` proves the Rust workspace builds, passes
@@ -188,14 +196,18 @@ Deterministic cross-process coverage proves:
   loopback-only `GET /v1/feature-conveyor/status`, empty state, deterministic
   current-lifecycle counts and ordering, exclusion of terminal history, the
   100-entry cap with explicit truncation, exact JSON-key allowlists, and
-  absence from the enrolled-device remote mTLS router. Kernel coverage proves
+  unchanged local owner boundary. Kernel coverage proves
   the fixed-enum owner-guidance precedence for idle, ready,
   dependency-blocked, active, reconciliation-required, and Emergency Pause
   states, including queue/lifecycle/pause revision binding and malformed-state
   rejection. The real-process E2E proves authenticated serialization,
   boundedness, redaction, and the idle and reconciliation-required states; the
-  Windows remote-mTLS E2E proves the route remains absent remotely. The
-  display labels do not establish claimability or callable owner authority.
+  Windows remote-mTLS E2E proves pre-handshake denial, MacBridge-only success,
+  non-MacBridge denial, and exact bounded/redacted allowlists for the dedicated
+  `/v1/distributed/feature-conveyor/status` route. Swift tests prove strict
+  schema-v7 decoding, request ordering, fail-closed cancellation, authenticated
+  snapshot propagation, and read-only presentation. The display labels do not
+  establish claimability or callable owner authority.
 - Enrollment identity: digest-only grants, signed-CSR issuance, expiry and
   replay denial, rotation, revocation, schema migration, two-phase pending
   capability rebind with replacement-key acknowledgement verification,

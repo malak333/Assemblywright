@@ -17,17 +17,20 @@ public struct AssemblywrightDeveloperBridgeAppStatus: Equatable, Sendable {
     public let phase: AssemblywrightDeveloperBridgeAppPhase
     public let masterEndpoint: String?
     public let connectionEpoch: UInt64?
+    public let featureConveyor: AssemblywrightMacFeatureConveyorStatus?
     public let errorCode: String?
 
     public init(
         phase: AssemblywrightDeveloperBridgeAppPhase,
         masterEndpoint: String? = nil,
         connectionEpoch: UInt64? = nil,
+        featureConveyor: AssemblywrightMacFeatureConveyorStatus? = nil,
         errorCode: String? = nil
     ) {
         self.phase = phase
         self.masterEndpoint = masterEndpoint
         self.connectionEpoch = connectionEpoch
+        self.featureConveyor = featureConveyor
         self.errorCode = errorCode
     }
 
@@ -532,10 +535,10 @@ private actor FoundationAssemblywrightDeveloperBridgeProcessSession:
 
 @MainActor
 public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObject {
-    nonisolated public static let maximumLineBytes = 16 * 1_024
+    nonisolated public static let maximumLineBytes = 96 * 1_024
     nonisolated public static let maximumBufferedBytes = maximumLineBytes + 1
     nonisolated public static let proofBoundary =
-        "Read-only Developer Mode health and metadata relay, with a separately explicit Public synthetic fixture-job diagnostic. This does not enable models, tools, files, repositories, Codex, or Git authority."
+        "Read-only Developer Mode health, Feature Conveyor observation, and metadata relay, with a separately explicit Public synthetic fixture-job diagnostic. Guidance is display-only and does not enable models, tools, files, repositories, Codex, Git, or owner-action authority."
 
     @Published public private(set) var status: AssemblywrightDeveloperBridgeAppStatus
 
@@ -651,7 +654,8 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
             return AssemblywrightDeveloperBridgeAppStatus(
                 phase: phase,
                 masterEndpoint: snapshot.masterEndpoint,
-                connectionEpoch: snapshot.connectionEpoch
+                connectionEpoch: snapshot.connectionEpoch,
+                featureConveyor: snapshot.featureConveyor
             )
         case .backingOff:
             return AssemblywrightDeveloperBridgeAppStatus(

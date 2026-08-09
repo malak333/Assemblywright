@@ -27,6 +27,8 @@ flowchart LR
   Master --> Durable["Registered devices, epochs, queue, attempts, cancellation, expiry, restart reconciliation, exact results"]
   Master --> Conveyor["Default-inert schema-v5 Feature Conveyor repository kernel"]
   Conveyor --> ConveyorSafety["Immutable approved specs and grants, strict CAS queue, one active lease, atomic redacted audit, and startup quarantine"]
+  Conveyor --> Observer["Exact bounded status projection: local owner route plus accepted-session MacBridge-only remote GET"]
+  Observer --> Helper
   Protocol --> Feature["Dormant assemblywright-core distributed-development feature"]
   Protocol --> Windows["Windows distributed format, clippy, protocol, and master-process gate"]
   Process --> Windows
@@ -76,10 +78,13 @@ current queue and retained lease. A fixed-enum advisory object bound to queue,
 Emergency Pause, and optional feature lifecycle revisions identifies the
 queue-head dependency blocker or retained-lease/pause state and
 one display-only next owner action. It does not determine claimability or
-authorize that action. The route is absent from the enrolled-device remote
-mTLS router. It has no
+authorize that action. The local owner route is unchanged; a dedicated
+`GET /v1/distributed/feature-conveyor/status` reuses the exact projection only
+after an accepted exporter-bound MacBridge session, denies other roles, and
+forwards no owner token. The Swift helper validates the exact schema-v7
+allowlist and the app displays it only while authenticated. It has no
 mutation, coding worker, Codex, repository, review-provider invocation, GitHub
-publication, Mac queue UI, live-device, unattended, or activation authority.
+publication, Mac control UI, live-device, unattended, or activation authority.
 
 The existing distributed-device portion of `assemblywright-master` persists explicitly
 registered device metadata, active connection epoch and sequence state, queued
