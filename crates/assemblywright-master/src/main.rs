@@ -2442,7 +2442,12 @@ fn observe_standard_repository_identity(
 
 #[cfg(windows)]
 fn open_windows_fixed_directory_chain(requested: &str) -> Result<WindowsHeldHandleSet, ()> {
-    use windows_sys::Win32::Storage::FileSystem::{GetDriveTypeW, DRIVE_FIXED};
+    use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
+
+    // Win32 GetDriveTypeW returns 3 for DRIVE_FIXED. Keep this local instead
+    // of enabling the much broader WindowsProgramming feature only for the
+    // generated constant.
+    const DRIVE_TYPE_FIXED: u32 = 3;
 
     let bytes = requested.as_bytes();
     if requested.starts_with(r"\\")
@@ -2456,7 +2461,7 @@ fn open_windows_fixed_directory_chain(requested: &str) -> Result<WindowsHeldHand
     }
     let drive = bytes[0].to_ascii_uppercase();
     let root = [u16::from(drive), b':' as u16, b'\\' as u16, 0];
-    if unsafe { GetDriveTypeW(root.as_ptr()) } != DRIVE_FIXED {
+    if unsafe { GetDriveTypeW(root.as_ptr()) } != DRIVE_TYPE_FIXED {
         return Err(());
     }
 
