@@ -284,6 +284,11 @@ an old one.
   The owner-token file is in `%LOCALAPPDATA%\Assemblywright\master`; the legacy
   namespace is only a one-time adoption source and must not be used for current
   control-plane requests.
+- When the Feature Conveyor response schema advances, update both the Swift
+  decoder and every live-harness assertion, then rebuild the separately
+  Apple-signed bridge before live proof. A stale signed helper fails closed as
+  `invalid_feature_conveyor_status`; source tests or an updated lifecycle marker
+  do not refresh that external signed binary.
 
 ## Workflow
 

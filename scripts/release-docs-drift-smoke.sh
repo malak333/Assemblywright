@@ -207,6 +207,10 @@ require_text "conveyor live observer requires signed helper" "$MAC_BRIDGE_LIVE_E
   'codesign --verify --strict "$BRIDGE_BIN"'
 require_text "conveyor live observer requires schema marker" "$MAC_BRIDGE_LIVE_E2E" \
   'feature_conveyor_schema=8'
+require_text "conveyor live observer validates schema eight" "$MAC_BRIDGE_LIVE_E2E" \
+  'Feature Conveyor schema was not v8'
+forbid_text "conveyor live observer rejects stale schema seven" \
+  "$MAC_BRIDGE_LIVE_E2E" 'Feature Conveyor schema was not v7'
 require_text "conveyor live observer requires repeated monitor samples" \
   "$MAC_BRIDGE_LIVE_E2E" "bridge monitor did not emit exactly two bounded samples"
 require_text "conveyor live observer requires reconnect advance" "$MAC_BRIDGE_LIVE_E2E" \

@@ -28,8 +28,8 @@ assert_feature_conveyor_sample() {
   queue_revision="$(json_value "$sample" feature_conveyor.queue_revision)"
   guidance_state="$(json_value "$sample" feature_conveyor.owner_guidance.state)"
   next_owner_action="$(json_value "$sample" feature_conveyor.owner_guidance.next_owner_action)"
-  [[ "$schema" == "7" ]] \
-    || fail "$label Feature Conveyor schema was not v7"
+  [[ "$schema" == "8" ]] \
+    || fail "$label Feature Conveyor schema was not v8"
   [[ "$queue_revision" =~ ^[0-9]+$ ]] \
     || fail "$label Feature Conveyor queue revision was invalid"
   [[ "$guidance_state" =~ ^(idle|ready|blocked|in_progress)$ ]] \
