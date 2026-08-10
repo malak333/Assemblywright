@@ -93,10 +93,10 @@ executable changes as release evidence.
 | Whole workspace | `cargo test --workspace` |
 | Protocol contract | `cargo test -p assemblywright-protocol` |
 | Master kernel | `cargo test -p assemblywright-master` |
-| Feature Conveyor kernel and read-only projection | `cargo test -p assemblywright-master --test feature_conveyor_kernel` |
-| Master process E2E, including authenticated loopback Feature Conveyor status | `cargo test -p assemblywright-master --test master_process_e2e` |
-| Windows remote mTLS MacBridge-only Feature Conveyor observer | `cargo test -p assemblywright-master --test remote_mtls_e2e remote_listener_requires_enrollment_tls13_and_channel_bound_identity -- --nocapture` |
-| Swift strict Feature Conveyor observer and helper lifecycle | `swift test --disable-sandbox --package-path apps/mac --filter DeveloperBridgeTests` |
+| Feature Conveyor kernel, owner designation, enqueue, and projection | `cargo test -p assemblywright-master --test feature_conveyor_kernel` |
+| Master process E2E, including authenticated loopback status/designation | `cargo test -p assemblywright-master --test master_process_e2e` |
+| Windows remote mTLS observer and designated-owner enqueue denial/success | `cargo test -p assemblywright-master --test remote_mtls_e2e remote_listener_requires_enrollment_tls13_and_channel_bound_identity -- --nocapture` |
+| Swift strict Feature Conveyor observer, one-shot owner action, and helper lifecycle | `swift test --disable-sandbox --package-path apps/mac --filter DeveloperBridgeTests` |
 | Enrollment, two-phase capability rebind, and identity | `cargo test -p assemblywright-master --test enrollment_identity_e2e` |
 | Remote mTLS | `cargo test -p assemblywright-master --test remote_mtls_e2e` |
 | Event cursor | `cargo test -p assemblywright-master --test event_cursor_e2e` |
@@ -170,7 +170,7 @@ model-quality, OS-sandbox, repository, Git, unattended, signing, notarization,
 or release evidence.
 
 The base `--run` lane additionally requires the signed helper monitor and the
-production app lifecycle to receive and strictly decode the schema-v7 Feature
+production app lifecycle to receive and strictly decode the schema-v8 Feature
 Conveyor snapshot over the accepted MacBridge session. This proves live
 read-only observation only; it grants no queue mutation or owner-action
 authority.
@@ -208,9 +208,16 @@ Deterministic cross-process coverage proves:
   boundedness, redaction, and the idle and reconciliation-required states; the
   Windows remote-mTLS E2E proves pre-handshake denial, MacBridge-only success,
   non-MacBridge denial, and exact bounded/redacted allowlists for the dedicated
-  `/v1/distributed/feature-conveyor/status` route. Swift tests prove strict
-  schema-v7 decoding, request ordering, fail-closed cancellation, authenticated
-  snapshot propagation, and read-only presentation. The display labels do not
+  `/v1/distributed/feature-conveyor/status` route. Schema-v8 coverage additionally
+  proves nullable/default-deny owner designation, compare-and-set rebinding,
+  fixture/non-designated/revoked denial, migration, and atomic redacted audit.
+  The designated-owner POST is bound to the exact queue, designation, and pause
+  revisions and reuses the manifest, grants, dependency, capacity, immutable-
+  specification, and atomic-enqueue checks without claiming a lease. Swift tests
+  prove strict schema-v8 decoding, request ordering, exact digest shapes,
+  self-dependency rejection, server-authoritative canonical-digest handling,
+  redacted-receipt validation, fail-closed cancellation, authenticated snapshot
+  propagation, and read-only app presentation. The display labels do not
   establish claimability or callable owner authority.
 - Enrollment identity: digest-only grants, signed-CSR issuance, expiry and
   replay denial, rotation, revocation, schema migration, two-phase pending

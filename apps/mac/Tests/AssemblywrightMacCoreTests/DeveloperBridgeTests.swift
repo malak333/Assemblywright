@@ -1316,6 +1316,114 @@ struct DeveloperBridgeTests {
         #expect(await session.cancelled)
     }
 
+    @Test("Owner control submits one exact approved feature and binds the redacted receipt")
+    func ownerControlApprovesAndEnqueuesExactFeature() async throws {
+        let request = numericManifestApprovedFeatureOwnerControlRequestData()
+        let session = FakeSupervisorSession(
+            connectionEpoch: 44,
+            outcomes: [
+                .response(.init(status: 200, body: approvedFeatureOwnerControlReceiptData()))
+            ]
+        )
+
+        let receipt = try await AssemblywrightMacFeatureConveyorOwnerControl
+            .approveAndEnqueue(requestData: request, using: session)
+
+        #expect(receipt.status == "queued")
+        #expect(receipt.queueRevision == 1)
+        #expect(receipt.ownerControlDesignationRevision == 3)
+        let requests = await session.requests
+        #expect(requests == [
+            AssemblywrightMacBridgeHTTPRequest(
+                method: "POST",
+                path: AssemblywrightMacFeatureConveyorOwnerControl.approvedFeaturesPath,
+                body: request
+            )
+        ])
+        #expect(await session.cancelled)
+    }
+
+    @Test("Owner control rejects malformed shape and self-dependencies before the request")
+    func ownerControlRejectsMalformedInputLocally() async {
+        let valid = approvedFeatureOwnerControlRequestData()
+        var duplicate = String(data: valid, encoding: .utf8)!
+        duplicate = duplicate.replacingOccurrences(
+            of: "\"schema_version\":1",
+            with: "\"schema_version\":1,\"schema_version\":1"
+        )
+        let invalidInputs = [
+            Data(duplicate.utf8),
+            selfDependentApprovedFeatureOwnerControlRequestData(),
+            Data(
+                repeating: 0x61,
+                count: AssemblywrightMacFeatureConveyorOwnerControl.maximumRequestBytes + 1
+            )
+        ]
+
+        for input in invalidInputs {
+            let session = FakeSupervisorSession(connectionEpoch: 45, outcomes: [])
+            do {
+                _ = try await AssemblywrightMacFeatureConveyorOwnerControl.approveAndEnqueue(
+                    requestData: input,
+                    using: session
+                )
+                Issue.record("malformed owner-control input was accepted")
+            } catch {
+                #expect(error is AssemblywrightMacFeatureConveyorOwnerControlError)
+            }
+            #expect(await session.requests.isEmpty)
+            #expect(await session.cancelled)
+        }
+    }
+
+    @Test("Owner control fails closed on denial and drifted or oversized receipts")
+    func ownerControlRejectsDenialAndReceiptDrift() async {
+        let requestsAndResponses = [
+            (
+                tamperedApprovedFeatureOwnerControlRequestData(),
+                AssemblywrightMacBridgeHTTPResponse(
+                status: 409,
+                body: Data("{\"error\":\"approved_feature_enqueue_rejected\"}".utf8)
+                )
+            ),
+            (
+                approvedFeatureOwnerControlRequestData(),
+                AssemblywrightMacBridgeHTTPResponse(
+                status: 200,
+                body: approvedFeatureOwnerControlReceiptData(queueRevision: 2)
+                )
+            ),
+            (
+                approvedFeatureOwnerControlRequestData(),
+                AssemblywrightMacBridgeHTTPResponse(
+                status: 200,
+                body: Data(
+                    repeating: 0x61,
+                    count: AssemblywrightMacFeatureConveyorOwnerControl.maximumReceiptBytes + 1
+                )
+                )
+            )
+        ]
+
+        for (request, response) in requestsAndResponses {
+            let session = FakeSupervisorSession(
+                connectionEpoch: 46,
+                outcomes: [.response(response)]
+            )
+            do {
+                _ = try await AssemblywrightMacFeatureConveyorOwnerControl.approveAndEnqueue(
+                    requestData: request,
+                    using: session
+                )
+                Issue.record("denied or drifted owner-control receipt was accepted")
+            } catch {
+                #expect(error is AssemblywrightMacFeatureConveyorOwnerControlError)
+            }
+            #expect(await session.requests.count == 1)
+            #expect(await session.cancelled)
+        }
+    }
+
     @Test("Supervisor rejects malformed health, cancels, and reconnects")
     func supervisorReconnectsAfterInvalidHealth() async throws {
         let invalid = FakeSupervisorSession(
@@ -3229,31 +3337,31 @@ private func sampleProfile() -> AssemblywrightMacBridgeProfile {
 
 private func validRemoteHealthData() -> Data {
     Data(
-        #"{"status":"ok","mode":"developer_remote_master","host_mode":"windows_service","service_identity":"MIKE-PC\\mike","maintenance_active":false,"maintenance_reason":null,"emergency_paused":false,"protocol_version":2,"schema_version":7,"process_id":43752,"started_at_ms":1784749559000,"startup_reconciliation":{"disconnected_connections":0,"abandoned_attempts":0,"requeued_steps":0},"state":{"registered_devices":1,"active_device_certificates":1,"unconsumed_enrollment_grants":2,"active_connections":1,"queued_steps":0,"leased_steps":0,"terminal_steps":0,"active_attempts":0},"boundary":"TLS 1.3 mutual authentication with enrolled-device certificate and durable revocation checks"}"#.utf8
+        #"{"status":"ok","mode":"developer_remote_master","host_mode":"windows_service","service_identity":"MIKE-PC\\mike","maintenance_active":false,"maintenance_reason":null,"emergency_paused":false,"protocol_version":2,"schema_version":8,"process_id":43752,"started_at_ms":1784749559000,"startup_reconciliation":{"disconnected_connections":0,"abandoned_attempts":0,"requeued_steps":0},"state":{"registered_devices":1,"active_device_certificates":1,"unconsumed_enrollment_grants":2,"active_connections":1,"queued_steps":0,"leased_steps":0,"terminal_steps":0,"active_attempts":0},"boundary":"TLS 1.3 mutual authentication with enrolled-device certificate and durable revocation checks"}"#.utf8
     )
 }
 
 private func pausedRemoteHealthData() -> Data {
     Data(
-        #"{"status":"paused","mode":"developer_remote_master","host_mode":"windows_service","service_identity":"MIKE-PC\\mike","maintenance_active":false,"maintenance_reason":null,"emergency_paused":true,"protocol_version":2,"schema_version":7,"process_id":43752,"started_at_ms":1784749559000,"startup_reconciliation":{"disconnected_connections":0,"abandoned_attempts":0,"requeued_steps":0},"state":{"registered_devices":1,"active_device_certificates":1,"unconsumed_enrollment_grants":2,"active_connections":1,"queued_steps":0,"leased_steps":1,"terminal_steps":0,"active_attempts":1},"boundary":"TLS 1.3 mutual authentication with enrolled-device certificate and durable revocation checks"}"#.utf8
+        #"{"status":"paused","mode":"developer_remote_master","host_mode":"windows_service","service_identity":"MIKE-PC\\mike","maintenance_active":false,"maintenance_reason":null,"emergency_paused":true,"protocol_version":2,"schema_version":8,"process_id":43752,"started_at_ms":1784749559000,"startup_reconciliation":{"disconnected_connections":0,"abandoned_attempts":0,"requeued_steps":0},"state":{"registered_devices":1,"active_device_certificates":1,"unconsumed_enrollment_grants":2,"active_connections":1,"queued_steps":0,"leased_steps":1,"terminal_steps":0,"active_attempts":1},"boundary":"TLS 1.3 mutual authentication with enrolled-device certificate and durable revocation checks"}"#.utf8
     )
 }
 
 private func validFeatureConveyorData() -> Data {
     Data(
-        #"{"schema_version":7,"queue_revision":0,"startup_quarantine_count":0,"counts_by_status":{"queued":0,"implementing":0,"validating":0,"reviewing":0,"publishing":0,"verifying_main":0,"succeeded":0,"cancelled":0,"abandoned":0,"quarantined":0},"visible_feature_count":0,"features_truncated":false,"features":[],"owner_guidance":{"state":"idle","reason_code":"queue_empty","next_owner_action":"prepare_approved_feature","feature_id":null,"specification_revision":null,"lifecycle_revision":null,"queue_revision":0,"emergency_pause_revision":0}}"#.utf8
+        #"{"schema_version":8,"queue_revision":0,"startup_quarantine_count":0,"counts_by_status":{"queued":0,"implementing":0,"validating":0,"reviewing":0,"publishing":0,"verifying_main":0,"succeeded":0,"cancelled":0,"abandoned":0,"quarantined":0},"visible_feature_count":0,"features_truncated":false,"features":[],"owner_guidance":{"state":"idle","reason_code":"queue_empty","next_owner_action":"prepare_approved_feature","feature_id":null,"specification_revision":null,"lifecycle_revision":null,"queue_revision":0,"emergency_pause_revision":0}}"#.utf8
     )
 }
 
 private func readyFeatureConveyorData() -> Data {
     Data(
-        #"{"schema_version":7,"queue_revision":1,"startup_quarantine_count":0,"counts_by_status":{"queued":1,"implementing":0,"validating":0,"reviewing":0,"publishing":0,"verifying_main":0,"succeeded":0,"cancelled":0,"abandoned":0,"quarantined":0},"visible_feature_count":1,"features_truncated":false,"features":[{"feature_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","specification_revision":1,"lifecycle_revision":1,"queue_position":1,"status":"queued","lease_present":false,"effect_possible":false}],"owner_guidance":{"state":"ready","reason_code":"head_dependency_satisfied","next_owner_action":"await_owner_control_surface","feature_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","specification_revision":1,"lifecycle_revision":1,"queue_revision":1,"emergency_pause_revision":0}}"#.utf8
+        #"{"schema_version":8,"queue_revision":1,"startup_quarantine_count":0,"counts_by_status":{"queued":1,"implementing":0,"validating":0,"reviewing":0,"publishing":0,"verifying_main":0,"succeeded":0,"cancelled":0,"abandoned":0,"quarantined":0},"visible_feature_count":1,"features_truncated":false,"features":[{"feature_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","specification_revision":1,"lifecycle_revision":1,"queue_position":1,"status":"queued","lease_present":false,"effect_possible":false}],"owner_guidance":{"state":"ready","reason_code":"head_dependency_satisfied","next_owner_action":"await_owner_control_surface","feature_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","specification_revision":1,"lifecycle_revision":1,"queue_revision":1,"emergency_pause_revision":0}}"#.utf8
     )
 }
 
 private func reconciliationFeatureConveyorData() -> Data {
     Data(
-        #"{"schema_version":7,"queue_revision":2,"startup_quarantine_count":0,"counts_by_status":{"queued":0,"implementing":0,"validating":0,"reviewing":0,"publishing":0,"verifying_main":0,"succeeded":0,"cancelled":1,"abandoned":0,"quarantined":0},"visible_feature_count":1,"features_truncated":false,"features":[{"feature_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","specification_revision":1,"lifecycle_revision":3,"queue_position":1,"status":"cancelled","lease_present":true,"effect_possible":true}],"owner_guidance":{"state":"blocked","reason_code":"active_requires_reconciliation","next_owner_action":"reconcile_active_feature","feature_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","specification_revision":1,"lifecycle_revision":3,"queue_revision":2,"emergency_pause_revision":0}}"#.utf8
+        #"{"schema_version":8,"queue_revision":2,"startup_quarantine_count":0,"counts_by_status":{"queued":0,"implementing":0,"validating":0,"reviewing":0,"publishing":0,"verifying_main":0,"succeeded":0,"cancelled":1,"abandoned":0,"quarantined":0},"visible_feature_count":1,"features_truncated":false,"features":[{"feature_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","specification_revision":1,"lifecycle_revision":3,"queue_position":1,"status":"cancelled","lease_present":true,"effect_possible":true}],"owner_guidance":{"state":"blocked","reason_code":"active_requires_reconciliation","next_owner_action":"reconcile_active_feature","feature_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","specification_revision":1,"lifecycle_revision":3,"queue_revision":2,"emergency_pause_revision":0}}"#.utf8
     )
 }
 
@@ -3275,7 +3383,7 @@ private func maximumFeatureConveyorData() -> Data {
     }
     let firstID = features[0]["feature_id"]!
     let object: [String: Any] = [
-        "schema_version": 7,
+        "schema_version": 8,
         "queue_revision": 100,
         "startup_quarantine_count": 0,
         "counts_by_status": [
@@ -3334,7 +3442,7 @@ private func truncatedFeatureConveyorData() -> Data {
         ]
     })
     let object: [String: Any] = [
-        "schema_version": 7,
+        "schema_version": 8,
         "queue_revision": 101,
         "startup_quarantine_count": 0,
         "counts_by_status": [
@@ -3368,7 +3476,7 @@ private func truncatedFeatureConveyorData() -> Data {
 
 private func pausedFeatureConveyorData() -> Data {
     Data(
-        #"{"schema_version":7,"queue_revision":0,"startup_quarantine_count":0,"counts_by_status":{"queued":0,"implementing":0,"validating":0,"reviewing":0,"publishing":0,"verifying_main":0,"succeeded":0,"cancelled":0,"abandoned":0,"quarantined":0},"visible_feature_count":0,"features_truncated":false,"features":[],"owner_guidance":{"state":"blocked","reason_code":"emergency_paused","next_owner_action":"resume_emergency_pause","feature_id":null,"specification_revision":null,"lifecycle_revision":null,"queue_revision":0,"emergency_pause_revision":1}}"#.utf8
+        #"{"schema_version":8,"queue_revision":0,"startup_quarantine_count":0,"counts_by_status":{"queued":0,"implementing":0,"validating":0,"reviewing":0,"publishing":0,"verifying_main":0,"succeeded":0,"cancelled":0,"abandoned":0,"quarantined":0},"visible_feature_count":0,"features_truncated":false,"features":[],"owner_guidance":{"state":"blocked","reason_code":"emergency_paused","next_owner_action":"resume_emergency_pause","feature_id":null,"specification_revision":null,"lifecycle_revision":null,"queue_revision":0,"emergency_pause_revision":1}}"#.utf8
     )
 }
 
@@ -3392,7 +3500,7 @@ private func authenticatedSnapshotData(
         "maintenance_active": maintenanceActive,
         "emergency_paused": emergencyPaused,
         "protocol_version": 2,
-        "schema_version": 7,
+        "schema_version": 8,
         "feature_conveyor": featureObject
     ]
     return try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
@@ -3400,4 +3508,89 @@ private func authenticatedSnapshotData(
 
 private func authenticatedSnapshotJSON(connectionEpoch: UInt64) -> String {
     String(data: authenticatedSnapshotData(connectionEpoch: connectionEpoch), encoding: .utf8)!
+}
+
+private func approvedFeatureOwnerControlRequestData() -> Data {
+    let manifest: [String: Any] = [
+        "acceptance": ["owner_control_transport_only"],
+        "title": "Bounded owner control"
+    ]
+    let canonicalManifest = try! JSONSerialization.data(
+        withJSONObject: manifest,
+        options: [.sortedKeys, .withoutEscapingSlashes]
+    )
+    let digest = Array(SHA256.hash(data: canonicalManifest))
+    let object: [String: Any] = [
+        "schema_version": 1,
+        "expected_queue_revision": 0,
+        "owner_control_designation_revision": 3,
+        "emergency_pause_revision": 0,
+        "specification": [
+            "feature_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "revision": 1,
+            "repository_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+            "manifest": manifest,
+            "manifest_sha256": digest,
+            "design_sha256": Array(repeating: UInt8(0x22), count: 32),
+            "brainstorming_sha256": Array(repeating: UInt8(0x33), count: 32),
+            "owner_approval_sha256": Array(repeating: UInt8(0x44), count: 32),
+            "grants": [
+                "registration": 1,
+                "cloud_disclosure": 2,
+                "autonomous_publication": 3
+            ],
+            "provider_id": "local-owner-planner",
+            "model_id": "owner-approved-v1",
+            "dependencies": []
+        ]
+    ]
+    return try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+}
+
+private func numericManifestApprovedFeatureOwnerControlRequestData() -> Data {
+    let canonicalManifest = Data(#"{"ratio":1.0}"#.utf8)
+    let digest = Array(SHA256.hash(data: canonicalManifest))
+        .map(String.init)
+        .joined(separator: ",")
+    return Data(
+        """
+        {"schema_version":1,"expected_queue_revision":0,"owner_control_designation_revision":3,"emergency_pause_revision":0,"specification":{"feature_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","revision":1,"repository_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","manifest":{"ratio":1.0},"manifest_sha256":[\(digest)],"design_sha256":[\(Array(repeating: "34", count: 32).joined(separator: ","))],"brainstorming_sha256":[\(Array(repeating: "51", count: 32).joined(separator: ","))],"owner_approval_sha256":[\(Array(repeating: "68", count: 32).joined(separator: ","))],"grants":{"registration":1,"cloud_disclosure":2,"autonomous_publication":3},"provider_id":"local-owner-planner","model_id":"owner-approved-v1","dependencies":[]}}
+        """.utf8
+    )
+}
+
+private func tamperedApprovedFeatureOwnerControlRequestData() -> Data {
+    var object = try! JSONSerialization.jsonObject(
+        with: approvedFeatureOwnerControlRequestData()
+    ) as! [String: Any]
+    var specification = object["specification"] as! [String: Any]
+    var manifest = specification["manifest"] as! [String: Any]
+    manifest["title"] = "tampered after approval"
+    specification["manifest"] = manifest
+    object["specification"] = specification
+    return try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+}
+
+private func selfDependentApprovedFeatureOwnerControlRequestData() -> Data {
+    var object = try! JSONSerialization.jsonObject(
+        with: approvedFeatureOwnerControlRequestData()
+    ) as! [String: Any]
+    var specification = object["specification"] as! [String: Any]
+    specification["dependencies"] = [specification["feature_id"]!]
+    object["specification"] = specification
+    return try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+}
+
+private func approvedFeatureOwnerControlReceiptData(queueRevision: UInt64 = 1) -> Data {
+    let object: [String: Any] = [
+        "schema_version": 1,
+        "feature_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "specification_revision": 1,
+        "lifecycle_revision": 1,
+        "queue_revision": queueRevision,
+        "owner_control_designation_revision": 3,
+        "emergency_pause_revision": 0,
+        "status": "queued"
+    ]
+    return try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
 }

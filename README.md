@@ -20,12 +20,14 @@ and the queue control UI are still design.
 **`assemblywright-protocol`** — the current protocol version: typed device, task,
 step, attempt, lease, and cancellation identifiers; bounded capability
 advertisements; handshake, job, and result envelopes; strict bound-before-decode
-JSON entry points; nil-identity rejection; and a golden compatibility fixture.
+JSON entry points; nil-identity rejection; fixed-schema Feature Conveyor owner-
+control request/receipt contracts; and a golden compatibility fixture.
 
-**`assemblywright-master`** — a portable schema-v7 SQLite database retaining
+**`assemblywright-master`** — a portable schema-v8 SQLite database retaining
 the schema-v4 device lifecycle, schema-v5 Feature Conveyor, schema-v6
-capability rebind evidence, and schema-v7 Emergency Pause revision, plus a
-headless single-owner executable.
+capability rebind evidence, schema-v7 Emergency Pause revision, and schema-v8
+single owner-control bridge designation, plus a headless single-owner
+executable.
 
 - *Distributed device lifecycle*: registered device metadata, connection epochs
   and sequence high-water marks, queued steps, immutable leased job envelopes,
@@ -54,8 +56,17 @@ headless single-owner executable.
   `GET /v1/distributed/feature-conveyor/status` returns that same projection
   only after an exporter-bound application session is accepted for an enrolled
   MacBridge; other device roles are denied and no owner token is forwarded.
-  Neither route grants mutation, execution, review, repository, Git,
-  publication, activation, or callable owner-action authority.
+  Neither observation route grants mutation, execution, review, repository,
+  Git, publication, activation, or callable owner-action authority. Separately,
+  an owner-token-authenticated loopback action designates exactly one current
+  non-fixture MacBridge under compare-and-set revision and atomic redacted
+  audit. Only that exact device, after a fresh exporter-bound application
+  session, may call
+  `POST /v1/distributed/feature-conveyor/approved-features` with a strict,
+  bounded, already-approved specification bound to the current queue,
+  designation, and Emergency Pause revisions. The action only appends the
+  immutable specification and queued row; it does not claim, dispatch, execute,
+  review, publish, or activate the feature.
 - *Identity*: a DPAPI-current-user protected ECDSA P-256 enrollment CA,
   ten-minute single-use digest-only grants, verified client CSRs, 30-day client
   certificates bound to a server-selected device ID, rotation, and immediate
@@ -87,8 +98,12 @@ exact separately signed bridge helper; the helper keeps the Secure Enclave
 Keychain identity and the outbound mTLS session, directly supervises the pinned
 agent, and forwards authenticated metadata pages into a durable cursor. The
 enrolled key and mTLS session never leave the helper. The helper also strictly
-decodes the bounded schema-v7 Feature Conveyor projection and the app renders
-its queue/guidance summary as read-only text only in authenticated state.
+  decodes the bounded schema-v8 Feature Conveyor projection and the app renders
+  its queue/guidance summary as read-only text only in authenticated state. A
+  separate one-shot signed-helper command,
+  `feature-conveyor approve-and-enqueue --confirm`, reads one bounded approved
+  request from stdin, uses the standard Keychain identity without forwarding an
+  owner token, and emits only a revision-bound redacted receipt.
 
 ## Current Scope
 
@@ -100,8 +115,10 @@ Not yet implemented, and not claimed:
 - Autonomous dispatch, repository mutation, or publication of any kind.
 - Worker execution against real repositories, review-provider invocation, or
   GitHub branch/PR/merge authority.
-- Mac Feature Conveyor controls, hosted brainstorming, or `Approve and Enqueue`.
-  The implemented Mac surface is observation only.
+- Mac Feature Conveyor UI controls or hosted brainstorming. The app remains
+  observation only. The implemented one-shot signed-helper action can enqueue
+  only an already-approved specification after separate Windows owner-bridge
+  designation and repository-grant preparation.
 - Developer ID signing, notarization, stapling, clean-profile installation, or
   Finder/LaunchServices validation.
 - Live cross-device reliability, host hardening, or unattended operation.

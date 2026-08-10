@@ -277,8 +277,8 @@ fi
 if [[ "$MODE" != "--run-fixture" && "$MODE" != "--run-mlx" ]]; then
   [[ "$app_lifecycle_output" == *"assemblywright_mac_app_bridge_live_e2e_ok"* ]] \
     || fail "production app bridge lifecycle omitted its live E2E marker"
-  [[ "$app_lifecycle_output" == *"feature_conveyor_schema=7"* ]] \
-    || fail "production app bridge lifecycle omitted schema-v7 Feature Conveyor proof"
+  [[ "$app_lifecycle_output" == *"feature_conveyor_schema=8"* ]] \
+    || fail "production app bridge lifecycle omitted schema-v8 Feature Conveyor proof"
 fi
 
 if [[ "$MODE" == "--run-relay" ]]; then

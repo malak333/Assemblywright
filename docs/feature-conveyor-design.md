@@ -31,13 +31,13 @@ empty queue; unsatisfied queue-head dependency; ready queue head. It exposes no
 dependency identifiers, repository/provider/grant data, free text, evidence,
 or audit metadata. `queue_revision` and `emergency_pause_revision` always bind
 the advisory snapshot; feature guidance also binds `lifecycle_revision`.
-This remains advisory observation only: it does not establish claimability,
-authorize its labeled action, or add a control route.
+This projection remains advisory observation only: it does not establish
+claimability or authorize its labeled action.
 A dedicated `GET /v1/distributed/feature-conveyor/status` returns the exact same
 projection only after the TLS-exporter-bound application handshake is accepted
 for an enrolled `MacBridge`; pre-handshake and non-MacBridge requests are
 denied, and no owner token crosses the device boundary. The Swift helper
-strictly decodes the bounded schema-v7 allowlist, cancels on drift, and includes
+strictly decodes the bounded schema-v8 allowlist, cancels on drift, and includes
 the projection only in authenticated snapshots. The app renders a compact
 read-only queue/guidance section and never presents `next_owner_action` as a
 button. Neither observation route grants enqueue, execution, review,
@@ -45,6 +45,22 @@ repository, Git, publication, audit-event, or activation authority. No worker
 dispatcher, repository execution, review provider, publication coordinator,
 Mac control UI, or autonomous activation is implemented. The remainder of this
 document is still target design.
+
+Master schema v8 adds the first bounded owner-control transport without
+activating the conveyor. An owner-token-authenticated Windows loopback action
+designates one exact current, enrolled, non-fixture `MacBridge` using a durable
+compare-and-set designation revision and same-transaction redacted audit. Only
+that exact device may use
+`POST /v1/distributed/feature-conveyor/approved-features` after a revalidated,
+exporter-bound application handshake. Its fixed-schema request carries one
+already-approved specification and binds the exact queue, designation, and
+Emergency Pause revisions. Existing grant, manifest-digest, dependency,
+capacity, immutable-specification, and atomic-audit checks remain authoritative.
+The one-shot signed Mac helper requires `--confirm`, reads the bounded request
+from stdin, strictly validates the redacted receipt, and closes the session.
+It does not create grants or brainstorming proof, claim or dispatch the queue,
+invoke a worker or provider, access a repository, or grant Git/publication or
+autonomous activation. The SwiftUI app remains observation only.
 
 ## Understanding Summary
 
@@ -437,6 +453,11 @@ restore-drill proof boundaries remain authoritative.
 Schema v7 adds the durable `emergency_pause_revision` under this backup-first
 path so schema-v6 binaries reject the forward database instead of changing
 pause state without advancing the advisory snapshot revision.
+
+Schema v8 adds the nullable owner-control MacBridge designation and its
+compare-and-set revision under the same backup-first path. Older binaries reject
+the forward database instead of accepting an approved-feature mutation without
+the exact designated-device boundary.
 
 Emergency Pause blocks new leases and publication, cancels safe active work,
 and marks potentially effectful interruptions for review.

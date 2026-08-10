@@ -156,7 +156,7 @@ release requirements, not optional UX guidance.
   a simultaneous or late result is suppressed. This lane grants no tool, file,
   repository, credential, network, Codex, Git, publication, or unattended
   authority.
-- The Windows `assemblywright-master` schema-v7 database retains the schema-v5
+- The Windows `assemblywright-master` schema-v8 database retains the schema-v5
   Durable Feature Conveyor kernel and is
   default-inert. The owner-token-authenticated loopback
   `GET /v1/feature-conveyor/status` and the dedicated enrolled-device
@@ -185,6 +185,28 @@ release requirements, not optional UX guidance.
   queued or active nonterminal features, uses one compare-and-set queue
   revision, never skips a blocked owner-ordered head, and permits only one
   database-backed active lease.
+- Schema v8 owner-control designation is Windows-authoritative, nullable by
+  default, and compare-and-set revisioned. Only the owner-token-authenticated
+  loopback route may designate or replace it, only with an exact current,
+  enrolled, non-revoked, non-fixture `MacBridge`, and the transition plus its
+  structurally redacted audit must commit in one transaction. Device role or
+  registration drift, revocation, a stale designation revision, a missing
+  designation, or any fixture identity fails closed. Possessing another valid
+  MacBridge certificate never implies owner-control authority.
+- Remote approved-feature enqueue is permitted only on
+  `POST /v1/distributed/feature-conveyor/approved-features`, after a fresh
+  exporter-bound application handshake is accepted and revalidated for the
+  exact designated device and registry revision. The strict bounded request
+  must bind the owner-control schema, current queue revision, current
+  designation revision, current Emergency Pause revision, canonical manifest
+  digest, immutable approved specification, three existing independent grant
+  revisions, and dependencies. Emergency Pause, stale state, absent/currently
+  invalid grants, capacity, dependency, digest, duplicate, unknown, malformed,
+  or oversized input rejects without mutation using a fixed redacted error.
+  Success may only append the immutable specification and queued lifecycle in
+  the same transaction as redacted audit. It never claims or leases the queue
+  and grants no brainstorming, grant creation, worker, repository, provider,
+  review, Git, publication, or activation authority.
 - Feature Conveyor state mutation and its redacted audit evidence must commit
   in the same immediate SQLite transaction. Manifest content, repository
   identity/path, brainstorming content, and owner reason must not enter audit
@@ -293,9 +315,9 @@ release requirements, not optional UX guidance.
   and exact CDHash before framing; the agent must reject any requirement text
   that is not canonical for its declared profile before opening durable state.
   The agent cursor may store only stream ID, sequence, and update time.
-- By default the helper may request only authenticated MacBridge health, the
+- By default the long-running helper may request only authenticated MacBridge health, the
   exact bounded Feature Conveyor observation route, and the metadata event
-  route. Feature Conveyor status is strictly decoded as schema v7, may appear
+  route. Feature Conveyor status is strictly decoded as schema v8, may appear
   only in authenticated supervisor/app snapshots, and is never forwarded to
   the agent. Unknown, duplicate, extra, oversized, inconsistent, or drifted
   status cancels the session and clears the observation.
@@ -309,6 +331,17 @@ release requirements, not optional UX guidance.
   master, helper, UDS, identity, cursor, fixture, cancellation, or deadline
   failure cancels the current mTLS session and enters fixed redacted backoff; it
   never authorizes a model, tool, file, repository, Codex, or Git action.
+  Separately, the standard-profile one-shot signed-helper command may send one
+  exact already-approved Feature Conveyor request only when invoked with
+  `feature-conveyor approve-and-enqueue --confirm` and bounded stdin. It must
+  recursively reject duplicate keys and self-dependencies, validate exact
+  nonzero digest shapes, accept only an exact redacted revision-bound receipt,
+  and close the session after success or failure. Windows alone recomputes and
+  validates the canonical manifest digest so Foundation and Rust number
+  serialization cannot create a second approval authority. The fixture profile
+  and the supervised app
+  monitor/relay modes must not invoke this action; the SwiftUI app remains
+  read-only.
 - Signed release provenance must record the exact app executable path and
   SHA-256 plus its code Identifier, ten-character TeamIdentifier, and CDHash.
   Live-device QA must revalidate the installed executable and bind its report

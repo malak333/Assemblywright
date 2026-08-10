@@ -11,9 +11,9 @@ private enum BridgeCLIError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .usage:
-            "Usage: assemblywright-mac-bridge enrollment prepare|install [--identity-profile fixture] | enrollment rebind prepare|stage|promote|cancel --confirm | enrollment remove --confirm --identity-profile fixture | status|connect [--identity-profile fixture] | monitor|relay [--identity-profile fixture] [--samples COUNT] [--interval-ms MILLISECONDS] [--reconnect-between-samples]"
+            "Usage: assemblywright-mac-bridge enrollment prepare|install [--identity-profile fixture] | enrollment rebind prepare|stage|promote|cancel --confirm | enrollment remove --confirm --identity-profile fixture | feature-conveyor approve-and-enqueue --confirm | status|connect [--identity-profile fixture] | monitor|relay [--identity-profile fixture] [--samples COUNT] [--interval-ms MILLISECONDS] [--reconnect-between-samples]"
         case .inputTooLarge:
-            "Input exceeds the 64 KiB enrollment-document limit."
+            "Input exceeds this command's fixed document limit."
         case .notEnrolled:
             "No installed Developer Mode bridge identity is available in Keychain."
         case .invalidHealth:
@@ -152,6 +152,18 @@ private struct AssemblywrightMacBridgeCLI {
                 await session.cancel()
                 throw error
             }
+        case ["feature-conveyor", "approve-and-enqueue", "--confirm"]
+            where parsed.profile == .standard:
+            guard let profile = try coordinator.status() else { throw BridgeCLIError.notEnrolled }
+            let request = try readBoundedStdin(
+                maximum: AssemblywrightMacFeatureConveyorOwnerControl.maximumRequestBytes
+            )
+            let session = try await AssemblywrightMacMTLSBridgeTransport(
+                factory: NetworkAssemblywrightMacTLSChannelFactory(identityStore: identityStore)
+            ).connect(profile: profile)
+            let receipt = try await AssemblywrightMacFeatureConveyorOwnerControl
+                .approveAndEnqueue(requestData: request, using: session)
+            try writeEncodableJSON(receipt)
         case let arguments where arguments.first == "monitor":
             guard let profile = try coordinator.status() else { throw BridgeCLIError.notEnrolled }
             let options = try monitorOptions(Array(arguments.dropFirst()))

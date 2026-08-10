@@ -212,7 +212,7 @@ an old one.
   owner-recorded evidence exists.
 - `release evidence-status` is file and report inventory plus structural
   validation. Presence never proves that an external check happened.
-- The Feature Conveyor kernel is persistence plus one observation seam:
+- The Feature Conveyor kernel includes one observation seam:
   owner-token-authenticated loopback-only
   `GET /v1/feature-conveyor/status`. Its pure-SELECT response is bounded to 100
   redacted current queue or retained-lease lifecycle entries, excludes terminal
@@ -233,8 +233,36 @@ an old one.
   nested duplicates, extra keys, enum drift, oversize and cross-field
   inconsistency, and publishes status only in authenticated snapshots. The app
   presents compact queue/guidance text; failure cancels the session and clears
-  the sample. It grants no enqueue, mutation, worker, Codex, repository, Git,
-  review, publication, Mac control UI, or autonomous activation authority.
+  the sample. The observation routes grant no enqueue, mutation, worker, Codex,
+  repository, Git, review, publication, Mac control UI, or autonomous activation
+  authority.
+- Schema v8 adds one nullable/default-deny owner-control bridge designation.
+  Only the owner-token-authenticated Windows loopback
+  `POST /v1/feature-conveyor/owner-control-bridge` may select or replace one
+  exact current, enrolled, non-revoked, non-fixture MacBridge using compare-and-
+  set revision and same-transaction redacted audit. Another valid MacBridge,
+  including the fixture profile, has no owner-control authority.
+- Only the exact designated bridge on a revalidated exporter-bound session may
+  call `POST /v1/distributed/feature-conveyor/approved-features`. Its fixed
+  schema binds an already-approved specification to current queue, designation,
+  and Emergency Pause revisions and reuses canonical manifest digest, current
+  independent grants, dependency, capacity, immutable-specification, and atomic
+  audit checks. Success only inserts a queued feature; it never claims,
+  dispatches, accesses a repository, invokes a provider/reviewer, uses Git, or
+  publishes. The standard-profile signed helper exposes the action only as
+  `feature-conveyor approve-and-enqueue --confirm` with bounded stdin, strict
+  recursive duplicate rejection, and a redacted bound receipt. The app remains
+  read-only.
+- Windows is the sole canonical-manifest digest authority for approved-feature
+  enqueue. The signed Swift helper validates exact nonzero digest shape but does
+  not recompute canonical JSON because Foundation normalizes some numeric JSON
+  forms differently from `serde_json` (for example `1.0` versus `1`). Rust
+  recomputes the digest before any mutation, and cross-language regressions must
+  include a numeric manifest plus a self-dependency rejection case.
+- A Windows-only remote mTLS proof can run from a disposable source checkout in
+  `%TEMP%` without changing the clean service checkout or the deployed service.
+  Remove that checkout after the test, and still treat a schema migration,
+  service restart, and live Mac bridge run as separate deployment evidence.
 - Rust serializes absent Feature Conveyor guidance identity as explicit JSON
   `null`, while Swift's synthesized `JSONEncoder` normally omits nil optional
   properties. Any Swift snapshot that must preserve the strict Rust allowlist
@@ -250,7 +278,7 @@ an old one.
   observer: it requires the separately Apple-signed helper, an authenticated
   MacBridge session to the live Windows service, repeated monitor and reconnect
   samples, and a production Swift lifecycle marker bound to
-  `feature_conveyor_schema=7`. A successful source pull is not this proof: stop,
+  `feature_conveyor_schema=8`. A successful source pull is not this proof: stop,
   rebuild, and restart the configured Windows release service, confirm its
   health reports the expected schema and a fresh process, then run the Mac lane.
   The owner-token file is in `%LOCALAPPDATA%\Assemblywright\master`; the legacy
@@ -281,8 +309,10 @@ an old one.
   browser UI. Native Rust/Swift HTTP, process, protocol, service, packaged-app,
   and Mac/Windows flows use native E2E. For the Feature Conveyor status slice,
   `master_process_e2e` proves the authenticated loopback HTTP path and the
-  Windows-only `remote_mtls_e2e` proves pre-handshake and non-MacBridge denial
-  plus exact MacBridge read-only success on the enrolled-device router.
+  Windows-only `remote_mtls_e2e` proves pre-handshake and non-MacBridge denial,
+  exact MacBridge read-only success, and designated-owner-only enqueue on the
+  enrolled-device router. This native Rust/Swift/process boundary does not use
+  Playwright.
 - Do not commit or push unless explicitly requested.
 
 ## Shell Portability

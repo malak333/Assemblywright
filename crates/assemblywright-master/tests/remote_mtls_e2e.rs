@@ -2,13 +2,14 @@
 
 use assemblywright_master::{
     current_time_ms, EnrollmentGrantSpec, EnrollmentRequest, IdentityAuthority, MasterProcess,
-    NewStep, PlatformSecretProtector,
+    NewStep, PlatformSecretProtector, RepositoryGrantKind, RepositoryGrantRevision,
 };
 use assemblywright_protocol::{
     AuthenticatedHandshakeRequest, CapabilityDescriptor, DeviceRole, DistributedEventBatch,
-    DistributedEventBatchRequest, DistributedEventKind, HandshakeRequest, HandshakeResponse,
-    HandshakeStatus, JobEnvelope, JobResultEnvelope, JobResultStatus, Sensitivity, StepId, TaskId,
-    PROTOCOL_VERSION,
+    DistributedEventBatchRequest, DistributedEventKind, FeatureConveyorApprovedFeatureRequest,
+    FeatureConveyorApprovedSpecification, FeatureConveyorGrantRevisions, HandshakeRequest,
+    HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope, JobResultStatus,
+    Sensitivity, StepId, TaskId, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, PROTOCOL_VERSION,
 };
 use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
@@ -16,8 +17,8 @@ use rustls::{ClientConfig, RootCertStore};
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::io::{BufRead, BufReader};
-use std::net::{SocketAddr, TcpListener};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
@@ -65,6 +66,28 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
         DeviceRole::MacBridge,
         false,
     );
+    let owner_control = enroll_client_with_capabilities(
+        directory.path(),
+        "designated-owner-control",
+        DeviceRole::MacBridge,
+        false,
+        vec![CapabilityDescriptor::mlx_reasoning(
+            "owner-control-mlx",
+            32 * 1024,
+            32 * 1024,
+        )],
+    );
+    let non_designated_bridge = enroll_client_with_capabilities(
+        directory.path(),
+        "non-designated-owner-control",
+        DeviceRole::MacBridge,
+        false,
+        vec![CapabilityDescriptor::mlx_reasoning(
+            "owner-control-mlx",
+            32 * 1024,
+            32 * 1024,
+        )],
+    );
     let inference_worker = enroll_client(
         directory.path(),
         "inference-worker",
@@ -77,6 +100,16 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
         DeviceRole::InferenceWorker,
         true,
     );
+    let repository_id = Uuid::new_v4();
+    let approved = approved_feature_request(repository_id);
+    {
+        let mut process = MasterProcess::acquire(directory.path()).expect("seed owner control");
+        install_repository_grants(process.kernel_mut(), repository_id);
+        process
+            .kernel_mut()
+            .designate_owner_control_bridge(owner_control.handshake.device_id, 0, 10)
+            .expect("designate exact owner-control bridge");
+    }
     let local_endpoint = unused_loopback_addr();
     let remote_endpoint = unused_loopback_addr();
     let mut server = spawn_server(binary, directory.path(), local_endpoint, remote_endpoint);
@@ -148,10 +181,22 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
         pre_handshake_status.starts_with("HTTP/1.1 401 Unauthorized"),
         "pre-handshake client reached Feature Conveyor status: {pre_handshake_status}"
     );
+    let (pre_handshake_enqueue, _) = tls_request(
+        remote_endpoint,
+        owner_control.config.clone(),
+        "POST",
+        "/v1/distributed/feature-conveyor/approved-features",
+        Some(&approved),
+    )
+    .await;
+    assert!(
+        pre_handshake_enqueue.starts_with("HTTP/1.1 401 Unauthorized"),
+        "pre-handshake client reached owner-control enqueue: {pre_handshake_enqueue}"
+    );
 
     let (health_handshake, health) = authenticated_application_request(
         remote_endpoint,
-        &valid,
+        &non_designated_bridge,
         "GET",
         "/health",
         &serde_json::json!({}),
@@ -217,7 +262,7 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
             "emergency_pause_revision",
         ],
     );
-    assert_eq!(remote_feature_status["schema_version"], 7);
+    assert_eq!(remote_feature_status["schema_version"], 8);
     assert_eq!(remote_feature_status["visible_feature_count"], 0);
     assert_eq!(remote_feature_status["features"], serde_json::json!([]));
     let redacted = serde_json::to_string(&remote_feature_status).expect("serialize status");
@@ -320,6 +365,212 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
         bridge_enqueue.starts_with("HTTP/1.1 404 Not Found"),
         "remote raw step enqueue remained available: {bridge_enqueue}"
     );
+
+    let (_, non_designated_enqueue) = authenticated_application_request(
+        remote_endpoint,
+        &non_designated_bridge,
+        "POST",
+        "/v1/distributed/feature-conveyor/approved-features",
+        &approved,
+    )
+    .await;
+    assert_fixed_error(
+        &non_designated_enqueue,
+        "HTTP/1.1 409 Conflict",
+        "approved_feature_enqueue_rejected",
+    );
+    let (_, wrong_role_enqueue) = authenticated_application_request(
+        remote_endpoint,
+        &inference_worker,
+        "POST",
+        "/v1/distributed/feature-conveyor/approved-features",
+        &approved,
+    )
+    .await;
+    assert_fixed_error(
+        &wrong_role_enqueue,
+        "HTTP/1.1 401 Unauthorized",
+        "unauthorized",
+    );
+
+    let mut stale_designation = approved.clone();
+    stale_designation.owner_control_designation_revision = 2;
+    let (_, stale_designation_response) = authenticated_application_request(
+        remote_endpoint,
+        &owner_control,
+        "POST",
+        "/v1/distributed/feature-conveyor/approved-features",
+        &stale_designation,
+    )
+    .await;
+    assert_fixed_error(
+        &stale_designation_response,
+        "HTTP/1.1 409 Conflict",
+        "approved_feature_enqueue_rejected",
+    );
+
+    let mut unknown_dependency = approved.clone();
+    unknown_dependency.specification.dependencies = vec![Uuid::new_v4()];
+    let (_, unknown_response) = authenticated_application_request(
+        remote_endpoint,
+        &owner_control,
+        "POST",
+        "/v1/distributed/feature-conveyor/approved-features",
+        &unknown_dependency,
+    )
+    .await;
+    assert_fixed_error(
+        &unknown_response,
+        "HTTP/1.1 409 Conflict",
+        "approved_feature_enqueue_rejected",
+    );
+
+    let mut malformed = serde_json::to_value(&approved).unwrap();
+    malformed["secret_error_detail"] = serde_json::json!("must-never-echo");
+    let (_, malformed_response) = authenticated_application_request(
+        remote_endpoint,
+        &owner_control,
+        "POST",
+        "/v1/distributed/feature-conveyor/approved-features",
+        &malformed,
+    )
+    .await;
+    assert_fixed_error(
+        &malformed_response,
+        "HTTP/1.1 422 Unprocessable Entity",
+        "approved_feature_request_rejected",
+    );
+    assert!(!malformed_response.contains("must-never-echo"));
+
+    let mut oversized = serde_json::to_value(&approved).unwrap();
+    oversized["specification"]["manifest"] =
+        serde_json::json!({"private_content": "x".repeat(256 * 1024 + 1)});
+    let (_, oversized_response) = authenticated_application_request(
+        remote_endpoint,
+        &owner_control,
+        "POST",
+        "/v1/distributed/feature-conveyor/approved-features",
+        &oversized,
+    )
+    .await;
+    assert_fixed_error(
+        &oversized_response,
+        "HTTP/1.1 422 Unprocessable Entity",
+        "approved_feature_request_rejected",
+    );
+    assert!(!oversized_response.contains("private_content"));
+
+    let development_token = std::fs::read_to_string(directory.path().join("development.token"))
+        .expect("read owner token");
+    let pause = local_post(
+        local_endpoint,
+        "/v1/development/emergency-pause/activate",
+        development_token.trim(),
+        "{}",
+    );
+    assert!(pause.starts_with("HTTP/1.1 200 OK"), "{pause}");
+    let mut paused_request = approved.clone();
+    paused_request.emergency_pause_revision = 1;
+    let (_, paused_response) = authenticated_application_request(
+        remote_endpoint,
+        &owner_control,
+        "POST",
+        "/v1/distributed/feature-conveyor/approved-features",
+        &paused_request,
+    )
+    .await;
+    assert_fixed_error(
+        &paused_response,
+        "HTTP/1.1 409 Conflict",
+        "approved_feature_enqueue_rejected",
+    );
+    let resume = local_post(
+        local_endpoint,
+        "/v1/development/emergency-pause/resume",
+        development_token.trim(),
+        "{}",
+    );
+    assert!(resume.starts_with("HTTP/1.1 200 OK"), "{resume}");
+    let (_, stale_pause_response) = authenticated_application_request(
+        remote_endpoint,
+        &owner_control,
+        "POST",
+        "/v1/distributed/feature-conveyor/approved-features",
+        &paused_request,
+    )
+    .await;
+    assert_fixed_error(
+        &stale_pause_response,
+        "HTTP/1.1 409 Conflict",
+        "approved_feature_enqueue_rejected",
+    );
+
+    let mut exact = approved.clone();
+    exact.emergency_pause_revision = 2;
+    let (_, enqueue_response) = authenticated_application_request(
+        remote_endpoint,
+        &owner_control,
+        "POST",
+        "/v1/distributed/feature-conveyor/approved-features",
+        &exact,
+    )
+    .await;
+    assert!(
+        enqueue_response.starts_with("HTTP/1.1 200 OK"),
+        "{enqueue_response}"
+    );
+    let receipt: Value = response_json(&enqueue_response);
+    assert_exact_object_keys(
+        &receipt,
+        &[
+            "schema_version",
+            "feature_id",
+            "specification_revision",
+            "lifecycle_revision",
+            "queue_revision",
+            "owner_control_designation_revision",
+            "emergency_pause_revision",
+            "status",
+        ],
+    );
+    assert_eq!(receipt["schema_version"], 1);
+    assert_eq!(receipt["queue_revision"], 1);
+    assert_eq!(receipt["owner_control_designation_revision"], 1);
+    assert_eq!(receipt["emergency_pause_revision"], 2);
+    assert_eq!(receipt["status"], "queued");
+    let receipt_json = serde_json::to_string(&receipt).unwrap();
+    for forbidden in [
+        "repository_id",
+        "manifest",
+        "provider_id",
+        "model_id",
+        "grant",
+        "approval",
+        "audit",
+    ] {
+        assert!(
+            !receipt_json.contains(forbidden),
+            "receipt leaked {forbidden}"
+        );
+    }
+
+    let mut duplicate = exact.clone();
+    duplicate.expected_queue_revision = 1;
+    let (_, duplicate_response) = authenticated_application_request(
+        remote_endpoint,
+        &owner_control,
+        "POST",
+        "/v1/distributed/feature-conveyor/approved-features",
+        &duplicate,
+    )
+    .await;
+    assert_fixed_error(
+        &duplicate_response,
+        "HTTP/1.1 409 Conflict",
+        "approved_feature_enqueue_rejected",
+    );
+    assert!(!duplicate_response.contains(&repository_id.to_string()));
+
     let (pause_handshake, remote_pause) = authenticated_application_request(
         remote_endpoint,
         &valid,
@@ -585,6 +836,93 @@ async fn remote_mlx_contract_accepts_exact_singleton_and_rejects_mixed_capabilit
         result_response.starts_with("HTTP/1.1 200 OK"),
         "{result_response}"
     );
+}
+
+fn approved_feature_request(repository_id: Uuid) -> FeatureConveyorApprovedFeatureRequest {
+    let feature_id = Uuid::new_v4();
+    let manifest = serde_json::json!({
+        "allowed_paths": ["crates/assemblywright-master/src/lib.rs"],
+        "feature_id": feature_id,
+        "outcome": "bounded remote owner-control enqueue"
+    });
+    let canonical = format!(
+        r#"{{"allowed_paths":["crates/assemblywright-master/src/lib.rs"],"feature_id":"{feature_id}","outcome":"bounded remote owner-control enqueue"}}"#
+    );
+    FeatureConveyorApprovedFeatureRequest {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        expected_queue_revision: 0,
+        owner_control_designation_revision: 1,
+        emergency_pause_revision: 0,
+        specification: FeatureConveyorApprovedSpecification {
+            feature_id,
+            revision: 1,
+            repository_id,
+            manifest,
+            manifest_sha256: Sha256::digest(canonical.as_bytes()).into(),
+            design_sha256: Sha256::digest(b"remote-design").into(),
+            brainstorming_sha256: Sha256::digest(b"remote-brainstorming").into(),
+            owner_approval_sha256: Sha256::digest(b"remote-owner-approval").into(),
+            grants: FeatureConveyorGrantRevisions {
+                registration: 1,
+                cloud_disclosure: 1,
+                autonomous_publication: 1,
+            },
+            provider_id: "local.review".to_string(),
+            model_id: "review-v1".to_string(),
+            dependencies: vec![],
+        },
+    }
+}
+
+fn install_repository_grants(
+    kernel: &mut assemblywright_master::MasterKernel,
+    repository_id: Uuid,
+) {
+    for (index, kind) in [
+        RepositoryGrantKind::Registration,
+        RepositoryGrantKind::CloudDisclosure,
+        RepositoryGrantKind::AutonomousPublication,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        kernel
+            .record_repository_grant_revision(
+                &RepositoryGrantRevision {
+                    repository_id,
+                    kind,
+                    revision: 1,
+                    scope_sha256: Sha256::digest(format!("remote-scope-{index}")).into(),
+                    owner_approval_sha256: Sha256::digest(format!("grant-owner-{index}")).into(),
+                    expires_at_ms: None,
+                    revoked: false,
+                },
+                1,
+            )
+            .expect("record repository grant");
+    }
+}
+
+fn assert_fixed_error(response: &str, status: &str, error: &str) {
+    assert!(response.starts_with(status), "{response}");
+    let value: Value = response_json(response);
+    assert_eq!(value, serde_json::json!({"error": error}));
+}
+
+fn local_post(endpoint: SocketAddr, path: &str, token: &str, body: &str) -> String {
+    let mut stream = TcpStream::connect(endpoint).expect("connect local owner route");
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: {endpoint}\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream
+        .write_all(request.as_bytes())
+        .expect("send local owner request");
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .expect("read local owner response");
+    response
 }
 
 fn enroll_client(data_dir: &Path, name: &str, role: DeviceRole, revoke: bool) -> EnrolledClient {

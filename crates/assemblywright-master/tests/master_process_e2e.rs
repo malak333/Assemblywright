@@ -1,8 +1,12 @@
 use assemblywright_master::{
-    ApprovedFeatureSpecification, FeatureGrantRevisions, MasterProcess, RepositoryGrantKind,
-    RepositoryGrantRevision, MAX_CONVEYOR_NONTERMINAL_FEATURES,
+    ApprovedFeatureSpecification, DeviceRegistration, FeatureGrantRevisions, MasterProcess,
+    RepositoryGrantKind, RepositoryGrantRevision, MAX_CONVEYOR_NONTERMINAL_FEATURES,
 };
-use assemblywright_protocol::MAX_WIRE_FRAME_BYTES;
+use assemblywright_protocol::{
+    CapabilityDescriptor, DeviceId, DeviceRole, FeatureConveyorOwnerBridgeDesignationRequest,
+    FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, MAX_WIRE_FRAME_BYTES,
+};
+use rusqlite::Connection;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -21,6 +25,140 @@ impl Drop for ChildGuard {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+#[test]
+fn owner_control_bridge_designation_is_owner_authenticated_strict_and_redacted() {
+    let directory = tempdir().expect("temporary owner-control directory");
+    let binary = env!("CARGO_BIN_EXE_assemblywright-master");
+    assert_success(&run(binary, directory.path(), ["setup"]), "setup");
+    let endpoint = unused_loopback_addr();
+    let mut server = spawn_server(binary, directory.path(), endpoint);
+    read_ready(&mut server.child);
+    let token = std::fs::read_to_string(directory.path().join("development.token")).unwrap();
+    let token = token.trim();
+    let owner = DeviceRegistration {
+        device_id: DeviceId::new(Uuid::new_v4()),
+        device_name: "owner-control-e2e".to_string(),
+        role: DeviceRole::MacBridge,
+        registry_revision: 1,
+        capabilities: vec![CapabilityDescriptor::mlx_reasoning(
+            "owner-control-mlx",
+            32 * 1024,
+            32 * 1024,
+        )],
+    };
+    let fixture = DeviceRegistration {
+        device_id: DeviceId::new(Uuid::new_v4()),
+        device_name: "fixture-owner-denied".to_string(),
+        role: DeviceRole::MacBridge,
+        registry_revision: 1,
+        capabilities: vec![CapabilityDescriptor::fixture_reasoning()],
+    };
+    for registration in [&owner, &fixture] {
+        let response = post_request(
+            endpoint,
+            "/v1/development/devices/register",
+            Some(token),
+            &serde_json::to_string(registration).unwrap(),
+        );
+        assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    }
+
+    let request = FeatureConveyorOwnerBridgeDesignationRequest {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        device_id: owner.device_id,
+        expected_designation_revision: 0,
+    };
+    let request_json = serde_json::to_string(&request).unwrap();
+    let unauthorized = post_request(
+        endpoint,
+        "/v1/feature-conveyor/owner-control-bridge",
+        None,
+        &request_json,
+    );
+    assert!(unauthorized.starts_with("HTTP/1.1 401 Unauthorized"));
+    let malformed = post_request(
+        endpoint,
+        "/v1/feature-conveyor/owner-control-bridge",
+        Some(token),
+        r#"{"schema_version":1,"device_id":"secret malformed value","expected_designation_revision":0}"#,
+    );
+    assert!(malformed.starts_with("HTTP/1.1 422 Unprocessable Entity"));
+    assert_eq!(
+        response_json(&malformed)["error"],
+        "owner_control_designation_request_rejected"
+    );
+    assert!(!malformed.contains("secret malformed value"));
+    let fixture_request = FeatureConveyorOwnerBridgeDesignationRequest {
+        device_id: fixture.device_id,
+        ..request
+    };
+    let fixture_denied = post_request(
+        endpoint,
+        "/v1/feature-conveyor/owner-control-bridge",
+        Some(token),
+        &serde_json::to_string(&fixture_request).unwrap(),
+    );
+    assert!(fixture_denied.starts_with("HTTP/1.1 409 Conflict"));
+    assert_eq!(
+        response_json(&fixture_denied)["error"],
+        "owner_control_designation_rejected"
+    );
+
+    let designated = post_request(
+        endpoint,
+        "/v1/feature-conveyor/owner-control-bridge",
+        Some(token),
+        &request_json,
+    );
+    assert!(designated.starts_with("HTTP/1.1 200 OK"), "{designated}");
+    let designated_json = response_json(&designated);
+    assert_exact_object_keys(
+        &designated_json,
+        &[
+            "schema_version",
+            "device_id",
+            "registry_revision",
+            "designation_revision",
+            "status",
+        ],
+    );
+    assert_eq!(designated_json["schema_version"], 1);
+    assert_eq!(designated_json["designation_revision"], 1);
+    assert_eq!(designated_json["status"], "designated");
+    let stale = post_request(
+        endpoint,
+        "/v1/feature-conveyor/owner-control-bridge",
+        Some(token),
+        &request_json,
+    );
+    assert!(stale.starts_with("HTTP/1.1 409 Conflict"));
+    assert_eq!(
+        response_json(&stale)["error"],
+        "owner_control_designation_rejected"
+    );
+    assert!(!stale.contains("expected"));
+
+    let remote_route_on_loopback = post_request(
+        endpoint,
+        "/v1/distributed/feature-conveyor/approved-features",
+        Some(token),
+        "{}",
+    );
+    assert!(remote_route_on_loopback.starts_with("HTTP/1.1 404 Not Found"));
+    let audit: String = Connection::open(directory.path().join("master.sqlite3"))
+        .unwrap()
+        .query_row(
+            "SELECT redacted_metadata_json FROM feature_conveyor_audit
+             WHERE event_kind = 'owner_control_bridge_designated'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(!audit.contains(&owner.device_id.0.to_string()));
+    assert!(!audit.contains(&owner.device_name));
+    assert!(!audit.contains("owner-control-mlx"));
 }
 
 #[test]
@@ -43,7 +181,7 @@ fn feature_conveyor_status_is_owner_authenticated_bounded_and_redacted() {
     let empty = get_request(empty_endpoint, "/v1/feature-conveyor/status", Some(token));
     assert!(empty.starts_with("HTTP/1.1 200 OK"), "{empty}");
     let empty_json = response_json(&empty);
-    assert_eq!(empty_json["schema_version"], 7);
+    assert_eq!(empty_json["schema_version"], 8);
     assert_eq!(empty_json["queue_revision"], 0);
     assert_eq!(empty_json["startup_quarantine_count"], 0);
     assert_eq!(empty_json["visible_feature_count"], 0);
@@ -130,7 +268,7 @@ fn windows_master_process_owns_state_and_completes_cross_process_fixture() {
     let setup_receipt: Value = serde_json::from_slice(&setup.stdout).expect("setup JSON receipt");
     assert_eq!(setup_receipt["status"], "setup_complete");
     assert_eq!(setup_receipt["protocol_version"], 2);
-    assert_eq!(setup_receipt["schema_version"], 7);
+    assert_eq!(setup_receipt["schema_version"], 8);
     assert!(directory.path().join("master.sqlite3").is_file());
     assert!(directory.path().join("development.token").is_file());
     let development_token = std::fs::read_to_string(directory.path().join("development.token"))

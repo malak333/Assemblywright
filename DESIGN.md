@@ -59,7 +59,7 @@ accepted designs and take precedence within their scope:
 
 ### Windows master
 
-`assemblywright-master` owns durable state and every authority decision. Its schema-v7
+`assemblywright-master` owns durable state and every authority decision. Its schema-v8
 SQLite database holds two kernels:
 
 - The distributed device lifecycle: registered devices, connection epochs,
@@ -79,8 +79,20 @@ SQLite database holds two kernels:
   dependency-blocked, active, reconciliation-required, and emergency-paused
   states and names one display-only next owner action. It does not establish
   claimability or expose a callable action. Other enrolled-device roles are
-  denied, and neither route adds mutation, audit, worker, repository, provider,
-  publication, or owner-action authority.
+  denied, and neither observation route adds mutation, audit, worker,
+  repository, provider, publication, or owner-action authority.
+
+Schema v8 adds one nullable, compare-and-set, Windows-authoritative owner-control
+bridge designation. Its owner-token-authenticated loopback mutation accepts
+only a current, enrolled, non-fixture `MacBridge` and commits a redacted audit
+event atomically. The separate remote
+`POST /v1/distributed/feature-conveyor/approved-features` remains unusable until
+the caller is the exact current designation on an accepted, revalidated,
+exporter-bound session. Its strict request binds one already-approved
+specification to queue, designation, and Emergency Pause revisions. It may only
+append the immutable specification and queued lifecycle; it adds no claim,
+dispatch, worker, repository, provider, review, Git, publication, or activation
+authority.
 
 Every authoritative transition commits its redacted audit event in the same
 transaction. Migrations from supported legacy schemas are backup-first under
@@ -130,11 +142,15 @@ session, directly supervises the pinned agent over a mutually
 code-identity-pinned local socket, and forwards authenticated metadata pages
 into a durable cursor. The enrolled key never leaves the helper, and the helper
 is not bundled inside the app. After health succeeds, the helper fetches the
-exact schema-v7 Feature Conveyor projection on the same authenticated session,
+  exact schema-v8 Feature Conveyor projection on the same authenticated session,
 strictly validates and bounds it, and includes it only in authenticated app
 snapshots. The SwiftUI app renders queue state and guidance as compact read-only
 text; a malformed or drifted projection cancels the session and no stale status
-is retained.
+is retained. The app remains read-only. A separate explicit one-shot signed
+helper command accepts one bounded already-approved document on stdin only with
+`--confirm`, uses the standard Keychain identity to invoke the designated-owner
+route, strictly binds the redacted receipt, and closes the authenticated
+session on success or failure.
 
 ### Shared local foundation
 

@@ -39,6 +39,11 @@ pub const MLX_GENERATE_TEXT_OPERATION: &str = "generate_text";
 pub const MAX_MLX_PROMPT_BYTES: usize = 32 * 1024;
 pub const MAX_MLX_TOKENS: u32 = 512;
 pub const MAX_MLX_TEMPERATURE_MILLI: u32 = 2_000;
+pub const FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION: u16 = 1;
+pub const MAX_FEATURE_CONVEYOR_APPROVED_MANIFEST_BYTES: usize = 256 * 1024;
+pub const MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES: usize = 320 * 1024;
+pub const MAX_FEATURE_CONVEYOR_DEPENDENCIES: usize = 100;
+pub const MAX_FEATURE_CONVEYOR_IDENTIFIER_BYTES: usize = 128;
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum ProtocolError {
@@ -110,6 +115,8 @@ pub enum ProtocolError {
     InvalidMlxJob,
     #[error("MLX result must use the exact bounded generate-text contract")]
     InvalidMlxResult,
+    #[error("feature conveyor owner-control request is invalid")]
+    InvalidFeatureConveyorOwnerControl,
 }
 
 macro_rules! uuid_id {
@@ -413,6 +420,198 @@ impl HandshakeRequest {
 pub struct AuthenticatedHandshakeRequest {
     pub handshake: HandshakeRequest,
     pub tls_exporter_sha256: [u8; 32],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorOwnerBridgeDesignationRequest {
+    pub schema_version: u16,
+    pub device_id: DeviceId,
+    pub expected_designation_revision: u64,
+}
+
+impl FeatureConveyorOwnerBridgeDesignationRequest {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "feature_conveyor_owner_bridge_designation_request",
+            frame,
+            MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_fixed_value(
+            "schema_version",
+            self.schema_version.to_string(),
+            FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION.to_string(),
+        )?;
+        validate_uuid("device_id", self.device_id.0)?;
+        validate_serialized_limit(
+            "feature_conveyor_owner_bridge_designation_request",
+            self,
+            MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureConveyorOwnerBridgeDesignationStatus {
+    Designated,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorOwnerBridgeDesignationReceipt {
+    pub schema_version: u16,
+    pub device_id: DeviceId,
+    pub registry_revision: u64,
+    pub designation_revision: u64,
+    pub status: FeatureConveyorOwnerBridgeDesignationStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorGrantRevisions {
+    pub registration: u64,
+    pub cloud_disclosure: u64,
+    pub autonomous_publication: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorApprovedSpecification {
+    pub feature_id: Uuid,
+    pub revision: u64,
+    pub repository_id: Uuid,
+    pub manifest: Value,
+    pub manifest_sha256: [u8; 32],
+    pub design_sha256: [u8; 32],
+    pub brainstorming_sha256: [u8; 32],
+    pub owner_approval_sha256: [u8; 32],
+    pub grants: FeatureConveyorGrantRevisions,
+    pub provider_id: String,
+    pub model_id: String,
+    pub dependencies: Vec<Uuid>,
+}
+
+impl FeatureConveyorApprovedSpecification {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_uuid("feature_id", self.feature_id)?;
+        validate_uuid("repository_id", self.repository_id)?;
+        validate_positive_limit("specification_revision", self.revision, u64::MAX)?;
+        validate_positive_limit(
+            "registration_grant_revision",
+            self.grants.registration,
+            u64::MAX,
+        )?;
+        validate_positive_limit(
+            "cloud_disclosure_grant_revision",
+            self.grants.cloud_disclosure,
+            u64::MAX,
+        )?;
+        validate_positive_limit(
+            "autonomous_publication_grant_revision",
+            self.grants.autonomous_publication,
+            u64::MAX,
+        )?;
+        if self.manifest_sha256 == [0; 32]
+            || self.design_sha256 == [0; 32]
+            || self.brainstorming_sha256 == [0; 32]
+            || self.owner_approval_sha256 == [0; 32]
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        validate_object("manifest", &self.manifest)?;
+        validate_identifier(
+            "provider_id",
+            &self.provider_id,
+            MAX_FEATURE_CONVEYOR_IDENTIFIER_BYTES,
+        )?;
+        validate_identifier(
+            "model_id",
+            &self.model_id,
+            MAX_FEATURE_CONVEYOR_IDENTIFIER_BYTES,
+        )?;
+        if self.dependencies.len() > MAX_FEATURE_CONVEYOR_DEPENDENCIES {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        let mut dependencies = HashSet::with_capacity(self.dependencies.len());
+        if self.dependencies.iter().any(|dependency| {
+            dependency.is_nil()
+                || *dependency == self.feature_id
+                || !dependencies.insert(*dependency)
+        }) {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        let canonical_manifest = canonical_json_bytes(&self.manifest)?;
+        if canonical_manifest.len() > MAX_FEATURE_CONVEYOR_APPROVED_MANIFEST_BYTES
+            || <[u8; 32]>::from(Sha256::digest(&canonical_manifest)) != self.manifest_sha256
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorApprovedFeatureRequest {
+    pub schema_version: u16,
+    pub expected_queue_revision: u64,
+    pub owner_control_designation_revision: u64,
+    pub emergency_pause_revision: u64,
+    pub specification: FeatureConveyorApprovedSpecification,
+}
+
+impl FeatureConveyorApprovedFeatureRequest {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "feature_conveyor_approved_feature_request",
+            frame,
+            MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_fixed_value(
+            "schema_version",
+            self.schema_version.to_string(),
+            FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION.to_string(),
+        )?;
+        validate_positive_limit(
+            "owner_control_designation_revision",
+            self.owner_control_designation_revision,
+            u64::MAX,
+        )?;
+        self.specification.validate()?;
+        validate_serialized_limit(
+            "feature_conveyor_approved_feature_request",
+            self,
+            MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureConveyorApprovedFeatureStatus {
+    Queued,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorApprovedFeatureReceipt {
+    pub schema_version: u16,
+    pub feature_id: Uuid,
+    pub specification_revision: u64,
+    pub lifecycle_revision: u64,
+    pub queue_revision: u64,
+    pub owner_control_designation_revision: u64,
+    pub emergency_pause_revision: u64,
+    pub status: FeatureConveyorApprovedFeatureStatus,
 }
 
 impl AuthenticatedHandshakeRequest {
@@ -1168,6 +1367,60 @@ fn validate_payload_digest<T: Serialize>(
     Ok(())
 }
 
+fn canonical_json_bytes(value: &Value) -> Result<Vec<u8>, ProtocolError> {
+    fn write_value(value: &Value, output: &mut Vec<u8>) -> Result<(), ProtocolError> {
+        match value {
+            Value::Null => output.extend_from_slice(b"null"),
+            Value::Bool(value) => output.extend_from_slice(if *value { b"true" } else { b"false" }),
+            Value::Number(value) => output.extend_from_slice(value.to_string().as_bytes()),
+            Value::String(value) => output.extend_from_slice(
+                serde_json::to_string(value)
+                    .map_err(|error| ProtocolError::Serialization {
+                        field: "manifest",
+                        message: error.to_string(),
+                    })?
+                    .as_bytes(),
+            ),
+            Value::Array(values) => {
+                output.push(b'[');
+                for (index, value) in values.iter().enumerate() {
+                    if index != 0 {
+                        output.push(b',');
+                    }
+                    write_value(value, output)?;
+                }
+                output.push(b']');
+            }
+            Value::Object(values) => {
+                output.push(b'{');
+                let mut keys = values.keys().collect::<Vec<_>>();
+                keys.sort();
+                for (index, key) in keys.into_iter().enumerate() {
+                    if index != 0 {
+                        output.push(b',');
+                    }
+                    output.extend_from_slice(
+                        serde_json::to_string(key)
+                            .map_err(|error| ProtocolError::Serialization {
+                                field: "manifest",
+                                message: error.to_string(),
+                            })?
+                            .as_bytes(),
+                    );
+                    output.push(b':');
+                    write_value(&values[key], output)?;
+                }
+                output.push(b'}');
+            }
+        }
+        Ok(())
+    }
+
+    let mut output = Vec::new();
+    write_value(value, &mut output)?;
+    Ok(output)
+}
+
 fn decode_and_validate_frame<T>(
     field: &'static str,
     frame: &[u8],
@@ -1184,6 +1437,117 @@ where
         field,
         message: error.to_string(),
     })?;
+    validate(&value)?;
+    Ok(value)
+}
+
+struct StrictJsonValue(Value);
+
+impl<'de> Deserialize<'de> for StrictJsonValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct StrictJsonVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for StrictJsonVisitor {
+            type Value = StrictJsonValue;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a JSON value without duplicate object keys")
+            }
+
+            fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
+                Ok(StrictJsonValue(Value::Bool(value)))
+            }
+
+            fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
+                Ok(StrictJsonValue(Value::Number(value.into())))
+            }
+
+            fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+                Ok(StrictJsonValue(Value::Number(value.into())))
+            }
+
+            fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                serde_json::Number::from_f64(value)
+                    .map(Value::Number)
+                    .map(StrictJsonValue)
+                    .ok_or_else(|| E::custom("non-finite JSON number"))
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+                Ok(StrictJsonValue(Value::String(value.to_string())))
+            }
+
+            fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+                Ok(StrictJsonValue(Value::String(value)))
+            }
+
+            fn visit_none<E>(self) -> Result<Self::Value, E> {
+                Ok(StrictJsonValue(Value::Null))
+            }
+
+            fn visit_unit<E>(self) -> Result<Self::Value, E> {
+                Ok(StrictJsonValue(Value::Null))
+            }
+
+            fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                let mut values = Vec::new();
+                while let Some(value) = sequence.next_element::<StrictJsonValue>()? {
+                    values.push(value.0);
+                }
+                Ok(StrictJsonValue(Value::Array(values)))
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut values = serde_json::Map::new();
+                while let Some(key) = map.next_key::<String>()? {
+                    if values.contains_key(&key) {
+                        return Err(serde::de::Error::custom("duplicate JSON object key"));
+                    }
+                    values.insert(key, map.next_value::<StrictJsonValue>()?.0);
+                }
+                Ok(StrictJsonValue(Value::Object(values)))
+            }
+        }
+
+        deserializer.deserialize_any(StrictJsonVisitor)
+    }
+}
+
+fn decode_strict_and_validate_frame<T>(
+    field: &'static str,
+    frame: &[u8],
+    maximum: usize,
+    validate: impl FnOnce(&T) -> Result<(), ProtocolError>,
+) -> Result<T, ProtocolError>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    if frame.len() > maximum {
+        return Err(ProtocolError::FrameTooLarge { field, maximum });
+    }
+    let strict = serde_json::from_slice::<StrictJsonValue>(frame).map_err(|error| {
+        ProtocolError::Deserialization {
+            field,
+            message: error.to_string(),
+        }
+    })?;
+    let value =
+        serde_json::from_value(strict.0).map_err(|error| ProtocolError::Deserialization {
+            field,
+            message: error.to_string(),
+        })?;
     validate(&value)?;
     Ok(value)
 }

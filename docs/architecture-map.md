@@ -25,10 +25,13 @@ flowchart LR
   Process --> Service["Windows SCM host: automatic start, bounded recovery, status, maintenance, uninstall"]
   Service --> Maintenance["Durable fail-closed marker blocks new enqueue and lease admission"]
   Master --> Durable["Registered devices, epochs, queue, attempts, cancellation, expiry, restart reconciliation, exact results"]
-  Master --> Conveyor["Default-inert schema-v5 Feature Conveyor repository kernel"]
+  Master --> Conveyor["Default-inert Feature Conveyor repository kernel retained through schema v8"]
   Conveyor --> ConveyorSafety["Immutable approved specs and grants, strict CAS queue, one active lease, atomic redacted audit, and startup quarantine"]
   Conveyor --> Observer["Exact bounded status projection: local owner route plus accepted-session MacBridge-only remote GET"]
   Observer --> Helper
+  Conveyor --> OwnerDesignation["Nullable CAS owner-control bridge designation with atomic redacted audit"]
+  OwnerDesignation --> OwnerAction["Exact designated non-fixture MacBridge-only approved-feature POST; queue insertion only"]
+  OwnerAction --> Helper
   Protocol --> Feature["Dormant assemblywright-core distributed-development feature"]
   Protocol --> Windows["Windows distributed format, clippy, protocol, and master-process gate"]
   Process --> Windows
@@ -52,10 +55,11 @@ a headless master executable. The contract seam provides the current protocol
 version, typed device/task/step/attempt/lease/cancellation identifiers, bounded
 capability advertisements, handshake messages, job and result envelopes, strict
 bound-before-decode JSON entry points, nil-identity rejection, and a golden
-compatibility fixture. `assemblywright-master` schema version 7 preserves the
+compatibility fixture. `assemblywright-master` schema version 8 preserves the
 schema-v4 distributed-device lifecycle, the schema-v5 Feature Conveyor, and
 schema-v6 dedicated pending capability-rebind evidence, then adds the durable
-Emergency Pause revision. The Feature Conveyor persists the first
+Emergency Pause revision, then adds one nullable compare-and-set owner-control
+MacBridge designation. The Feature Conveyor persists the first
 default-inert Durable Feature Conveyor repository kernel. Its immutable
 owner-approved specification revisions bind canonical manifest and evidence
 digests, three independent repository-grant revisions, dependencies, and a
@@ -66,7 +70,7 @@ abandonment, and startup quarantine commit with redacted audit evidence in the
 same immediate transaction. Success releases the lease only with verified
 healthy-main evidence; cancellation retains it until explicit safe
 abandonment, and restart ambiguity is quarantined without automatic retry.
-Master-process upgrades from supported legacy schemas v1-v5 to v6 are
+Master-process upgrades from supported legacy schemas v1-v7 to v8 are
 backup-first under the owner lock, verify the versioned backup before migration,
 and restore through a fsynced sibling plus atomic replacement when
 migration-open fails. Direct file-backed legacy migration through
@@ -78,13 +82,18 @@ current queue and retained lease. A fixed-enum advisory object bound to queue,
 Emergency Pause, and optional feature lifecycle revisions identifies the
 queue-head dependency blocker or retained-lease/pause state and
 one display-only next owner action. It does not determine claimability or
-authorize that action. The local owner route is unchanged; a dedicated
+  authorize that action. The local owner observation route is unchanged; a dedicated
 `GET /v1/distributed/feature-conveyor/status` reuses the exact projection only
 after an accepted exporter-bound MacBridge session, denies other roles, and
-forwards no owner token. The Swift helper validates the exact schema-v7
-allowlist and the app displays it only while authenticated. It has no
-mutation, coding worker, Codex, repository, review-provider invocation, GitHub
-publication, Mac control UI, live-device, unattended, or activation authority.
+forwards no owner token. The Swift helper validates the exact schema-v8
+allowlist and the app displays it only while authenticated. A separate
+owner-token-authenticated loopback action designates one exact current,
+non-fixture MacBridge. Only that designated device may submit one revision-bound
+already-approved specification through the dedicated remote POST; the signed
+helper exposes it only as a one-shot `--confirm` command with bounded stdin and
+a redacted receipt. This adds queue insertion but no claim, coding worker,
+Codex, repository, review-provider invocation, GitHub publication, Mac control
+UI, live-device proof, unattended operation, or activation authority.
 
 The existing distributed-device portion of `assemblywright-master` persists explicitly
 registered device metadata, active connection epoch and sequence state, queued

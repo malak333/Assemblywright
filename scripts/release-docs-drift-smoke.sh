@@ -50,6 +50,7 @@ MAC_BRIDGE_CLI="apps/mac/Sources/AssemblywrightMacBridgeCLI/AssemblywrightMacBri
 MAC_BRIDGE_KEYCHAIN="apps/mac/Sources/AssemblywrightMacCore/KeychainDeveloperIdentity.swift"
 MAC_BRIDGE_NETWORK="apps/mac/Sources/AssemblywrightMacCore/NetworkMTLSBridge.swift"
 MAC_BRIDGE_SUPERVISOR="apps/mac/Sources/AssemblywrightMacCore/DeveloperBridgeSupervisor.swift"
+MAC_OWNER_CONTROL="apps/mac/Sources/AssemblywrightMacCore/FeatureConveyorOwnerControl.swift"
 MAC_BRIDGE_PROCESS="apps/mac/Sources/AssemblywrightMacCore/DeveloperBridgeProcessLifecycle.swift"
 MAC_EVENT_RELAY="apps/mac/Sources/AssemblywrightMacCore/DeveloperEventRelay.swift"
 MAC_APP="apps/mac/Sources/AssemblywrightMacApp/AssemblywrightMacApp.swift"
@@ -108,7 +109,7 @@ for file in \
   "$MASTER_SERVICE_E2E" "$AGENT_E2E" "$CLI_NAMING_E2E" \
   "$CLI_READINESS_E2E" \
   "$MAC_BRIDGE" "$MAC_BRIDGE_CLI" "$MAC_BRIDGE_KEYCHAIN" "$MAC_BRIDGE_NETWORK" \
-  "$MAC_BRIDGE_SUPERVISOR" "$MAC_BRIDGE_PROCESS" "$MAC_EVENT_RELAY" \
+  "$MAC_BRIDGE_SUPERVISOR" "$MAC_OWNER_CONTROL" "$MAC_BRIDGE_PROCESS" "$MAC_EVENT_RELAY" \
   "$MAC_APP" "$MAC_BRIDGE_TESTS" "$MAC_APP_TESTS" \
   "$MAC_BRIDGE_LIVE_E2E" "$WINDOWS_FIXTURE_LIVE_CONTROL" \
   "$WINDOWS_MLX_LIVE_CONTROL" "$WINDOWS_PROTOCOL_WORKFLOW" \
@@ -154,7 +155,7 @@ require_text "README non-claims" "$README" "Autonomous dispatch"
 require_text "DESIGN conveyor pointer" "$DESIGN" "docs/feature-conveyor-design.md"
 require_text "DESIGN distributed pointer" "$DESIGN" "docs/distributed-developer-mode-design.md"
 require_text "DESIGN assistant non-goal" "$DESIGN" "No general-purpose assistant surface."
-require_text "DESIGN current master schema" "$DESIGN" "schema-v7"
+require_text "DESIGN current master schema" "$DESIGN" "schema-v8"
 
 require_text "conveyor design status" "$FEATURE_CONVEYOR_DESIGN" "default-inert"
 require_text "conveyor design approval" "$FEATURE_CONVEYOR_DESIGN" "Approve and Enqueue"
@@ -163,13 +164,19 @@ require_text "conveyor loopback status route" "$FEATURE_CONVEYOR_DESIGN" \
 require_text "conveyor MacBridge-only remote route" "$FEATURE_CONVEYOR_DESIGN" \
   "GET /v1/distributed/feature-conveyor/status"
 require_text "conveyor advisory observation limit" "$FEATURE_CONVEYOR_DESIGN" \
-  "This remains advisory observation only"
+  "This projection remains advisory observation only"
+require_text "conveyor owner designation route" "$FEATURE_CONVEYOR_DESIGN" \
+  "POST /v1/distributed/feature-conveyor/approved-features"
 require_text "conveyor claimability limit" "$FEATURE_CONVEYOR_DESIGN" \
-  "establish claimability"
+  "does not establish"
 require_text "conveyor local status implementation" "$MASTER_PROCESS" \
   '"/v1/feature-conveyor/status"'
 require_text "conveyor remote status implementation" "$MASTER_PROCESS" \
   '"/v1/distributed/feature-conveyor/status"'
+require_text "conveyor owner designation implementation" "$MASTER_PROCESS" \
+  '"/v1/feature-conveyor/owner-control-bridge"'
+require_text "conveyor remote owner action implementation" "$MASTER_PROCESS" \
+  '"/v1/distributed/feature-conveyor/approved-features"'
 require_text "conveyor owner guidance implementation" "$MASTER_CRATE" \
   "owner_guidance"
 require_text "conveyor pause revision implementation" "$MASTER_CRATE" \
@@ -178,6 +185,10 @@ require_text "conveyor pre-handshake remote denial" "$MASTER_REMOTE_MTLS_E2E" \
   "pre-handshake client reached Feature Conveyor status"
 require_text "conveyor non-MacBridge remote denial" "$MASTER_REMOTE_MTLS_E2E" \
   "non-MacBridge reached Feature Conveyor status"
+require_text "conveyor pre-handshake owner-action denial" "$MASTER_REMOTE_MTLS_E2E" \
+  "pre-handshake client reached owner-control enqueue"
+require_text "conveyor remote owner-action redaction" "$MASTER_REMOTE_MTLS_E2E" \
+  "receipt leaked"
 require_text "conveyor local owner route remote absence" "$MASTER_REMOTE_MTLS_E2E" \
   "owner-token local status route leaked onto the remote router"
 require_text "conveyor Swift strict decoder" "$MAC_BRIDGE_SUPERVISOR" \
@@ -186,12 +197,16 @@ require_text "conveyor authenticated snapshot only" "$MAC_BRIDGE_SUPERVISOR" \
   'case featureConveyor = "feature_conveyor"'
 require_text "conveyor read-only Mac presentation" "$MAC_APP" \
   "Guidance is not an approval or callable action"
+require_text "conveyor explicit signed-helper action" "$MAC_BRIDGE_CLI" \
+  '"feature-conveyor", "approve-and-enqueue", "--confirm"'
+require_text "conveyor strict signed-helper owner action" "$MAC_OWNER_CONTROL" \
+  "owner_control_designation_revision"
 require_text "conveyor Swift negative-path regression" "$MAC_BRIDGE_TESTS" \
   "Supervisor rejects drifted, inconsistent, duplicate, and oversized Conveyor data"
 require_text "conveyor live observer requires signed helper" "$MAC_BRIDGE_LIVE_E2E" \
   'codesign --verify --strict "$BRIDGE_BIN"'
 require_text "conveyor live observer requires schema marker" "$MAC_BRIDGE_LIVE_E2E" \
-  'feature_conveyor_schema=7'
+  'feature_conveyor_schema=8'
 require_text "conveyor live observer requires repeated monitor samples" \
   "$MAC_BRIDGE_LIVE_E2E" "bridge monitor did not emit exactly two bounded samples"
 require_text "conveyor live observer requires reconnect advance" "$MAC_BRIDGE_LIVE_E2E" \
@@ -217,7 +232,11 @@ require_text "knowledge base conveyor guidance boundary" "$KB" \
 require_text "knowledge base conveyor pause revision" "$KB" \
   '`emergency_pause_revision`'
 require_text "knowledge base conveyor live observer proof" "$KB" \
-  '`feature_conveyor_schema=7`'
+  '`feature_conveyor_schema=8`'
+require_text "knowledge base owner designation boundary" "$KB" \
+  "POST /v1/feature-conveyor/owner-control-bridge"
+require_text "knowledge base remote owner action boundary" "$KB" \
+  "POST /v1/distributed/feature-conveyor/approved-features"
 require_text "knowledge base feature closeout" "$KB" \
   "Every feature or phase uses the closeout contract"
 require_text "knowledge base native E2E boundary" "$KB" \
@@ -233,6 +252,8 @@ require_text "release checklist conveyor observation seam" "$CHECKLIST" \
   "GET /v1/feature-conveyor/status"
 require_text "release checklist conveyor remote observation" "$CHECKLIST" \
   "GET /v1/distributed/feature-conveyor/status"
+require_text "release checklist conveyor owner designation" "$CHECKLIST" \
+  "owner-control MacBridge"
 require_text "release checklist feature closeout" "$CHECKLIST" \
   "docs/development-agent-workflow.md"
 

@@ -14,7 +14,7 @@ Before starting a release pass, confirm the claim you intend to make.
   it. Do not describe autonomous dispatch, repository mutation, review-provider
   invocation, or GitHub publication as implemented.
 - Confirm `docs/feature-conveyor-design.md` still marks the implemented slice
-  accurately. The repository kernel is default-inert and exposes only the
+  accurately. The repository kernel is default-inert and exposes the
   owner-token-authenticated loopback read-only
   `GET /v1/feature-conveyor/status` observation seam. Its queue-, pause-, and
   optional feature-lifecycle-revision-bound owner-guidance labels remain
@@ -22,9 +22,14 @@ Before starting a release pass, confirm the claim you intend to make.
   The dedicated remote `GET /v1/distributed/feature-conveyor/status` is
   read-only, requires an accepted exporter-bound MacBridge session, denies
   other roles, and forwards no owner token. The Mac renders it as text, never a
-  callable owner action. It exposes no worker dispatcher, repository execution,
-  review provider, publication coordinator, Mac control UI, or autonomous
-  activation.
+  callable owner action. Separately confirm schema v8 designates exactly one
+  current non-fixture owner-control MacBridge through the owner-token loopback
+  route, and that only its accepted, revalidated session can enqueue one strict,
+  already-approved, queue/designation/pause-revision-bound specification. The
+  signed helper action requires `--confirm`, bounded stdin, a strict redacted
+  receipt, and session close; the app remains read-only. It exposes no grant
+  creation, worker dispatcher, repository execution, review provider,
+  publication coordinator, Mac control UI, or autonomous activation.
 - Confirm `docs/architecture-map.md` matches the code for any surface that
   changed in this cycle.
 - Confirm the version is consistent:

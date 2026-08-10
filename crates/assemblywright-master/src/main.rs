@@ -1,21 +1,27 @@
 use anyhow::{bail, Context};
 use assemblywright_master::{
-    current_time_ms, AcceptedCancellation, AcceptedResult, CapabilityRebindAcknowledgement,
-    DeviceRegistration, EnrollmentGrantSpec, EnrollmentRequest, EphemeralServerIdentity,
-    FeatureConveyorStatus, IdentityAuthority, MasterHealthSnapshot, MasterProcess, NewStep,
-    PlatformSecretProtector, RemoteWorkContract, StartupReconciliation,
+    current_time_ms, AcceptedCancellation, AcceptedResult, ApprovedFeatureSpecification,
+    CapabilityRebindAcknowledgement, DeviceRegistration, EnrollmentGrantSpec, EnrollmentRequest,
+    EphemeralServerIdentity, FeatureConveyorStatus, IdentityAuthority, MasterHealthSnapshot,
+    MasterProcess, NewStep, PlatformSecretProtector, RemoteWorkContract, StartupReconciliation,
 };
 #[cfg(test)]
 use assemblywright_protocol::CapabilityKind;
 use assemblywright_protocol::{
     AuthenticatedHandshakeRequest, CancellationAcknowledgement, CancellationPollRequest,
     CapabilityDescriptor, DeviceId, DeviceRole, DistributedEventBatch,
-    DistributedEventBatchRequest, EnrollmentCsrReply, EnrollmentInvitation, FixtureJobResult,
-    HandshakeRequest, HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope,
-    JobResultStatus, Sensitivity, StepId, TaskId, ENROLLMENT_INVITATION_READY_STATUS,
-    ENROLLMENT_PAIRING_SCHEMA_VERSION, MAX_ENROLLMENT_PAIRING_FRAME_BYTES, MAX_WIRE_FRAME_BYTES,
-    PROTOCOL_VERSION,
+    DistributedEventBatchRequest, EnrollmentCsrReply, EnrollmentInvitation,
+    FeatureConveyorApprovedFeatureReceipt, FeatureConveyorApprovedFeatureRequest,
+    FeatureConveyorApprovedFeatureStatus, FeatureConveyorOwnerBridgeDesignationReceipt,
+    FeatureConveyorOwnerBridgeDesignationRequest, FeatureConveyorOwnerBridgeDesignationStatus,
+    FixtureJobResult, HandshakeRequest, HandshakeResponse, HandshakeStatus, JobEnvelope,
+    JobResultEnvelope, JobResultStatus, Sensitivity, StepId, TaskId,
+    ENROLLMENT_INVITATION_READY_STATUS, ENROLLMENT_PAIRING_SCHEMA_VERSION,
+    FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, MAX_ENROLLMENT_PAIRING_FRAME_BYTES,
+    MAX_WIRE_FRAME_BYTES, PROTOCOL_VERSION,
 };
+use axum::body::Bytes;
+use axum::extract::rejection::BytesRejection;
 use axum::extract::{DefaultBodyLimit, Path as AxumPath, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -1423,6 +1429,10 @@ async fn serve_runtime(
             "/v1/feature-conveyor/status",
             get(get_feature_conveyor_status),
         )
+        .route(
+            "/v1/feature-conveyor/owner-control-bridge",
+            post(designate_owner_control_bridge),
+        )
         .route("/v1/development/devices/register", post(register_device))
         .route("/v1/development/connections/accept", post(accept_handshake))
         .route("/v1/development/events/next", post(development_events_next))
@@ -1641,6 +1651,10 @@ fn remote_router(state: AppState) -> Router {
             get(remote_get_feature_conveyor_status),
         )
         .route(
+            "/v1/distributed/feature-conveyor/approved-features",
+            post(remote_enqueue_approved_feature),
+        )
+        .route(
             "/v1/distributed/connections/accept",
             post(remote_accept_handshake),
         )
@@ -1710,6 +1724,66 @@ async fn remote_get_feature_conveyor_status(
         .feature_conveyor_status()
         .map_err(api_error)?;
     Ok(Json(status))
+}
+
+async fn remote_enqueue_approved_feature(
+    State(state): State<AppState>,
+    Extension(session): Extension<RemoteSession>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<FeatureConveyorApprovedFeatureReceipt> {
+    let registration = require_remote_application_session(&state, &session, None)?;
+    if registration.role != DeviceRole::MacBridge {
+        return Err(unauthorized());
+    }
+    if state.lifecycle.maintenance_active.load(Ordering::SeqCst) {
+        return Err(fixed_error(
+            StatusCode::CONFLICT,
+            "approved_feature_enqueue_rejected",
+        ));
+    }
+    let body = body.map_err(|_| {
+        fixed_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "approved_feature_request_rejected",
+        )
+    })?;
+    let request = FeatureConveyorApprovedFeatureRequest::decode_frame(&body).map_err(|_| {
+        fixed_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "approved_feature_request_rejected",
+        )
+    })?;
+    let specification: ApprovedFeatureSpecification = request.specification.into();
+    let mut process = lock_process(&state)?;
+    let snapshot = process
+        .kernel_mut()
+        .enqueue_approved_feature_from_owner_bridge(
+            &specification,
+            request.expected_queue_revision,
+            request.owner_control_designation_revision,
+            request.emergency_pause_revision,
+            &registration,
+            current_time_ms().map_err(|_| {
+                fixed_error(StatusCode::CONFLICT, "approved_feature_enqueue_rejected")
+            })?,
+        )
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "approved_feature_enqueue_rejected"))?;
+    let queue_revision = process.kernel().feature_queue_revision().map_err(|_| {
+        fixed_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "approved_feature_enqueue_unavailable",
+        )
+    })?;
+    Ok(Json(FeatureConveyorApprovedFeatureReceipt {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        feature_id: snapshot.feature_id,
+        specification_revision: snapshot.specification_revision,
+        lifecycle_revision: snapshot.lifecycle_revision,
+        queue_revision,
+        owner_control_designation_revision: request.owner_control_designation_revision,
+        emergency_pause_revision: request.emergency_pause_revision,
+        status: FeatureConveyorApprovedFeatureStatus::Queued,
+    }))
 }
 
 async fn remote_accept_handshake(
@@ -1998,6 +2072,44 @@ async fn get_feature_conveyor_status(
     Ok(Json(status))
 }
 
+async fn designate_owner_control_bridge(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<FeatureConveyorOwnerBridgeDesignationReceipt> {
+    authorize(&headers, &state)?;
+    let body = body.map_err(|_| {
+        fixed_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "owner_control_designation_request_rejected",
+        )
+    })?;
+    let request =
+        FeatureConveyorOwnerBridgeDesignationRequest::decode_frame(&body).map_err(|_| {
+            fixed_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "owner_control_designation_request_rejected",
+            )
+        })?;
+    let designation = lock_process(&state)?
+        .kernel_mut()
+        .designate_owner_control_bridge(
+            request.device_id,
+            request.expected_designation_revision,
+            current_time_ms().map_err(|_| {
+                fixed_error(StatusCode::CONFLICT, "owner_control_designation_rejected")
+            })?,
+        )
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "owner_control_designation_rejected"))?;
+    Ok(Json(FeatureConveyorOwnerBridgeDesignationReceipt {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        device_id: designation.device_id,
+        registry_revision: designation.registry_revision,
+        designation_revision: designation.designation_revision,
+        status: FeatureConveyorOwnerBridgeDesignationStatus::Designated,
+    }))
+}
+
 async fn register_device(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2207,6 +2319,15 @@ fn unauthorized() -> ApiError {
         StatusCode::UNAUTHORIZED,
         Json(ErrorResponse {
             error: "unauthorized".to_string(),
+        }),
+    )
+}
+
+fn fixed_error(status: StatusCode, code: &'static str) -> ApiError {
+    (
+        status,
+        Json(ErrorResponse {
+            error: code.to_string(),
         }),
     )
 }

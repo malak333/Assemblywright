@@ -1,10 +1,11 @@
 use assemblywright_master::{
-    ApprovedFeatureSpecification, FeatureAbandonmentEvidence, FeatureConveyorGuidanceReason,
-    FeatureConveyorGuidanceState, FeatureConveyorNextOwnerAction, FeatureGrantRevisions,
-    FeatureLifecycleStatus, FeatureTransitionEvidence, MasterError, MasterKernel, MasterProcess,
-    RepositoryGrantKind, RepositoryGrantRevision, VerifiedFeatureSuccess,
-    MAX_CONVEYOR_NONTERMINAL_FEATURES, MAX_CONVEYOR_STATUS_FEATURES,
+    ApprovedFeatureSpecification, DeviceRegistration, FeatureAbandonmentEvidence,
+    FeatureConveyorGuidanceReason, FeatureConveyorGuidanceState, FeatureConveyorNextOwnerAction,
+    FeatureGrantRevisions, FeatureLifecycleStatus, FeatureTransitionEvidence, MasterError,
+    MasterKernel, MasterProcess, RepositoryGrantKind, RepositoryGrantRevision,
+    VerifiedFeatureSuccess, MAX_CONVEYOR_NONTERMINAL_FEATURES, MAX_CONVEYOR_STATUS_FEATURES,
 };
+use assemblywright_protocol::{CapabilityDescriptor, DeviceId, DeviceRole};
 use rusqlite::Connection;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -108,6 +109,246 @@ fn specification(
         model_id: "review-v1".to_string(),
         dependencies,
     }
+}
+
+fn bridge_registration(name: &str) -> DeviceRegistration {
+    DeviceRegistration {
+        device_id: DeviceId::new(Uuid::new_v4()),
+        device_name: name.to_string(),
+        role: DeviceRole::MacBridge,
+        registry_revision: 1,
+        capabilities: vec![CapabilityDescriptor::mlx_reasoning(
+            "owner-control-mlx",
+            32 * 1024,
+            32 * 1024,
+        )],
+    }
+}
+
+#[test]
+fn owner_control_designation_is_explicit_cas_bound_role_checked_and_audited() {
+    let directory = tempdir().unwrap();
+    let database = directory.path().join("master.sqlite3");
+    let mut kernel = MasterKernel::open(&database).unwrap();
+    assert_eq!(kernel.schema_version().unwrap(), 8);
+    assert_eq!(kernel.owner_control_bridge_designation().unwrap(), None);
+
+    let fixture = DeviceRegistration {
+        device_id: DeviceId::new(Uuid::new_v4()),
+        device_name: "fixture-bridge".to_string(),
+        role: DeviceRole::MacBridge,
+        registry_revision: 1,
+        capabilities: vec![CapabilityDescriptor::fixture_reasoning()],
+    };
+    let worker = DeviceRegistration {
+        role: DeviceRole::InferenceWorker,
+        ..bridge_registration("worker")
+    };
+    let first = bridge_registration("owner-bridge-a");
+    let second = bridge_registration("owner-bridge-b");
+    for registration in [&fixture, &worker, &first, &second] {
+        kernel.register_device(registration).unwrap();
+    }
+
+    assert!(matches!(
+        kernel
+            .designate_owner_control_bridge(DeviceId::new(Uuid::new_v4()), 0, 10)
+            .unwrap_err(),
+        MasterError::DeviceNotRegistered
+    ));
+    for denied in [&fixture, &worker] {
+        assert!(matches!(
+            kernel
+                .designate_owner_control_bridge(denied.device_id, 0, 11)
+                .unwrap_err(),
+            MasterError::OwnerControlBridgeUnauthorized
+        ));
+    }
+    assert_eq!(kernel.owner_control_bridge_designation().unwrap(), None);
+
+    install_audit_failure(&database, "owner_control_bridge_designated");
+    assert!(matches!(
+        kernel
+            .designate_owner_control_bridge(first.device_id, 0, 12)
+            .unwrap_err(),
+        MasterError::Storage(_)
+    ));
+    assert_eq!(kernel.owner_control_bridge_designation().unwrap(), None);
+    remove_audit_failure(&database);
+
+    let designated = kernel
+        .designate_owner_control_bridge(first.device_id, 0, 13)
+        .unwrap();
+    assert_eq!(designated.device_id, first.device_id);
+    assert_eq!(designated.registry_revision, first.registry_revision);
+    assert_eq!(designated.designation_revision, 1);
+    assert!(matches!(
+        kernel
+            .designate_owner_control_bridge(second.device_id, 0, 14)
+            .unwrap_err(),
+        MasterError::StaleOwnerControlDesignationRevision {
+            expected: 0,
+            found: 1
+        }
+    ));
+    assert_eq!(
+        kernel.owner_control_bridge_designation().unwrap(),
+        Some(designated)
+    );
+
+    let rebound = kernel
+        .designate_owner_control_bridge(second.device_id, 1, 15)
+        .unwrap();
+    assert_eq!(rebound.device_id, second.device_id);
+    assert_eq!(rebound.designation_revision, 2);
+    let connection = Connection::open(database).unwrap();
+    let audits = connection
+        .prepare(
+            "SELECT redacted_metadata_json FROM feature_conveyor_audit
+             WHERE event_kind = 'owner_control_bridge_designated' ORDER BY audit_id",
+        )
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(audits.len(), 2);
+    for audit in audits {
+        assert!(!audit.contains(&first.device_id.0.to_string()));
+        assert!(!audit.contains(&second.device_id.0.to_string()));
+        assert!(!audit.contains("owner-control-mlx"));
+        assert!(!audit.contains("owner-bridge"));
+    }
+}
+
+#[test]
+fn owner_bridge_enqueue_binds_designation_queue_pause_and_existing_approval_mechanics() {
+    let directory = tempdir().unwrap();
+    let database = directory.path().join("master.sqlite3");
+    let mut kernel = MasterKernel::open(&database).unwrap();
+    let owner = bridge_registration("owner-bridge");
+    let other = bridge_registration("other-bridge");
+    kernel.register_device(&owner).unwrap();
+    kernel.register_device(&other).unwrap();
+    let repository_id = Uuid::new_v4();
+    install_grants(&mut kernel, repository_id);
+    let feature = specification(Uuid::new_v4(), repository_id, vec![]);
+
+    assert!(matches!(
+        kernel
+            .enqueue_approved_feature_from_owner_bridge(&feature, 0, 1, 0, &owner, 20)
+            .unwrap_err(),
+        MasterError::StaleOwnerControlDesignationRevision {
+            expected: 1,
+            found: 0
+        }
+    ));
+    let designation = kernel
+        .designate_owner_control_bridge(owner.device_id, 0, 21)
+        .unwrap();
+    Connection::open(&database)
+        .unwrap()
+        .execute(
+            "UPDATE master_devices SET registry_revision = 2 WHERE device_id = ?1",
+            [owner.device_id.0.to_string()],
+        )
+        .unwrap();
+    let drifted_owner = DeviceRegistration {
+        registry_revision: 2,
+        ..owner.clone()
+    };
+    assert!(matches!(
+        kernel
+            .enqueue_approved_feature_from_owner_bridge(
+                &feature,
+                0,
+                designation.designation_revision,
+                0,
+                &drifted_owner,
+                21,
+            )
+            .unwrap_err(),
+        MasterError::OwnerControlBridgeUnauthorized
+    ));
+    Connection::open(&database)
+        .unwrap()
+        .execute(
+            "UPDATE master_devices SET registry_revision = 1 WHERE device_id = ?1",
+            [owner.device_id.0.to_string()],
+        )
+        .unwrap();
+    assert!(matches!(
+        kernel
+            .enqueue_approved_feature_from_owner_bridge(
+                &feature,
+                0,
+                designation.designation_revision,
+                0,
+                &other,
+                22,
+            )
+            .unwrap_err(),
+        MasterError::OwnerControlBridgeUnauthorized
+    ));
+    assert!(matches!(
+        kernel
+            .enqueue_approved_feature_from_owner_bridge(&feature, 0, 2, 0, &owner, 23)
+            .unwrap_err(),
+        MasterError::StaleOwnerControlDesignationRevision { .. }
+    ));
+
+    kernel.set_emergency_paused_at(true, 24).unwrap();
+    assert!(matches!(
+        kernel
+            .enqueue_approved_feature_from_owner_bridge(&feature, 0, 1, 0, &owner, 25)
+            .unwrap_err(),
+        MasterError::StaleEmergencyPauseRevision {
+            expected: 0,
+            found: 1
+        }
+    ));
+    assert!(matches!(
+        kernel
+            .enqueue_approved_feature_from_owner_bridge(&feature, 0, 1, 1, &owner, 26)
+            .unwrap_err(),
+        MasterError::EmergencyPaused
+    ));
+    kernel.set_emergency_paused_at(false, 27).unwrap();
+    assert!(matches!(
+        kernel
+            .enqueue_approved_feature_from_owner_bridge(&feature, 0, 1, 1, &owner, 28)
+            .unwrap_err(),
+        MasterError::StaleEmergencyPauseRevision {
+            expected: 1,
+            found: 2
+        }
+    ));
+    install_audit_failure(&database, "feature_enqueued");
+    assert!(matches!(
+        kernel
+            .enqueue_approved_feature_from_owner_bridge(&feature, 0, 1, 2, &owner, 28)
+            .unwrap_err(),
+        MasterError::Storage(_)
+    ));
+    assert_eq!(kernel.feature_queue_revision().unwrap(), 0);
+    assert!(matches!(
+        kernel.feature_snapshot(feature.feature_id).unwrap_err(),
+        MasterError::FeatureNotFound
+    ));
+    remove_audit_failure(&database);
+    let queued = kernel
+        .enqueue_approved_feature_from_owner_bridge(&feature, 0, 1, 2, &owner, 29)
+        .unwrap();
+    assert_eq!(queued.status, FeatureLifecycleStatus::Queued);
+    assert_eq!(queued.lifecycle_revision, 1);
+    assert_eq!(kernel.feature_queue_revision().unwrap(), 1);
+    assert!(matches!(
+        kernel
+            .enqueue_approved_feature_from_owner_bridge(&feature, 1, 1, 2, &owner, 30)
+            .unwrap_err(),
+        MasterError::FeatureSpecificationImmutable
+    ));
+    assert_eq!(kernel.feature_queue_revision().unwrap(), 1);
 }
 
 fn assert_exact_object_keys(value: &Value, expected: &[&str]) {
@@ -251,7 +492,7 @@ fn abandon_feature(kernel: &mut MasterKernel, feature: &ApprovedFeatureSpecifica
 fn status_projection_is_empty_bounded_and_redacted() {
     let mut kernel = MasterKernel::in_memory().unwrap();
     let empty = kernel.feature_conveyor_status().unwrap();
-    assert_eq!(empty.schema_version, 7);
+    assert_eq!(empty.schema_version, 8);
     assert_eq!(empty.queue_revision, 0);
     assert_eq!(empty.startup_quarantine_count, 0);
     assert_eq!(empty.visible_feature_count, 0);
@@ -1193,6 +1434,7 @@ fn downgrade_v5_database_to_v4(path: &std::path::Path, sabotage: bool) {
              DROP TRIGGER master_pending_capability_rebinds_terminal_only;
              DROP TABLE master_identity_rebind_audit;
              DROP TABLE master_pending_capability_rebinds;
+             DROP TABLE feature_owner_control_state;
              DROP TABLE feature_conveyor_audit;
              DROP TABLE feature_transition_evidence;
              DROP TABLE feature_active_lease;
@@ -1226,7 +1468,7 @@ fn master_process_v4_backup_migration_reopen_and_restore_on_failure() {
     ));
     {
         let process = MasterProcess::acquire(directory.path()).unwrap();
-        assert_eq!(process.kernel().schema_version().unwrap(), 7);
+        assert_eq!(process.kernel().schema_version().unwrap(), 8);
         let backup = process.migration_backup_path().unwrap();
         assert!(backup.exists());
         let backup_connection = Connection::open(backup).unwrap();
@@ -1249,7 +1491,7 @@ fn master_process_v4_backup_migration_reopen_and_restore_on_failure() {
             .kernel()
             .schema_version()
             .unwrap(),
-        7
+        8
     );
 
     let failed_directory = tempdir().unwrap();
@@ -1290,18 +1532,19 @@ fn master_process_v4_backup_migration_reopen_and_restore_on_failure() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v7.")));
+            .starts_with("master.pre-v8.")));
 }
 
 #[test]
-fn master_process_v6_backup_migration_binds_emergency_pause_revision() {
+fn master_process_v6_backup_migration_binds_pause_and_default_inert_owner_control() {
     let directory = tempdir().unwrap();
     let database = directory.path().join("master.sqlite3");
     drop(MasterKernel::open(&database).unwrap());
     Connection::open(&database)
         .unwrap()
         .execute_batch(
-            "DELETE FROM master_metadata WHERE key = 'emergency_pause_revision';
+            "DROP TABLE feature_owner_control_state;
+             DELETE FROM master_metadata WHERE key = 'emergency_pause_revision';
              PRAGMA user_version = 6;",
         )
         .unwrap();
@@ -1312,14 +1555,18 @@ fn master_process_v6_backup_migration_binds_emergency_pause_revision() {
     ));
 
     let process = MasterProcess::acquire(directory.path()).unwrap();
-    assert_eq!(process.kernel().schema_version().unwrap(), 7);
+    assert_eq!(process.kernel().schema_version().unwrap(), 8);
     assert_eq!(process.kernel().emergency_pause_revision().unwrap(), 0);
+    assert_eq!(
+        process.kernel().owner_control_bridge_designation().unwrap(),
+        None
+    );
     let backup = process.migration_backup_path().unwrap();
     assert!(backup
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v7."));
+        .starts_with("master.pre-v8."));
     let backup = Connection::open(backup).unwrap();
     assert_eq!(
         backup
@@ -1347,7 +1594,7 @@ fn forward_schema_version_fails_closed_without_backup() {
     drop(MasterKernel::open(&database).unwrap());
     Connection::open(&database)
         .unwrap()
-        .execute_batch("PRAGMA user_version = 8;")
+        .execute_batch("PRAGMA user_version = 9;")
         .unwrap();
     let forward_error = match MasterProcess::acquire(directory.path()) {
         Ok(_) => panic!("forward schema unexpectedly opened"),
@@ -1356,8 +1603,8 @@ fn forward_schema_version_fails_closed_without_backup() {
     assert!(matches!(
         forward_error,
         MasterError::UnsupportedSchemaVersion {
-            expected: 7,
-            found: 8
+            expected: 8,
+            found: 9
         }
     ));
     assert!(!directory
@@ -1368,5 +1615,5 @@ fn forward_schema_version_fails_closed_without_backup() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v7.")));
+            .starts_with("master.pre-v8.")));
 }

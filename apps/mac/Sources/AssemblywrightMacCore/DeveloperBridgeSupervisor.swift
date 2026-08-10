@@ -69,7 +69,7 @@ public enum AssemblywrightMacFeatureConveyorNextOwnerAction: String, Codable, Eq
 }
 
 public struct AssemblywrightMacFeatureConveyorStatus: Codable, Equatable, Sendable {
-    public static let expectedSchemaVersion: UInt64 = 7
+    public static let expectedSchemaVersion: UInt64 = 8
     public static let maximumFeatures = 100
     public static let maximumVisibleFeatures: UInt64 = 101
 

@@ -167,7 +167,7 @@ separate layer; it adds no remote enqueue, repository, tool, credential,
 network, Codex, Git, publication, or unattended authority.
 
 The first Durable Feature Conveyor implementation is a separate default-inert
-schema-v5 repository kernel retained by the schema-v7 Windows
+schema-v5 repository kernel retained by the schema-v8 Windows
 `assemblywright-master`. It persists
 immutable digest-bound approved specifications, independent repository grant
 revisions, a 100-nonterminal-item owner-ordered queue, dependency blocking,
@@ -178,8 +178,16 @@ bounded projection is reachable through the owner-authenticated local route and
 through `GET /v1/distributed/feature-conveyor/status` only after an accepted
 exporter-bound MacBridge session. The latter accepts no owner token, denies
 other roles, and is decoded into authenticated read-only Mac app state. It
-grants no worker, repository, review, Codex, GitHub, publication, control UI,
-unattended, or autonomous authority.
+  grants no worker, repository, review, Codex, GitHub, publication, control UI,
+  unattended, or autonomous authority. Schema v8 separately persists one
+  owner-token-designated, compare-and-set owner-control MacBridge. Only its
+  exact current exporter-bound application session may POST one bounded,
+  already-approved specification bound to current queue, designation, and
+  Emergency Pause revisions. The action appends an immutable queued feature
+  with atomic redacted audit and does not claim, dispatch, execute, review,
+  publish, or activate it. The signed Mac helper exposes this only through a
+  one-shot standard-profile `approve-and-enqueue --confirm` stdin command; the
+  app remains read-only.
 
 Emergency pause and deliberate resume are reachable only through the
 Windows-local bearer-authenticated loopback actions
@@ -242,7 +250,7 @@ stale exact fixture registration. `enrollment rebind-pair --confirm` retains the
 raw grant secret only in the stopped Windows CLI process, snapshots the current
 same-device/name/role registration, and permits only a strictly higher exact
 singleton MLX target. Certificate issuance creates schema-v6 pending evidence
-retained by schema v7;
+retained by schema v8;
 it neither changes the active registry nor authorizes the new certificate. The
 Mac `enrollment rebind prepare|stage --confirm` commands use a separate standard
 replacement Secure Enclave key, certificate label, and staged record, validate

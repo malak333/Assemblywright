@@ -2,11 +2,11 @@ use assemblywright_protocol::{
     AttemptId, CancellationAcknowledgement, CancellationId, CancellationInstruction,
     CapabilityDescriptor, ContextHandlingPolicy, DeviceId, DeviceRole, DistributedEvent,
     DistributedEventBatch, DistributedEventBatchRequest, DistributedEventCursor,
-    DistributedEventKind, HandshakeRequest, HandshakeResponse, HandshakeStatus, JobEnvelope,
-    JobResultEnvelope, JobResultStatus, LeaseId, ProtocolError, Sensitivity, StepId, TaskId,
-    CANCELLATION_ACK_DEADLINE_MS, FIXTURE_REASONING_CAPABILITY_ID, MAX_CAPABILITY_ID_BYTES,
-    MAX_JOB_CONTEXT_BYTES, MAX_LEASE_DURATION_MS, MAX_STEP_DEADLINE_MS,
-    MLX_REASONING_CAPABILITY_ID, PROTOCOL_VERSION,
+    DistributedEventKind, FeatureConveyorApprovedSpecification, HandshakeRequest,
+    HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope, JobResultStatus, LeaseId,
+    ProtocolError, Sensitivity, StepId, TaskId, CANCELLATION_ACK_DEADLINE_MS,
+    FIXTURE_REASONING_CAPABILITY_ID, MAX_CAPABILITY_ID_BYTES, MAX_JOB_CONTEXT_BYTES,
+    MAX_LEASE_DURATION_MS, MAX_STEP_DEADLINE_MS, MLX_REASONING_CAPABILITY_ID, PROTOCOL_VERSION,
 };
 use rusqlite::{
     params, Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior,
@@ -33,7 +33,7 @@ pub use identity::{
     SERVER_CERTIFICATE_LIFETIME_MS,
 };
 
-pub const MASTER_SCHEMA_VERSION: i64 = 7;
+pub const MASTER_SCHEMA_VERSION: i64 = 8;
 pub const MAX_QUEUED_OR_LEASED_STEPS: u64 = 256;
 pub const MAX_CONCURRENT_JOBS: u64 = 4;
 pub const MAX_CONVEYOR_NONTERMINAL_FEATURES: u64 = 100;
@@ -198,6 +198,16 @@ pub enum MasterError {
     FeatureQueueFull,
     #[error("feature conveyor queue revision is stale: expected {expected}, found {found}")]
     StaleFeatureQueueRevision { expected: u64, found: u64 },
+    #[error("feature conveyor owner-control designation revision is stale: expected {expected}, found {found}")]
+    StaleOwnerControlDesignationRevision { expected: u64, found: u64 },
+    #[error(
+        "feature conveyor emergency-pause revision is stale: expected {expected}, found {found}"
+    )]
+    StaleEmergencyPauseRevision { expected: u64, found: u64 },
+    #[error("no owner-control Mac bridge is designated")]
+    OwnerControlBridgeNotDesignated,
+    #[error("the authenticated device is not the exact designated owner-control Mac bridge")]
+    OwnerControlBridgeUnauthorized,
     #[error("feature lifecycle revision is stale: expected {expected}, found {found}")]
     StaleFeatureLifecycleRevision { expected: u64, found: u64 },
     #[error("feature was not found")]
@@ -479,6 +489,37 @@ pub struct ApprovedFeatureSpecification {
     pub provider_id: String,
     pub model_id: String,
     pub dependencies: Vec<Uuid>,
+}
+
+impl From<FeatureConveyorApprovedSpecification> for ApprovedFeatureSpecification {
+    fn from(specification: FeatureConveyorApprovedSpecification) -> Self {
+        Self {
+            feature_id: specification.feature_id,
+            revision: specification.revision,
+            repository_id: specification.repository_id,
+            manifest: specification.manifest,
+            manifest_sha256: specification.manifest_sha256,
+            design_sha256: specification.design_sha256,
+            brainstorming_sha256: specification.brainstorming_sha256,
+            owner_approval_sha256: specification.owner_approval_sha256,
+            grants: FeatureGrantRevisions {
+                registration: specification.grants.registration,
+                cloud_disclosure: specification.grants.cloud_disclosure,
+                autonomous_publication: specification.grants.autonomous_publication,
+            },
+            provider_id: specification.provider_id,
+            model_id: specification.model_id,
+            dependencies: specification.dependencies,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OwnerControlBridgeDesignation {
+    pub device_id: DeviceId,
+    pub registry_revision: u64,
+    pub designation_revision: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -915,6 +956,77 @@ impl MasterKernel {
         i64_to_u64(revision)
     }
 
+    pub fn owner_control_bridge_designation(
+        &self,
+    ) -> Result<Option<OwnerControlBridgeDesignation>, MasterError> {
+        owner_control_bridge_designation_connection(&self.connection)
+    }
+
+    pub fn designate_owner_control_bridge(
+        &mut self,
+        device_id: DeviceId,
+        expected_designation_revision: u64,
+        now_ms: u64,
+    ) -> Result<OwnerControlBridgeDesignation, MasterError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (current_device_id, current_revision): (Option<String>, i64) = tx.query_row(
+            "SELECT owner_bridge_device_id, designation_revision
+             FROM feature_owner_control_state WHERE singleton = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let current_revision = i64_to_u64(current_revision)?;
+        if current_revision != expected_designation_revision {
+            return Err(MasterError::StaleOwnerControlDesignationRevision {
+                expected: expected_designation_revision,
+                found: current_revision,
+            });
+        }
+        let registration = device_registration_tx(&tx, device_id)?;
+        require_owner_control_eligible_registration(&registration)?;
+        let next_revision = current_revision
+            .checked_add(1)
+            .ok_or(MasterError::IntegerOutOfRange)?;
+        let changed = tx.execute(
+            "UPDATE feature_owner_control_state
+             SET owner_bridge_device_id = ?1,
+                 owner_bridge_registry_revision = ?2,
+                 designation_revision = ?3
+             WHERE singleton = 1 AND designation_revision = ?4",
+            params![
+                device_id.0.to_string(),
+                u64_to_i64(registration.registry_revision)?,
+                u64_to_i64(next_revision)?,
+                u64_to_i64(current_revision)?,
+            ],
+        )?;
+        if changed != 1 {
+            return Err(MasterError::InvalidStoredState(
+                "owner-control designation changed during compare-and-set".to_string(),
+            ));
+        }
+        append_feature_audit_tx(
+            &tx,
+            "owner_control_bridge_designated",
+            None,
+            now_ms,
+            serde_json::json!({
+                "designation_revision": next_revision,
+                "registry_revision": registration.registry_revision,
+                "rebound": current_device_id.is_some(),
+                "side_effect_executed": false
+            }),
+        )?;
+        tx.commit()?;
+        Ok(OwnerControlBridgeDesignation {
+            device_id,
+            registry_revision: registration.registry_revision,
+            designation_revision: next_revision,
+        })
+    }
+
     pub fn feature_conveyor_status(&self) -> Result<FeatureConveyorStatus, MasterError> {
         let schema_version = self.schema_version()?;
         let queue_revision = self.feature_queue_revision()?;
@@ -1213,11 +1325,52 @@ impl MasterKernel {
         expected_queue_revision: u64,
         now_ms: u64,
     ) -> Result<FeatureSnapshot, MasterError> {
+        self.enqueue_approved_feature_with_owner_binding(
+            specification,
+            expected_queue_revision,
+            now_ms,
+            None,
+        )
+    }
+
+    pub fn enqueue_approved_feature_from_owner_bridge(
+        &mut self,
+        specification: &ApprovedFeatureSpecification,
+        expected_queue_revision: u64,
+        expected_designation_revision: u64,
+        expected_emergency_pause_revision: u64,
+        registration: &DeviceRegistration,
+        now_ms: u64,
+    ) -> Result<FeatureSnapshot, MasterError> {
+        self.enqueue_approved_feature_with_owner_binding(
+            specification,
+            expected_queue_revision,
+            now_ms,
+            Some((
+                registration,
+                expected_designation_revision,
+                expected_emergency_pause_revision,
+            )),
+        )
+    }
+
+    fn enqueue_approved_feature_with_owner_binding(
+        &mut self,
+        specification: &ApprovedFeatureSpecification,
+        expected_queue_revision: u64,
+        now_ms: u64,
+        owner_binding: Option<(&DeviceRegistration, u64, u64)>,
+    ) -> Result<FeatureSnapshot, MasterError> {
         let canonical_manifest = validate_approved_specification(specification)?;
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         require_queue_revision_tx(&tx, expected_queue_revision)?;
+        if let Some((registration, designation_revision, emergency_pause_revision)) = owner_binding
+        {
+            require_owner_control_bridge_tx(&tx, registration, designation_revision)?;
+            require_unpaused_revision_tx(&tx, emergency_pause_revision)?;
+        }
         require_grants_tx(
             &tx,
             specification.repository_id,
@@ -3594,6 +3747,35 @@ impl MasterKernel {
             )?;
         }
         let version = self.schema_version()?;
+        if version == 7 {
+            self.connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 CREATE TABLE feature_owner_control_state (
+                   singleton INTEGER PRIMARY KEY NOT NULL CHECK (singleton = 1),
+                   owner_bridge_device_id TEXT REFERENCES master_devices(device_id),
+                   owner_bridge_registry_revision INTEGER,
+                   designation_revision INTEGER NOT NULL CHECK (designation_revision >= 0),
+                   CHECK (
+                     (
+                       owner_bridge_device_id IS NULL
+                       AND owner_bridge_registry_revision IS NULL
+                       AND designation_revision = 0
+                     ) OR (
+                       owner_bridge_device_id IS NOT NULL
+                       AND owner_bridge_registry_revision > 0
+                       AND designation_revision > 0
+                     )
+                   )
+                 );
+                 INSERT INTO feature_owner_control_state (
+                   singleton, owner_bridge_device_id,
+                   owner_bridge_registry_revision, designation_revision
+                 ) VALUES (1, NULL, NULL, 0);
+                 PRAGMA user_version = 8;
+                 COMMIT;",
+            )?;
+        }
+        let version = self.schema_version()?;
         if version != MASTER_SCHEMA_VERSION {
             return Err(MasterError::UnsupportedSchemaVersion {
                 expected: MASTER_SCHEMA_VERSION,
@@ -4693,6 +4875,152 @@ fn canonical_json(value: &Value) -> Result<String, MasterError> {
     let mut output = String::new();
     write_value(value, &mut output)?;
     Ok(output)
+}
+
+fn owner_control_bridge_designation_connection(
+    connection: &Connection,
+) -> Result<Option<OwnerControlBridgeDesignation>, MasterError> {
+    let (device_id, registry_revision, designation_revision): (Option<String>, Option<i64>, i64) =
+        connection.query_row(
+            "SELECT owner_bridge_device_id, owner_bridge_registry_revision, designation_revision
+         FROM feature_owner_control_state WHERE singleton = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+    match (
+        device_id,
+        registry_revision,
+        i64_to_u64(designation_revision)?,
+    ) {
+        (None, None, 0) => Ok(None),
+        (Some(device_id), Some(registry_revision), designation_revision)
+            if designation_revision > 0 =>
+        {
+            Ok(Some(OwnerControlBridgeDesignation {
+                device_id: DeviceId::new(parse_uuid(&device_id)?),
+                registry_revision: i64_to_u64(registry_revision)?,
+                designation_revision,
+            }))
+        }
+        _ => Err(MasterError::InvalidStoredState(
+            "owner-control designation is inconsistent".to_string(),
+        )),
+    }
+}
+
+fn device_registration_tx(
+    tx: &Transaction<'_>,
+    device_id: DeviceId,
+) -> Result<DeviceRegistration, MasterError> {
+    let stored = tx
+        .query_row(
+            "SELECT device_name, role_json, registry_revision, capabilities_json, revoked
+             FROM master_devices WHERE device_id = ?1",
+            [device_id.0.to_string()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((device_name, role_json, registry_revision, capabilities_json, revoked)) = stored
+    else {
+        return Err(MasterError::DeviceNotRegistered);
+    };
+    if revoked != 0 {
+        return Err(MasterError::OwnerControlBridgeUnauthorized);
+    }
+    let registration = DeviceRegistration {
+        device_id,
+        device_name,
+        role: serde_json::from_str(&role_json)?,
+        registry_revision: i64_to_u64(registry_revision)?,
+        capabilities: serde_json::from_str(&capabilities_json)?,
+    };
+    let validation = HandshakeRequest {
+        protocol_version: PROTOCOL_VERSION,
+        device_id: registration.device_id,
+        device_name: registration.device_name.clone(),
+        role: registration.role,
+        registry_revision: registration.registry_revision,
+        capabilities: registration.capabilities.clone(),
+    };
+    validation.validate()?;
+    Ok(registration)
+}
+
+fn require_owner_control_eligible_registration(
+    registration: &DeviceRegistration,
+) -> Result<(), MasterError> {
+    if registration.role != DeviceRole::MacBridge
+        || registration
+            .capabilities
+            .iter()
+            .any(|capability| capability.id == FIXTURE_REASONING_CAPABILITY_ID)
+    {
+        return Err(MasterError::OwnerControlBridgeUnauthorized);
+    }
+    Ok(())
+}
+
+fn require_owner_control_bridge_tx(
+    tx: &Transaction<'_>,
+    registration: &DeviceRegistration,
+    expected_designation_revision: u64,
+) -> Result<(), MasterError> {
+    require_owner_control_eligible_registration(registration)?;
+    let (device_id, registry_revision, designation_revision): (Option<String>, Option<i64>, i64) =
+        tx.query_row(
+            "SELECT owner_bridge_device_id, owner_bridge_registry_revision, designation_revision
+         FROM feature_owner_control_state WHERE singleton = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+    let designation_revision = i64_to_u64(designation_revision)?;
+    if designation_revision != expected_designation_revision {
+        return Err(MasterError::StaleOwnerControlDesignationRevision {
+            expected: expected_designation_revision,
+            found: designation_revision,
+        });
+    }
+    let Some(device_id) = device_id else {
+        return Err(MasterError::OwnerControlBridgeNotDesignated);
+    };
+    let Some(registry_revision) = registry_revision else {
+        return Err(MasterError::InvalidStoredState(
+            "designated owner-control bridge omitted its registry revision".to_string(),
+        ));
+    };
+    let current = device_registration_tx(tx, registration.device_id)?;
+    if parse_uuid(&device_id)? != registration.device_id.0
+        || i64_to_u64(registry_revision)? != registration.registry_revision
+        || current != *registration
+    {
+        return Err(MasterError::OwnerControlBridgeUnauthorized);
+    }
+    Ok(())
+}
+
+fn require_unpaused_revision_tx(
+    tx: &Transaction<'_>,
+    expected_revision: u64,
+) -> Result<(), MasterError> {
+    let found = emergency_pause_revision_tx(tx)?;
+    if found != expected_revision {
+        return Err(MasterError::StaleEmergencyPauseRevision {
+            expected: expected_revision,
+            found,
+        });
+    }
+    if emergency_paused_tx(tx)? {
+        return Err(MasterError::EmergencyPaused);
+    }
+    Ok(())
 }
 
 fn require_queue_revision_tx(

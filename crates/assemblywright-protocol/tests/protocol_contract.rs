@@ -1,11 +1,14 @@
 use assemblywright_protocol::{
     AttemptId, AuthenticatedHandshakeRequest, CancellationId, CapabilityDescriptor, CapabilityKind,
     ContextHandlingPolicy, DeviceId, DeviceRole, EnrollmentCsrReply, EnrollmentInvitation,
-    HandshakeRequest, HandshakeResponse, JobEnvelope, JobResultEnvelope, JobResultStatus, LeaseId,
-    ProtocolError, Sensitivity, StepId, TaskId, ENROLLMENT_CSR_READY_STATUS,
-    ENROLLMENT_INVITATION_READY_STATUS, ENROLLMENT_PAIRING_SCHEMA_VERSION,
-    MAX_ENROLLMENT_CSR_PEM_BYTES, MAX_ENROLLMENT_PAIRING_FRAME_BYTES, MAX_JOB_CONTEXT_BYTES,
-    MAX_JOB_RESULT_BYTES, MAX_LEASE_DURATION_MS, MAX_WIRE_FRAME_BYTES, PROTOCOL_VERSION,
+    FeatureConveyorApprovedFeatureRequest, FeatureConveyorApprovedSpecification,
+    FeatureConveyorGrantRevisions, FeatureConveyorOwnerBridgeDesignationRequest, HandshakeRequest,
+    HandshakeResponse, JobEnvelope, JobResultEnvelope, JobResultStatus, LeaseId, ProtocolError,
+    Sensitivity, StepId, TaskId, ENROLLMENT_CSR_READY_STATUS, ENROLLMENT_INVITATION_READY_STATUS,
+    ENROLLMENT_PAIRING_SCHEMA_VERSION, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+    MAX_ENROLLMENT_CSR_PEM_BYTES, MAX_ENROLLMENT_PAIRING_FRAME_BYTES,
+    MAX_FEATURE_CONVEYOR_DEPENDENCIES, MAX_JOB_CONTEXT_BYTES, MAX_JOB_RESULT_BYTES,
+    MAX_LEASE_DURATION_MS, MAX_WIRE_FRAME_BYTES, PROTOCOL_VERSION,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -17,6 +20,121 @@ fn fixed_uuid(value: &str) -> Uuid {
 
 fn digest_json(value: &Value) -> [u8; 32] {
     Sha256::digest(serde_json::to_vec(value).expect("serialize JSON for digest")).into()
+}
+
+fn canonical_digest(value: &Value) -> [u8; 32] {
+    let canonical = match value {
+        Value::Object(object) => {
+            let mut keys = object.keys().collect::<Vec<_>>();
+            keys.sort();
+            format!(
+                "{{{}}}",
+                keys.into_iter()
+                    .map(|key| format!(
+                        "{}:{}",
+                        serde_json::to_string(key).unwrap(),
+                        serde_json::to_string(&object[key]).unwrap()
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        }
+        _ => unreachable!("test manifest is an object"),
+    };
+    Sha256::digest(canonical.as_bytes()).into()
+}
+
+fn approved_feature_request() -> FeatureConveyorApprovedFeatureRequest {
+    let feature_id = fixed_uuid("77777777-7777-4777-8777-777777777777");
+    let manifest = json!({"allowed_paths":["crates/example"],"outcome":"bounded"});
+    FeatureConveyorApprovedFeatureRequest {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        expected_queue_revision: 0,
+        owner_control_designation_revision: 1,
+        emergency_pause_revision: 0,
+        specification: FeatureConveyorApprovedSpecification {
+            feature_id,
+            revision: 1,
+            repository_id: fixed_uuid("88888888-8888-4888-8888-888888888888"),
+            manifest_sha256: canonical_digest(&manifest),
+            manifest,
+            design_sha256: [1; 32],
+            brainstorming_sha256: [2; 32],
+            owner_approval_sha256: [3; 32],
+            grants: FeatureConveyorGrantRevisions {
+                registration: 1,
+                cloud_disclosure: 1,
+                autonomous_publication: 1,
+            },
+            provider_id: "local.review".to_string(),
+            model_id: "review-v1".to_string(),
+            dependencies: vec![],
+        },
+    }
+}
+
+#[test]
+fn feature_conveyor_owner_control_dtos_are_strict_bounded_and_independently_versioned() {
+    assert_eq!(PROTOCOL_VERSION, 2);
+    let designation = FeatureConveyorOwnerBridgeDesignationRequest {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        device_id: DeviceId::new(fixed_uuid("99999999-9999-4999-8999-999999999999")),
+        expected_designation_revision: 0,
+    };
+    designation.validate().unwrap();
+    assert!(
+        serde_json::from_value::<FeatureConveyorOwnerBridgeDesignationRequest>(json!({
+            "schema_version": 1,
+            "device_id": "99999999-9999-4999-8999-999999999999",
+            "expected_designation_revision": 0,
+            "owner_token": "must-not-be-accepted"
+        }))
+        .is_err()
+    );
+
+    let valid = approved_feature_request();
+    valid.validate().unwrap();
+    let encoded = serde_json::to_vec(&valid).unwrap();
+    assert_eq!(
+        FeatureConveyorApprovedFeatureRequest::decode_frame(&encoded).unwrap(),
+        valid
+    );
+    let duplicate_nested_key = String::from_utf8(encoded).unwrap().replacen(
+        "\"manifest\":{",
+        "\"manifest\":{\"duplicate\":1,\"duplicate\":2,",
+        1,
+    );
+    assert!(
+        FeatureConveyorApprovedFeatureRequest::decode_frame(duplicate_nested_key.as_bytes())
+            .is_err()
+    );
+
+    let mut wrong_schema = valid.clone();
+    wrong_schema.schema_version += 1;
+    assert!(wrong_schema.validate().is_err());
+    let mut no_designation = valid.clone();
+    no_designation.owner_control_designation_revision = 0;
+    assert!(no_designation.validate().is_err());
+    let mut wrong_digest = valid.clone();
+    wrong_digest.specification.manifest_sha256 = [9; 32];
+    assert!(wrong_digest.validate().is_err());
+    let mut numeric_manifest = approved_feature_request();
+    numeric_manifest.specification.manifest = json!({"ratio": 1.0});
+    numeric_manifest.specification.manifest_sha256 =
+        canonical_digest(&numeric_manifest.specification.manifest);
+    numeric_manifest.validate().unwrap();
+    let mut duplicate_dependencies = valid.clone();
+    let dependency = fixed_uuid("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+    duplicate_dependencies.specification.dependencies = vec![dependency, dependency];
+    assert!(duplicate_dependencies.validate().is_err());
+    let mut self_dependency = valid.clone();
+    self_dependency.specification.dependencies = vec![self_dependency.specification.feature_id];
+    assert!(self_dependency.validate().is_err());
+    let mut too_many_dependencies = valid;
+    too_many_dependencies.specification.dependencies = (0..=MAX_FEATURE_CONVEYOR_DEPENDENCIES)
+        .map(|index| Uuid::from_u128(0x4000 + index as u128))
+        .collect();
+    assert!(too_many_dependencies.validate().is_err());
 }
 
 fn sample_job() -> JobEnvelope {
