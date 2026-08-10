@@ -5,8 +5,9 @@ use assemblywright_master::{
 use assemblywright_protocol::{
     CapabilityDescriptor, DeviceId, DeviceRole, FeatureConveyorOwnerBridgeDesignationRequest,
     FeatureConveyorRepositoryGrantKind, FeatureConveyorRepositoryGrantRequest,
-    FeatureConveyorRepositoryGrantRevision, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
-    MAX_WIRE_FRAME_BYTES,
+    FeatureConveyorRepositoryGrantRevision, FeatureConveyorRepositoryPreflightRequest,
+    FeatureConveyorRepositoryScopeDocument, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+    MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES, MAX_WIRE_FRAME_BYTES,
 };
 use rusqlite::Connection;
 use serde_json::Value;
@@ -324,6 +325,269 @@ fn repository_grant_routes_are_owner_authenticated_strict_cas_bound_and_redacted
     assert!(!audit.contains(&repository_id.to_string()));
     assert!(!audit.contains("private"));
     assert!(audit.contains("\"side_effect_executed\":false"));
+}
+
+#[test]
+fn repository_preflight_is_owner_only_filesystem_identity_observation_and_redacted() {
+    let directory = tempdir().expect("temporary repository-preflight master directory");
+    let repository = tempdir().expect("temporary repository-preflight Git directory");
+    let binary = env!("CARGO_BIN_EXE_assemblywright-master");
+    assert_success(&run(binary, directory.path(), ["setup"]), "setup");
+    git(repository.path(), &["init", "-b", "main"]);
+    git(
+        repository.path(),
+        &["config", "user.name", "Assemblywright Test"],
+    );
+    git(
+        repository.path(),
+        &["config", "user.email", "assemblywright@example.invalid"],
+    );
+    std::fs::write(repository.path().join("README.md"), "bounded fixture\n").unwrap();
+    git(repository.path(), &["add", "README.md"]);
+    git(repository.path(), &["commit", "-m", "bounded fixture"]);
+    let head = git_stdout(repository.path(), &["rev-parse", "HEAD"]);
+    let repository_path = std::fs::canonicalize(repository.path()).unwrap();
+
+    let endpoint = unused_loopback_addr();
+    let mut server = spawn_server(binary, directory.path(), endpoint);
+    read_ready(&mut server.child);
+    let token = std::fs::read_to_string(directory.path().join("development.token")).unwrap();
+    let token = token.trim();
+    let repository_id = Uuid::new_v4();
+    let scope = FeatureConveyorRepositoryScopeDocument {
+        repository_id,
+        repository_path: repository_path.to_string_lossy().into_owned(),
+        expected_base_branch: "main".to_string(),
+        expected_head_commit: head.clone(),
+    };
+    let mut request = FeatureConveyorRepositoryPreflightRequest {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        scope_sha256: scope.canonical_scope_sha256().unwrap(),
+        scope,
+        registration_grant_revision: 1,
+        expected_emergency_pause_revision: 0,
+    };
+    record_preflight_registration_grant(endpoint, token, &request, 0);
+
+    let request_json = serde_json::to_string(&request).unwrap();
+    let unauthorized = post_request(
+        endpoint,
+        "/v1/feature-conveyor/repository-preflight",
+        None,
+        &request_json,
+    );
+    assert!(unauthorized.starts_with("HTTP/1.1 401 Unauthorized"));
+    let malformed = post_request(
+        endpoint,
+        "/v1/feature-conveyor/repository-preflight",
+        Some(token),
+        r#"{"schema_version":1,"private_path":"must-not-leak"}"#,
+    );
+    assert!(malformed.starts_with("HTTP/1.1 422 Unprocessable Entity"));
+    assert_eq!(
+        response_json(&malformed),
+        serde_json::json!({"error":"repository_preflight_request_rejected"})
+    );
+    assert!(!malformed.contains("must-not-leak"));
+    for forbidden_path in [
+        "//server/share/repository",
+        r"\\server\share\repository",
+        r"\\?\C:\repository",
+        r"\\.\C:\repository",
+    ] {
+        let mut forbidden = serde_json::to_value(&request).unwrap();
+        forbidden["scope"]["repository_path"] = Value::String(forbidden_path.to_string());
+        let response = post_request(
+            endpoint,
+            "/v1/feature-conveyor/repository-preflight",
+            Some(token),
+            &serde_json::to_string(&forbidden).unwrap(),
+        );
+        assert!(
+            response.starts_with("HTTP/1.1 422 Unprocessable Entity"),
+            "accepted {forbidden_path}: {response}"
+        );
+        assert!(!response.contains(forbidden_path));
+    }
+    let oversized = post_bytes_request(
+        endpoint,
+        "/v1/feature-conveyor/repository-preflight",
+        Some(token),
+        &vec![b'x'; MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES + 1],
+    );
+    assert!(
+        oversized.starts_with("HTTP/1.1 422 Unprocessable Entity"),
+        "{oversized}"
+    );
+    assert_eq!(
+        response_json(&oversized),
+        serde_json::json!({"error":"repository_preflight_request_rejected"})
+    );
+
+    let eligible = post_request(
+        endpoint,
+        "/v1/feature-conveyor/repository-preflight",
+        Some(token),
+        &request_json,
+    );
+    assert!(eligible.starts_with("HTTP/1.1 200 OK"), "{eligible}");
+    let receipt = response_json(&eligible);
+    assert_exact_object_keys(
+        &receipt,
+        &[
+            "schema_version",
+            "repository_id",
+            "registration_grant_revision",
+            "scope_sha256",
+            "emergency_pause_revision",
+            "base_branch",
+            "head_commit",
+            "preflight_fingerprint_sha256",
+            "observed_at_ms",
+            "status",
+        ],
+    );
+    assert_eq!(receipt["repository_id"], repository_id.to_string());
+    assert_eq!(receipt["base_branch"], "main");
+    assert_eq!(receipt["head_commit"], head);
+    assert!(receipt.get("clean").is_none());
+    assert_eq!(receipt["status"], "identity_eligible");
+    assert!(!eligible.contains(&request.scope.repository_path));
+
+    std::fs::write(repository.path().join("README.md"), "dirty fixture\n").unwrap();
+    assert_preflight_identity_eligible(endpoint, token, &request);
+    git(repository.path(), &["checkout", "--", "README.md"]);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let marker = repository.path().join("hostile-filter-executed");
+        let hostile_filter = repository.path().join("hostile-filter.sh");
+        std::fs::write(
+            &hostile_filter,
+            format!(
+                "#!/bin/sh\nprintf executed > '{}'\n(sleep 30) &\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&hostile_filter).unwrap().permissions();
+        permissions.set_mode(0o700);
+        std::fs::set_permissions(&hostile_filter, permissions).unwrap();
+        git(
+            repository.path(),
+            &[
+                "config",
+                "filter.hostile.process",
+                hostile_filter.to_str().unwrap(),
+            ],
+        );
+        git(
+            repository.path(),
+            &["config", "filter.hostile.required", "true"],
+        );
+        std::fs::write(
+            repository.path().join(".gitattributes"),
+            "* filter=hostile\n",
+        )
+        .unwrap();
+        assert_preflight_identity_eligible(endpoint, token, &request);
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(!marker.exists(), "repository filter executable was invoked");
+        std::fs::remove_file(repository.path().join(".gitattributes")).unwrap();
+        std::fs::remove_file(hostile_filter).unwrap();
+        git(
+            repository.path(),
+            &["config", "--unset", "filter.hostile.process"],
+        );
+        git(
+            repository.path(),
+            &["config", "--unset", "filter.hostile.required"],
+        );
+    }
+
+    git(repository.path(), &["checkout", "-b", "other"]);
+    assert_preflight_rejected(endpoint, token, &request);
+    git(repository.path(), &["checkout", "main"]);
+    std::fs::write(repository.path().join("README.md"), "new clean head\n").unwrap();
+    git(repository.path(), &["add", "README.md"]);
+    git(repository.path(), &["commit", "-m", "new head"]);
+    assert_preflight_rejected(endpoint, token, &request);
+    git(repository.path(), &["reset", "--hard", &head]);
+    git(repository.path(), &["checkout", "--detach", &head]);
+    assert_preflight_rejected(endpoint, token, &request);
+    git(repository.path(), &["checkout", "main"]);
+    std::fs::create_dir(repository.path().join(".git").join("worktrees")).unwrap();
+    assert_preflight_rejected(endpoint, token, &request);
+    std::fs::remove_dir(repository.path().join(".git").join("worktrees")).unwrap();
+    std::fs::create_dir(repository.path().join(".git").join("modules")).unwrap();
+    assert_preflight_rejected(endpoint, token, &request);
+    std::fs::remove_dir(repository.path().join(".git").join("modules")).unwrap();
+    std::fs::write(
+        repository.path().join(".git").join("config.worktree"),
+        "[core]\n\tworktree = forbidden\n",
+    )
+    .unwrap();
+    assert_preflight_rejected(endpoint, token, &request);
+    std::fs::remove_file(repository.path().join(".git").join("config.worktree")).unwrap();
+    std::fs::write(
+        repository.path().join(".gitmodules"),
+        "forbidden submodule\n",
+    )
+    .unwrap();
+    assert_preflight_rejected(endpoint, token, &request);
+    std::fs::remove_file(repository.path().join(".gitmodules")).unwrap();
+
+    #[cfg(unix)]
+    {
+        let symlink_parent = tempdir().unwrap();
+        let symlink = symlink_parent.path().join("repository-link");
+        std::os::unix::fs::symlink(repository.path(), &symlink).unwrap();
+        request.scope.repository_path = symlink.to_string_lossy().into_owned();
+        request.scope_sha256 = request.scope.canonical_scope_sha256().unwrap();
+        request.registration_grant_revision = 2;
+        record_preflight_registration_grant(endpoint, token, &request, 1);
+        assert_preflight_rejected(endpoint, token, &request);
+    }
+
+    let non_git = tempdir().unwrap();
+    request.scope.repository_path = std::fs::canonicalize(non_git.path())
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    request.scope_sha256 = request.scope.canonical_scope_sha256().unwrap();
+    request.registration_grant_revision += 1;
+    record_preflight_registration_grant(
+        endpoint,
+        token,
+        &request,
+        request.registration_grant_revision - 1,
+    );
+    assert_preflight_rejected(endpoint, token, &request);
+
+    let audit: String = Connection::open(directory.path().join("master.sqlite3"))
+        .unwrap()
+        .query_row(
+            "SELECT redacted_metadata_json FROM feature_conveyor_audit
+             WHERE event_kind = 'repository_identity_preflight_eligible'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    for forbidden in [
+        repository_id.to_string(),
+        repository_path.to_string_lossy().into_owned(),
+        "main".to_string(),
+        head,
+        "error".to_string(),
+    ] {
+        assert!(
+            !audit.contains(&forbidden),
+            "audit leaked {forbidden}: {audit}"
+        );
+    }
+    assert!(audit.contains("\"identity_only\":true"));
+    assert!(!audit.contains("clean"));
 }
 
 #[test]
@@ -756,6 +1020,129 @@ fn post_request(endpoint: SocketAddr, path: &str, token: Option<&str>, body: &st
         .read_to_string(&mut response)
         .expect("read owner action response");
     response
+}
+
+fn post_bytes_request(
+    endpoint: SocketAddr,
+    path: &str,
+    token: Option<&str>,
+    body: &[u8],
+) -> String {
+    let mut stream = TcpStream::connect(endpoint).expect("connect binary owner action");
+    let authorization = token
+        .map(|token| format!("Authorization: Bearer {token}\r\n"))
+        .unwrap_or_default();
+    write!(
+        stream,
+        "POST {path} HTTP/1.1\r\nHost: {endpoint}\r\n{authorization}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )
+    .expect("write binary owner action request headers");
+    stream
+        .write_all(body)
+        .expect("write binary owner action request body");
+    let mut response = String::new();
+    stream
+        .read_to_string(&mut response)
+        .expect("read binary owner action response");
+    response
+}
+
+fn record_preflight_registration_grant(
+    endpoint: SocketAddr,
+    token: &str,
+    request: &FeatureConveyorRepositoryPreflightRequest,
+    expected_current_revision: u64,
+) {
+    let grant = FeatureConveyorRepositoryGrantRequest {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        expected_current_revision,
+        expected_emergency_pause_revision: request.expected_emergency_pause_revision,
+        grant: FeatureConveyorRepositoryGrantRevision {
+            repository_id: request.scope.repository_id,
+            kind: FeatureConveyorRepositoryGrantKind::Registration,
+            revision: request.registration_grant_revision,
+            scope_sha256: request.scope_sha256,
+            owner_approval_sha256: Sha256::digest(format!(
+                "owner-approved-preflight-revision-{}",
+                request.registration_grant_revision
+            ))
+            .into(),
+            expires_at_ms: None,
+            revoked: false,
+        },
+    };
+    let response = post_request(
+        endpoint,
+        "/v1/feature-conveyor/repository-grants",
+        Some(token),
+        &serde_json::to_string(&grant).unwrap(),
+    );
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+}
+
+fn assert_preflight_rejected(
+    endpoint: SocketAddr,
+    token: &str,
+    request: &FeatureConveyorRepositoryPreflightRequest,
+) {
+    let response = post_request(
+        endpoint,
+        "/v1/feature-conveyor/repository-preflight",
+        Some(token),
+        &serde_json::to_string(request).unwrap(),
+    );
+    assert!(response.starts_with("HTTP/1.1 409 Conflict"), "{response}");
+    assert_eq!(
+        response_json(&response),
+        serde_json::json!({"error":"repository_preflight_rejected"})
+    );
+    assert!(!response.contains(&request.scope.repository_path));
+}
+
+fn assert_preflight_identity_eligible(
+    endpoint: SocketAddr,
+    token: &str,
+    request: &FeatureConveyorRepositoryPreflightRequest,
+) {
+    let response = post_request(
+        endpoint,
+        "/v1/feature-conveyor/repository-preflight",
+        Some(token),
+        &serde_json::to_string(request).unwrap(),
+    );
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    let receipt = response_json(&response);
+    assert_eq!(receipt["status"], "identity_eligible");
+    assert!(receipt.get("clean").is_none());
+}
+
+fn git(repository: &Path, arguments: &[&str]) {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repository)
+        .args(arguments)
+        .output()
+        .expect("run disposable Git fixture command");
+    assert!(
+        output.status.success(),
+        "Git fixture command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn git_stdout(repository: &Path, arguments: &[&str]) -> String {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repository)
+        .args(arguments)
+        .output()
+        .expect("run disposable Git fixture observation");
+    assert!(output.status.success());
+    String::from_utf8(output.stdout)
+        .unwrap()
+        .trim_end_matches(['\r', '\n'])
+        .to_string()
 }
 
 fn get_request(endpoint: SocketAddr, path: &str, token: Option<&str>) -> String {

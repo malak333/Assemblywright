@@ -1350,6 +1350,81 @@ impl MasterKernel {
         })
     }
 
+    /// Checks whether one exact repository scope is currently eligible for a
+    /// read-only point-in-time preflight. This grants no repository action;
+    /// callers must recheck through `record_repository_preflight` after the
+    /// observation and before issuing any receipt.
+    pub fn authorize_repository_preflight(
+        &self,
+        repository_id: Uuid,
+        registration_grant_revision: u64,
+        scope_sha256: &[u8; 32],
+        expected_emergency_pause_revision: u64,
+        now_ms: u64,
+    ) -> Result<(), MasterError> {
+        validate_repository_preflight_binding(
+            repository_id,
+            registration_grant_revision,
+            scope_sha256,
+            now_ms,
+        )?;
+        require_repository_preflight_binding(
+            &self.connection,
+            repository_id,
+            registration_grant_revision,
+            scope_sha256,
+            expected_emergency_pause_revision,
+            now_ms,
+        )
+    }
+
+    /// Atomically rechecks the exact active registration grant and Emergency
+    /// Pause binding, then appends only structurally redacted point-in-time
+    /// audit evidence. No path or preflight result is stored durably.
+    pub fn record_repository_preflight(
+        &mut self,
+        repository_id: Uuid,
+        registration_grant_revision: u64,
+        scope_sha256: &[u8; 32],
+        expected_emergency_pause_revision: u64,
+        observed_at_ms: u64,
+    ) -> Result<(), MasterError> {
+        validate_repository_preflight_binding(
+            repository_id,
+            registration_grant_revision,
+            scope_sha256,
+            observed_at_ms,
+        )?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_repository_preflight_binding(
+            &tx,
+            repository_id,
+            registration_grant_revision,
+            scope_sha256,
+            expected_emergency_pause_revision,
+            observed_at_ms,
+        )?;
+        append_feature_audit_tx(
+            &tx,
+            "repository_identity_preflight_eligible",
+            None,
+            observed_at_ms,
+            serde_json::json!({
+                "grant_kind": "registration",
+                "grant_revision": registration_grant_revision,
+                "emergency_pause_revision": expected_emergency_pause_revision,
+                "scope_digest_matched": true,
+                "point_in_time": true,
+                "identity_only": true,
+                "side_effect_executed": false
+            }),
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn enqueue_approved_feature(
         &mut self,
         specification: &ApprovedFeatureSpecification,
@@ -5201,6 +5276,90 @@ fn increment_queue_revision_tx(
         });
     }
     Ok(next)
+}
+
+fn validate_repository_preflight_binding(
+    repository_id: Uuid,
+    registration_grant_revision: u64,
+    scope_sha256: &[u8; 32],
+    now_ms: u64,
+) -> Result<(), MasterError> {
+    if repository_id.is_nil()
+        || registration_grant_revision == 0
+        || *scope_sha256 == [0; 32]
+        || now_ms == 0
+    {
+        return Err(MasterError::InvalidFeatureConveyorInput(
+            "repository preflight requires exact nonzero identity, grant, scope, and observation time"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn require_repository_preflight_binding(
+    connection: &Connection,
+    repository_id: Uuid,
+    registration_grant_revision: u64,
+    scope_sha256: &[u8; 32],
+    expected_emergency_pause_revision: u64,
+    now_ms: u64,
+) -> Result<(), MasterError> {
+    let row = connection.query_row(
+        "SELECT paused.integer_value, pause_revision.integer_value,
+                grant.revision, grant.scope_sha256, grant.expires_at_ms, grant.revoked
+         FROM master_metadata paused
+         JOIN master_metadata pause_revision
+           ON pause_revision.key = 'emergency_pause_revision'
+         LEFT JOIN feature_repository_grants grant
+           ON grant.repository_id = ?1
+          AND grant.grant_kind = 'registration'
+          AND grant.revision = (
+            SELECT MAX(current.revision)
+            FROM feature_repository_grants current
+            WHERE current.repository_id = ?1
+              AND current.grant_kind = 'registration'
+          )
+         WHERE paused.key = 'emergency_paused'",
+        [repository_id.to_string()],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+                row.get::<_, Option<Vec<u8>>>(3)?,
+                row.get::<_, Option<i64>>(4)?,
+                row.get::<_, Option<i64>>(5)?,
+            ))
+        },
+    )?;
+    let paused = parse_stored_boolean(row.0, "emergency pause state")?;
+    let pause_revision = i64_to_u64(row.1)?;
+    if pause_revision != expected_emergency_pause_revision {
+        return Err(MasterError::StaleEmergencyPauseRevision {
+            expected: expected_emergency_pause_revision,
+            found: pause_revision,
+        });
+    }
+    if paused {
+        return Err(MasterError::EmergencyPaused);
+    }
+    let (Some(revision), Some(stored_scope), expires_at_ms, Some(revoked)) =
+        (row.2, row.3, row.4, row.5)
+    else {
+        return Err(MasterError::RepositoryGrantUnavailable);
+    };
+    if i64_to_u64(revision)? != registration_grant_revision
+        || stored_scope.as_slice() != scope_sha256
+        || parse_stored_boolean(revoked, "repository grant revoked state")?
+        || expires_at_ms
+            .map(i64_to_u64)
+            .transpose()?
+            .is_some_and(|expiry| expiry <= now_ms)
+    {
+        return Err(MasterError::RepositoryGrantUnavailable);
+    }
+    Ok(())
 }
 
 fn require_grants_tx(

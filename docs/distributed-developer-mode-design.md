@@ -187,7 +187,18 @@ other roles, and is decoded into authenticated read-only Mac app state. It
   with atomic redacted audit and does not claim, dispatch, execute, review,
   publish, or activate it. The signed Mac helper exposes this only through a
   one-shot standard-profile `approve-and-enqueue --confirm` stdin command; the
-  app remains read-only.
+  app remains read-only. Separately, an owner-token loopback-only repository
+  preflight binds one canonical path/branch/HEAD scope to the exact current
+  active registration grant and Emergency Pause revision. It runs only bounded
+  filesystem-only identity observation of a standard local `.git` directory,
+  symbolic HEAD, and exact loose ref for a single-component branch. Windows
+  holds non-reparse handles for the complete fixed-volume identity chain
+  without delete sharing through the final atomic grant, pause, and audit
+  recheck. It executes no Git process, loads
+  no repository configuration or attributes, rejects network/reparse/worktree/
+  submodule paths, does not prove clean-tree or content state, retains no path
+  or content, and returns a path-free point-in-time digest receipt after atomic
+  redacted audit. The receipt is not a durable snapshot or claimability.
 
 Emergency pause and deliberate resume are reachable only through the
 Windows-local bearer-authenticated loopback actions

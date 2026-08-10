@@ -64,7 +64,21 @@ executable.
   Recording is contiguous, compare-and-set and Emergency-Pause-revision bound;
   active authority is blocked while paused, revocation remains available, and
   redacted audit commits atomically. The routes inspect no repository and are
-  absent from enrolled-device mTLS. Separately,
+  absent from enrolled-device mTLS. A separate owner-token loopback-only
+  `POST /v1/feature-conveyor/repository-preflight` accepts one strict local
+  repository scope whose canonical digest, registration-grant revision, exact
+  single-component base branch, and exact HEAD commit are owner-bound. It performs only a
+  bounded, point-in-time filesystem identity inspection of a standard local
+  `.git` directory, symbolic HEAD, and exact loose branch ref. It executes no
+  Git process, loads no repository configuration or attributes, and rejects
+  UNC, device, mapped/non-fixed-volume, reparse, worktree, and submodule paths.
+  On Windows it holds non-reparse filesystem handles for the fixed-volume path,
+  identity directories, symbolic HEAD, and loose ref through the final grant,
+  Emergency Pause, and audit transaction recheck.
+  It does not prove a clean tree or inspect repository content. The path is
+  neither returned nor stored; success returns a
+  path-free digest receipt only after the active grant and Emergency Pause
+  revision are rechecked and a redacted audit commits atomically. Separately,
   an owner-token-authenticated loopback action designates exactly one current
   non-fixture MacBridge under compare-and-set revision and atomic redacted
   audit. Only that exact device, after a fresh exporter-bound application
@@ -119,7 +133,9 @@ decision must be auditable. Do not describe this as a finished product.
 
 Not yet implemented, and not claimed:
 
-- Autonomous dispatch, repository mutation, or publication of any kind.
+- Autonomous dispatch, repository mutation, or publication of any kind. The
+  implemented repository preflight is read-only, point-in-time, owner-local,
+  and does not create a reusable snapshot or establish claimability.
 - Worker execution against real repositories, review-provider invocation, or
   GitHub branch/PR/merge authority.
 - Mac Feature Conveyor UI controls or hosted brainstorming. The app remains

@@ -49,14 +49,31 @@ document is still target design.
 Master schema v8 adds the first bounded owner-control transport without
 activating the conveyor. An owner-token-authenticated Windows loopback action
 designates one exact current, enrolled, non-fixture `MacBridge` using a durable
-compare-and-set designation revision and same-transaction redacted audit. Only
-Two additional owner-token loopback-only routes record and inspect the three
+compare-and-set designation revision and same-transaction redacted audit. Two
+additional owner-token loopback-only routes record and inspect the three
 independent repository grants without accessing a repository. Each strict
 digest-only mutation must be the contiguous next revision, match the current
 grant and Emergency Pause revisions, and commit with a redacted audit. Active
 grants fail while paused; a revocation revision remains available. The current
 projection exposes only digests, revision, expiry, revocation, and computed
-active state, and both routes are absent from enrolled-device mTLS. Only the
+active state, and both routes are absent from enrolled-device mTLS. A separate
+owner-token loopback-only repository preflight accepts one bounded scope whose
+canonical digest, registration-grant revision, exact single-component base branch, exact HEAD,
+and Emergency Pause revision must all still match. It performs a point-in-time
+filesystem identity inspection of only a standard local `.git` directory,
+objects directory, symbolic HEAD, and exact loose branch ref. Windows holds
+non-reparse handles for the complete fixed-volume identity chain without delete
+sharing through the final atomic grant, pause, and audit recheck. It runs no Git
+process, loads no repository configuration or attributes, rejects network,
+device, reparse, worktree, and submodule paths, and does not prove clean-tree,
+index, object, or content state. The canonical path is neither stored nor returned;
+success emits only a path-free digest receipt after an atomic redacted audit.
+The five-second timeout applies to the filesystem-observation await only; owner
+authentication and database lock/audit latency remain separately fail-closed
+but are not covered by that response-time claim.
+This is admission evidence for the observed instant only: it creates no durable
+snapshot, claim, lease, mutation, worker, review, publication, or activation
+authority. Only the
 exact designated device may use
 `POST /v1/distributed/feature-conveyor/approved-features` after a revalidated,
 exporter-bound application handshake. Its fixed-schema request carries one

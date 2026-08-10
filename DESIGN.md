@@ -91,7 +91,22 @@ inspect only the current registration, cloud-disclosure, and autonomous-
 publication revisions. The mutation is bound to the Emergency Pause revision;
 active grants are blocked while paused, revocation remains available, and audit
 failure rolls back the revision. These routes never inspect a repository and
-are absent from the enrolled-device router. The separate remote
+are absent from the enrolled-device router. A separate owner-token-authenticated
+loopback preflight accepts one strict scope document whose canonical digest and
+revision must match the exact current active registration grant. The master
+performs only a filesystem identity check of a canonical non-symlink fixed-
+volume repository, standard `.git` and objects directories, symbolic HEAD, and
+exact loose ref for a single-component branch. On Windows, non-reparse handles
+for that complete path and identity chain remain held without delete sharing
+through the final grant, Emergency Pause, and audit transaction recheck. It
+executes no Git process, loads no repository config
+or attributes, rejects network/device/reparse/worktree/submodule paths, and
+does not establish clean working-tree or object-content state. It retains no
+path or repository content and returns only a path-free point-in-time digest
+receipt after the
+grant and Emergency Pause revision are rechecked with a same-transaction
+redacted audit. It does not create a snapshot or establish claimability. The
+separate remote
 `POST /v1/distributed/feature-conveyor/approved-features` remains unusable until
 the caller is the exact current designation on an accepted, revalidated,
 exporter-bound session. Its strict request binds one already-approved

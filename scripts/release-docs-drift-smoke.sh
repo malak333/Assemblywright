@@ -167,6 +167,8 @@ require_text "conveyor advisory observation limit" "$FEATURE_CONVEYOR_DESIGN" \
   "This projection remains advisory observation only"
 require_text "conveyor owner designation route" "$FEATURE_CONVEYOR_DESIGN" \
   "POST /v1/distributed/feature-conveyor/approved-features"
+require_text "conveyor repository preflight boundary" "$FEATURE_CONVEYOR_DESIGN" \
+  "owner-token loopback-only repository preflight"
 require_text "conveyor claimability limit" "$FEATURE_CONVEYOR_DESIGN" \
   "does not establish"
 require_text "conveyor local status implementation" "$MASTER_PROCESS" \
@@ -179,6 +181,8 @@ require_text "conveyor repository grant mutation implementation" "$MASTER_PROCES
   '"/v1/feature-conveyor/repository-grants"'
 require_text "conveyor repository grant status implementation" "$MASTER_PROCESS" \
   '"/v1/feature-conveyor/repositories/:repository_id/grants"'
+require_text "conveyor repository preflight implementation" "$MASTER_PROCESS" \
+  '"/v1/feature-conveyor/repository-preflight"'
 require_text "conveyor remote owner action implementation" "$MASTER_PROCESS" \
   '"/v1/distributed/feature-conveyor/approved-features"'
 require_text "conveyor owner guidance implementation" "$MASTER_CRATE" \
@@ -197,6 +201,8 @@ require_text "conveyor local owner route remote absence" "$MASTER_REMOTE_MTLS_E2
   "owner-token local status route leaked onto the remote router"
 require_text "conveyor local grant routes remote absence" "$MASTER_REMOTE_MTLS_E2E" \
   "repository-grant mutation leaked onto the remote router"
+require_text "conveyor local preflight remote absence" "$MASTER_REMOTE_MTLS_E2E" \
+  "repository preflight leaked onto the remote router"
 require_text "conveyor Swift strict decoder" "$MAC_BRIDGE_SUPERVISOR" \
   "invalid_feature_conveyor_status"
 require_text "conveyor authenticated snapshot only" "$MAC_BRIDGE_SUPERVISOR" \
@@ -251,6 +257,8 @@ require_text "knowledge base repository grant boundary" "$KB" \
   "POST /v1/feature-conveyor/repository-grants"
 require_text "knowledge base repository grant mutation invariant" "$KB" \
   "sole public mutation primitive"
+require_text "knowledge base repository preflight boundary" "$KB" \
+  "point-in-time admission check"
 require_text "knowledge base feature closeout" "$KB" \
   "Every feature or phase uses the closeout contract"
 require_text "knowledge base native E2E boundary" "$KB" \
@@ -270,6 +278,8 @@ require_text "release checklist conveyor owner designation" "$CHECKLIST" \
   "owner-control MacBridge"
 require_text "release checklist repository grant boundary" "$CHECKLIST" \
   "owner-token loopback repository-grant routes"
+require_text "release checklist repository preflight boundary" "$CHECKLIST" \
+  "loopback repository preflight"
 require_text "release checklist feature closeout" "$CHECKLIST" \
   "docs/development-agent-workflow.md"
 

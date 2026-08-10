@@ -1990,8 +1990,8 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "feature_conveyor_repository_kernel",
             "implemented",
-            "The default-inert schema-v8 Feature Conveyor kernel persists immutable owner-approved specification revisions, three independent repository-grant revisions, a bounded owner-ordered queue with strict head/dependency ordering, compare-and-set revisions, one durable active lease, exact lifecycle advancement, cancellation without advancement, explicit safe abandonment, startup quarantine, and same-transaction redacted audits. Its owner-authenticated loopback read-only status route and accepted-session MacBridge route add bounded lifecycle observation and fixed-enum owner guidance bound to queue, Emergency Pause, and optional feature lifecycle revisions. Owner-token loopback routes record and inspect strict contiguous, pause-bound, digest-only repository-grant revisions; a separate designation permits only the exact MacBridge to enqueue one already-approved specification.",
-            "Bounded observation, repository-grant preparation, and queue insertion only. Guidance labels are display-only and do not establish claimability. Grant recording performs no repository access, and enqueue does not claim or dispatch. No worker dispatcher, repository execution, review provider, publication coordinator, Mac queue UI, or autonomous activation is implemented.",
+            "The default-inert schema-v8 Feature Conveyor kernel persists immutable owner-approved specification revisions, three independent repository-grant revisions, a bounded owner-ordered queue with strict head/dependency ordering, compare-and-set revisions, one durable active lease, exact lifecycle advancement, cancellation without advancement, explicit safe abandonment, startup quarantine, and same-transaction redacted audits. Its owner-authenticated loopback read-only status route and accepted-session MacBridge route add bounded lifecycle observation and fixed-enum owner guidance bound to queue, Emergency Pause, and optional feature lifecycle revisions. Owner-token loopback routes record and inspect strict contiguous, pause-bound, digest-only repository-grant revisions; a separate owner-local route performs one bounded point-in-time filesystem-only repository identity preflight bound to the exact active registration grant and returns no path; a separate designation permits only the exact MacBridge to enqueue one already-approved specification.",
+            "Bounded observation, repository-grant preparation, point-in-time identity-only preflight, and queue insertion only. Guidance labels are display-only and do not establish claimability. Grant recording performs no repository access; preflight executes no Git process, stores no path, proves no clean-tree or content state, and creates no reusable snapshot; enqueue does not claim or dispatch. No worker dispatcher, repository mutation, review provider, publication coordinator, Mac queue UI, or autonomous activation is implemented.",
         ),
         feature(
             "enrollment_identity_and_mtls",
@@ -2176,8 +2176,16 @@ mod tests {
         assert!(feature
             .proof
             .contains("digest-only repository-grant revisions"));
+        assert!(feature
+            .proof
+            .contains("point-in-time filesystem-only repository identity preflight"));
         assert!(feature.boundary.contains("queue insertion only"));
-        assert!(feature.boundary.contains("performs no repository access"));
+        assert!(feature.boundary.contains("stores no path"));
+        assert!(feature.boundary.contains("executes no Git process"));
+        assert!(feature
+            .boundary
+            .contains("proves no clean-tree or content state"));
+        assert!(feature.boundary.contains("creates no reusable snapshot"));
         assert!(feature.boundary.contains("display-only"));
         assert!(feature.boundary.contains("do not establish claimability"));
         for forbidden in [

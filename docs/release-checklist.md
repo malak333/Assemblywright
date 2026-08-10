@@ -31,7 +31,17 @@ Before starting a release pass, confirm the claim you intend to make.
   owner-token loopback repository-grant routes enforce contiguous compare-and-
   set and Emergency-Pause-revision binding, allow revocation while paused,
   expose only current digest metadata, and remain absent from enrolled-device
-  mTLS. They perform no repository access. The slice exposes no worker
+  mTLS. They perform no repository access. Separately confirm the owner-token
+  loopback repository preflight is bound to the exact active registration
+  grant and Emergency Pause revision, limits the base branch to one component, uses only bounded point-in-time
+  filesystem identity inspection with no Git process or configuration load,
+  returns and stores no path, and commits only redacted audit plus a path-free
+  receipt. On Windows it must hold non-reparse, no-delete identity-chain handles
+  through the final atomic recheck. Confirm the five-second timeout claim is
+  limited to the filesystem-observation await and does not cover authentication
+  or database lock/audit latency. It does not prove clean-tree or content state and creates no reusable
+  snapshot or claimability. The slice
+  exposes no worker
   dispatcher, repository execution, review provider,
   publication coordinator, Mac control UI, or autonomous activation.
 - Confirm `docs/architecture-map.md` matches the code for any surface that

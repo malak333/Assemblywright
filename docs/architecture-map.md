@@ -31,6 +31,7 @@ flowchart LR
   Observer --> Helper
   Conveyor --> OwnerDesignation["Nullable CAS owner-control bridge designation with atomic redacted audit"]
   Conveyor --> GrantControl["Loopback-only contiguous CAS repository-grant revisions and current digest projection"]
+  GrantControl --> RepositoryPreflight["Owner-local filesystem-only identity preflight; path-free digest receipt and redacted audit"]
   OwnerDesignation --> OwnerAction["Exact designated non-fixture MacBridge-only approved-feature POST; queue insertion only"]
   OwnerAction --> Helper
   Protocol --> Feature["Dormant assemblywright-core distributed-development feature"]
@@ -92,7 +93,17 @@ owner-token-authenticated loopback grant surface records one strict contiguous
 compare-and-set digest-only revision and inspects current grant metadata for a
 repository. It is Emergency-Pause-revision bound, blocks active grants while
 paused, permits revocation, performs no repository access, and is absent from
-the remote router. Another owner-token-authenticated loopback action designates one exact current,
+the remote router. A separate owner-token-authenticated loopback preflight binds
+one strict canonical scope to the exact active registration grant and pause
+revision, then performs only bounded point-in-time standard `.git`, symbolic
+HEAD, and exact loose-ref identity observation for one single-component branch.
+Windows holds the fixed-volume path and identity-chain handles without delete
+sharing through the final atomic authorization and audit recheck. It executes no Git process, loads no
+repository config or attributes, rejects network/reparse/worktree/submodule
+paths, and does not prove clean-tree or content state. It stores and returns no
+path, appends only redacted audit,
+and emits a path-free digest receipt that grants no snapshot or claimability.
+Another owner-token-authenticated loopback action designates one exact current,
 non-fixture MacBridge. Only that designated device may submit one revision-bound
 already-approved specification through the dedicated remote POST; the signed
 helper exposes it only as a one-shot `--confirm` command with bounded stdin and

@@ -389,6 +389,144 @@ fn repository_grant_owner_control_is_cas_pause_bound_redacted_and_projected() {
 }
 
 #[test]
+fn repository_preflight_rechecks_active_registration_pause_and_redacted_audit_atomically() {
+    let directory = tempdir().unwrap();
+    let database = directory.path().join("master.sqlite3");
+    let mut kernel = MasterKernel::open(&database).unwrap();
+    let repository_id = Uuid::new_v4();
+    let scope_sha256 = digest("exact canonical path branch and head scope");
+    let registration = RepositoryGrantRevision {
+        repository_id,
+        kind: RepositoryGrantKind::Registration,
+        revision: 1,
+        scope_sha256,
+        owner_approval_sha256: digest("owner registration approval"),
+        expires_at_ms: Some(100),
+        revoked: false,
+    };
+    kernel
+        .record_repository_grant_revision(&registration, 0, 0, 10)
+        .unwrap();
+
+    kernel
+        .authorize_repository_preflight(repository_id, 1, &scope_sha256, 0, 50)
+        .unwrap();
+    assert!(matches!(
+        kernel
+            .authorize_repository_preflight(repository_id, 2, &scope_sha256, 0, 50)
+            .unwrap_err(),
+        MasterError::RepositoryGrantUnavailable
+    ));
+    assert!(matches!(
+        kernel
+            .authorize_repository_preflight(repository_id, 1, &digest("wrong scope"), 0, 50)
+            .unwrap_err(),
+        MasterError::RepositoryGrantUnavailable
+    ));
+    assert!(matches!(
+        kernel
+            .authorize_repository_preflight(Uuid::new_v4(), 1, &scope_sha256, 0, 50)
+            .unwrap_err(),
+        MasterError::RepositoryGrantUnavailable
+    ));
+    assert!(matches!(
+        kernel
+            .authorize_repository_preflight(repository_id, 1, &scope_sha256, 0, 100)
+            .unwrap_err(),
+        MasterError::RepositoryGrantUnavailable
+    ));
+    assert!(matches!(
+        kernel
+            .authorize_repository_preflight(Uuid::nil(), 1, &scope_sha256, 0, 50)
+            .unwrap_err(),
+        MasterError::InvalidFeatureConveyorInput(_)
+    ));
+    assert!(matches!(
+        kernel
+            .authorize_repository_preflight(repository_id, 0, &scope_sha256, 0, 50)
+            .unwrap_err(),
+        MasterError::InvalidFeatureConveyorInput(_)
+    ));
+
+    kernel.set_emergency_paused_at(true, 51).unwrap();
+    assert!(matches!(
+        kernel
+            .authorize_repository_preflight(repository_id, 1, &scope_sha256, 1, 52)
+            .unwrap_err(),
+        MasterError::EmergencyPaused
+    ));
+    assert!(matches!(
+        kernel
+            .authorize_repository_preflight(repository_id, 1, &scope_sha256, 0, 52)
+            .unwrap_err(),
+        MasterError::StaleEmergencyPauseRevision {
+            expected: 0,
+            found: 1
+        }
+    ));
+    kernel.set_emergency_paused_at(false, 53).unwrap();
+
+    install_audit_failure(&database, "repository_identity_preflight_eligible");
+    assert!(matches!(
+        kernel
+            .record_repository_preflight(repository_id, 1, &scope_sha256, 2, 54)
+            .unwrap_err(),
+        MasterError::Storage(_)
+    ));
+    assert_eq!(
+        Connection::open(&database)
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM feature_conveyor_audit
+                 WHERE event_kind = 'repository_identity_preflight_eligible'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+    remove_audit_failure(&database);
+    kernel
+        .record_repository_preflight(repository_id, 1, &scope_sha256, 2, 55)
+        .unwrap();
+
+    let revoked = RepositoryGrantRevision {
+        revision: 2,
+        expires_at_ms: None,
+        revoked: true,
+        ..registration
+    };
+    kernel
+        .record_repository_grant_revision(&revoked, 1, 2, 56)
+        .unwrap();
+    assert!(matches!(
+        kernel
+            .authorize_repository_preflight(repository_id, 2, &scope_sha256, 2, 57)
+            .unwrap_err(),
+        MasterError::RepositoryGrantUnavailable
+    ));
+
+    let audit: String = Connection::open(database)
+        .unwrap()
+        .query_row(
+            "SELECT redacted_metadata_json FROM feature_conveyor_audit
+             WHERE event_kind = 'repository_identity_preflight_eligible'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(!audit.contains(&repository_id.to_string()));
+    assert!(!audit.contains("path"));
+    assert!(!audit.contains("branch"));
+    assert!(!audit.contains("commit"));
+    assert!(!audit.contains("error"));
+    assert!(audit.contains("\"point_in_time\":true"));
+    assert!(audit.contains("\"identity_only\":true"));
+    assert!(!audit.contains("clean"));
+    assert!(audit.contains("\"side_effect_executed\":false"));
+}
+
+#[test]
 fn owner_bridge_enqueue_binds_designation_queue_pause_and_existing_approval_mechanics() {
     let directory = tempdir().unwrap();
     let database = directory.path().join("master.sqlite3");

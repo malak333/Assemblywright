@@ -1,17 +1,20 @@
 use assemblywright_protocol::{
-    AttemptId, AuthenticatedHandshakeRequest, CancellationId, CapabilityDescriptor, CapabilityKind,
-    ContextHandlingPolicy, DeviceId, DeviceRole, EnrollmentCsrReply, EnrollmentInvitation,
-    FeatureConveyorApprovedFeatureRequest, FeatureConveyorApprovedSpecification,
-    FeatureConveyorGrantRevisions, FeatureConveyorOwnerBridgeDesignationRequest,
-    FeatureConveyorRepositoryGrantKind, FeatureConveyorRepositoryGrantRequest,
-    FeatureConveyorRepositoryGrantRevision, HandshakeRequest, HandshakeResponse, JobEnvelope,
-    JobResultEnvelope, JobResultStatus, LeaseId, ProtocolError, Sensitivity, StepId, TaskId,
-    ENROLLMENT_CSR_READY_STATUS, ENROLLMENT_INVITATION_READY_STATUS,
-    ENROLLMENT_PAIRING_SCHEMA_VERSION, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
-    MAX_ENROLLMENT_CSR_PEM_BYTES, MAX_ENROLLMENT_PAIRING_FRAME_BYTES,
-    MAX_FEATURE_CONVEYOR_DEPENDENCIES, MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES,
-    MAX_JOB_CONTEXT_BYTES, MAX_JOB_RESULT_BYTES, MAX_LEASE_DURATION_MS, MAX_WIRE_FRAME_BYTES,
-    PROTOCOL_VERSION,
+    repository_preflight_fingerprint_sha256, AttemptId, AuthenticatedHandshakeRequest,
+    CancellationId, CapabilityDescriptor, CapabilityKind, ContextHandlingPolicy, DeviceId,
+    DeviceRole, EnrollmentCsrReply, EnrollmentInvitation, FeatureConveyorApprovedFeatureRequest,
+    FeatureConveyorApprovedSpecification, FeatureConveyorGrantRevisions,
+    FeatureConveyorOwnerBridgeDesignationRequest, FeatureConveyorRepositoryGrantKind,
+    FeatureConveyorRepositoryGrantRequest, FeatureConveyorRepositoryGrantRevision,
+    FeatureConveyorRepositoryPreflightReceipt, FeatureConveyorRepositoryPreflightRequest,
+    FeatureConveyorRepositoryPreflightStatus, FeatureConveyorRepositoryScopeDocument,
+    HandshakeRequest, HandshakeResponse, JobEnvelope, JobResultEnvelope, JobResultStatus, LeaseId,
+    ProtocolError, Sensitivity, StepId, TaskId, ENROLLMENT_CSR_READY_STATUS,
+    ENROLLMENT_INVITATION_READY_STATUS, ENROLLMENT_PAIRING_SCHEMA_VERSION,
+    FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, MAX_ENROLLMENT_CSR_PEM_BYTES,
+    MAX_ENROLLMENT_PAIRING_FRAME_BYTES, MAX_FEATURE_CONVEYOR_DEPENDENCIES,
+    MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES, MAX_FEATURE_CONVEYOR_REPOSITORY_PATH_BYTES,
+    MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES, MAX_JOB_CONTEXT_BYTES,
+    MAX_JOB_RESULT_BYTES, MAX_LEASE_DURATION_MS, MAX_WIRE_FRAME_BYTES, PROTOCOL_VERSION,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -19,6 +22,22 @@ use uuid::Uuid;
 
 fn fixed_uuid(value: &str) -> Uuid {
     Uuid::parse_str(value).expect("fixed UUID")
+}
+
+fn repository_preflight_request() -> FeatureConveyorRepositoryPreflightRequest {
+    let scope = FeatureConveyorRepositoryScopeDocument {
+        repository_id: fixed_uuid("88888888-8888-4888-8888-888888888888"),
+        repository_path: "/private/owner/repository".to_string(),
+        expected_base_branch: "main".to_string(),
+        expected_head_commit: "1234567890abcdef1234567890abcdef12345678".to_string(),
+    };
+    FeatureConveyorRepositoryPreflightRequest {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        scope_sha256: scope.canonical_scope_sha256().unwrap(),
+        scope,
+        registration_grant_revision: 3,
+        expected_emergency_pause_revision: 2,
+    }
 }
 
 fn digest_json(value: &Value) -> [u8; 32] {
@@ -229,6 +248,132 @@ fn repository_grant_requests_are_strict_revision_bound_and_digest_only() {
             maximum: MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES,
         })
     );
+}
+
+#[test]
+fn repository_preflight_scope_is_canonical_strict_bounded_and_revision_bound() {
+    let valid = repository_preflight_request();
+    valid.validate().unwrap();
+    let expected_canonical = r#"{"expected_base_branch":"main","expected_head_commit":"1234567890abcdef1234567890abcdef12345678","repository_id":"88888888-8888-4888-8888-888888888888","repository_path":"/private/owner/repository"}"#;
+    assert_eq!(
+        valid.scope_sha256,
+        Sha256::digest(expected_canonical.as_bytes()).as_slice()
+    );
+    let encoded = serde_json::to_vec(&valid).unwrap();
+    assert_eq!(
+        FeatureConveyorRepositoryPreflightRequest::decode_frame(&encoded).unwrap(),
+        valid
+    );
+
+    let duplicate = String::from_utf8(encoded.clone()).unwrap().replacen(
+        "\"scope\":{",
+        "\"scope\":{\"repository_id\":\"88888888-8888-4888-8888-888888888888\",",
+        1,
+    );
+    assert!(FeatureConveyorRepositoryPreflightRequest::decode_frame(duplicate.as_bytes()).is_err());
+    let unknown = String::from_utf8(encoded).unwrap().replacen(
+        "\"scope_sha256\":",
+        "\"private_source\":\"forbidden\",\"scope_sha256\":",
+        1,
+    );
+    assert!(FeatureConveyorRepositoryPreflightRequest::decode_frame(unknown.as_bytes()).is_err());
+
+    let mut wrong_digest = valid.clone();
+    wrong_digest.scope_sha256 = [9; 32];
+    assert!(wrong_digest.validate().is_err());
+    let mut zero_digest = valid.clone();
+    zero_digest.scope_sha256 = [0; 32];
+    assert!(zero_digest.validate().is_err());
+    let mut no_grant = valid.clone();
+    no_grant.registration_grant_revision = 0;
+    assert!(no_grant.validate().is_err());
+    let mut nil_repository = valid.clone();
+    nil_repository.scope.repository_id = Uuid::nil();
+    assert!(nil_repository.validate().is_err());
+    let mut relative_path = valid.clone();
+    relative_path.scope.repository_path = "relative/repository".to_string();
+    assert!(relative_path.validate().is_err());
+    for forbidden_path in [
+        "//server/share/repository",
+        r"\\server\share\repository",
+        r"\\?\C:\repository",
+        r"\\.\C:\repository",
+        "//?/C:/repository",
+    ] {
+        let mut forbidden = valid.clone();
+        forbidden.scope.repository_path = forbidden_path.to_string();
+        assert!(forbidden.validate().is_err(), "accepted {forbidden_path}");
+    }
+    let mut oversized_path = valid.clone();
+    oversized_path.scope.repository_path = format!(
+        "/{}",
+        "r".repeat(MAX_FEATURE_CONVEYOR_REPOSITORY_PATH_BYTES)
+    );
+    assert!(oversized_path.validate().is_err());
+    let mut malformed_branch = valid.clone();
+    malformed_branch.scope.expected_base_branch = "refs/heads/../secret".to_string();
+    assert!(malformed_branch.validate().is_err());
+    let mut nested_branch = valid.clone();
+    nested_branch.scope.expected_base_branch = "feature/nested".to_string();
+    assert!(nested_branch.validate().is_err());
+    let mut malformed_commit = valid.clone();
+    malformed_commit.scope.expected_head_commit = "ABCDEF".repeat(7);
+    assert!(malformed_commit.validate().is_err());
+    let mut wrong_schema = valid.clone();
+    wrong_schema.schema_version += 1;
+    assert!(wrong_schema.validate().is_err());
+
+    assert_eq!(
+        FeatureConveyorRepositoryPreflightRequest::decode_frame(&vec![
+            b' ';
+            MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES
+                + 1
+        ]),
+        Err(ProtocolError::FrameTooLarge {
+            field: "feature_conveyor_repository_preflight_request",
+            maximum: MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES,
+        })
+    );
+
+    let mut receipt = FeatureConveyorRepositoryPreflightReceipt {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        repository_id: valid.scope.repository_id,
+        registration_grant_revision: valid.registration_grant_revision,
+        scope_sha256: valid.scope_sha256,
+        emergency_pause_revision: valid.expected_emergency_pause_revision,
+        base_branch: valid.scope.expected_base_branch.clone(),
+        head_commit: valid.scope.expected_head_commit.clone(),
+        preflight_fingerprint_sha256: [0; 32],
+        observed_at_ms: 1_234,
+        status: FeatureConveyorRepositoryPreflightStatus::IdentityEligible,
+    };
+    receipt.preflight_fingerprint_sha256 = repository_preflight_fingerprint_sha256(
+        receipt.repository_id,
+        receipt.registration_grant_revision,
+        &receipt.scope_sha256,
+        receipt.emergency_pause_revision,
+        &receipt.base_branch,
+        &receipt.head_commit,
+        receipt.observed_at_ms,
+    );
+    receipt.validate().unwrap();
+    let receipt_json = serde_json::to_vec(&receipt).unwrap();
+    assert_eq!(
+        FeatureConveyorRepositoryPreflightReceipt::decode_frame(&receipt_json).unwrap(),
+        receipt
+    );
+    let unknown_receipt = String::from_utf8(receipt_json).unwrap().replacen(
+        "\"status\":",
+        "\"repository_path\":\"forbidden\",\"status\":",
+        1,
+    );
+    assert!(
+        FeatureConveyorRepositoryPreflightReceipt::decode_frame(unknown_receipt.as_bytes())
+            .is_err()
+    );
+    let mut unbound = receipt;
+    unbound.observed_at_ms += 1;
+    assert!(unbound.validate().is_err());
 }
 
 fn sample_job() -> JobEnvelope {

@@ -206,6 +206,35 @@ release requirements, not optional UX guidance.
   bounded to the three fixed grant kinds, and both routes remain absent from the
   enrolled-device mTLS router. Recording a grant performs no repository access
   and grants no enqueue, claim, worker, provider, Git, or publication action.
+- Repository preflight is Windows-loopback-only and owner-token authenticated.
+  Its strict scope must canonically hash to the exact current active
+  registration grant and bind that grant revision, the current Emergency Pause
+  revision, one absolute repository path, one exact base branch, and one exact
+  HEAD commit. It executes no Git process and loads no repository configuration
+  or attributes. The filesystem-only observer must reject UNC, device,
+  mapped/non-fixed-volume, and component reparse paths before canonical
+  traversal, then require and revalidate only a canonical non-symlink local
+  directory, standard `.git` and objects directories, symbolic HEAD, and exact
+  loose ref for a single-component branch. On Windows, non-reparse handles for
+  the fixed-volume root, every repository component, identity directories,
+  symbolic HEAD, and loose ref must remain held without delete sharing through
+  the final grant, Emergency Pause, and audit transaction recheck. Worktree,
+  submodule, detached, wrong-branch, wrong-HEAD,
+  non-Git, symlinked, stale, expired, revoked, paused, malformed, or ambiguous
+  state fails closed with a fixed error. It does not inspect or prove clean
+  working-tree, index, object, configuration, attribute, or source-content
+  state. A five-second timeout bounds the filesystem-observation await, not
+  owner authentication or database lock/audit latency. A blocked local
+  filesystem thread cannot be forcibly cancelled, so the observation remains
+  limited to fixed local volumes and performs no external process or write.
+  Before emitting success, the
+  kernel must atomically recheck the grant and pause binding and append a
+  structurally redacted audit containing no repository identity, path, branch,
+  commit, remote, source, Git configuration, or raw error. Neither the path nor
+  repository content is stored or returned. The receipt is point-in-time
+  evidence only and grants no snapshot, claim, lease, worker, repository
+  mutation, provider, credential, network, Git publication, or activation
+  authority.
 - Remote approved-feature enqueue is permitted only on
   `POST /v1/distributed/feature-conveyor/approved-features`, after a fresh
   exporter-bound application handshake is accepted and revalidated for the

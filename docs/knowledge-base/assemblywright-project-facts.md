@@ -271,6 +271,28 @@ an old one.
   owner-control boundary. Tests therefore seed grants through the same checked
   entry point; any private insert helper runs only after validation and writes
   its redacted audit record in the same transaction.
+- The Windows-local repository preflight is an owner-token-authenticated,
+  point-in-time admission check, not repository registration persistence or a
+  reusable execution snapshot. Its strict scope document must canonically hash
+  to the exact current active registration grant and bind the current grant and
+  Emergency Pause revisions, absolute repository path, single-component base
+  branch, and HEAD.
+  Inspection executes no Git process and loads no repository configuration or
+  attributes. It reads only a canonical fixed-local-volume standard `.git`
+  shape, symbolic HEAD, and exact loose branch ref, and rejects UNC, device,
+  mapped/non-fixed-volume, reparse, worktree, submodule, detached, mismatched,
+  symlinked, non-Git, stale, revoked, expired, or paused state. Windows holds
+  non-reparse handles for the complete fixed-volume identity chain without
+  delete sharing until the final grant, pause, and audit transaction recheck.
+  Its five-second timeout bounds only the filesystem-observation await, not
+  owner authentication or database lock/audit latency; a blocked filesystem
+  thread cannot be forcibly cancelled.
+  It does not
+  prove clean-tree, index, object, or source-content state. The
+  path and repository content are neither stored nor returned. Success rechecks
+  authority atomically, appends only a structurally redacted audit, and returns
+  a path-free digest receipt. A later claim must inspect again against a durable
+  snapshot; this receipt grants no dispatch, mutation, review, or publication.
 - Windows is the sole canonical-manifest digest authority for approved-feature
   enqueue. The signed Swift helper validates exact nonzero digest shape but does
   not recompute canonical JSON because Foundation normalizes some numeric JSON

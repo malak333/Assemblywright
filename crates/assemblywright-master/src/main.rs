@@ -9,18 +9,21 @@ use assemblywright_master::{
 #[cfg(test)]
 use assemblywright_protocol::CapabilityKind;
 use assemblywright_protocol::{
-    AuthenticatedHandshakeRequest, CancellationAcknowledgement, CancellationPollRequest,
-    CapabilityDescriptor, DeviceId, DeviceRole, DistributedEventBatch,
-    DistributedEventBatchRequest, EnrollmentCsrReply, EnrollmentInvitation,
-    FeatureConveyorApprovedFeatureReceipt, FeatureConveyorApprovedFeatureRequest,
-    FeatureConveyorApprovedFeatureStatus, FeatureConveyorOwnerBridgeDesignationReceipt,
-    FeatureConveyorOwnerBridgeDesignationRequest, FeatureConveyorOwnerBridgeDesignationStatus,
-    FeatureConveyorRepositoryGrantKind, FeatureConveyorRepositoryGrantReceipt,
-    FeatureConveyorRepositoryGrantRequest, FeatureConveyorRepositoryGrantSet,
-    FeatureConveyorRepositoryGrantStatus, FixtureJobResult, HandshakeRequest, HandshakeResponse,
-    HandshakeStatus, JobEnvelope, JobResultEnvelope, JobResultStatus, Sensitivity, StepId, TaskId,
-    ENROLLMENT_INVITATION_READY_STATUS, ENROLLMENT_PAIRING_SCHEMA_VERSION,
-    FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, MAX_ENROLLMENT_PAIRING_FRAME_BYTES,
+    repository_preflight_fingerprint_sha256, AuthenticatedHandshakeRequest,
+    CancellationAcknowledgement, CancellationPollRequest, CapabilityDescriptor, DeviceId,
+    DeviceRole, DistributedEventBatch, DistributedEventBatchRequest, EnrollmentCsrReply,
+    EnrollmentInvitation, FeatureConveyorApprovedFeatureReceipt,
+    FeatureConveyorApprovedFeatureRequest, FeatureConveyorApprovedFeatureStatus,
+    FeatureConveyorOwnerBridgeDesignationReceipt, FeatureConveyorOwnerBridgeDesignationRequest,
+    FeatureConveyorOwnerBridgeDesignationStatus, FeatureConveyorRepositoryGrantKind,
+    FeatureConveyorRepositoryGrantReceipt, FeatureConveyorRepositoryGrantRequest,
+    FeatureConveyorRepositoryGrantSet, FeatureConveyorRepositoryGrantStatus,
+    FeatureConveyorRepositoryPreflightReceipt, FeatureConveyorRepositoryPreflightRequest,
+    FeatureConveyorRepositoryPreflightStatus, FixtureJobResult, HandshakeRequest,
+    HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope, JobResultStatus,
+    Sensitivity, StepId, TaskId, ENROLLMENT_INVITATION_READY_STATUS,
+    ENROLLMENT_PAIRING_SCHEMA_VERSION, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+    MAX_ENROLLMENT_PAIRING_FRAME_BYTES, MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES,
     MAX_WIRE_FRAME_BYTES, PROTOCOL_VERSION,
 };
 use axum::body::Bytes;
@@ -46,7 +49,7 @@ use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Write};
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -72,6 +75,7 @@ const MASTER_STATE_NAMESPACE: &str = "Assemblywright";
 /// already-enrolled host keeps its durable kernel. Never written.
 const LEGACY_MASTER_STATE_NAMESPACE: &str = "Jarvis";
 const MAINTENANCE_MARKER_FILE: &str = "maintenance-mode.json";
+const REPOSITORY_FILESYSTEM_OBSERVATION_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Parser)]
 #[command(
@@ -1441,6 +1445,12 @@ async fn serve_runtime(
             post(record_repository_grant),
         )
         .route(
+            "/v1/feature-conveyor/repository-preflight",
+            post(repository_preflight).layer(DefaultBodyLimit::max(
+                MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES,
+            )),
+        )
+        .route(
             "/v1/feature-conveyor/repositories/:repository_id/grants",
             get(get_repository_grants),
         )
@@ -2181,6 +2191,566 @@ async fn record_repository_grant(
     }))
 }
 
+async fn repository_preflight(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<FeatureConveyorRepositoryPreflightReceipt> {
+    authorize(&headers, &state)?;
+    let body = body.map_err(|_| {
+        fixed_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "repository_preflight_request_rejected",
+        )
+    })?;
+    let request = FeatureConveyorRepositoryPreflightRequest::decode_frame(&body).map_err(|_| {
+        fixed_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "repository_preflight_request_rejected",
+        )
+    })?;
+    let before_ms = current_time_ms()
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "repository_preflight_rejected"))?;
+    lock_process(&state)?
+        .kernel()
+        .authorize_repository_preflight(
+            request.scope.repository_id,
+            request.registration_grant_revision,
+            &request.scope_sha256,
+            request.expected_emergency_pause_revision,
+            before_ms,
+        )
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "repository_preflight_rejected"))?;
+    let repository_path = request.scope.repository_path.clone();
+    let expected_base_branch = request.scope.expected_base_branch.clone();
+    let expected_head_commit = request.scope.expected_head_commit.clone();
+    // Only the blocking filesystem observation await is bounded to five
+    // seconds. The grant precheck above and atomic grant/pause/audit recheck
+    // below intentionally remain outside this timeout rather than converting
+    // database-lock contention into filesystem-timeout semantics.
+    let observation_guard = tokio::time::timeout(
+        REPOSITORY_FILESYSTEM_OBSERVATION_TIMEOUT,
+        tokio::task::spawn_blocking(move || {
+            observe_standard_repository_identity(
+                &repository_path,
+                &expected_base_branch,
+                &expected_head_commit,
+            )
+        }),
+    )
+    .await
+    .map_err(|_| fixed_error(StatusCode::CONFLICT, "repository_preflight_rejected"))?
+    .map_err(|_| fixed_error(StatusCode::CONFLICT, "repository_preflight_rejected"))?
+    .map_err(|_| fixed_error(StatusCode::CONFLICT, "repository_preflight_rejected"))?;
+    observation_guard
+        .revalidate()
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "repository_preflight_rejected"))?;
+    let observed_at_ms = current_time_ms()
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "repository_preflight_rejected"))?;
+    lock_process(&state)?
+        .kernel_mut()
+        .record_repository_preflight(
+            request.scope.repository_id,
+            request.registration_grant_revision,
+            &request.scope_sha256,
+            request.expected_emergency_pause_revision,
+            observed_at_ms,
+        )
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "repository_preflight_rejected"))?;
+    let preflight_fingerprint_sha256 = repository_preflight_fingerprint_sha256(
+        request.scope.repository_id,
+        request.registration_grant_revision,
+        &request.scope_sha256,
+        request.expected_emergency_pause_revision,
+        &request.scope.expected_base_branch,
+        &request.scope.expected_head_commit,
+        observed_at_ms,
+    );
+    let receipt = FeatureConveyorRepositoryPreflightReceipt {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        repository_id: request.scope.repository_id,
+        registration_grant_revision: request.registration_grant_revision,
+        scope_sha256: request.scope_sha256,
+        emergency_pause_revision: request.expected_emergency_pause_revision,
+        base_branch: request.scope.expected_base_branch,
+        head_commit: request.scope.expected_head_commit,
+        preflight_fingerprint_sha256,
+        observed_at_ms,
+        status: FeatureConveyorRepositoryPreflightStatus::IdentityEligible,
+    };
+    receipt
+        .validate()
+        .map_err(|_| fixed_error(StatusCode::INTERNAL_SERVER_ERROR, "internal_error"))?;
+    drop(observation_guard);
+    Ok(Json(receipt))
+}
+
+#[cfg(not(windows))]
+struct RepositoryIdentityObservationGuard;
+
+#[cfg(not(windows))]
+impl Drop for RepositoryIdentityObservationGuard {
+    fn drop(&mut self) {}
+}
+
+#[cfg(not(windows))]
+impl RepositoryIdentityObservationGuard {
+    fn revalidate(&self) -> Result<(), ()> {
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+struct RepositoryIdentityObservationGuard {
+    held: WindowsHeldHandleSet,
+}
+
+#[cfg(windows)]
+impl Drop for RepositoryIdentityObservationGuard {
+    fn drop(&mut self) {}
+}
+
+#[cfg(windows)]
+impl RepositoryIdentityObservationGuard {
+    fn revalidate(&self) -> Result<(), ()> {
+        self.held.revalidate()
+    }
+}
+
+#[cfg(windows)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WindowsHandleKind {
+    Directory,
+    File { maximum_bytes: u64 },
+}
+
+#[cfg(windows)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct WindowsHandleIdentity {
+    volume_serial: u32,
+    file_index: u64,
+    attributes: u32,
+    size: u64,
+}
+
+#[cfg(windows)]
+struct WindowsHeldHandleSet {
+    handles: Vec<fs::File>,
+    identities: Vec<(WindowsHandleIdentity, WindowsHandleKind)>,
+}
+
+#[cfg(windows)]
+impl WindowsHeldHandleSet {
+    fn new() -> Self {
+        Self {
+            handles: Vec::new(),
+            identities: Vec::new(),
+        }
+    }
+
+    fn hold(&mut self, handle: fs::File, kind: WindowsHandleKind) -> Result<usize, ()> {
+        let identity = windows_handle_identity(&handle, kind)?;
+        if self
+            .identities
+            .first()
+            .is_some_and(|(root, _)| root.volume_serial != identity.volume_serial)
+        {
+            return Err(());
+        }
+        self.handles.push(handle);
+        self.identities.push((identity, kind));
+        Ok(self.handles.len() - 1)
+    }
+
+    fn revalidate(&self) -> Result<(), ()> {
+        for (handle, (expected, kind)) in self.handles.iter().zip(&self.identities) {
+            if windows_handle_identity(handle, *kind)? != *expected {
+                return Err(());
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+fn observe_standard_repository_identity(
+    requested: &str,
+    expected_base_branch: &str,
+    expected_head_commit: &str,
+) -> Result<RepositoryIdentityObservationGuard, ()> {
+    let requested_path = PathBuf::from(requested);
+    let mut held = open_windows_fixed_directory_chain(requested)?;
+    require_windows_handle_path_matches_requested(held.handles.last().ok_or(())?, &requested_path)?;
+    let git_directory = requested_path.join(".git");
+    held.hold(
+        open_windows_stable_handle(&git_directory, WindowsHandleKind::Directory)?,
+        WindowsHandleKind::Directory,
+    )?;
+    held.hold(
+        open_windows_stable_handle(&git_directory.join("objects"), WindowsHandleKind::Directory)?,
+        WindowsHandleKind::Directory,
+    )?;
+    let refs_directory = git_directory.join("refs");
+    held.hold(
+        open_windows_stable_handle(&refs_directory, WindowsHandleKind::Directory)?,
+        WindowsHandleKind::Directory,
+    )?;
+    let heads_directory = refs_directory.join("heads");
+    held.hold(
+        open_windows_stable_handle(&heads_directory, WindowsHandleKind::Directory)?,
+        WindowsHandleKind::Directory,
+    )?;
+
+    reject_existing_repository_control_path(&requested_path.join(".gitmodules"))?;
+    for forbidden in [
+        "modules",
+        "worktrees",
+        "commondir",
+        "gitdir",
+        "config.worktree",
+    ] {
+        reject_existing_repository_control_path(&git_directory.join(forbidden))?;
+    }
+
+    let branch_path = Path::new(expected_base_branch);
+    if branch_path.components().count() != 1
+        || !matches!(branch_path.components().next(), Some(Component::Normal(_)))
+    {
+        return Err(());
+    }
+    let head_kind = WindowsHandleKind::File { maximum_bytes: 512 };
+    let head_index = held.hold(
+        open_windows_stable_handle(&git_directory.join("HEAD"), head_kind)?,
+        head_kind,
+    )?;
+    let branch_index = held.hold(
+        open_windows_stable_handle(&heads_directory.join(branch_path), head_kind)?,
+        head_kind,
+    )?;
+    let expected_head = format!("ref: refs/heads/{expected_base_branch}\n");
+    let expected_ref = format!("{expected_head_commit}\n");
+    if read_windows_held_file(&mut held.handles[head_index], 512)? != expected_head.as_bytes()
+        || read_windows_held_file(&mut held.handles[branch_index], 512)? != expected_ref.as_bytes()
+        || read_windows_held_file(&mut held.handles[head_index], 512)? != expected_head.as_bytes()
+        || read_windows_held_file(&mut held.handles[branch_index], 512)? != expected_ref.as_bytes()
+    {
+        return Err(());
+    }
+    held.revalidate()?;
+    Ok(RepositoryIdentityObservationGuard { held })
+}
+
+#[cfg(windows)]
+fn open_windows_fixed_directory_chain(requested: &str) -> Result<WindowsHeldHandleSet, ()> {
+    use windows_sys::Win32::Storage::FileSystem::{GetDriveTypeW, DRIVE_FIXED};
+
+    let bytes = requested.as_bytes();
+    if requested.starts_with(r"\\")
+        || requested.starts_with("//")
+        || bytes.len() < 3
+        || !bytes[0].is_ascii_alphabetic()
+        || bytes[1] != b':'
+        || !matches!(bytes[2], b'/' | b'\\')
+    {
+        return Err(());
+    }
+    let drive = bytes[0].to_ascii_uppercase();
+    let root = [u16::from(drive), b':' as u16, b'\\' as u16, 0];
+    if unsafe { GetDriveTypeW(root.as_ptr()) } != DRIVE_FIXED {
+        return Err(());
+    }
+
+    let mut held = WindowsHeldHandleSet::new();
+    let mut current = PathBuf::from(format!("{}:\\", char::from(drive)));
+    held.hold(
+        open_windows_stable_handle(&current, WindowsHandleKind::Directory)?,
+        WindowsHandleKind::Directory,
+    )?;
+    for component in Path::new(requested).components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => {}
+            Component::Normal(name) => {
+                current.push(name);
+                held.hold(
+                    open_windows_stable_handle(&current, WindowsHandleKind::Directory)?,
+                    WindowsHandleKind::Directory,
+                )?;
+            }
+            Component::CurDir | Component::ParentDir => return Err(()),
+        }
+    }
+    if !repository_paths_match(&current, Path::new(requested)) {
+        return Err(());
+    }
+    Ok(held)
+}
+
+#[cfg(windows)]
+fn require_windows_handle_path_matches_requested(
+    handle: &fs::File,
+    requested: &Path,
+) -> Result<(), ()> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFinalPathNameByHandleW, FILE_NAME_NORMALIZED, VOLUME_NAME_DOS,
+    };
+
+    const MAX_FINAL_PATH_CHARS: usize = 32_768;
+    let mut buffer = vec![0_u16; MAX_FINAL_PATH_CHARS];
+    let length = unsafe {
+        GetFinalPathNameByHandleW(
+            handle.as_raw_handle().cast(),
+            buffer.as_mut_ptr(),
+            buffer.len() as u32,
+            FILE_NAME_NORMALIZED | VOLUME_NAME_DOS,
+        )
+    };
+    let length = usize::try_from(length).map_err(|_| ())?;
+    if length == 0 || length >= buffer.len() {
+        return Err(());
+    }
+    let resolved = String::from_utf16(&buffer[..length]).map_err(|_| ())?;
+    if !repository_paths_match(Path::new(&resolved), requested) {
+        return Err(());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn open_windows_stable_handle(path: &Path, kind: WindowsHandleKind) -> Result<fs::File, ()> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+
+    let mut options = OpenOptions::new();
+    match kind {
+        WindowsHandleKind::Directory => {
+            options
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+                .access_mode(FILE_READ_ATTRIBUTES)
+                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS);
+        }
+        WindowsHandleKind::File { .. } => {
+            options
+                .share_mode(FILE_SHARE_READ)
+                .read(true)
+                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        }
+    }
+    let handle = options.open(path).map_err(|_| ())?;
+    windows_handle_identity(&handle, kind)?;
+    Ok(handle)
+}
+
+#[cfg(windows)]
+fn windows_handle_identity(
+    handle: &fs::File,
+    kind: WindowsHandleKind,
+) -> Result<WindowsHandleIdentity, ()> {
+    use std::mem::MaybeUninit;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY,
+        FILE_ATTRIBUTE_REPARSE_POINT,
+    };
+
+    let mut information = MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::zeroed();
+    if unsafe {
+        GetFileInformationByHandle(handle.as_raw_handle().cast(), information.as_mut_ptr())
+    } == 0
+    {
+        return Err(());
+    }
+    let information = unsafe { information.assume_init() };
+    let is_directory = information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0;
+    let size = (u64::from(information.nFileSizeHigh) << 32) | u64::from(information.nFileSizeLow);
+    if information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        || information.nNumberOfLinks == 0
+        || is_directory != matches!(kind, WindowsHandleKind::Directory)
+        || matches!(kind, WindowsHandleKind::File { maximum_bytes } if size > maximum_bytes)
+    {
+        return Err(());
+    }
+    Ok(WindowsHandleIdentity {
+        volume_serial: information.dwVolumeSerialNumber,
+        file_index: (u64::from(information.nFileIndexHigh) << 32)
+            | u64::from(information.nFileIndexLow),
+        attributes: information.dwFileAttributes,
+        size,
+    })
+}
+
+#[cfg(windows)]
+fn read_windows_held_file(handle: &mut fs::File, maximum: u64) -> Result<Vec<u8>, ()> {
+    use std::io::{Seek, SeekFrom};
+
+    handle.seek(SeekFrom::Start(0)).map_err(|_| ())?;
+    let mut bytes = Vec::new();
+    std::io::Read::by_ref(handle)
+        .take(maximum + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ())?;
+    if bytes.len() as u64 > maximum {
+        return Err(());
+    }
+    Ok(bytes)
+}
+
+#[cfg(not(windows))]
+fn observe_standard_repository_identity(
+    requested: &str,
+    expected_base_branch: &str,
+    expected_head_commit: &str,
+) -> Result<RepositoryIdentityObservationGuard, ()> {
+    validate_windows_fixed_local_repository_path(requested)?;
+    let requested = PathBuf::from(requested);
+    if !requested.is_absolute()
+        || requested
+            .components()
+            .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+    {
+        return Err(());
+    }
+    let metadata = fs::symlink_metadata(&requested).map_err(|_| ())?;
+    if metadata_is_link_or_reparse(&metadata) || !metadata.is_dir() {
+        return Err(());
+    }
+    let canonical = fs::canonicalize(&requested).map_err(|_| ())?;
+    if !repository_paths_match(&canonical, &requested) {
+        return Err(());
+    }
+    let git_directory = requested.join(".git");
+    require_directory_without_symlink(&git_directory)?;
+    require_directory_without_symlink(&git_directory.join("objects"))?;
+    reject_existing_repository_control_path(&requested.join(".gitmodules"))?;
+    for forbidden in [
+        "modules",
+        "worktrees",
+        "commondir",
+        "gitdir",
+        "config.worktree",
+    ] {
+        reject_existing_repository_control_path(&git_directory.join(forbidden))?;
+    }
+
+    let expected_head = format!("ref: refs/heads/{expected_base_branch}\n");
+    let head_path = git_directory.join("HEAD");
+    if read_bounded_regular_file(&head_path, 512)? != expected_head.as_bytes() {
+        return Err(());
+    }
+    let heads_directory = git_directory.join("refs").join("heads");
+    require_directory_without_symlink(&heads_directory)?;
+    let branch_path = heads_directory.join(expected_base_branch);
+    validate_windows_fixed_local_repository_path(branch_path.to_str().ok_or(())?)?;
+    let canonical_branch = fs::canonicalize(&branch_path).map_err(|_| ())?;
+    if !canonical_branch.starts_with(fs::canonicalize(&heads_directory).map_err(|_| ())?)
+        || !repository_paths_match(&canonical_branch, &branch_path)
+    {
+        return Err(());
+    }
+    let expected_ref = format!("{expected_head_commit}\n");
+    if read_bounded_regular_file(&canonical_branch, 512)? != expected_ref.as_bytes() {
+        return Err(());
+    }
+
+    // Revalidate the complete identity after reading it. This remains a
+    // point-in-time observation and grants no later repository authority.
+    let revalidated = fs::canonicalize(&requested).map_err(|_| ())?;
+    let revalidated_metadata = fs::symlink_metadata(&requested).map_err(|_| ())?;
+    if !repository_paths_match(&revalidated, &canonical)
+        || metadata_is_link_or_reparse(&revalidated_metadata)
+        || read_bounded_regular_file(&head_path, 512)? != expected_head.as_bytes()
+        || read_bounded_regular_file(&canonical_branch, 512)? != expected_ref.as_bytes()
+    {
+        return Err(());
+    }
+    Ok(RepositoryIdentityObservationGuard)
+}
+
+#[cfg(not(windows))]
+fn repository_paths_match(left: &Path, right: &Path) -> bool {
+    left == right
+}
+
+#[cfg(windows)]
+fn repository_paths_match(left: &Path, right: &Path) -> bool {
+    fn normalized(path: &Path) -> String {
+        let mut value = path.to_string_lossy().replace('\\', "/");
+        if let Some(rest) = value.strip_prefix("//?/UNC/") {
+            value = format!("//{rest}");
+        } else if let Some(rest) = value.strip_prefix("//?/") {
+            value = rest.to_string();
+        }
+        value.to_ascii_lowercase().trim_end_matches('/').to_string()
+    }
+    normalized(left) == normalized(right)
+}
+
+fn require_directory_without_symlink(path: &Path) -> Result<(), ()> {
+    let metadata = fs::symlink_metadata(path).map_err(|_| ())?;
+    if metadata_is_link_or_reparse(&metadata) || !metadata.is_dir() {
+        return Err(());
+    }
+    Ok(())
+}
+
+fn reject_existing_repository_control_path(path: &Path) -> Result<(), ()> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Err(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(()),
+    }
+}
+
+fn read_bounded_regular_file(path: &Path, maximum: u64) -> Result<Vec<u8>, ()> {
+    let metadata = fs::symlink_metadata(path).map_err(|_| ())?;
+    if metadata_is_link_or_reparse(&metadata) || !metadata.is_file() || metadata.len() > maximum {
+        return Err(());
+    }
+    let mut file = OpenOptions::new().read(true).open(path).map_err(|_| ())?;
+    let opened = file.metadata().map_err(|_| ())?;
+    if !opened.is_file() || opened.len() > maximum {
+        return Err(());
+    }
+    let mut bytes = Vec::new();
+    std::io::Read::by_ref(&mut file)
+        .take(maximum + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| ())?;
+    if bytes.len() as u64 > maximum
+        || metadata_is_link_or_reparse(&fs::symlink_metadata(path).map_err(|_| ())?)
+    {
+        return Err(());
+    }
+    Ok(bytes)
+}
+
+#[cfg(not(windows))]
+fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_symlink()
+}
+
+#[cfg(windows)]
+fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+    metadata.file_type().is_symlink()
+        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn validate_windows_fixed_local_repository_path(_requested: &str) -> Result<(), ()> {
+    Ok(())
+}
+
+#[cfg(windows)]
+fn validate_windows_fixed_local_repository_path(requested: &str) -> Result<(), ()> {
+    open_windows_fixed_directory_chain(requested).map(|_| ())
+}
+
 async fn get_repository_grants(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -2783,6 +3353,93 @@ mod tests {
         assert!(require_concrete_remote_bind("0.0.0.0:7792".parse().unwrap()).is_err());
         assert!(require_concrete_remote_bind("127.0.0.1:7792".parse().unwrap()).is_ok());
         assert!(require_concrete_remote_bind("100.64.0.10:7792".parse().unwrap()).is_ok());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn repository_identity_preflight_rejects_windows_device_network_and_reparse_paths() {
+        for forbidden in [
+            r"\\server\share\repository",
+            r"\\?\C:\repository",
+            r"\\.\C:\repository",
+            "//server/share/repository",
+        ] {
+            assert!(validate_windows_fixed_local_repository_path(forbidden).is_err());
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let held = open_windows_fixed_directory_chain(directory.path().to_str().unwrap()).unwrap();
+        held.revalidate().unwrap();
+        let moved = directory.path().with_extension("moved-while-held");
+        assert!(std::fs::rename(directory.path(), &moved).is_err());
+        drop(held);
+        let long_name = directory.path().join("Repository Identity Long Name");
+        std::fs::create_dir(&long_name).unwrap();
+        if let Some(short_name) = windows_short_path(&long_name) {
+            if !repository_paths_match(&short_name, &long_name) {
+                let held =
+                    open_windows_fixed_directory_chain(short_name.to_str().unwrap()).unwrap();
+                assert!(require_windows_handle_path_matches_requested(
+                    held.handles.last().unwrap(),
+                    &short_name,
+                )
+                .is_err());
+            }
+        }
+        let target = directory.path().join("target");
+        let link = directory.path().join("junction-or-symlink");
+        std::fs::create_dir(&target).unwrap();
+        if std::os::windows::fs::symlink_dir(&target, &link).is_ok() {
+            assert!(validate_windows_fixed_local_repository_path(link.to_str().unwrap()).is_err());
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn repository_identity_handles_hold_ancestors_and_identity_files_stable() {
+        let repository = tempfile::tempdir().unwrap();
+        let git = repository.path().join(".git");
+        std::fs::create_dir(&git).unwrap();
+        std::fs::create_dir(git.join("objects")).unwrap();
+        std::fs::create_dir_all(git.join("refs").join("heads")).unwrap();
+        let commit = "1234567890abcdef1234567890abcdef12345678";
+        std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(
+            git.join("refs").join("heads").join("main"),
+            format!("{commit}\n"),
+        )
+        .unwrap();
+        let guard = observe_standard_repository_identity(
+            repository.path().to_str().unwrap(),
+            "main",
+            commit,
+        )
+        .unwrap();
+        assert!(std::fs::rename(git.join("HEAD"), git.join("HEAD.moved")).is_err());
+        assert!(
+            std::fs::rename(repository.path(), repository.path().with_extension("moved")).is_err()
+        );
+        drop(guard);
+        std::fs::rename(git.join("HEAD"), git.join("HEAD.moved")).unwrap();
+    }
+
+    #[cfg(windows)]
+    fn windows_short_path(path: &Path) -> Option<PathBuf> {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::GetShortPathNameW;
+
+        let input = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let mut output = vec![0_u16; 32_768];
+        let length =
+            unsafe { GetShortPathNameW(input.as_ptr(), output.as_mut_ptr(), output.len() as u32) }
+                as usize;
+        if length == 0 || length >= output.len() {
+            return None;
+        }
+        Some(PathBuf::from(String::from_utf16(&output[..length]).ok()?))
     }
 
     #[test]

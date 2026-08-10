@@ -44,6 +44,9 @@ pub const MAX_FEATURE_CONVEYOR_APPROVED_MANIFEST_BYTES: usize = 256 * 1024;
 pub const MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES: usize = 320 * 1024;
 pub const MAX_FEATURE_CONVEYOR_DEPENDENCIES: usize = 100;
 pub const MAX_FEATURE_CONVEYOR_IDENTIFIER_BYTES: usize = 128;
+pub const MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES: usize = 8 * 1024;
+pub const MAX_FEATURE_CONVEYOR_REPOSITORY_PATH_BYTES: usize = 4 * 1024;
+pub const MAX_FEATURE_CONVEYOR_BASE_BRANCH_BYTES: usize = 255;
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum ProtocolError {
@@ -576,6 +579,187 @@ pub struct FeatureConveyorRepositoryGrantSet {
     pub registration: Option<FeatureConveyorRepositoryGrantView>,
     pub cloud_disclosure: Option<FeatureConveyorRepositoryGrantView>,
     pub autonomous_publication: Option<FeatureConveyorRepositoryGrantView>,
+}
+
+/// Exact owner-approved repository observation scope.
+///
+/// The path is accepted only by the owner-token loopback preflight route and is
+/// never durable or returned in a receipt. Its canonical digest must match the
+/// current active registration grant before any local repository observation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorRepositoryScopeDocument {
+    pub repository_id: Uuid,
+    pub repository_path: String,
+    pub expected_base_branch: String,
+    pub expected_head_commit: String,
+}
+
+impl FeatureConveyorRepositoryScopeDocument {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_uuid("repository_id", self.repository_id)?;
+        validate_text(
+            "repository_path",
+            &self.repository_path,
+            MAX_FEATURE_CONVEYOR_REPOSITORY_PATH_BYTES,
+        )?;
+        if self.repository_path.chars().any(char::is_control)
+            || self.repository_path.starts_with("//")
+            || self.repository_path.starts_with("\\\\")
+            || !(self.repository_path.starts_with('/')
+                || is_windows_absolute_path(&self.repository_path))
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        validate_git_branch(&self.expected_base_branch)?;
+        validate_git_commit(&self.expected_head_commit)?;
+        Ok(())
+    }
+
+    pub fn canonical_scope_sha256(&self) -> Result<[u8; 32], ProtocolError> {
+        self.validate()?;
+        let value = serde_json::to_value(self).map_err(|error| ProtocolError::Serialization {
+            field: "feature_conveyor_repository_scope",
+            message: error.to_string(),
+        })?;
+        Ok(Sha256::digest(canonical_json_bytes(&value)?).into())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorRepositoryPreflightRequest {
+    pub schema_version: u16,
+    pub scope: FeatureConveyorRepositoryScopeDocument,
+    pub scope_sha256: [u8; 32],
+    pub registration_grant_revision: u64,
+    pub expected_emergency_pause_revision: u64,
+}
+
+impl FeatureConveyorRepositoryPreflightRequest {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "feature_conveyor_repository_preflight_request",
+            frame,
+            MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_fixed_value(
+            "schema_version",
+            self.schema_version.to_string(),
+            FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION.to_string(),
+        )?;
+        self.scope.validate()?;
+        validate_positive_limit(
+            "registration_grant_revision",
+            self.registration_grant_revision,
+            u64::MAX,
+        )?;
+        if self.scope_sha256 == [0; 32] || self.scope.canonical_scope_sha256()? != self.scope_sha256
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        validate_serialized_limit(
+            "feature_conveyor_repository_preflight_request",
+            self,
+            MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureConveyorRepositoryPreflightStatus {
+    IdentityEligible,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorRepositoryPreflightReceipt {
+    pub schema_version: u16,
+    pub repository_id: Uuid,
+    pub registration_grant_revision: u64,
+    pub scope_sha256: [u8; 32],
+    pub emergency_pause_revision: u64,
+    pub base_branch: String,
+    pub head_commit: String,
+    pub preflight_fingerprint_sha256: [u8; 32],
+    pub observed_at_ms: u64,
+    pub status: FeatureConveyorRepositoryPreflightStatus,
+}
+
+impl FeatureConveyorRepositoryPreflightReceipt {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "feature_conveyor_repository_preflight_receipt",
+            frame,
+            MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_fixed_value(
+            "schema_version",
+            self.schema_version.to_string(),
+            FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION.to_string(),
+        )?;
+        validate_uuid("repository_id", self.repository_id)?;
+        validate_positive_limit(
+            "registration_grant_revision",
+            self.registration_grant_revision,
+            u64::MAX,
+        )?;
+        validate_git_branch(&self.base_branch)?;
+        validate_git_commit(&self.head_commit)?;
+        validate_positive_limit("observed_at_ms", self.observed_at_ms, u64::MAX)?;
+        if self.scope_sha256 == [0; 32]
+            || self.preflight_fingerprint_sha256 == [0; 32]
+            || self.preflight_fingerprint_sha256
+                != repository_preflight_fingerprint_sha256(
+                    self.repository_id,
+                    self.registration_grant_revision,
+                    &self.scope_sha256,
+                    self.emergency_pause_revision,
+                    &self.base_branch,
+                    &self.head_commit,
+                    self.observed_at_ms,
+                )
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        validate_serialized_limit(
+            "feature_conveyor_repository_preflight_receipt",
+            self,
+            MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES,
+        )
+    }
+}
+
+pub fn repository_preflight_fingerprint_sha256(
+    repository_id: Uuid,
+    registration_grant_revision: u64,
+    scope_sha256: &[u8; 32],
+    emergency_pause_revision: u64,
+    base_branch: &str,
+    head_commit: &str,
+    observed_at_ms: u64,
+) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"assemblywright.repository-preflight.v1\0");
+    digest.update(repository_id.as_bytes());
+    digest.update(registration_grant_revision.to_be_bytes());
+    digest.update(scope_sha256);
+    digest.update(emergency_pause_revision.to_be_bytes());
+    digest.update((base_branch.len() as u64).to_be_bytes());
+    digest.update(base_branch.as_bytes());
+    digest.update((head_commit.len() as u64).to_be_bytes());
+    digest.update(head_commit.as_bytes());
+    digest.update(observed_at_ms.to_be_bytes());
+    digest.finalize().into()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1421,6 +1605,50 @@ fn validate_identifier(
             .all(|byte| byte.is_ascii_graphic() && !byte.is_ascii_control())
     {
         return Err(ProtocolError::InvalidIdentifier { field });
+    }
+    Ok(())
+}
+
+fn is_windows_absolute_path(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\')
+}
+
+fn validate_git_branch(value: &str) -> Result<(), ProtocolError> {
+    validate_identifier(
+        "expected_base_branch",
+        value,
+        MAX_FEATURE_CONVEYOR_BASE_BRANCH_BYTES,
+    )?;
+    if value.starts_with('.')
+        || value.starts_with('/')
+        || value.ends_with('.')
+        || value.ends_with('/')
+        || value.contains('/')
+        || value.ends_with(".lock")
+        || value.contains("..")
+        || value.contains("//")
+        || value.contains("@{")
+        || value
+            .bytes()
+            .any(|byte| matches!(byte, b' ' | b'~' | b'^' | b':' | b'?' | b'*' | b'[' | b'\\'))
+    {
+        return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+    }
+    Ok(())
+}
+
+fn validate_git_commit(value: &str) -> Result<(), ProtocolError> {
+    if !matches!(value.len(), 40 | 64)
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || value.bytes().all(|byte| byte == b'0')
+    {
+        return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
     }
     Ok(())
 }

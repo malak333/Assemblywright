@@ -94,7 +94,7 @@ executable changes as release evidence.
 | Protocol contract | `cargo test -p assemblywright-protocol` |
 | Master kernel | `cargo test -p assemblywright-master` |
 | Feature Conveyor kernel, grant CAS/projection, owner designation, enqueue, and status | `cargo test -p assemblywright-master --test feature_conveyor_kernel` |
-| Master process E2E, including authenticated loopback grant/status/designation routes | `cargo test -p assemblywright-master --test master_process_e2e` |
+| Master process E2E, including authenticated loopback grant/preflight/status/designation routes | `cargo test -p assemblywright-master --test master_process_e2e` |
 | Windows remote mTLS observer and designated-owner enqueue denial/success | `cargo test -p assemblywright-master --test remote_mtls_e2e remote_listener_requires_enrollment_tls13_and_channel_bound_identity -- --nocapture` |
 | Swift strict Feature Conveyor observer, one-shot owner action, and helper lifecycle | `swift test --disable-sandbox --package-path apps/mac --filter DeveloperBridgeTests` |
 | Enrollment, two-phase capability rebind, and identity | `cargo test -p assemblywright-master --test enrollment_identity_e2e` |
@@ -215,6 +215,16 @@ Deterministic cross-process coverage proves:
   contiguous compare-and-set revisions, digest-only current projection, expiry,
   pause-bound active-grant denial, revocation while paused, redaction, audit
   rollback, and absence from the enrolled-device router.
+  Repository-preflight coverage proves canonical scope-digest validation,
+  exact active registration-grant and Emergency Pause binding, bounded
+  filesystem-only identity observation against a disposable standard
+  repository, hostile filter-configuration non-execution, and
+  UNC/device/non-fixed-volume/reparse/worktree/submodule/detached/wrong-branch/
+  wrong-HEAD/symlink/non-Git denial. It also proves fixed redacted failures,
+  atomic path-free audit, owner authentication, request bounds, and absence
+  from the enrolled-device router. It does not claim clean-tree or content
+  validation. This is native process E2E; no browser or Playwright surface is
+  involved.
   The designated-owner POST is bound to the exact queue, designation, and pause
   revisions and reuses the manifest, grants, dependency, capacity, immutable-
   specification, and atomic-enqueue checks without claiming a lease. Swift tests
