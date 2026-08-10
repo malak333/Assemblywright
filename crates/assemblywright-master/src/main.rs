@@ -2693,6 +2693,7 @@ fn repository_paths_match(left: &Path, right: &Path) -> bool {
     normalized(left) == normalized(right)
 }
 
+#[cfg(not(windows))]
 fn require_directory_without_symlink(path: &Path) -> Result<(), ()> {
     let metadata = fs::symlink_metadata(path).map_err(|_| ())?;
     if metadata_is_link_or_reparse(&metadata) || !metadata.is_dir() {
@@ -2709,6 +2710,7 @@ fn reject_existing_repository_control_path(path: &Path) -> Result<(), ()> {
     }
 }
 
+#[cfg(not(windows))]
 fn read_bounded_regular_file(path: &Path, maximum: u64) -> Result<Vec<u8>, ()> {
     let metadata = fs::symlink_metadata(path).map_err(|_| ())?;
     if metadata_is_link_or_reparse(&metadata) || !metadata.is_file() || metadata.len() > maximum {
@@ -2737,7 +2739,7 @@ fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
     metadata.file_type().is_symlink()
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, test))]
 fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
     use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
@@ -2751,7 +2753,7 @@ fn validate_windows_fixed_local_repository_path(_requested: &str) -> Result<(), 
     Ok(())
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, test))]
 fn validate_windows_fixed_local_repository_path(requested: &str) -> Result<(), ()> {
     open_windows_fixed_directory_chain(requested).map(|_| ())
 }
