@@ -299,6 +299,35 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
     );
     tokio::time::sleep(Duration::from_millis(50)).await;
 
+    let (local_grants_handshake, local_grants_over_remote) = authenticated_application_request(
+        remote_endpoint,
+        &valid,
+        "GET",
+        &format!("/v1/feature-conveyor/repositories/{repository_id}/grants"),
+        &serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(local_grants_handshake.status, HandshakeStatus::Accepted);
+    assert!(
+        local_grants_over_remote.starts_with("HTTP/1.1 404 Not Found"),
+        "owner-token repository-grant status leaked onto the remote router: {local_grants_over_remote}"
+    );
+    let (local_grant_post_handshake, local_grant_post_over_remote) =
+        authenticated_application_request(
+            remote_endpoint,
+            &valid,
+            "POST",
+            "/v1/feature-conveyor/repository-grants",
+            &serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(local_grant_post_handshake.status, HandshakeStatus::Accepted);
+    assert!(
+        local_grant_post_over_remote.starts_with("HTTP/1.1 404 Not Found"),
+        "owner-token repository-grant mutation leaked onto the remote router: {local_grant_post_over_remote}"
+    );
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
     let (first_response, first_exporter) = tls_request_with_body(
         remote_endpoint,
         valid.config.clone(),
@@ -897,6 +926,8 @@ fn install_repository_grants(
                     expires_at_ms: None,
                     revoked: false,
                 },
+                0,
+                0,
                 1,
             )
             .expect("record repository grant");

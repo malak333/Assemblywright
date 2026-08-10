@@ -472,6 +472,113 @@ pub struct FeatureConveyorOwnerBridgeDesignationReceipt {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureConveyorRepositoryGrantKind {
+    Registration,
+    CloudDisclosure,
+    AutonomousPublication,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorRepositoryGrantRevision {
+    pub repository_id: Uuid,
+    pub kind: FeatureConveyorRepositoryGrantKind,
+    pub revision: u64,
+    pub scope_sha256: [u8; 32],
+    pub owner_approval_sha256: [u8; 32],
+    pub expires_at_ms: Option<u64>,
+    pub revoked: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorRepositoryGrantRequest {
+    pub schema_version: u16,
+    pub expected_current_revision: u64,
+    pub expected_emergency_pause_revision: u64,
+    pub grant: FeatureConveyorRepositoryGrantRevision,
+}
+
+impl FeatureConveyorRepositoryGrantRequest {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "feature_conveyor_repository_grant_request",
+            frame,
+            MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_fixed_value(
+            "schema_version",
+            self.schema_version.to_string(),
+            FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION.to_string(),
+        )?;
+        validate_uuid("repository_id", self.grant.repository_id)?;
+        validate_positive_limit("repository_grant_revision", self.grant.revision, u64::MAX)?;
+        if self.grant.revision != self.expected_current_revision.saturating_add(1)
+            || self.expected_current_revision == u64::MAX
+            || self.grant.scope_sha256 == [0; 32]
+            || self.grant.owner_approval_sha256 == [0; 32]
+            || self.grant.expires_at_ms == Some(0)
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        validate_serialized_limit(
+            "feature_conveyor_repository_grant_request",
+            self,
+            MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureConveyorRepositoryGrantStatus {
+    Recorded,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorRepositoryGrantReceipt {
+    pub schema_version: u16,
+    pub repository_id: Uuid,
+    pub kind: FeatureConveyorRepositoryGrantKind,
+    pub revision: u64,
+    pub scope_sha256: [u8; 32],
+    pub owner_approval_sha256: [u8; 32],
+    pub expires_at_ms: Option<u64>,
+    pub revoked: bool,
+    pub emergency_pause_revision: u64,
+    pub status: FeatureConveyorRepositoryGrantStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorRepositoryGrantView {
+    pub revision: u64,
+    pub scope_sha256: [u8; 32],
+    pub owner_approval_sha256: [u8; 32],
+    pub expires_at_ms: Option<u64>,
+    pub revoked: bool,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorRepositoryGrantSet {
+    pub schema_version: u16,
+    pub repository_id: Uuid,
+    pub emergency_paused: bool,
+    pub emergency_pause_revision: u64,
+    pub registration: Option<FeatureConveyorRepositoryGrantView>,
+    pub cloud_disclosure: Option<FeatureConveyorRepositoryGrantView>,
+    pub autonomous_publication: Option<FeatureConveyorRepositoryGrantView>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FeatureConveyorGrantRevisions {
     pub registration: u64,

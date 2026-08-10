@@ -93,8 +93,8 @@ executable changes as release evidence.
 | Whole workspace | `cargo test --workspace` |
 | Protocol contract | `cargo test -p assemblywright-protocol` |
 | Master kernel | `cargo test -p assemblywright-master` |
-| Feature Conveyor kernel, owner designation, enqueue, and projection | `cargo test -p assemblywright-master --test feature_conveyor_kernel` |
-| Master process E2E, including authenticated loopback status/designation | `cargo test -p assemblywright-master --test master_process_e2e` |
+| Feature Conveyor kernel, grant CAS/projection, owner designation, enqueue, and status | `cargo test -p assemblywright-master --test feature_conveyor_kernel` |
+| Master process E2E, including authenticated loopback grant/status/designation routes | `cargo test -p assemblywright-master --test master_process_e2e` |
 | Windows remote mTLS observer and designated-owner enqueue denial/success | `cargo test -p assemblywright-master --test remote_mtls_e2e remote_listener_requires_enrollment_tls13_and_channel_bound_identity -- --nocapture` |
 | Swift strict Feature Conveyor observer, one-shot owner action, and helper lifecycle | `swift test --disable-sandbox --package-path apps/mac --filter DeveloperBridgeTests` |
 | Enrollment, two-phase capability rebind, and identity | `cargo test -p assemblywright-master --test enrollment_identity_e2e` |
@@ -211,6 +211,10 @@ Deterministic cross-process coverage proves:
   `/v1/distributed/feature-conveyor/status` route. Schema-v8 coverage additionally
   proves nullable/default-deny owner designation, compare-and-set rebinding,
   fixture/non-designated/revoked denial, migration, and atomic redacted audit.
+  Repository-grant coverage proves authenticated loopback-only strict requests,
+  contiguous compare-and-set revisions, digest-only current projection, expiry,
+  pause-bound active-grant denial, revocation while paused, redaction, audit
+  rollback, and absence from the enrolled-device router.
   The designated-owner POST is bound to the exact queue, designation, and pause
   revisions and reuses the manifest, grants, dependency, capacity, immutable-
   specification, and atomic-enqueue checks without claiming a lease. Swift tests

@@ -3,7 +3,8 @@ use assemblywright_master::{
     current_time_ms, AcceptedCancellation, AcceptedResult, ApprovedFeatureSpecification,
     CapabilityRebindAcknowledgement, DeviceRegistration, EnrollmentGrantSpec, EnrollmentRequest,
     EphemeralServerIdentity, FeatureConveyorStatus, IdentityAuthority, MasterHealthSnapshot,
-    MasterProcess, NewStep, PlatformSecretProtector, RemoteWorkContract, StartupReconciliation,
+    MasterProcess, NewStep, PlatformSecretProtector, RemoteWorkContract, RepositoryGrantKind,
+    RepositoryGrantRevision, StartupReconciliation,
 };
 #[cfg(test)]
 use assemblywright_protocol::CapabilityKind;
@@ -14,8 +15,10 @@ use assemblywright_protocol::{
     FeatureConveyorApprovedFeatureReceipt, FeatureConveyorApprovedFeatureRequest,
     FeatureConveyorApprovedFeatureStatus, FeatureConveyorOwnerBridgeDesignationReceipt,
     FeatureConveyorOwnerBridgeDesignationRequest, FeatureConveyorOwnerBridgeDesignationStatus,
-    FixtureJobResult, HandshakeRequest, HandshakeResponse, HandshakeStatus, JobEnvelope,
-    JobResultEnvelope, JobResultStatus, Sensitivity, StepId, TaskId,
+    FeatureConveyorRepositoryGrantKind, FeatureConveyorRepositoryGrantReceipt,
+    FeatureConveyorRepositoryGrantRequest, FeatureConveyorRepositoryGrantSet,
+    FeatureConveyorRepositoryGrantStatus, FixtureJobResult, HandshakeRequest, HandshakeResponse,
+    HandshakeStatus, JobEnvelope, JobResultEnvelope, JobResultStatus, Sensitivity, StepId, TaskId,
     ENROLLMENT_INVITATION_READY_STATUS, ENROLLMENT_PAIRING_SCHEMA_VERSION,
     FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, MAX_ENROLLMENT_PAIRING_FRAME_BYTES,
     MAX_WIRE_FRAME_BYTES, PROTOCOL_VERSION,
@@ -1433,6 +1436,14 @@ async fn serve_runtime(
             "/v1/feature-conveyor/owner-control-bridge",
             post(designate_owner_control_bridge),
         )
+        .route(
+            "/v1/feature-conveyor/repository-grants",
+            post(record_repository_grant),
+        )
+        .route(
+            "/v1/feature-conveyor/repositories/:repository_id/grants",
+            get(get_repository_grants),
+        )
         .route("/v1/development/devices/register", post(register_device))
         .route("/v1/development/connections/accept", post(accept_handshake))
         .route("/v1/development/events/next", post(development_events_next))
@@ -2108,6 +2119,91 @@ async fn designate_owner_control_bridge(
         designation_revision: designation.designation_revision,
         status: FeatureConveyorOwnerBridgeDesignationStatus::Designated,
     }))
+}
+
+async fn record_repository_grant(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<FeatureConveyorRepositoryGrantReceipt> {
+    authorize(&headers, &state)?;
+    let body = body.map_err(|_| {
+        fixed_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "repository_grant_request_rejected",
+        )
+    })?;
+    let request = FeatureConveyorRepositoryGrantRequest::decode_frame(&body).map_err(|_| {
+        fixed_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "repository_grant_request_rejected",
+        )
+    })?;
+    let grant = RepositoryGrantRevision {
+        repository_id: request.grant.repository_id,
+        kind: match request.grant.kind {
+            FeatureConveyorRepositoryGrantKind::Registration => RepositoryGrantKind::Registration,
+            FeatureConveyorRepositoryGrantKind::CloudDisclosure => {
+                RepositoryGrantKind::CloudDisclosure
+            }
+            FeatureConveyorRepositoryGrantKind::AutonomousPublication => {
+                RepositoryGrantKind::AutonomousPublication
+            }
+        },
+        revision: request.grant.revision,
+        scope_sha256: request.grant.scope_sha256,
+        owner_approval_sha256: request.grant.owner_approval_sha256,
+        expires_at_ms: request.grant.expires_at_ms,
+        revoked: request.grant.revoked,
+    };
+    let now_ms = current_time_ms()
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "repository_grant_recording_rejected"))?;
+    lock_process(&state)?
+        .kernel_mut()
+        .record_repository_grant_revision(
+            &grant,
+            request.expected_current_revision,
+            request.expected_emergency_pause_revision,
+            now_ms,
+        )
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "repository_grant_recording_rejected"))?;
+    Ok(Json(FeatureConveyorRepositoryGrantReceipt {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        repository_id: request.grant.repository_id,
+        kind: request.grant.kind,
+        revision: request.grant.revision,
+        scope_sha256: request.grant.scope_sha256,
+        owner_approval_sha256: request.grant.owner_approval_sha256,
+        expires_at_ms: request.grant.expires_at_ms,
+        revoked: request.grant.revoked,
+        emergency_pause_revision: request.expected_emergency_pause_revision,
+        status: FeatureConveyorRepositoryGrantStatus::Recorded,
+    }))
+}
+
+async fn get_repository_grants(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(repository_id): AxumPath<String>,
+) -> ApiResult<FeatureConveyorRepositoryGrantSet> {
+    authorize(&headers, &state)?;
+    let repository_id = Uuid::parse_str(&repository_id).map_err(|_| {
+        fixed_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "repository_grant_status_request_rejected",
+        )
+    })?;
+    let now_ms = current_time_ms().map_err(|_| internal_error())?;
+    let grants = lock_process(&state)?
+        .kernel()
+        .repository_grant_set(repository_id, now_ms)
+        .map_err(|_| {
+            fixed_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "repository_grant_status_request_rejected",
+            )
+        })?;
+    Ok(Json(grants))
 }
 
 async fn register_device(

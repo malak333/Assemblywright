@@ -193,6 +193,19 @@ release requirements, not optional UX guidance.
   registration drift, revocation, a stale designation revision, a missing
   designation, or any fixture identity fails closed. Possessing another valid
   MacBridge certificate never implies owner-control authority.
+- Repository-grant preparation and inspection are Windows-loopback-only and
+  owner-token authenticated. A mutation carries only repository identity,
+  grant kind, exact scope and approval digests, optional expiry, revocation,
+  the contiguous next revision, the expected current revision, and the current
+  Emergency Pause revision. Duplicate or unknown fields, nil identity, zero
+  digests, skipped/stale revisions, expired active authority, stale pause state,
+  and active grant creation while paused fail before mutation. Revocation stays
+  available while paused. Each immutable revision and structurally redacted
+  audit commit atomically; audit contains no repository identity, scope,
+  approval, path, or owner content. The current projection is owner-local,
+  bounded to the three fixed grant kinds, and both routes remain absent from the
+  enrolled-device mTLS router. Recording a grant performs no repository access
+  and grants no enqueue, claim, worker, provider, Git, or publication action.
 - Remote approved-feature enqueue is permitted only on
   `POST /v1/distributed/feature-conveyor/approved-features`, after a fresh
   exporter-bound application handshake is accepted and revalidated for the

@@ -2,13 +2,16 @@ use assemblywright_protocol::{
     AttemptId, AuthenticatedHandshakeRequest, CancellationId, CapabilityDescriptor, CapabilityKind,
     ContextHandlingPolicy, DeviceId, DeviceRole, EnrollmentCsrReply, EnrollmentInvitation,
     FeatureConveyorApprovedFeatureRequest, FeatureConveyorApprovedSpecification,
-    FeatureConveyorGrantRevisions, FeatureConveyorOwnerBridgeDesignationRequest, HandshakeRequest,
-    HandshakeResponse, JobEnvelope, JobResultEnvelope, JobResultStatus, LeaseId, ProtocolError,
-    Sensitivity, StepId, TaskId, ENROLLMENT_CSR_READY_STATUS, ENROLLMENT_INVITATION_READY_STATUS,
+    FeatureConveyorGrantRevisions, FeatureConveyorOwnerBridgeDesignationRequest,
+    FeatureConveyorRepositoryGrantKind, FeatureConveyorRepositoryGrantRequest,
+    FeatureConveyorRepositoryGrantRevision, HandshakeRequest, HandshakeResponse, JobEnvelope,
+    JobResultEnvelope, JobResultStatus, LeaseId, ProtocolError, Sensitivity, StepId, TaskId,
+    ENROLLMENT_CSR_READY_STATUS, ENROLLMENT_INVITATION_READY_STATUS,
     ENROLLMENT_PAIRING_SCHEMA_VERSION, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
     MAX_ENROLLMENT_CSR_PEM_BYTES, MAX_ENROLLMENT_PAIRING_FRAME_BYTES,
-    MAX_FEATURE_CONVEYOR_DEPENDENCIES, MAX_JOB_CONTEXT_BYTES, MAX_JOB_RESULT_BYTES,
-    MAX_LEASE_DURATION_MS, MAX_WIRE_FRAME_BYTES, PROTOCOL_VERSION,
+    MAX_FEATURE_CONVEYOR_DEPENDENCIES, MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES,
+    MAX_JOB_CONTEXT_BYTES, MAX_JOB_RESULT_BYTES, MAX_LEASE_DURATION_MS, MAX_WIRE_FRAME_BYTES,
+    PROTOCOL_VERSION,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -135,6 +138,97 @@ fn feature_conveyor_owner_control_dtos_are_strict_bounded_and_independently_vers
         .map(|index| Uuid::from_u128(0x4000 + index as u128))
         .collect();
     assert!(too_many_dependencies.validate().is_err());
+}
+
+#[test]
+fn repository_grant_requests_are_strict_revision_bound_and_digest_only() {
+    let repository_id = fixed_uuid("88888888-8888-4888-8888-888888888888");
+    let valid = FeatureConveyorRepositoryGrantRequest {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        expected_current_revision: 0,
+        expected_emergency_pause_revision: 2,
+        grant: FeatureConveyorRepositoryGrantRevision {
+            repository_id,
+            kind: FeatureConveyorRepositoryGrantKind::Registration,
+            revision: 1,
+            scope_sha256: [4; 32],
+            owner_approval_sha256: [5; 32],
+            expires_at_ms: Some(2_000_000),
+            revoked: false,
+        },
+    };
+    valid.validate().unwrap();
+    let encoded = serde_json::to_vec(&valid).unwrap();
+    assert_eq!(
+        FeatureConveyorRepositoryGrantRequest::decode_frame(&encoded).unwrap(),
+        valid
+    );
+    let duplicate = String::from_utf8(encoded).unwrap().replacen(
+        "\"grant\":{",
+        "\"grant\":{\"revision\":1,",
+        1,
+    );
+    assert!(FeatureConveyorRepositoryGrantRequest::decode_frame(duplicate.as_bytes()).is_err());
+
+    for invalid in [
+        FeatureConveyorRepositoryGrantRequest {
+            schema_version: 2,
+            ..valid
+        },
+        FeatureConveyorRepositoryGrantRequest {
+            expected_current_revision: 1,
+            ..valid
+        },
+        FeatureConveyorRepositoryGrantRequest {
+            expected_current_revision: u64::MAX,
+            grant: FeatureConveyorRepositoryGrantRevision {
+                revision: u64::MAX,
+                ..valid.grant
+            },
+            ..valid
+        },
+        FeatureConveyorRepositoryGrantRequest {
+            grant: FeatureConveyorRepositoryGrantRevision {
+                repository_id: Uuid::nil(),
+                ..valid.grant
+            },
+            ..valid
+        },
+        FeatureConveyorRepositoryGrantRequest {
+            grant: FeatureConveyorRepositoryGrantRevision {
+                scope_sha256: [0; 32],
+                ..valid.grant
+            },
+            ..valid
+        },
+        FeatureConveyorRepositoryGrantRequest {
+            grant: FeatureConveyorRepositoryGrantRevision {
+                owner_approval_sha256: [0; 32],
+                ..valid.grant
+            },
+            ..valid
+        },
+        FeatureConveyorRepositoryGrantRequest {
+            grant: FeatureConveyorRepositoryGrantRevision {
+                expires_at_ms: Some(0),
+                ..valid.grant
+            },
+            ..valid
+        },
+    ] {
+        assert!(invalid.validate().is_err());
+    }
+    assert_eq!(
+        FeatureConveyorRepositoryGrantRequest::decode_frame(&vec![
+            b' ';
+            MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES
+                + 1
+        ]),
+        Err(ProtocolError::FrameTooLarge {
+            field: "feature_conveyor_repository_grant_request",
+            maximum: MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES,
+        })
+    );
 }
 
 fn sample_job() -> JobEnvelope {

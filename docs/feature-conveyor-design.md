@@ -50,7 +50,14 @@ Master schema v8 adds the first bounded owner-control transport without
 activating the conveyor. An owner-token-authenticated Windows loopback action
 designates one exact current, enrolled, non-fixture `MacBridge` using a durable
 compare-and-set designation revision and same-transaction redacted audit. Only
-that exact device may use
+Two additional owner-token loopback-only routes record and inspect the three
+independent repository grants without accessing a repository. Each strict
+digest-only mutation must be the contiguous next revision, match the current
+grant and Emergency Pause revisions, and commit with a redacted audit. Active
+grants fail while paused; a revocation revision remains available. The current
+projection exposes only digests, revision, expiry, revocation, and computed
+active state, and both routes are absent from enrolled-device mTLS. Only the
+exact designated device may use
 `POST /v1/distributed/feature-conveyor/approved-features` after a revalidated,
 exporter-bound application handshake. Its fixed-schema request carries one
 already-approved specification and binds the exact queue, designation, and

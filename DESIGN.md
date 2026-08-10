@@ -85,7 +85,13 @@ SQLite database holds two kernels:
 Schema v8 adds one nullable, compare-and-set, Windows-authoritative owner-control
 bridge designation. Its owner-token-authenticated loopback mutation accepts
 only a current, enrolled, non-fixture `MacBridge` and commits a redacted audit
-event atomically. The separate remote
+event atomically. Separate owner-token-authenticated loopback repository-grant
+routes record one strict digest-only, contiguous, compare-and-set revision and
+inspect only the current registration, cloud-disclosure, and autonomous-
+publication revisions. The mutation is bound to the Emergency Pause revision;
+active grants are blocked while paused, revocation remains available, and audit
+failure rolls back the revision. These routes never inspect a repository and
+are absent from the enrolled-device router. The separate remote
 `POST /v1/distributed/feature-conveyor/approved-features` remains unusable until
 the caller is the exact current designation on an accepted, revalidated,
 exporter-bound session. Its strict request binds one already-approved

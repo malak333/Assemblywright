@@ -74,6 +74,8 @@ fn install_grants(kernel: &mut MasterKernel, repository_id: Uuid) {
                     expires_at_ms: None,
                     revoked: false,
                 },
+                0,
+                0,
                 1,
             )
             .unwrap();
@@ -218,6 +220,171 @@ fn owner_control_designation_is_explicit_cas_bound_role_checked_and_audited() {
         assert!(!audit.contains(&second.device_id.0.to_string()));
         assert!(!audit.contains("owner-control-mlx"));
         assert!(!audit.contains("owner-bridge"));
+    }
+}
+
+#[test]
+fn repository_grant_owner_control_is_cas_pause_bound_redacted_and_projected() {
+    let directory = tempdir().unwrap();
+    let database = directory.path().join("master.sqlite3");
+    let mut kernel = MasterKernel::open(&database).unwrap();
+    let repository_id = Uuid::new_v4();
+    let empty = kernel.repository_grant_set(repository_id, 10).unwrap();
+    assert_eq!(empty.schema_version, 1);
+    assert_eq!(empty.repository_id, repository_id);
+    assert!(!empty.emergency_paused);
+    assert_eq!(empty.emergency_pause_revision, 0);
+    assert_eq!(empty.registration, None);
+    assert_eq!(empty.cloud_disclosure, None);
+    assert_eq!(empty.autonomous_publication, None);
+
+    let registration = RepositoryGrantRevision {
+        repository_id,
+        kind: RepositoryGrantKind::Registration,
+        revision: 1,
+        scope_sha256: digest("private repository path and workflow scope"),
+        owner_approval_sha256: digest("private registration approval"),
+        expires_at_ms: Some(100),
+        revoked: false,
+    };
+    kernel
+        .record_repository_grant_revision(&registration, 0, 0, 10)
+        .unwrap();
+    let active = kernel.repository_grant_set(repository_id, 99).unwrap();
+    let active_registration = active.registration.unwrap();
+    assert_eq!(active_registration.revision, 1);
+    assert!(active_registration.active);
+    assert!(!active_registration.revoked);
+    assert_eq!(active_registration.expires_at_ms, Some(100));
+    assert!(
+        !kernel
+            .repository_grant_set(repository_id, 100)
+            .unwrap()
+            .registration
+            .unwrap()
+            .active
+    );
+
+    let revision_two = RepositoryGrantRevision {
+        revision: 2,
+        scope_sha256: digest("replacement registration scope"),
+        owner_approval_sha256: digest("replacement registration approval"),
+        expires_at_ms: None,
+        ..registration
+    };
+    assert!(matches!(
+        kernel
+            .record_repository_grant_revision(&revision_two, 0, 0, 20)
+            .unwrap_err(),
+        MasterError::StaleRepositoryGrantRevision {
+            expected: 0,
+            found: 1
+        }
+    ));
+    let skipped = RepositoryGrantRevision {
+        revision: 3,
+        ..revision_two
+    };
+    assert!(matches!(
+        kernel
+            .record_repository_grant_revision(&skipped, 1, 0, 20)
+            .unwrap_err(),
+        MasterError::InvalidFeatureConveyorInput(_)
+    ));
+    let expired = RepositoryGrantRevision {
+        repository_id,
+        kind: RepositoryGrantKind::CloudDisclosure,
+        revision: 1,
+        scope_sha256: digest("expired cloud scope"),
+        owner_approval_sha256: digest("expired cloud approval"),
+        expires_at_ms: Some(20),
+        revoked: false,
+    };
+    assert!(matches!(
+        kernel
+            .record_repository_grant_revision(&expired, 0, 0, 20)
+            .unwrap_err(),
+        MasterError::InvalidFeatureConveyorInput(_)
+    ));
+
+    kernel.set_emergency_paused_at(true, 30).unwrap();
+    let cloud = RepositoryGrantRevision {
+        expires_at_ms: None,
+        ..expired
+    };
+    assert!(matches!(
+        kernel
+            .record_repository_grant_revision(&cloud, 0, 1, 31)
+            .unwrap_err(),
+        MasterError::EmergencyPaused
+    ));
+    let revoked_cloud = RepositoryGrantRevision {
+        revoked: true,
+        ..cloud
+    };
+    kernel
+        .record_repository_grant_revision(&revoked_cloud, 0, 1, 32)
+        .unwrap();
+    let paused = kernel.repository_grant_set(repository_id, 33).unwrap();
+    assert!(paused.emergency_paused);
+    assert_eq!(paused.emergency_pause_revision, 1);
+    assert!(paused.cloud_disclosure.unwrap().revoked);
+    assert!(!paused.cloud_disclosure.unwrap().active);
+
+    let publication = RepositoryGrantRevision {
+        repository_id,
+        kind: RepositoryGrantKind::AutonomousPublication,
+        revision: 1,
+        scope_sha256: digest("publication scope"),
+        owner_approval_sha256: digest("publication approval"),
+        expires_at_ms: None,
+        revoked: false,
+    };
+    assert!(matches!(
+        kernel
+            .record_repository_grant_revision(&publication, 0, 0, 34)
+            .unwrap_err(),
+        MasterError::StaleEmergencyPauseRevision {
+            expected: 0,
+            found: 1
+        }
+    ));
+    kernel.set_emergency_paused_at(false, 35).unwrap();
+    install_audit_failure(&database, "repository_grant_revision_recorded");
+    assert!(matches!(
+        kernel
+            .record_repository_grant_revision(&publication, 0, 2, 36)
+            .unwrap_err(),
+        MasterError::Storage(_)
+    ));
+    assert_eq!(
+        kernel
+            .repository_grant_set(repository_id, 36)
+            .unwrap()
+            .autonomous_publication,
+        None
+    );
+    remove_audit_failure(&database);
+    kernel
+        .record_repository_grant_revision(&publication, 0, 2, 37)
+        .unwrap();
+
+    let connection = Connection::open(database).unwrap();
+    let audits = connection
+        .prepare(
+            "SELECT redacted_metadata_json FROM feature_conveyor_audit
+             WHERE event_kind = 'repository_grant_revision_recorded' ORDER BY audit_id",
+        )
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(audits.len(), 3);
+    for audit in audits {
+        assert!(!audit.contains(&repository_id.to_string()));
+        assert!(!audit.contains("private"));
+        assert!(audit.contains("\"side_effect_executed\":false"));
     }
 }
 
@@ -885,7 +1052,7 @@ fn capacity_101_and_immutable_revisions_roll_back_atomically() {
     ));
     assert_eq!(kernel.feature_queue_revision().unwrap(), 1);
 
-    let duplicate_grant = kernel
+    let stale_grant = kernel
         .record_repository_grant_revision(
             &RepositoryGrantRevision {
                 repository_id,
@@ -896,12 +1063,17 @@ fn capacity_101_and_immutable_revisions_roll_back_atomically() {
                 expires_at_ms: None,
                 revoked: false,
             },
+            0,
+            0,
             4,
         )
         .unwrap_err();
     assert!(matches!(
-        duplicate_grant,
-        MasterError::RepositoryGrantImmutable
+        stale_grant,
+        MasterError::StaleRepositoryGrantRevision {
+            expected: 0,
+            found: 1
+        }
     ));
 
     for revision in 1..MAX_CONVEYOR_NONTERMINAL_FEATURES {
@@ -1095,6 +1267,8 @@ fn changed_grant_invalidates_active_feature_before_lifecycle_advancement() {
                 expires_at_ms: None,
                 revoked: true,
             },
+            1,
+            0,
             12,
         )
         .unwrap();

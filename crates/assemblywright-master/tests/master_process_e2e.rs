@@ -4,7 +4,9 @@ use assemblywright_master::{
 };
 use assemblywright_protocol::{
     CapabilityDescriptor, DeviceId, DeviceRole, FeatureConveyorOwnerBridgeDesignationRequest,
-    FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, MAX_WIRE_FRAME_BYTES,
+    FeatureConveyorRepositoryGrantKind, FeatureConveyorRepositoryGrantRequest,
+    FeatureConveyorRepositoryGrantRevision, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+    MAX_WIRE_FRAME_BYTES,
 };
 use rusqlite::Connection;
 use serde_json::Value;
@@ -159,6 +161,169 @@ fn owner_control_bridge_designation_is_owner_authenticated_strict_and_redacted()
     assert!(!audit.contains(&owner.device_id.0.to_string()));
     assert!(!audit.contains(&owner.device_name));
     assert!(!audit.contains("owner-control-mlx"));
+}
+
+#[test]
+fn repository_grant_routes_are_owner_authenticated_strict_cas_bound_and_redacted() {
+    let directory = tempdir().expect("temporary repository-grant directory");
+    let binary = env!("CARGO_BIN_EXE_assemblywright-master");
+    assert_success(&run(binary, directory.path(), ["setup"]), "setup");
+    let endpoint = unused_loopback_addr();
+    let mut server = spawn_server(binary, directory.path(), endpoint);
+    read_ready(&mut server.child);
+    let token = std::fs::read_to_string(directory.path().join("development.token")).unwrap();
+    let token = token.trim();
+    let repository_id = Uuid::new_v4();
+    let status_path = format!("/v1/feature-conveyor/repositories/{repository_id}/grants");
+
+    let unauthorized = get_request(endpoint, &status_path, None);
+    assert!(unauthorized.starts_with("HTTP/1.1 401 Unauthorized"));
+    let malformed_status = get_request(
+        endpoint,
+        "/v1/feature-conveyor/repositories/private-invalid-repository/grants",
+        Some(token),
+    );
+    assert!(malformed_status.starts_with("HTTP/1.1 422 Unprocessable Entity"));
+    assert_eq!(
+        response_json(&malformed_status),
+        serde_json::json!({"error":"repository_grant_status_request_rejected"})
+    );
+    assert!(!malformed_status.contains("private-invalid-repository"));
+
+    let empty = get_request(endpoint, &status_path, Some(token));
+    assert!(empty.starts_with("HTTP/1.1 200 OK"), "{empty}");
+    let empty_json = response_json(&empty);
+    assert_exact_object_keys(
+        &empty_json,
+        &[
+            "schema_version",
+            "repository_id",
+            "emergency_paused",
+            "emergency_pause_revision",
+            "registration",
+            "cloud_disclosure",
+            "autonomous_publication",
+        ],
+    );
+    assert_eq!(empty_json["schema_version"], 1);
+    assert_eq!(empty_json["repository_id"], repository_id.to_string());
+    assert_eq!(empty_json["registration"], Value::Null);
+    assert_eq!(empty_json["cloud_disclosure"], Value::Null);
+    assert_eq!(empty_json["autonomous_publication"], Value::Null);
+
+    let request = FeatureConveyorRepositoryGrantRequest {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        expected_current_revision: 0,
+        expected_emergency_pause_revision: 0,
+        grant: FeatureConveyorRepositoryGrantRevision {
+            repository_id,
+            kind: FeatureConveyorRepositoryGrantKind::Registration,
+            revision: 1,
+            scope_sha256: Sha256::digest("private exact repository scope").into(),
+            owner_approval_sha256: Sha256::digest("private exact owner approval").into(),
+            expires_at_ms: None,
+            revoked: false,
+        },
+    };
+    let request_json = serde_json::to_string(&request).unwrap();
+    let unauthorized_post = post_request(
+        endpoint,
+        "/v1/feature-conveyor/repository-grants",
+        None,
+        &request_json,
+    );
+    assert!(unauthorized_post.starts_with("HTTP/1.1 401 Unauthorized"));
+    let duplicate = request_json.replacen(
+        "\"grant\":{",
+        "\"grant\":{\"revision\":1,\"private_scope\":\"must-not-echo\",",
+        1,
+    );
+    let malformed_post = post_request(
+        endpoint,
+        "/v1/feature-conveyor/repository-grants",
+        Some(token),
+        &duplicate,
+    );
+    assert!(malformed_post.starts_with("HTTP/1.1 422 Unprocessable Entity"));
+    assert_eq!(
+        response_json(&malformed_post),
+        serde_json::json!({"error":"repository_grant_request_rejected"})
+    );
+    assert!(!malformed_post.contains("must-not-echo"));
+
+    let recorded = post_request(
+        endpoint,
+        "/v1/feature-conveyor/repository-grants",
+        Some(token),
+        &request_json,
+    );
+    assert!(recorded.starts_with("HTTP/1.1 200 OK"), "{recorded}");
+    let receipt = response_json(&recorded);
+    assert_exact_object_keys(
+        &receipt,
+        &[
+            "schema_version",
+            "repository_id",
+            "kind",
+            "revision",
+            "scope_sha256",
+            "owner_approval_sha256",
+            "expires_at_ms",
+            "revoked",
+            "emergency_pause_revision",
+            "status",
+        ],
+    );
+    assert_eq!(receipt["repository_id"], repository_id.to_string());
+    assert_eq!(receipt["kind"], "registration");
+    assert_eq!(receipt["revision"], 1);
+    assert_eq!(receipt["revoked"], false);
+    assert_eq!(receipt["status"], "recorded");
+
+    let stale = post_request(
+        endpoint,
+        "/v1/feature-conveyor/repository-grants",
+        Some(token),
+        &request_json,
+    );
+    assert!(stale.starts_with("HTTP/1.1 409 Conflict"));
+    assert_eq!(
+        response_json(&stale),
+        serde_json::json!({"error":"repository_grant_recording_rejected"})
+    );
+
+    let populated = get_request(endpoint, &status_path, Some(token));
+    assert!(populated.starts_with("HTTP/1.1 200 OK"), "{populated}");
+    let populated_json = response_json(&populated);
+    let registration = &populated_json["registration"];
+    assert_exact_object_keys(
+        registration,
+        &[
+            "revision",
+            "scope_sha256",
+            "owner_approval_sha256",
+            "expires_at_ms",
+            "revoked",
+            "active",
+        ],
+    );
+    assert_eq!(registration["revision"], 1);
+    assert_eq!(registration["active"], true);
+    assert_eq!(populated_json["cloud_disclosure"], Value::Null);
+    assert_eq!(populated_json["autonomous_publication"], Value::Null);
+
+    let audit: String = Connection::open(directory.path().join("master.sqlite3"))
+        .unwrap()
+        .query_row(
+            "SELECT redacted_metadata_json FROM feature_conveyor_audit
+             WHERE event_kind = 'repository_grant_revision_recorded'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(!audit.contains(&repository_id.to_string()));
+    assert!(!audit.contains("private"));
+    assert!(audit.contains("\"side_effect_executed\":false"));
 }
 
 #[test]
@@ -633,6 +798,8 @@ fn seed_bounded_feature_status(data_dir: &Path) {
                     expires_at_ms: None,
                     revoked: false,
                 },
+                0,
+                0,
                 1,
             )
             .expect("record status seed grant");

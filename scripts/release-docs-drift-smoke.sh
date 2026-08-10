@@ -175,6 +175,10 @@ require_text "conveyor remote status implementation" "$MASTER_PROCESS" \
   '"/v1/distributed/feature-conveyor/status"'
 require_text "conveyor owner designation implementation" "$MASTER_PROCESS" \
   '"/v1/feature-conveyor/owner-control-bridge"'
+require_text "conveyor repository grant mutation implementation" "$MASTER_PROCESS" \
+  '"/v1/feature-conveyor/repository-grants"'
+require_text "conveyor repository grant status implementation" "$MASTER_PROCESS" \
+  '"/v1/feature-conveyor/repositories/:repository_id/grants"'
 require_text "conveyor remote owner action implementation" "$MASTER_PROCESS" \
   '"/v1/distributed/feature-conveyor/approved-features"'
 require_text "conveyor owner guidance implementation" "$MASTER_CRATE" \
@@ -191,6 +195,8 @@ require_text "conveyor remote owner-action redaction" "$MASTER_REMOTE_MTLS_E2E" 
   "receipt leaked"
 require_text "conveyor local owner route remote absence" "$MASTER_REMOTE_MTLS_E2E" \
   "owner-token local status route leaked onto the remote router"
+require_text "conveyor local grant routes remote absence" "$MASTER_REMOTE_MTLS_E2E" \
+  "repository-grant mutation leaked onto the remote router"
 require_text "conveyor Swift strict decoder" "$MAC_BRIDGE_SUPERVISOR" \
   "invalid_feature_conveyor_status"
 require_text "conveyor authenticated snapshot only" "$MAC_BRIDGE_SUPERVISOR" \
@@ -241,6 +247,10 @@ require_text "knowledge base owner designation boundary" "$KB" \
   "POST /v1/feature-conveyor/owner-control-bridge"
 require_text "knowledge base remote owner action boundary" "$KB" \
   "POST /v1/distributed/feature-conveyor/approved-features"
+require_text "knowledge base repository grant boundary" "$KB" \
+  "POST /v1/feature-conveyor/repository-grants"
+require_text "knowledge base repository grant mutation invariant" "$KB" \
+  "sole public mutation primitive"
 require_text "knowledge base feature closeout" "$KB" \
   "Every feature or phase uses the closeout contract"
 require_text "knowledge base native E2E boundary" "$KB" \
@@ -258,6 +268,8 @@ require_text "release checklist conveyor remote observation" "$CHECKLIST" \
   "GET /v1/distributed/feature-conveyor/status"
 require_text "release checklist conveyor owner designation" "$CHECKLIST" \
   "owner-control MacBridge"
+require_text "release checklist repository grant boundary" "$CHECKLIST" \
+  "owner-token loopback repository-grant routes"
 require_text "release checklist feature closeout" "$CHECKLIST" \
   "docs/development-agent-workflow.md"
 

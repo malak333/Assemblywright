@@ -30,6 +30,7 @@ flowchart LR
   Conveyor --> Observer["Exact bounded status projection: local owner route plus accepted-session MacBridge-only remote GET"]
   Observer --> Helper
   Conveyor --> OwnerDesignation["Nullable CAS owner-control bridge designation with atomic redacted audit"]
+  Conveyor --> GrantControl["Loopback-only contiguous CAS repository-grant revisions and current digest projection"]
   OwnerDesignation --> OwnerAction["Exact designated non-fixture MacBridge-only approved-feature POST; queue insertion only"]
   OwnerAction --> Helper
   Protocol --> Feature["Dormant assemblywright-core distributed-development feature"]
@@ -87,7 +88,11 @@ one display-only next owner action. It does not determine claimability or
 after an accepted exporter-bound MacBridge session, denies other roles, and
 forwards no owner token. The Swift helper validates the exact schema-v8
 allowlist and the app displays it only while authenticated. A separate
-owner-token-authenticated loopback action designates one exact current,
+owner-token-authenticated loopback grant surface records one strict contiguous
+compare-and-set digest-only revision and inspects current grant metadata for a
+repository. It is Emergency-Pause-revision bound, blocks active grants while
+paused, permits revocation, performs no repository access, and is absent from
+the remote router. Another owner-token-authenticated loopback action designates one exact current,
 non-fixture MacBridge. Only that designated device may submit one revision-bound
 already-approved specification through the dedicated remote POST; the signed
 helper exposes it only as a one-shot `--confirm` command with bounded stdin and

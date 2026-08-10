@@ -57,7 +57,14 @@ executable.
   only after an exporter-bound application session is accepted for an enrolled
   MacBridge; other device roles are denied and no owner token is forwarded.
   Neither observation route grants mutation, execution, review, repository,
-  Git, publication, activation, or callable owner-action authority. Separately,
+  Git, publication, activation, or callable owner-action authority. The
+  owner-token loopback-only `POST /v1/feature-conveyor/repository-grants` and
+  `GET /v1/feature-conveyor/repositories/:repository_id/grants` routes prepare
+  and inspect one current digest-only revision for each independent grant.
+  Recording is contiguous, compare-and-set and Emergency-Pause-revision bound;
+  active authority is blocked while paused, revocation remains available, and
+  redacted audit commits atomically. The routes inspect no repository and are
+  absent from enrolled-device mTLS. Separately,
   an owner-token-authenticated loopback action designates exactly one current
   non-fixture MacBridge under compare-and-set revision and atomic redacted
   audit. Only that exact device, after a fresh exporter-bound application
@@ -118,7 +125,7 @@ Not yet implemented, and not claimed:
 - Mac Feature Conveyor UI controls or hosted brainstorming. The app remains
   observation only. The implemented one-shot signed-helper action can enqueue
   only an already-approved specification after separate Windows owner-bridge
-  designation and repository-grant preparation.
+  designation and three current repository-grant revisions.
 - Developer ID signing, notarization, stapling, clean-profile installation, or
   Finder/LaunchServices validation.
 - Live cross-device reliability, host hardening, or unattended operation.

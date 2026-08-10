@@ -253,6 +253,24 @@ an old one.
   `feature-conveyor approve-and-enqueue --confirm` with bounded stdin, strict
   recursive duplicate rejection, and a redacted bound receipt. The app remains
   read-only.
+- Repository-grant preparation is now supported only through the owner-token-
+  authenticated Windows loopback `POST /v1/feature-conveyor/repository-grants`;
+  current grant inspection uses
+  `GET /v1/feature-conveyor/repositories/:repository_id/grants`. The fixed
+  schema carries digest-only scope and approval bindings, the contiguous next
+  revision, expected current revision, and Emergency Pause revision. Active
+  grant creation fails while paused, revocation remains available, and the
+  immutable revision plus redacted audit commit atomically. The projection is
+  limited to the three current fixed grant kinds and their revision, digests,
+  expiry, revoked, and computed active state. Neither route exists on enrolled-
+  device mTLS, and recording a grant neither reads a repository nor exercises
+  enqueue, worker, provider, Git, or publication authority.
+- Repository-grant compare-and-set, Emergency Pause, revision, expiry, and audit
+  invariants belong in the sole public mutation primitive, not only in an HTTP
+  handler. A separate public raw-insert or test-seeding path can bypass the
+  owner-control boundary. Tests therefore seed grants through the same checked
+  entry point; any private insert helper runs only after validation and writes
+  its redacted audit record in the same transaction.
 - Windows is the sole canonical-manifest digest authority for approved-feature
   enqueue. The signed Swift helper validates exact nonzero digest shape but does
   not recompute canonical JSON because Foundation normalizes some numeric JSON

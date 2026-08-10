@@ -2,9 +2,10 @@ use assemblywright_protocol::{
     AttemptId, CancellationAcknowledgement, CancellationId, CancellationInstruction,
     CapabilityDescriptor, ContextHandlingPolicy, DeviceId, DeviceRole, DistributedEvent,
     DistributedEventBatch, DistributedEventBatchRequest, DistributedEventCursor,
-    DistributedEventKind, FeatureConveyorApprovedSpecification, HandshakeRequest,
-    HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope, JobResultStatus, LeaseId,
-    ProtocolError, Sensitivity, StepId, TaskId, CANCELLATION_ACK_DEADLINE_MS,
+    DistributedEventKind, FeatureConveyorApprovedSpecification, FeatureConveyorRepositoryGrantSet,
+    FeatureConveyorRepositoryGrantView, HandshakeRequest, HandshakeResponse, HandshakeStatus,
+    JobEnvelope, JobResultEnvelope, JobResultStatus, LeaseId, ProtocolError, Sensitivity, StepId,
+    TaskId, CANCELLATION_ACK_DEADLINE_MS, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
     FIXTURE_REASONING_CAPABILITY_ID, MAX_CAPABILITY_ID_BYTES, MAX_JOB_CONTEXT_BYTES,
     MAX_LEASE_DURATION_MS, MAX_STEP_DEADLINE_MS, MLX_REASONING_CAPABILITY_ID, PROTOCOL_VERSION,
 };
@@ -216,6 +217,8 @@ pub enum MasterError {
     FeatureSpecificationImmutable,
     #[error("repository grant revision is immutable or already present")]
     RepositoryGrantImmutable,
+    #[error("repository grant revision is stale: expected {expected}, found {found}")]
+    StaleRepositoryGrantRevision { expected: u64, found: u64 },
     #[error("repository grant is absent, revoked, expired, or does not match the approved specification")]
     RepositoryGrantUnavailable,
     #[error("the strict queue head is dependency-blocked")]
@@ -1267,56 +1270,84 @@ impl MasterKernel {
     pub fn record_repository_grant_revision(
         &mut self,
         grant: &RepositoryGrantRevision,
+        expected_current_revision: u64,
+        expected_emergency_pause_revision: u64,
         now_ms: u64,
     ) -> Result<(), MasterError> {
         validate_repository_grant(grant)?;
+        if !grant.revoked && grant.expires_at_ms.is_some_and(|expiry| expiry <= now_ms) {
+            return Err(MasterError::InvalidFeatureConveyorInput(
+                "an active repository grant must not already be expired".to_string(),
+            ));
+        }
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let inserted = tx.execute(
-            "INSERT INTO feature_repository_grants (
-               repository_id, grant_kind, revision, scope_sha256,
-               owner_approval_sha256, expires_at_ms, revoked, created_at_ms
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                grant.repository_id.to_string(),
-                grant.kind.as_str(),
-                u64_to_i64(grant.revision)?,
-                grant.scope_sha256.as_slice(),
-                grant.owner_approval_sha256.as_slice(),
-                grant.expires_at_ms.map(u64_to_i64).transpose()?,
-                i64::from(grant.revoked),
-                u64_to_i64(now_ms)?,
-            ],
-        );
-        match inserted {
-            Ok(1) => {}
-            Ok(_) => {
-                return Err(MasterError::InvalidStoredState(
-                    "repository grant insert did not affect one row".to_string(),
-                ));
-            }
-            Err(error) if is_constraint_violation(&error) => {
-                return Err(MasterError::RepositoryGrantImmutable);
-            }
-            Err(error) => return Err(error.into()),
+        require_emergency_pause_revision_tx(&tx, expected_emergency_pause_revision)?;
+        if !grant.revoked {
+            require_emergency_unpaused_tx(&tx)?;
         }
-        append_feature_audit_tx(
-            &tx,
-            "repository_grant_revision_recorded",
-            None,
-            now_ms,
-            serde_json::json!({
-                "grant_kind": grant.kind.as_str(),
-                "revision": grant.revision,
-                "revoked": grant.revoked,
-                "scope_digest_present": true,
-                "owner_approval_digest_present": true,
-                "side_effect_executed": false
-            }),
+        let current_revision: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(revision), 0) FROM feature_repository_grants
+             WHERE repository_id = ?1 AND grant_kind = ?2",
+            params![grant.repository_id.to_string(), grant.kind.as_str()],
+            |row| row.get(0),
         )?;
+        let current_revision = i64_to_u64(current_revision)?;
+        if current_revision != expected_current_revision {
+            return Err(MasterError::StaleRepositoryGrantRevision {
+                expected: expected_current_revision,
+                found: current_revision,
+            });
+        }
+        let next_revision = current_revision.checked_add(1).ok_or_else(|| {
+            MasterError::InvalidStoredState("repository grant revision overflowed".to_string())
+        })?;
+        if grant.revision != next_revision {
+            return Err(MasterError::InvalidFeatureConveyorInput(
+                "repository grant revisions must be contiguous".to_string(),
+            ));
+        }
+        insert_repository_grant_revision_tx(&tx, grant, now_ms)?;
         tx.commit()?;
         Ok(())
+    }
+
+    pub fn repository_grant_set(
+        &self,
+        repository_id: Uuid,
+        now_ms: u64,
+    ) -> Result<FeatureConveyorRepositoryGrantSet, MasterError> {
+        if repository_id.is_nil() {
+            return Err(MasterError::InvalidFeatureConveyorInput(
+                "repository identity is required".to_string(),
+            ));
+        }
+        let (emergency_paused, emergency_pause_revision) = self.emergency_pause_snapshot()?;
+        Ok(FeatureConveyorRepositoryGrantSet {
+            schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+            repository_id,
+            emergency_paused,
+            emergency_pause_revision,
+            registration: repository_grant_view(
+                &self.connection,
+                repository_id,
+                RepositoryGrantKind::Registration,
+                now_ms,
+            )?,
+            cloud_disclosure: repository_grant_view(
+                &self.connection,
+                repository_id,
+                RepositoryGrantKind::CloudDisclosure,
+                now_ms,
+            )?,
+            autonomous_publication: repository_grant_view(
+                &self.connection,
+                repository_id,
+                RepositoryGrantKind::AutonomousPublication,
+                now_ms,
+            )?,
+        })
     }
 
     pub fn enqueue_approved_feature(
@@ -4765,6 +4796,96 @@ fn validate_repository_grant(grant: &RepositoryGrantRevision) -> Result<(), Mast
     Ok(())
 }
 
+fn insert_repository_grant_revision_tx(
+    tx: &Transaction<'_>,
+    grant: &RepositoryGrantRevision,
+    now_ms: u64,
+) -> Result<(), MasterError> {
+    let inserted = tx.execute(
+        "INSERT INTO feature_repository_grants (
+           repository_id, grant_kind, revision, scope_sha256,
+           owner_approval_sha256, expires_at_ms, revoked, created_at_ms
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            grant.repository_id.to_string(),
+            grant.kind.as_str(),
+            u64_to_i64(grant.revision)?,
+            grant.scope_sha256.as_slice(),
+            grant.owner_approval_sha256.as_slice(),
+            grant.expires_at_ms.map(u64_to_i64).transpose()?,
+            i64::from(grant.revoked),
+            u64_to_i64(now_ms)?,
+        ],
+    );
+    match inserted {
+        Ok(1) => {}
+        Ok(_) => {
+            return Err(MasterError::InvalidStoredState(
+                "repository grant insert did not affect one row".to_string(),
+            ));
+        }
+        Err(error) if is_constraint_violation(&error) => {
+            return Err(MasterError::RepositoryGrantImmutable);
+        }
+        Err(error) => return Err(error.into()),
+    }
+    append_feature_audit_tx(
+        tx,
+        "repository_grant_revision_recorded",
+        None,
+        now_ms,
+        serde_json::json!({
+            "grant_kind": grant.kind.as_str(),
+            "revision": grant.revision,
+            "revoked": grant.revoked,
+            "scope_digest_present": true,
+            "owner_approval_digest_present": true,
+            "side_effect_executed": false
+        }),
+    )?;
+    Ok(())
+}
+
+fn repository_grant_view(
+    connection: &Connection,
+    repository_id: Uuid,
+    kind: RepositoryGrantKind,
+    now_ms: u64,
+) -> Result<Option<FeatureConveyorRepositoryGrantView>, MasterError> {
+    let stored = connection
+        .query_row(
+            "SELECT revision, scope_sha256, owner_approval_sha256, expires_at_ms, revoked
+             FROM feature_repository_grants
+             WHERE repository_id = ?1 AND grant_kind = ?2
+             ORDER BY revision DESC LIMIT 1",
+            params![repository_id.to_string(), kind.as_str()],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((revision, scope_sha256, owner_approval_sha256, expires_at_ms, revoked)) = stored
+    else {
+        return Ok(None);
+    };
+    let revoked = parse_stored_boolean(revoked, "repository grant revocation")?;
+    let expires_at_ms = expires_at_ms.map(i64_to_u64).transpose()?;
+    Ok(Some(FeatureConveyorRepositoryGrantView {
+        revision: i64_to_u64(revision)?,
+        scope_sha256: digest_array(&scope_sha256)?,
+        owner_approval_sha256: digest_array(&owner_approval_sha256)?,
+        expires_at_ms,
+        revoked,
+        active: !revoked && expires_at_ms.is_none_or(|expiry| expiry > now_ms),
+    }))
+}
+
 fn validate_approved_specification(
     specification: &ApprovedFeatureSpecification,
 ) -> Result<String, MasterError> {
@@ -5019,6 +5140,20 @@ fn require_unpaused_revision_tx(
     }
     if emergency_paused_tx(tx)? {
         return Err(MasterError::EmergencyPaused);
+    }
+    Ok(())
+}
+
+fn require_emergency_pause_revision_tx(
+    tx: &Transaction<'_>,
+    expected_revision: u64,
+) -> Result<(), MasterError> {
+    let found = emergency_pause_revision_tx(tx)?;
+    if found != expected_revision {
+        return Err(MasterError::StaleEmergencyPauseRevision {
+            expected: expected_revision,
+            found,
+        });
     }
     Ok(())
 }

@@ -27,8 +27,12 @@ Before starting a release pass, confirm the claim you intend to make.
   route, and that only its accepted, revalidated session can enqueue one strict,
   already-approved, queue/designation/pause-revision-bound specification. The
   signed helper action requires `--confirm`, bounded stdin, a strict redacted
-  receipt, and session close; the app remains read-only. It exposes no grant
-  creation, worker dispatcher, repository execution, review provider,
+  receipt, and session close; the app remains read-only. Separately confirm the
+  owner-token loopback repository-grant routes enforce contiguous compare-and-
+  set and Emergency-Pause-revision binding, allow revocation while paused,
+  expose only current digest metadata, and remain absent from enrolled-device
+  mTLS. They perform no repository access. The slice exposes no worker
+  dispatcher, repository execution, review provider,
   publication coordinator, Mac control UI, or autonomous activation.
 - Confirm `docs/architecture-map.md` matches the code for any surface that
   changed in this cycle.
