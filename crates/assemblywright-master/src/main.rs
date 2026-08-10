@@ -2739,15 +2739,6 @@ fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
     metadata.file_type().is_symlink()
 }
 
-#[cfg(all(windows, test))]
-fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
-
-    metadata.file_type().is_symlink()
-        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-}
-
 #[cfg(not(windows))]
 fn validate_windows_fixed_local_repository_path(_requested: &str) -> Result<(), ()> {
     Ok(())
