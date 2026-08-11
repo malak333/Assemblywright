@@ -2947,7 +2947,9 @@ struct DeveloperBridgeTests {
         )
         let documents = try localCodingSnapshotDocuments(
             connectionEpoch: 69,
-            snapshotBundle: nativeLocalCodingSnapshotBundle()
+            snapshotBundle: nativeLocalCodingSnapshotBundle(),
+            leaseDurationMilliseconds: 120_000,
+            deadlineAfterMilliseconds: 120_000
         )
         let relay = AssemblywrightMacDeveloperEventRelay(
             configuration: AssemblywrightMacDeveloperEventRelayConfiguration(
