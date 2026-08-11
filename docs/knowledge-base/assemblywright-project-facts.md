@@ -669,7 +669,12 @@ an old one.
   authoritative cancellation during final verification, sends local
   cancellation before cancelling the blocked Unix request, observes an empty
   attempt root before forwarding the acknowledgement, posts no result, and
-  requires acknowledgement strictly inside two seconds. Deadline/lease loss,
+  requires acknowledgement strictly inside two seconds. The relay records the
+  cancellation-in-progress state before invoking the agent: if the cancelled
+  final-chunk request returns its expected rejection just before the agent's
+  acknowledgement, the relay waits for and validates that acknowledgement;
+  the same rejection without an in-progress cancellation still fails closed.
+  Deadline/lease loss,
   Emergency Pause through durable
   cancellation, failure, shutdown, and startup likewise suppress late results
   and leave no partial attempt state. Master bundle reads retain

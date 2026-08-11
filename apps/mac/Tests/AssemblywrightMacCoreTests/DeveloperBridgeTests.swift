@@ -440,6 +440,9 @@ private actor FakeDeveloperAgentSession: AssemblywrightMacDeveloperAgentSession 
     var cancellationAcknowledgement: Data?
     private var localCodingChunkResults: [Data?]
     let fixtureDelayMilliseconds: UInt64
+    let localCodingFinalChunkRejectsDuringCancellation: Bool
+    let localCodingCancellationAcknowledgementDelayMilliseconds: UInt64
+    private var inFlightLocalCodingFinalChunk: CheckedContinuation<Void, Never>?
     private(set) var stopped = false
 
     init(
@@ -447,13 +450,19 @@ private actor FakeDeveloperAgentSession: AssemblywrightMacDeveloperAgentSession 
         fixtureResult: Data? = nil,
         cancellationAcknowledgement: Data? = nil,
         fixtureDelayMilliseconds: UInt64 = 0,
-        localCodingChunkResults: [Data?] = []
+        localCodingChunkResults: [Data?] = [],
+        localCodingFinalChunkRejectsDuringCancellation: Bool = false,
+        localCodingCancellationAcknowledgementDelayMilliseconds: UInt64 = 0
     ) {
         self.cursor = cursor
         self.fixtureResult = fixtureResult
         self.cancellationAcknowledgement = cancellationAcknowledgement
         self.fixtureDelayMilliseconds = fixtureDelayMilliseconds
         self.localCodingChunkResults = localCodingChunkResults
+        self.localCodingFinalChunkRejectsDuringCancellation =
+            localCodingFinalChunkRejectsDuringCancellation
+        self.localCodingCancellationAcknowledgementDelayMilliseconds =
+            localCodingCancellationAcknowledgementDelayMilliseconds
     }
 
     func health() async throws -> AssemblywrightMacDeveloperAgentCursorSnapshot {
@@ -534,6 +543,13 @@ private actor FakeDeveloperAgentSession: AssemblywrightMacDeveloperAgentSession 
         guard !localCodingChunkResults.isEmpty else {
             throw AssemblywrightMacDeveloperEventRelayError.localCodingSnapshotRejected
         }
+        if localCodingFinalChunkRejectsDuringCancellation,
+           localCodingChunkResults.count == 1 {
+            await withCheckedContinuation { continuation in
+                inFlightLocalCodingFinalChunk = continuation
+            }
+            throw AssemblywrightMacDeveloperEventRelayError.localCodingSnapshotRejected
+        }
         if let result = localCodingChunkResults.removeFirst() {
             return .result(result)
         }
@@ -547,6 +563,20 @@ private actor FakeDeveloperAgentSession: AssemblywrightMacDeveloperAgentSession 
 
     func cancelLocalCodingSnapshot(_ instruction: Data) async throws -> Data {
         localCodingCancellations.append(instruction)
+        if localCodingFinalChunkRejectsDuringCancellation {
+            guard let continuation = inFlightLocalCodingFinalChunk else {
+                throw AssemblywrightMacDeveloperEventRelayError.localCodingSnapshotRejected
+            }
+            inFlightLocalCodingFinalChunk = nil
+            continuation.resume()
+            if localCodingCancellationAcknowledgementDelayMilliseconds > 0 {
+                try await Task.sleep(
+                    for: .milliseconds(
+                        localCodingCancellationAcknowledgementDelayMilliseconds
+                    )
+                )
+            }
+        }
         guard let cancellationAcknowledgement else {
             throw AssemblywrightMacDeveloperEventRelayError.localCodingSnapshotRejected
         }
@@ -2936,6 +2966,43 @@ struct DeveloperBridgeTests {
                 AssemblywrightMacDeveloperEventRelay.remoteResultPath
             )))
         }
+    }
+
+    @Test("Local-coding cancellation acknowledgement dominates transfer rejection")
+    func localCodingCancellationDominatesInFlightTransferRejection() async throws {
+        let documents = try localCodingSnapshotDocuments(connectionEpoch: 72)
+        let agent = FakeDeveloperAgentSession(
+            cancellationAcknowledgement: documents.cancellationAcknowledgement,
+            localCodingChunkResults: [nil, documents.result],
+            localCodingFinalChunkRejectsDuringCancellation: true,
+            localCodingCancellationAcknowledgementDelayMilliseconds: 100
+        )
+        let relay = AssemblywrightMacDeveloperEventRelay(
+            configuration: localCodingRelayConfiguration(),
+            deviceID: documents.deviceID,
+            launcher: FakeDeveloperAgentLauncher(session: agent)
+        )
+        let master = FakeLocalCodingBridgeSession(
+            connectionEpoch: 72,
+            eventBatch: emptyEventBatch(),
+            job: documents.job,
+            chunks: documents.chunks,
+            cancellation: documents.cancellation,
+            acceptedResult: nil,
+            cancellationRequiresFinalChunk: true
+        )
+
+        _ = try await relay.relayEvents(using: master)
+
+        #expect(await agent.localCodingCancellations == [documents.cancellation])
+        let requests = await master.requests.map(\.path)
+        #expect(!requests.contains(
+            AssemblywrightMacDeveloperEventRelay.remoteResultPath
+        ))
+        #expect(requests.contains(
+            AssemblywrightMacDeveloperEventRelay.remoteCancellationAcknowledgementPath
+        ))
+        try await relay.stop()
     }
 
     @Test("Production Swift relay transfers a snapshot through a real supervised Rust agent")

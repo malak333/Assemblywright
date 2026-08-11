@@ -5,13 +5,22 @@ import Security
 
 private actor AssemblywrightMacFixtureRaceResolution {
     private var resolved = false
+    private var cancellationInProgress = false
 
     func markResolved() {
         resolved = true
     }
 
+    func markCancellationInProgress() {
+        cancellationInProgress = true
+    }
+
     func isResolved() -> Bool {
         resolved
+    }
+
+    func isCancellationInProgress() -> Bool {
+        cancellationInProgress
     }
 }
 
@@ -464,6 +473,7 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
     private enum LocalCodingRaceOutcome: Sendable {
         case result(Data)
         case cancellation(ValidatedCancellation, acknowledgement: Data)
+        case transferRejectedDuringCancellation
         case timedOut
         case settled
     }
@@ -518,11 +528,21 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
                 returning: LocalCodingRaceOutcome.self
             ) { group in
                 group.addTask {
-                    .result(try await Self.transferLocalCodingSnapshot(
-                        using: session,
-                        job: job,
-                        agent: agent
-                    ))
+                    do {
+                        return .result(try await Self.transferLocalCodingSnapshot(
+                            using: session,
+                            job: job,
+                            agent: agent
+                        ))
+                    } catch AssemblywrightMacDeveloperEventRelayError
+                        .localCodingSnapshotRejected
+                    {
+                        guard await resolution.isCancellationInProgress() else {
+                            throw AssemblywrightMacDeveloperEventRelayError
+                                .localCodingSnapshotRejected
+                        }
+                        return .transferRejectedDuringCancellation
+                    }
                 }
                 group.addTask {
                     while !Task.isCancelled {
@@ -531,6 +551,7 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
                             using: session,
                             job: job
                         ) {
+                            await resolution.markCancellationInProgress()
                             let acknowledgement = try await agent.cancelLocalCodingSnapshot(
                                 cancellation.body
                             )
@@ -564,9 +585,21 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
                     }
                     return await resolution.isResolved() ? .settled : .timedOut
                 }
-                guard let first = try await group.next() else {
+                guard var first = try await group.next() else {
                     throw AssemblywrightMacDeveloperEventRelayError
                         .localCodingSnapshotRejected
+                }
+                if case .transferRejectedDuringCancellation = first {
+                    while let remaining = try await group.next() {
+                        if case .cancellation = remaining {
+                            first = remaining
+                            break
+                        }
+                        if case .timedOut = remaining {
+                            first = remaining
+                            break
+                        }
+                    }
                 }
                 if case let .result(result) = first {
                     await resolution.markResolved()
@@ -606,7 +639,7 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
                 try Self.validateAcceptedCancellation(accepted)
             case .timedOut:
                 throw AssemblywrightMacDeveloperEventRelayError.localCodingSnapshotTimedOut
-            case .settled:
+            case .settled, .transferRejectedDuringCancellation:
                 throw AssemblywrightMacDeveloperEventRelayError.localCodingSnapshotRejected
             }
             return false

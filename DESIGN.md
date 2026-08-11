@@ -191,7 +191,11 @@ trailing data, and digest or size drift fail closed; the child's own process
 group is boundedly TERM-to-KILL reaped before cleanup and no late result is
 accepted. During final verification, the Swift cancellation task sends the
 local cancellation immediately, then cancels the in-flight Unix request; the
-native E2E requires cleanup before acknowledgement, no result post, and an
+relay marks cancellation in progress before the local call, so an expected
+final-chunk rejection that races just ahead of the cancellation acknowledgement
+waits for and validates that acknowledgement while every rejection without an
+in-progress cancellation still fails closed. The native E2E requires cleanup
+before acknowledgement, no result post, and an
 acknowledgement strictly inside two seconds. The dispatch approval
 authorizes only this fixed fixture, not an arbitrary command, tool, executable,
 path, provider, test, or network/credential access. This slice claims no host

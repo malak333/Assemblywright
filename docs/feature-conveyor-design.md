@@ -165,8 +165,12 @@ Emergency Pause through durable cancellation,
 lease/deadline loss, shutdown, restart, and failure dominate completion; the
 child's own process group is boundedly TERM-to-KILL reaped before cleanup. The
 Swift cancellation task sends local cancellation before cancelling the blocked
-Unix request; native proof requires cleanup-before-acknowledgement, no result
-post, and acknowledgement strictly inside two seconds. This
+Unix request. It marks cancellation in progress before the local call, so the
+expected final-chunk rejection may race ahead of the acknowledgement without
+overriding a subsequently validated cancellation; a rejection without that
+in-progress cancellation still fails closed. Native proof requires
+cleanup-before-acknowledgement, no result post, and acknowledgement strictly
+inside two seconds. This
 proves one deterministic contained-coding fixture, not arbitrary
 commands, tools, paths, providers, tests, credential/network access, a host
 sandbox or host-egress enforcement, retained worker state, canonical-repository
