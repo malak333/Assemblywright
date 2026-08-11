@@ -222,6 +222,8 @@ require_text "conveyor local snapshot claim remote absence" "$MASTER_REMOTE_MTLS
   "repository snapshot claim leaked onto the remote router"
 require_text "conveyor local coding dispatch remote absence" "$MASTER_REMOTE_MTLS_E2E" \
   "coding dispatch leaked onto the remote router"
+require_text "conveyor Windows coding dispatch E2E" "$MASTER_REMOTE_MTLS_E2E" \
+  "remote_local_coding_dispatch_is_exporter_bound_exact_and_pause_dominant"
 require_text "conveyor coding protocol path-free contract" "$PROTOCOL_LOCAL_CODING_E2E" \
   "owner_dispatch_is_strict_bounded_digest_bound_and_path_free"
 require_text "conveyor native coding admission" "$AGENT_LOCAL_CODING_E2E" \
@@ -286,6 +288,8 @@ require_text "knowledge base standalone preflight checkout" "$KB" \
   "dedicated standalone checkout"
 require_text "knowledge base Windows final path rule" "$KB" \
   "GetFinalPathNameByHandleW"
+require_text "knowledge base native HTTP response framing rule" "$KB" \
+  'complete declared `Content-Length` body'
 require_text "knowledge base feature closeout" "$KB" \
   "Every feature or phase uses the closeout contract"
 require_text "knowledge base native E2E boundary" "$KB" \
@@ -328,6 +332,8 @@ require_text "agent workflow native E2E boundary" "$AGENT_WORKFLOW" \
 require_text "build docs local gate" "$BUILD_DOCS" "./scripts/release-local.sh"
 require_text "build docs evidence boundary" "$BUILD_DOCS" "## Release Evidence Boundary"
 require_text "build docs windows gate" "$BUILD_DOCS" "windows-protocol.yml"
+require_text "build docs Windows coding dispatch E2E command" "$BUILD_DOCS" \
+  "remote_local_coding_dispatch_is_exporter_bound_exact_and_pause_dominant"
 require_text "build docs shell portability gate" "$BUILD_DOCS" \
   "./scripts/release-shell-portability-smoke.sh --check"
 require_text "build docs readiness unit test" "$BUILD_DOCS" \

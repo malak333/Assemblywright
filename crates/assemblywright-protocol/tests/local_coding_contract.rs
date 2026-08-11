@@ -41,8 +41,11 @@ fn local_coding_capability_is_one_exact_contract() {
     assert_eq!(capability.provider, LOCAL_CODING_PROVIDER);
     assert_eq!(capability.model, LOCAL_CODING_MODEL);
     for mutate in [
+        |value: &mut CapabilityDescriptor| value.kind = CapabilityKind::LocalInference,
         |value: &mut CapabilityDescriptor| value.provider.push_str("-cloud"),
+        |value: &mut CapabilityDescriptor| value.model.push_str("-drifted"),
         |value: &mut CapabilityDescriptor| value.max_context_bytes += 1,
+        |value: &mut CapabilityDescriptor| value.max_result_bytes += 1,
     ] {
         let mut invalid = capability.clone();
         mutate(&mut invalid);
@@ -51,6 +54,39 @@ fn local_coding_capability_is_one_exact_contract() {
             Err(ProtocolError::InvalidLocalCodingCapability)
         );
     }
+}
+
+#[test]
+fn owner_dispatch_rejects_zero_authority_bindings_and_accepts_numeric_maxima() {
+    let invalid_mutations: [fn(&mut FeatureConveyorCodingDispatchRequest); 12] = [
+        |value| value.schema_version = 0,
+        |value| value.feature_id = Uuid::nil(),
+        |value| value.specification_revision = 0,
+        |value| value.expected_lifecycle_revision = 0,
+        |value| value.feature_lease_id = Uuid::nil(),
+        |value| value.snapshot_id = Uuid::nil(),
+        |value| value.snapshot_sha256 = [0; 32],
+        |value| value.work_packet.packet_id = Uuid::nil(),
+        |value| value.work_packet.ordinal = 0,
+        |value| value.work_packet.acceptance_criteria_count = 0,
+        |value| value.device_id = DeviceId::new(Uuid::nil()),
+        |value| value.device_registry_revision = 0,
+    ];
+    for mutate in invalid_mutations {
+        let mut invalid = request();
+        mutate(&mut invalid);
+        assert!(invalid.validate().is_err());
+    }
+
+    let mut maximum = request();
+    maximum.specification_revision = u64::MAX;
+    maximum.expected_lifecycle_revision = u64::MAX;
+    maximum.device_registry_revision = u64::MAX;
+    maximum.expected_queue_revision = u64::MAX;
+    maximum.expected_emergency_pause_revision = u64::MAX;
+    maximum.work_packet.ordinal = u16::MAX;
+    maximum.work_packet.acceptance_criteria_count = u16::MAX;
+    maximum.validate().unwrap();
 }
 
 #[test]
@@ -141,7 +177,7 @@ fn coding_job_and_ack_are_exact_attempt_bound_and_forbid_mutation_claims() {
         mutation_performed: false,
     })
     .unwrap();
-    let mut result = JobResultEnvelope {
+    let result = JobResultEnvelope {
         protocol_version: PROTOCOL_VERSION,
         connection_epoch: job.connection_epoch,
         sequence: 2,
@@ -156,10 +192,38 @@ fn coding_job_and_ack_are_exact_attempt_bound_and_forbid_mutation_claims() {
         payload,
     };
     result.validate_local_coding_result(&job).unwrap();
-    result.payload["mutation_performed"] = json!(true);
-    result.payload_sha256 = Sha256::digest(serde_json::to_vec(&result.payload).unwrap()).into();
-    assert_eq!(
-        result.validate_local_coding_result(&job),
-        Err(ProtocolError::InvalidLocalCodingResult)
-    );
+    let valid_result = result;
+    let refresh_digest = |value: &mut JobResultEnvelope| {
+        value.payload_sha256 = Sha256::digest(serde_json::to_vec(&value.payload).unwrap()).into();
+    };
+    let mut wrong_envelope_status = valid_result.clone();
+    wrong_envelope_status.status = JobResultStatus::Failed;
+    let mut wrong_result_status = valid_result.clone();
+    wrong_result_status.payload["status"] = json!("completed");
+    refresh_digest(&mut wrong_result_status);
+    let mut wrong_packet = valid_result.clone();
+    wrong_packet.payload["work_packet_sha256"] = serde_json::to_value([8_u8; 32]).unwrap();
+    refresh_digest(&mut wrong_packet);
+    let mut zero_admission = valid_result.clone();
+    zero_admission.payload["admission_sha256"] = serde_json::to_value([0_u8; 32]).unwrap();
+    refresh_digest(&mut zero_admission);
+    let mut mutation_claim = valid_result.clone();
+    mutation_claim.payload["mutation_performed"] = json!(true);
+    refresh_digest(&mut mutation_claim);
+    let mut unknown_payload_field = valid_result;
+    unknown_payload_field.payload["repository_path"] = json!("/private/repo");
+    refresh_digest(&mut unknown_payload_field);
+    for invalid in [
+        wrong_envelope_status,
+        wrong_result_status,
+        wrong_packet,
+        zero_admission,
+        mutation_claim,
+        unknown_payload_field,
+    ] {
+        assert_eq!(
+            invalid.validate_local_coding_result(&job),
+            Err(ProtocolError::InvalidLocalCodingResult)
+        );
+    }
 }

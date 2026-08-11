@@ -590,6 +590,28 @@ an old one.
   snapshot transport/materialization, contained coding execution, allowed-path
   enforcement, result integration, review, publication, and autonomous
   activation remain separate unimplemented boundaries.
+- The 2026-08-11 schema-v10 closeout reached `main` and the live Windows service
+  at `4c891bd`. Native Windows mTLS/process E2E proved exact worker enrollment,
+  exporter-bound dispatch and lease, wrong-digest denial, valid metadata-only
+  acknowledgement, remote owner-route absence, and pause-dominant late-result
+  denial. The deployed database and pre-v10 schema-v9 backup both passed
+  `PRAGMA integrity_check`; the new dispatch table remained empty by default,
+  and live owner-route probes returned 401 without authentication and 422 for
+  an authenticated malformed request. Focused unit coverage includes exact
+  capability-field drift, zero and maximum authority bindings, malformed or
+  mutation-claiming results, and native-agent envelope drift. This is
+  historical admission and
+  deployment proof, not snapshot transport or coding-execution proof.
+- Windows snapshot-claim fixtures must derive the final DOS path before
+  computing the scope digest and recording grants. Using the raw temporary path
+  can make the real filesystem admission correctly return 409 even when the Git
+  fixture itself is valid; reuse the same `GetFinalPathNameByHandleW`
+  normalization as production rather than weakening path validation.
+- Raw TCP HTTP E2E clients should stop after reading the complete declared `Content-Length` body.
+  Waiting for EOF with `read_to_string` can turn a complete
+  `Connection: close` response into a macOS-only connection-reset failure when
+  the server closes with unread request bytes. Truncated or malformed response
+  bodies must still fail the harness.
 
 ## Safety Guardrails
 

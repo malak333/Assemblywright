@@ -83,6 +83,7 @@ cargo test -p assemblywright-master --test feature_conveyor_kernel coding_dispat
 cargo test -p assemblywright-master --test feature_conveyor_kernel emergency_pause_cancels_coding_attempt_and_resume_rejects_pre_pause_acknowledgement
 cargo test -p assemblywright-master --test feature_conveyor_kernel terminal_coding_ack_allows_validation_and_lifecycle_change_invalidates_replay
 cargo test -p assemblywright-agent --test local_coding_admission
+cargo test -p assemblywright-master --test remote_mtls_e2e remote_local_coding_dispatch_is_exporter_bound_exact_and_pause_dominant -- --nocapture
 ```
 
 The portable real-process route test proves authentication, path-free response,
@@ -134,6 +135,7 @@ executable changes as release evidence.
 | Swift strict Feature Conveyor observer, one-shot owner action, and helper lifecycle | `swift test --disable-sandbox --package-path apps/mac --filter DeveloperBridgeTests` |
 | Enrollment, two-phase capability rebind, and identity | `cargo test -p assemblywright-master --test enrollment_identity_e2e` |
 | Remote mTLS | `cargo test -p assemblywright-master --test remote_mtls_e2e` |
+| Windows snapshot-bound coding dispatch mTLS/process E2E | `cargo test -p assemblywright-master --test remote_mtls_e2e remote_local_coding_dispatch_is_exporter_bound_exact_and_pause_dominant -- --nocapture` |
 | Event cursor | `cargo test -p assemblywright-master --test event_cursor_e2e` |
 | Windows service lifecycle | `cargo test -p assemblywright-master --test windows_service_lifecycle_e2e -- --ignored` |
 | Mac agent relay | `cargo test -p assemblywright-agent --test local_relay_e2e` |
@@ -262,7 +264,9 @@ Deterministic cross-process coverage proves:
   validation. This is native process E2E; no browser or Playwright surface is
   involved.
   Schema-v10 coding-dispatch coverage proves strict path-free protocol framing,
-  exact capability/device registration, feature/specification/lifecycle lease,
+  exact capability/device registration including field drift, zero and maximum
+  numeric authority bindings, malformed result/status/digest/mutation denial,
+  feature/specification/lifecycle lease,
   snapshot ID/digest, queue and Emergency Pause binding, atomic queued-step/
   immutable-row/event/audit creation, audit rollback, owner authentication,
   enrolled-device route absence, cancellation dominance, lifecycle blocking,

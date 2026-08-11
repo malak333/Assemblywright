@@ -64,3 +64,25 @@ fn native_agent_admits_only_path_free_snapshot_bound_metadata_without_executing_
         Err(ProtocolError::InvalidLocalCodingJob)
     );
 }
+
+#[test]
+fn native_agent_rejects_capability_model_sensitivity_and_digest_drift() {
+    let valid = job();
+    let mut wrong_capability = valid.clone();
+    wrong_capability.capability_id = "local.coding.v2".to_string();
+    let mut wrong_model = valid.clone();
+    wrong_model.selected_model.push_str("-drifted");
+    let mut wrong_sensitivity = valid.clone();
+    wrong_sensitivity.sensitivity = Sensitivity::Public;
+    let mut wrong_digest = valid;
+    wrong_digest.context_sha256 = [9; 32];
+
+    for invalid in [
+        wrong_capability,
+        wrong_model,
+        wrong_sensitivity,
+        wrong_digest,
+    ] {
+        assert!(validate_local_coding_dispatch(&invalid).is_err());
+    }
+}
