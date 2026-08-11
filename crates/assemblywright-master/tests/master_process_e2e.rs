@@ -346,7 +346,7 @@ fn repository_preflight_is_owner_only_filesystem_identity_observation_and_redact
     git(repository.path(), &["add", "README.md"]);
     git(repository.path(), &["commit", "-m", "bounded fixture"]);
     let head = git_stdout(repository.path(), &["rev-parse", "HEAD"]);
-    let repository_path = std::fs::canonicalize(repository.path()).unwrap();
+    let repository_path = canonical_repository_path(repository.path());
 
     let endpoint = unused_loopback_addr();
     let mut server = spawn_server(binary, directory.path(), endpoint);
@@ -1143,6 +1143,47 @@ fn git_stdout(repository: &Path, arguments: &[&str]) -> String {
         .unwrap()
         .trim_end_matches(['\r', '\n'])
         .to_string()
+}
+
+#[cfg(not(windows))]
+fn canonical_repository_path(path: &Path) -> std::path::PathBuf {
+    std::fs::canonicalize(path).expect("canonical disposable repository path")
+}
+
+#[cfg(windows)]
+fn canonical_repository_path(path: &Path) -> std::path::PathBuf {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFinalPathNameByHandleW, FILE_FLAG_BACKUP_SEMANTICS, FILE_NAME_NORMALIZED,
+        FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        VOLUME_NAME_DOS,
+    };
+
+    let handle = std::fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+        .expect("open disposable repository directory");
+    let mut buffer = vec![0_u16; 32_768];
+    let length = unsafe {
+        GetFinalPathNameByHandleW(
+            handle.as_raw_handle().cast(),
+            buffer.as_mut_ptr(),
+            buffer.len() as u32,
+            FILE_NAME_NORMALIZED | VOLUME_NAME_DOS,
+        )
+    } as usize;
+    assert!(length > 0 && length < buffer.len());
+    let resolved = String::from_utf16(&buffer[..length]).expect("Windows final DOS path");
+    if let Some(rest) = resolved.strip_prefix(r"\\?\UNC\") {
+        std::path::PathBuf::from(format!(r"\\{rest}"))
+    } else if let Some(rest) = resolved.strip_prefix(r"\\?\") {
+        std::path::PathBuf::from(rest)
+    } else {
+        std::path::PathBuf::from(resolved)
+    }
 }
 
 fn get_request(endpoint: SocketAddr, path: &str, token: Option<&str>) -> String {
