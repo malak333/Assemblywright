@@ -105,6 +105,20 @@ Before starting a release pass, confirm the claim you intend to make.
   worker checkout, arbitrary coding/test execution, canonical-repository
   mutation, result integration, review provider, publication coordinator, Mac
   control UI, queue advancement, or autonomous activation.
+- Confirm the owner-token loopback-only `cancel-active-feature` and
+  `abandon-and-advance` routes are absent from enrolled-device mTLS. Prove
+  strict duplicate/unknown/oversized-frame denial; exact feature, lifecycle,
+  queue, and Emergency Pause compare-and-set checks inside the transaction;
+  audit rollback; cancellation-dominant coding cleanup with the feature lease
+  retained and no advancement; abandonment denial before cancellation or
+  without safe-reconciliation/required healthy-main evidence; and successful
+  lease release plus one queue-revision advance. Prove schema-v11 backup-first
+  migration backfills a missing retained-lease origin receipt only from one
+  exact immutable v10 audit event and restores v10 unchanged when evidence is
+  missing, ambiguous, malformed, or names a non-active origin. The live two-device lane must
+  finish with no queue entry, active feature lease, distributed lease/attempt,
+  transfer staging, or Mac workspace. Direct SQLite mutation or deleting state
+  as proof is forbidden.
 - Confirm `docs/architecture-map.md` matches the code for any surface that
   changed in this cycle.
 - Confirm the version is consistent:

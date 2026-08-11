@@ -68,8 +68,9 @@ swift build --disable-sandbox --package-path apps/mac
 
 ## Windows Distributed Gate
 
-The schema-v9 snapshot-claim and schema-v10 coding-dispatch plus ephemeral
-snapshot-transfer/materialization slices have focused portable coverage:
+The schema-v9 snapshot-claim, schema-v10 coding-dispatch, schema-v11 owner-resolution,
+and ephemeral snapshot-transfer/materialization slices have focused portable
+coverage:
 
 ```sh
 cargo test -p assemblywright-protocol --test protocol_contract repository_snapshot_claim_contract_is_strict_exact_and_path_free_on_receipt
@@ -79,7 +80,11 @@ cargo test -p assemblywright-master --test master_process_e2e repository_preflig
 cargo test -p assemblywright-master --test master_process_e2e repository_snapshot_claim_is_authenticated_path_free_and_durable
 cargo test -p assemblywright-master --bin assemblywright-master snapshot_claim_reservation_survives_blocking_task_timeout
 cargo test -p assemblywright-protocol --test local_coding_contract
+cargo test -p assemblywright-protocol --test owner_resolution_contract
 cargo test -p assemblywright-master --test feature_conveyor_kernel coding_dispatch
+cargo test -p assemblywright-master --test feature_conveyor_kernel owner_resolution
+cargo test -p assemblywright-master --test feature_conveyor_kernel master_process_v10
+cargo test -p assemblywright-master --test master_process_e2e owner_resolution_routes_are_authenticated_strict_cas_bound_and_redacted -- --nocapture
 cargo test -p assemblywright-master --test feature_conveyor_kernel emergency_pause_cancels_coding_attempt_and_resume_rejects_pre_pause_acknowledgement
 cargo test -p assemblywright-master --test feature_conveyor_kernel terminal_coding_ack_allows_validation_and_lifecycle_change_invalidates_replay
 cargo test -p assemblywright-agent --test local_coding_admission
@@ -87,6 +92,7 @@ cargo test -p assemblywright-agent snapshot::tests
 cargo test -p assemblywright-agent --test local_relay_e2e authenticated_uds_local_coding_snapshot_admission_cancellation_and_restart_cleanup -- --nocapture
 cargo test -p assemblywright-master --test remote_mtls_e2e remote_local_coding_dispatch_is_exporter_bound_exact_and_pause_dominant -- --nocapture
 swift test --disable-sandbox --package-path apps/mac --filter DeveloperBridgeTests
+./scripts/mac-windows-bridge-live-e2e.sh --run-local-coding
 ```
 
 The portable real-process route test proves authentication, path-free response,

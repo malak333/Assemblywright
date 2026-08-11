@@ -2,10 +2,11 @@ use anyhow::{bail, Context};
 use assemblywright_master::{
     current_time_ms, AcceptedCancellation, AcceptedResult, ApprovedFeatureSpecification,
     CapabilityRebindAcknowledgement, DeviceRegistration, EnrollmentGrantSpec, EnrollmentRequest,
-    EphemeralServerIdentity, FeatureConveyorStatus, FeatureGrantRevisions,
-    FeatureSnapshotClaimPlan, IdentityAuthority, MasterHealthSnapshot, MasterProcess, NewStep,
-    PlatformSecretProtector, RemoteWorkContract, RepositoryGrantKind, RepositoryGrantRevision,
-    RepositorySnapshotEvidence, RepositorySnapshotStore, StartupReconciliation,
+    EphemeralServerIdentity, FeatureAbandonmentEvidence, FeatureConveyorStatus,
+    FeatureGrantRevisions, FeatureSnapshotClaimPlan, IdentityAuthority, MasterHealthSnapshot,
+    MasterProcess, NewStep, PlatformSecretProtector, RemoteWorkContract, RepositoryGrantKind,
+    RepositoryGrantRevision, RepositorySnapshotEvidence, RepositorySnapshotStore,
+    StartupReconciliation,
 };
 #[cfg(test)]
 use assemblywright_protocol::CapabilityKind;
@@ -14,8 +15,11 @@ use assemblywright_protocol::{
     AuthenticatedHandshakeRequest, CancellationAcknowledgement, CancellationPollRequest,
     CapabilityDescriptor, DeviceId, DeviceRole, DistributedEventBatch,
     DistributedEventBatchRequest, EnrollmentCsrReply, EnrollmentInvitation,
-    FeatureConveyorApprovedFeatureReceipt, FeatureConveyorApprovedFeatureRequest,
-    FeatureConveyorApprovedFeatureStatus, FeatureConveyorCodingDispatchReceipt,
+    FeatureConveyorAbandonAndAdvanceReceipt, FeatureConveyorAbandonAndAdvanceRequest,
+    FeatureConveyorAbandonAndAdvanceStatus, FeatureConveyorApprovedFeatureReceipt,
+    FeatureConveyorApprovedFeatureRequest, FeatureConveyorApprovedFeatureStatus,
+    FeatureConveyorCancelActiveFeatureReceipt, FeatureConveyorCancelActiveFeatureRequest,
+    FeatureConveyorCancelActiveFeatureStatus, FeatureConveyorCodingDispatchReceipt,
     FeatureConveyorCodingDispatchRequest, FeatureConveyorOwnerBridgeDesignationReceipt,
     FeatureConveyorOwnerBridgeDesignationRequest, FeatureConveyorOwnerBridgeDesignationStatus,
     FeatureConveyorRepositoryGrantKind, FeatureConveyorRepositoryGrantReceipt,
@@ -29,6 +33,7 @@ use assemblywright_protocol::{
     ENROLLMENT_INVITATION_READY_STATUS, ENROLLMENT_PAIRING_SCHEMA_VERSION,
     FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, MAX_ENROLLMENT_PAIRING_FRAME_BYTES,
     MAX_FEATURE_CONVEYOR_CODING_DISPATCH_REQUEST_BYTES,
+    MAX_FEATURE_CONVEYOR_OWNER_RESOLUTION_REQUEST_BYTES,
     MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES,
     MAX_FEATURE_CONVEYOR_SNAPSHOT_CLAIM_REQUEST_BYTES, MAX_LOCAL_CODING_SNAPSHOT_CHUNK_BYTES,
     MAX_WIRE_FRAME_BYTES, PROTOCOL_VERSION,
@@ -1486,6 +1491,18 @@ async fn serve_runtime(
             )),
         )
         .route(
+            "/v1/feature-conveyor/cancel-active-feature",
+            post(cancel_active_feature).layer(DefaultBodyLimit::max(
+                MAX_FEATURE_CONVEYOR_OWNER_RESOLUTION_REQUEST_BYTES,
+            )),
+        )
+        .route(
+            "/v1/feature-conveyor/abandon-and-advance",
+            post(abandon_and_advance).layer(DefaultBodyLimit::max(
+                MAX_FEATURE_CONVEYOR_OWNER_RESOLUTION_REQUEST_BYTES,
+            )),
+        )
+        .route(
             "/v1/feature-conveyor/repositories/:repository_id/grants",
             get(get_repository_grants),
         )
@@ -2564,6 +2581,100 @@ async fn feature_coding_dispatch(
             })?,
         )
         .map_err(|_| fixed_error(StatusCode::CONFLICT, "feature_coding_dispatch_rejected"))?;
+    receipt
+        .validate()
+        .map_err(|_| fixed_error(StatusCode::INTERNAL_SERVER_ERROR, "internal_error"))?;
+    Ok(Json(receipt))
+}
+
+async fn cancel_active_feature(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<FeatureConveyorCancelActiveFeatureReceipt> {
+    authorize(&headers, &state)?;
+    let body = body.map_err(|_| {
+        fixed_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "feature_cancel_request_rejected",
+        )
+    })?;
+    let request = FeatureConveyorCancelActiveFeatureRequest::decode_frame(&body).map_err(|_| {
+        fixed_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "feature_cancel_request_rejected",
+        )
+    })?;
+    let snapshot = lock_process(&state)?
+        .kernel_mut()
+        .cancel_active_feature(
+            request.feature_id,
+            request.expected_lifecycle_revision,
+            request.expected_queue_revision,
+            request.expected_emergency_pause_revision,
+            current_time_ms()
+                .map_err(|_| fixed_error(StatusCode::CONFLICT, "feature_cancel_rejected"))?,
+        )
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "feature_cancel_rejected"))?;
+    let receipt = FeatureConveyorCancelActiveFeatureReceipt {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        feature_id: snapshot.feature_id,
+        lifecycle_revision: snapshot.lifecycle_revision,
+        queue_revision: request.expected_queue_revision,
+        emergency_pause_revision: request.expected_emergency_pause_revision,
+        lease_retained: snapshot.active_lease_id.is_some(),
+        advancement_authorized: false,
+        status: FeatureConveyorCancelActiveFeatureStatus::Cancelled,
+    };
+    receipt
+        .validate()
+        .map_err(|_| fixed_error(StatusCode::INTERNAL_SERVER_ERROR, "internal_error"))?;
+    Ok(Json(receipt))
+}
+
+async fn abandon_and_advance(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<FeatureConveyorAbandonAndAdvanceReceipt> {
+    authorize(&headers, &state)?;
+    let body = body.map_err(|_| {
+        fixed_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "feature_abandonment_request_rejected",
+        )
+    })?;
+    let request = FeatureConveyorAbandonAndAdvanceRequest::decode_frame(&body).map_err(|_| {
+        fixed_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "feature_abandonment_request_rejected",
+        )
+    })?;
+    let snapshot = lock_process(&state)?
+        .kernel_mut()
+        .abandon_and_advance(
+            request.feature_id,
+            request.expected_lifecycle_revision,
+            request.expected_queue_revision,
+            request.expected_emergency_pause_revision,
+            FeatureAbandonmentEvidence {
+                safe_reconciliation_sha256: request.evidence.safe_reconciliation_sha256,
+                merged: request.evidence.merged,
+                verified_healthy_main_sha256: request.evidence.verified_healthy_main_sha256,
+            },
+            current_time_ms()
+                .map_err(|_| fixed_error(StatusCode::CONFLICT, "feature_abandonment_rejected"))?,
+        )
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "feature_abandonment_rejected"))?;
+    let receipt = FeatureConveyorAbandonAndAdvanceReceipt {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        feature_id: snapshot.feature_id,
+        lifecycle_revision: snapshot.lifecycle_revision,
+        queue_revision: request.expected_queue_revision + 1,
+        emergency_pause_revision: request.expected_emergency_pause_revision,
+        lease_released: snapshot.active_lease_id.is_none(),
+        status: FeatureConveyorAbandonAndAdvanceStatus::Abandoned,
+    };
     receipt
         .validate()
         .map_err(|_| fixed_error(StatusCode::INTERNAL_SERVER_ERROR, "internal_error"))?;

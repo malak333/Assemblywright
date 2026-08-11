@@ -595,7 +595,12 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
                 session = launched
                 for try await line in launched.outputLines {
                     if Task.isCancelled { break }
-                    status = try Self.status(from: line)
+                    status = try Self.status(
+                        from: line,
+                        localCodingSnapshotsEnabled:
+                            configuration.eventRelayConfiguration?
+                                .localCodingSnapshotsEnabled == true
+                    )
                 }
                 if !Task.isCancelled {
                     status = .init(phase: .masterOffline, errorCode: "helper_exited")
@@ -651,8 +656,14 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
         await stop()
     }
 
-    nonisolated public static func status(from line: Data) throws -> AssemblywrightDeveloperBridgeAppStatus {
-        let snapshot = try AssemblywrightMacBridgeSupervisorSnapshot.decodeStrict(line)
+    nonisolated public static func status(
+        from line: Data,
+        localCodingSnapshotsEnabled: Bool = false
+    ) throws -> AssemblywrightDeveloperBridgeAppStatus {
+        let snapshot = try AssemblywrightMacBridgeSupervisorSnapshot.decodeStrict(
+            line,
+            localCodingSnapshotsEnabled: localCodingSnapshotsEnabled
+        )
         switch snapshot.phase {
         case .authenticated:
             let phase: AssemblywrightDeveloperBridgeAppPhase

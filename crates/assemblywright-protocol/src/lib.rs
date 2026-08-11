@@ -47,6 +47,7 @@ pub const MAX_FEATURE_CONVEYOR_IDENTIFIER_BYTES: usize = 128;
 pub const MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES: usize = 8 * 1024;
 pub const MAX_FEATURE_CONVEYOR_SNAPSHOT_CLAIM_REQUEST_BYTES: usize = 12 * 1024;
 pub const MAX_FEATURE_CONVEYOR_CODING_DISPATCH_REQUEST_BYTES: usize = 8 * 1024;
+pub const MAX_FEATURE_CONVEYOR_OWNER_RESOLUTION_REQUEST_BYTES: usize = 4 * 1024;
 pub const MAX_FEATURE_CONVEYOR_REPOSITORY_PATH_BYTES: usize = 4 * 1024;
 pub const MAX_FEATURE_CONVEYOR_BASE_BRANCH_BYTES: usize = 255;
 pub const LOCAL_CODING_CAPABILITY_ID: &str = "local.coding.v1";
@@ -1095,6 +1096,214 @@ impl FeatureConveyorCodingDispatchReceipt {
         request.validate()?;
         validate_uuid("task_id", self.task_id.0)?;
         validate_uuid("step_id", self.step_id.0)
+    }
+}
+
+/// Explicit owner-token loopback action that stops one exact active feature.
+///
+/// Cancellation retains the active feature lease and does not authorize queue
+/// advancement. Queue and Emergency Pause revisions are compare-and-set
+/// bindings, including when cancellation is deliberately performed while
+/// Emergency Pause is active.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorCancelActiveFeatureRequest {
+    pub schema_version: u16,
+    pub feature_id: Uuid,
+    pub expected_lifecycle_revision: u64,
+    pub expected_queue_revision: u64,
+    pub expected_emergency_pause_revision: u64,
+}
+
+impl FeatureConveyorCancelActiveFeatureRequest {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "feature_conveyor_cancel_active_feature_request",
+            frame,
+            MAX_FEATURE_CONVEYOR_OWNER_RESOLUTION_REQUEST_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_fixed_value(
+            "schema_version",
+            self.schema_version.to_string(),
+            FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION.to_string(),
+        )?;
+        validate_uuid("feature_id", self.feature_id)?;
+        validate_positive_limit(
+            "expected_lifecycle_revision",
+            self.expected_lifecycle_revision,
+            u64::MAX,
+        )?;
+        validate_serialized_limit(
+            "feature_conveyor_cancel_active_feature_request",
+            self,
+            MAX_FEATURE_CONVEYOR_OWNER_RESOLUTION_REQUEST_BYTES,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureConveyorCancelActiveFeatureStatus {
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorCancelActiveFeatureReceipt {
+    pub schema_version: u16,
+    pub feature_id: Uuid,
+    pub lifecycle_revision: u64,
+    pub queue_revision: u64,
+    pub emergency_pause_revision: u64,
+    pub lease_retained: bool,
+    pub advancement_authorized: bool,
+    pub status: FeatureConveyorCancelActiveFeatureStatus,
+}
+
+impl FeatureConveyorCancelActiveFeatureReceipt {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "feature_conveyor_cancel_active_feature_receipt",
+            frame,
+            MAX_FEATURE_CONVEYOR_OWNER_RESOLUTION_REQUEST_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        let request = FeatureConveyorCancelActiveFeatureRequest {
+            schema_version: self.schema_version,
+            feature_id: self.feature_id,
+            expected_lifecycle_revision: self.lifecycle_revision,
+            expected_queue_revision: self.queue_revision,
+            expected_emergency_pause_revision: self.emergency_pause_revision,
+        };
+        request.validate()?;
+        if !self.lease_retained || self.advancement_authorized {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        Ok(())
+    }
+}
+
+/// Digest-only evidence required for an explicit owner abandonment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorAbandonmentEvidence {
+    pub safe_reconciliation_sha256: [u8; 32],
+    pub merged: bool,
+    pub verified_healthy_main_sha256: Option<[u8; 32]>,
+}
+
+impl FeatureConveyorAbandonmentEvidence {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.safe_reconciliation_sha256 == [0; 32]
+            || self
+                .verified_healthy_main_sha256
+                .is_some_and(|digest| digest == [0; 32])
+            || (self.merged && self.verified_healthy_main_sha256.is_none())
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        Ok(())
+    }
+}
+
+/// Explicit owner-token loopback action that records non-approval and advances
+/// only after the kernel proves reconciliation and, when merged, healthy main.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorAbandonAndAdvanceRequest {
+    pub schema_version: u16,
+    pub feature_id: Uuid,
+    pub expected_lifecycle_revision: u64,
+    pub expected_queue_revision: u64,
+    pub expected_emergency_pause_revision: u64,
+    pub evidence: FeatureConveyorAbandonmentEvidence,
+}
+
+impl FeatureConveyorAbandonAndAdvanceRequest {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "feature_conveyor_abandon_and_advance_request",
+            frame,
+            MAX_FEATURE_CONVEYOR_OWNER_RESOLUTION_REQUEST_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_fixed_value(
+            "schema_version",
+            self.schema_version.to_string(),
+            FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION.to_string(),
+        )?;
+        validate_uuid("feature_id", self.feature_id)?;
+        validate_positive_limit(
+            "expected_lifecycle_revision",
+            self.expected_lifecycle_revision,
+            u64::MAX,
+        )?;
+        self.evidence.validate()?;
+        if self.expected_queue_revision == u64::MAX {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        validate_serialized_limit(
+            "feature_conveyor_abandon_and_advance_request",
+            self,
+            MAX_FEATURE_CONVEYOR_OWNER_RESOLUTION_REQUEST_BYTES,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureConveyorAbandonAndAdvanceStatus {
+    Abandoned,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorAbandonAndAdvanceReceipt {
+    pub schema_version: u16,
+    pub feature_id: Uuid,
+    pub lifecycle_revision: u64,
+    pub queue_revision: u64,
+    pub emergency_pause_revision: u64,
+    pub lease_released: bool,
+    pub status: FeatureConveyorAbandonAndAdvanceStatus,
+}
+
+impl FeatureConveyorAbandonAndAdvanceReceipt {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "feature_conveyor_abandon_and_advance_receipt",
+            frame,
+            MAX_FEATURE_CONVEYOR_OWNER_RESOLUTION_REQUEST_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_fixed_value(
+            "schema_version",
+            self.schema_version.to_string(),
+            FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION.to_string(),
+        )?;
+        validate_uuid("feature_id", self.feature_id)?;
+        validate_positive_limit("lifecycle_revision", self.lifecycle_revision, u64::MAX)?;
+        if !self.lease_released {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        validate_serialized_limit(
+            "feature_conveyor_abandon_and_advance_receipt",
+            self,
+            MAX_FEATURE_CONVEYOR_OWNER_RESOLUTION_REQUEST_BYTES,
+        )
     }
 }
 

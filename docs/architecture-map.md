@@ -25,7 +25,7 @@ flowchart LR
   Process --> Service["Windows SCM host: automatic start, bounded recovery, status, maintenance, uninstall"]
   Service --> Maintenance["Durable fail-closed marker blocks new enqueue and lease admission"]
   Master --> Durable["Registered devices, epochs, queue, attempts, cancellation, expiry, restart reconciliation, exact results"]
-  Master --> Conveyor["Default-inert Feature Conveyor repository kernel retained through schema v10"]
+  Master --> Conveyor["Default-inert Feature Conveyor repository kernel retained through schema v11"]
   Conveyor --> ConveyorSafety["Immutable approved specs and grants, strict CAS queue, one active lease, atomic redacted audit, and startup quarantine"]
   Conveyor --> Observer["Exact bounded status projection: local owner route plus accepted-session MacBridge-only remote GET"]
   Observer --> Helper
@@ -34,6 +34,7 @@ flowchart LR
   GrantControl --> RepositoryPreflight["Owner-local filesystem-only identity preflight; path-free digest receipt and redacted audit"]
   RepositoryPreflight --> SnapshotClaim["Loopback-only isolated raw-object snapshot plus atomic strict queue-head claim"]
   SnapshotClaim --> CodingDispatch["Explicit loopback-only metadata dispatch bound to exact snapshot, lease, worker, queue, and pause revisions"]
+  CodingDispatch --> OwnerResolution["Loopback-only exact cancellation plus evidence-gated abandon-and-advance"]
   CodingDispatch --> SnapshotChunks["Exact leased-attempt bounded snapshot bundle chunks with before-and-after authorization"]
   SnapshotChunks --> Helper
   Helper --> Agent
@@ -63,7 +64,7 @@ a headless master executable. The contract seam provides the current protocol
 version, typed device/task/step/attempt/lease/cancellation identifiers, bounded
 capability advertisements, handshake messages, job and result envelopes, strict
 bound-before-decode JSON entry points, nil-identity rejection, and a golden
-compatibility fixture. `assemblywright-master` schema version 10 preserves the
+compatibility fixture. `assemblywright-master` schema version 11 preserves the
 schema-v4 distributed-device lifecycle, the schema-v5 Feature Conveyor, and
 schema-v6 dedicated pending capability-rebind evidence, then adds the durable
 Emergency Pause revision, then adds one nullable compare-and-set owner-control
@@ -75,10 +76,15 @@ snapshotted review provider/model. Its queue has a 100-item nonterminal ceiling,
 one global compare-and-set revision, strict head/dependency ordering, and one
 durable active lease. Enqueue, reorder, claim, lifecycle, cancellation,
 abandonment, and startup quarantine commit with redacted audit evidence in the
-same immediate transaction. Success releases the lease only with verified
+same authoritative transaction. Schema v11 additionally requires every
+cancelled or quarantined retained lease to have an immutable resolution-origin
+receipt. Its backup-first v10 migration reconstructs a missing receipt only
+from one exact append-only audit event and restores the verified v10 backup on
+missing, ambiguous, malformed, or non-active-origin evidence. The
+Success path releases the lease only with verified
 healthy-main evidence; cancellation retains it until explicit safe
 abandonment, and restart ambiguity is quarantined without automatic retry.
-Master-process upgrades from supported legacy schemas v1-v9 to v10 are
+Master-process upgrades from supported legacy schemas v1-v10 to v11 are
 backup-first under the owner lock, verify the versioned backup before migration,
 and restore through a fsynced sibling plus atomic replacement when
 migration-open fails. Direct file-backed legacy migration through
@@ -135,7 +141,11 @@ Pause, lifecycle departure, or restart quarantine blocks later acceptance.
 After an exact lease, the default-off snapshot lane reauthorizes every bounded
 sequential bundle read and binds each chunk to the full attempt, lease,
 cancellation, and snapshot identity. The Mac bridge strictly relays those
-chunks over the authenticated local socket. The native agent reconstructs and
+chunks over the authenticated local socket. For this exact `InferenceWorker`
+profile the Swift supervisor validates the singleton capability and required
+relay before connecting, performs authenticated health, and relays without
+requesting or emitting the MacBridge-only Feature Conveyor projection. Standard
+and fixture MacBridge observation is unchanged. The native agent reconstructs and
   verifies an independent shallow no-remote Git repository in private
   per-attempt state while enforcing an aggregate materialized-output byte
   budget. It then forks only one fixed contained-coding child from the running
@@ -158,6 +168,15 @@ chunks over the authenticated local socket. The native agent reconstructs and
   claimed. No retained worker checkout, canonical-repository mutation,
   integration, review, publication, queue advance, or autonomous activation is
   implemented.
+Two additional owner-token loopback-only resolution routes compare-and-set the
+exact feature, lifecycle, queue, and Emergency Pause revisions inside the
+authoritative transaction. Cancellation cancels bound coding work, retains the
+feature lease, and cannot advance. Abandon-and-advance accepts only cancelled
+or quarantined state with nonzero safe-reconciliation evidence and, after a
+merge, verified healthy-main evidence; it releases the lease and increments the
+queue revision. Both routes return fixed path-free receipts, are absent from
+enrolled-device mTLS, and add no worker, repository, review, Git, publication,
+or activation authority.
 Another owner-token-authenticated loopback action designates one exact current,
 non-fixture MacBridge. Only that designated device may submit one revision-bound
 already-approved specification through the dedicated remote POST; the signed

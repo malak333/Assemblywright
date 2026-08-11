@@ -414,14 +414,15 @@ an old one.
 
 ## Cross-Language Protocol Version
 
-- `PROTOCOL_VERSION` is declared four times and nothing derives one from
+- `PROTOCOL_VERSION` is declared five times and nothing derives one from
   another: `crates/assemblywright-protocol/src/lib.rs`,
   `apps/mac/Sources/AssemblywrightMacCore/DeveloperBridge.swift`, and
-  `$protocolVersion` in both `scripts/windows-*-live-control.ps1`.
+  `$protocolVersion` in the three `scripts/windows-*-live-control.ps1`
+  controllers.
 - Each language's tests only compare against its own declaration, so a partial
   bump passes every suite. Both halves of that have already shipped. Missing the
   Swift constant produced a live-device handshake rejection *after* mTLS had
-  authenticated. Missing both PowerShell control planes made every fixture and
+  authenticated. Missing the PowerShell control planes made every fixture and
   MLX enqueue fail with `unsupported protocol version: expected 2, received 1`;
   those scripts have no test suite at all, so only an owner-driven live run
   could surface it.
@@ -577,7 +578,7 @@ an old one.
   it and leaves no lease. Startup removes unreferenced UUID
   directories; a finalized `implementing` lease still becomes quarantined with
   no automatic retry. The schema-v8 observer projection remains wire-compatible
-  even though the durable database is schema v10.
+  even though the durable database is schema v11.
 - Schema v10 is the first metadata-only coding-dispatch admission slice. The
   explicit owner-token loopback route accepts no repository path, bytes,
   command, prompt, credential, patch, or commit. It binds one work-packet
@@ -603,6 +604,13 @@ an old one.
   `ASSEMBLYWRIGHT_MAC_DEVELOPER_LOCAL_CODING_SNAPSHOTS_ENABLED=true` opt-in with
   both agent executable and agent data-directory settings present. Fixture,
   MLX, and local-coding snapshot lanes are mutually exclusive.
+- The production Swift supervisor must not request the MacBridge-only Feature
+  Conveyor projection for the separate local-coding `InferenceWorker` identity.
+  It validates the exact singleton `local.coding.v1` profile and required relay
+  before connecting, then authenticates, health-checks, and relays without
+  emitting an owner projection. Partial, mixed, drifted, or relayless worker
+  profiles fail before network use; standard and fixture MacBridge observation
+  remains strict and unchanged.
 - Production enrollment uses `--identity-profile local-coding`, a separate
   Secure Enclave/Keychain service, key tag, certificate label, and installed
   profile. It accepts only `inference_worker` with the exact singleton
@@ -677,15 +685,23 @@ an old one.
   left clean on schema 10/protocol 2 at `e0ba81f`. Protocol 3 deployment must
   therefore be coordinated with rebuilding the Mac helper rather than
   upgrading only one peer and breaking version negotiation.
-- A disposable live two-device contained-coding closeout is not yet safe on the
-  schema-10 owner surface. After the fixed fixture completes, the feature and
-  its lease remain active; the kernel has exact cancellation and
-  abandon-and-advance operations, but no owner-local HTTP or CLI routes expose
-  them. Do not use direct SQLite mutation or deletion of a temporary data
-  directory as cleanup evidence. A later phase must add owner-token,
-  loopback-only, revision-bound cancel and abandon routes, then prove the
-  feature queue, lease, attempt, and Mac workspace are empty before tearing
-  down a live harness.
+- Schema v11 now exposes owner-token, loopback-only, strict bounded
+  `cancel-active-feature` and `abandon-and-advance` routes. Both compare-and-set
+  exact feature, lifecycle, queue, and Emergency Pause revisions inside the
+  authoritative transaction and are absent from enrolled-device mTLS.
+  Cancellation cancels exact coding dispatches but retains the feature lease
+  and cannot advance. Abandonment accepts only cancelled or quarantined state,
+  requires a nonzero safe-reconciliation digest, derives merge necessity from
+  immutable active-origin transition evidence, and requires verified healthy-
+  main evidence when that origin is `verifying_main`, then releases the lease
+  and increments the queue revision. The backup-first v10 migration backfills
+  a missing retained-lease origin receipt only from one exact lifecycle-bound
+  append-only cancellation or startup-quarantine audit event; missing,
+  ambiguous, malformed, or non-active-origin evidence fails closed and restores
+  the verified v10 database. Their receipts are fixed and path-free. A live closeout must use
+  these routes and prove the feature queue, lease, distributed attempt, transfer
+  staging, and Mac workspace are empty; direct SQLite mutation or deleting
+  state as proof remains forbidden.
 - Validate bundle manifest paths from the raw UTF-8 bytes before constructing a
   platform path. `PathBuf` may normalize repeated or boundary separators, so
   traversal, empty segments, `.git`, Windows-reserved names, invalid UTF-8,

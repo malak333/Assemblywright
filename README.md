@@ -23,11 +23,13 @@ advertisements; handshake, job, and result envelopes; strict bound-before-decode
 JSON entry points; nil-identity rejection; fixed-schema Feature Conveyor owner-
 control request/receipt contracts; and a golden compatibility fixture.
 
-**`assemblywright-master`** — a portable schema-v10 SQLite database retaining
+**`assemblywright-master`** — a portable schema-v11 SQLite database retaining
 the schema-v4 device lifecycle, schema-v5 Feature Conveyor, schema-v6
 capability rebind evidence, schema-v7 Emergency Pause revision, and schema-v8
 single owner-control bridge designation, schema-v9 immutable repository
-snapshot-claim evidence, and schema-v10 metadata-only coding-dispatch evidence,
+snapshot-claim evidence, schema-v10 metadata-only coding-dispatch evidence, and
+schema-v11 immutable owner-resolution origin evidence with a backup-first
+fail-closed v10 compatibility migration,
 plus a headless single-owner
 executable.
 
@@ -73,6 +75,15 @@ executable.
   returning. It accepts no caller-selected command, executable, tool, path,
   provider, test, credential, or network authority; this does not claim a host
   sandbox or host-level egress control.
+  Two additional owner-token loopback-only resolution actions cancel one exact
+  active feature and explicitly abandon-and-advance one already cancelled or
+  quarantined feature. Both bind the feature, lifecycle, queue, and Emergency
+  Pause revisions inside the authoritative transaction. Cancellation cancels
+  bound coding work but retains the feature lease and never advances the queue;
+  abandonment requires a nonzero safe-reconciliation digest and, after any
+  merge, a verified healthy-main digest before releasing the lease. Their
+  receipts are path-free and redacted, and neither action exists on enrolled-
+  device mTLS.
   Enqueue, reorder, claim, lifecycle, cancellation, abandonment,
   and startup quarantine commit with redacted audit evidence in the same
   transaction. Success releases the lease only with verified healthy-main

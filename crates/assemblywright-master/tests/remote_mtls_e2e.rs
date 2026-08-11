@@ -372,6 +372,24 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
         local_dispatch_over_remote.starts_with("HTTP/1.1 404 Not Found"),
         "owner-token coding dispatch leaked onto the remote router: {local_dispatch_over_remote}"
     );
+    for path in [
+        "/v1/feature-conveyor/cancel-active-feature",
+        "/v1/feature-conveyor/abandon-and-advance",
+    ] {
+        let (resolution_handshake, resolution_over_remote) = authenticated_application_request(
+            remote_endpoint,
+            &valid,
+            "POST",
+            path,
+            &serde_json::json!({}),
+        )
+        .await;
+        assert_eq!(resolution_handshake.status, HandshakeStatus::Accepted);
+        assert!(
+            resolution_over_remote.starts_with("HTTP/1.1 404 Not Found"),
+            "owner-resolution route {path} leaked onto the remote router: {resolution_over_remote}"
+        );
+    }
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     let (first_response, first_exporter) = tls_request_with_body(

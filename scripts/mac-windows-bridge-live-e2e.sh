@@ -51,7 +51,11 @@ case "$MODE" in
       || fail "missing supervised Rust agent"
     [[ -f "$ROOT_DIR/packaging/AssemblywrightMacBridge.entitlements" ]] \
       || fail "missing Mac bridge Keychain entitlement"
+    [[ -f "$ROOT_DIR/scripts/windows-local-coding-live-control.ps1" ]] \
+      || fail "missing Windows local-coding live controller"
     bash -n "$ROOT_DIR/scripts/build-mac-bridge-signed.sh"
+    bash -n "$ROOT_DIR/scripts/windows-local-coding-live-control-self-check.sh"
+    "$ROOT_DIR/scripts/windows-local-coding-live-control-self-check.sh"
     swift build --package-path "$PACKAGE_PATH" --product "$PRODUCT"
     cargo build --manifest-path "$ROOT_DIR/Cargo.toml" -p assemblywright-agent --locked
     printf 'Assemblywright Mac-Windows bridge live E2E harness: ready\n'
@@ -65,10 +69,12 @@ case "$MODE" in
     ;;
   --run-mlx)
     ;;
+  --run-local-coding)
+    ;;
   --run-outage)
     ;;
   *)
-    fail "usage: $0 [--check|--run|--run-relay|--run-fixture|--run-mlx|--run-outage]"
+    fail "usage: $0 [--check|--run|--run-relay|--run-fixture|--run-mlx|--run-local-coding|--run-outage]"
     ;;
 esac
 
@@ -218,7 +224,8 @@ cleanup_relay() {
     rm -rf -- "$relay_directory"
   fi
 }
-if [[ "$MODE" == "--run-relay" || "$MODE" == "--run-fixture" || "$MODE" == "--run-mlx" ]]; then
+if [[ "$MODE" == "--run-relay" || "$MODE" == "--run-fixture" \
+  || "$MODE" == "--run-mlx" || "$MODE" == "--run-local-coding" ]]; then
   command -v sqlite3 >/dev/null 2>&1 \
     || fail "sqlite3 is required for the durable relay proof"
   if [[ -n "${ASSEMBLYWRIGHT_MAC_AGENT_BIN:-}" ]]; then
@@ -257,11 +264,16 @@ if [[ "$MODE" == "--run-relay" || "$MODE" == "--run-fixture" || "$MODE" == "--ru
       "ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_MODEL_DIR=$ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_MODEL_DIR"
       "ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_MODEL_ID=$ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_MODEL_ID"
     )
+  elif [[ "$MODE" == "--run-local-coding" ]]; then
+    app_lifecycle_environment+=(
+      "ASSEMBLYWRIGHT_MAC_DEVELOPER_LOCAL_CODING_SNAPSHOTS_ENABLED=true"
+    )
   fi
   trap cleanup_relay EXIT
 fi
 
-if [[ "$MODE" != "--run-fixture" && "$MODE" != "--run-mlx" ]] \
+if [[ "$MODE" != "--run-fixture" && "$MODE" != "--run-mlx" \
+  && "$MODE" != "--run-local-coding" ]] \
   && ! app_lifecycle_output="$(
   env \
     ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_LIVE_E2E=true \
@@ -274,7 +286,8 @@ if [[ "$MODE" != "--run-fixture" && "$MODE" != "--run-mlx" ]] \
   printf '%s\n' "$app_lifecycle_output" >&2
   fail "production app bridge lifecycle did not reach the Windows master"
 fi
-if [[ "$MODE" != "--run-fixture" && "$MODE" != "--run-mlx" ]]; then
+if [[ "$MODE" != "--run-fixture" && "$MODE" != "--run-mlx" \
+  && "$MODE" != "--run-local-coding" ]]; then
   [[ "$app_lifecycle_output" == *"assemblywright_mac_app_bridge_live_e2e_ok"* ]] \
     || fail "production app bridge lifecycle omitted its live E2E marker"
   [[ "$app_lifecycle_output" == *"feature_conveyor_schema=8"* ]] \
@@ -323,6 +336,224 @@ if [[ "$MODE" == "--run-relay" ]]; then
     || fail "production app relay did not durably resume the same advancing stream"
   printf 'assemblywright_mac_windows_event_relay_live_e2e_ok endpoint=%s stream_id=%s sequence_before=%s sequence_after=%s app_supervision=verified agent_restart=verified\n' \
     "$endpoint" "$first_stream" "$first_sequence" "$resumed_sequence"
+fi
+
+if [[ "$MODE" == "--run-local-coding" ]]; then
+  local_coding_profile=(--identity-profile local-coding)
+  local_coding_status="$(
+    "$BRIDGE_BIN" status \
+      ${local_coding_profile[@]+"${local_coding_profile[@]}"}
+  )"
+  [[ "$(json_value "$local_coding_status" status)" == "enrolled" ]] \
+    || fail "the separate local-coding identity is not enrolled"
+  local_coding_device_id="$(json_value "$local_coding_status" device_id)"
+  local_coding_registry_revision="$(json_value "$local_coding_status" registry_revision)"
+  local_coding_endpoint="$(json_value "$local_coding_status" master_endpoint)"
+  [[ "$local_coding_device_id" =~ ^[0-9a-fA-F-]{36}$ \
+    && "$local_coding_device_id" != "$standard_device_id" \
+    && "$local_coding_registry_revision" =~ ^[0-9]+$ \
+    && "$local_coding_registry_revision" -gt 0 \
+    && "$local_coding_endpoint" == "$standard_master_endpoint" ]] \
+    || fail "the local-coding identity was not isolated and endpoint-bound"
+  owner_designation_revision="${ASSEMBLYWRIGHT_FEATURE_CONVEYOR_OWNER_CONTROL_DESIGNATION_REVISION:-}"
+  [[ "$owner_designation_revision" =~ ^[0-9]+$ && "$owner_designation_revision" -gt 0 ]] \
+    || fail "set ASSEMBLYWRIGHT_FEATURE_CONVEYOR_OWNER_CONTROL_DESIGNATION_REVISION to the exact current revision"
+
+  local_coding_coordination_directory="$relay_directory/local-coding-coordination"
+  mkdir "$local_coding_coordination_directory"
+  chmod 700 "$local_coding_coordination_directory"
+  local_coding_output="$relay_directory/local-coding-live.log"
+  : >"$local_coding_output"
+  chmod 600 "$local_coding_output"
+  local_coding_pid=""
+
+  cleanup_local_coding() {
+    if [[ -n "$local_coding_pid" ]] && kill -0 "$local_coding_pid" >/dev/null 2>&1; then
+      kill "$local_coding_pid" >/dev/null 2>&1 || true
+      local deadline=$((SECONDS + 5))
+      while kill -0 "$local_coding_pid" >/dev/null 2>&1 \
+        && (( SECONDS < deadline )); do
+        sleep 0.1
+      done
+      if kill -0 "$local_coding_pid" >/dev/null 2>&1; then
+        kill -KILL "$local_coding_pid" >/dev/null 2>&1 || true
+      fi
+      wait "$local_coding_pid" >/dev/null 2>&1 || true
+    fi
+    cleanup_relay
+  }
+  trap cleanup_local_coding EXIT
+
+  capture_local_coding_receipt() {
+    local filename="$1"
+    local label="$2"
+    local receipt=""
+    if ! IFS= read -r -t 600 receipt; then
+      fail "timed out waiting for the sanitized $label receipt on stdin"
+    fi
+    [[ -n "$receipt" && "${#receipt}" -le 8192 ]] \
+      || fail "the sanitized $label receipt was empty or oversized"
+    (
+      umask 077
+      printf '%s' "$receipt" >"$local_coding_coordination_directory/$filename.tmp"
+    )
+    chmod 600 "$local_coding_coordination_directory/$filename.tmp"
+    mv "$local_coding_coordination_directory/$filename.tmp" \
+      "$local_coding_coordination_directory/$filename"
+  }
+
+  printf '%s\n' \
+    "assemblywright_mac_windows_local_coding_prepare_required action=Prepare script=scripts/windows-local-coding-live-control.ps1 owner_control_designation_revision=$owner_designation_revision receipt_stdin=required"
+  capture_local_coding_receipt "prepare-control.json" "local-coding repository preparation"
+  prepare_receipt="$(<"$local_coding_coordination_directory/prepare-control.json")"
+  [[ "$(json_value "$prepare_receipt" status)" == "local_coding_repository_prepared" \
+    && "$(json_value "$prepare_receipt" owner_control_designation_revision)" == "$owner_designation_revision" ]] \
+    || fail "the repository preparation receipt drifted from owner control"
+  local_coding_repository_id="$(json_value "$prepare_receipt" repository_id)"
+  local_coding_feature_id="$(json_value "$prepare_receipt" feature_id)"
+  local_coding_head_commit="$(json_value "$prepare_receipt" head_commit)"
+  local_coding_prepare_queue_revision="$(json_value "$prepare_receipt" queue_revision)"
+  local_coding_pause_revision="$(json_value "$prepare_receipt" emergency_pause_revision)"
+  local_coding_approved_request_sha="$(json_value "$prepare_receipt" approved_request_sha256)"
+  local_coding_approved_request_base64="$(json_value "$prepare_receipt" approved_request_base64)"
+  [[ "$local_coding_repository_id" =~ ^[0-9a-fA-F-]{36}$ \
+    && "$local_coding_feature_id" =~ ^[0-9a-fA-F-]{36}$ \
+    && "$local_coding_head_commit" =~ ^[0-9a-f]{40}$ \
+    && "$local_coding_prepare_queue_revision" =~ ^[0-9]+$ \
+    && "$local_coding_pause_revision" =~ ^[0-9]+$ \
+    && "$local_coding_approved_request_sha" =~ ^[0-9a-f]{64}$ \
+    && "${#local_coding_approved_request_base64}" -le 6144 ]] \
+    || fail "the repository preparation receipt contained invalid bindings"
+  local_coding_approved_request="$(printf '%s' "$local_coding_approved_request_base64" | /usr/bin/base64 -D)" \
+    || fail "the approved local-coding request was not canonical base64"
+  computed_approved_request_sha="$(printf '%s' "$local_coding_approved_request" | shasum -a 256 | awk '{print $1}')"
+  [[ "$computed_approved_request_sha" == "$local_coding_approved_request_sha" ]] \
+    || fail "the approved local-coding request digest drifted"
+  enqueue_receipt="$(printf '%s' "$local_coding_approved_request" \
+    | "$BRIDGE_BIN" feature-conveyor approve-and-enqueue --confirm)"
+  [[ "$(json_value "$enqueue_receipt" status)" == "queued" \
+    && "$(json_value "$enqueue_receipt" feature_id)" == "$local_coding_feature_id" \
+    && "$(json_value "$enqueue_receipt" specification_revision)" == "1" \
+    && "$(json_value "$enqueue_receipt" lifecycle_revision)" == "1" \
+    && "$(json_value "$enqueue_receipt" queue_revision)" -eq $((local_coding_prepare_queue_revision + 1)) \
+    && "$(json_value "$enqueue_receipt" owner_control_designation_revision)" == "$owner_designation_revision" \
+    && "$(json_value "$enqueue_receipt" emergency_pause_revision)" == "$local_coding_pause_revision" ]] \
+    || fail "the signed-helper enqueue receipt drifted"
+  local_coding_enqueue_queue_revision="$(json_value "$enqueue_receipt" queue_revision)"
+
+  local_coding_startup="$(printf \
+    '{"agent_data_dir":"%s","agent_executable_path":"%s","fixture_jobs_enabled":false,"local_coding_snapshots_enabled":true,"mlx_executable_path":null,"mlx_jobs_enabled":false,"mlx_model_dir":null,"mlx_model_id":null,"version":4}' \
+    "$relay_data_directory" "$relay_agent_bin")"
+  printf '%s' "$local_coding_startup" \
+    | "$BRIDGE_BIN" relay \
+      ${local_coding_profile[@]+"${local_coding_profile[@]}"} \
+      --samples 10000 --interval-ms 100 \
+      >"$local_coding_output" 2>&1 &
+  local_coding_pid="$!"
+  local_coding_relay_deadline=$((SECONDS + 180))
+  while ! rg -q '"phase":"authenticated"' "$local_coding_output"; do
+    kill -0 "$local_coding_pid" >/dev/null 2>&1 \
+      || { cat "$local_coding_output" >&2; fail "the production local-coding relay exited"; }
+    (( SECONDS < local_coding_relay_deadline )) \
+      || { cat "$local_coding_output" >&2; fail "timed out waiting for local-coding relay"; }
+    sleep 0.25
+  done
+  ! rg -q '"feature_conveyor"' "$local_coding_output" \
+    || fail "the InferenceWorker relay received the MacBridge-only Conveyor projection"
+
+  printf '%s\n' \
+    "assemblywright_mac_windows_local_coding_dispatch_required action=ClaimAndDispatch script=scripts/windows-local-coding-live-control.ps1 repository_id=$local_coding_repository_id feature_id=$local_coding_feature_id head_commit=$local_coding_head_commit local_coding_device_id=$local_coding_device_id local_coding_registry_revision=$local_coding_registry_revision expected_lifecycle_revision=1 expected_queue_revision=$local_coding_enqueue_queue_revision expected_emergency_pause_revision=$local_coding_pause_revision receipt_stdin=required"
+  capture_local_coding_receipt "dispatch-control.json" "local-coding dispatch"
+  dispatch_receipt="$(<"$local_coding_coordination_directory/dispatch-control.json")"
+  [[ "$(json_value "$dispatch_receipt" status)" == "local_coding_dispatch_succeeded" \
+    && "$(json_value "$dispatch_receipt" repository_id)" == "$local_coding_repository_id" \
+    && "$(json_value "$dispatch_receipt" feature_id)" == "$local_coding_feature_id" \
+    && "$(json_value "$dispatch_receipt" device_id)" == "$local_coding_device_id" \
+    && "$(json_value "$dispatch_receipt" transfer_staging_empty)" == "true" \
+    && "$(json_value "$dispatch_receipt" proof_checkout_clean)" == "true" ]] \
+    || fail "the terminal local-coding dispatch receipt drifted"
+  local_coding_lifecycle_revision="$(json_value "$dispatch_receipt" lifecycle_revision)"
+  local_coding_claim_queue_revision="$(json_value "$dispatch_receipt" queue_revision)"
+  local_coding_task_id="$(json_value "$dispatch_receipt" task_id)"
+  local_coding_step_id="$(json_value "$dispatch_receipt" step_id)"
+  local_coding_queued_sequence="$(json_value "$dispatch_receipt" queued_sequence)"
+  local_coding_leased_sequence="$(json_value "$dispatch_receipt" leased_sequence)"
+  local_coding_succeeded_sequence="$(json_value "$dispatch_receipt" succeeded_sequence)"
+  local_coding_snapshot_sha="$(json_value "$dispatch_receipt" snapshot_sha256)"
+  local_coding_packet_sha="$(json_value "$dispatch_receipt" work_packet_sha256)"
+  [[ "$local_coding_lifecycle_revision" =~ ^[0-9]+$ \
+    && "$local_coding_claim_queue_revision" -eq $((local_coding_enqueue_queue_revision + 1)) \
+    && "$local_coding_task_id" =~ ^[0-9a-fA-F-]{36}$ \
+    && "$local_coding_step_id" =~ ^[0-9a-fA-F-]{36}$ \
+    && "$local_coding_queued_sequence" -lt "$local_coding_leased_sequence" \
+    && "$local_coding_leased_sequence" -lt "$local_coding_succeeded_sequence" \
+    && "$local_coding_snapshot_sha" =~ ^[0-9a-f]{64}$ \
+    && "$local_coding_packet_sha" =~ ^[0-9a-f]{64}$ ]] \
+    || fail "the terminal local-coding receipt omitted exact revision or digest evidence"
+
+  kill "$local_coding_pid" >/dev/null 2>&1 || true
+  wait "$local_coding_pid" >/dev/null 2>&1 || true
+  local_coding_pid=""
+  local_coding_snapshot_root="$relay_data_directory/local-coding-snapshots"
+  [[ -d "$local_coding_snapshot_root" \
+    && -z "$(find "$local_coding_snapshot_root" -mindepth 1 -maxdepth 1 -print -quit)" ]] \
+    || fail "the Mac retained local-coding transfer or workspace state"
+  local_coding_mac_cleanup_sha="$(printf \
+    'assemblywright.local-coding-live.mac-cleanup.v1\\0%s\\0%s\\0%s' \
+    "$local_coding_feature_id" "$local_coding_task_id" "$local_coding_step_id" \
+    | shasum -a 256 | awk '{print $1}')"
+
+  printf '%s\n' \
+    "assemblywright_mac_windows_local_coding_cancel_required action=Cancel script=scripts/windows-local-coding-live-control.ps1 feature_id=$local_coding_feature_id expected_lifecycle_revision=$local_coding_lifecycle_revision expected_queue_revision=$local_coding_claim_queue_revision expected_emergency_pause_revision=$local_coding_pause_revision receipt_stdin=required"
+  capture_local_coding_receipt "cancel-control.json" "active-feature cancellation"
+  cancel_receipt="$(<"$local_coding_coordination_directory/cancel-control.json")"
+  [[ "$(json_value "$cancel_receipt" status)" == "local_coding_feature_cancelled" \
+    && "$(json_value "$cancel_receipt" feature_id)" == "$local_coding_feature_id" \
+    && "$(json_value "$cancel_receipt" queue_revision)" == "$local_coding_claim_queue_revision" \
+    && "$(json_value "$cancel_receipt" lease_retained)" == "true" \
+    && "$(json_value "$cancel_receipt" advancement_authorized)" == "false" ]] \
+    || fail "cancellation did not retain the lease and deny advancement"
+  local_coding_cancel_lifecycle="$(json_value "$cancel_receipt" lifecycle_revision)"
+  [[ "$local_coding_cancel_lifecycle" -eq $((local_coding_lifecycle_revision + 1)) ]] \
+    || fail "cancellation lifecycle revision was not contiguous"
+
+  printf '%s\n' \
+    "assemblywright_mac_windows_local_coding_abandon_required action=Abandon script=scripts/windows-local-coding-live-control.ps1 repository_id=$local_coding_repository_id feature_id=$local_coding_feature_id head_commit=$local_coding_head_commit task_id=$local_coding_task_id step_id=$local_coding_step_id succeeded_sequence=$local_coding_succeeded_sequence mac_cleanup_sha256=$local_coding_mac_cleanup_sha expected_lifecycle_revision=$local_coding_cancel_lifecycle expected_queue_revision=$local_coding_claim_queue_revision expected_emergency_pause_revision=$local_coding_pause_revision receipt_stdin=required"
+  capture_local_coding_receipt "abandon-control.json" "safe abandonment"
+  abandon_receipt="$(<"$local_coding_coordination_directory/abandon-control.json")"
+  [[ "$(json_value "$abandon_receipt" status)" == "local_coding_feature_abandoned" \
+    && "$(json_value "$abandon_receipt" feature_id)" == "$local_coding_feature_id" \
+    && "$(json_value "$abandon_receipt" lease_released)" == "true" \
+    && "$(json_value "$abandon_receipt" queue_empty)" == "true" \
+    && "$(json_value "$abandon_receipt" transfer_staging_empty)" == "true" \
+    && "$(json_value "$abandon_receipt" safe_reconciliation_sha256)" =~ ^[0-9a-f]{64}$ ]] \
+    || fail "safe abandonment did not release the exact lease into an empty queue"
+
+  printf '%s\n' \
+    "assemblywright_mac_windows_local_coding_cleanup_required action=Cleanup script=scripts/windows-local-coding-live-control.ps1 repository_id=$local_coding_repository_id feature_id=$local_coding_feature_id head_commit=$local_coding_head_commit receipt_stdin=required"
+  capture_local_coding_receipt "cleanup-control.json" "disposable proof cleanup"
+  cleanup_receipt="$(<"$local_coding_coordination_directory/cleanup-control.json")"
+  [[ "$(json_value "$cleanup_receipt" status)" == "local_coding_live_cleanup_complete" \
+    && "$(json_value "$cleanup_receipt" repository_id)" == "$local_coding_repository_id" \
+    && "$(json_value "$cleanup_receipt" feature_id)" == "$local_coding_feature_id" \
+    && "$(json_value "$cleanup_receipt" absent_grant_count)" == "0" \
+    && "$(json_value "$cleanup_receipt" revoked_grant_count)" == "3" \
+    && "$(json_value "$cleanup_receipt" grant_cleanup_status)" == "absent_or_revoked" \
+    && "$(json_value "$cleanup_receipt" proof_checkout_removed)" == "true" ]] \
+    || fail "the disposable Windows cleanup receipt drifted"
+
+  local_coding_status_after="$(
+    "$BRIDGE_BIN" status \
+      ${local_coding_profile[@]+"${local_coding_profile[@]}"}
+  )"
+  [[ "$(json_value "$local_coding_status_after" status)" == "enrolled" \
+    && "$(json_value "$local_coding_status_after" device_id)" == "$local_coding_device_id" \
+    && "$(json_value "$local_coding_status_after" registry_revision)" == "$local_coding_registry_revision" ]] \
+    || fail "the live proof changed the separate local-coding identity"
+  printf 'assemblywright_mac_windows_local_coding_live_e2e_ok endpoint=%s feature_id=%s task_id=%s step_id=%s queued_sequence=%s leased_sequence=%s succeeded_sequence=%s snapshot_sha256=%s work_packet_sha256=%s separate_identity=verified signed_swift_relay=verified real_rust_agent=verified owner_cancel=verified owner_abandon=verified queue_empty=verified feature_lease_empty=verified distributed_active_state_empty=verified windows_transfer_staging_empty=verified mac_workspace_empty=verified grants_revoked=verified disposable_checkout_removed=verified\n' \
+    "$local_coding_endpoint" "$local_coding_feature_id" "$local_coding_task_id" \
+    "$local_coding_step_id" "$local_coding_queued_sequence" "$local_coding_leased_sequence" \
+    "$local_coding_succeeded_sequence" "$local_coding_snapshot_sha" "$local_coding_packet_sha"
 fi
 
 if [[ "$MODE" == "--run-mlx" ]]; then

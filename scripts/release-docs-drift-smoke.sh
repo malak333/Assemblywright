@@ -36,6 +36,7 @@ PROTOCOL_E2E="crates/assemblywright-protocol/tests/distributed_protocol_contract
 PROTOCOL_EVENT_E2E="crates/assemblywright-protocol/tests/distributed_event_cursor_contract.rs"
 PROTOCOL_MLX_E2E="crates/assemblywright-protocol/tests/mlx_job_contract.rs"
 PROTOCOL_LOCAL_CODING_E2E="crates/assemblywright-protocol/tests/local_coding_contract.rs"
+PROTOCOL_OWNER_RESOLUTION_E2E="crates/assemblywright-protocol/tests/owner_resolution_contract.rs"
 MASTER_E2E="crates/assemblywright-master/tests/master_lifecycle_e2e.rs"
 MASTER_PROCESS_E2E="crates/assemblywright-master/tests/master_process_e2e.rs"
 MASTER_IDENTITY_E2E="crates/assemblywright-master/tests/enrollment_identity_e2e.rs"
@@ -64,6 +65,8 @@ MAC_BRIDGE_LIVE_E2E="scripts/mac-windows-bridge-live-e2e.sh"
 MAC_LOCAL_CODING_SNAPSHOT_E2E="scripts/mac-local-coding-snapshot-e2e.sh"
 WINDOWS_FIXTURE_LIVE_CONTROL="scripts/windows-fixture-live-control.ps1"
 WINDOWS_MLX_LIVE_CONTROL="scripts/windows-mlx-live-control.ps1"
+WINDOWS_LOCAL_CODING_LIVE_CONTROL="scripts/windows-local-coding-live-control.ps1"
+WINDOWS_LOCAL_CODING_LIVE_CONTROL_SELF_CHECK="scripts/windows-local-coding-live-control-self-check.sh"
 WINDOWS_PROTOCOL_WORKFLOW=".github/workflows/windows-protocol.yml"
 RELEASE_VERSION_SCRIPT="scripts/release-version.sh"
 NAMING_CONTRACT_SMOKE="scripts/release-naming-contract-smoke.sh"
@@ -108,7 +111,7 @@ for file in \
   "$MASTER_CRATE" "$MASTER_PROCESS" "$MASTER_IDENTITY" "$MASTER_SERVICE_HOST" \
   "$AGENT_CRATE" "$AGENT_PROCESS" "$CLI_MAIN" \
   "$PROTOCOL_E2E" "$PROTOCOL_EVENT_E2E" "$PROTOCOL_MLX_E2E" \
-  "$PROTOCOL_LOCAL_CODING_E2E" \
+  "$PROTOCOL_LOCAL_CODING_E2E" "$PROTOCOL_OWNER_RESOLUTION_E2E" \
   "$MASTER_E2E" "$MASTER_PROCESS_E2E" "$MASTER_IDENTITY_E2E" \
   "$MASTER_REMOTE_MTLS_E2E" "$MASTER_EVENT_E2E" "$MASTER_CONVEYOR_E2E" \
   "$MASTER_SERVICE_E2E" "$AGENT_E2E" "$AGENT_LOCAL_CODING_E2E" "$CLI_NAMING_E2E" \
@@ -118,7 +121,8 @@ for file in \
   "$MAC_APP" "$MAC_BRIDGE_TESTS" "$MAC_APP_TESTS" \
   "$MAC_BRIDGE_LIVE_E2E" "$MAC_LOCAL_CODING_SNAPSHOT_E2E" \
   "$WINDOWS_FIXTURE_LIVE_CONTROL" \
-  "$WINDOWS_MLX_LIVE_CONTROL" "$WINDOWS_PROTOCOL_WORKFLOW" \
+  "$WINDOWS_MLX_LIVE_CONTROL" "$WINDOWS_LOCAL_CODING_LIVE_CONTROL" \
+  "$WINDOWS_LOCAL_CODING_LIVE_CONTROL_SELF_CHECK" "$WINDOWS_PROTOCOL_WORKFLOW" \
   "$RELEASE_VERSION_SCRIPT" "$NAMING_CONTRACT_SMOKE"; do
   require_file "$file"
 done
@@ -161,7 +165,7 @@ require_text "README non-claims" "$README" "Autonomous dispatch"
 require_text "DESIGN conveyor pointer" "$DESIGN" "docs/feature-conveyor-design.md"
 require_text "DESIGN distributed pointer" "$DESIGN" "docs/distributed-developer-mode-design.md"
 require_text "DESIGN assistant non-goal" "$DESIGN" "No general-purpose assistant surface."
-require_text "DESIGN current master schema" "$DESIGN" "schema-v10"
+require_text "DESIGN current master schema" "$DESIGN" "schema-v11"
 
 require_text "conveyor design status" "$FEATURE_CONVEYOR_DESIGN" "default-inert"
 require_text "conveyor design approval" "$FEATURE_CONVEYOR_DESIGN" "Approve and Enqueue"
@@ -179,6 +183,10 @@ require_text "conveyor repository snapshot claim boundary" "$FEATURE_CONVEYOR_DE
   "repository-snapshot-claims"
 require_text "conveyor coding dispatch boundary" "$FEATURE_CONVEYOR_DESIGN" \
   "coding-dispatches"
+require_text "conveyor cancellation boundary" "$FEATURE_CONVEYOR_DESIGN" \
+  "cancel-active-feature"
+require_text "conveyor abandonment boundary" "$FEATURE_CONVEYOR_DESIGN" \
+  "abandon-and-advance"
 require_text "conveyor snapshot excludes history" "$FEATURE_CONVEYOR_DESIGN" \
   "never copies parent history or"
 require_text "conveyor snapshot singleton reservation" "$FEATURE_CONVEYOR_DESIGN" \
@@ -201,6 +209,16 @@ require_text "conveyor repository snapshot claim implementation" "$MASTER_PROCES
   '"/v1/feature-conveyor/repository-snapshot-claims"'
 require_text "conveyor coding dispatch implementation" "$MASTER_PROCESS" \
   '"/v1/feature-conveyor/coding-dispatches"'
+require_text "conveyor cancellation implementation" "$MASTER_PROCESS" \
+  '"/v1/feature-conveyor/cancel-active-feature"'
+require_text "conveyor abandonment implementation" "$MASTER_PROCESS" \
+  '"/v1/feature-conveyor/abandon-and-advance"'
+require_text "conveyor live local-coding lane" "$MAC_BRIDGE_LIVE_E2E" \
+  "--run-local-coding"
+require_text "conveyor live controller cancellation" "$WINDOWS_LOCAL_CODING_LIVE_CONTROL" \
+  '"/v1/feature-conveyor/cancel-active-feature"'
+require_text "conveyor live controller Mac cleanup binding" "$WINDOWS_LOCAL_CODING_LIVE_CONTROL" \
+  "mac_cleanup_sha256"
 require_text "conveyor remote owner action implementation" "$MASTER_PROCESS" \
   '"/v1/distributed/feature-conveyor/approved-features"'
 require_text "conveyor owner guidance implementation" "$MASTER_CRATE" \
@@ -213,6 +231,8 @@ require_text "conveyor non-MacBridge remote denial" "$MASTER_REMOTE_MTLS_E2E" \
   "non-MacBridge reached Feature Conveyor status"
 require_text "conveyor pre-handshake owner-action denial" "$MASTER_REMOTE_MTLS_E2E" \
   "pre-handshake client reached owner-control enqueue"
+require_text "conveyor remote owner-resolution absence" "$MASTER_REMOTE_MTLS_E2E" \
+  '"/v1/feature-conveyor/cancel-active-feature"'
 require_text "conveyor remote owner-action redaction" "$MASTER_REMOTE_MTLS_E2E" \
   "receipt leaked"
 require_text "conveyor local owner route remote absence" "$MASTER_REMOTE_MTLS_E2E" \
@@ -243,6 +263,8 @@ require_text "conveyor protocol admission golden transcript" "$PROTOCOL_LOCAL_CO
   'admission_digest_has_a_fixed_cross_language_transcript'
 require_text "conveyor Swift exact admission domain" "$MAC_EVENT_RELAY" \
   'assemblywright.local-coding-admission.v1\0'
+require_text "conveyor Swift local-coding projection denial" "$MAC_BRIDGE_SUPERVISOR" \
+  "case .localCodingRelay:"
 require_text "conveyor Swift admission binds protocol version" "$MAC_EVENT_RELAY" \
   'protocolVersion: AssemblywrightMacMTLSBridgeTransport.protocolVersion'
 require_text "conveyor Swift admission binds lease duration" "$MAC_EVENT_RELAY" \
@@ -375,6 +397,10 @@ require_text "release checklist preserves worktree metadata" "$CHECKLIST" \
   "do not prune or delete that metadata"
 require_text "release checklist feature closeout" "$CHECKLIST" \
   "docs/development-agent-workflow.md"
+require_text "release checklist owner resolution" "$CHECKLIST" \
+  "abandon-and-advance"
+require_text "release checklist schema-v11 migration invariant" "$CHECKLIST" \
+  "schema-v11 backup-first"
 
 require_text "agent instructions feature closeout" "$AGENTS" \
   "Close every feature or phase"
@@ -404,8 +430,12 @@ require_text "build docs snapshot claim process E2E" "$BUILD_DOCS" \
   "repository_snapshot_claim_is_authenticated_path_free_and_durable"
 require_text "build docs coding dispatch protocol" "$BUILD_DOCS" \
   "cargo test -p assemblywright-protocol --test local_coding_contract"
+require_text "build docs owner-resolution protocol" "$BUILD_DOCS" \
+  "cargo test -p assemblywright-protocol --test owner_resolution_contract"
 require_text "build docs native snapshot relay E2E" "$BUILD_DOCS" \
   "./scripts/mac-local-coding-snapshot-e2e.sh"
+require_text "build docs live local-coding E2E" "$BUILD_DOCS" \
+  "./scripts/mac-windows-bridge-live-e2e.sh --run-local-coding"
 require_text "build docs Windows package-scoped clippy boundary" "$BUILD_DOCS" \
   "Do not substitute the macOS/Linux workspace-wide clippy command"
 require_text "safety snapshot blocking timeout boundary" "$SAFETY_RULES" \
@@ -416,8 +446,14 @@ require_text "knowledge base shallow snapshot boundary" "$KB" \
   "parent commits and deleted historical objects are absent"
 require_text "knowledge base coding dispatch boundary" "$KB" \
   "metadata-only coding-dispatch admission"
+require_text "knowledge base owner resolution" "$KB" \
+  "cancel-active-feature"
+require_text "knowledge base resolution migration invariant" "$KB" \
+  "backup-first v10 migration"
 require_text "knowledge base production Swift-to-Rust snapshot E2E" "$KB" \
   "production Swift relay and code-identity launcher"
+require_text "knowledge base local-coding projection boundary" "$KB" \
+  "must not request the MacBridge-only Feature"
 require_text "knowledge base contained-coding result" "$KB" \
   'contained_coding_completed'
 require_text "safety contained-coding host boundary" "$SAFETY_RULES" \
@@ -467,6 +503,8 @@ require_text "protocol version contract covers the fixture control plane" \
   "$PROTOCOL_VERSION_CONTRACT_SMOKE" "$WINDOWS_FIXTURE_LIVE_CONTROL"
 require_text "protocol version contract covers the MLX control plane" \
   "$PROTOCOL_VERSION_CONTRACT_SMOKE" "$WINDOWS_MLX_LIVE_CONTROL"
+require_text "protocol version contract covers the local-coding control plane" \
+  "$PROTOCOL_VERSION_CONTRACT_SMOKE" "$WINDOWS_LOCAL_CODING_LIVE_CONTROL"
 require_text "protocol version contract covers README prose" \
   "$PROTOCOL_VERSION_CONTRACT_SMOKE" "$README"
 require_text "protocol version contract covers architecture prose" \

@@ -575,15 +575,18 @@ private actor FakeDeveloperAgentLauncher: AssemblywrightMacDeveloperAgentLaunchi
 }
 
 private actor FakeBridgeEventRelay: AssemblywrightMacBridgeEventRelaying {
+    nonisolated let routingMode: AssemblywrightMacBridgeEventRelayRoutingMode
     let error: AssemblywrightMacDeveloperEventRelayError?
     let requiresFreshConnection: Bool
     private(set) var epochs: [UInt64] = []
     private(set) var stopped = false
 
     init(
+        routingMode: AssemblywrightMacBridgeEventRelayRoutingMode = .metadataOnly,
         error: AssemblywrightMacDeveloperEventRelayError? = nil,
         requiresFreshConnection: Bool = false
     ) {
+        self.routingMode = routingMode
         self.error = error
         self.requiresFreshConnection = requiresFreshConnection
     }
@@ -1505,6 +1508,222 @@ struct DeveloperBridgeTests {
         #expect(await session.cancelled)
     }
 
+    @Test("Fixture MacBridge keeps strict Feature Conveyor observation")
+    func fixtureSupervisorKeepsFeatureConveyorObservation() async {
+        let session = FakeSupervisorSession(
+            connectionEpoch: 141,
+            outcomes: [.response(.init(status: 200, body: validRemoteHealthData()))]
+        )
+        let relay = FakeBridgeEventRelay(routingMode: .fixture)
+        let supervisor = AssemblywrightMacBridgeSupervisor(
+            profile: staleFixtureProfile(),
+            connector: FakeSupervisorConnector(sessions: [session]),
+            eventRelay: relay
+        )
+
+        let snapshot = await supervisor.sample()
+
+        #expect(snapshot.phase == .authenticated)
+        #expect(snapshot.featureConveyor?.ownerGuidance.state == .idle)
+        #expect(await session.requests.map(\.path) == [
+            AssemblywrightMacBridgeSupervisor.healthPath,
+            AssemblywrightMacBridgeSupervisor.featureConveyorPath
+        ])
+        #expect(await relay.epochs == [141])
+        await supervisor.stop()
+    }
+
+    @Test("Exact local-coding supervisor relays after health without MacBridge observation")
+    func localCodingSupervisorSkipsFeatureConveyorObservation() async throws {
+        let session = FakeSupervisorSession(
+            connectionEpoch: 142,
+            outcomes: [.response(.init(status: 200, body: validRemoteHealthData()))],
+            featureConveyorOutcome: .failure
+        )
+        let connector = FakeSupervisorConnector(sessions: [session])
+        let relay = FakeBridgeEventRelay(routingMode: .localCoding)
+        let supervisor = AssemblywrightMacBridgeSupervisor(
+            profile: localCodingProfile(),
+            connector: connector,
+            eventRelay: relay
+        )
+
+        let snapshot = await supervisor.sample()
+        let encoded = try JSONEncoder().encode(snapshot)
+        let object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+
+        #expect(snapshot.phase == .authenticated)
+        #expect(snapshot.connectionEpoch == 142)
+        #expect(snapshot.featureConveyor == nil)
+        #expect(snapshot.errorCode == nil)
+        #expect(object["feature_conveyor"] == nil)
+        #expect(await session.requests.map(\.path) == [
+            AssemblywrightMacBridgeSupervisor.healthPath
+        ])
+        #expect(await relay.epochs == [142])
+        #expect(await connector.connectCount == 1)
+        #expect(!(await session.cancelled))
+        #expect(throws: AssemblywrightDeveloperBridgeProcessError.invalidSnapshot) {
+            try AssemblywrightMacBridgeSupervisorSnapshot.decodeStrict(encoded)
+        }
+        let decoded = try AssemblywrightMacBridgeSupervisorSnapshot.decodeStrict(
+            encoded,
+            localCodingSnapshotsEnabled: true
+        )
+        #expect(decoded == snapshot)
+        #expect(throws: AssemblywrightDeveloperBridgeProcessError.invalidSnapshot) {
+            try AssemblywrightMacBridgeSupervisorSnapshot.decodeStrict(
+                authenticatedSnapshotData(connectionEpoch: 142),
+                localCodingSnapshotsEnabled: true
+            )
+        }
+        let appStatus = try AssemblywrightDeveloperBridgeProcessLifecycle.status(
+            from: encoded,
+            localCodingSnapshotsEnabled: true
+        )
+        #expect(appStatus.phase == .connected)
+        #expect(appStatus.featureConveyor == nil)
+
+        await supervisor.stop()
+        #expect(await session.cancelled)
+    }
+
+    @Test("Supervisor rejects partial, mixed, and relayless local-coding profiles before connect")
+    func supervisorRejectsAmbiguousLocalCodingProfiles() async {
+        let localCoding = localCodingProfile()
+        let exactCapability = localCodingCapability()
+        let driftedCapability = AssemblywrightMacBridgeCapability(
+            id: exactCapability.id,
+            kind: exactCapability.kind,
+            provider: exactCapability.provider,
+            model: "assemblywright-local-coding-v2",
+            maxContextBytes: exactCapability.maxContextBytes,
+            maxResultBytes: exactCapability.maxResultBytes
+        )
+        var profiles = [
+            AssemblywrightMacBridgeProfile(
+                deviceID: localCoding.deviceID,
+                deviceName: localCoding.deviceName,
+                role: "inference_worker",
+                registryRevision: localCoding.registryRevision,
+                capabilities: [],
+                masterEndpoint: localCoding.masterEndpoint,
+                certificateNotAfterMilliseconds: localCoding.certificateNotAfterMilliseconds
+            ),
+            AssemblywrightMacBridgeProfile(
+                deviceID: localCoding.deviceID,
+                deviceName: localCoding.deviceName,
+                role: "mac_bridge",
+                registryRevision: localCoding.registryRevision,
+                capabilities: [exactCapability],
+                masterEndpoint: localCoding.masterEndpoint,
+                certificateNotAfterMilliseconds: localCoding.certificateNotAfterMilliseconds
+            )
+        ]
+        profiles.append(AssemblywrightMacBridgeProfile(
+            deviceID: localCoding.deviceID,
+            deviceName: localCoding.deviceName,
+            role: localCoding.role,
+            registryRevision: localCoding.registryRevision,
+            capabilities: [driftedCapability],
+            masterEndpoint: localCoding.masterEndpoint,
+            certificateNotAfterMilliseconds: localCoding.certificateNotAfterMilliseconds
+        ))
+
+        for profile in profiles {
+            let session = FakeSupervisorSession(
+                connectionEpoch: 143,
+                outcomes: [.response(.init(status: 200, body: validRemoteHealthData()))]
+            )
+            let connector = FakeSupervisorConnector(sessions: [session])
+            let relay = FakeBridgeEventRelay(routingMode: .localCoding)
+            let supervisor = AssemblywrightMacBridgeSupervisor(
+                profile: profile,
+                connector: connector,
+                eventRelay: relay
+            )
+
+            let snapshot = await supervisor.sample()
+
+            #expect(snapshot.phase == .backingOff)
+            #expect(snapshot.errorCode == "bridge_unavailable")
+            #expect(await connector.connectCount == 0)
+            #expect(await session.requests.isEmpty)
+            #expect(await relay.epochs.isEmpty)
+        }
+
+        let connector = FakeSupervisorConnector(sessions: [])
+        let relayless = AssemblywrightMacBridgeSupervisor(
+            profile: localCodingProfile(),
+            connector: connector
+        )
+        let relaylessSnapshot = await relayless.sample()
+        #expect(relaylessSnapshot.phase == .backingOff)
+        #expect(relaylessSnapshot.errorCode == "bridge_unavailable")
+        #expect(await connector.connectCount == 0)
+
+        for routingMode in [
+            AssemblywrightMacBridgeEventRelayRoutingMode.metadataOnly,
+            .fixture,
+            .mlx,
+            .invalid
+        ] {
+            let connector = FakeSupervisorConnector(sessions: [])
+            let mismatchedRelay = FakeBridgeEventRelay(routingMode: routingMode)
+            let mismatched = AssemblywrightMacBridgeSupervisor(
+                profile: localCodingProfile(),
+                connector: connector,
+                eventRelay: mismatchedRelay
+            )
+
+            let snapshot = await mismatched.sample()
+
+            #expect(snapshot.phase == .backingOff)
+            #expect(snapshot.errorCode == "bridge_unavailable")
+            #expect(await connector.connectCount == 0)
+            #expect(await mismatchedRelay.epochs.isEmpty)
+        }
+
+        let reverseConnector = FakeSupervisorConnector(sessions: [])
+        let reverseMismatchedRelay = FakeBridgeEventRelay(routingMode: .localCoding)
+        let reverseMismatched = AssemblywrightMacBridgeSupervisor(
+            profile: sampleProfile(),
+            connector: reverseConnector,
+            eventRelay: reverseMismatchedRelay
+        )
+        let reverseSnapshot = await reverseMismatched.sample()
+        #expect(reverseSnapshot.phase == .backingOff)
+        #expect(reverseSnapshot.errorCode == "bridge_unavailable")
+        #expect(await reverseConnector.connectCount == 0)
+        #expect(await reverseMismatchedRelay.epochs.isEmpty)
+    }
+
+    @Test("Local-coding malformed health cancels before relay and never requests status")
+    func localCodingSupervisorRejectsMalformedHealth() async {
+        let session = FakeSupervisorSession(
+            connectionEpoch: 144,
+            outcomes: [.response(.init(status: 200, body: Data(#"{"status":"ok"}"#.utf8)))],
+            featureConveyorOutcome: .failure
+        )
+        let relay = FakeBridgeEventRelay(routingMode: .localCoding)
+        let supervisor = AssemblywrightMacBridgeSupervisor(
+            profile: localCodingProfile(),
+            connector: FakeSupervisorConnector(sessions: [session]),
+            eventRelay: relay
+        )
+
+        let snapshot = await supervisor.sample()
+
+        #expect(snapshot.phase == .backingOff)
+        #expect(snapshot.errorCode == "invalid_health")
+        #expect(snapshot.featureConveyor == nil)
+        #expect(await session.requests.map(\.path) == [
+            AssemblywrightMacBridgeSupervisor.healthPath
+        ])
+        #expect(await relay.epochs.isEmpty)
+        #expect(await session.cancelled)
+    }
+
     @Test("Supervisor accepts the exact authoritative paused health projection")
     func supervisorAcceptsPausedHealth() async {
         let session = FakeSupervisorSession(
@@ -2127,6 +2346,13 @@ struct DeveloperBridgeTests {
         #expect(!String(decoding: document, as: UTF8.self).contains("bearer"))
         #expect(!relay.fixtureJobsEnabled)
         #expect(!relay.localCodingSnapshotsEnabled)
+        let relayDeviceID = UUID(uuidString: "22222222-2222-4222-8222-222222222222")!
+        #expect(
+            AssemblywrightMacDeveloperEventRelay(
+                configuration: relay,
+                deviceID: relayDeviceID
+            ).routingMode == .metadataOnly
+        )
 
         let partial = AssemblywrightDeveloperBridgeProcessConfiguration(environment: [
             AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
@@ -2152,6 +2378,13 @@ struct DeveloperBridgeTests {
                 "true"
         ])
         #expect(fixture.eventRelayConfiguration?.fixtureJobsEnabled == true)
+        let fixtureRelay = try #require(fixture.eventRelayConfiguration)
+        #expect(
+            AssemblywrightMacDeveloperEventRelay(
+                configuration: fixtureRelay,
+                deviceID: relayDeviceID
+            ).routingMode == .fixture
+        )
         #expect(
             FoundationAssemblywrightDeveloperBridgeProcessLauncher.helperArguments(
                 eventRelayConfiguration: fixture.eventRelayConfiguration
@@ -2197,6 +2430,39 @@ struct DeveloperBridgeTests {
             FoundationAssemblywrightDeveloperBridgeProcessLauncher.helperArguments(
                 eventRelayConfiguration: localCoding.eventRelayConfiguration
             ) == ["relay", "--identity-profile", "local-coding"]
+        )
+        let localCodingRelay = try #require(localCoding.eventRelayConfiguration)
+        #expect(
+            AssemblywrightMacDeveloperEventRelay(
+                configuration: localCodingRelay,
+                deviceID: relayDeviceID
+            ).routingMode == .localCoding
+        )
+        #expect(
+            AssemblywrightMacDeveloperEventRelay(
+                configuration: localCodingRelay
+            ).routingMode == .invalid
+        )
+        #expect(
+            AssemblywrightMacDeveloperEventRelay(
+                configuration: localCodingRelay,
+                deviceID: UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+            ).routingMode == .invalid
+        )
+        let mixedRelay = AssemblywrightMacDeveloperEventRelayConfiguration(
+            agentExecutableURL: URL(fileURLWithPath: "/tmp/assemblywright-agent"),
+            agentDataDirectoryURL: URL(
+                fileURLWithPath: "/tmp/assemblywright-agent-data",
+                isDirectory: true
+            ),
+            fixtureJobsEnabled: true,
+            localCodingSnapshotsEnabled: true
+        )
+        #expect(
+            AssemblywrightMacDeveloperEventRelay(
+                configuration: mixedRelay,
+                deviceID: relayDeviceID
+            ).routingMode == .invalid
         )
 
         let unsafeLocalCoding = AssemblywrightDeveloperBridgeProcessConfiguration(environment: [
@@ -2271,6 +2537,12 @@ struct DeveloperBridgeTests {
         #expect(relay.mlxJobsEnabled)
         #expect(!relay.fixtureJobsEnabled)
         #expect(relay.mlxModelID == "mlx-local")
+        #expect(
+            AssemblywrightMacDeveloperEventRelay(
+                configuration: relay,
+                deviceID: UUID(uuidString: "22222222-2222-4222-8222-222222222222")!
+            ).routingMode == .mlx
+        )
         #expect(
             FoundationAssemblywrightDeveloperBridgeProcessLauncher.helperArguments(
                 eventRelayConfiguration: relay
@@ -3031,6 +3303,42 @@ struct DeveloperBridgeTests {
         await lifecycle.stop()
         #expect(await session.stopped)
         #expect(lifecycle.status.phase == .stopped)
+    }
+
+    @MainActor
+    @Test("App helper lifecycle accepts projection-free output only for local-coding opt-in")
+    func appHelperLifecycleBindsProjectionFreeOutputToLocalCodingOptIn() async {
+        let line = localCodingAuthenticatedSnapshotData(connectionEpoch: 145)
+        let session = FakeBridgeProcessSession(lines: [line])
+        let launcher = FakeBridgeProcessLauncher(session: session)
+        let lifecycle = AssemblywrightDeveloperBridgeProcessLifecycle(
+            configuration: .init(environment: [
+                AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
+                    "/tmp/assemblywright-mac-bridge",
+                AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
+                    "ABCDEFGHIJ",
+                AssemblywrightDeveloperBridgeProcessConfiguration.agentExecutableEnvironmentKey:
+                    "/tmp/assemblywright-agent",
+                AssemblywrightDeveloperBridgeProcessConfiguration.agentDataDirectoryEnvironmentKey:
+                    "/tmp/assemblywright-agent-data",
+                AssemblywrightDeveloperBridgeProcessConfiguration
+                    .localCodingSnapshotsEnabledEnvironmentKey: "true"
+            ]),
+            validator: FakeBridgeExecutableValidator(),
+            launcher: launcher
+        )
+
+        lifecycle.start()
+        for _ in 0 ..< 50 where lifecycle.status.phase != .connected {
+            await Task.yield()
+        }
+
+        #expect(lifecycle.status.phase == .connected)
+        #expect(lifecycle.status.connectionEpoch == 145)
+        #expect(lifecycle.status.featureConveyor == nil)
+        #expect(await launcher.launchCount == 1)
+        await lifecycle.stop()
+        #expect(await session.stopped)
     }
 
     @MainActor
@@ -4526,6 +4834,18 @@ private func sampleProfile() -> AssemblywrightMacBridgeProfile {
     )
 }
 
+private func localCodingProfile() -> AssemblywrightMacBridgeProfile {
+    AssemblywrightMacBridgeProfile(
+        deviceID: "33333333-3333-4333-8333-333333333333",
+        deviceName: "owner-mac-local-coding",
+        role: "inference_worker",
+        registryRevision: 4,
+        capabilities: [localCodingCapability()],
+        masterEndpoint: "100.64.23.14:7792",
+        certificateNotAfterMilliseconds: 4_102_444_800_000
+    )
+}
+
 private func validRemoteHealthData() -> Data {
     Data(
         #"{"status":"ok","mode":"developer_remote_master","host_mode":"windows_service","service_identity":"MIKE-PC\\mike","maintenance_active":false,"maintenance_reason":null,"emergency_paused":false,"protocol_version":3,"schema_version":8,"process_id":43752,"started_at_ms":1784749559000,"startup_reconciliation":{"disconnected_connections":0,"abandoned_attempts":0,"requeued_steps":0},"state":{"registered_devices":1,"active_device_certificates":1,"unconsumed_enrollment_grants":2,"active_connections":1,"queued_steps":0,"leased_steps":0,"terminal_steps":0,"active_attempts":0},"boundary":"TLS 1.3 mutual authentication with enrolled-device certificate and durable revocation checks"}"#.utf8
@@ -4699,6 +5019,14 @@ private func authenticatedSnapshotData(
 
 private func authenticatedSnapshotJSON(connectionEpoch: UInt64) -> String {
     String(data: authenticatedSnapshotData(connectionEpoch: connectionEpoch), encoding: .utf8)!
+}
+
+private func localCodingAuthenticatedSnapshotData(connectionEpoch: UInt64) -> Data {
+    var object = try! JSONSerialization.jsonObject(
+        with: authenticatedSnapshotData(connectionEpoch: connectionEpoch)
+    ) as! [String: Any]
+    object.removeValue(forKey: "feature_conveyor")
+    return try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
 }
 
 private func approvedFeatureOwnerControlRequestData() -> Data {

@@ -905,13 +905,20 @@ fn abandon_feature(kernel: &mut MasterKernel, feature: &ApprovedFeatureSpecifica
     )
     .unwrap();
     let cancelled = kernel
-        .cancel_active_feature(feature.feature_id, claim.lifecycle_revision, now + 2)
+        .cancel_active_feature(
+            feature.feature_id,
+            claim.lifecycle_revision,
+            kernel.feature_queue_revision().unwrap(),
+            kernel.emergency_pause_revision().unwrap(),
+            now + 2,
+        )
         .unwrap();
     kernel
         .abandon_and_advance(
             feature.feature_id,
             cancelled.lifecycle_revision,
             kernel.feature_queue_revision().unwrap(),
+            kernel.emergency_pause_revision().unwrap(),
             FeatureAbandonmentEvidence {
                 safe_reconciliation_sha256: digest("history-safe-reconciliation"),
                 merged: false,
@@ -972,7 +979,13 @@ fn status_projection_is_empty_bounded_and_redacted() {
     )
     .unwrap();
     kernel
-        .cancel_active_feature(claim.feature_id, claim.lifecycle_revision, 201)
+        .cancel_active_feature(
+            claim.feature_id,
+            claim.lifecycle_revision,
+            kernel.feature_queue_revision().unwrap(),
+            kernel.emergency_pause_revision().unwrap(),
+            201,
+        )
         .unwrap();
     kernel
         .enqueue_approved_feature(
@@ -1807,7 +1820,13 @@ fn coding_dispatch_is_atomic_snapshot_device_and_revision_bound_then_cancellatio
     ));
 
     let cancelled = kernel
-        .cancel_active_feature(feature.feature_id, claim.lifecycle_revision, 16)
+        .cancel_active_feature(
+            feature.feature_id,
+            claim.lifecycle_revision,
+            kernel.feature_queue_revision().unwrap(),
+            kernel.emergency_pause_revision().unwrap(),
+            16,
+        )
         .unwrap();
     assert_eq!(cancelled.status, FeatureLifecycleStatus::Cancelled);
     assert_eq!(
@@ -1981,6 +2000,337 @@ fn terminal_coding_ack_allows_validation_and_lifecycle_change_invalidates_replay
 }
 
 #[test]
+fn abandonment_rejects_malformed_durable_resolution_transition_evidence() {
+    let directory = tempdir().unwrap();
+    let database = directory.path().join("master.sqlite3");
+    let (feature, cancelled, queue_revision, pause_revision) = {
+        let mut kernel = MasterKernel::open(&database).unwrap();
+        let repository_id = Uuid::new_v4();
+        install_grants(&mut kernel, repository_id);
+        let feature = specification(Uuid::new_v4(), repository_id, vec![]);
+        kernel.enqueue_approved_feature(&feature, 0, 10).unwrap();
+        let claim = claim_feature(&mut kernel, &feature, 1, 11).unwrap();
+        let transition = FeatureTransitionEvidence {
+            repository_snapshot_sha256: claim.snapshot_sha256,
+            accepted_evidence_sha256: digest("stored-merge-transition-evidence"),
+        };
+        let mut snapshot = kernel.feature_snapshot(feature.feature_id).unwrap();
+        for next in [
+            FeatureLifecycleStatus::Validating,
+            FeatureLifecycleStatus::Reviewing,
+            FeatureLifecycleStatus::Publishing,
+            FeatureLifecycleStatus::VerifyingMain,
+        ] {
+            snapshot = kernel
+                .advance_feature_lifecycle(
+                    feature.feature_id,
+                    snapshot.lifecycle_revision,
+                    next,
+                    transition,
+                    12 + snapshot.lifecycle_revision,
+                )
+                .unwrap();
+        }
+        let queue_revision = kernel.feature_queue_revision().unwrap();
+        let pause_revision = kernel.emergency_pause_revision().unwrap();
+        let cancelled = kernel
+            .cancel_active_feature(
+                feature.feature_id,
+                snapshot.lifecycle_revision,
+                queue_revision,
+                pause_revision,
+                20,
+            )
+            .unwrap();
+        (feature, cancelled, queue_revision, pause_revision)
+    };
+    let connection = Connection::open(&database).unwrap();
+    connection
+        .execute_batch("DROP TRIGGER feature_transition_evidence_no_update")
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE feature_transition_evidence
+             SET accepted_evidence_sha256 = NULL
+             WHERE feature_id = ?1 AND lifecycle_revision = ?2",
+            rusqlite::params![
+                feature.feature_id.to_string(),
+                (cancelled.lifecycle_revision - 1) as i64,
+            ],
+        )
+        .unwrap();
+    drop(connection);
+
+    let mut reopened = MasterKernel::open(&database).unwrap();
+    assert!(matches!(
+        reopened.abandon_and_advance(
+            feature.feature_id,
+            cancelled.lifecycle_revision,
+            queue_revision,
+            pause_revision,
+            FeatureAbandonmentEvidence {
+                safe_reconciliation_sha256: digest("safe-reconciliation"),
+                merged: true,
+                verified_healthy_main_sha256: Some(digest("healthy-main")),
+            },
+            21,
+        ),
+        Err(MasterError::InvalidStoredState(_))
+    ));
+    let retained = reopened.feature_snapshot(feature.feature_id).unwrap();
+    assert_eq!(retained.status, FeatureLifecycleStatus::Cancelled);
+    assert!(retained.active_lease_id.is_some());
+    assert_eq!(reopened.feature_queue_revision().unwrap(), queue_revision);
+}
+
+#[test]
+fn cancellation_from_verifying_main_cannot_bypass_healthy_main_evidence() {
+    let mut kernel = MasterKernel::in_memory().unwrap();
+    let repository_id = Uuid::new_v4();
+    install_grants(&mut kernel, repository_id);
+    let feature = specification(Uuid::new_v4(), repository_id, vec![]);
+    kernel.enqueue_approved_feature(&feature, 0, 10).unwrap();
+    let claim = claim_feature(&mut kernel, &feature, 1, 11).unwrap();
+    let transition = FeatureTransitionEvidence {
+        repository_snapshot_sha256: claim.snapshot_sha256,
+        accepted_evidence_sha256: digest("merged-transition-evidence"),
+    };
+    let mut snapshot = kernel.feature_snapshot(feature.feature_id).unwrap();
+    for next in [
+        FeatureLifecycleStatus::Validating,
+        FeatureLifecycleStatus::Reviewing,
+        FeatureLifecycleStatus::Publishing,
+        FeatureLifecycleStatus::VerifyingMain,
+    ] {
+        snapshot = kernel
+            .advance_feature_lifecycle(
+                feature.feature_id,
+                snapshot.lifecycle_revision,
+                next,
+                transition,
+                12 + snapshot.lifecycle_revision,
+            )
+            .unwrap();
+    }
+    let queue_revision = kernel.feature_queue_revision().unwrap();
+    let pause_revision = kernel.emergency_pause_revision().unwrap();
+    let cancelled = kernel
+        .cancel_active_feature(
+            feature.feature_id,
+            snapshot.lifecycle_revision,
+            queue_revision,
+            pause_revision,
+            20,
+        )
+        .unwrap();
+
+    for evidence in [
+        FeatureAbandonmentEvidence {
+            safe_reconciliation_sha256: digest("verified-safe-reconciliation"),
+            merged: false,
+            verified_healthy_main_sha256: None,
+        },
+        FeatureAbandonmentEvidence {
+            safe_reconciliation_sha256: digest("verified-safe-reconciliation"),
+            merged: false,
+            verified_healthy_main_sha256: Some(digest("healthy-main")),
+        },
+    ] {
+        assert!(matches!(
+            kernel.abandon_and_advance(
+                feature.feature_id,
+                cancelled.lifecycle_revision,
+                queue_revision,
+                pause_revision,
+                evidence,
+                21,
+            ),
+            Err(MasterError::VerifiedHealthyMainRequired)
+        ));
+        let retained = kernel.feature_snapshot(feature.feature_id).unwrap();
+        assert_eq!(retained.status, FeatureLifecycleStatus::Cancelled);
+        assert_eq!(retained.active_lease_id, Some(claim.lease_id));
+        assert_eq!(kernel.feature_queue_revision().unwrap(), queue_revision);
+    }
+
+    let abandoned = kernel
+        .abandon_and_advance(
+            feature.feature_id,
+            cancelled.lifecycle_revision,
+            queue_revision,
+            pause_revision,
+            FeatureAbandonmentEvidence {
+                safe_reconciliation_sha256: digest("verified-safe-reconciliation"),
+                merged: true,
+                verified_healthy_main_sha256: Some(digest("healthy-main")),
+            },
+            22,
+        )
+        .unwrap();
+    assert_eq!(abandoned.status, FeatureLifecycleStatus::Abandoned);
+    assert!(abandoned.active_lease_id.is_none());
+}
+
+#[test]
+fn verifying_main_startup_quarantine_also_requires_healthy_main_before_abandonment() {
+    let directory = tempdir().unwrap();
+    let database = directory.path().join("master.sqlite3");
+    let (feature, claim, lifecycle_revision, queue_revision, pause_revision) = {
+        let mut kernel = MasterKernel::open(&database).unwrap();
+        let repository_id = Uuid::new_v4();
+        install_grants(&mut kernel, repository_id);
+        let feature = specification(Uuid::new_v4(), repository_id, vec![]);
+        kernel.enqueue_approved_feature(&feature, 0, 10).unwrap();
+        let claim = claim_feature(&mut kernel, &feature, 1, 11).unwrap();
+        let transition = FeatureTransitionEvidence {
+            repository_snapshot_sha256: claim.snapshot_sha256,
+            accepted_evidence_sha256: digest("restart-merged-transition-evidence"),
+        };
+        let mut snapshot = kernel.feature_snapshot(feature.feature_id).unwrap();
+        for next in [
+            FeatureLifecycleStatus::Validating,
+            FeatureLifecycleStatus::Reviewing,
+            FeatureLifecycleStatus::Publishing,
+            FeatureLifecycleStatus::VerifyingMain,
+        ] {
+            snapshot = kernel
+                .advance_feature_lifecycle(
+                    feature.feature_id,
+                    snapshot.lifecycle_revision,
+                    next,
+                    transition,
+                    12 + snapshot.lifecycle_revision,
+                )
+                .unwrap();
+        }
+        (
+            feature,
+            claim,
+            snapshot.lifecycle_revision,
+            kernel.feature_queue_revision().unwrap(),
+            kernel.emergency_pause_revision().unwrap(),
+        )
+    };
+
+    let mut restarted = MasterKernel::open(&database).unwrap();
+    assert_eq!(restarted.feature_startup_quarantines(), 1);
+    let quarantined = restarted.feature_snapshot(feature.feature_id).unwrap();
+    assert_eq!(quarantined.status, FeatureLifecycleStatus::Quarantined);
+    assert_eq!(quarantined.lifecycle_revision, lifecycle_revision + 1);
+    assert_eq!(quarantined.active_lease_id, Some(claim.lease_id));
+    assert!(matches!(
+        restarted.abandon_and_advance(
+            feature.feature_id,
+            quarantined.lifecycle_revision,
+            queue_revision,
+            pause_revision,
+            FeatureAbandonmentEvidence {
+                safe_reconciliation_sha256: digest("restart-safe-reconciliation"),
+                merged: false,
+                verified_healthy_main_sha256: None,
+            },
+            30,
+        ),
+        Err(MasterError::VerifiedHealthyMainRequired)
+    ));
+    let retained = restarted.feature_snapshot(feature.feature_id).unwrap();
+    assert_eq!(retained.status, FeatureLifecycleStatus::Quarantined);
+    assert_eq!(retained.active_lease_id, Some(claim.lease_id));
+}
+
+#[test]
+fn owner_resolution_is_exact_queue_and_pause_bound_even_while_paused() {
+    let mut kernel = MasterKernel::in_memory().unwrap();
+    let repository_id = Uuid::new_v4();
+    install_grants(&mut kernel, repository_id);
+    let feature = specification(Uuid::new_v4(), repository_id, vec![]);
+    kernel.enqueue_approved_feature(&feature, 0, 10).unwrap();
+    let claim = claim_feature(&mut kernel, &feature, 1, 11).unwrap();
+    let queue_revision = kernel.feature_queue_revision().unwrap();
+    kernel.set_emergency_paused_at(true, 12).unwrap();
+    let pause_revision = kernel.emergency_pause_revision().unwrap();
+
+    assert!(matches!(
+        kernel.cancel_active_feature(
+            feature.feature_id,
+            claim.lifecycle_revision,
+            queue_revision + 1,
+            pause_revision,
+            13,
+        ),
+        Err(MasterError::StaleFeatureQueueRevision { .. })
+    ));
+    assert!(matches!(
+        kernel.cancel_active_feature(
+            feature.feature_id,
+            claim.lifecycle_revision,
+            queue_revision,
+            pause_revision - 1,
+            14,
+        ),
+        Err(MasterError::StaleEmergencyPauseRevision { .. })
+    ));
+    let unchanged = kernel.feature_snapshot(feature.feature_id).unwrap();
+    assert_eq!(unchanged.status, FeatureLifecycleStatus::Implementing);
+    assert_eq!(unchanged.lifecycle_revision, claim.lifecycle_revision);
+    assert_eq!(unchanged.active_lease_id, Some(claim.lease_id));
+
+    let cancelled = kernel
+        .cancel_active_feature(
+            feature.feature_id,
+            claim.lifecycle_revision,
+            queue_revision,
+            pause_revision,
+            15,
+        )
+        .unwrap();
+    assert_eq!(cancelled.status, FeatureLifecycleStatus::Cancelled);
+    assert_eq!(cancelled.active_lease_id, Some(claim.lease_id));
+    let evidence = FeatureAbandonmentEvidence {
+        safe_reconciliation_sha256: digest("paused-safe-reconciliation"),
+        merged: false,
+        verified_healthy_main_sha256: None,
+    };
+
+    assert!(matches!(
+        kernel.abandon_and_advance(
+            feature.feature_id,
+            cancelled.lifecycle_revision,
+            queue_revision + 1,
+            pause_revision,
+            evidence,
+            16,
+        ),
+        Err(MasterError::StaleFeatureQueueRevision { .. })
+    ));
+    assert!(matches!(
+        kernel.abandon_and_advance(
+            feature.feature_id,
+            cancelled.lifecycle_revision,
+            queue_revision,
+            pause_revision - 1,
+            evidence,
+            17,
+        ),
+        Err(MasterError::StaleEmergencyPauseRevision { .. })
+    ));
+    let abandoned = kernel
+        .abandon_and_advance(
+            feature.feature_id,
+            cancelled.lifecycle_revision,
+            queue_revision,
+            pause_revision,
+            evidence,
+            18,
+        )
+        .unwrap();
+    assert_eq!(abandoned.status, FeatureLifecycleStatus::Abandoned);
+    assert!(abandoned.active_lease_id.is_none());
+    assert_eq!(kernel.feature_queue_revision().unwrap(), queue_revision + 1);
+    assert!(kernel.emergency_paused().unwrap());
+}
+
+#[test]
 fn cancellation_blocks_until_safe_abandonment_and_merged_main_is_healthy() {
     let mut kernel = MasterKernel::in_memory().unwrap();
     let repository_id = Uuid::new_v4();
@@ -1989,7 +2339,13 @@ fn cancellation_blocks_until_safe_abandonment_and_merged_main_is_healthy() {
     kernel.enqueue_approved_feature(&feature, 0, 10).unwrap();
     let claim = claim_feature(&mut kernel, &feature, 1, 11).unwrap();
     let cancelled = kernel
-        .cancel_active_feature(feature.feature_id, claim.lifecycle_revision, 12)
+        .cancel_active_feature(
+            feature.feature_id,
+            claim.lifecycle_revision,
+            kernel.feature_queue_revision().unwrap(),
+            kernel.emergency_pause_revision().unwrap(),
+            12,
+        )
         .unwrap();
     assert_eq!(cancelled.status, FeatureLifecycleStatus::Cancelled);
     assert_eq!(cancelled.active_lease_id, Some(claim.lease_id));
@@ -2008,6 +2364,7 @@ fn cancellation_blocks_until_safe_abandonment_and_merged_main_is_healthy() {
                 feature.feature_id,
                 cancelled.lifecycle_revision,
                 kernel.feature_queue_revision().unwrap(),
+                kernel.emergency_pause_revision().unwrap(),
                 FeatureAbandonmentEvidence {
                     safe_reconciliation_sha256: digest("safe"),
                     merged: false,
@@ -2024,6 +2381,7 @@ fn cancellation_blocks_until_safe_abandonment_and_merged_main_is_healthy() {
                 feature.feature_id,
                 cancelled.lifecycle_revision,
                 kernel.feature_queue_revision().unwrap(),
+                kernel.emergency_pause_revision().unwrap(),
                 FeatureAbandonmentEvidence {
                     safe_reconciliation_sha256: digest("safe"),
                     merged: true,
@@ -2039,6 +2397,7 @@ fn cancellation_blocks_until_safe_abandonment_and_merged_main_is_healthy() {
             feature.feature_id,
             cancelled.lifecycle_revision,
             kernel.feature_queue_revision().unwrap(),
+            kernel.emergency_pause_revision().unwrap(),
             FeatureAbandonmentEvidence {
                 safe_reconciliation_sha256: digest("safe"),
                 merged: true,
@@ -2166,7 +2525,13 @@ fn emergency_pause_and_audit_failures_roll_back_authoritative_mutations() {
     install_audit_failure(&database, "feature_cancelled");
     assert!(matches!(
         kernel
-            .cancel_active_feature(feature.feature_id, validating.lifecycle_revision, 18)
+            .cancel_active_feature(
+                feature.feature_id,
+                validating.lifecycle_revision,
+                kernel.feature_queue_revision().unwrap(),
+                kernel.emergency_pause_revision().unwrap(),
+                18,
+            )
             .unwrap_err(),
         MasterError::Storage(_)
     ));
@@ -2177,7 +2542,13 @@ fn emergency_pause_and_audit_failures_roll_back_authoritative_mutations() {
     remove_audit_failure(&database);
 
     let cancelled = kernel
-        .cancel_active_feature(feature.feature_id, validating.lifecycle_revision, 19)
+        .cancel_active_feature(
+            feature.feature_id,
+            validating.lifecycle_revision,
+            kernel.feature_queue_revision().unwrap(),
+            kernel.emergency_pause_revision().unwrap(),
+            19,
+        )
         .unwrap();
     install_audit_failure(&database, "feature_abandoned");
     assert!(matches!(
@@ -2186,6 +2557,7 @@ fn emergency_pause_and_audit_failures_roll_back_authoritative_mutations() {
                 feature.feature_id,
                 cancelled.lifecycle_revision,
                 kernel.feature_queue_revision().unwrap(),
+                kernel.emergency_pause_revision().unwrap(),
                 FeatureAbandonmentEvidence {
                     safe_reconciliation_sha256: digest("audit-safe"),
                     merged: false,
@@ -2331,6 +2703,332 @@ fn downgrade_v5_database_to_v4(path: &std::path::Path, sabotage: bool) {
     }
 }
 
+fn remove_resolution_receipt_for_v10_fixture(
+    database: &std::path::Path,
+    feature_id: Uuid,
+    lifecycle_revision: u64,
+    legacy_cancellation_audit: bool,
+) {
+    let connection = Connection::open(database).unwrap();
+    connection
+        .execute_batch("DROP TRIGGER feature_transition_evidence_no_delete;")
+        .unwrap();
+    connection
+        .execute(
+            "DELETE FROM feature_transition_evidence
+             WHERE feature_id = ?1 AND lifecycle_revision = ?2",
+            rusqlite::params![feature_id.to_string(), lifecycle_revision as i64],
+        )
+        .unwrap();
+    connection
+        .execute_batch(
+            "CREATE TRIGGER feature_transition_evidence_no_delete
+               BEFORE DELETE ON feature_transition_evidence
+               BEGIN SELECT RAISE(ABORT, 'durable transition evidence'); END;",
+        )
+        .unwrap();
+    if legacy_cancellation_audit {
+        connection
+            .execute_batch("DROP TRIGGER feature_conveyor_audit_no_update;")
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE feature_conveyor_audit
+                 SET redacted_metadata_json = ?1
+                 WHERE event_kind = 'feature_cancelled' AND feature_id = ?2",
+                rusqlite::params![
+                    canonical_manifest(&json!({
+                        "from_status": "implementing",
+                        "to_status": "cancelled",
+                        "lifecycle_revision": lifecycle_revision,
+                        "lease_retained": true,
+                        "advancement_authorized": false,
+                        "effect_possible": true,
+                        "side_effect_executed": false
+                    })),
+                    feature_id.to_string(),
+                ],
+            )
+            .unwrap();
+        connection
+            .execute_batch(
+                "CREATE TRIGGER feature_conveyor_audit_no_update
+                   BEFORE UPDATE ON feature_conveyor_audit
+                   BEGIN SELECT RAISE(ABORT, 'append-only feature audit'); END;",
+            )
+            .unwrap();
+    }
+    connection
+        .execute_batch("PRAGMA user_version = 10;")
+        .unwrap();
+}
+
+#[test]
+fn master_process_v10_backfills_resolution_receipts_from_exact_immutable_audit() {
+    for startup_quarantine in [false, true] {
+        let directory = tempdir().unwrap();
+        let database = directory.path().join("master.sqlite3");
+        let repository_id = Uuid::new_v4();
+        let feature = specification(Uuid::new_v4(), repository_id, vec![]);
+        let resolved = {
+            let mut kernel = MasterKernel::open(&database).unwrap();
+            install_grants(&mut kernel, repository_id);
+            kernel.enqueue_approved_feature(&feature, 0, 10).unwrap();
+            let claim = claim_feature(&mut kernel, &feature, 1, 11).unwrap();
+            if startup_quarantine {
+                drop(kernel);
+                MasterKernel::open(&database)
+                    .unwrap()
+                    .feature_snapshot(feature.feature_id)
+                    .unwrap()
+            } else {
+                kernel
+                    .cancel_active_feature(
+                        feature.feature_id,
+                        claim.lifecycle_revision,
+                        kernel.feature_queue_revision().unwrap(),
+                        kernel.emergency_pause_revision().unwrap(),
+                        12,
+                    )
+                    .unwrap()
+            }
+        };
+        assert_eq!(
+            resolved.status,
+            if startup_quarantine {
+                FeatureLifecycleStatus::Quarantined
+            } else {
+                FeatureLifecycleStatus::Cancelled
+            }
+        );
+        remove_resolution_receipt_for_v10_fixture(
+            &database,
+            feature.feature_id,
+            resolved.lifecycle_revision,
+            !startup_quarantine,
+        );
+
+        let mut process = MasterProcess::acquire(directory.path()).unwrap();
+        assert_eq!(process.kernel().schema_version().unwrap(), 11);
+        let backup = process.migration_backup_path().unwrap();
+        assert!(backup
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("master.pre-v11."));
+        assert_eq!(
+            Connection::open(backup)
+                .unwrap()
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            10
+        );
+        let receipt: (String, String) = Connection::open(&database)
+            .unwrap()
+            .query_row(
+                "SELECT from_status, to_status FROM feature_transition_evidence
+                 WHERE feature_id = ?1 AND lifecycle_revision = ?2",
+                rusqlite::params![
+                    feature.feature_id.to_string(),
+                    resolved.lifecycle_revision as i64,
+                ],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(receipt.0, "implementing");
+        assert_eq!(
+            receipt.1,
+            if startup_quarantine {
+                "quarantined"
+            } else {
+                "cancelled"
+            }
+        );
+        let queue_revision = process.kernel().feature_queue_revision().unwrap();
+        let pause_revision = process.kernel().emergency_pause_revision().unwrap();
+        let abandoned = process
+            .kernel_mut()
+            .abandon_and_advance(
+                feature.feature_id,
+                resolved.lifecycle_revision,
+                queue_revision,
+                pause_revision,
+                FeatureAbandonmentEvidence {
+                    safe_reconciliation_sha256: digest("migrated-safe-reconciliation"),
+                    merged: false,
+                    verified_healthy_main_sha256: None,
+                },
+                20,
+            )
+            .unwrap();
+        assert_eq!(abandoned.status, FeatureLifecycleStatus::Abandoned);
+        assert!(abandoned.active_lease_id.is_none());
+    }
+}
+
+#[test]
+fn master_process_v10_ambiguous_resolution_audit_fails_closed_and_restores_backup() {
+    let directory = tempdir().unwrap();
+    let database = directory.path().join("master.sqlite3");
+    let repository_id = Uuid::new_v4();
+    let feature = specification(Uuid::new_v4(), repository_id, vec![]);
+    let cancelled = {
+        let mut kernel = MasterKernel::open(&database).unwrap();
+        install_grants(&mut kernel, repository_id);
+        kernel.enqueue_approved_feature(&feature, 0, 10).unwrap();
+        let claim = claim_feature(&mut kernel, &feature, 1, 11).unwrap();
+        kernel
+            .cancel_active_feature(
+                feature.feature_id,
+                claim.lifecycle_revision,
+                kernel.feature_queue_revision().unwrap(),
+                kernel.emergency_pause_revision().unwrap(),
+                12,
+            )
+            .unwrap()
+    };
+    remove_resolution_receipt_for_v10_fixture(
+        &database,
+        feature.feature_id,
+        cancelled.lifecycle_revision,
+        true,
+    );
+    let connection = Connection::open(&database).unwrap();
+    connection
+        .execute(
+            "INSERT INTO feature_conveyor_audit (
+               event_kind, feature_id, occurred_at_ms, redacted_metadata_json
+             ) SELECT event_kind, feature_id, occurred_at_ms, redacted_metadata_json
+               FROM feature_conveyor_audit
+               WHERE event_kind = 'feature_cancelled' AND feature_id = ?1",
+            [feature.feature_id.to_string()],
+        )
+        .unwrap();
+    drop(connection);
+
+    assert!(matches!(
+        MasterProcess::acquire(directory.path()),
+        Err(MasterError::InvalidStoredState(_))
+    ));
+    let restored = Connection::open(&database).unwrap();
+    assert_eq!(
+        restored
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        10
+    );
+    assert_eq!(
+        restored
+            .query_row(
+                "SELECT COUNT(*) FROM feature_transition_evidence
+                 WHERE feature_id = ?1 AND lifecycle_revision = ?2",
+                rusqlite::params![
+                    feature.feature_id.to_string(),
+                    cancelled.lifecycle_revision as i64,
+                ],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+    assert!(directory
+        .path()
+        .read_dir()
+        .unwrap()
+        .filter_map(Result::ok)
+        .any(|entry| entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with("master.pre-v11.")));
+}
+
+#[test]
+fn master_process_v10_malformed_resolution_audit_fails_closed_and_restores_backup() {
+    let directory = tempdir().unwrap();
+    let database = directory.path().join("master.sqlite3");
+    let repository_id = Uuid::new_v4();
+    let feature = specification(Uuid::new_v4(), repository_id, vec![]);
+    let cancelled = {
+        let mut kernel = MasterKernel::open(&database).unwrap();
+        install_grants(&mut kernel, repository_id);
+        kernel.enqueue_approved_feature(&feature, 0, 10).unwrap();
+        let claim = claim_feature(&mut kernel, &feature, 1, 11).unwrap();
+        kernel
+            .cancel_active_feature(
+                feature.feature_id,
+                claim.lifecycle_revision,
+                kernel.feature_queue_revision().unwrap(),
+                kernel.emergency_pause_revision().unwrap(),
+                12,
+            )
+            .unwrap()
+    };
+    remove_resolution_receipt_for_v10_fixture(
+        &database,
+        feature.feature_id,
+        cancelled.lifecycle_revision,
+        true,
+    );
+    let connection = Connection::open(&database).unwrap();
+    connection
+        .execute_batch("DROP TRIGGER feature_conveyor_audit_no_update;")
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE feature_conveyor_audit
+             SET redacted_metadata_json = ?1
+             WHERE event_kind = 'feature_cancelled' AND feature_id = ?2",
+            rusqlite::params![
+                canonical_manifest(&json!({
+                    "from_status": "implementing",
+                    "to_status": "cancelled",
+                    "lifecycle_revision": cancelled.lifecycle_revision,
+                    "lease_retained": true,
+                    "advancement_authorized": false,
+                    "effect_possible": true,
+                    "side_effect_executed": false,
+                    "unexpected_authority": true
+                })),
+                feature.feature_id.to_string(),
+            ],
+        )
+        .unwrap();
+    connection
+        .execute_batch(
+            "CREATE TRIGGER feature_conveyor_audit_no_update
+               BEFORE UPDATE ON feature_conveyor_audit
+               BEGIN SELECT RAISE(ABORT, 'append-only feature audit'); END;",
+        )
+        .unwrap();
+    drop(connection);
+
+    assert!(matches!(
+        MasterProcess::acquire(directory.path()),
+        Err(MasterError::InvalidStoredState(_))
+    ));
+    let restored = Connection::open(&database).unwrap();
+    assert_eq!(
+        restored
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        10
+    );
+    assert_eq!(
+        restored
+            .query_row(
+                "SELECT COUNT(*) FROM feature_transition_evidence
+                 WHERE feature_id = ?1 AND lifecycle_revision = ?2",
+                rusqlite::params![
+                    feature.feature_id.to_string(),
+                    cancelled.lifecycle_revision as i64,
+                ],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+}
+
 #[test]
 fn master_process_v4_backup_migration_reopen_and_restore_on_failure() {
     let directory = tempdir().unwrap();
@@ -2409,7 +3107,7 @@ fn master_process_v4_backup_migration_reopen_and_restore_on_failure() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v10.")));
+            .starts_with("master.pre-v11.")));
 }
 
 #[test]
@@ -2463,7 +3161,7 @@ fn master_process_v6_backup_migration_binds_pause_and_default_inert_owner_contro
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v10."));
+        .starts_with("master.pre-v11."));
     let backup = Connection::open(backup).unwrap();
     assert_eq!(
         backup
@@ -2537,7 +3235,7 @@ fn forward_schema_version_fails_closed_without_backup() {
     drop(MasterKernel::open(&database).unwrap());
     Connection::open(&database)
         .unwrap()
-        .execute_batch("PRAGMA user_version = 11;")
+        .execute_batch("PRAGMA user_version = 12;")
         .unwrap();
     let forward_error = match MasterProcess::acquire(directory.path()) {
         Ok(_) => panic!("forward schema unexpectedly opened"),
@@ -2547,7 +3245,7 @@ fn forward_schema_version_fails_closed_without_backup() {
         forward_error,
         MasterError::UnsupportedSchemaVersion {
             expected: MASTER_SCHEMA_VERSION,
-            found: 11
+            found: 12
         }
     ));
     assert!(!directory
@@ -2558,5 +3256,5 @@ fn forward_schema_version_fails_closed_without_backup() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v10.")));
+            .starts_with("master.pre-v11.")));
 }

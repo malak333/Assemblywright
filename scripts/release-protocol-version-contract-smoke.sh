@@ -3,16 +3,16 @@ set -euo pipefail
 
 # Cross-language protocol version contract.
 #
-# PROTOCOL_VERSION is declared independently in four places: the Rust protocol
-# crate, the Swift bridge, and both Windows-local live control planes. Nothing
+# PROTOCOL_VERSION is declared independently in five places: the Rust protocol
+# crate, the Swift bridge, and all three Windows-local live control planes. Nothing
 # derives one from another, and each language's tests only ever compare against
 # its own declaration, so a partial bump passes every suite and then fails only
 # against a live peer.
 #
 # Both halves of that failure have already shipped. Moving 1 -> 2 missed the
 # Swift constant, which surfaced as a live-device handshake rejection after mTLS
-# had already authenticated. The same bump also missed both PowerShell control
-# planes, which have no test suite at all: they kept POSTing version 1 and the
+# had already authenticated. The same bump also missed the PowerShell control
+# planes, which had no shared contract test: they kept POSTing version 1 and the
 # master answered "unsupported protocol version: expected 2, received 1" on
 # every enqueue, so the fixture and MLX live lanes could not run.
 # Moving 2 -> 3 is separately required because LocalCodingJobResult replaced
@@ -20,7 +20,7 @@ set -euo pipefail
 # evidence. A stale peer must fail at handshake instead of accepting a result
 # shape with different mutation, retention, ambiguity, and test semantics.
 #
-# This gate compares the four declarations directly, and requires the PowerShell
+# This gate compares the five declarations directly, and requires the PowerShell
 # scripts to route every request and assertion through one named variable so a
 # hardcoded literal cannot drift away from the value this check reads.
 
@@ -32,6 +32,7 @@ SWIFT_DECLARATION="apps/mac/Sources/AssemblywrightMacCore/DeveloperBridge.swift"
 POWERSHELL_DECLARATIONS=(
   "scripts/windows-fixture-live-control.ps1"
   "scripts/windows-mlx-live-control.ps1"
+  "scripts/windows-local-coding-live-control.ps1"
 )
 PROTOCOL_PROSE_FILES=(
   "README.md"

@@ -42,7 +42,7 @@ pub use identity::{
     SERVER_CERTIFICATE_LIFETIME_MS,
 };
 
-pub const MASTER_SCHEMA_VERSION: i64 = 10;
+pub const MASTER_SCHEMA_VERSION: i64 = 11;
 pub const MAX_QUEUED_OR_LEASED_STEPS: u64 = 256;
 pub const MAX_CONCURRENT_JOBS: u64 = 4;
 pub const MAX_CONVEYOR_NONTERMINAL_FEATURES: u64 = 100;
@@ -2209,11 +2209,17 @@ impl MasterKernel {
         &mut self,
         feature_id: Uuid,
         expected_lifecycle_revision: u64,
+        expected_queue_revision: u64,
+        expected_emergency_pause_revision: u64,
         now_ms: u64,
     ) -> Result<FeatureSnapshot, MasterError> {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_queue_revision_tx(&tx, expected_queue_revision)?;
+        // Owner cancellation remains available during Emergency Pause, but it
+        // must be bound to the exact pause epoch observed by the owner.
+        require_emergency_pause_revision_tx(&tx, expected_emergency_pause_revision)?;
         require_active_lease_tx(&tx, feature_id)?;
         let (status, revision) = feature_status_and_revision_tx(&tx, feature_id)?;
         if revision != expected_lifecycle_revision {
@@ -2232,6 +2238,17 @@ impl MasterKernel {
              WHERE feature_id = ?2",
             params![u64_to_i64(now_ms)?, feature_id.to_string()],
         )?;
+        tx.execute(
+            "INSERT INTO feature_transition_evidence (
+               feature_id, lifecycle_revision, from_status, to_status, recorded_at_ms
+             ) VALUES (?1, ?2, ?3, 'cancelled', ?4)",
+            params![
+                feature_id.to_string(),
+                u64_to_i64(revision + 1)?,
+                status.as_str(),
+                u64_to_i64(now_ms)?,
+            ],
+        )?;
         cancel_feature_coding_dispatches_tx(&tx, feature_id, now_ms)?;
         append_feature_audit_tx(
             &tx,
@@ -2242,6 +2259,8 @@ impl MasterKernel {
                 "from_status": status.as_str(),
                 "to_status": "cancelled",
                 "lifecycle_revision": revision + 1,
+                "queue_revision": expected_queue_revision,
+                "emergency_pause_revision": expected_emergency_pause_revision,
                 "lease_retained": true,
                 "advancement_authorized": false,
                 "effect_possible": true,
@@ -2338,6 +2357,7 @@ impl MasterKernel {
         feature_id: Uuid,
         expected_lifecycle_revision: u64,
         expected_queue_revision: u64,
+        expected_emergency_pause_revision: u64,
         evidence: FeatureAbandonmentEvidence,
         now_ms: u64,
     ) -> Result<FeatureSnapshot, MasterError> {
@@ -2366,6 +2386,9 @@ impl MasterKernel {
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         require_queue_revision_tx(&tx, expected_queue_revision)?;
+        // Resolution is permitted while paused only against the exact pause
+        // revision; it does not resume work or create a new lease.
+        require_emergency_pause_revision_tx(&tx, expected_emergency_pause_revision)?;
         require_active_lease_tx(&tx, feature_id)?;
         let (status, revision) = feature_status_and_revision_tx(&tx, feature_id)?;
         if revision != expected_lifecycle_revision {
@@ -2379,6 +2402,16 @@ impl MasterKernel {
             FeatureLifecycleStatus::Cancelled | FeatureLifecycleStatus::Quarantined
         ) {
             return Err(MasterError::InvalidFeatureTransition);
+        }
+        let resolution_origin = feature_resolution_origin_tx(&tx, feature_id, status, revision)?;
+        if resolution_origin == FeatureLifecycleStatus::VerifyingMain
+            && (!evidence.merged
+                || evidence
+                    .verified_healthy_main_sha256
+                    .filter(|digest| *digest != [0; 32])
+                    .is_none())
+        {
+            return Err(MasterError::VerifiedHealthyMainRequired);
         }
         tx.execute(
             "UPDATE feature_conveyor_features
@@ -2423,8 +2456,11 @@ impl MasterKernel {
                 "to_status": "abandoned",
                 "lifecycle_revision": revision + 1,
                 "queue_revision": next_queue_revision,
+                "emergency_pause_revision": expected_emergency_pause_revision,
                 "safe_reconciliation_digest_present": true,
                 "merged": evidence.merged,
+                "merged_required_by_durable_transition":
+                    resolution_origin == FeatureLifecycleStatus::VerifyingMain,
                 "verified_healthy_main_digest_present":
                     evidence.verified_healthy_main_sha256.is_some(),
                 "lease_released": true,
@@ -3642,7 +3678,7 @@ impl MasterKernel {
         AttemptStatus::parse(&status)
     }
 
-    fn migrate(&self) -> Result<(), MasterError> {
+    fn migrate(&mut self) -> Result<(), MasterError> {
         let version = self.schema_version()?;
         if version == 0 {
             self.connection.execute_batch(
@@ -4307,6 +4343,15 @@ impl MasterKernel {
             )?;
         }
         let version = self.schema_version()?;
+        if version == 10 {
+            let tx = self
+                .connection
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            backfill_legacy_feature_resolution_evidence_tx(&tx)?;
+            tx.execute_batch("PRAGMA user_version = 11;")?;
+            tx.commit()?;
+        }
+        let version = self.schema_version()?;
         if version != MASTER_SCHEMA_VERSION {
             return Err(MasterError::UnsupportedSchemaVersion {
                 expected: MASTER_SCHEMA_VERSION,
@@ -4354,6 +4399,17 @@ impl MasterKernel {
                         "active feature changed during startup quarantine".to_string(),
                     ));
                 }
+                tx.execute(
+                    "INSERT INTO feature_transition_evidence (
+                       feature_id, lifecycle_revision, from_status, to_status, recorded_at_ms
+                     ) VALUES (?1, ?2, ?3, 'quarantined', ?4)",
+                    params![
+                        feature_id,
+                        revision + 1,
+                        status.as_str(),
+                        u64_to_i64(now_ms)?,
+                    ],
+                )?;
                 append_feature_audit_tx(
                     &tx,
                     "feature_startup_quarantined",
@@ -6200,6 +6256,265 @@ fn feature_status_and_revision_tx(
     })
     .transpose()?
     .ok_or(MasterError::FeatureNotFound)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyFeatureCancellationAudit {
+    from_status: String,
+    to_status: String,
+    lifecycle_revision: u64,
+    #[serde(default)]
+    queue_revision: Option<u64>,
+    #[serde(default)]
+    emergency_pause_revision: Option<u64>,
+    lease_retained: bool,
+    advancement_authorized: bool,
+    effect_possible: bool,
+    side_effect_executed: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyFeatureStartupQuarantineAudit {
+    from_status: String,
+    to_status: String,
+    lifecycle_revision: u64,
+    lease_retained: bool,
+    automatic_retry_authorized: bool,
+    effect_possible: bool,
+    side_effect_executed: bool,
+}
+
+fn backfill_legacy_feature_resolution_evidence_tx(tx: &Transaction<'_>) -> Result<(), MasterError> {
+    let active = tx
+        .query_row(
+            "SELECT f.feature_id, f.status, f.lifecycle_revision
+             FROM feature_active_lease l
+             JOIN feature_conveyor_features f ON f.feature_id = l.feature_id
+             WHERE l.singleton = 1",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((feature_id, status, lifecycle_revision)) = active else {
+        return Ok(());
+    };
+    let status = FeatureLifecycleStatus::parse(&status)?;
+    if !matches!(
+        status,
+        FeatureLifecycleStatus::Cancelled | FeatureLifecycleStatus::Quarantined
+    ) {
+        return Ok(());
+    }
+    let feature_uuid = parse_uuid(&feature_id)?;
+    let lifecycle_revision = i64_to_u64(lifecycle_revision)?;
+    let receipt_exists: bool = tx.query_row(
+        "SELECT EXISTS(
+           SELECT 1 FROM feature_transition_evidence
+           WHERE feature_id = ?1 AND lifecycle_revision = ?2
+         )",
+        params![feature_id, u64_to_i64(lifecycle_revision)?],
+        |row| row.get(0),
+    )?;
+    if receipt_exists {
+        feature_resolution_origin_tx(tx, feature_uuid, status, lifecycle_revision)?;
+        return Ok(());
+    }
+
+    let event_kind = match status {
+        FeatureLifecycleStatus::Cancelled => "feature_cancelled",
+        FeatureLifecycleStatus::Quarantined => "feature_startup_quarantined",
+        _ => unreachable!("resolution status checked above"),
+    };
+    let mut statement = tx.prepare(
+        "SELECT occurred_at_ms, redacted_metadata_json
+         FROM feature_conveyor_audit
+         WHERE event_kind = ?1 AND feature_id = ?2
+         ORDER BY audit_id",
+    )?;
+    let candidates = statement
+        .query_map(params![event_kind, feature_id], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    if candidates.len() != 1 {
+        return Err(MasterError::InvalidStoredState(
+            "legacy feature resolution audit evidence is missing or ambiguous".to_string(),
+        ));
+    }
+    let (recorded_at_ms, metadata_json) = &candidates[0];
+    let from_status = match status {
+        FeatureLifecycleStatus::Cancelled => {
+            let metadata: LegacyFeatureCancellationAudit = serde_json::from_str(metadata_json)
+                .map_err(|_| {
+                    MasterError::InvalidStoredState(
+                        "legacy feature cancellation audit evidence is malformed".to_string(),
+                    )
+                })?;
+            if metadata.to_status != FeatureLifecycleStatus::Cancelled.as_str()
+                || metadata.lifecycle_revision != lifecycle_revision
+                || !metadata.lease_retained
+                || metadata.advancement_authorized
+                || !metadata.effect_possible
+                || metadata.side_effect_executed
+                || metadata.queue_revision.is_some() != metadata.emergency_pause_revision.is_some()
+            {
+                return Err(MasterError::InvalidStoredState(
+                    "legacy feature cancellation audit evidence is malformed".to_string(),
+                ));
+            }
+            metadata.from_status
+        }
+        FeatureLifecycleStatus::Quarantined => {
+            let metadata: LegacyFeatureStartupQuarantineAudit = serde_json::from_str(metadata_json)
+                .map_err(|_| {
+                    MasterError::InvalidStoredState(
+                        "legacy feature quarantine audit evidence is malformed".to_string(),
+                    )
+                })?;
+            if metadata.to_status != FeatureLifecycleStatus::Quarantined.as_str()
+                || metadata.lifecycle_revision != lifecycle_revision
+                || !metadata.lease_retained
+                || metadata.automatic_retry_authorized
+                || !metadata.effect_possible
+                || metadata.side_effect_executed
+            {
+                return Err(MasterError::InvalidStoredState(
+                    "legacy feature quarantine audit evidence is malformed".to_string(),
+                ));
+            }
+            metadata.from_status
+        }
+        _ => unreachable!("resolution status checked above"),
+    };
+    let from_status = FeatureLifecycleStatus::parse(&from_status)?;
+    if !from_status.is_active_execution() {
+        return Err(MasterError::InvalidStoredState(
+            "legacy feature resolution origin is not active execution".to_string(),
+        ));
+    }
+    tx.execute(
+        "INSERT INTO feature_transition_evidence (
+           feature_id, lifecycle_revision, from_status, to_status, recorded_at_ms
+         ) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            feature_id,
+            u64_to_i64(lifecycle_revision)?,
+            from_status.as_str(),
+            status.as_str(),
+            recorded_at_ms,
+        ],
+    )?;
+    feature_resolution_origin_tx(tx, feature_uuid, status, lifecycle_revision)?;
+    Ok(())
+}
+
+fn feature_resolution_origin_tx(
+    tx: &Transaction<'_>,
+    feature_id: Uuid,
+    resolution_status: FeatureLifecycleStatus,
+    lifecycle_revision: u64,
+) -> Result<FeatureLifecycleStatus, MasterError> {
+    let evidence = tx
+        .query_row(
+            "SELECT from_status, to_status,
+                    repository_snapshot_sha256, accepted_evidence_sha256,
+                    verified_main_commit_sha256, post_merge_evidence_sha256,
+                    safe_reconciliation_sha256, verified_healthy_main_sha256
+             FROM feature_transition_evidence
+             WHERE feature_id = ?1 AND lifecycle_revision = ?2",
+            params![feature_id.to_string(), u64_to_i64(lifecycle_revision)?,],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<Vec<u8>>>(2)?,
+                    row.get::<_, Option<Vec<u8>>>(3)?,
+                    row.get::<_, Option<Vec<u8>>>(4)?,
+                    row.get::<_, Option<Vec<u8>>>(5)?,
+                    row.get::<_, Option<Vec<u8>>>(6)?,
+                    row.get::<_, Option<Vec<u8>>>(7)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or_else(|| {
+            MasterError::InvalidStoredState(
+                "feature resolution transition evidence is missing".to_string(),
+            )
+        })?;
+    let from_status = FeatureLifecycleStatus::parse(&evidence.0)?;
+    if evidence.1 != resolution_status.as_str()
+        || !from_status.is_active_execution()
+        || evidence.2.is_some()
+        || evidence.3.is_some()
+        || evidence.4.is_some()
+        || evidence.5.is_some()
+        || evidence.6.is_some()
+        || evidence.7.is_some()
+    {
+        return Err(MasterError::InvalidStoredState(
+            "feature resolution transition evidence is malformed".to_string(),
+        ));
+    }
+    if from_status == FeatureLifecycleStatus::VerifyingMain {
+        let prior_revision = lifecycle_revision.checked_sub(1).ok_or_else(|| {
+            MasterError::InvalidStoredState(
+                "verified-main resolution evidence revision underflowed".to_string(),
+            )
+        })?;
+        let prior = tx
+            .query_row(
+                "SELECT from_status, to_status,
+                        repository_snapshot_sha256, accepted_evidence_sha256,
+                        verified_main_commit_sha256, post_merge_evidence_sha256,
+                        safe_reconciliation_sha256, verified_healthy_main_sha256
+                 FROM feature_transition_evidence
+                 WHERE feature_id = ?1 AND lifecycle_revision = ?2",
+                params![feature_id.to_string(), u64_to_i64(prior_revision)?,],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<Vec<u8>>>(2)?,
+                        row.get::<_, Option<Vec<u8>>>(3)?,
+                        row.get::<_, Option<Vec<u8>>>(4)?,
+                        row.get::<_, Option<Vec<u8>>>(5)?,
+                        row.get::<_, Option<Vec<u8>>>(6)?,
+                        row.get::<_, Option<Vec<u8>>>(7)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| {
+                MasterError::InvalidStoredState(
+                    "verified-main transition evidence is missing".to_string(),
+                )
+            })?;
+        let snapshot_digest = prior.2.as_deref().map(digest_array).transpose()?;
+        let accepted_digest = prior.3.as_deref().map(digest_array).transpose()?;
+        if prior.0 != FeatureLifecycleStatus::Publishing.as_str()
+            || prior.1 != FeatureLifecycleStatus::VerifyingMain.as_str()
+            || snapshot_digest.is_none_or(|digest| digest == [0; 32])
+            || accepted_digest.is_none_or(|digest| digest == [0; 32])
+            || prior.4.is_some()
+            || prior.5.is_some()
+            || prior.6.is_some()
+            || prior.7.is_some()
+        {
+            return Err(MasterError::InvalidStoredState(
+                "verified-main transition evidence is malformed".to_string(),
+            ));
+        }
+    }
+    Ok(from_status)
 }
 
 fn require_active_lease_tx(tx: &Transaction<'_>, feature_id: Uuid) -> Result<(), MasterError> {

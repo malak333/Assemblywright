@@ -232,7 +232,10 @@ public struct AssemblywrightMacBridgeSupervisorSnapshot: Codable, Equatable, Sen
         case errorCode = "error_code"
     }
 
-    public static func decodeStrict(_ data: Data) throws -> Self {
+    public static func decodeStrict(
+        _ data: Data,
+        localCodingSnapshotsEnabled: Bool = false
+    ) throws -> Self {
         guard !data.isEmpty,
               data.count <= AssemblywrightDeveloperBridgeProcessLifecycle.maximumLineBytes else {
             throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
@@ -249,12 +252,13 @@ public struct AssemblywrightMacBridgeSupervisorSnapshot: Codable, Equatable, Sen
               let phase = AssemblywrightMacBridgeSupervisorPhase(rawValue: phaseText) else {
             throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
         }
-        let authenticated = Set([
+        let authenticatedObservation = Set([
             "phase", "device_id", "master_endpoint", "connection_epoch",
             "consecutive_failures", "next_delay_ms", "master_status",
             "maintenance_active", "emergency_paused", "protocol_version",
             "schema_version", "feature_conveyor"
         ])
+        let authenticatedLocalCoding = authenticatedObservation.subtracting(["feature_conveyor"])
         let backingOff = Set([
             "phase", "device_id", "master_endpoint", "consecutive_failures",
             "next_delay_ms", "error_code"
@@ -265,7 +269,10 @@ public struct AssemblywrightMacBridgeSupervisorSnapshot: Codable, Equatable, Sen
         ])
         let expectedKeys: Set<String>
         switch phase {
-        case .authenticated: expectedKeys = authenticated
+        case .authenticated:
+            expectedKeys = localCodingSnapshotsEnabled
+                ? authenticatedLocalCoding
+                : authenticatedObservation
         case .backingOff: expectedKeys = backingOff
         case .stopped: expectedKeys = stopped
         }
@@ -287,14 +294,6 @@ public struct AssemblywrightMacBridgeSupervisorSnapshot: Codable, Equatable, Sen
         }
         switch snapshot.phase {
         case .authenticated:
-            guard let featureObject = object["feature_conveyor"] as? [String: Any],
-                  let featureConveyor = snapshot.featureConveyor else {
-                throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
-            }
-            try AssemblywrightMacRemoteFeatureConveyorStatus.validate(
-                featureConveyor,
-                object: featureObject
-            )
             guard snapshot.connectionEpoch.map({ $0 > 0 }) == true,
                   snapshot.consecutiveFailures == 0,
                   snapshot.nextDelayMilliseconds > 0,
@@ -308,9 +307,26 @@ public struct AssemblywrightMacBridgeSupervisorSnapshot: Codable, Equatable, Sen
                   ),
                   snapshot.protocolVersion == AssemblywrightMacMTLSBridgeTransport.protocolVersion,
                   snapshot.schemaVersion.map({ $0 > 0 }) == true,
-                  snapshot.schemaVersion == Int64(featureConveyor.schemaVersion),
                   snapshot.errorCode == nil else {
                 throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
+            }
+            if localCodingSnapshotsEnabled {
+                guard snapshot.featureConveyor == nil,
+                      object["feature_conveyor"] == nil else {
+                    throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
+                }
+            } else {
+                guard let featureObject = object["feature_conveyor"] as? [String: Any],
+                      let featureConveyor = snapshot.featureConveyor else {
+                    throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
+                }
+                try AssemblywrightMacRemoteFeatureConveyorStatus.validate(
+                    featureConveyor,
+                    object: featureObject
+                )
+                guard snapshot.schemaVersion == Int64(featureConveyor.schemaVersion) else {
+                    throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
+                }
             }
         case .backingOff:
             guard snapshot.connectionEpoch == nil,
@@ -822,6 +838,11 @@ public actor AssemblywrightMacBridgeSupervisor {
     private var consecutiveFailures: UInt32 = 0
     private var stopped = false
 
+    private enum SupervisionMode {
+        case macBridgeObservation
+        case localCodingRelay
+    }
+
     public init(
         profile: AssemblywrightMacBridgeProfile,
         connector: any AssemblywrightMacBridgeConnecting = AssemblywrightMacDefaultBridgeConnector(),
@@ -835,6 +856,10 @@ public actor AssemblywrightMacBridgeSupervisor {
     public func sample() async -> AssemblywrightMacBridgeSupervisorSnapshot {
         guard !stopped else { return stoppedSnapshot() }
         do {
+            let supervisionMode = try Self.supervisionMode(
+                for: profile,
+                eventRelayRoutingMode: eventRelay?.routingMode
+            )
             let activeSession: any AssemblywrightMacBridgeSession
             if let session {
                 activeSession = session
@@ -846,19 +871,26 @@ public actor AssemblywrightMacBridgeSupervisor {
                 AssemblywrightMacBridgeHTTPRequest(method: "GET", path: Self.healthPath)
             )
             let health = try AssemblywrightMacRemoteMasterHealth.decode(response)
-            let featureResponse = try await activeSession.send(
-                AssemblywrightMacBridgeHTTPRequest(
-                    method: "GET",
-                    path: Self.featureConveyorPath
+            let featureConveyor: AssemblywrightMacFeatureConveyorStatus?
+            switch supervisionMode {
+            case .macBridgeObservation:
+                let featureResponse = try await activeSession.send(
+                    AssemblywrightMacBridgeHTTPRequest(
+                        method: "GET",
+                        path: Self.featureConveyorPath
+                    )
                 )
-            )
-            let featureConveyor = try AssemblywrightMacRemoteFeatureConveyorStatus.decode(
-                featureResponse
-            )
-            guard health.schemaVersion == Int64(featureConveyor.schemaVersion),
-                  health.emergencyPaused
-                    == (featureConveyor.ownerGuidance.reasonCode == .emergencyPaused) else {
-                throw AssemblywrightMacRemoteFeatureConveyorStatusError.invalid
+                let decoded = try AssemblywrightMacRemoteFeatureConveyorStatus.decode(
+                    featureResponse
+                )
+                guard health.schemaVersion == Int64(decoded.schemaVersion),
+                      health.emergencyPaused
+                        == (decoded.ownerGuidance.reasonCode == .emergencyPaused) else {
+                    throw AssemblywrightMacRemoteFeatureConveyorStatusError.invalid
+                }
+                featureConveyor = decoded
+            case .localCodingRelay:
+                featureConveyor = nil
             }
             if let eventRelay {
                 let progress = try await eventRelay.relayEvents(using: activeSession)
@@ -954,6 +986,41 @@ public actor AssemblywrightMacBridgeSupervisor {
         if error is AssemblywrightMacDeveloperBridgeError { return "bridge_unavailable" }
         if error is AssemblywrightMacDeveloperEventRelayError { return "event_relay_failed" }
         return "connection_failed"
+    }
+
+    private static func supervisionMode(
+        for profile: AssemblywrightMacBridgeProfile,
+        eventRelayRoutingMode: AssemblywrightMacBridgeEventRelayRoutingMode?
+    ) throws -> SupervisionMode {
+        guard eventRelayRoutingMode != .invalid else {
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+        }
+        switch profile.role {
+        case "mac_bridge":
+            try AssemblywrightMacBridgeIdentityProfile.standard.validate(profile: profile)
+            guard eventRelayRoutingMode != .localCoding,
+                  !profile.capabilities.contains(where: isLocalCodingRelated) else {
+                throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+            }
+            return .macBridgeObservation
+        case "inference_worker":
+            try AssemblywrightMacBridgeIdentityProfile.localCoding.validate(profile: profile)
+            guard eventRelayRoutingMode == .localCoding else {
+                throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+            }
+            return .localCodingRelay
+        default:
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+        }
+    }
+
+    private static func isLocalCodingRelated(
+        _ capability: AssemblywrightMacBridgeCapability
+    ) -> Bool {
+        capability.id == "local.coding.v1"
+            || capability.kind == "local_coding"
+            || capability.provider == "assemblywright-agent"
+            || capability.model == "assemblywright-local-coding-v1"
     }
 }
 

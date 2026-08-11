@@ -173,12 +173,39 @@ sandbox or host-egress enforcement, retained worker state, canonical-repository
 mutation, integration, review, publication, queue advancement, or autonomous
 activation.
 
+Schema v11 also exposes two separate owner-token loopback-only resolution
+actions: `POST /v1/feature-conveyor/cancel-active-feature` and
+`POST /v1/feature-conveyor/abandon-and-advance`. Both accept only strict,
+bounded, path-free input and compare-and-set the exact feature, lifecycle,
+queue, and Emergency Pause revisions inside the authoritative transaction.
+Cancellation cancels any exact bound coding dispatch, retains the feature
+lease, records effect-possible state, and never advances. Abandonment accepts
+only a cancelled or quarantined retained lease, requires a nonzero safe-
+reconciliation digest and verified healthy-main evidence after any merge, then
+releases the lease and advances the queue revision. Same-transaction redacted
+audits remain authoritative. The fixed receipts contain no repository path,
+content, evidence text, credential, provider payload, or raw error. Schema v11
+requires the cancelled or quarantined retained lease to carry an
+immutable transition receipt naming its active execution origin. The
+backup-first v10 migration backfills a missing receipt only when one exact
+lifecycle-bound append-only cancellation or startup-quarantine audit event has
+the fixed redacted shape; missing, duplicate, malformed, or non-active-origin
+evidence fails closed and restores the verified v10 backup. These actions are absent
+from enrolled-device mTLS and do not resume work, approve a
+result, integrate a patch, or grant review, Git, publication, or autonomous
+activation authority.
+
 The Mac provisions this worker through a separate `local-coding` Keychain
 identity profile. Enrollment is accepted only for role `inference_worker` and
 the exact singleton `local.coding.v1` descriptor; standard and fixture profiles
 remain `mac_bridge`-only. The production helper selects the isolated profile
 only for the explicit local-coding snapshot opt-in and never reuses owner-control
-bridge authority.
+bridge authority. That exact `inference_worker` plus singleton-capability
+profile must have a production relay, authenticates and health-checks without
+requesting or emitting the MacBridge-only Feature Conveyor projection, and
+fails before connection when partial, mixed, or relayless. Standard and fixture
+MacBridge profiles continue to require strict health plus Feature Conveyor
+observation.
 
 ## Understanding Summary
 

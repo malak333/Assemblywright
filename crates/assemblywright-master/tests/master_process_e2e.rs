@@ -4,11 +4,15 @@ use assemblywright_master::{
     RepositorySnapshotEvidence, MAX_CONVEYOR_NONTERMINAL_FEATURES,
 };
 use assemblywright_protocol::{
-    CapabilityDescriptor, DeviceId, DeviceRole, FeatureConveyorGrantRevisions,
-    FeatureConveyorOwnerBridgeDesignationRequest, FeatureConveyorRepositoryGrantKind,
-    FeatureConveyorRepositoryGrantRequest, FeatureConveyorRepositoryGrantRevision,
-    FeatureConveyorRepositoryPreflightRequest, FeatureConveyorRepositoryScopeDocument,
+    CapabilityDescriptor, DeviceId, DeviceRole, FeatureConveyorAbandonAndAdvanceRequest,
+    FeatureConveyorAbandonmentEvidence, FeatureConveyorCancelActiveFeatureRequest,
+    FeatureConveyorCodingDispatchRequest, FeatureConveyorCodingWorkPacketMetadata,
+    FeatureConveyorGrantRevisions, FeatureConveyorOwnerBridgeDesignationRequest,
+    FeatureConveyorRepositoryGrantKind, FeatureConveyorRepositoryGrantRequest,
+    FeatureConveyorRepositoryGrantRevision, FeatureConveyorRepositoryPreflightRequest,
+    FeatureConveyorRepositoryScopeDocument, FeatureConveyorRepositorySnapshotClaimReceipt,
     FeatureConveyorRepositorySnapshotClaimRequest, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+    MAX_FEATURE_CONVEYOR_OWNER_RESOLUTION_REQUEST_BYTES,
     MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES, MAX_WIRE_FRAME_BYTES,
 };
 use rusqlite::Connection;
@@ -918,6 +922,389 @@ fn repository_snapshot_claim_is_authenticated_path_free_and_durable() {
 }
 
 #[test]
+fn owner_resolution_routes_are_authenticated_strict_cas_bound_and_redacted() {
+    let directory = tempdir().expect("temporary owner-resolution directory");
+    let repository = tempdir().expect("temporary owner-resolution repository");
+    let binary = env!("CARGO_BIN_EXE_assemblywright-master");
+    assert_success(&run(binary, directory.path(), ["setup"]), "setup");
+    git(repository.path(), &["init", "-b", "main"]);
+    git(
+        repository.path(),
+        &["config", "user.name", "Assemblywright Test"],
+    );
+    git(
+        repository.path(),
+        &["config", "user.email", "assemblywright@example.invalid"],
+    );
+    std::fs::write(repository.path().join("README.md"), "owner resolution\n").unwrap();
+    git(repository.path(), &["add", "README.md"]);
+    git(repository.path(), &["commit", "-m", "owner resolution"]);
+    let head = git_stdout(repository.path(), &["rev-parse", "HEAD"]);
+    let repository_id = Uuid::new_v4();
+    let scope = FeatureConveyorRepositoryScopeDocument {
+        repository_id,
+        repository_path: canonical_repository_path(repository.path())
+            .to_string_lossy()
+            .into_owned(),
+        expected_base_branch: "main".to_string(),
+        expected_head_commit: head,
+    };
+    let scope_sha256 = scope.canonical_scope_sha256().unwrap();
+    let (feature_id, coding_device) =
+        seed_owner_resolution_feature(directory.path(), repository_id, scope_sha256);
+    let endpoint = unused_loopback_addr();
+    let mut server = spawn_server(binary, directory.path(), endpoint);
+    read_ready(&mut server.child);
+    let token = std::fs::read_to_string(directory.path().join("development.token")).unwrap();
+    let token = token.trim();
+    let preflight = FeatureConveyorRepositoryPreflightRequest {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        scope: scope.clone(),
+        scope_sha256,
+        registration_grant_revision: 1,
+        expected_emergency_pause_revision: 0,
+    };
+    let preflight_response = post_request(
+        endpoint,
+        "/v1/feature-conveyor/repository-preflight",
+        Some(token),
+        &serde_json::to_string(&preflight).unwrap(),
+    );
+    assert!(
+        preflight_response.starts_with("HTTP/1.1 200 OK"),
+        "{preflight_response}"
+    );
+    let claim = FeatureConveyorRepositorySnapshotClaimRequest {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        scope,
+        scope_sha256,
+        expected_feature_id: feature_id,
+        expected_specification_revision: 1,
+        expected_queue_revision: 1,
+        expected_emergency_pause_revision: 0,
+        grants: FeatureConveyorGrantRevisions {
+            registration: 1,
+            cloud_disclosure: 1,
+            autonomous_publication: 1,
+        },
+        provider_id: "local.review".to_string(),
+        model_id: "review-v1".to_string(),
+    };
+    let claim_response = post_request(
+        endpoint,
+        "/v1/feature-conveyor/repository-snapshot-claims",
+        Some(token),
+        &serde_json::to_string(&claim).unwrap(),
+    );
+    assert!(
+        claim_response.starts_with("HTTP/1.1 200 OK"),
+        "{claim_response}"
+    );
+    let claim: FeatureConveyorRepositorySnapshotClaimReceipt =
+        serde_json::from_value(response_json(&claim_response)).unwrap();
+    let lifecycle_revision = claim.lifecycle_revision;
+    let queue_revision = claim.queue_revision;
+    let emergency_pause_revision = claim.emergency_pause_revision;
+    let dispatch = FeatureConveyorCodingDispatchRequest {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        feature_id,
+        specification_revision: claim.specification_revision,
+        expected_lifecycle_revision: lifecycle_revision,
+        feature_lease_id: claim.lease_id,
+        snapshot_id: claim.snapshot_id,
+        snapshot_sha256: claim.snapshot_sha256,
+        work_packet_sha256: Sha256::digest("owner-resolution-work-packet").into(),
+        work_packet: FeatureConveyorCodingWorkPacketMetadata {
+            packet_id: Uuid::new_v4(),
+            ordinal: 1,
+            acceptance_criteria_count: 1,
+        },
+        device_id: coding_device.device_id,
+        device_registry_revision: coding_device.registry_revision,
+        expected_queue_revision: queue_revision,
+        expected_emergency_pause_revision: emergency_pause_revision,
+    };
+    let dispatch_response = post_request(
+        endpoint,
+        "/v1/feature-conveyor/coding-dispatches",
+        Some(token),
+        &serde_json::to_string(&dispatch).unwrap(),
+    );
+    assert!(
+        dispatch_response.starts_with("HTTP/1.1 200 OK"),
+        "{dispatch_response}"
+    );
+    let cancel = FeatureConveyorCancelActiveFeatureRequest {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        feature_id,
+        expected_lifecycle_revision: lifecycle_revision,
+        expected_queue_revision: queue_revision,
+        expected_emergency_pause_revision: emergency_pause_revision,
+    };
+    let cancel_json = serde_json::to_string(&cancel).unwrap();
+
+    let unauthorized = post_request(
+        endpoint,
+        "/v1/feature-conveyor/cancel-active-feature",
+        None,
+        &cancel_json,
+    );
+    assert!(unauthorized.starts_with("HTTP/1.1 401 Unauthorized"));
+    let duplicate = cancel_json.replacen(
+        "\"feature_id\":",
+        "\"feature_id\":\"private-owner-value\",\"feature_id\":",
+        1,
+    );
+    let malformed = post_request(
+        endpoint,
+        "/v1/feature-conveyor/cancel-active-feature",
+        Some(token),
+        &duplicate,
+    );
+    assert!(malformed.starts_with("HTTP/1.1 422 Unprocessable Entity"));
+    assert_eq!(
+        response_json(&malformed),
+        serde_json::json!({"error":"feature_cancel_request_rejected"})
+    );
+    assert!(!malformed.contains("private-owner-value"));
+    let oversized = post_bytes_request(
+        endpoint,
+        "/v1/feature-conveyor/cancel-active-feature",
+        Some(token),
+        &vec![b'x'; MAX_FEATURE_CONVEYOR_OWNER_RESOLUTION_REQUEST_BYTES + 1],
+    );
+    assert!(oversized.starts_with("HTTP/1.1 422 Unprocessable Entity"));
+    assert_eq!(
+        response_json(&oversized),
+        serde_json::json!({"error":"feature_cancel_request_rejected"})
+    );
+    let mut stale_cancel = cancel;
+    stale_cancel.expected_queue_revision += 1;
+    let stale = post_request(
+        endpoint,
+        "/v1/feature-conveyor/cancel-active-feature",
+        Some(token),
+        &serde_json::to_string(&stale_cancel).unwrap(),
+    );
+    assert!(stale.starts_with("HTTP/1.1 409 Conflict"));
+    assert_eq!(
+        response_json(&stale),
+        serde_json::json!({"error":"feature_cancel_rejected"})
+    );
+
+    let cancelled = post_request(
+        endpoint,
+        "/v1/feature-conveyor/cancel-active-feature",
+        Some(token),
+        &cancel_json,
+    );
+    assert!(cancelled.starts_with("HTTP/1.1 200 OK"), "{cancelled}");
+    let cancelled_receipt = response_json(&cancelled);
+    assert_exact_object_keys(
+        &cancelled_receipt,
+        &[
+            "schema_version",
+            "feature_id",
+            "lifecycle_revision",
+            "queue_revision",
+            "emergency_pause_revision",
+            "lease_retained",
+            "advancement_authorized",
+            "status",
+        ],
+    );
+    assert_eq!(cancelled_receipt["feature_id"], feature_id.to_string());
+    assert_eq!(
+        cancelled_receipt["lifecycle_revision"],
+        lifecycle_revision + 1
+    );
+    assert_eq!(cancelled_receipt["queue_revision"], queue_revision);
+    assert_eq!(cancelled_receipt["lease_retained"], true);
+    assert_eq!(cancelled_receipt["advancement_authorized"], false);
+    assert_eq!(cancelled_receipt["status"], "cancelled");
+    let repeated_cancel = post_request(
+        endpoint,
+        "/v1/feature-conveyor/cancel-active-feature",
+        Some(token),
+        &cancel_json,
+    );
+    assert!(repeated_cancel.starts_with("HTTP/1.1 409 Conflict"));
+    assert_eq!(
+        response_json(&repeated_cancel),
+        serde_json::json!({"error":"feature_cancel_rejected"})
+    );
+
+    let mut abandon = FeatureConveyorAbandonAndAdvanceRequest {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        feature_id,
+        expected_lifecycle_revision: lifecycle_revision + 1,
+        expected_queue_revision: queue_revision,
+        expected_emergency_pause_revision: emergency_pause_revision,
+        evidence: FeatureConveyorAbandonmentEvidence {
+            safe_reconciliation_sha256: Sha256::digest("private-reconciliation-proof").into(),
+            merged: true,
+            verified_healthy_main_sha256: Some(Sha256::digest("private-healthy-main-proof").into()),
+        },
+    };
+    let mut invalid_evidence = abandon;
+    invalid_evidence.evidence.verified_healthy_main_sha256 = None;
+    let unauthorized_abandonment = post_request(
+        endpoint,
+        "/v1/feature-conveyor/abandon-and-advance",
+        None,
+        &serde_json::to_string(&abandon).unwrap(),
+    );
+    assert!(unauthorized_abandonment.starts_with("HTTP/1.1 401 Unauthorized"));
+    let duplicate_evidence = serde_json::to_string(&abandon).unwrap().replacen(
+        "\"merged\":",
+        "\"private_reason\":\"must-not-echo\",\"merged\":",
+        1,
+    );
+    let malformed_abandonment = post_request(
+        endpoint,
+        "/v1/feature-conveyor/abandon-and-advance",
+        Some(token),
+        &duplicate_evidence,
+    );
+    assert!(malformed_abandonment.starts_with("HTTP/1.1 422 Unprocessable Entity"));
+    assert_eq!(
+        response_json(&malformed_abandonment),
+        serde_json::json!({"error":"feature_abandonment_request_rejected"})
+    );
+    assert!(!malformed_abandonment.contains("must-not-echo"));
+    let oversized_abandonment = post_bytes_request(
+        endpoint,
+        "/v1/feature-conveyor/abandon-and-advance",
+        Some(token),
+        &vec![b'x'; MAX_FEATURE_CONVEYOR_OWNER_RESOLUTION_REQUEST_BYTES + 1],
+    );
+    assert!(oversized_abandonment.starts_with("HTTP/1.1 422 Unprocessable Entity"));
+    assert_eq!(
+        response_json(&oversized_abandonment),
+        serde_json::json!({"error":"feature_abandonment_request_rejected"})
+    );
+    let rejected_evidence = post_request(
+        endpoint,
+        "/v1/feature-conveyor/abandon-and-advance",
+        Some(token),
+        &serde_json::to_string(&invalid_evidence).unwrap(),
+    );
+    assert!(rejected_evidence.starts_with("HTTP/1.1 422 Unprocessable Entity"));
+    assert_eq!(
+        response_json(&rejected_evidence),
+        serde_json::json!({"error":"feature_abandonment_request_rejected"})
+    );
+    abandon.expected_emergency_pause_revision += 1;
+    let stale_abandonment = post_request(
+        endpoint,
+        "/v1/feature-conveyor/abandon-and-advance",
+        Some(token),
+        &serde_json::to_string(&abandon).unwrap(),
+    );
+    assert!(stale_abandonment.starts_with("HTTP/1.1 409 Conflict"));
+    assert_eq!(
+        response_json(&stale_abandonment),
+        serde_json::json!({"error":"feature_abandonment_rejected"})
+    );
+    abandon.expected_emergency_pause_revision = emergency_pause_revision;
+
+    let abandoned = post_request(
+        endpoint,
+        "/v1/feature-conveyor/abandon-and-advance",
+        Some(token),
+        &serde_json::to_string(&abandon).unwrap(),
+    );
+    assert!(abandoned.starts_with("HTTP/1.1 200 OK"), "{abandoned}");
+    let abandoned_receipt = response_json(&abandoned);
+    assert_exact_object_keys(
+        &abandoned_receipt,
+        &[
+            "schema_version",
+            "feature_id",
+            "lifecycle_revision",
+            "queue_revision",
+            "emergency_pause_revision",
+            "lease_released",
+            "status",
+        ],
+    );
+    assert_eq!(
+        abandoned_receipt["lifecycle_revision"],
+        lifecycle_revision + 2
+    );
+    assert_eq!(abandoned_receipt["queue_revision"], queue_revision + 1);
+    assert_eq!(abandoned_receipt["lease_released"], true);
+    assert_eq!(abandoned_receipt["status"], "abandoned");
+    for forbidden in [
+        "private",
+        "reconciliation",
+        "healthy-main",
+        "repository_path",
+    ] {
+        assert!(
+            !abandoned.contains(forbidden),
+            "owner-resolution receipt leaked {forbidden}: {abandoned}"
+        );
+    }
+    drop(server);
+
+    let connection = Connection::open(directory.path().join("master.sqlite3")).unwrap();
+    let durable: (String, i64, i64) = connection
+        .query_row(
+            "SELECT status, lifecycle_revision,
+                    (SELECT COUNT(*) FROM feature_active_lease)
+             FROM feature_conveyor_features WHERE feature_id = ?1",
+            [feature_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        durable,
+        ("abandoned".to_string(), (lifecycle_revision + 2) as i64, 0)
+    );
+    let coding_step_status: String = connection
+        .query_row(
+            "SELECT step.status
+             FROM feature_coding_dispatches dispatch
+             JOIN master_steps step ON step.step_id = dispatch.step_id
+             WHERE dispatch.feature_id = ?1",
+            [feature_id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(coding_step_status, "cancelled");
+    let mut statement = connection
+        .prepare(
+            "SELECT event_kind, redacted_metadata_json FROM feature_conveyor_audit
+             WHERE event_kind IN ('feature_cancelled', 'feature_abandoned')
+             ORDER BY audit_id",
+        )
+        .unwrap();
+    let audits = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(audits.len(), 2);
+    assert_eq!(audits[0].0, "feature_cancelled");
+    assert_eq!(audits[1].0, "feature_abandoned");
+    for (_, metadata) in audits {
+        for forbidden in [
+            feature_id.to_string(),
+            "private-reconciliation-proof".to_string(),
+            "private-healthy-main-proof".to_string(),
+        ] {
+            assert!(
+                !metadata.contains(&forbidden),
+                "audit leaked {forbidden}: {metadata}"
+            );
+        }
+    }
+}
+
+#[test]
 fn feature_conveyor_status_is_owner_authenticated_bounded_and_redacted() {
     let directory = tempdir().expect("temporary feature status directory");
     let binary = env!("CARGO_BIN_EXE_assemblywright-master");
@@ -1024,7 +1411,7 @@ fn windows_master_process_owns_state_and_completes_cross_process_fixture() {
     let setup_receipt: Value = serde_json::from_slice(&setup.stdout).expect("setup JSON receipt");
     assert_eq!(setup_receipt["status"], "setup_complete");
     assert_eq!(setup_receipt["protocol_version"], 3);
-    assert_eq!(setup_receipt["schema_version"], 10);
+    assert_eq!(setup_receipt["schema_version"], 11);
     assert!(directory.path().join("master.sqlite3").is_file());
     assert!(directory.path().join("development.token").is_file());
     let development_token = std::fs::read_to_string(directory.path().join("development.token"))
@@ -1580,6 +1967,82 @@ fn get_request(endpoint: SocketAddr, path: &str, token: Option<&str>) -> String 
     response
 }
 
+fn seed_owner_resolution_feature(
+    data_dir: &Path,
+    repository_id: Uuid,
+    registration_scope_sha256: [u8; 32],
+) -> (Uuid, DeviceRegistration) {
+    let mut process = MasterProcess::acquire(data_dir).expect("acquire owner-resolution seed");
+    for (index, kind) in [
+        RepositoryGrantKind::Registration,
+        RepositoryGrantKind::CloudDisclosure,
+        RepositoryGrantKind::AutonomousPublication,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        process
+            .kernel_mut()
+            .record_repository_grant_revision(
+                &RepositoryGrantRevision {
+                    repository_id,
+                    kind,
+                    revision: 1,
+                    scope_sha256: if kind == RepositoryGrantKind::Registration {
+                        registration_scope_sha256
+                    } else {
+                        Sha256::digest(format!("resolution-scope-{index}")).into()
+                    },
+                    owner_approval_sha256: Sha256::digest(format!("resolution-approval-{index}"))
+                        .into(),
+                    expires_at_ms: None,
+                    revoked: false,
+                },
+                0,
+                0,
+                1,
+            )
+            .unwrap();
+    }
+    let feature_id = Uuid::new_v4();
+    let manifest = serde_json::json!({"feature_id": feature_id, "outcome": "owner resolution"});
+    let canonical = format!(r#"{{"feature_id":"{feature_id}","outcome":"owner resolution"}}"#);
+    let feature = ApprovedFeatureSpecification {
+        feature_id,
+        revision: 1,
+        repository_id,
+        manifest,
+        manifest_sha256: Sha256::digest(canonical).into(),
+        design_sha256: Sha256::digest("resolution-design").into(),
+        brainstorming_sha256: Sha256::digest("resolution-brainstorming").into(),
+        owner_approval_sha256: Sha256::digest("resolution-owner-approval").into(),
+        grants: FeatureGrantRevisions {
+            registration: 1,
+            cloud_disclosure: 1,
+            autonomous_publication: 1,
+        },
+        provider_id: "local.review".to_string(),
+        model_id: "review-v1".to_string(),
+        dependencies: vec![],
+    };
+    process
+        .kernel_mut()
+        .enqueue_approved_feature(&feature, 0, 10)
+        .unwrap();
+    let coding_device = DeviceRegistration {
+        device_id: DeviceId::new(Uuid::new_v4()),
+        device_name: "owner-resolution-coding-worker".to_string(),
+        role: DeviceRole::InferenceWorker,
+        registry_revision: 1,
+        capabilities: vec![CapabilityDescriptor::local_coding()],
+    };
+    process
+        .kernel_mut()
+        .register_device(&coding_device)
+        .unwrap();
+    (feature_id, coding_device)
+}
+
 fn seed_bounded_feature_status(data_dir: &Path) {
     let mut process = MasterProcess::acquire(data_dir).expect("acquire feature status seed");
     let repository_id = Uuid::new_v4();
@@ -1673,9 +2136,17 @@ fn seed_bounded_feature_status(data_dir: &Path) {
             200,
         )
         .expect("claim status blocker");
+    let queue_revision = process.kernel().feature_queue_revision().unwrap();
+    let emergency_pause_revision = process.kernel().emergency_pause_revision().unwrap();
     process
         .kernel_mut()
-        .cancel_active_feature(claim.feature_id, claim.lifecycle_revision, 201)
+        .cancel_active_feature(
+            claim.feature_id,
+            claim.lifecycle_revision,
+            queue_revision,
+            emergency_pause_revision,
+            201,
+        )
         .expect("cancel status blocker");
     process
         .kernel_mut()

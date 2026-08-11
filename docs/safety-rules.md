@@ -156,7 +156,7 @@ release requirements, not optional UX guidance.
   a simultaneous or late result is suppressed. This lane grants no tool, file,
   repository, credential, network, Codex, Git, publication, or unattended
   authority.
-- The Windows `assemblywright-master` schema-v10 database retains the schema-v5
+- The Windows `assemblywright-master` schema-v11 database retains the schema-v5
   Durable Feature Conveyor kernel and is
   default-inert. The owner-token-authenticated loopback
   `GET /v1/feature-conveyor/status` and the dedicated enrolled-device
@@ -328,12 +328,35 @@ release requirements, not optional UX guidance.
   provider, credential or network access, canonical-repository mutation,
   integration, review, publication, queue advancement, or autonomous
   activation. It does not claim a host sandbox or host-level egress control.
+- Owner resolution is available only through the owner-token-authenticated
+  loopback `cancel-active-feature` and `abandon-and-advance` actions. Both must
+  compare-and-set the exact feature, lifecycle, queue, and Emergency Pause
+  revisions inside the state transition; a route-level precheck is not enough.
+  Cancellation must cancel exact coding dispatches, retain the feature lease,
+  set effect-possible state, and never advance. Abandonment must accept only a
+  cancelled or quarantined retained lease, require a nonzero safe-
+  reconciliation digest and verified healthy-main evidence after any merge,
+  and derive merge necessity from its immutable active-origin transition
+  receipt, then release the lease and increment the queue revision. Schema v11
+  backup-first migrates a retained v10 resolution by backfilling a missing
+  receipt only from one exact lifecycle-bound append-only audit event. Missing,
+  ambiguous, malformed, or non-active-origin evidence fails closed and restores
+  the verified v10 backup. Both may resolve an
+  exact paused epoch but must never resume work. They return only fixed path-
+  free receipts, remain absent from enrolled-device mTLS, and grant no worker,
+  repository, review, Git, publication, or activation authority.
 - Local-coding snapshot traffic must use a separate Mac `local-coding`
   Secure Enclave/Keychain namespace enrolled as `InferenceWorker` with exactly
   one `local.coding.v1` capability. It must never reuse the standard owner
   `MacBridge` or fixture identity. Standard and fixture enrollment remain
   `MacBridge`-only, local-coding capability rebind is forbidden, and selecting
   the local-coding relay profile requires the explicit default-off opt-in.
+  Before connecting, the Swift supervisor must validate the exact
+  `InferenceWorker` role, singleton capability, and production relay. That path
+  may authenticate and health-check, then relay, but must not request or emit
+  the MacBridge-only Feature Conveyor projection. Partial, mixed, drifted, or
+  relayless profiles fail before network use; standard and fixture MacBridge
+  observation remains unchanged.
 - Remote approved-feature enqueue is permitted only on
   `POST /v1/distributed/feature-conveyor/approved-features`, after a fresh
   exporter-bound application handshake is accepted and revalidated for the

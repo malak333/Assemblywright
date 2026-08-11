@@ -212,7 +212,16 @@ public struct AssemblywrightMacDeveloperEventRelayProgress: Equatable, Sendable 
     public let requiresFreshConnection: Bool
 }
 
+public enum AssemblywrightMacBridgeEventRelayRoutingMode: String, Equatable, Sendable {
+    case metadataOnly = "metadata_only"
+    case fixture
+    case mlx
+    case localCoding = "local_coding"
+    case invalid
+}
+
 public protocol AssemblywrightMacBridgeEventRelaying: Sendable {
+    var routingMode: AssemblywrightMacBridgeEventRelayRoutingMode { get }
     func relayEvents(
         using session: any AssemblywrightMacBridgeSession
     ) async throws -> AssemblywrightMacDeveloperEventRelayProgress
@@ -251,6 +260,7 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
         "/v1/distributed/feature-conveyor/snapshot-chunks"
     public static let maximumEventsPerBatch = 64
 
+    nonisolated public let routingMode: AssemblywrightMacBridgeEventRelayRoutingMode
     private let configuration: AssemblywrightMacDeveloperEventRelayConfiguration
     private let deviceID: UUID?
     private let launcher: any AssemblywrightMacDeveloperAgentLaunching
@@ -263,9 +273,31 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
         launcher: any AssemblywrightMacDeveloperAgentLaunching =
             FoundationAssemblywrightMacDeveloperAgentLauncher()
     ) {
+        routingMode = Self.routingMode(for: configuration, deviceID: deviceID)
         self.configuration = configuration
         self.deviceID = deviceID
         self.launcher = launcher
+    }
+
+    private nonisolated static func routingMode(
+        for configuration: AssemblywrightMacDeveloperEventRelayConfiguration,
+        deviceID: UUID?
+    ) -> AssemblywrightMacBridgeEventRelayRoutingMode {
+        guard (try? configuration.validatePaths()) != nil else { return .invalid }
+        let zeroDeviceID = UUID(
+            uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        )
+        let hasExactDeviceID = deviceID.map({ $0 != zeroDeviceID }) == true
+        if configuration.fixtureJobsEnabled {
+            return hasExactDeviceID ? .fixture : .invalid
+        }
+        if configuration.mlxJobsEnabled {
+            return hasExactDeviceID ? .mlx : .invalid
+        }
+        if configuration.localCodingSnapshotsEnabled {
+            return hasExactDeviceID ? .localCoding : .invalid
+        }
+        return .metadataOnly
     }
 
     public func relayEvents(

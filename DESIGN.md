@@ -59,7 +59,7 @@ accepted designs and take precedence within their scope:
 
 ### Windows master
 
-`assemblywright-master` owns durable state and every authority decision. Its schema-v10
+`assemblywright-master` owns durable state and every authority decision. Its schema-v11
 SQLite database holds two kernels:
 
 - The distributed device lifecycle: registered devices, connection epochs,
@@ -199,13 +199,37 @@ sandbox or host-level egress enforcement and adds no retained workspace,
 canonical-repository mutation, commit, integration, review, publication, queue
 advancement, or autonomous activation.
 
+Two further owner-token-authenticated loopback-only schema-v11 resolution
+routes expose the kernel's exact `cancel active feature` and `abandon and
+advance` transitions without adding a device mutation surface. Schema v11
+backup-first migrates retained schema-v10 cancelled or quarantined leases by
+backfilling their missing immutable resolution-origin receipt only from one
+exact lifecycle-bound append-only audit event; missing, ambiguous, malformed,
+or non-active-origin evidence fails closed and restores the verified v10
+backup. Their strict
+bounded requests compare-and-set the feature identity, lifecycle, queue, and
+Emergency Pause revisions inside the same immediate transaction. Cancellation
+durably cancels exact coding dispatches, retains the active feature lease,
+marks effect possible, and cannot advance. Abandonment is available only from
+cancelled or quarantined state, requires a nonzero safe-reconciliation digest
+and verified healthy-main evidence after any merge, then releases the lease and
+increments the queue revision. Both return fixed path-free receipts and remain
+absent from the enrolled-device mTLS router. Neither operation resumes work,
+creates a lease, integrates output, approves a result, or grants repository,
+review, Git, publication, or autonomous authority.
+
 The local-coding lane uses a separate `local-coding` Secure Enclave/Keychain
 identity namespace. Its enrollment profile accepts only the
 `inference_worker` role with the exact singleton `local.coding.v1` capability;
 the standard and fixture profiles remain exact `mac_bridge` identities. The
 process lifecycle selects that identity only when the local-coding snapshot
 opt-in is explicitly enabled, and capability rebind remains standard-profile
-only.
+only. The Swift supervisor validates that exact worker role/capability before
+connecting, requires the production relay, authenticates and checks health,
+then relays without requesting or emitting the MacBridge-only Feature Conveyor
+projection. Partial, mixed, or relayless worker profiles fail before network
+use. Standard and fixture MacBridge sessions retain strict health plus Feature
+Conveyor observation.
 
 Every authoritative transition commits its redacted audit event in the same
 transaction. Migrations from supported legacy schemas are backup-first under
