@@ -14,6 +14,10 @@ fail() {
 for required in \
   '"Check", "Prepare", "ClaimAndDispatch", "Cancel", "Abandon", "Cleanup"' \
   '$masterSchemaVersion = 11' \
+  '$featureConveyorProjectionSchemaVersion = 8' \
+  '$ownerControlSchemaVersion = 1' \
+  '[UInt64]$status.schema_version -ne $featureConveyorProjectionSchemaVersion' \
+  'schema_version = $ownerControlSchemaVersion' \
   'local_coding_live_control_ready' \
   '/v1/feature-conveyor/repository-grants' \
   '/v1/feature-conveyor/repository-preflight' \

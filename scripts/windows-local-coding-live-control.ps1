@@ -32,7 +32,8 @@ Set-StrictMode -Version Latest
 
 $protocolVersion = 3
 $masterSchemaVersion = 11
-$ownerControlSchemaVersion = 8
+$featureConveyorProjectionSchemaVersion = 8
+$ownerControlSchemaVersion = 1
 $uuidPattern = "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 $commitPattern = "^[0-9a-f]{40}$"
 $proofLeaf = "Assemblywright-local-coding-live-proof"
@@ -168,7 +169,7 @@ function Get-ConveyorStatus {
         "visible_feature_count", "features_truncated", "features", "owner_guidance"
     ) "Feature Conveyor status"
     if (
-        [UInt64]$status.schema_version -ne $ownerControlSchemaVersion -or
+        [UInt64]$status.schema_version -ne $featureConveyorProjectionSchemaVersion -or
         [UInt64]$status.queue_revision -ne [UInt64]$status.owner_guidance.queue_revision -or
         [UInt64]$status.owner_guidance.emergency_pause_revision -lt 0
     ) {
@@ -347,7 +348,13 @@ function Wait-ExactLocalCodingEvents {
 
 if ($Action -eq "Check") {
     $testDigest = Convert-BytesToHex (Get-Sha256Bytes "assemblywright-local-coding-live-control-check-v1")
-    if ($testDigest.Length -ne 64 -or $protocolVersion -ne 3 -or $ownerControlSchemaVersion -ne 8) {
+    if (
+        $testDigest.Length -ne 64 -or
+        $protocolVersion -ne 3 -or
+        $masterSchemaVersion -ne 11 -or
+        $featureConveyorProjectionSchemaVersion -ne 8 -or
+        $ownerControlSchemaVersion -ne 1
+    ) {
         throw "Local-coding live controller self-check failed."
     }
     '{"schema_version":1,"status":"local_coding_live_control_ready"}'

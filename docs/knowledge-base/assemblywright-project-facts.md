@@ -715,7 +715,9 @@ an old one.
   a missing retained-lease origin receipt only from one exact lifecycle-bound
   append-only cancellation or startup-quarantine audit event; missing,
   ambiguous, malformed, or non-active-origin evidence fails closed and restores
-  the verified v10 database. Their receipts are fixed and path-free. A live closeout must use
+  the verified v10 database. Their owner-control documents remain schema 1,
+  independent of the schema-v8 Feature Conveyor observation projection and the
+  schema-v11 master database. Their receipts are fixed and path-free. A live closeout must use
   these routes and prove the feature queue, lease, distributed attempt, transfer
   staging, and Mac workspace are empty; direct SQLite mutation or deleting
   state as proof remains forbidden.
