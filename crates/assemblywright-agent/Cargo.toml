@@ -19,6 +19,7 @@ axum.workspace = true
 base64.workspace = true
 clap.workspace = true
 fs2.workspace = true
+git2.workspace = true
 assemblywright-core = { path = "../assemblywright-core", version = "0.1.4" }
 assemblywright-protocol = { path = "../assemblywright-protocol", version = "0.1.4" }
 libc.workspace = true

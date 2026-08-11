@@ -155,11 +155,30 @@ distributed event, and redacted Feature Conveyor audit. The enrolled-device
 router does not expose this owner action. Remote leasing and result acceptance
 recheck the exact device, registration, feature lifecycle, feature lease,
 snapshot, queue, and pause binding; cancellation, Emergency Pause, lifecycle
-departure, or startup quarantine prevents later acceptance. The native Mac
-agent only validates the metadata-only admission envelope. No repository bytes
-or path, command, tool, process, provider, credential, patch, commit, mutation,
-integration, review, publication, queue advancement, or autonomous activation
-exists in this slice.
+departure, or startup quarantine prevents later acceptance. A separate
+default-off distributed route may then serve bounded sequential chunks of the
+immutable snapshot bundle only for that exact current attempt, lease,
+cancellation identity, snapshot ID, and snapshot digest. Authority is rechecked
+both before and after each filesystem read. The Mac bridge strictly validates
+every response and forwards it over the authenticated local socket to the
+native agent, which reconstructs the exact raw-object graph and safe regular or
+executable files in a fresh private per-attempt directory, verifies object,
+chunk, bundle, path, and aggregate digests, and immediately removes the
+materialized repository before returning a path-free
+`snapshot_materialized` receipt. Cancellation, shutdown, restart, malformed or
+out-of-order chunks, identity drift, links, duplicate/colliding/unsafe paths,
+trailing data, and digest or size drift fail closed and clean partial state. No
+repository source path, command, tool, coding process, provider, credential,
+patch, retained workspace, commit, mutation, integration, review, publication,
+queue advancement, or autonomous activation exists in this slice.
+
+The local-coding lane uses a separate `local-coding` Secure Enclave/Keychain
+identity namespace. Its enrollment profile accepts only the
+`inference_worker` role with the exact singleton `local.coding.v1` capability;
+the standard and fixture profiles remain exact `mac_bridge` identities. The
+process lifecycle selects that identity only when the local-coding snapshot
+opt-in is explicitly enabled, and capability rebind remains standard-profile
+only.
 
 Every authoritative transition commits its redacted audit event in the same
 transaction. Migrations from supported legacy schemas are backup-first under

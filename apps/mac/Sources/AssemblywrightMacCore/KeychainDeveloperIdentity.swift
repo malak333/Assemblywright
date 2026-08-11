@@ -45,6 +45,23 @@ struct AssemblywrightMacBridgeKeychainNamespace: Equatable, Sendable {
                     "com.nobiletechnology.assemblywright.developer-bridge.fixture.rebind-forbidden".utf8
                 )
             )
+        case .localCoding:
+            Self(
+                service: "com.nobiletechnology.assemblywright.developer-bridge.local-coding",
+                stagedAccount: "enrollment-staged-v1",
+                installedAccount: "identity-installed-v1",
+                certificateLabel:
+                    "com.nobiletechnology.assemblywright.developer-bridge.local-coding.identity-v1",
+                keyTag: Data(
+                    "com.nobiletechnology.assemblywright.developer-bridge.local-coding.p256-v1".utf8
+                ),
+                replacementStagedAccount: "capability-rebind-forbidden",
+                replacementCertificateLabel:
+                    "com.nobiletechnology.assemblywright.developer-bridge.local-coding.rebind-forbidden",
+                replacementKeyTag: Data(
+                    "com.nobiletechnology.assemblywright.developer-bridge.local-coding.rebind-forbidden".utf8
+                )
+            )
         }
     }
 }
@@ -209,8 +226,8 @@ public struct KeychainAssemblywrightMacBridgeIdentityStore: AssemblywrightMacBri
         }
     }
 
-    public func removeFixtureIdentity() throws {
-        guard identityProfile == .fixtureReasoning else {
+    public func removeIsolatedIdentity() throws {
+        guard identityProfile == .fixtureReasoning || identityProfile == .localCoding else {
             throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
         }
         try Self.lock.withLock {

@@ -132,11 +132,26 @@ Dispatch evidence, one existing distributed queued step and event, and a
 redacted Feature Conveyor audit commit atomically. The owner action is absent
 from the enrolled-device router. Remote lease and result acceptance fail closed
 when any bound authority changes; cancellation, Emergency Pause, lifecycle
-departure, or restart quarantine prevents later acknowledgement. The native
-agent validates the envelope but receives no repository bytes or path and runs
-no coding process. This is dispatch admission evidence only, not repository
-transport, materialization, worker execution, mutation, integration, review,
-publication, queue advancement, or autonomous activation.
+departure, or restart quarantine prevents later acknowledgement. The
+default-off snapshot-transfer lane is separate from dispatch: after the exact
+lease, the bridge requests sequential bounded chunks whose request and response
+bind the job, attempt, lease, cancellation, snapshot ID/digest, offset, total,
+chunk digest, and completion state. The master reauthorizes around every
+filesystem read. The native agent reconstructs and verifies the independent
+shallow Git snapshot in a fresh private per-attempt directory, rejects unsafe
+paths, links, duplicates, trailing bytes, object/digest drift, and then removes
+the materialized repository before returning a path-free
+`snapshot_materialized` result. This proves ephemeral repository transport and
+materialization only, not retained worker execution state, coding execution,
+mutation, integration, review, publication, queue advancement, or autonomous
+activation.
+
+The Mac provisions this worker through a separate `local-coding` Keychain
+identity profile. Enrollment is accepted only for role `inference_worker` and
+the exact singleton `local.coding.v1` descriptor; standard and fixture profiles
+remain `mac_bridge`-only. The production helper selects the isolated profile
+only for the explicit local-coding snapshot opt-in and never reuses owner-control
+bridge authority.
 
 ## Understanding Summary
 
@@ -249,12 +264,15 @@ canonical repository, master database, canonical memory, credentials, or
 unrelated files. General network access is disabled; only a narrowly controlled
 local-model connection is allowed.
 
-The implemented schema-v10 kernel reaches only the metadata admission edge of
+The implemented schema-v10 kernel reaches the ephemeral materialization edge of
 this target: one explicit owner action may queue a path-free snapshot-bound
-packet for one exact registered worker, and the native agent can validate and
-acknowledge that envelope without mutation. Snapshot transport/materialization,
-process containment, file ownership enforcement, coding execution, and result
-integration remain unimplemented.
+packet for one exact registered worker; after the exact lease, a separate
+default-off route streams a bounded authenticated snapshot bundle to the Mac
+bridge and native agent. The agent reconstructs an independent no-remote Git
+repository, verifies its object graph, paths, modes, sizes, and aggregate
+digest, and removes it before returning a non-mutation receipt. Retaining that
+workspace for a contained coding process, allowed-path mutation enforcement,
+patch/result integration, review, and publication remain unimplemented.
 
 #### Evidence Gate
 

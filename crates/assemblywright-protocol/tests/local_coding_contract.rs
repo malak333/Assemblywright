@@ -2,9 +2,10 @@ use assemblywright_protocol::{
     AttemptId, CancellationId, CapabilityDescriptor, CapabilityKind, ContextHandlingPolicy,
     DeviceId, FeatureConveyorCodingDispatchRequest, FeatureConveyorCodingWorkPacketMetadata,
     JobEnvelope, JobResultEnvelope, JobResultStatus, LeaseId, LocalCodingJobRequest,
-    LocalCodingJobResult, ProtocolError, Sensitivity, StepId, TaskId,
-    FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, LOCAL_CODING_CAPABILITY_ID, LOCAL_CODING_MODEL,
-    LOCAL_CODING_PROVIDER, MAX_FEATURE_CONVEYOR_CODING_DISPATCH_REQUEST_BYTES, PROTOCOL_VERSION,
+    LocalCodingJobResult, LocalCodingSnapshotChunk, LocalCodingSnapshotChunkRequest, ProtocolError,
+    Sensitivity, StepId, TaskId, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+    LOCAL_CODING_CAPABILITY_ID, LOCAL_CODING_MODEL, LOCAL_CODING_PROVIDER,
+    MAX_FEATURE_CONVEYOR_CODING_DISPATCH_REQUEST_BYTES, PROTOCOL_VERSION,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -30,6 +31,52 @@ fn request() -> FeatureConveyorCodingDispatchRequest {
         expected_queue_revision: 4,
         expected_emergency_pause_revision: 5,
     }
+}
+
+fn coding_job(owner: &FeatureConveyorCodingDispatchRequest) -> JobEnvelope {
+    let context = serde_json::to_value(LocalCodingJobRequest {
+        feature_id: owner.feature_id,
+        specification_revision: owner.specification_revision,
+        lifecycle_revision: owner.expected_lifecycle_revision,
+        feature_lease_id: owner.feature_lease_id,
+        snapshot_id: owner.snapshot_id,
+        snapshot_sha256: owner.snapshot_sha256,
+        work_packet_sha256: owner.work_packet_sha256,
+        work_packet: owner.work_packet.clone(),
+        device_id: owner.device_id,
+        device_registry_revision: owner.device_registry_revision,
+        queue_revision: owner.expected_queue_revision,
+        emergency_pause_revision: owner.expected_emergency_pause_revision,
+    })
+    .unwrap();
+    JobEnvelope {
+        protocol_version: PROTOCOL_VERSION,
+        connection_epoch: 1,
+        sequence: 1,
+        task_id: TaskId::new(Uuid::new_v4()),
+        step_id: StepId::new(Uuid::new_v4()),
+        attempt_id: AttemptId::new(Uuid::new_v4()),
+        lease_id: LeaseId::new(Uuid::new_v4()),
+        cancellation_id: CancellationId::new(Uuid::new_v4()),
+        capability_id: LOCAL_CODING_CAPABILITY_ID.to_string(),
+        selected_model: LOCAL_CODING_MODEL.to_string(),
+        sensitivity: Sensitivity::Workspace,
+        context_handling: ContextHandlingPolicy::EphemeralNoRetention,
+        lease_duration_ms: 60_000,
+        deadline_after_ms: 60_000,
+        context_sha256: Sha256::digest(serde_json::to_vec(&context).unwrap()).into(),
+        context,
+    }
+}
+
+fn lower_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    encoded
 }
 
 #[test]
@@ -124,39 +171,7 @@ fn owner_dispatch_is_strict_bounded_digest_bound_and_path_free() {
 #[test]
 fn coding_job_and_ack_are_exact_attempt_bound_and_forbid_mutation_claims() {
     let owner = request();
-    let context = serde_json::to_value(LocalCodingJobRequest {
-        feature_id: owner.feature_id,
-        specification_revision: owner.specification_revision,
-        lifecycle_revision: owner.expected_lifecycle_revision,
-        feature_lease_id: owner.feature_lease_id,
-        snapshot_id: owner.snapshot_id,
-        snapshot_sha256: owner.snapshot_sha256,
-        work_packet_sha256: owner.work_packet_sha256,
-        work_packet: owner.work_packet,
-        device_id: owner.device_id,
-        device_registry_revision: owner.device_registry_revision,
-        queue_revision: owner.expected_queue_revision,
-        emergency_pause_revision: owner.expected_emergency_pause_revision,
-    })
-    .unwrap();
-    let mut job = JobEnvelope {
-        protocol_version: PROTOCOL_VERSION,
-        connection_epoch: 1,
-        sequence: 1,
-        task_id: TaskId::new(Uuid::new_v4()),
-        step_id: StepId::new(Uuid::new_v4()),
-        attempt_id: AttemptId::new(Uuid::new_v4()),
-        lease_id: LeaseId::new(Uuid::new_v4()),
-        cancellation_id: CancellationId::new(Uuid::new_v4()),
-        capability_id: LOCAL_CODING_CAPABILITY_ID.to_string(),
-        selected_model: LOCAL_CODING_MODEL.to_string(),
-        sensitivity: Sensitivity::Workspace,
-        context_handling: ContextHandlingPolicy::EphemeralNoRetention,
-        lease_duration_ms: 60_000,
-        deadline_after_ms: 60_000,
-        context_sha256: Sha256::digest(serde_json::to_vec(&context).unwrap()).into(),
-        context,
-    };
+    let mut job = coding_job(&owner);
     job.validate_local_coding().unwrap();
     job.context["repository_path"] = json!("/private/repo");
     job.context_sha256 = Sha256::digest(serde_json::to_vec(&job.context).unwrap()).into();
@@ -171,9 +186,10 @@ fn coding_job_and_ack_are_exact_attempt_bound_and_forbid_mutation_claims() {
         .remove("repository_path");
     job.context_sha256 = Sha256::digest(serde_json::to_vec(&job.context).unwrap()).into();
     let payload = serde_json::to_value(LocalCodingJobResult {
-        status: "dispatch_acknowledged".to_string(),
+        status: "snapshot_materialized".to_string(),
         work_packet_sha256: owner.work_packet_sha256,
         admission_sha256: [9; 32],
+        snapshot_sha256: owner.snapshot_sha256,
         mutation_performed: false,
     })
     .unwrap();
@@ -226,4 +242,70 @@ fn coding_job_and_ack_are_exact_attempt_bound_and_forbid_mutation_claims() {
             Err(ProtocolError::InvalidLocalCodingResult)
         );
     }
+}
+
+#[test]
+fn snapshot_chunks_are_strict_sequential_digest_and_attempt_bound() {
+    let owner = request();
+    let job = coding_job(&owner);
+    let request = LocalCodingSnapshotChunkRequest {
+        protocol_version: job.protocol_version,
+        connection_epoch: job.connection_epoch,
+        task_id: job.task_id,
+        step_id: job.step_id,
+        attempt_id: job.attempt_id,
+        lease_id: job.lease_id,
+        cancellation_id: job.cancellation_id,
+        snapshot_id: owner.snapshot_id,
+        snapshot_sha256: owner.snapshot_sha256,
+        offset: 0,
+    };
+    request.validate_for_job(&job).unwrap();
+    let content = b"bounded snapshot chunk";
+    let chunk = LocalCodingSnapshotChunk {
+        protocol_version: request.protocol_version,
+        connection_epoch: request.connection_epoch,
+        task_id: request.task_id,
+        step_id: request.step_id,
+        attempt_id: request.attempt_id,
+        lease_id: request.lease_id,
+        cancellation_id: request.cancellation_id,
+        snapshot_id: request.snapshot_id,
+        snapshot_sha256: request.snapshot_sha256,
+        offset: request.offset,
+        total_bytes: content.len() as u64,
+        content_sha256: Sha256::digest(content).into(),
+        content_hex: lower_hex(content),
+        complete: true,
+    };
+    chunk.validate_for_request(&request).unwrap();
+    assert_eq!(chunk.decode_content().unwrap(), content);
+    assert_eq!(
+        LocalCodingSnapshotChunk::decode_frame(&serde_json::to_vec(&chunk).unwrap()).unwrap(),
+        chunk
+    );
+
+    let mut wrong_attempt = request.clone();
+    wrong_attempt.attempt_id = AttemptId::new(Uuid::new_v4());
+    assert_eq!(
+        wrong_attempt.validate_for_job(&job),
+        Err(ProtocolError::InvalidLocalCodingSnapshotTransfer)
+    );
+    let mut wrong_offset = chunk.clone();
+    wrong_offset.offset = 1;
+    assert!(wrong_offset.validate().is_err());
+    let mut uppercase = chunk.clone();
+    uppercase.content_hex.make_ascii_uppercase();
+    assert!(uppercase.validate().is_err());
+    let mut corrupt = chunk.clone();
+    corrupt.content_sha256 = [7; 32];
+    assert!(corrupt.validate().is_err());
+    let unknown = String::from_utf8(serde_json::to_vec(&chunk).unwrap())
+        .unwrap()
+        .replacen(
+            "\"offset\":",
+            "\"repository_path\":\"C:/private\",\"offset\":",
+            1,
+        );
+    assert!(LocalCodingSnapshotChunk::decode_frame(unknown.as_bytes()).is_err());
 }

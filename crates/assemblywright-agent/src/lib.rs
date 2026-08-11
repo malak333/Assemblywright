@@ -28,14 +28,19 @@ use tokio::process::{Child, Command};
 use tokio::sync::Notify;
 use uuid::Uuid;
 
+mod snapshot;
+pub use snapshot::{
+    LocalCodingSnapshotAcceptance, LocalCodingSnapshotError, LocalCodingSnapshotRuntime,
+};
+
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 
 pub const AGENT_SCHEMA_VERSION: i64 = 1;
 
-/// Native-agent admission for the default-off coding-dispatch kernel. This
-/// validates the exact path-free binding only; it deliberately grants no
-/// repository access, process execution, provider call, or mutation runtime.
+/// Native-agent admission for the default-off coding-dispatch kernel. Snapshot
+/// bytes remain on the separate exact-attempt transfer lane; this metadata
+/// check alone grants no repository access, process execution, or mutation.
 pub fn validate_local_coding_dispatch(
     job: &JobEnvelope,
 ) -> Result<LocalCodingJobRequest, ProtocolError> {

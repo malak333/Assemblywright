@@ -10,8 +10,8 @@ use assemblywright_master::{
 use assemblywright_protocol::{
     CapabilityDescriptor, DeviceId, DeviceRole, FeatureConveyorCodingDispatchRequest,
     FeatureConveyorCodingWorkPacketMetadata, HandshakeRequest, JobEnvelope, JobResultEnvelope,
-    JobResultStatus, LocalCodingJobResult, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
-    PROTOCOL_VERSION,
+    JobResultStatus, LocalCodingJobResult, LocalCodingSnapshotChunkRequest,
+    FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, PROTOCOL_VERSION,
 };
 use rusqlite::Connection;
 use serde_json::{json, Value};
@@ -216,9 +216,10 @@ fn coding_dispatch_request(
 fn coding_ack(job: &JobEnvelope, sequence: u64) -> JobResultEnvelope {
     let context = job.validate_local_coding().unwrap();
     let payload = serde_json::to_value(LocalCodingJobResult {
-        status: "dispatch_acknowledged".to_string(),
+        status: "snapshot_materialized".to_string(),
         work_packet_sha256: context.work_packet_sha256,
         admission_sha256: digest("coding-admission"),
+        snapshot_sha256: context.snapshot_sha256,
         mutation_performed: false,
     })
     .unwrap();
@@ -1761,7 +1762,30 @@ fn coding_dispatch_is_atomic_snapshot_device_and_revision_bound_then_cancellatio
         .lease_next_remote_step(device.device_id, epoch, 15, &contract)
         .unwrap();
     assert_eq!(job.step_id, receipt.step_id);
-    job.validate_local_coding().unwrap();
+    let coding_context = job.validate_local_coding().unwrap();
+    let transfer = LocalCodingSnapshotChunkRequest {
+        protocol_version: job.protocol_version,
+        connection_epoch: job.connection_epoch,
+        task_id: job.task_id,
+        step_id: job.step_id,
+        attempt_id: job.attempt_id,
+        lease_id: job.lease_id,
+        cancellation_id: job.cancellation_id,
+        snapshot_id: coding_context.snapshot_id,
+        snapshot_sha256: coding_context.snapshot_sha256,
+        offset: 0,
+    };
+    kernel
+        .authorize_local_coding_snapshot_chunk(device.device_id, &transfer, 15)
+        .unwrap();
+    let mut wrong_attempt = transfer.clone();
+    wrong_attempt.attempt_id = assemblywright_protocol::AttemptId::new(Uuid::new_v4());
+    assert!(kernel
+        .authorize_local_coding_snapshot_chunk(device.device_id, &wrong_attempt, 15)
+        .is_err());
+    assert!(kernel
+        .authorize_local_coding_snapshot_chunk(DeviceId::new(Uuid::new_v4()), &transfer, 15,)
+        .is_err());
     assert!(matches!(
         kernel.advance_feature_lifecycle(
             feature.feature_id,
@@ -1781,6 +1805,10 @@ fn coding_dispatch_is_atomic_snapshot_device_and_revision_bound_then_cancellatio
         kernel.attempt_status(job.attempt_id).unwrap(),
         assemblywright_master::AttemptStatus::CancellationPending
     );
+    assert!(matches!(
+        kernel.authorize_local_coding_snapshot_chunk(device.device_id, &transfer, 16),
+        Err(MasterError::FeatureCodingDispatchUnavailable)
+    ));
 }
 
 #[test]

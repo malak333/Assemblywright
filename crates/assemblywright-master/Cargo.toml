@@ -24,6 +24,7 @@ git2.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 assemblywright-protocol = { path = "../assemblywright-protocol", version = "0.1.4" }
+libc.workspace = true
 p256.workspace = true
 reqwest.workspace = true
 rcgen.workspace = true

@@ -274,12 +274,35 @@ release requirements, not optional UX guidance.
   immutable dispatch row, event, and structurally redacted audit commit
   atomically. Lease and acknowledgement acceptance recheck every binding;
   cancellation, Emergency Pause, lifecycle departure, registration drift or
-  revocation, and restart quarantine prevent later acceptance. The protocol
-  and native agent reject repository bytes or paths, commands, credentials,
-  mutation claims, and unknown fields. This metadata admission kernel grants no
-  snapshot transport/materialization, process or tool execution, provider
-  access, mutation, integration, review, publication, queue advancement, or
-  autonomous activation.
+  revocation, and restart quarantine prevent later acceptance. The metadata
+  envelope rejects repository bytes or paths, commands, credentials, mutation
+  claims, and unknown fields. After an exact current lease, a separate
+  default-off snapshot route may expose only bounded sequential chunks of the
+  immutable master-owned bundle. Every request binds the exact job, attempt,
+  lease, cancellation, snapshot ID/digest, and offset; the master must
+  reauthorize both before and after reading. The bridge and native agent must
+  reject out-of-order, duplicate, trailing, oversized, malformed,
+  identity-drifted, or digest-drifted frames. Materialization may create only a
+  fresh owner-private per-attempt directory with independent shallow Git
+  metadata, no remote or active hooks, and safe regular/executable paths;
+  links, traversal, reserved/case-colliding paths, hardlinks, and object
+  identity drift fail closed. Successful proof must remove the repository
+  before returning a path-free `snapshot_materialized` receipt; cancellation,
+  shutdown, restart, and failure remove partial state. Cancellation during
+  verification is checked between bounded object/file operations and may be
+  acknowledged only after verification stops and the attempt directory is
+  removed. Snapshot bundle reads must retain no-follow/no-reparse handles for
+  every state-directory component and the single-link bundle leaf through the
+  read. This grants no process
+  or tool execution, retained workspace, provider access, mutation,
+  integration, review, publication, queue advancement, or autonomous
+  activation.
+- Local-coding snapshot traffic must use a separate Mac `local-coding`
+  Secure Enclave/Keychain namespace enrolled as `InferenceWorker` with exactly
+  one `local.coding.v1` capability. It must never reuse the standard owner
+  `MacBridge` or fixture identity. Standard and fixture enrollment remain
+  `MacBridge`-only, local-coding capability rebind is forbidden, and selecting
+  the local-coding relay profile requires the explicit default-off opt-in.
 - Remote approved-feature enqueue is permitted only on
   `POST /v1/distributed/feature-conveyor/approved-features`, after a fresh
   exporter-bound application handshake is accepted and revalidated for the

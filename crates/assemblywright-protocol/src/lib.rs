@@ -54,6 +54,9 @@ pub const LOCAL_CODING_PROVIDER: &str = "assemblywright-agent";
 pub const LOCAL_CODING_MODEL: &str = "assemblywright-local-coding-v1";
 pub const MAX_LOCAL_CODING_CONTEXT_BYTES: usize = 8 * 1024;
 pub const MAX_LOCAL_CODING_RESULT_BYTES: usize = 32 * 1024;
+pub const MAX_LOCAL_CODING_SNAPSHOT_CHUNK_BYTES: usize = 128 * 1024;
+pub const MAX_LOCAL_CODING_SNAPSHOT_BUNDLE_BYTES: u64 = 320 * 1024 * 1024;
+pub const MAX_LOCAL_CODING_SNAPSHOT_CHUNK_FRAME_BYTES: usize = 384 * 1024;
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum ProtocolError {
@@ -131,6 +134,8 @@ pub enum ProtocolError {
     InvalidLocalCodingJob,
     #[error("local coding result must use the exact bounded metadata-only contract")]
     InvalidLocalCodingResult,
+    #[error("local coding snapshot transfer must use the exact leased-attempt contract")]
+    InvalidLocalCodingSnapshotTransfer,
     #[error("feature conveyor owner-control request is invalid")]
     InvalidFeatureConveyorOwnerControl,
 }
@@ -246,13 +251,6 @@ impl EnrollmentInvitation {
         validate_uuid("grant_id", self.grant_id)?;
         validate_uuid("device_id", self.device_id.0)?;
         validate_text("device_name", &self.device_name, MAX_DEVICE_NAME_BYTES)?;
-        if self.role != DeviceRole::MacBridge {
-            return Err(ProtocolError::UnsupportedFixedValue {
-                field: "role",
-                expected: "mac_bridge".to_string(),
-                received: "inference_worker".to_string(),
-            });
-        }
         if self.registry_revision == 0 {
             return Err(ProtocolError::InvalidLimit {
                 field: "registry_revision",
@@ -265,6 +263,19 @@ impl EnrollmentInvitation {
             });
         }
         validate_capabilities(&self.capabilities)?;
+        if self.role == DeviceRole::InferenceWorker
+            && self.capabilities.as_slice() != [CapabilityDescriptor::local_coding()]
+        {
+            return Err(ProtocolError::InvalidLocalCodingCapability);
+        }
+        if self.role == DeviceRole::MacBridge
+            && self.capabilities.iter().any(|capability| {
+                capability.id == LOCAL_CODING_CAPABILITY_ID
+                    || capability.kind == CapabilityKind::LocalCoding
+            })
+        {
+            return Err(ProtocolError::InvalidLocalCodingCapability);
+        }
         if self.expires_at_ms == 0 {
             return Err(ProtocolError::InvalidLimit {
                 field: "expires_at_ms",
@@ -1122,6 +1133,194 @@ impl LocalCodingJobRequest {
     }
 }
 
+/// Strict cursor for one bounded read from the exact snapshot assigned to an
+/// already-leased `local.coding.v1` attempt. Repository paths and bytes remain
+/// outside the job envelope and are available only through this separate pull.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalCodingSnapshotChunkRequest {
+    pub protocol_version: u16,
+    pub connection_epoch: u64,
+    pub task_id: TaskId,
+    pub step_id: StepId,
+    pub attempt_id: AttemptId,
+    pub lease_id: LeaseId,
+    pub cancellation_id: CancellationId,
+    pub snapshot_id: Uuid,
+    pub snapshot_sha256: [u8; 32],
+    pub offset: u64,
+}
+
+impl LocalCodingSnapshotChunkRequest {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "local_coding_snapshot_chunk_request",
+            frame,
+            MAX_LOCAL_CODING_CONTEXT_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_version(self.protocol_version)?;
+        validate_positive_limit("connection_epoch", self.connection_epoch, u64::MAX)?;
+        validate_uuid("task_id", self.task_id.0)?;
+        validate_uuid("step_id", self.step_id.0)?;
+        validate_uuid("attempt_id", self.attempt_id.0)?;
+        validate_uuid("lease_id", self.lease_id.0)?;
+        validate_uuid("cancellation_id", self.cancellation_id.0)?;
+        validate_uuid("snapshot_id", self.snapshot_id)?;
+        if self.snapshot_sha256 == [0; 32] || self.offset > MAX_LOCAL_CODING_SNAPSHOT_BUNDLE_BYTES {
+            return Err(ProtocolError::InvalidLocalCodingSnapshotTransfer);
+        }
+        validate_serialized_limit(
+            "local_coding_snapshot_chunk_request",
+            self,
+            MAX_LOCAL_CODING_CONTEXT_BYTES,
+        )
+    }
+
+    pub fn validate_for_job(&self, job: &JobEnvelope) -> Result<(), ProtocolError> {
+        self.validate()?;
+        let context = job.validate_local_coding()?;
+        if self.protocol_version != job.protocol_version
+            || self.connection_epoch != job.connection_epoch
+            || self.task_id != job.task_id
+            || self.step_id != job.step_id
+            || self.attempt_id != job.attempt_id
+            || self.lease_id != job.lease_id
+            || self.cancellation_id != job.cancellation_id
+            || self.snapshot_id != context.snapshot_id
+            || self.snapshot_sha256 != context.snapshot_sha256
+        {
+            return Err(ProtocolError::InvalidLocalCodingSnapshotTransfer);
+        }
+        Ok(())
+    }
+}
+
+/// One bounded, sequentially addressed portion of a deterministic snapshot
+/// bundle. Hex encoding keeps the JSON contract strict and portable without
+/// allowing arbitrary nested payload values.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalCodingSnapshotChunk {
+    pub protocol_version: u16,
+    pub connection_epoch: u64,
+    pub task_id: TaskId,
+    pub step_id: StepId,
+    pub attempt_id: AttemptId,
+    pub lease_id: LeaseId,
+    pub cancellation_id: CancellationId,
+    pub snapshot_id: Uuid,
+    pub snapshot_sha256: [u8; 32],
+    pub offset: u64,
+    pub total_bytes: u64,
+    pub content_sha256: [u8; 32],
+    pub content_hex: String,
+    pub complete: bool,
+}
+
+impl LocalCodingSnapshotChunk {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "local_coding_snapshot_chunk",
+            frame,
+            MAX_LOCAL_CODING_SNAPSHOT_CHUNK_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_version(self.protocol_version)?;
+        validate_positive_limit("connection_epoch", self.connection_epoch, u64::MAX)?;
+        validate_uuid("task_id", self.task_id.0)?;
+        validate_uuid("step_id", self.step_id.0)?;
+        validate_uuid("attempt_id", self.attempt_id.0)?;
+        validate_uuid("lease_id", self.lease_id.0)?;
+        validate_uuid("cancellation_id", self.cancellation_id.0)?;
+        validate_uuid("snapshot_id", self.snapshot_id)?;
+        if self.snapshot_sha256 == [0; 32]
+            || self.content_sha256 == [0; 32]
+            || self.total_bytes == 0
+            || self.total_bytes > MAX_LOCAL_CODING_SNAPSHOT_BUNDLE_BYTES
+            || self.offset >= self.total_bytes
+            || self.content_hex.is_empty()
+            || self.content_hex.len() % 2 != 0
+            || self.content_hex.len() / 2 > MAX_LOCAL_CODING_SNAPSHOT_CHUNK_BYTES
+            || !self
+                .content_hex
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(ProtocolError::InvalidLocalCodingSnapshotTransfer);
+        }
+        let content = self.decode_content()?;
+        let end = self
+            .offset
+            .checked_add(content.len() as u64)
+            .ok_or(ProtocolError::InvalidLocalCodingSnapshotTransfer)?;
+        if end > self.total_bytes
+            || self.complete != (end == self.total_bytes)
+            || Sha256::digest(&content).as_slice() != self.content_sha256
+        {
+            return Err(ProtocolError::InvalidLocalCodingSnapshotTransfer);
+        }
+        validate_serialized_limit(
+            "local_coding_snapshot_chunk",
+            self,
+            MAX_LOCAL_CODING_SNAPSHOT_CHUNK_FRAME_BYTES,
+        )
+    }
+
+    pub fn validate_for_request(
+        &self,
+        request: &LocalCodingSnapshotChunkRequest,
+    ) -> Result<(), ProtocolError> {
+        self.validate()?;
+        request.validate()?;
+        if self.protocol_version != request.protocol_version
+            || self.connection_epoch != request.connection_epoch
+            || self.task_id != request.task_id
+            || self.step_id != request.step_id
+            || self.attempt_id != request.attempt_id
+            || self.lease_id != request.lease_id
+            || self.cancellation_id != request.cancellation_id
+            || self.snapshot_id != request.snapshot_id
+            || self.snapshot_sha256 != request.snapshot_sha256
+            || self.offset != request.offset
+        {
+            return Err(ProtocolError::InvalidLocalCodingSnapshotTransfer);
+        }
+        Ok(())
+    }
+
+    pub fn decode_content(&self) -> Result<Vec<u8>, ProtocolError> {
+        if self.content_hex.len() % 2 != 0
+            || self.content_hex.len() / 2 > MAX_LOCAL_CODING_SNAPSHOT_CHUNK_BYTES
+        {
+            return Err(ProtocolError::InvalidLocalCodingSnapshotTransfer);
+        }
+        self.content_hex
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|pair| {
+                let high = decode_lower_hex_nibble(pair[0])?;
+                let low = decode_lower_hex_nibble(pair[1])?;
+                Ok((high << 4) | low)
+            })
+            .collect()
+    }
+}
+
+fn decode_lower_hex_nibble(byte: u8) -> Result<u8, ProtocolError> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        _ => Err(ProtocolError::InvalidLocalCodingSnapshotTransfer),
+    }
+}
+
 pub fn feature_conveyor_provider_binding_sha256(provider_id: &str, model_id: &str) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(b"assemblywright.feature-provider-binding.v1\0");
@@ -1693,14 +1892,15 @@ pub struct MlxJobResult {
     pub model: String,
 }
 
-/// Metadata-only acknowledgement for this default-off kernel slice. The agent
-/// does not receive repository material and cannot report a repository mutation.
+/// Metadata-only receipt for an exact snapshot materialization proof. The
+/// transferred repository remains ephemeral and no mutation is permitted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LocalCodingJobResult {
     pub status: String,
     pub work_packet_sha256: [u8; 32],
     pub admission_sha256: [u8; 32],
+    pub snapshot_sha256: [u8; 32],
     pub mutation_performed: bool,
 }
 
@@ -1924,9 +2124,10 @@ impl JobResultEnvelope {
         let result: LocalCodingJobResult = serde_json::from_value(self.payload.clone())
             .map_err(|_| ProtocolError::InvalidLocalCodingResult)?;
         if self.status != JobResultStatus::Completed
-            || result.status != "dispatch_acknowledged"
+            || result.status != "snapshot_materialized"
             || result.work_packet_sha256 != request.work_packet_sha256
             || result.admission_sha256 == [0; 32]
+            || result.snapshot_sha256 != request.snapshot_sha256
             || result.mutation_performed
         {
             return Err(ProtocolError::InvalidLocalCodingResult);

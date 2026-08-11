@@ -614,10 +614,24 @@ fn enrollment_pairing_documents_fail_closed_on_expiry_identity_and_bounds() {
 
     let mut wrong_role = invitation.clone();
     wrong_role.role = DeviceRole::InferenceWorker;
-    assert!(matches!(
+    assert_eq!(
         wrong_role.validate(),
-        Err(ProtocolError::UnsupportedFixedValue { field: "role", .. })
-    ));
+        Err(ProtocolError::InvalidLocalCodingCapability)
+    );
+
+    let mut local_coding_worker = invitation.clone();
+    local_coding_worker.role = DeviceRole::InferenceWorker;
+    local_coding_worker.capabilities = vec![CapabilityDescriptor::local_coding()];
+    local_coding_worker
+        .validate_at(invitation.expires_at_ms - 1)
+        .expect("exact local-coding inference worker invitation");
+
+    let mut local_coding_mac_bridge = invitation.clone();
+    local_coding_mac_bridge.capabilities = vec![CapabilityDescriptor::local_coding()];
+    assert_eq!(
+        local_coding_mac_bridge.validate(),
+        Err(ProtocolError::InvalidLocalCodingCapability)
+    );
 
     let mut empty_capabilities = invitation.clone();
     empty_capabilities.capabilities.clear();

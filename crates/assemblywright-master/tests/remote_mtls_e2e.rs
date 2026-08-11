@@ -12,7 +12,8 @@ use assemblywright_protocol::{
     FeatureConveyorGrantRevisions, FeatureConveyorRepositoryScopeDocument,
     FeatureConveyorRepositorySnapshotClaimReceipt, FeatureConveyorRepositorySnapshotClaimRequest,
     HandshakeRequest, HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope,
-    JobResultStatus, LocalCodingJobResult, Sensitivity, StepId, TaskId,
+    JobResultStatus, LocalCodingJobResult, LocalCodingSnapshotChunk,
+    LocalCodingSnapshotChunkRequest, Sensitivity, StepId, TaskId,
     FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, PROTOCOL_VERSION,
 };
 use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
@@ -1061,12 +1062,73 @@ async fn remote_local_coding_dispatch_is_exporter_bound_exact_and_pause_dominant
         first_context.work_packet_sha256,
         first_dispatch.work_packet_sha256
     );
+    let mut snapshot_chunk_request = LocalCodingSnapshotChunkRequest {
+        protocol_version: first_job.protocol_version,
+        connection_epoch: first_job.connection_epoch,
+        task_id: first_job.task_id,
+        step_id: first_job.step_id,
+        attempt_id: first_job.attempt_id,
+        lease_id: first_job.lease_id,
+        cancellation_id: first_job.cancellation_id,
+        snapshot_id: first_context.snapshot_id,
+        snapshot_sha256: first_context.snapshot_sha256,
+        offset: 0,
+    };
+    let mut snapshot_bundle = Vec::new();
+    loop {
+        let snapshot_chunk_response = send_http_keep_alive(
+            &mut coding_stream,
+            remote_endpoint,
+            "POST",
+            "/v1/distributed/feature-conveyor/snapshot-chunks",
+            &serde_json::to_vec(&snapshot_chunk_request).expect("serialize snapshot chunk request"),
+        )
+        .await
+        .expect("read exact leased snapshot chunk");
+        assert!(
+            snapshot_chunk_response.starts_with("HTTP/1.1 200 OK"),
+            "{snapshot_chunk_response}"
+        );
+        let snapshot_chunk: LocalCodingSnapshotChunk = response_json(&snapshot_chunk_response);
+        snapshot_chunk
+            .validate_for_request(&snapshot_chunk_request)
+            .expect("strict response remains exact-attempt bound");
+        let content = snapshot_chunk.decode_content().unwrap();
+        assert!(!content.is_empty());
+        snapshot_bundle.extend_from_slice(&content);
+        if snapshot_chunk.complete {
+            break;
+        }
+        snapshot_chunk_request.offset += content.len() as u64;
+    }
+    assert!(snapshot_bundle.starts_with(b"AW-SNAPSHOT-BUNDLE-V1\n"));
+    assert_eq!(
+        &snapshot_bundle[snapshot_bundle.len() - 32..],
+        first_context.snapshot_sha256.as_slice()
+    );
+
+    let mut wrong_snapshot_attempt = snapshot_chunk_request.clone();
+    wrong_snapshot_attempt.attempt_id = assemblywright_protocol::AttemptId::new(Uuid::new_v4());
+    let wrong_snapshot_response = send_http_keep_alive(
+        &mut coding_stream,
+        remote_endpoint,
+        "POST",
+        "/v1/distributed/feature-conveyor/snapshot-chunks",
+        &serde_json::to_vec(&wrong_snapshot_attempt).expect("serialize wrong snapshot attempt"),
+    )
+    .await
+    .expect("reject wrong snapshot attempt");
+    assert!(
+        wrong_snapshot_response.starts_with("HTTP/1.1 409 Conflict"),
+        "{wrong_snapshot_response}"
+    );
 
     let result_for = |job: &JobEnvelope, packet_sha256, sequence| {
         let payload = serde_json::to_value(LocalCodingJobResult {
-            status: "dispatch_acknowledged".to_string(),
+            status: "snapshot_materialized".to_string(),
             work_packet_sha256: packet_sha256,
             admission_sha256: Sha256::digest(b"coding-admission").into(),
+            snapshot_sha256: job.validate_local_coding().unwrap().snapshot_sha256,
             mutation_performed: false,
         })
         .expect("serialize coding acknowledgement payload");

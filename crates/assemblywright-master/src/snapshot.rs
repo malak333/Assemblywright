@@ -1,10 +1,8 @@
 use git2::{ObjectType, Odb, Oid, Repository};
 use sha2::{Digest, Sha256};
 use std::collections::{HashSet, VecDeque};
-#[cfg(not(windows))]
-use std::fs::File;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use uuid::Uuid;
 
@@ -12,6 +10,10 @@ const MAX_SNAPSHOT_OBJECTS: usize = 50_000;
 const MAX_SNAPSHOT_OBJECT_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_SNAPSHOT_FILE_BYTES: usize = 32 * 1024 * 1024;
 const MAX_SNAPSHOT_PATH_BYTES: usize = 1024;
+const MAX_SNAPSHOT_BUNDLE_BYTES: u64 = 320 * 1024 * 1024;
+const SNAPSHOT_BUNDLE_FILE: &str = "assemblywright-snapshot-v1.bundle";
+const SNAPSHOT_BUNDLE_MAGIC: &[u8] = b"AW-SNAPSHOT-BUNDLE-V1\n";
+const SNAPSHOT_BUNDLE_END_MAGIC: &[u8] = b"AW-SNAPSHOT-END-V1\n";
 
 #[derive(Debug, thiserror::Error)]
 pub enum RepositorySnapshotError {
@@ -48,6 +50,13 @@ impl Drop for PreparedRepositorySnapshot {
 #[derive(Debug, Clone)]
 pub struct RepositorySnapshotStore {
     root: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepositorySnapshotChunkData {
+    pub offset: u64,
+    pub total_bytes: u64,
+    pub content: Vec<u8>,
 }
 
 impl RepositorySnapshotStore {
@@ -100,6 +109,15 @@ impl RepositorySnapshotStore {
             &mut digest,
             &mut seen_paths,
         )?;
+        let snapshot_sha256: [u8; 32] = digest.clone().finalize().into();
+        write_snapshot_transfer_bundle(
+            &source_odb,
+            commit_oid,
+            tree_oid,
+            &snapshot_path.join(".git").join(SNAPSHOT_BUNDLE_FILE),
+            expected_commit,
+            snapshot_sha256,
+        )?;
         write_snapshot_repository_metadata(&repository, expected_commit, tree_oid)?;
         // Close libgit2 handles before flushing the object files on Windows;
         // its open ODB handles do not share the write access required by
@@ -116,7 +134,7 @@ impl RepositorySnapshotStore {
         )?;
         Ok(PreparedRepositorySnapshot {
             snapshot_id,
-            snapshot_sha256: digest.finalize().into(),
+            snapshot_sha256,
             base_commit: expected_commit.to_string(),
             path: Some(snapshot_path),
         })
@@ -129,6 +147,185 @@ impl RepositorySnapshotStore {
         cleanup_uuid_children(&self.root.join("staging"), &HashSet::new())?;
         cleanup_uuid_children(&self.root.join("snapshots"), referenced)
     }
+
+    pub fn read_bundle_chunk(
+        &self,
+        snapshot_id: Uuid,
+        offset: u64,
+        maximum_bytes: usize,
+    ) -> Result<RepositorySnapshotChunkData, RepositorySnapshotError> {
+        if snapshot_id.is_nil() || maximum_bytes == 0 || maximum_bytes > 128 * 1024 {
+            return Err(RepositorySnapshotError::Rejected);
+        }
+        let mut bundle = open_snapshot_bundle(&self.root, snapshot_id)?;
+        let file = &mut bundle.file;
+        let metadata = file.metadata()?;
+        let total_bytes = metadata.len();
+        if total_bytes == 0 || total_bytes > MAX_SNAPSHOT_BUNDLE_BYTES || offset >= total_bytes {
+            return Err(RepositorySnapshotError::Rejected);
+        }
+        let remaining = usize::try_from((total_bytes - offset).min(maximum_bytes as u64))
+            .map_err(|_| RepositorySnapshotError::Rejected)?;
+        file.seek(SeekFrom::Start(offset))?;
+        let mut content = vec![0; remaining];
+        file.read_exact(&mut content)?;
+        Ok(RepositorySnapshotChunkData {
+            offset,
+            total_bytes,
+            content,
+        })
+    }
+}
+
+struct OpenSnapshotBundle {
+    file: File,
+    _directory_handles: Vec<File>,
+}
+
+#[cfg(unix)]
+fn open_snapshot_bundle(
+    root: &Path,
+    snapshot_id: Uuid,
+) -> Result<OpenSnapshotBundle, RepositorySnapshotError> {
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+
+    let root_handle = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(root)?;
+    if !root_handle.metadata()?.is_dir() {
+        return Err(RepositorySnapshotError::Rejected);
+    }
+    let mut directory_handles = vec![root_handle];
+    for component in [
+        "snapshots".to_string(),
+        snapshot_id.to_string(),
+        ".git".to_string(),
+    ] {
+        let name = CString::new(component).map_err(|_| RepositorySnapshotError::Rejected)?;
+        let parent = directory_handles
+            .last()
+            .ok_or(RepositorySnapshotError::Rejected)?;
+        // SAFETY: `parent` is a live directory descriptor and `name` is a
+        // NUL-terminated single component. The returned descriptor is uniquely
+        // owned by the constructed `File`.
+        let descriptor = unsafe {
+            libc::openat(
+                parent.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if descriptor < 0 {
+            return Err(RepositorySnapshotError::Io(std::io::Error::last_os_error()));
+        }
+        // SAFETY: `descriptor` is a fresh successful `openat` result.
+        let handle = unsafe { File::from_raw_fd(descriptor) };
+        if !handle.metadata()?.is_dir() {
+            return Err(RepositorySnapshotError::Rejected);
+        }
+        directory_handles.push(handle);
+    }
+    let name = CString::new(SNAPSHOT_BUNDLE_FILE).expect("fixed bundle file name");
+    let parent = directory_handles
+        .last()
+        .ok_or(RepositorySnapshotError::Rejected)?;
+    // SAFETY: the parent descriptor and fixed NUL-terminated component remain
+    // live for the call; the returned descriptor is uniquely owned below.
+    let descriptor = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if descriptor < 0 {
+        return Err(RepositorySnapshotError::Io(std::io::Error::last_os_error()));
+    }
+    // SAFETY: `descriptor` is a fresh successful `openat` result.
+    let file = unsafe { File::from_raw_fd(descriptor) };
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || metadata.nlink() != 1 {
+        return Err(RepositorySnapshotError::Rejected);
+    }
+    Ok(OpenSnapshotBundle {
+        file,
+        _directory_handles: directory_handles,
+    })
+}
+
+#[cfg(windows)]
+fn open_snapshot_bundle(
+    root: &Path,
+    snapshot_id: Uuid,
+) -> Result<OpenSnapshotBundle, RepositorySnapshotError> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+
+    let snapshots = root.join("snapshots");
+    let snapshot = snapshots.join(snapshot_id.to_string());
+    let git = snapshot.join(".git");
+    let mut directory_handles = Vec::with_capacity(4);
+    for directory in [root.to_path_buf(), snapshots, snapshot, git.clone()] {
+        let handle = OpenOptions::new()
+            .access_mode(FILE_READ_ATTRIBUTES)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS)
+            .open(&directory)?;
+        let information = windows_file_information(&handle)?;
+        if information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0
+            || information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        {
+            return Err(RepositorySnapshotError::Rejected);
+        }
+        directory_handles.push(handle);
+    }
+    let path = git.join(SNAPSHOT_BUNDLE_FILE);
+    let file = OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)?;
+    let information = windows_file_information(&file)?;
+    if information.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) != 0
+        || information.nNumberOfLinks != 1
+    {
+        return Err(RepositorySnapshotError::Rejected);
+    }
+    Ok(OpenSnapshotBundle {
+        file,
+        _directory_handles: directory_handles,
+    })
+}
+
+#[cfg(windows)]
+fn windows_file_information(
+    file: &File,
+) -> Result<
+    windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION,
+    RepositorySnapshotError,
+> {
+    use std::mem::MaybeUninit;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+
+    let mut information = MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::zeroed();
+    // SAFETY: `file` owns a live handle and `information` points to writable
+    // storage for the duration of the call.
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, information.as_mut_ptr()) }
+        == 0
+    {
+        return Err(RepositorySnapshotError::Io(std::io::Error::last_os_error()));
+    }
+    // SAFETY: the successful API call initialized every field.
+    Ok(unsafe { information.assume_init() })
 }
 
 struct SnapshotCleanup(Option<PathBuf>);
@@ -288,6 +485,146 @@ fn materialize_tree(
         digest.update((blob.data().len() as u64).to_be_bytes());
         digest.update(blob.data());
     }
+    Ok(())
+}
+
+fn write_snapshot_transfer_bundle(
+    odb: &Odb<'_>,
+    commit_oid: Oid,
+    tree_oid: Oid,
+    path: &Path,
+    expected_commit: &str,
+    snapshot_sha256: [u8; 32],
+) -> Result<(), RepositorySnapshotError> {
+    let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+    let mut written = 0_u64;
+    write_bounded_bundle(&mut file, SNAPSHOT_BUNDLE_MAGIC, &mut written)?;
+    write_bounded_bundle(&mut file, expected_commit.as_bytes(), &mut written)?;
+
+    write_bundle_object(odb, commit_oid, ObjectType::Commit, &mut file, &mut written)?;
+    let mut pending = VecDeque::from([(tree_oid, ObjectType::Tree)]);
+    let mut copied = HashSet::from([commit_oid]);
+    while let Some((oid, expected_kind)) = pending.pop_front() {
+        if !copied.insert(oid) {
+            continue;
+        }
+        if copied.len() > MAX_SNAPSHOT_OBJECTS {
+            return Err(RepositorySnapshotError::Rejected);
+        }
+        let data = write_bundle_object(odb, oid, expected_kind, &mut file, &mut written)?;
+        if expected_kind == ObjectType::Tree {
+            for entry in parse_tree(&data)? {
+                pending.push_back((
+                    entry.oid,
+                    if entry.mode == 0o040000 {
+                        ObjectType::Tree
+                    } else if matches!(entry.mode, 0o100644 | 0o100755) {
+                        ObjectType::Blob
+                    } else {
+                        return Err(RepositorySnapshotError::Rejected);
+                    },
+                ));
+            }
+        }
+    }
+    write_bounded_bundle(&mut file, &[0], &mut written)?;
+
+    let mut seen_paths = HashSet::new();
+    write_bundle_file_manifest(
+        odb,
+        tree_oid,
+        Path::new(""),
+        &mut seen_paths,
+        &mut file,
+        &mut written,
+    )?;
+    write_bounded_bundle(&mut file, &[0], &mut written)?;
+    write_bounded_bundle(&mut file, SNAPSHOT_BUNDLE_END_MAGIC, &mut written)?;
+    write_bounded_bundle(&mut file, &snapshot_sha256, &mut written)?;
+    file.sync_all()?;
+    Ok(())
+}
+
+fn write_bundle_object(
+    odb: &Odb<'_>,
+    oid: Oid,
+    expected_kind: ObjectType,
+    file: &mut File,
+    written: &mut u64,
+) -> Result<Vec<u8>, RepositorySnapshotError> {
+    let declared_size = checked_object_header(odb, oid, expected_kind)?;
+    let object = odb.read(oid)?;
+    if object.kind() != expected_kind || object.data().len() != declared_size {
+        return Err(RepositorySnapshotError::Rejected);
+    }
+    let kind = match expected_kind {
+        ObjectType::Commit => 1,
+        ObjectType::Tree => 2,
+        ObjectType::Blob => 3,
+        _ => return Err(RepositorySnapshotError::Rejected),
+    };
+    write_bounded_bundle(file, &[1, kind], written)?;
+    write_bounded_bundle(file, oid.as_bytes(), written)?;
+    write_bounded_bundle(file, &(declared_size as u64).to_be_bytes(), written)?;
+    write_bounded_bundle(file, object.data(), written)?;
+    Ok(object.data().to_vec())
+}
+
+fn write_bundle_file_manifest(
+    odb: &Odb<'_>,
+    tree_oid: Oid,
+    relative: &Path,
+    seen_paths: &mut HashSet<String>,
+    file: &mut File,
+    written: &mut u64,
+) -> Result<(), RepositorySnapshotError> {
+    let declared_size = checked_object_header(odb, tree_oid, ObjectType::Tree)?;
+    let object = odb.read(tree_oid)?;
+    if object.kind() != ObjectType::Tree || object.data().len() != declared_size {
+        return Err(RepositorySnapshotError::Rejected);
+    }
+    for entry in parse_tree(object.data())? {
+        let name = validate_tree_name(&entry.name)?;
+        let child_relative = relative.join(name);
+        validate_snapshot_relative_path(&child_relative, seen_paths)?;
+        if entry.mode == 0o040000 {
+            write_bundle_file_manifest(odb, entry.oid, &child_relative, seen_paths, file, written)?;
+            continue;
+        }
+        if !matches!(entry.mode, 0o100644 | 0o100755) {
+            return Err(RepositorySnapshotError::Rejected);
+        }
+        let declared_size = checked_object_header(odb, entry.oid, ObjectType::Blob)?;
+        let path = child_relative
+            .to_str()
+            .ok_or(RepositorySnapshotError::Rejected)?
+            .replace('\\', "/");
+        let path_bytes = path.as_bytes();
+        let path_length =
+            u16::try_from(path_bytes.len()).map_err(|_| RepositorySnapshotError::Rejected)?;
+        write_bounded_bundle(file, &[1], written)?;
+        write_bounded_bundle(file, &path_length.to_be_bytes(), written)?;
+        write_bounded_bundle(file, path_bytes, written)?;
+        write_bounded_bundle(file, &entry.mode.to_be_bytes(), written)?;
+        write_bounded_bundle(file, entry.oid.as_bytes(), written)?;
+        write_bounded_bundle(file, &(declared_size as u64).to_be_bytes(), written)?;
+    }
+    Ok(())
+}
+
+fn write_bounded_bundle(
+    file: &mut File,
+    bytes: &[u8],
+    written: &mut u64,
+) -> Result<(), RepositorySnapshotError> {
+    let next = written
+        .checked_add(bytes.len() as u64)
+        .ok_or(RepositorySnapshotError::Rejected)?;
+    if next > MAX_SNAPSHOT_BUNDLE_BYTES {
+        return Err(RepositorySnapshotError::Rejected);
+    }
+    file.write_all(bytes)?;
+    *written = next;
     Ok(())
 }
 
@@ -702,6 +1039,44 @@ mod tests {
         assert!(!config.contains(source.path().to_string_lossy().as_ref()));
         assert!(!config.contains("remote"));
         assert_ne!(prepared.snapshot_sha256, [0; 32]);
+        #[cfg(unix)]
+        {
+            let hardlink = data.path().join("bundle-hardlink");
+            fs::hard_link(
+                snapshot_path.join(".git").join(SNAPSHOT_BUNDLE_FILE),
+                &hardlink,
+            )
+            .unwrap();
+            assert!(store
+                .read_bundle_chunk(prepared.snapshot_id, 0, 17)
+                .is_err());
+            fs::remove_file(hardlink).unwrap();
+        }
+        let mut offset = 0_u64;
+        let mut bundle = Vec::new();
+        loop {
+            let chunk = store
+                .read_bundle_chunk(prepared.snapshot_id, offset, 17)
+                .unwrap();
+            assert_eq!(chunk.offset, offset);
+            assert!(chunk.content.len() <= 17);
+            bundle.extend_from_slice(&chunk.content);
+            offset += chunk.content.len() as u64;
+            if offset == chunk.total_bytes {
+                break;
+            }
+        }
+        assert!(bundle.starts_with(SNAPSHOT_BUNDLE_MAGIC));
+        assert_eq!(
+            &bundle[bundle.len() - 32..],
+            prepared.snapshot_sha256.as_slice()
+        );
+        assert!(bundle
+            .windows(SNAPSHOT_BUNDLE_END_MAGIC.len())
+            .any(|window| window == SNAPSHOT_BUNDLE_END_MAGIC));
+        assert!(store
+            .read_bundle_chunk(prepared.snapshot_id, offset, 17)
+            .is_err());
         drop(snapshot_repository);
         drop(prepared);
         assert!(!snapshot_path.exists());

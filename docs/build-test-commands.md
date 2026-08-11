@@ -68,8 +68,8 @@ swift build --disable-sandbox --package-path apps/mac
 
 ## Windows Distributed Gate
 
-The schema-v9 snapshot-claim and schema-v10 metadata coding-dispatch slices
-have focused portable coverage:
+The schema-v9 snapshot-claim and schema-v10 coding-dispatch plus ephemeral
+snapshot-transfer/materialization slices have focused portable coverage:
 
 ```sh
 cargo test -p assemblywright-protocol --test protocol_contract repository_snapshot_claim_contract_is_strict_exact_and_path_free_on_receipt
@@ -83,7 +83,10 @@ cargo test -p assemblywright-master --test feature_conveyor_kernel coding_dispat
 cargo test -p assemblywright-master --test feature_conveyor_kernel emergency_pause_cancels_coding_attempt_and_resume_rejects_pre_pause_acknowledgement
 cargo test -p assemblywright-master --test feature_conveyor_kernel terminal_coding_ack_allows_validation_and_lifecycle_change_invalidates_replay
 cargo test -p assemblywright-agent --test local_coding_admission
+cargo test -p assemblywright-agent snapshot::tests
+cargo test -p assemblywright-agent --test local_relay_e2e authenticated_uds_local_coding_snapshot_admission_cancellation_and_restart_cleanup -- --nocapture
 cargo test -p assemblywright-master --test remote_mtls_e2e remote_local_coding_dispatch_is_exporter_bound_exact_and_pause_dominant -- --nocapture
+swift test --disable-sandbox --package-path apps/mac --filter DeveloperBridgeTests
 ```
 
 The portable real-process route test proves authentication, path-free response,
@@ -135,11 +138,12 @@ executable changes as release evidence.
 | Swift strict Feature Conveyor observer, one-shot owner action, and helper lifecycle | `swift test --disable-sandbox --package-path apps/mac --filter DeveloperBridgeTests` |
 | Enrollment, two-phase capability rebind, and identity | `cargo test -p assemblywright-master --test enrollment_identity_e2e` |
 | Remote mTLS | `cargo test -p assemblywright-master --test remote_mtls_e2e` |
-| Windows snapshot-bound coding dispatch mTLS/process E2E | `cargo test -p assemblywright-master --test remote_mtls_e2e remote_local_coding_dispatch_is_exporter_bound_exact_and_pause_dominant -- --nocapture` |
+| Windows snapshot-bound coding dispatch and bounded transfer mTLS/process E2E | `cargo test -p assemblywright-master --test remote_mtls_e2e remote_local_coding_dispatch_is_exporter_bound_exact_and_pause_dominant -- --nocapture` |
 | Event cursor | `cargo test -p assemblywright-master --test event_cursor_e2e` |
 | Windows service lifecycle | `cargo test -p assemblywright-master --test windows_service_lifecycle_e2e -- --ignored` |
 | Mac agent relay | `cargo test -p assemblywright-agent --test local_relay_e2e` |
 | Native metadata-only coding admission | `cargo test -p assemblywright-agent --test local_coding_admission` |
+| Native ephemeral snapshot materialization and cleanup | `cargo test -p assemblywright-agent snapshot::tests` |
 | Local transport and release | `cargo test -p assemblywright-core` |
 | Readiness protocol proof unit | `cargo test -p assemblywright-core protocol_readiness_proof_is_version_independent` |
 | CLI naming contract E2E | `cargo test -p assemblywright-cli --test naming_contract_e2e` |
@@ -270,9 +274,15 @@ Deterministic cross-process coverage proves:
   snapshot ID/digest, queue and Emergency Pause binding, atomic queued-step/
   immutable-row/event/audit creation, audit rollback, owner authentication,
   enrolled-device route absence, cancellation dominance, lifecycle blocking,
-  and restart quarantine. Native-agent coverage validates admission without
-  repository material or execution. It does not prove snapshot transport,
-  coding runtime containment, mutation, or integration.
+  and restart quarantine. Snapshot-transfer coverage additionally proves exact
+  post-lease authorization around bounded filesystem reads, strict sequential
+  chunk identity/digests, and a deterministic bounded raw-object bundle. Swift
+  fake-session coverage proves strict bridge ordering and cancellation, while
+  separate real-process UDS coverage proves native-agent admission and cleanup;
+  agent library coverage reconstructs and validates an independent private
+  no-remote shallow Git repository. These are three bounded native seams, not a
+  combined live Windows-to-Mac transfer proof. They do not prove signed-helper
+  deployment, retained coding runtime containment, mutation, or integration.
   The designated-owner POST is bound to the exact queue, designation, and pause
   revisions and reuses the manifest, grants, dependency, capacity, immutable-
   specification, and atomic-enqueue checks without claiming a lease. Swift tests

@@ -2,12 +2,15 @@
 
 use assemblywright_protocol::{
     AttemptId, CancellationId, CancellationInstruction, ContextHandlingPolicy, DistributedEvent,
-    DistributedEventBatch, DistributedEventCursor, DistributedEventKind, JobEnvelope, LeaseId,
-    Sensitivity, StepId, TaskId, CANCELLATION_ACK_DEADLINE_MS, FIXTURE_REASONING_CAPABILITY_ID,
-    FIXTURE_REASONING_MODEL, MLX_REASONING_CAPABILITY_ID, PROTOCOL_VERSION,
+    DistributedEventBatch, DistributedEventCursor, DistributedEventKind,
+    FeatureConveyorCodingWorkPacketMetadata, JobEnvelope, LeaseId, LocalCodingJobRequest,
+    LocalCodingSnapshotChunk, Sensitivity, StepId, TaskId, CANCELLATION_ACK_DEADLINE_MS,
+    FIXTURE_REASONING_CAPABILITY_ID, FIXTURE_REASONING_MODEL, LOCAL_CODING_CAPABILITY_ID,
+    LOCAL_CODING_MODEL, MLX_REASONING_CAPABILITY_ID, PROTOCOL_VERSION,
 };
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
+use git2::{IndexAddOption, ObjectType, Repository, Signature};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -276,6 +279,110 @@ printf 'mlx:%s' "$prompt"
     assert_eq!(late["status"], 409);
     assert_eq!(response_body(&late)["error"], "job_cancelled");
     ChildGuard(child);
+}
+
+#[test]
+fn authenticated_uds_local_coding_snapshot_admission_cancellation_and_restart_cleanup() {
+    let temporary = tempfile::tempdir().expect("agent local coding snapshot");
+    let runtime_dir = temporary.path().join("run");
+    fs::create_dir(&runtime_dir).expect("create runtime");
+    fs::set_permissions(&runtime_dir, fs::Permissions::from_mode(0o700)).expect("secure runtime");
+    let data_dir = temporary.path().join("data");
+    let socket_path = runtime_dir.join("local-coding.sock");
+    let mut child = start_local_coding_agent(&data_dir, &socket_path);
+    let bearer = Some(format!("Bearer {TOKEN}"));
+    let health = send(
+        &socket_path,
+        request("GET", "/health", bearer.clone(), None),
+    );
+    let health_body = response_body(&health);
+    assert_eq!(health_body["local_coding_snapshots_enabled"], true);
+    assert_eq!(
+        health_body["boundary"],
+        "metadata_cursor_plus_ephemeral_snapshot_materialization_no_execution"
+    );
+
+    let (bundle, snapshot_sha256) = local_coding_bundle();
+    let job = local_coding_job(snapshot_sha256);
+    let admitted = send(
+        &socket_path,
+        request(
+            "POST",
+            "/v1/local-coding/snapshots/admit",
+            bearer.clone(),
+            Some(serde_json::to_value(&job).unwrap()),
+        ),
+    );
+    assert_eq!(admitted["status"], 200);
+    assert_eq!(response_body(&admitted)["status"], "snapshot_admitted");
+    let snapshot_id = serde_json::from_value::<LocalCodingJobRequest>(job.context.clone())
+        .unwrap()
+        .snapshot_id;
+    let chunk = LocalCodingSnapshotChunk {
+        protocol_version: job.protocol_version,
+        connection_epoch: job.connection_epoch,
+        task_id: job.task_id,
+        step_id: job.step_id,
+        attempt_id: job.attempt_id,
+        lease_id: job.lease_id,
+        cancellation_id: job.cancellation_id,
+        snapshot_id,
+        snapshot_sha256,
+        offset: 0,
+        total_bytes: bundle.len() as u64,
+        content_sha256: Sha256::digest(&bundle).into(),
+        content_hex: bundle.iter().map(|byte| format!("{byte:02x}")).collect(),
+        complete: true,
+    };
+    let materialized = send(
+        &socket_path,
+        request(
+            "POST",
+            "/v1/local-coding/snapshots/accept",
+            bearer.clone(),
+            Some(serde_json::to_value(chunk).unwrap()),
+        ),
+    );
+    assert_eq!(materialized["status"], 200);
+    assert_eq!(
+        response_body(&materialized)["payload"]["status"],
+        "snapshot_materialized"
+    );
+    let cancelled = send(
+        &socket_path,
+        request(
+            "POST",
+            "/v1/local-coding/snapshots/cancel",
+            bearer.clone(),
+            Some(serde_json::to_value(cancellation(&job)).unwrap()),
+        ),
+    );
+    assert_eq!(cancelled["status"], 200);
+    assert_eq!(response_body(&cancelled)["status"], "cancelled");
+
+    let second_job = local_coding_job([3; 32]);
+    let admitted = send(
+        &socket_path,
+        request(
+            "POST",
+            "/v1/local-coding/snapshots/admit",
+            bearer,
+            Some(serde_json::to_value(&second_job).unwrap()),
+        ),
+    );
+    assert_eq!(admitted["status"], 200);
+    child.kill().expect("stop with partial snapshot");
+    child.wait().expect("reap partial snapshot agent");
+
+    let restart_socket = runtime_dir.join("local-coding-restart.sock");
+    let restarted = start_local_coding_agent(&data_dir, &restart_socket);
+    assert_eq!(
+        fs::read_dir(data_dir.join("local-coding-snapshots"))
+            .unwrap()
+            .count(),
+        0
+    );
+    ChildGuard(restarted);
 }
 
 #[test]
@@ -548,6 +655,118 @@ fn mlx_job(prompt: &str) -> JobEnvelope {
     }
 }
 
+fn local_coding_job(snapshot_sha256: [u8; 32]) -> JobEnvelope {
+    let context = serde_json::to_value(LocalCodingJobRequest {
+        feature_id: Uuid::new_v4(),
+        specification_revision: 1,
+        lifecycle_revision: 2,
+        feature_lease_id: Uuid::new_v4(),
+        snapshot_id: Uuid::new_v4(),
+        snapshot_sha256,
+        work_packet_sha256: [4; 32],
+        work_packet: FeatureConveyorCodingWorkPacketMetadata {
+            packet_id: Uuid::new_v4(),
+            ordinal: 1,
+            acceptance_criteria_count: 1,
+        },
+        device_id: assemblywright_protocol::DeviceId::new(Uuid::new_v4()),
+        device_registry_revision: 1,
+        queue_revision: 1,
+        emergency_pause_revision: 1,
+    })
+    .unwrap();
+    JobEnvelope {
+        protocol_version: PROTOCOL_VERSION,
+        connection_epoch: 19,
+        sequence: 1,
+        task_id: TaskId::new(Uuid::new_v4()),
+        step_id: StepId::new(Uuid::new_v4()),
+        attempt_id: AttemptId::new(Uuid::new_v4()),
+        lease_id: LeaseId::new(Uuid::new_v4()),
+        cancellation_id: CancellationId::new(Uuid::new_v4()),
+        capability_id: LOCAL_CODING_CAPABILITY_ID.to_string(),
+        selected_model: LOCAL_CODING_MODEL.to_string(),
+        sensitivity: Sensitivity::Workspace,
+        context_handling: ContextHandlingPolicy::EphemeralNoRetention,
+        lease_duration_ms: 60_000,
+        deadline_after_ms: 60_000,
+        context_sha256: Sha256::digest(serde_json::to_vec(&context).unwrap()).into(),
+        context,
+    }
+}
+
+fn local_coding_bundle() -> (Vec<u8>, [u8; 32]) {
+    const MAGIC: &[u8] = b"AW-SNAPSHOT-BUNDLE-V1\n";
+    const END_MAGIC: &[u8] = b"AW-SNAPSHOT-END-V1\n";
+    let source = tempfile::tempdir().unwrap();
+    let repository = Repository::init(source.path()).unwrap();
+    let content = b"native process materialization\n";
+    fs::write(source.path().join("README.md"), content).unwrap();
+    let mut index = repository.index().unwrap();
+    index
+        .add_all(["README.md"].iter(), IndexAddOption::DEFAULT, None)
+        .unwrap();
+    index.write().unwrap();
+    let tree_oid = index.write_tree().unwrap();
+    let tree = repository.find_tree(tree_oid).unwrap();
+    let blob_oid = tree.get_name("README.md").unwrap().id();
+    let signature = Signature::now("Assemblywright Test", "test@example.invalid").unwrap();
+    let commit_oid = repository
+        .commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "native process fixture",
+            &tree,
+            &[],
+        )
+        .unwrap();
+    let odb = repository.odb().unwrap();
+    let mut bundle = Vec::new();
+    bundle.extend_from_slice(MAGIC);
+    bundle.extend_from_slice(commit_oid.to_string().as_bytes());
+    for (kind, oid) in [
+        (ObjectType::Commit, commit_oid),
+        (ObjectType::Tree, tree_oid),
+        (ObjectType::Blob, blob_oid),
+    ] {
+        let object = odb.read(oid).unwrap();
+        bundle.extend_from_slice(&[
+            1,
+            match kind {
+                ObjectType::Commit => 1,
+                ObjectType::Tree => 2,
+                ObjectType::Blob => 3,
+                _ => unreachable!(),
+            },
+        ]);
+        bundle.extend_from_slice(oid.as_bytes());
+        bundle.extend_from_slice(&(object.data().len() as u64).to_be_bytes());
+        bundle.extend_from_slice(object.data());
+    }
+    bundle.push(0);
+    bundle.push(1);
+    bundle.extend_from_slice(&("README.md".len() as u16).to_be_bytes());
+    bundle.extend_from_slice(b"README.md");
+    bundle.extend_from_slice(&0o100644_u32.to_be_bytes());
+    bundle.extend_from_slice(blob_oid.as_bytes());
+    bundle.extend_from_slice(&(content.len() as u64).to_be_bytes());
+    bundle.push(0);
+    let mut digest = Sha256::new();
+    digest.update(b"assemblywright.repository-snapshot.v1\0");
+    digest.update(commit_oid.as_bytes());
+    digest.update(("README.md".len() as u64).to_be_bytes());
+    digest.update(b"README.md");
+    digest.update(0o100644_u32.to_be_bytes());
+    digest.update(blob_oid.as_bytes());
+    digest.update((content.len() as u64).to_be_bytes());
+    digest.update(content);
+    let snapshot_sha256: [u8; 32] = digest.finalize().into();
+    bundle.extend_from_slice(END_MAGIC);
+    bundle.extend_from_slice(&snapshot_sha256);
+    (bundle, snapshot_sha256)
+}
+
 fn cancellation(job: &JobEnvelope) -> CancellationInstruction {
     CancellationInstruction {
         protocol_version: PROTOCOL_VERSION,
@@ -670,6 +889,36 @@ fn start_mlx_agent(
         .expect("startup stdin")
         .write_all(startup.as_bytes())
         .expect("write MLX startup document");
+    wait_for_socket(&mut child, socket_path);
+    child
+}
+
+fn start_local_coding_agent(data_dir: &Path, socket_path: &Path) -> Child {
+    let startup = json!({
+        "version": 2,
+        "supervised_parent_pid": std::process::id(),
+        "socket_path": socket_path,
+        "peer_code_requirement": current_process_designated_requirement(),
+        "peer_identity_profile": "adhoc_exact",
+        "bearer_token": TOKEN,
+        "fixture_jobs_enabled": false,
+        "mlx_jobs_enabled": false,
+        "local_coding_snapshots_enabled": true
+    })
+    .to_string();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_assemblywright-agent"))
+        .args(["--data-dir", data_dir.to_str().expect("data path"), "serve"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn supervised local coding snapshot agent");
+    child
+        .stdin
+        .take()
+        .expect("startup stdin")
+        .write_all(startup.as_bytes())
+        .expect("write local coding startup document");
     wait_for_socket(&mut child, socket_path);
     child
 }

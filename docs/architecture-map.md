@@ -34,7 +34,10 @@ flowchart LR
   GrantControl --> RepositoryPreflight["Owner-local filesystem-only identity preflight; path-free digest receipt and redacted audit"]
   RepositoryPreflight --> SnapshotClaim["Loopback-only isolated raw-object snapshot plus atomic strict queue-head claim"]
   SnapshotClaim --> CodingDispatch["Explicit loopback-only metadata dispatch bound to exact snapshot, lease, worker, queue, and pause revisions"]
-  CodingDispatch --> Agent
+  CodingDispatch --> SnapshotChunks["Exact leased-attempt bounded snapshot bundle chunks with before-and-after authorization"]
+  SnapshotChunks --> Helper
+  Helper --> Agent
+  Agent --> Materialization["Private independent Git materialization proof, then immediate cleanup; no execution"]
   OwnerDesignation --> OwnerAction["Exact designated non-fixture MacBridge-only approved-feature POST; queue insertion only"]
   OwnerAction --> Helper
   Protocol --> Feature["Dormant assemblywright-core distributed-development feature"]
@@ -129,9 +132,15 @@ is `local.coding.v1`; the distributed event and redacted audit share the same
 transaction. The owner route is absent from enrolled-device routing. Lease and
 acknowledgement acceptance recheck the binding, while cancellation, Emergency
 Pause, lifecycle departure, or restart quarantine blocks later acceptance.
-The native agent validates metadata only. No snapshot bytes/path, command,
-credential, coding process, mutation, integration, review, publication, queue
-advance, or autonomous activation is implemented.
+After an exact lease, the default-off snapshot lane reauthorizes every bounded
+sequential bundle read and binds each chunk to the full attempt, lease,
+cancellation, and snapshot identity. The Mac bridge strictly relays those
+chunks over the authenticated local socket. The native agent reconstructs and
+verifies an independent shallow no-remote Git repository in private
+per-attempt state and immediately deletes it before returning a path-free
+non-mutation receipt. No source repository path, command, credential, retained
+worker checkout, coding process, mutation, integration, review, publication,
+queue advance, or autonomous activation is implemented.
 Another owner-token-authenticated loopback action designates one exact current,
 non-fixture MacBridge. Only that designated device may submit one revision-bound
 already-approved specification through the dedicated remote POST; the signed

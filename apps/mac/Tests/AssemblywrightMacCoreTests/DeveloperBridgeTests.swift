@@ -295,6 +295,69 @@ private actor FakeFixtureBridgeSession: AssemblywrightMacBridgeSession {
     }
 }
 
+private actor FakeLocalCodingBridgeSession: AssemblywrightMacBridgeSession {
+    nonisolated let connectionEpoch: UInt64
+    let eventBatch: Data
+    let job: Data
+    private var chunks: [Data]
+    let cancellation: Data?
+    let acceptedResult: Data
+    private(set) var requests: [AssemblywrightMacBridgeHTTPRequest] = []
+    private(set) var cancelled = false
+    private var cancellationDelivered = false
+
+    init(
+        connectionEpoch: UInt64,
+        eventBatch: Data,
+        job: Data,
+        chunks: [Data],
+        cancellation: Data? = nil,
+        acceptedResult: Data
+    ) {
+        self.connectionEpoch = connectionEpoch
+        self.eventBatch = eventBatch
+        self.job = job
+        self.chunks = chunks
+        self.cancellation = cancellation
+        self.acceptedResult = acceptedResult
+    }
+
+    func send(_ request: AssemblywrightMacBridgeHTTPRequest) async throws
+        -> AssemblywrightMacBridgeHTTPResponse
+    {
+        requests.append(request)
+        switch request.path {
+        case AssemblywrightMacDeveloperEventRelay.remoteEventsPath:
+            return .init(status: 200, body: eventBatch)
+        case AssemblywrightMacDeveloperEventRelay.remoteLeasePath:
+            return .init(status: 200, body: job)
+        case AssemblywrightMacDeveloperEventRelay.remoteSnapshotChunksPath:
+            guard !chunks.isEmpty else { throw FakeSupervisorError() }
+            return .init(status: 200, body: chunks.removeFirst())
+        case AssemblywrightMacDeveloperEventRelay.remoteCancellationPath:
+            if let cancellation, !cancellationDelivered {
+                cancellationDelivered = true
+                return .init(status: 200, body: cancellation)
+            }
+            return .init(
+                status: 200,
+                body: Data(#"{"status":"no_cancellation"}"#.utf8)
+            )
+        case AssemblywrightMacDeveloperEventRelay.remoteResultPath:
+            return .init(status: 200, body: acceptedResult)
+        case AssemblywrightMacDeveloperEventRelay.remoteCancellationAcknowledgementPath:
+            return .init(
+                status: 200,
+                body: Data(#"{"accepted":true,"status":"cancelled"}"#.utf8)
+            )
+        default:
+            throw FakeSupervisorError()
+        }
+    }
+
+    func cancel() async { cancelled = true }
+}
+
 private actor FakeDeveloperAgentSession: AssemblywrightMacDeveloperAgentSession {
     private var cursor: AssemblywrightMacDeveloperEventCursor?
     private(set) var acceptedBatches: [Data] = []
@@ -302,8 +365,12 @@ private actor FakeDeveloperAgentSession: AssemblywrightMacDeveloperAgentSession 
     private(set) var cancellations: [Data] = []
     private(set) var executedMLXJobs: [Data] = []
     private(set) var mlxCancellations: [Data] = []
+    private(set) var admittedLocalCodingJobs: [Data] = []
+    private(set) var acceptedLocalCodingChunks: [Data] = []
+    private(set) var localCodingCancellations: [Data] = []
     var fixtureResult: Data?
     var cancellationAcknowledgement: Data?
+    private var localCodingChunkResults: [Data?]
     let fixtureDelayMilliseconds: UInt64
     private(set) var stopped = false
 
@@ -311,12 +378,14 @@ private actor FakeDeveloperAgentSession: AssemblywrightMacDeveloperAgentSession 
         cursor: AssemblywrightMacDeveloperEventCursor? = nil,
         fixtureResult: Data? = nil,
         cancellationAcknowledgement: Data? = nil,
-        fixtureDelayMilliseconds: UInt64 = 0
+        fixtureDelayMilliseconds: UInt64 = 0,
+        localCodingChunkResults: [Data?] = []
     ) {
         self.cursor = cursor
         self.fixtureResult = fixtureResult
         self.cancellationAcknowledgement = cancellationAcknowledgement
         self.fixtureDelayMilliseconds = fixtureDelayMilliseconds
+        self.localCodingChunkResults = localCodingChunkResults
     }
 
     func health() async throws -> AssemblywrightMacDeveloperAgentCursorSnapshot {
@@ -379,6 +448,39 @@ private actor FakeDeveloperAgentSession: AssemblywrightMacDeveloperAgentSession 
         mlxCancellations.append(instruction)
         guard let cancellationAcknowledgement else {
             throw AssemblywrightMacDeveloperEventRelayError.mlxJobRejected
+        }
+        return cancellationAcknowledgement
+    }
+
+    func admitLocalCodingSnapshot(_ job: Data) async throws {
+        admittedLocalCodingJobs.append(job)
+    }
+
+    func acceptLocalCodingSnapshotChunk(
+        _ chunk: Data
+    ) async throws -> AssemblywrightMacDeveloperAgentSnapshotChunkAcceptance {
+        acceptedLocalCodingChunks.append(chunk)
+        if fixtureDelayMilliseconds > 0 {
+            try await Task.sleep(for: .milliseconds(fixtureDelayMilliseconds))
+        }
+        guard !localCodingChunkResults.isEmpty else {
+            throw AssemblywrightMacDeveloperEventRelayError.localCodingSnapshotRejected
+        }
+        if let result = localCodingChunkResults.removeFirst() {
+            return .result(result)
+        }
+        let object = try #require(
+            JSONSerialization.jsonObject(with: chunk) as? [String: Any]
+        )
+        let offset = try #require((object["offset"] as? NSNumber)?.uint64Value)
+        let content = try #require(object["content_hex"] as? String)
+        return .nextOffset(offset + UInt64(content.utf8.count / 2))
+    }
+
+    func cancelLocalCodingSnapshot(_ instruction: Data) async throws -> Data {
+        localCodingCancellations.append(instruction)
+        guard let cancellationAcknowledgement else {
+            throw AssemblywrightMacDeveloperEventRelayError.localCodingSnapshotRejected
         }
         return cancellationAcknowledgement
     }
@@ -922,6 +1024,15 @@ struct DeveloperBridgeTests {
                 maxResultBytes: 8_192
             )
         ])
+        var wrongFixtureRole = try #require(
+            JSONSerialization.jsonObject(with: fixtureInvitationData()) as? [String: Any]
+        )
+        wrongFixtureRole["role"] = "inference_worker"
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.bindingMismatch) {
+            _ = try exactFixtureEnrollment.prepare(
+                invitationData: try JSONSerialization.data(withJSONObject: wrongFixtureRole)
+            )
+        }
         acceptedStore.installedProfile = sampleProfile()
         #expect(throws: AssemblywrightMacDeveloperBridgeError.bindingMismatch) {
             _ = try exactFixtureEnrollment.status()
@@ -929,6 +1040,7 @@ struct DeveloperBridgeTests {
 
         let standard = AssemblywrightMacBridgeKeychainNamespace.identityProfile(.standard)
         let fixture = AssemblywrightMacBridgeKeychainNamespace.identityProfile(.fixtureReasoning)
+        let localCoding = AssemblywrightMacBridgeKeychainNamespace.identityProfile(.localCoding)
         #expect(
             standard.service == "com.nobiletechnology.assemblywright.developer-bridge"
         )
@@ -960,11 +1072,149 @@ struct DeveloperBridgeTests {
         #expect(fixture.service != standard.service)
         #expect(fixture.certificateLabel != standard.certificateLabel)
         #expect(fixture.keyTag != standard.keyTag)
+        #expect(
+            localCoding.service
+                == "com.nobiletechnology.assemblywright.developer-bridge.local-coding"
+        )
+        #expect(
+            localCoding.certificateLabel
+                == "com.nobiletechnology.assemblywright.developer-bridge.local-coding.identity-v1"
+        )
+        #expect(
+            localCoding.keyTag
+                == Data(
+                    "com.nobiletechnology.assemblywright.developer-bridge.local-coding.p256-v1".utf8
+                )
+        )
+        #expect(localCoding.service != standard.service)
+        #expect(localCoding.service != fixture.service)
+        #expect(localCoding.certificateLabel != standard.certificateLabel)
+        #expect(localCoding.certificateLabel != fixture.certificateLabel)
+        #expect(localCoding.keyTag != standard.keyTag)
+        #expect(localCoding.keyTag != fixture.keyTag)
         #expect(standard.replacementKeyTag != standard.keyTag)
         #expect(standard.replacementCertificateLabel != standard.certificateLabel)
         #expect(standard.replacementStagedAccount != standard.stagedAccount)
         #expect(AssemblywrightMacBridgeIdentityProfile(selector: "fixture") == .fixtureReasoning)
+        #expect(AssemblywrightMacBridgeIdentityProfile(selector: "local-coding") == .localCoding)
         #expect(AssemblywrightMacBridgeIdentityProfile(selector: "mlx") == nil)
+    }
+
+    @Test("Local-coding enrollment is an exact inference-worker profile and round trips")
+    func localCodingEnrollmentIsExactAndProfileIsolated() throws {
+        let standardStore = FakeBridgeIdentityStore()
+        let standardEnrollment = AssemblywrightMacEnrollmentCoordinator(
+            identityStore: standardStore
+        )
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.bindingMismatch) {
+            _ = try standardEnrollment.prepare(invitationData: localCodingInvitationData())
+        }
+        #expect(standardStore.staged == nil)
+        var macBridgeLocalCoding = try #require(
+            JSONSerialization.jsonObject(with: localCodingInvitationData()) as? [String: Any]
+        )
+        macBridgeLocalCoding["role"] = "mac_bridge"
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.bindingMismatch) {
+            _ = try standardEnrollment.prepare(
+                invitationData: try JSONSerialization.data(
+                    withJSONObject: macBridgeLocalCoding,
+                    options: [.sortedKeys]
+                )
+            )
+        }
+
+        let store = FakeBridgeIdentityStore()
+        let enrollment = AssemblywrightMacEnrollmentCoordinator(
+            identityStore: store,
+            identityProfile: .localCoding
+        )
+        let csr = try enrollment.prepare(invitationData: localCodingInvitationData())
+        let csrObject = try #require(
+            JSONSerialization.jsonObject(with: csr) as? [String: Any]
+        )
+        #expect(csrObject["status"] as? String == "enrollment_csr_ready")
+        #expect(store.staged?.role == "inference_worker")
+        #expect(store.staged?.capabilities == [localCodingCapability()])
+
+        let installed = try enrollment.install(
+            issuedReceiptData: localCodingIssuedReceiptData()
+        )
+        #expect(installed.role == "inference_worker")
+        #expect(installed.capabilities == [localCodingCapability()])
+        #expect(try enrollment.status() == installed)
+
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.bindingMismatch) {
+            _ = try enrollment.prepareCapabilityRebind(
+                invitationData: localCodingInvitationData()
+            )
+        }
+    }
+
+    @Test("Local-coding profile rejects role, singleton, and descriptor drift")
+    func localCodingEnrollmentRejectsDrift() throws {
+        let base = try #require(
+            JSONSerialization.jsonObject(with: localCodingInvitationData()) as? [String: Any]
+        )
+        var driftedInvitations: [[String: Any]] = []
+
+        var wrongRole = base
+        wrongRole["role"] = "mac_bridge"
+        driftedInvitations.append(wrongRole)
+
+        for (field, value) in [
+            ("id", "local.coding.v2"),
+            ("kind", "local_inference"),
+            ("provider", "mlx"),
+            ("model", "assemblywright-local-coding-v2"),
+            ("max_context_bytes", 8_193),
+            ("max_result_bytes", 32_769)
+        ] as [(String, Any)] {
+            var invitation = base
+            var capabilities = try #require(invitation["capabilities"] as? [[String: Any]])
+            capabilities[0][field] = value
+            invitation["capabilities"] = capabilities
+            driftedInvitations.append(invitation)
+        }
+
+        var mixed = base
+        var mixedCapabilities = try #require(mixed["capabilities"] as? [[String: Any]])
+        mixedCapabilities.append([
+            "id": "fixture.reasoning",
+            "kind": "local_inference",
+            "provider": "assemblywright-fixture",
+            "model": "assemblywright-fixture-v1",
+            "max_context_bytes": 8_192,
+            "max_result_bytes": 8_192
+        ])
+        mixed["capabilities"] = mixedCapabilities
+        driftedInvitations.append(mixed)
+
+        for invitation in driftedInvitations {
+            let store = FakeBridgeIdentityStore()
+            let enrollment = AssemblywrightMacEnrollmentCoordinator(
+                identityStore: store,
+                identityProfile: .localCoding
+            )
+            #expect(throws: AssemblywrightMacDeveloperBridgeError.bindingMismatch) {
+                _ = try enrollment.prepare(
+                    invitationData: try JSONSerialization.data(
+                        withJSONObject: invitation,
+                        options: [.sortedKeys]
+                    )
+                )
+            }
+            #expect(store.staged == nil)
+        }
+
+        let statusStore = FakeBridgeIdentityStore()
+        statusStore.installedProfile = sampleProfile()
+        let status = AssemblywrightMacEnrollmentCoordinator(
+            identityStore: statusStore,
+            identityProfile: .localCoding
+        )
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.bindingMismatch) {
+            _ = try status.status()
+        }
     }
 
     @Test("Expired and non-concrete master invitations fail before identity creation")
@@ -1792,6 +2042,7 @@ struct DeveloperBridgeTests {
         #expect(decoded == relay)
         #expect(!String(decoding: document, as: UTF8.self).contains("bearer"))
         #expect(!relay.fixtureJobsEnabled)
+        #expect(!relay.localCodingSnapshotsEnabled)
 
         let partial = AssemblywrightDeveloperBridgeProcessConfiguration(environment: [
             AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
@@ -1842,6 +2093,59 @@ struct DeveloperBridgeTests {
                 "true"
         ])
         #expect(unsafeFixture.executableURL == nil)
+
+        let localCoding = AssemblywrightDeveloperBridgeProcessConfiguration(environment: [
+            AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
+                "/tmp/assemblywright-mac-bridge",
+            AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
+                "ABCDEFGHIJ",
+            AssemblywrightDeveloperBridgeProcessConfiguration.agentExecutableEnvironmentKey:
+                "/tmp/assemblywright-agent",
+            AssemblywrightDeveloperBridgeProcessConfiguration.agentDataDirectoryEnvironmentKey:
+                "/tmp/assemblywright-agent-data",
+            AssemblywrightDeveloperBridgeProcessConfiguration
+                .localCodingSnapshotsEnabledEnvironmentKey: "true"
+        ])
+        #expect(localCoding.eventRelayConfiguration?.localCodingSnapshotsEnabled == true)
+        #expect(localCoding.eventRelayConfiguration?.fixtureJobsEnabled == false)
+        #expect(localCoding.eventRelayConfiguration?.mlxJobsEnabled == false)
+        #expect(
+            FoundationAssemblywrightDeveloperBridgeProcessLauncher.helperArguments(
+                eventRelayConfiguration: localCoding.eventRelayConfiguration
+            ) == ["relay", "--identity-profile", "local-coding"]
+        )
+
+        let unsafeLocalCoding = AssemblywrightDeveloperBridgeProcessConfiguration(environment: [
+            AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
+                "/tmp/assemblywright-mac-bridge",
+            AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
+                "ABCDEFGHIJ",
+            AssemblywrightDeveloperBridgeProcessConfiguration
+                .localCodingSnapshotsEnabledEnvironmentKey: "true"
+        ])
+        #expect(unsafeLocalCoding.executableURL == nil)
+
+        var mixedLocalCoding = [
+            AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
+                "/tmp/assemblywright-mac-bridge",
+            AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
+                "ABCDEFGHIJ",
+            AssemblywrightDeveloperBridgeProcessConfiguration.agentExecutableEnvironmentKey:
+                "/tmp/assemblywright-agent",
+            AssemblywrightDeveloperBridgeProcessConfiguration.agentDataDirectoryEnvironmentKey:
+                "/tmp/assemblywright-agent-data",
+            AssemblywrightDeveloperBridgeProcessConfiguration.fixtureJobsEnabledEnvironmentKey:
+                "true"
+        ]
+        mixedLocalCoding[
+            AssemblywrightDeveloperBridgeProcessConfiguration
+                .localCodingSnapshotsEnabledEnvironmentKey
+        ] = "true"
+        #expect(
+            AssemblywrightDeveloperBridgeProcessConfiguration(
+                environment: mixedLocalCoding
+            ).executableURL == nil
+        )
 
         let extra = try #require(
             JSONSerialization.jsonObject(with: document) as? [String: Any]
@@ -1895,7 +2199,7 @@ struct DeveloperBridgeTests {
         let object = try #require(
             JSONSerialization.jsonObject(with: document) as? [String: Any]
         )
-        #expect((object["version"] as? NSNumber)?.intValue == 3)
+        #expect((object["version"] as? NSNumber)?.intValue == 4)
         #expect(object["mlx_executable_path"] as? String == "/opt/assemblywright/bin/mlx-runner")
         #expect(object["mlx_model_dir"] as? String == "/opt/assemblywright/models/mlx-local")
         #expect(object["mlx_model_id"] as? String == "mlx-local")
@@ -2066,6 +2370,183 @@ struct DeveloperBridgeTests {
 
         #expect(await agent.executedMLXJobs == [mlx.job])
         #expect(await agent.mlxCancellations == [mlx.cancellation])
+        let paths = await master.requests.map(\.path)
+        #expect(paths.contains(
+            AssemblywrightMacDeveloperEventRelay.remoteCancellationAcknowledgementPath
+        ))
+        #expect(!paths.contains(AssemblywrightMacDeveloperEventRelay.remoteResultPath))
+        try await relay.stop()
+    }
+
+    @Test("Local-coding snapshot mode is default-off, strict, and mutually exclusive")
+    func localCodingSnapshotConfigurationIsStrict() throws {
+        let base = AssemblywrightMacDeveloperEventRelayConfiguration(
+            agentExecutableURL: URL(fileURLWithPath: "/tmp/assemblywright-agent"),
+            agentDataDirectoryURL: URL(
+                fileURLWithPath: "/tmp/assemblywright-agent-data",
+                isDirectory: true
+            )
+        )
+        let baseDocument = try base.encodeStartupDocument()
+        let baseObject = try #require(
+            JSONSerialization.jsonObject(with: baseDocument) as? [String: Any]
+        )
+        #expect(baseObject["local_coding_snapshots_enabled"] as? Bool == false)
+        #expect((baseObject["version"] as? NSNumber)?.intValue == 4)
+        #expect(
+            try AssemblywrightMacDeveloperEventRelayConfiguration
+                .decodeStartupDocument(baseDocument) == base
+        )
+
+        let enabled = AssemblywrightMacDeveloperEventRelayConfiguration(
+            agentExecutableURL: base.agentExecutableURL,
+            agentDataDirectoryURL: base.agentDataDirectoryURL,
+            localCodingSnapshotsEnabled: true
+        )
+        #expect(
+            try AssemblywrightMacDeveloperEventRelayConfiguration.decodeStartupDocument(
+                enabled.encodeStartupDocument()
+            ) == enabled
+        )
+        for mixed in [
+            AssemblywrightMacDeveloperEventRelayConfiguration(
+                agentExecutableURL: base.agentExecutableURL,
+                agentDataDirectoryURL: base.agentDataDirectoryURL,
+                fixtureJobsEnabled: true,
+                localCodingSnapshotsEnabled: true
+            ),
+            AssemblywrightMacDeveloperEventRelayConfiguration(
+                agentExecutableURL: base.agentExecutableURL,
+                agentDataDirectoryURL: base.agentDataDirectoryURL,
+                mlxJobsEnabled: true,
+                localCodingSnapshotsEnabled: true,
+                mlxExecutableURL: URL(fileURLWithPath: "/opt/assemblywright/bin/mlx-runner"),
+                mlxModelDirectoryURL: URL(fileURLWithPath: "/opt/assemblywright/models/mlx"),
+                mlxModelID: "mlx-local"
+            )
+        ] {
+            #expect(throws: AssemblywrightMacDeveloperEventRelayError.invalidStartupDocument) {
+                _ = try mixed.encodeStartupDocument()
+            }
+        }
+
+        var extra = baseObject
+        extra.removeValue(forKey: "local_coding_snapshots_enabled")
+        #expect(throws: AssemblywrightMacDeveloperEventRelayError.invalidStartupDocument) {
+            _ = try AssemblywrightMacDeveloperEventRelayConfiguration.decodeStartupDocument(
+                try JSONSerialization.data(withJSONObject: extra)
+            )
+        }
+    }
+
+    @Test("Local-coding relay materializes exact sequential chunks without execution")
+    func localCodingSnapshotRelayCompletesExactTransfer() async throws {
+        let documents = try localCodingSnapshotDocuments(connectionEpoch: 66)
+        let agent = FakeDeveloperAgentSession(
+            localCodingChunkResults: [nil, documents.result]
+        )
+        let relay = AssemblywrightMacDeveloperEventRelay(
+            configuration: localCodingRelayConfiguration(),
+            deviceID: documents.deviceID,
+            launcher: FakeDeveloperAgentLauncher(session: agent)
+        )
+        let master = FakeLocalCodingBridgeSession(
+            connectionEpoch: 66,
+            eventBatch: emptyEventBatch(),
+            job: documents.job,
+            chunks: documents.chunks,
+            acceptedResult: documents.acceptedResult
+        )
+
+        _ = try await relay.relayEvents(using: master)
+
+        #expect(await agent.admittedLocalCodingJobs == [documents.job])
+        #expect(await agent.acceptedLocalCodingChunks == documents.chunks)
+        #expect(await agent.executedJobs.isEmpty)
+        #expect(await agent.executedMLXJobs.isEmpty)
+        let requests = await master.requests
+        let chunkRequests = requests.filter {
+            $0.path == AssemblywrightMacDeveloperEventRelay.remoteSnapshotChunksPath
+        }
+        #expect(chunkRequests.count == 2)
+        let offsets = try chunkRequests.map { request in
+            let object = try #require(
+                JSONSerialization.jsonObject(with: request.body) as? [String: Any]
+            )
+            #expect(object["snapshot_id"] as? String == documents.snapshotID)
+            return try #require((object["offset"] as? NSNumber)?.uint64Value)
+        }
+        #expect(offsets == [0, 2])
+        #expect(requests.map(\.path).contains(
+            AssemblywrightMacDeveloperEventRelay.remoteResultPath
+        ))
+        try await relay.stop()
+    }
+
+    @Test("Local-coding relay rejects drift before forwarding and cleans partial state")
+    func localCodingSnapshotRelayRejectsChunkDrift() async throws {
+        let documents = try localCodingSnapshotDocuments(connectionEpoch: 67)
+        var wrongIdentity = try #require(
+            JSONSerialization.jsonObject(with: documents.chunks[0]) as? [String: Any]
+        )
+        wrongIdentity["snapshot_id"] = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        let invalidChunk = try JSONSerialization.data(
+            withJSONObject: wrongIdentity,
+            options: [.sortedKeys]
+        )
+        let agent = FakeDeveloperAgentSession(
+            localCodingChunkResults: [documents.result]
+        )
+        let relay = AssemblywrightMacDeveloperEventRelay(
+            configuration: localCodingRelayConfiguration(),
+            deviceID: documents.deviceID,
+            launcher: FakeDeveloperAgentLauncher(session: agent)
+        )
+        let master = FakeLocalCodingBridgeSession(
+            connectionEpoch: 67,
+            eventBatch: emptyEventBatch(),
+            job: documents.job,
+            chunks: [invalidChunk],
+            acceptedResult: documents.acceptedResult
+        )
+
+        await #expect(
+            throws: AssemblywrightMacDeveloperEventRelayError.localCodingSnapshotRejected
+        ) {
+            _ = try await relay.relayEvents(using: master)
+        }
+        #expect(await agent.acceptedLocalCodingChunks.isEmpty)
+        #expect(await agent.stopped)
+        #expect(!(await master.requests.map(\.path).contains(
+            AssemblywrightMacDeveloperEventRelay.remoteResultPath
+        )))
+    }
+
+    @Test("Authoritative cancellation removes partial local-coding materialization")
+    func localCodingSnapshotCancellationDominatesTransfer() async throws {
+        let documents = try localCodingSnapshotDocuments(connectionEpoch: 68)
+        let agent = FakeDeveloperAgentSession(
+            cancellationAcknowledgement: documents.cancellationAcknowledgement,
+            fixtureDelayMilliseconds: 5_000,
+            localCodingChunkResults: [documents.result]
+        )
+        let relay = AssemblywrightMacDeveloperEventRelay(
+            configuration: localCodingRelayConfiguration(),
+            deviceID: documents.deviceID,
+            launcher: FakeDeveloperAgentLauncher(session: agent)
+        )
+        let master = FakeLocalCodingBridgeSession(
+            connectionEpoch: 68,
+            eventBatch: emptyEventBatch(),
+            job: documents.job,
+            chunks: [documents.chunks[0]],
+            cancellation: documents.cancellation,
+            acceptedResult: documents.acceptedResult
+        )
+
+        _ = try await relay.relayEvents(using: master)
+
+        #expect(await agent.localCodingCancellations == [documents.cancellation])
         let paths = await master.requests.map(\.path)
         #expect(paths.contains(
             AssemblywrightMacDeveloperEventRelay.remoteCancellationAcknowledgementPath
@@ -3131,6 +3612,186 @@ private func mlxRelayConfiguration() -> AssemblywrightMacDeveloperEventRelayConf
     )
 }
 
+private struct LocalCodingSnapshotDocuments {
+    let deviceID: UUID
+    let snapshotID: String
+    let job: Data
+    let chunks: [Data]
+    let result: Data
+    let acceptedResult: Data
+    let cancellation: Data
+    let cancellationAcknowledgement: Data
+}
+
+private func localCodingRelayConfiguration()
+    -> AssemblywrightMacDeveloperEventRelayConfiguration
+{
+    AssemblywrightMacDeveloperEventRelayConfiguration(
+        agentExecutableURL: URL(fileURLWithPath: "/tmp/assemblywright-agent"),
+        agentDataDirectoryURL: URL(fileURLWithPath: "/tmp/assemblywright-agent-data"),
+        localCodingSnapshotsEnabled: true
+    )
+}
+
+private func localCodingSnapshotDocuments(
+    connectionEpoch: UInt64
+) throws -> LocalCodingSnapshotDocuments {
+    let taskID = "11111111-1111-4111-8111-111111111111"
+    let stepID = "22222222-2222-4222-8222-222222222222"
+    let attemptID = "33333333-3333-4333-8333-333333333333"
+    let leaseID = "44444444-4444-4444-8444-444444444444"
+    let cancellationID = "55555555-5555-4555-8555-555555555555"
+    let deviceIDText = "66666666-6666-4666-8666-666666666666"
+    let snapshotID = "77777777-7777-4777-8777-777777777777"
+    let snapshotDigest = [UInt8](repeating: 0x22, count: 32)
+    let workPacketDigest = [UInt8](repeating: 0x33, count: 32)
+    let context: [String: Any] = [
+        "feature_id": "88888888-8888-4888-8888-888888888888",
+        "specification_revision": 1,
+        "lifecycle_revision": 2,
+        "feature_lease_id": "99999999-9999-4999-8999-999999999999",
+        "snapshot_id": snapshotID,
+        "snapshot_sha256": snapshotDigest,
+        "work_packet_sha256": workPacketDigest,
+        "work_packet": [
+            "packet_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "ordinal": 1,
+            "acceptance_criteria_count": 2
+        ],
+        "device_id": deviceIDText,
+        "device_registry_revision": 3,
+        "queue_revision": 4,
+        "emergency_pause_revision": 0
+    ]
+    let contextData = try JSONSerialization.data(
+        withJSONObject: context,
+        options: [.sortedKeys, .withoutEscapingSlashes]
+    )
+    let contextDigest = Array(SHA256.hash(data: contextData))
+    let jobObject: [String: Any] = [
+        "protocol_version": 2,
+        "connection_epoch": connectionEpoch,
+        "sequence": 10,
+        "task_id": taskID,
+        "step_id": stepID,
+        "attempt_id": attemptID,
+        "lease_id": leaseID,
+        "cancellation_id": cancellationID,
+        "capability_id": "local.coding.v1",
+        "selected_model": "assemblywright-local-coding-v1",
+        "sensitivity": "workspace",
+        "context_handling": "ephemeral_no_retention",
+        "lease_duration_ms": 10_000,
+        "deadline_after_ms": 10_000,
+        "context_sha256": contextDigest,
+        "context": context
+    ]
+    let job = try JSONSerialization.data(withJSONObject: jobObject, options: [.sortedKeys])
+
+    func chunk(offset: UInt64, content: Data, complete: Bool) throws -> Data {
+        try JSONSerialization.data(
+            withJSONObject: [
+                "protocol_version": 2,
+                "connection_epoch": connectionEpoch,
+                "task_id": taskID,
+                "step_id": stepID,
+                "attempt_id": attemptID,
+                "lease_id": leaseID,
+                "cancellation_id": cancellationID,
+                "snapshot_id": snapshotID,
+                "snapshot_sha256": snapshotDigest,
+                "offset": offset,
+                "total_bytes": 3,
+                "content_sha256": Array(SHA256.hash(data: content)),
+                "content_hex": content.map { String(format: "%02x", $0) }.joined(),
+                "complete": complete
+            ],
+            options: [.sortedKeys]
+        )
+    }
+    let chunks = [
+        try chunk(offset: 0, content: Data([0xaa, 0xbb]), complete: false),
+        try chunk(offset: 2, content: Data([0xcc]), complete: true)
+    ]
+
+    let payload: [String: Any] = [
+        "status": "snapshot_materialized",
+        "work_packet_sha256": workPacketDigest,
+        "admission_sha256": [UInt8](repeating: 0x44, count: 32),
+        "snapshot_sha256": snapshotDigest,
+        "mutation_performed": false
+    ]
+    let payloadData = try JSONSerialization.data(
+        withJSONObject: payload,
+        options: [.sortedKeys, .withoutEscapingSlashes]
+    )
+    let payloadDigest = Array(SHA256.hash(data: payloadData))
+    let result = try JSONSerialization.data(
+        withJSONObject: [
+            "protocol_version": 2,
+            "connection_epoch": connectionEpoch,
+            "sequence": 11,
+            "task_id": taskID,
+            "step_id": stepID,
+            "attempt_id": attemptID,
+            "lease_id": leaseID,
+            "cancellation_id": cancellationID,
+            "status": "completed",
+            "context_sha256": contextDigest,
+            "payload_sha256": payloadDigest,
+            "payload": payload
+        ],
+        options: [.sortedKeys]
+    )
+    let acceptedResult = try JSONSerialization.data(
+        withJSONObject: [
+            "task_id": taskID,
+            "step_id": stepID,
+            "status": "succeeded",
+            "payload_sha256": payloadDigest
+        ],
+        options: [.sortedKeys]
+    )
+    let cancellation = try JSONSerialization.data(
+        withJSONObject: [
+            "protocol_version": 2,
+            "connection_epoch": connectionEpoch,
+            "sequence": 11,
+            "task_id": taskID,
+            "step_id": stepID,
+            "attempt_id": attemptID,
+            "lease_id": leaseID,
+            "cancellation_id": cancellationID,
+            "deadline_after_ms": 2_000
+        ],
+        options: [.sortedKeys]
+    )
+    let cancellationAcknowledgement = try JSONSerialization.data(
+        withJSONObject: [
+            "protocol_version": 2,
+            "connection_epoch": connectionEpoch,
+            "sequence": 12,
+            "task_id": taskID,
+            "step_id": stepID,
+            "attempt_id": attemptID,
+            "lease_id": leaseID,
+            "cancellation_id": cancellationID,
+            "status": "cancelled"
+        ],
+        options: [.sortedKeys]
+    )
+    return LocalCodingSnapshotDocuments(
+        deviceID: UUID(uuidString: deviceIDText)!,
+        snapshotID: snapshotID,
+        job: job,
+        chunks: chunks,
+        result: result,
+        acceptedResult: acceptedResult,
+        cancellation: cancellation,
+        cancellationAcknowledgement: cancellationAcknowledgement
+    )
+}
+
 private func mlxJobDocuments(connectionEpoch: UInt64) throws -> FixtureJobDocuments {
     let taskID = "11111111-1111-4111-8111-111111111111"
     let stepID = "22222222-2222-4222-8222-222222222222"
@@ -3267,10 +3928,47 @@ private func fixtureInvitationData() throws -> Data {
     return try JSONSerialization.data(withJSONObject: invitation, options: [.sortedKeys])
 }
 
+private func localCodingCapability() -> AssemblywrightMacBridgeCapability {
+    AssemblywrightMacBridgeCapability(
+        id: "local.coding.v1",
+        kind: "local_coding",
+        provider: "assemblywright-agent",
+        model: "assemblywright-local-coding-v1",
+        maxContextBytes: 8_192,
+        maxResultBytes: 32_768
+    )
+}
+
+private func localCodingInvitationData() throws -> Data {
+    var invitation = try #require(
+        JSONSerialization.jsonObject(with: validInvitationData()) as? [String: Any]
+    )
+    invitation["device_name"] = "owner-mac-local-coding"
+    invitation["role"] = "inference_worker"
+    invitation["capabilities"] = [[
+        "id": "local.coding.v1",
+        "kind": "local_coding",
+        "provider": "assemblywright-agent",
+        "model": "assemblywright-local-coding-v1",
+        "max_context_bytes": 8_192,
+        "max_result_bytes": 32_768
+    ]]
+    return try JSONSerialization.data(withJSONObject: invitation, options: [.sortedKeys])
+}
+
 private func validIssuedReceiptData() throws -> Data {
     Data(
         #"{"status":"device_certificate_issued","operation":"enroll","device_id":"22222222-2222-4222-8222-222222222222","device_name":"owner-mac-bridge","role":"mac_bridge","registry_revision":3,"serial_hex":"01","issued_at_ms":1000,"not_after_ms":4102444800000,"certificate_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","certificate_pem":"-----BEGIN CERTIFICATE-----\nZmFrZQ==\n-----END CERTIFICATE-----\n","ca_certificate_pem":"-----BEGIN CERTIFICATE-----\nZmFrZQ==\n-----END CERTIFICATE-----\n"}"#.utf8
     )
+}
+
+private func localCodingIssuedReceiptData() throws -> Data {
+    var receipt = try #require(
+        JSONSerialization.jsonObject(with: validIssuedReceiptData()) as? [String: Any]
+    )
+    receipt["device_name"] = "owner-mac-local-coding"
+    receipt["role"] = "inference_worker"
+    return try JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys])
 }
 
 private func rebindInvitationData() throws -> Data {

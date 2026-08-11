@@ -49,6 +49,8 @@ public struct AssemblywrightDeveloperBridgeProcessConfiguration: Equatable, Send
         "ASSEMBLYWRIGHT_MAC_DEVELOPER_FIXTURE_JOBS_ENABLED"
     public static let mlxJobsEnabledEnvironmentKey =
         "ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_JOBS_ENABLED"
+    public static let localCodingSnapshotsEnabledEnvironmentKey =
+        "ASSEMBLYWRIGHT_MAC_DEVELOPER_LOCAL_CODING_SNAPSHOTS_ENABLED"
     public static let mlxExecutableEnvironmentKey =
         "ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_EXECUTABLE"
     public static let mlxModelDirectoryEnvironmentKey =
@@ -72,8 +74,11 @@ public struct AssemblywrightDeveloperBridgeProcessConfiguration: Equatable, Send
         let agentDataDirectory = environment[Self.agentDataDirectoryEnvironmentKey]
         let fixtureJobsValue = environment[Self.fixtureJobsEnabledEnvironmentKey]
         let mlxJobsValue = environment[Self.mlxJobsEnabledEnvironmentKey]
+        let localCodingSnapshotsValue =
+            environment[Self.localCodingSnapshotsEnabledEnvironmentKey]
         guard Self.isValidBooleanOptIn(fixtureJobsValue),
-              Self.isValidBooleanOptIn(mlxJobsValue) else {
+              Self.isValidBooleanOptIn(mlxJobsValue),
+              Self.isValidBooleanOptIn(localCodingSnapshotsValue) else {
             executableURL = nil
             expectedTeamIdentifier = nil
             eventRelayConfiguration = nil
@@ -81,7 +86,9 @@ public struct AssemblywrightDeveloperBridgeProcessConfiguration: Equatable, Send
         }
         let fixtureJobsEnabled = fixtureJobsValue == "true"
         let mlxJobsEnabled = mlxJobsValue == "true"
-        guard !(fixtureJobsEnabled && mlxJobsEnabled) else {
+        let localCodingSnapshotsEnabled = localCodingSnapshotsValue == "true"
+        guard [fixtureJobsEnabled, mlxJobsEnabled, localCodingSnapshotsEnabled]
+            .filter({ $0 }).count <= 1 else {
             executableURL = nil
             expectedTeamIdentifier = nil
             eventRelayConfiguration = nil
@@ -124,6 +131,7 @@ public struct AssemblywrightDeveloperBridgeProcessConfiguration: Equatable, Send
                 ),
                 fixtureJobsEnabled: fixtureJobsEnabled,
                 mlxJobsEnabled: mlxJobsEnabled,
+                localCodingSnapshotsEnabled: localCodingSnapshotsEnabled,
                 mlxExecutableURL: mlxExecutable.map(URL.init(fileURLWithPath:)),
                 mlxModelDirectoryURL: mlxModelDirectory.map {
                     URL(fileURLWithPath: $0, isDirectory: true)
@@ -138,7 +146,8 @@ public struct AssemblywrightDeveloperBridgeProcessConfiguration: Equatable, Send
             }
             relayConfiguration = relay
         } else {
-            guard !fixtureJobsEnabled, !mlxJobsEnabled else {
+            guard !fixtureJobsEnabled, !mlxJobsEnabled,
+                  !localCodingSnapshotsEnabled else {
                 executableURL = nil
                 expectedTeamIdentifier = nil
                 eventRelayConfiguration = nil
@@ -384,6 +393,9 @@ public struct FoundationAssemblywrightDeveloperBridgeProcessLauncher:
     ) -> [String] {
         if let eventRelayConfiguration, eventRelayConfiguration.fixtureJobsEnabled {
             return ["relay", "--identity-profile", "fixture"]
+        }
+        if let eventRelayConfiguration, eventRelayConfiguration.localCodingSnapshotsEnabled {
+            return ["relay", "--identity-profile", "local-coding"]
         }
         return [eventRelayConfiguration == nil ? "monitor" : "relay"]
     }

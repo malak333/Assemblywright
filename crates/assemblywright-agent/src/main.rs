@@ -1,7 +1,8 @@
 use anyhow::{bail, Context};
 use assemblywright_agent::{
-    AgentCursorSnapshot, AgentCursorStore, FixtureJobRuntime, FixtureRuntimeError, MlxJobRuntime,
-    MlxRuntimeConfig, MlxRuntimeError, AGENT_SCHEMA_VERSION,
+    AgentCursorSnapshot, AgentCursorStore, FixtureJobRuntime, FixtureRuntimeError,
+    LocalCodingSnapshotAcceptance, LocalCodingSnapshotError, LocalCodingSnapshotRuntime,
+    MlxJobRuntime, MlxRuntimeConfig, MlxRuntimeError, AGENT_SCHEMA_VERSION,
 };
 use assemblywright_core::{
     serve_router_unix_socket_with_peer_identity, validate_peer_code_requirement,
@@ -9,7 +10,7 @@ use assemblywright_core::{
 };
 use assemblywright_protocol::{
     CancellationAcknowledgement, CancellationInstruction, DistributedEventBatch, JobEnvelope,
-    JobResultEnvelope, MAX_WIRE_FRAME_BYTES, PROTOCOL_VERSION,
+    JobResultEnvelope, LocalCodingSnapshotChunk, MAX_WIRE_FRAME_BYTES, PROTOCOL_VERSION,
 };
 use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{header, HeaderMap, StatusCode};
@@ -70,6 +71,8 @@ struct AgentStartupDocument {
     #[serde(default)]
     mlx_jobs_enabled: bool,
     #[serde(default)]
+    local_coding_snapshots_enabled: bool,
+    #[serde(default)]
     mlx_executable_path: Option<PathBuf>,
     #[serde(default)]
     mlx_model_path: Option<PathBuf>,
@@ -85,6 +88,8 @@ struct AgentState {
     fixture_jobs_enabled: bool,
     mlx_runtime: MlxJobRuntime,
     mlx_jobs_enabled: bool,
+    local_coding_snapshot_runtime: Arc<LocalCodingSnapshotRuntime>,
+    local_coding_snapshots_enabled: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -98,6 +103,7 @@ struct AgentHealth {
     boundary: &'static str,
     fixture_jobs_enabled: bool,
     mlx_jobs_enabled: bool,
+    local_coding_snapshots_enabled: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -140,7 +146,11 @@ async fn serve(data_dir: PathBuf) -> anyhow::Result<()> {
         let token_sha256 = digest_bearer_token(&startup.bearer_token)?;
         startup.bearer_token.zeroize();
 
-        let store = AgentCursorStore::open(data_dir).context("open durable agent cursor")?;
+        let store = AgentCursorStore::open(&data_dir).context("open durable agent cursor")?;
+        let local_coding_snapshot_runtime = Arc::new(
+            LocalCodingSnapshotRuntime::open(&data_dir, startup.local_coding_snapshots_enabled)
+                .context("open bounded local coding snapshot runtime")?,
+        );
         let state = AgentState {
             store: Arc::new(Mutex::new(store)),
             token_sha256,
@@ -148,6 +158,8 @@ async fn serve(data_dir: PathBuf) -> anyhow::Result<()> {
             fixture_jobs_enabled: startup.fixture_jobs_enabled,
             mlx_runtime: MlxJobRuntime::new(mlx_config),
             mlx_jobs_enabled: startup.mlx_jobs_enabled,
+            local_coding_snapshot_runtime,
+            local_coding_snapshots_enabled: startup.local_coding_snapshots_enabled,
         };
         let app = Router::new()
             .route("/health", get(health))
@@ -156,6 +168,18 @@ async fn serve(data_dir: PathBuf) -> anyhow::Result<()> {
             .route("/v1/jobs/cancel", post(cancel_fixture_job))
             .route("/v1/mlx/jobs/execute", post(execute_mlx_job))
             .route("/v1/mlx/jobs/cancel", post(cancel_mlx_job))
+            .route(
+                "/v1/local-coding/snapshots/admit",
+                post(admit_local_coding_snapshot),
+            )
+            .route(
+                "/v1/local-coding/snapshots/accept",
+                post(accept_local_coding_snapshot_chunk),
+            )
+            .route(
+                "/v1/local-coding/snapshots/cancel",
+                post(cancel_local_coding_snapshot),
+            )
             .layer(DefaultBodyLimit::max(MAX_WIRE_FRAME_BYTES))
             .layer(middleware::from_fn_with_state(
                 state.clone(),
@@ -176,6 +200,10 @@ async fn serve(data_dir: PathBuf) -> anyhow::Result<()> {
             .shutdown_active()
             .await
             .context("reap active MLX backend during agent shutdown")?;
+        state
+            .local_coding_snapshot_runtime
+            .shutdown()
+            .context("remove active local coding snapshot during agent shutdown")?;
         serve_result
     }
 }
@@ -198,14 +226,18 @@ fn validate_startup(startup: &AgentStartupDocument) -> anyhow::Result<()> {
     }
     if startup.version == LEGACY_AGENT_STARTUP_VERSION
         && (startup.mlx_jobs_enabled
+            || startup.local_coding_snapshots_enabled
             || startup.mlx_executable_path.is_some()
             || startup.mlx_model_path.is_some()
             || startup.mlx_model_id.is_some())
     {
         bail!("version-1 assemblywright-agent startup documents cannot configure MLX jobs");
     }
-    if startup.fixture_jobs_enabled && startup.mlx_jobs_enabled {
-        bail!("fixture and MLX job runtimes cannot be enabled together");
+    let enabled_lanes = u8::from(startup.fixture_jobs_enabled)
+        + u8::from(startup.mlx_jobs_enabled)
+        + u8::from(startup.local_coding_snapshots_enabled);
+    if enabled_lanes > 1 {
+        bail!("fixture, MLX, and local-coding snapshot runtimes are mutually exclusive");
     }
     if startup.supervised_parent_pid == 0 {
         bail!("assemblywright-agent requires a nonzero supervised parent PID");
@@ -344,12 +376,87 @@ async fn health(
             "metadata_cursor_plus_in_memory_public_fixture_jobs_no_retention"
         } else if state.mlx_jobs_enabled {
             "metadata_cursor_plus_bounded_public_mlx_jobs_no_retention"
+        } else if state.local_coding_snapshots_enabled {
+            "metadata_cursor_plus_ephemeral_snapshot_materialization_no_execution"
         } else {
             "metadata_only_no_authoritative_state"
         },
         fixture_jobs_enabled: state.fixture_jobs_enabled,
         mlx_jobs_enabled: state.mlx_jobs_enabled,
+        local_coding_snapshots_enabled: state.local_coding_snapshots_enabled,
     }))
+}
+
+async fn admit_local_coding_snapshot(
+    State(state): State<AgentState>,
+    Json(job): Json<JobEnvelope>,
+) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+    let next_offset = state
+        .local_coding_snapshot_runtime
+        .admit(job)
+        .map_err(local_coding_snapshot_error)?;
+    Ok(Json(json!({
+        "status": "snapshot_admitted",
+        "next_offset": next_offset
+    })))
+}
+
+async fn accept_local_coding_snapshot_chunk(
+    State(state): State<AgentState>,
+    Json(chunk): Json<LocalCodingSnapshotChunk>,
+) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
+    match state
+        .local_coding_snapshot_runtime
+        .accept_chunk(chunk)
+        .map_err(local_coding_snapshot_error)?
+    {
+        LocalCodingSnapshotAcceptance::Continue { next_offset } => Ok((
+            StatusCode::ACCEPTED,
+            Json(json!({
+                "status": "snapshot_chunk_accepted",
+                "next_offset": next_offset
+            })),
+        )
+            .into_response()),
+        LocalCodingSnapshotAcceptance::Complete(result) => Ok(Json(result).into_response()),
+    }
+}
+
+async fn cancel_local_coding_snapshot(
+    State(state): State<AgentState>,
+    Json(instruction): Json<CancellationInstruction>,
+) -> Result<Json<CancellationAcknowledgement>, (StatusCode, Json<serde_json::Value>)> {
+    state
+        .local_coding_snapshot_runtime
+        .cancel(&instruction)
+        .map(Json)
+        .map_err(local_coding_snapshot_error)
+}
+
+fn local_coding_snapshot_error(
+    error: LocalCodingSnapshotError,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match error {
+        LocalCodingSnapshotError::Disabled => (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error":"local_coding_snapshots_disabled"})),
+        ),
+        LocalCodingSnapshotError::AlreadyActive => (
+            StatusCode::CONFLICT,
+            Json(json!({"error":"local_coding_snapshot_already_active"})),
+        ),
+        LocalCodingSnapshotError::NotActive => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error":"local_coding_snapshot_not_active"})),
+        ),
+        LocalCodingSnapshotError::Protocol(_) | LocalCodingSnapshotError::Rejected => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({"error":"local_coding_snapshot_rejected"})),
+        ),
+        LocalCodingSnapshotError::Io(_)
+        | LocalCodingSnapshotError::Git(_)
+        | LocalCodingSnapshotError::Unavailable => internal_error(),
+    }
 }
 
 async fn execute_mlx_job(

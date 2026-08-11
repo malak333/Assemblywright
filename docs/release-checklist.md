@@ -60,7 +60,9 @@ Before starting a release pass, confirm the claim you intend to make.
   work while retaining the reservation after HTTP timeout until the blocking
   task exits; and atomically binds one durable snapshot receipt to one lease and
   redacted audit. Prove failure/cancellation leaves no lease or referenced snapshot,
-  and restart cleans unreferenced state and quarantines a finalized lease.
+  and restart cleans unreferenced state and quarantines a finalized lease. The
+  snapshot also contains one deterministic bounded transfer bundle whose raw
+  object graph and file manifest are independently digest-bound.
   Schema v10 separately exposes one owner-token loopback-only metadata coding-
   dispatch POST. Confirm it is absent from the enrolled-device router, binds
   the exact feature/specification/lifecycle, feature lease, snapshot ID/digest,
@@ -69,8 +71,14 @@ Before starting a release pass, confirm the claim you intend to make.
   event, and redacted audit. Prove stale authority, cancellation, Emergency
   Pause, lifecycle departure, registration drift, and restart quarantine block
   lease or acknowledgement. Confirm protocol and native-agent tests accept no
-  repository bytes/path, commands, credentials, or mutation claim. This slice
-  exposes no snapshot transport/materialization, coding execution, result
+  repository bytes/path, commands, credentials, or mutation claim. Then prove
+  the separate default-off snapshot lane authorizes only exact active
+  attempt/lease/cancellation/snapshot bindings, rechecks around every bounded
+  read, rejects stale or out-of-order frames, and materializes through the
+  authenticated Mac local socket into fresh private per-attempt state. Prove
+  object/chunk/bundle/path/digest validation, no remote/hooks/links, and cleanup
+  on completion, cancellation, failure, shutdown, and restart. This slice
+  exposes no retained worker checkout, coding execution, mutation/result
   integration, review provider, publication coordinator, Mac control UI, queue
   advancement, or autonomous activation.
 - Confirm `docs/architecture-map.md` matches the code for any surface that

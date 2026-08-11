@@ -6,11 +6,12 @@ use assemblywright_protocol::{
     FeatureConveyorCodingDispatchReceipt, FeatureConveyorCodingDispatchRequest,
     FeatureConveyorCodingDispatchStatus, FeatureConveyorRepositoryGrantSet,
     FeatureConveyorRepositoryGrantView, HandshakeRequest, HandshakeResponse, HandshakeStatus,
-    JobEnvelope, JobResultEnvelope, JobResultStatus, LeaseId, LocalCodingJobRequest, ProtocolError,
-    Sensitivity, StepId, TaskId, CANCELLATION_ACK_DEADLINE_MS,
-    FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, FIXTURE_REASONING_CAPABILITY_ID,
-    LOCAL_CODING_CAPABILITY_ID, MAX_CAPABILITY_ID_BYTES, MAX_JOB_CONTEXT_BYTES,
-    MAX_LEASE_DURATION_MS, MAX_STEP_DEADLINE_MS, MLX_REASONING_CAPABILITY_ID, PROTOCOL_VERSION,
+    JobEnvelope, JobResultEnvelope, JobResultStatus, LeaseId, LocalCodingJobRequest,
+    LocalCodingSnapshotChunkRequest, ProtocolError, Sensitivity, StepId, TaskId,
+    CANCELLATION_ACK_DEADLINE_MS, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+    FIXTURE_REASONING_CAPABILITY_ID, LOCAL_CODING_CAPABILITY_ID, MAX_CAPABILITY_ID_BYTES,
+    MAX_JOB_CONTEXT_BYTES, MAX_LEASE_DURATION_MS, MAX_STEP_DEADLINE_MS,
+    MLX_REASONING_CAPABILITY_ID, PROTOCOL_VERSION,
 };
 use rusqlite::{
     params, Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior,
@@ -2904,6 +2905,46 @@ impl MasterKernel {
         contract: &RemoteWorkContract,
     ) -> Result<JobEnvelope, MasterError> {
         self.lease_next_step_bound(device_id, connection_epoch, now_ms, Some(contract))
+    }
+
+    /// Authorizes one read-only bundle chunk only while the exact local-coding
+    /// attempt remains leased and every Feature Conveyor binding is current.
+    /// This creates no reusable repository or worker authority.
+    pub fn authorize_local_coding_snapshot_chunk(
+        &self,
+        authenticated_device_id: DeviceId,
+        request: &LocalCodingSnapshotChunkRequest,
+        now_ms: u64,
+    ) -> Result<(), MasterError> {
+        request.validate()?;
+        let tx = self.connection.unchecked_transaction()?;
+        require_emergency_unpaused_tx(&tx)?;
+        let attempt = load_attempt(&tx, request.attempt_id)?
+            .ok_or(MasterError::FeatureCodingDispatchUnavailable)?;
+        if attempt.device_id != authenticated_device_id
+            || attempt.status != AttemptStatus::Leased
+            || attempt.lease_expires_at_ms <= now_ms
+        {
+            return Err(MasterError::FeatureCodingDispatchUnavailable);
+        }
+        let job: JobEnvelope = serde_json::from_str(&attempt.job_json)?;
+        request.validate_for_job(&job)?;
+        let step_status: String = tx
+            .query_row(
+                "SELECT status FROM master_steps WHERE step_id = ?1 AND task_id = ?2",
+                params![job.step_id.0.to_string(), job.task_id.0.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or(MasterError::FeatureCodingDispatchUnavailable)?;
+        if StepStatus::parse(&step_status)? != StepStatus::Leased {
+            return Err(MasterError::FeatureCodingDispatchUnavailable);
+        }
+        let context = job.validate_local_coding()?;
+        if !coding_job_binding_is_current_tx(&tx, &context, job.step_id, attempt.device_id)? {
+            return Err(MasterError::FeatureCodingDispatchUnavailable);
+        }
+        Ok(())
     }
 
     fn lease_next_step_bound(

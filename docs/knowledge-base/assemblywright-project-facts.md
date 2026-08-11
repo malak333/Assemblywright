@@ -585,11 +585,43 @@ an old one.
   lifecycle departure, registration drift or revocation, and restart quarantine
   make it ineligible; a pre-pause or out-of-phase acknowledgement must never be
   accepted after state returns to a superficially compatible condition.
-- The Rust Mac agent currently validates and may acknowledge only the exact
-  path-free metadata envelope with `mutation_performed:false`. Windows-to-Mac
-  snapshot transport/materialization, contained coding execution, allowed-path
-  enforcement, result integration, review, publication, and autonomous
-  activation remain separate unimplemented boundaries.
+- The default-off local-coding snapshot lane begins only after the exact leased
+  path-free metadata envelope. Its distributed request and response bind the
+  job, attempt, lease, cancellation, snapshot ID/digest, sequential offset,
+  bounded total, chunk digest, and completion state. The Windows master
+  reauthorizes before and after every snapshot-bundle filesystem read; stale
+  authority never becomes reusable byte access.
+- The signed Mac bridge selects this lane only through the exact
+  `ASSEMBLYWRIGHT_MAC_DEVELOPER_LOCAL_CODING_SNAPSHOTS_ENABLED=true` opt-in with
+  both agent executable and agent data-directory settings present. Fixture,
+  MLX, and local-coding snapshot lanes are mutually exclusive.
+- Production enrollment uses `--identity-profile local-coding`, a separate
+  Secure Enclave/Keychain service, key tag, certificate label, and installed
+  profile. It accepts only `inference_worker` with the exact singleton
+  `local.coding.v1` descriptor. Standard/fixture identities remain
+  `mac_bridge`-only, local-coding rebind is forbidden, and the process launcher
+  selects this identity only for the local-coding snapshot opt-in.
+- The Mac bridge strictly validates every chunk and forwards it over the
+  authenticated owner-only Unix socket. The Rust agent writes through one
+  retained no-follow file descriptor, verifies the deterministic bundle and
+  raw Git object IDs, rejects links, traversal, reserved/case-colliding or
+  duplicate paths, reconstructs only safe regular/executable files with
+  independent shallow Git metadata and no remote/hooks, and recomputes the
+  original snapshot SHA-256. It removes the materialized repository before
+  returning `snapshot_materialized` with `mutation_performed:false`; completion,
+  cancellation, failure, shutdown, and startup leave no partial attempt state.
+- Cancellation during native verification sets an atomic stop request, waits
+  for bounded parser checkpoints and cleanup, and emits `cancelled` only after
+  the verifier has removed active attempt state. Master bundle reads retain
+  component-by-component no-follow/no-reparse directory handles plus the
+  single-link bundle handle until the bounded read completes, preventing an
+  intermediate path replacement from redirecting authority.
+- This is ephemeral Windows-to-Mac snapshot replication/materialization proof,
+  at the repository, protocol, master-route, Swift-session, agent-library, and
+  real UDS process seams; it is not yet one live two-device transfer or a
+  retained coding workspace. Contained coding execution, allowed-path
+  mutation enforcement, patch/result integration, review, publication, and
+  autonomous activation remain separate unimplemented boundaries.
 - The 2026-08-11 schema-v10 closeout reached `main` and the live Windows service
   at `4c891bd`. Native Windows mTLS/process E2E proved exact worker enrollment,
   exporter-bound dispatch and lease, wrong-digest denial, valid metadata-only

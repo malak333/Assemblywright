@@ -11,7 +11,7 @@ private enum BridgeCLIError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .usage:
-            "Usage: assemblywright-mac-bridge enrollment prepare|install [--identity-profile fixture] | enrollment rebind prepare|stage|promote|cancel --confirm | enrollment remove --confirm --identity-profile fixture | feature-conveyor approve-and-enqueue --confirm | status|connect [--identity-profile fixture] | monitor|relay [--identity-profile fixture] [--samples COUNT] [--interval-ms MILLISECONDS] [--reconnect-between-samples]"
+            "Usage: assemblywright-mac-bridge enrollment prepare|install [--identity-profile fixture|local-coding] | enrollment rebind prepare|stage|promote|cancel --confirm | enrollment remove --confirm --identity-profile fixture|local-coding | feature-conveyor approve-and-enqueue --confirm | status|connect [--identity-profile fixture|local-coding] | monitor|relay [--identity-profile fixture|local-coding] [--samples COUNT] [--interval-ms MILLISECONDS] [--reconnect-between-samples]"
         case .inputTooLarge:
             "Input exceeds this command's fixed document limit."
         case .notEnrolled:
@@ -92,11 +92,13 @@ private struct AssemblywrightMacBridgeCLI {
             try coordinator.cancelCapabilityRebind()
             try writeJSON(["status": "capability_rebind_stage_removed"])
         case ["enrollment", "remove", "--confirm"]
-            where parsed.profile == .fixtureReasoning:
-            try identityStore.removeFixtureIdentity()
+            where parsed.profile == .fixtureReasoning || parsed.profile == .localCoding:
+            try identityStore.removeIsolatedIdentity()
+            let status = parsed.profile == .fixtureReasoning
+                ? "fixture_identity_removed" : "local_coding_identity_removed"
             try writeJSON([
-                "status": "fixture_identity_removed",
-                "identity_profile": AssemblywrightMacBridgeIdentityProfile.fixtureReasoning.rawValue
+                "status": status,
+                "identity_profile": parsed.profile.rawValue
             ])
         case ["status"]:
             guard let profile = try coordinator.status() else {
@@ -185,6 +187,7 @@ private struct AssemblywrightMacBridgeCLI {
             let relay = AssemblywrightMacDeveloperEventRelay(
                 configuration: configuration,
                 deviceID: configuration.fixtureJobsEnabled || configuration.mlxJobsEnabled
+                    || configuration.localCodingSnapshotsEnabled
                     ? UUID(uuidString: profile.deviceID)
                     : nil
             )
@@ -209,12 +212,13 @@ private struct AssemblywrightMacBridgeCLI {
         while index < arguments.count {
             if arguments[index] == "--identity-profile" {
                 guard !selected, index + 1 < arguments.count,
-                      arguments[index + 1]
-                        == AssemblywrightMacBridgeIdentityProfile.fixtureReasoning.rawValue else {
+                      let selectedProfile = AssemblywrightMacBridgeIdentityProfile(
+                        selector: arguments[index + 1]
+                      ), selectedProfile != .standard else {
                     throw BridgeCLIError.usage
                 }
                 selected = true
-                profile = .fixtureReasoning
+                profile = selectedProfile
                 index += 2
             } else {
                 remaining.append(arguments[index])

@@ -25,11 +25,13 @@ use assemblywright_protocol::{
     FeatureConveyorRepositorySnapshotClaimReceipt, FeatureConveyorRepositorySnapshotClaimRequest,
     FeatureConveyorRepositorySnapshotClaimStatus, FixtureJobResult, HandshakeRequest,
     HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope, JobResultStatus,
-    Sensitivity, StepId, TaskId, ENROLLMENT_INVITATION_READY_STATUS,
-    ENROLLMENT_PAIRING_SCHEMA_VERSION, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
-    MAX_ENROLLMENT_PAIRING_FRAME_BYTES, MAX_FEATURE_CONVEYOR_CODING_DISPATCH_REQUEST_BYTES,
+    LocalCodingSnapshotChunk, LocalCodingSnapshotChunkRequest, Sensitivity, StepId, TaskId,
+    ENROLLMENT_INVITATION_READY_STATUS, ENROLLMENT_PAIRING_SCHEMA_VERSION,
+    FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, MAX_ENROLLMENT_PAIRING_FRAME_BYTES,
+    MAX_FEATURE_CONVEYOR_CODING_DISPATCH_REQUEST_BYTES,
     MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES,
-    MAX_FEATURE_CONVEYOR_SNAPSHOT_CLAIM_REQUEST_BYTES, MAX_WIRE_FRAME_BYTES, PROTOCOL_VERSION,
+    MAX_FEATURE_CONVEYOR_SNAPSHOT_CLAIM_REQUEST_BYTES, MAX_LOCAL_CODING_SNAPSHOT_CHUNK_BYTES,
+    MAX_WIRE_FRAME_BYTES, PROTOCOL_VERSION,
 };
 use axum::body::Bytes;
 use axum::extract::rejection::BytesRejection;
@@ -1162,9 +1164,6 @@ fn enrollment_pair(
 ) -> anyhow::Result<()> {
     require_operator_confirmation(confirm, "Mac enrollment pairing")?;
     let role: DeviceRole = role.into();
-    if role != DeviceRole::MacBridge {
-        bail!("enrollment pair accepts only --role mac-bridge");
-    }
     require_concrete_remote_bind(master_endpoint)
         .context("validate the advertised master endpoint before creating an enrollment grant")?;
 
@@ -1178,6 +1177,19 @@ fn enrollment_pair(
                 capabilities_file.display()
             )
         })?;
+    if role == DeviceRole::InferenceWorker
+        && capabilities.as_slice() != [CapabilityDescriptor::local_coding()]
+    {
+        bail!("inference-worker enrollment requires exact local.coding.v1 capability");
+    }
+    if role == DeviceRole::MacBridge
+        && capabilities.iter().any(|capability| {
+            capability.id == assemblywright_protocol::LOCAL_CODING_CAPABILITY_ID
+                || capability.kind == assemblywright_protocol::CapabilityKind::LocalCoding
+        })
+    {
+        bail!("mac-bridge enrollment cannot carry local.coding.v1 capability");
+    }
     HandshakeRequest {
         protocol_version: PROTOCOL_VERSION,
         device_id: DeviceId::new(Uuid::from_u128(1)),
@@ -1703,6 +1715,10 @@ fn remote_router(state: AppState) -> Router {
             post(remote_accept_handshake),
         )
         .route("/v1/distributed/leases/next", post(remote_lease_next))
+        .route(
+            "/v1/distributed/feature-conveyor/snapshot-chunks",
+            post(remote_local_coding_snapshot_chunk),
+        )
         .route("/v1/distributed/results", post(remote_accept_result))
         .route(
             "/v1/distributed/cancellations/next",
@@ -1898,6 +1914,79 @@ async fn remote_lease_next(
         }
         Err(error) => Err(api_error(error)),
     }
+}
+
+async fn remote_local_coding_snapshot_chunk(
+    State(state): State<AppState>,
+    Extension(session): Extension<RemoteSession>,
+    Json(request): Json<LocalCodingSnapshotChunkRequest>,
+) -> ApiResult<LocalCodingSnapshotChunk> {
+    require_work_admission(&state)?;
+    let registration =
+        require_remote_application_session(&state, &session, Some(request.connection_epoch))?;
+    if !matches!(
+        RemoteWorkContract::from_registration(&registration),
+        Ok(RemoteWorkContract::LocalCoding)
+    ) {
+        return Err(unauthorized());
+    }
+    let now_ms = current_time_ms().map_err(api_error)?;
+    let data_dir = {
+        let process = lock_process(&state)?;
+        process
+            .kernel()
+            .authorize_local_coding_snapshot_chunk(registration.device_id, &request, now_ms)
+            .map_err(snapshot_transfer_error)?;
+        process.data_dir().to_path_buf()
+    };
+    let store = RepositorySnapshotStore::open(&data_dir).map_err(|_| {
+        snapshot_transfer_error(
+            assemblywright_master::MasterError::FeatureCodingDispatchUnavailable,
+        )
+    })?;
+    let chunk = store
+        .read_bundle_chunk(
+            request.snapshot_id,
+            request.offset,
+            MAX_LOCAL_CODING_SNAPSHOT_CHUNK_BYTES,
+        )
+        .map_err(|_| {
+            snapshot_transfer_error(
+                assemblywright_master::MasterError::FeatureCodingDispatchUnavailable,
+            )
+        })?;
+    // Recheck immediately after filesystem work so pause, cancellation,
+    // registration drift, lifecycle departure, and lease expiry dominate the
+    // response rather than leaving a reusable read authorization.
+    lock_process(&state)?
+        .kernel()
+        .authorize_local_coding_snapshot_chunk(
+            registration.device_id,
+            &request,
+            current_time_ms().map_err(api_error)?,
+        )
+        .map_err(snapshot_transfer_error)?;
+    let content_sha256: [u8; 32] = Sha256::digest(&chunk.content).into();
+    Ok(Json(LocalCodingSnapshotChunk {
+        protocol_version: request.protocol_version,
+        connection_epoch: request.connection_epoch,
+        task_id: request.task_id,
+        step_id: request.step_id,
+        attempt_id: request.attempt_id,
+        lease_id: request.lease_id,
+        cancellation_id: request.cancellation_id,
+        snapshot_id: request.snapshot_id,
+        snapshot_sha256: request.snapshot_sha256,
+        offset: chunk.offset,
+        total_bytes: chunk.total_bytes,
+        content_sha256,
+        content_hex: hex(&chunk.content),
+        complete: chunk.offset + chunk.content.len() as u64 == chunk.total_bytes,
+    }))
+}
+
+fn snapshot_transfer_error(_error: assemblywright_master::MasterError) -> ApiError {
+    fixed_error(StatusCode::CONFLICT, "snapshot_transfer_rejected")
 }
 
 async fn remote_accept_result(

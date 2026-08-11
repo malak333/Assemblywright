@@ -78,7 +78,8 @@ public struct AssemblywrightMacBridgeCapability: Codable, Equatable, Sendable {
 
     fileprivate func validate() throws {
         guard validIdentifier(id, maximum: 64),
-              kind == "local_inference" || kind == "apple_integration",
+              kind == "local_inference" || kind == "local_coding"
+                || kind == "apple_integration",
               validIdentifier(provider, maximum: 64),
               !model.isEmpty, model.utf8.count <= 128,
               maxContextBytes > 0, maxContextBytes <= 256 * 1_024,
@@ -120,7 +121,7 @@ public struct AssemblywrightMacEnrollmentInvitation: Codable, Equatable, Sendabl
               status == "enrollment_invitation_ready",
               validUUID(grantID), validUUID(deviceID),
               !deviceName.isEmpty, deviceName.utf8.count <= 128,
-              role == "mac_bridge",
+              role == "mac_bridge" || role == "inference_worker",
               registryRevision > 0,
               !capabilities.isEmpty, capabilities.count <= 64,
               validEndpoint(masterEndpoint),
@@ -201,7 +202,8 @@ public struct AssemblywrightMacIssuedDeviceCertificate: Codable, Equatable, Send
         guard status == "device_certificate_issued",
               operation == "enroll",
               validUUID(deviceID), !deviceName.isEmpty, deviceName.utf8.count <= 128,
-              role == "mac_bridge", registryRevision > 0,
+              (role == "mac_bridge" || role == "inference_worker"),
+              registryRevision > 0,
               validLowercaseHex(serialHex, minimum: 2, maximum: 40),
               issuedAtMilliseconds < notAfterMilliseconds,
               validLowercaseHex(certificateSHA256, count: 64),
@@ -334,32 +336,60 @@ public struct AssemblywrightMacBridgeProfile: Codable, Equatable, Sendable {
 public enum AssemblywrightMacBridgeIdentityProfile: String, Equatable, Sendable {
     case standard
     case fixtureReasoning = "fixture"
+    case localCoding = "local-coding"
 
     public init?(selector: String) {
         self.init(rawValue: selector)
     }
 
     func validate(invitation: AssemblywrightMacEnrollmentInvitation) throws {
-        guard self == .fixtureReasoning else { return }
-        try validate(capabilities: invitation.capabilities)
+        try validate(role: invitation.role, capabilities: invitation.capabilities)
     }
 
     func validate(profile: AssemblywrightMacBridgeProfile) throws {
-        guard self == .fixtureReasoning else { return }
-        try validate(capabilities: profile.capabilities)
+        try validate(role: profile.role, capabilities: profile.capabilities)
     }
 
-    private func validate(capabilities: [AssemblywrightMacBridgeCapability]) throws {
-        guard capabilities == [
-            AssemblywrightMacBridgeCapability(
-                id: "fixture.reasoning",
-                kind: "local_inference",
-                provider: "assemblywright-fixture",
-                model: "assemblywright-fixture-v1",
-                maxContextBytes: 8 * 1_024,
-                maxResultBytes: 8 * 1_024
-            )
-        ] else {
+    private func validate(
+        role: String,
+        capabilities: [AssemblywrightMacBridgeCapability]
+    ) throws {
+        let expectedRole: String
+        let expectedCapabilities: [AssemblywrightMacBridgeCapability]?
+        switch self {
+        case .standard:
+            expectedRole = "mac_bridge"
+            expectedCapabilities = nil
+        case .fixtureReasoning:
+            expectedRole = "mac_bridge"
+            expectedCapabilities = [
+                AssemblywrightMacBridgeCapability(
+                    id: "fixture.reasoning",
+                    kind: "local_inference",
+                    provider: "assemblywright-fixture",
+                    model: "assemblywright-fixture-v1",
+                    maxContextBytes: 8 * 1_024,
+                    maxResultBytes: 8 * 1_024
+                )
+            ]
+        case .localCoding:
+            expectedRole = "inference_worker"
+            expectedCapabilities = [
+                AssemblywrightMacBridgeCapability(
+                    id: "local.coding.v1",
+                    kind: "local_coding",
+                    provider: "assemblywright-agent",
+                    model: "assemblywright-local-coding-v1",
+                    maxContextBytes: 8 * 1_024,
+                    maxResultBytes: 32 * 1_024
+                )
+            ]
+        }
+        guard role == expectedRole,
+              self != .standard || !capabilities.contains(where: {
+                  $0.id == "local.coding.v1" || $0.kind == "local_coding"
+              }),
+              expectedCapabilities.map({ capabilities == $0 }) ?? true else {
             throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
         }
     }
