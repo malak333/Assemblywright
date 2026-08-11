@@ -152,7 +152,7 @@ function Remove-BoundedCommitGraphCache {
             $entry.PSIsContainer -or
             ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
             ($entry.Name -cne "commit-graph-chain" -and
-                $entry.Name -cnotmatch "^graph-[0-9a-f]{64}\.graph$")
+                $entry.Name -cnotmatch "^graph-([0-9a-f]{40}|[0-9a-f]{64})\.graph$")
         ) {
             throw "The disposable commit-graph cache contained an unsupported entry."
         }

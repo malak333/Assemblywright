@@ -527,8 +527,9 @@ an old one.
   nested object-store directory. The live controller therefore uses
   `git clone --no-local`; recovery of an already marker-bound disposable clone
   removes only a strictly named, regular-file, non-reparse commit-graph cache
-  and verifies the remaining flat object-store shape before claiming. It never
-  rewrites the source checkout or committed proof tree.
+  (admitting Git's 40-hex SHA-1 and 64-hex SHA-256 graph names) and verifies
+  the remaining flat object-store shape before claiming. It never rewrites the
+  source checkout or committed proof tree.
 - Take authenticated Windows health before and after a live fixture closeout.
   A reconnect may expire an abandoned queued fixture from an interrupted prior
   run; accept the closeout only when the final health is unpaused and reports

@@ -32,6 +32,7 @@ for required in \
   'Assert-NoReparseTree' \
   'Remove-BoundedCommitGraphCache' \
   'Assert-SnapshotCompatibleObjectStore' \
+  'graph-([0-9a-f]{40}|[0-9a-f]{64})' \
   'git clone --no-local' \
   'non-resumable $kind grant revision' \
   'Cleanup without a checkout requires its exact prior binding.' \
