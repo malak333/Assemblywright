@@ -616,12 +616,27 @@ an old one.
   component-by-component no-follow/no-reparse directory handles plus the
   single-link bundle handle until the bounded read completes, preventing an
   intermediate path replacement from redirecting authority.
-- This is ephemeral Windows-to-Mac snapshot replication/materialization proof,
-  at the repository, protocol, master-route, Swift-session, agent-library, and
-  real UDS process seams; it is not yet one live two-device transfer or a
-  retained coding workspace. Contained coding execution, allowed-path
-  mutation enforcement, patch/result integration, review, publication, and
-  autonomous activation remain separate unimplemented boundaries.
+- This is ephemeral Windows-to-Mac snapshot replication/materialization proof.
+  Repository, protocol, Windows master-route/mTLS, agent-library, and real UDS
+  process seams are covered, and the canonical Mac native E2E now drives the
+  production Swift relay and code-identity launcher against the real supervised
+  Rust agent. It is still not one live two-device transfer or a retained coding
+  workspace. Contained coding execution, allowed-path mutation enforcement,
+  patch/result integration, review, publication, and autonomous activation
+  remain separate unimplemented boundaries.
+- Validate bundle manifest paths from the raw UTF-8 bytes before constructing a
+  platform path. `PathBuf` may normalize repeated or boundary separators, so
+  traversal, empty segments, `.git`, Windows-reserved names, invalid UTF-8,
+  trailing dot/space, overlength names, and case collisions need direct unit
+  coverage rather than relying on later filesystem calls to fail.
+- The 2026-08-11 snapshot-replication implementation reached `main` and the
+  live Windows `AssemblywrightMaster` service at `94a98a0`. The Windows native
+  gate proved exact local-coding enrollment and bounded snapshot transfer over
+  mTLS; the Mac native seams proved deterministic Git materialization, strict
+  identity and digest binding, cancellation cleanup, startup recovery, and
+  production Swift-to-real-agent supervision. This remains repository and
+  deployment proof, not a signed/notarized clean-profile release or owner-run
+  live two-device snapshot transfer.
 - The 2026-08-11 schema-v10 closeout reached `main` and the live Windows service
   at `4c891bd`. Native Windows mTLS/process E2E proved exact worker enrollment,
   exporter-bound dispatch and lease, wrong-digest denial, valid metadata-only

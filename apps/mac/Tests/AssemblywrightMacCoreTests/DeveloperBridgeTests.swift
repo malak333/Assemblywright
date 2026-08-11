@@ -301,7 +301,7 @@ private actor FakeLocalCodingBridgeSession: AssemblywrightMacBridgeSession {
     let job: Data
     private var chunks: [Data]
     let cancellation: Data?
-    let acceptedResult: Data
+    let acceptedResult: Data?
     private(set) var requests: [AssemblywrightMacBridgeHTTPRequest] = []
     private(set) var cancelled = false
     private var cancellationDelivered = false
@@ -312,7 +312,7 @@ private actor FakeLocalCodingBridgeSession: AssemblywrightMacBridgeSession {
         job: Data,
         chunks: [Data],
         cancellation: Data? = nil,
-        acceptedResult: Data
+        acceptedResult: Data?
     ) {
         self.connectionEpoch = connectionEpoch
         self.eventBatch = eventBatch
@@ -344,7 +344,24 @@ private actor FakeLocalCodingBridgeSession: AssemblywrightMacBridgeSession {
                 body: Data(#"{"status":"no_cancellation"}"#.utf8)
             )
         case AssemblywrightMacDeveloperEventRelay.remoteResultPath:
-            return .init(status: 200, body: acceptedResult)
+            if let acceptedResult {
+                return .init(status: 200, body: acceptedResult)
+            }
+            let result = try #require(
+                JSONSerialization.jsonObject(with: request.body) as? [String: Any]
+            )
+            return .init(
+                status: 200,
+                body: try JSONSerialization.data(
+                    withJSONObject: [
+                        "task_id": try #require(result["task_id"] as? String),
+                        "step_id": try #require(result["step_id"] as? String),
+                        "status": "succeeded",
+                        "payload_sha256": try #require(result["payload_sha256"] as? [Any])
+                    ],
+                    options: [.sortedKeys]
+                )
+            )
         case AssemblywrightMacDeveloperEventRelay.remoteCancellationAcknowledgementPath:
             return .init(
                 status: 200,
@@ -2483,6 +2500,74 @@ struct DeveloperBridgeTests {
         try await relay.stop()
     }
 
+    @Test("Production Swift relay transfers a snapshot through a real supervised Rust agent")
+    func localCodingSnapshotRelayUsesRealSupervisedAgent() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["ASSEMBLYWRIGHT_MAC_LOCAL_CODING_NATIVE_E2E"] == "true" else {
+            return
+        }
+        let executablePath = try #require(
+            environment["ASSEMBLYWRIGHT_MAC_LOCAL_CODING_AGENT_EXECUTABLE"]
+        )
+        let dataDirectoryPath = try #require(
+            environment["ASSEMBLYWRIGHT_MAC_LOCAL_CODING_AGENT_DATA_DIR"]
+        )
+        let documents = try localCodingSnapshotDocuments(
+            connectionEpoch: 69,
+            snapshotBundle: nativeLocalCodingSnapshotBundle()
+        )
+        let relay = AssemblywrightMacDeveloperEventRelay(
+            configuration: AssemblywrightMacDeveloperEventRelayConfiguration(
+                agentExecutableURL: URL(fileURLWithPath: executablePath),
+                agentDataDirectoryURL: URL(
+                    fileURLWithPath: dataDirectoryPath,
+                    isDirectory: true
+                ),
+                localCodingSnapshotsEnabled: true
+            ),
+            deviceID: documents.deviceID
+        )
+        let master = FakeLocalCodingBridgeSession(
+            connectionEpoch: 69,
+            eventBatch: emptyEventBatch(),
+            job: documents.job,
+            chunks: documents.chunks,
+            acceptedResult: nil
+        )
+
+        do {
+            let progress = try await relay.relayEvents(using: master)
+            #expect(progress.acceptedEventCount == 0)
+            #expect(progress.requiresFreshConnection == false)
+            try await relay.stop()
+        } catch {
+            try? await relay.stop()
+            throw error
+        }
+
+        let attemptRoot = URL(
+            fileURLWithPath: dataDirectoryPath,
+            isDirectory: true
+        ).appendingPathComponent("local-coding-snapshots", isDirectory: true)
+        #expect(
+            try FileManager.default.contentsOfDirectory(atPath: attemptRoot.path).isEmpty
+        )
+        let requests = await master.requests
+        #expect(
+            requests.filter {
+                $0.path == AssemblywrightMacDeveloperEventRelay.remoteSnapshotChunksPath
+            }.count == documents.chunks.count
+        )
+        #expect(requests.map(\.path).contains(
+            AssemblywrightMacDeveloperEventRelay.remoteResultPath
+        ))
+        print(
+            "assemblywright_mac_local_coding_native_e2e_ok "
+                + "agent_supervision=verified sequential_transfer=verified "
+                + "git_materialization=verified cleanup=verified no_execution=verified"
+        )
+    }
+
     @Test("Local-coding relay rejects drift before forwarding and cleans partial state")
     func localCodingSnapshotRelayRejectsChunkDrift() async throws {
         let documents = try localCodingSnapshotDocuments(connectionEpoch: 67)
@@ -3634,7 +3719,8 @@ private func localCodingRelayConfiguration()
 }
 
 private func localCodingSnapshotDocuments(
-    connectionEpoch: UInt64
+    connectionEpoch: UInt64,
+    snapshotBundle: (data: Data, digest: [UInt8])? = nil
 ) throws -> LocalCodingSnapshotDocuments {
     let taskID = "11111111-1111-4111-8111-111111111111"
     let stepID = "22222222-2222-4222-8222-222222222222"
@@ -3643,7 +3729,7 @@ private func localCodingSnapshotDocuments(
     let cancellationID = "55555555-5555-4555-8555-555555555555"
     let deviceIDText = "66666666-6666-4666-8666-666666666666"
     let snapshotID = "77777777-7777-4777-8777-777777777777"
-    let snapshotDigest = [UInt8](repeating: 0x22, count: 32)
+    let snapshotDigest = snapshotBundle?.digest ?? [UInt8](repeating: 0x22, count: 32)
     let workPacketDigest = [UInt8](repeating: 0x33, count: 32)
     let context: [String: Any] = [
         "feature_id": "88888888-8888-4888-8888-888888888888",
@@ -3688,6 +3774,7 @@ private func localCodingSnapshotDocuments(
     ]
     let job = try JSONSerialization.data(withJSONObject: jobObject, options: [.sortedKeys])
 
+    let totalBytes = snapshotBundle.map { UInt64($0.data.count) } ?? 3
     func chunk(offset: UInt64, content: Data, complete: Bool) throws -> Data {
         try JSONSerialization.data(
             withJSONObject: [
@@ -3701,7 +3788,7 @@ private func localCodingSnapshotDocuments(
                 "snapshot_id": snapshotID,
                 "snapshot_sha256": snapshotDigest,
                 "offset": offset,
-                "total_bytes": 3,
+                "total_bytes": totalBytes,
                 "content_sha256": Array(SHA256.hash(data: content)),
                 "content_hex": content.map { String(format: "%02x", $0) }.joined(),
                 "complete": complete
@@ -3709,10 +3796,25 @@ private func localCodingSnapshotDocuments(
             options: [.sortedKeys]
         )
     }
-    let chunks = [
-        try chunk(offset: 0, content: Data([0xaa, 0xbb]), complete: false),
-        try chunk(offset: 2, content: Data([0xcc]), complete: true)
-    ]
+    let chunks: [Data]
+    if let snapshotBundle {
+        let split = max(1, snapshotBundle.data.count / 2)
+        let first = snapshotBundle.data.prefix(split)
+        let second = snapshotBundle.data.dropFirst(split)
+        chunks = [
+            try chunk(offset: 0, content: Data(first), complete: second.isEmpty),
+            try chunk(
+                offset: UInt64(first.count),
+                content: Data(second),
+                complete: true
+            )
+        ]
+    } else {
+        chunks = [
+            try chunk(offset: 0, content: Data([0xaa, 0xbb]), complete: false),
+            try chunk(offset: 2, content: Data([0xcc]), complete: true)
+        ]
+    }
 
     let payload: [String: Any] = [
         "status": "snapshot_materialized",
@@ -3790,6 +3892,80 @@ private func localCodingSnapshotDocuments(
         cancellation: cancellation,
         cancellationAcknowledgement: cancellationAcknowledgement
     )
+}
+
+private func nativeLocalCodingSnapshotBundle() -> (data: Data, digest: [UInt8]) {
+    let path = "Worker.swift"
+    let content = Data("let materialized = true\n".utf8)
+
+    func gitObjectID(kind: String, data: Data) -> Data {
+        var framed = Data("\(kind) \(data.count)\0".utf8)
+        framed.append(data)
+        return Data(Insecure.SHA1.hash(data: framed))
+    }
+
+    let blobID = gitObjectID(kind: "blob", data: content)
+    var tree = Data("100644 \(path)\0".utf8)
+    tree.append(blobID)
+    let treeID = gitObjectID(kind: "tree", data: tree)
+    let treeHex = treeID.map { String(format: "%02x", $0) }.joined()
+    let commit = Data(
+        (
+            "tree \(treeHex)\n"
+                + "author Assemblywright E2E <e2e@example.invalid> 0 +0000\n"
+                + "committer Assemblywright E2E <e2e@example.invalid> 0 +0000\n\n"
+                + "bounded native relay fixture\n"
+        ).utf8
+    )
+    let commitID = gitObjectID(kind: "commit", data: commit)
+    let commitHex = commitID.map { String(format: "%02x", $0) }.joined()
+
+    var bundle = Data("AW-SNAPSHOT-BUNDLE-V1\n\(commitHex)".utf8)
+    for (kind, objectID, data) in [
+        (UInt8(1), commitID, commit),
+        (UInt8(2), treeID, tree),
+        (UInt8(3), blobID, content)
+    ] {
+        bundle.append(contentsOf: [1, kind])
+        bundle.append(objectID)
+        bundle.appendBigEndian(UInt64(data.count))
+        bundle.append(data)
+    }
+    bundle.append(0)
+    bundle.append(1)
+    bundle.appendBigEndian(UInt16(path.utf8.count))
+    bundle.append(Data(path.utf8))
+    bundle.appendBigEndian(UInt32(0o100644))
+    bundle.append(blobID)
+    bundle.appendBigEndian(UInt64(content.count))
+    bundle.append(0)
+
+    var digest = SHA256()
+    digest.update(data: Data("assemblywright.repository-snapshot.v1\0".utf8))
+    digest.update(data: commitID)
+    var pathLength = Data()
+    pathLength.appendBigEndian(UInt64(path.utf8.count))
+    digest.update(data: pathLength)
+    digest.update(data: Data(path.utf8))
+    var mode = Data()
+    mode.appendBigEndian(UInt32(0o100644))
+    digest.update(data: mode)
+    digest.update(data: blobID)
+    var contentLength = Data()
+    contentLength.appendBigEndian(UInt64(content.count))
+    digest.update(data: contentLength)
+    digest.update(data: content)
+    let snapshotDigest = Array(digest.finalize())
+    bundle.append(Data("AW-SNAPSHOT-END-V1\n".utf8))
+    bundle.append(Data(snapshotDigest))
+    return (bundle, snapshotDigest)
+}
+
+private extension Data {
+    mutating func appendBigEndian<T: FixedWidthInteger>(_ value: T) {
+        var encoded = value.bigEndian
+        Swift.withUnsafeBytes(of: &encoded) { append(contentsOf: $0) }
+    }
 }
 
 private func mlxJobDocuments(connectionEpoch: UInt64) throws -> FixtureJobDocuments {

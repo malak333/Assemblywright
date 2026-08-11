@@ -272,7 +272,8 @@ and digests, never raw payloads or credentials.
 - Deterministic cross-process E2E across the real boundaries: the protocol
   contract seam, a real master process with fake workers, enrollment and mTLS
   over loopback, the event cursor, the Windows SCM service, and the Mac
-  agent relay.
+  agent relay. The local-coding snapshot lane additionally runs the production
+  Swift relay and launcher against the real supervised Rust agent process.
 - Owner-controlled live closeouts for the Mac/Windows bridge, kept explicitly
   separate from repository validation.
 - Repository validation stays distinct from signing, notarization, live-device

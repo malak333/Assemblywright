@@ -144,6 +144,7 @@ executable changes as release evidence.
 | Mac agent relay | `cargo test -p assemblywright-agent --test local_relay_e2e` |
 | Native metadata-only coding admission | `cargo test -p assemblywright-agent --test local_coding_admission` |
 | Native ephemeral snapshot materialization and cleanup | `cargo test -p assemblywright-agent snapshot::tests` |
+| Production Swift relay to supervised Rust-agent snapshot E2E | `./scripts/mac-local-coding-snapshot-e2e.sh` |
 | Local transport and release | `cargo test -p assemblywright-core` |
 | Readiness protocol proof unit | `cargo test -p assemblywright-core protocol_readiness_proof_is_version_independent` |
 | CLI naming contract E2E | `cargo test -p assemblywright-cli --test naming_contract_e2e` |

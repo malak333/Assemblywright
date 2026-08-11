@@ -270,7 +270,10 @@ packet for one exact registered worker; after the exact lease, a separate
 default-off route streams a bounded authenticated snapshot bundle to the Mac
 bridge and native agent. The agent reconstructs an independent no-remote Git
 repository, verifies its object graph, paths, modes, sizes, and aggregate
-digest, and removes it before returning a non-mutation receipt. Retaining that
+digest, and removes it before returning a non-mutation receipt. Manifest paths
+are rejected from their raw UTF-8 form before filesystem path normalization so
+empty, repeated, leading, or trailing separators cannot acquire a different
+meaning on the Mac or Windows boundary. Retaining that
 workspace for a contained coding process, allowed-path mutation enforcement,
 patch/result integration, review, and publication remain unimplemented.
 

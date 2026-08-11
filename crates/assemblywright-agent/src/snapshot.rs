@@ -686,7 +686,11 @@ fn validate_relative_path(
     seen: &mut HashSet<String>,
 ) -> Result<PathBuf, LocalCodingSnapshotError> {
     let text = std::str::from_utf8(bytes).map_err(|_| LocalCodingSnapshotError::Rejected)?;
-    if text.is_empty() || text.len() > MAX_PATH_BYTES || text.contains('\\') {
+    if text.is_empty()
+        || text.len() > MAX_PATH_BYTES
+        || text.contains('\\')
+        || text.split('/').any(|component| component.is_empty())
+    {
         return Err(LocalCodingSnapshotError::Rejected);
     }
     let path = PathBuf::from(text);
@@ -1081,6 +1085,70 @@ mod tests {
                 .count(),
             0
         );
+    }
+
+    #[test]
+    fn manifest_path_policy_rejects_ambiguous_or_cross_platform_unsafe_names() {
+        let mut seen = HashSet::new();
+        assert_eq!(
+            validate_relative_path(b"Sources/Worker.swift", &mut seen).unwrap(),
+            PathBuf::from("Sources/Worker.swift")
+        );
+
+        for invalid in [
+            b"".as_slice(),
+            b"/absolute",
+            b"trailing/",
+            b"double//separator",
+            b"./relative",
+            b"parent/../escape",
+            b".git/config",
+            b"metadata/.GIT/index",
+            b"back\\slash",
+            b"drive:name",
+            b"trailing-dot.",
+            b"trailing-space ",
+            b"CON",
+            b"aux.txt",
+            b"COM1.log",
+            b"lpt9",
+        ] {
+            assert!(
+                matches!(
+                    validate_relative_path(invalid, &mut HashSet::new()),
+                    Err(LocalCodingSnapshotError::Rejected)
+                ),
+                "unsafe manifest path was accepted: {:?}",
+                String::from_utf8_lossy(invalid)
+            );
+        }
+        assert!(matches!(
+            validate_relative_path(&[0xff], &mut HashSet::new()),
+            Err(LocalCodingSnapshotError::Rejected)
+        ));
+        assert!(matches!(
+            validate_relative_path(
+                vec![b'a'; MAX_PATH_BYTES + 1].as_slice(),
+                &mut HashSet::new()
+            ),
+            Err(LocalCodingSnapshotError::Rejected)
+        ));
+        let maximum = (0..5)
+            .map(|_| "a".repeat(204))
+            .collect::<Vec<_>>()
+            .join("/");
+        assert_eq!(maximum.len(), MAX_PATH_BYTES);
+        assert_eq!(
+            validate_relative_path(maximum.as_bytes(), &mut HashSet::new()).unwrap(),
+            PathBuf::from(maximum)
+        );
+
+        let mut collisions = HashSet::new();
+        validate_relative_path(b"Sources/File.swift", &mut collisions).unwrap();
+        assert!(matches!(
+            validate_relative_path(b"sources/file.swift", &mut collisions),
+            Err(LocalCodingSnapshotError::Rejected)
+        ));
     }
 
     #[test]

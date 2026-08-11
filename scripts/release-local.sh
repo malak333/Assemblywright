@@ -92,6 +92,7 @@ run cargo clippy --workspace --all-targets -- -D warnings
 run cargo test --workspace
 run cargo test --workspace -- --ignored
 run cargo build --workspace
+run ./scripts/mac-local-coding-snapshot-e2e.sh
 run ./scripts/release-cargo-package.sh
 run ./scripts/package-distribution.sh --check
 run ./scripts/package-distribution.sh --check-guidance-self-test

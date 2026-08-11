@@ -60,6 +60,7 @@ MAC_BRIDGE_TESTS="apps/mac/Tests/AssemblywrightMacCoreTests/DeveloperBridgeTests
 MAC_APP_TESTS="apps/mac/Tests/AssemblywrightMacAppTests/AssemblywrightMacAppTests.swift"
 
 MAC_BRIDGE_LIVE_E2E="scripts/mac-windows-bridge-live-e2e.sh"
+MAC_LOCAL_CODING_SNAPSHOT_E2E="scripts/mac-local-coding-snapshot-e2e.sh"
 WINDOWS_FIXTURE_LIVE_CONTROL="scripts/windows-fixture-live-control.ps1"
 WINDOWS_MLX_LIVE_CONTROL="scripts/windows-mlx-live-control.ps1"
 WINDOWS_PROTOCOL_WORKFLOW=".github/workflows/windows-protocol.yml"
@@ -114,7 +115,8 @@ for file in \
   "$MAC_BRIDGE" "$MAC_BRIDGE_CLI" "$MAC_BRIDGE_KEYCHAIN" "$MAC_BRIDGE_NETWORK" \
   "$MAC_BRIDGE_SUPERVISOR" "$MAC_OWNER_CONTROL" "$MAC_BRIDGE_PROCESS" "$MAC_EVENT_RELAY" \
   "$MAC_APP" "$MAC_BRIDGE_TESTS" "$MAC_APP_TESTS" \
-  "$MAC_BRIDGE_LIVE_E2E" "$WINDOWS_FIXTURE_LIVE_CONTROL" \
+  "$MAC_BRIDGE_LIVE_E2E" "$MAC_LOCAL_CODING_SNAPSHOT_E2E" \
+  "$WINDOWS_FIXTURE_LIVE_CONTROL" \
   "$WINDOWS_MLX_LIVE_CONTROL" "$WINDOWS_PROTOCOL_WORKFLOW" \
   "$RELEASE_VERSION_SCRIPT" "$NAMING_CONTRACT_SMOKE"; do
   require_file "$file"
@@ -228,6 +230,11 @@ require_text "conveyor coding protocol path-free contract" "$PROTOCOL_LOCAL_CODI
   "owner_dispatch_is_strict_bounded_digest_bound_and_path_free"
 require_text "conveyor native coding admission" "$AGENT_LOCAL_CODING_E2E" \
   "native_agent_admits_only_path_free_snapshot_bound_metadata_without_executing_it"
+require_text "conveyor native Swift-to-Rust snapshot E2E" \
+  "$MAC_LOCAL_CODING_SNAPSHOT_E2E" \
+  "localCodingSnapshotRelayUsesRealSupervisedAgent"
+require_text "conveyor native snapshot E2E release gate" "$LOCAL_GATE" \
+  "./scripts/mac-local-coding-snapshot-e2e.sh"
 require_text "conveyor Swift strict decoder" "$MAC_BRIDGE_SUPERVISOR" \
   "invalid_feature_conveyor_status"
 require_text "conveyor authenticated snapshot only" "$MAC_BRIDGE_SUPERVISOR" \
@@ -344,6 +351,8 @@ require_text "build docs snapshot claim process E2E" "$BUILD_DOCS" \
   "repository_snapshot_claim_is_authenticated_path_free_and_durable"
 require_text "build docs coding dispatch protocol" "$BUILD_DOCS" \
   "cargo test -p assemblywright-protocol --test local_coding_contract"
+require_text "build docs native snapshot relay E2E" "$BUILD_DOCS" \
+  "./scripts/mac-local-coding-snapshot-e2e.sh"
 require_text "build docs Windows package-scoped clippy boundary" "$BUILD_DOCS" \
   "Do not substitute the macOS/Linux workspace-wide clippy command"
 require_text "safety snapshot blocking timeout boundary" "$SAFETY_RULES" \
@@ -354,6 +363,10 @@ require_text "knowledge base shallow snapshot boundary" "$KB" \
   "parent commits and deleted historical objects are absent"
 require_text "knowledge base coding dispatch boundary" "$KB" \
   "metadata-only coding-dispatch admission"
+require_text "knowledge base production Swift-to-Rust snapshot E2E" "$KB" \
+  "production Swift relay and code-identity launcher"
+require_text "knowledge base raw manifest path rule" "$KB" \
+  "raw UTF-8 bytes before constructing a"
 
 # Documents must not advertise the removed assistant surface.
 for file in "$README" "$DESIGN" "$ARCHITECTURE" "$BUILD_DOCS" "$CHECKLIST" "$KB" "$AGENTS"; do
