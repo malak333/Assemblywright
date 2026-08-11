@@ -42,6 +42,25 @@ fn owner_control_bridge_designation_is_owner_authenticated_strict_and_redacted()
     read_ready(&mut server.child);
     let token = std::fs::read_to_string(directory.path().join("development.token")).unwrap();
     let token = token.trim();
+    let dispatch_unauthorized = post_request(
+        endpoint,
+        "/v1/feature-conveyor/coding-dispatches",
+        None,
+        "{}",
+    );
+    assert!(dispatch_unauthorized.starts_with("HTTP/1.1 401 Unauthorized"));
+    let dispatch_malformed = post_request(
+        endpoint,
+        "/v1/feature-conveyor/coding-dispatches",
+        Some(token),
+        r#"{"schema_version":1,"repository_path":"private"}"#,
+    );
+    assert!(dispatch_malformed.starts_with("HTTP/1.1 422 Unprocessable Entity"));
+    assert_eq!(
+        response_json(&dispatch_malformed),
+        serde_json::json!({"error":"feature_coding_dispatch_request_rejected"})
+    );
+    assert!(!dispatch_malformed.contains("private"));
     let owner = DeviceRegistration {
         device_id: DeviceId::new(Uuid::new_v4()),
         device_name: "owner-control-e2e".to_string(),
@@ -1005,7 +1024,7 @@ fn windows_master_process_owns_state_and_completes_cross_process_fixture() {
     let setup_receipt: Value = serde_json::from_slice(&setup.stdout).expect("setup JSON receipt");
     assert_eq!(setup_receipt["status"], "setup_complete");
     assert_eq!(setup_receipt["protocol_version"], 2);
-    assert_eq!(setup_receipt["schema_version"], 9);
+    assert_eq!(setup_receipt["schema_version"], 10);
     assert!(directory.path().join("master.sqlite3").is_file());
     assert!(directory.path().join("development.token").is_file());
     let development_token = std::fs::read_to_string(directory.path().join("development.token"))

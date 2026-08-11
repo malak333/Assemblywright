@@ -23,11 +23,12 @@ advertisements; handshake, job, and result envelopes; strict bound-before-decode
 JSON entry points; nil-identity rejection; fixed-schema Feature Conveyor owner-
 control request/receipt contracts; and a golden compatibility fixture.
 
-**`assemblywright-master`** — a portable schema-v9 SQLite database retaining
+**`assemblywright-master`** — a portable schema-v10 SQLite database retaining
 the schema-v4 device lifecycle, schema-v5 Feature Conveyor, schema-v6
 capability rebind evidence, schema-v7 Emergency Pause revision, and schema-v8
-single owner-control bridge designation, and schema-v9 immutable repository
-snapshot-claim evidence, plus a headless single-owner
+single owner-control bridge designation, schema-v9 immutable repository
+snapshot-claim evidence, and schema-v10 metadata-only coding-dispatch evidence,
+plus a headless single-owner
 executable.
 
 - *Distributed device lifecycle*: registered device metadata, connection epochs
@@ -48,6 +49,14 @@ executable.
   atomically binds it to the exact strict queue head, provider, grants, pause,
   and queue revisions. A fail-fast singleton reservation serializes bounded
   snapshot work and remains held by any timed-out blocking task until cleanup.
+  A separate owner-token loopback-only action may explicitly queue one
+  `local.coding.v1` metadata-only work packet bound to that exact feature lease,
+  snapshot ID and digest, lifecycle, queue and Emergency Pause revisions, and
+  one exact current `InferenceWorker` registration. The action, queued step,
+  distributed event, immutable dispatch binding, and redacted audit commit in
+  one transaction. The native agent validates only the path-free admission
+  envelope and cannot receive repository bytes, a path, commands, credentials,
+  or mutation authority in this slice.
   Enqueue, reorder, claim, lifecycle, cancellation, abandonment,
   and startup quarantine commit with redacted audit evidence in the same
   transaction. Success releases the lease only with verified healthy-main
@@ -142,9 +151,11 @@ decision must be auditable. Do not describe this as a finished product.
 Not yet implemented, and not claimed:
 
 - Autonomous dispatch, repository mutation, or publication of any kind. The
-  implemented preflight remains read-only; the separate default-off owner-local
-  snapshot-claim action creates durable isolated state and one lease but does
-  not dispatch work or invoke a provider.
+  implemented preflight remains read-only; the default-off owner-local
+  snapshot claim creates durable isolated state and one lease, and a separate
+  explicit owner-local action may queue one snapshot-bound metadata-only coding
+  admission. It does not transfer repository material, execute a coding
+  runtime, mutate a snapshot, integrate a result, or invoke a provider.
 - Worker execution against real repositories, review-provider invocation, or
   GitHub branch/PR/merge authority.
 - Mac Feature Conveyor UI controls or hosted brainstorming. The app remains

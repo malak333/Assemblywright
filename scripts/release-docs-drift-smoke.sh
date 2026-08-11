@@ -34,6 +34,7 @@ CLI_MAIN="crates/assemblywright-cli/src/main.rs"
 PROTOCOL_E2E="crates/assemblywright-protocol/tests/distributed_protocol_contract_e2e.rs"
 PROTOCOL_EVENT_E2E="crates/assemblywright-protocol/tests/distributed_event_cursor_contract.rs"
 PROTOCOL_MLX_E2E="crates/assemblywright-protocol/tests/mlx_job_contract.rs"
+PROTOCOL_LOCAL_CODING_E2E="crates/assemblywright-protocol/tests/local_coding_contract.rs"
 MASTER_E2E="crates/assemblywright-master/tests/master_lifecycle_e2e.rs"
 MASTER_PROCESS_E2E="crates/assemblywright-master/tests/master_process_e2e.rs"
 MASTER_IDENTITY_E2E="crates/assemblywright-master/tests/enrollment_identity_e2e.rs"
@@ -42,6 +43,7 @@ MASTER_EVENT_E2E="crates/assemblywright-master/tests/event_cursor_e2e.rs"
 MASTER_CONVEYOR_E2E="crates/assemblywright-master/tests/feature_conveyor_kernel.rs"
 MASTER_SERVICE_E2E="crates/assemblywright-master/tests/windows_service_lifecycle_e2e.rs"
 AGENT_E2E="crates/assemblywright-agent/tests/local_relay_e2e.rs"
+AGENT_LOCAL_CODING_E2E="crates/assemblywright-agent/tests/local_coding_admission.rs"
 CLI_NAMING_E2E="crates/assemblywright-cli/tests/naming_contract_e2e.rs"
 CLI_READINESS_E2E="crates/assemblywright-cli/tests/release_readiness_e2e.rs"
 
@@ -104,9 +106,10 @@ for file in \
   "$MASTER_CRATE" "$MASTER_PROCESS" "$MASTER_IDENTITY" "$MASTER_SERVICE_HOST" \
   "$AGENT_CRATE" "$AGENT_PROCESS" "$CLI_MAIN" \
   "$PROTOCOL_E2E" "$PROTOCOL_EVENT_E2E" "$PROTOCOL_MLX_E2E" \
+  "$PROTOCOL_LOCAL_CODING_E2E" \
   "$MASTER_E2E" "$MASTER_PROCESS_E2E" "$MASTER_IDENTITY_E2E" \
   "$MASTER_REMOTE_MTLS_E2E" "$MASTER_EVENT_E2E" "$MASTER_CONVEYOR_E2E" \
-  "$MASTER_SERVICE_E2E" "$AGENT_E2E" "$CLI_NAMING_E2E" \
+  "$MASTER_SERVICE_E2E" "$AGENT_E2E" "$AGENT_LOCAL_CODING_E2E" "$CLI_NAMING_E2E" \
   "$CLI_READINESS_E2E" \
   "$MAC_BRIDGE" "$MAC_BRIDGE_CLI" "$MAC_BRIDGE_KEYCHAIN" "$MAC_BRIDGE_NETWORK" \
   "$MAC_BRIDGE_SUPERVISOR" "$MAC_OWNER_CONTROL" "$MAC_BRIDGE_PROCESS" "$MAC_EVENT_RELAY" \
@@ -155,7 +158,7 @@ require_text "README non-claims" "$README" "Autonomous dispatch"
 require_text "DESIGN conveyor pointer" "$DESIGN" "docs/feature-conveyor-design.md"
 require_text "DESIGN distributed pointer" "$DESIGN" "docs/distributed-developer-mode-design.md"
 require_text "DESIGN assistant non-goal" "$DESIGN" "No general-purpose assistant surface."
-require_text "DESIGN current master schema" "$DESIGN" "schema-v9"
+require_text "DESIGN current master schema" "$DESIGN" "schema-v10"
 
 require_text "conveyor design status" "$FEATURE_CONVEYOR_DESIGN" "default-inert"
 require_text "conveyor design approval" "$FEATURE_CONVEYOR_DESIGN" "Approve and Enqueue"
@@ -171,6 +174,8 @@ require_text "conveyor repository preflight boundary" "$FEATURE_CONVEYOR_DESIGN"
   "owner-token loopback-only repository preflight"
 require_text "conveyor repository snapshot claim boundary" "$FEATURE_CONVEYOR_DESIGN" \
   "repository-snapshot-claims"
+require_text "conveyor coding dispatch boundary" "$FEATURE_CONVEYOR_DESIGN" \
+  "coding-dispatches"
 require_text "conveyor snapshot excludes history" "$FEATURE_CONVEYOR_DESIGN" \
   "never copies parent history or"
 require_text "conveyor snapshot singleton reservation" "$FEATURE_CONVEYOR_DESIGN" \
@@ -191,6 +196,8 @@ require_text "conveyor repository preflight implementation" "$MASTER_PROCESS" \
   '"/v1/feature-conveyor/repository-preflight"'
 require_text "conveyor repository snapshot claim implementation" "$MASTER_PROCESS" \
   '"/v1/feature-conveyor/repository-snapshot-claims"'
+require_text "conveyor coding dispatch implementation" "$MASTER_PROCESS" \
+  '"/v1/feature-conveyor/coding-dispatches"'
 require_text "conveyor remote owner action implementation" "$MASTER_PROCESS" \
   '"/v1/distributed/feature-conveyor/approved-features"'
 require_text "conveyor owner guidance implementation" "$MASTER_CRATE" \
@@ -213,6 +220,12 @@ require_text "conveyor local preflight remote absence" "$MASTER_REMOTE_MTLS_E2E"
   "repository preflight leaked onto the remote router"
 require_text "conveyor local snapshot claim remote absence" "$MASTER_REMOTE_MTLS_E2E" \
   "repository snapshot claim leaked onto the remote router"
+require_text "conveyor local coding dispatch remote absence" "$MASTER_REMOTE_MTLS_E2E" \
+  "coding dispatch leaked onto the remote router"
+require_text "conveyor coding protocol path-free contract" "$PROTOCOL_LOCAL_CODING_E2E" \
+  "owner_dispatch_is_strict_bounded_digest_bound_and_path_free"
+require_text "conveyor native coding admission" "$AGENT_LOCAL_CODING_E2E" \
+  "native_agent_admits_only_path_free_snapshot_bound_metadata_without_executing_it"
 require_text "conveyor Swift strict decoder" "$MAC_BRIDGE_SUPERVISOR" \
   "invalid_feature_conveyor_status"
 require_text "conveyor authenticated snapshot only" "$MAC_BRIDGE_SUPERVISOR" \
@@ -323,6 +336,8 @@ require_text "build docs readiness E2E" "$BUILD_DOCS" \
   "cargo test -p assemblywright-cli --test release_readiness_e2e"
 require_text "build docs snapshot claim process E2E" "$BUILD_DOCS" \
   "repository_snapshot_claim_is_authenticated_path_free_and_durable"
+require_text "build docs coding dispatch protocol" "$BUILD_DOCS" \
+  "cargo test -p assemblywright-protocol --test local_coding_contract"
 require_text "build docs Windows package-scoped clippy boundary" "$BUILD_DOCS" \
   "Do not substitute the macOS/Linux workspace-wide clippy command"
 require_text "safety snapshot blocking timeout boundary" "$SAFETY_RULES" \
@@ -331,6 +346,8 @@ require_text "safety snapshot pre-allocation header gate" "$SAFETY_RULES" \
   "header type/declared-size"
 require_text "knowledge base shallow snapshot boundary" "$KB" \
   "parent commits and deleted historical objects are absent"
+require_text "knowledge base coding dispatch boundary" "$KB" \
+  "metadata-only coding-dispatch admission"
 
 # Documents must not advertise the removed assistant surface.
 for file in "$README" "$DESIGN" "$ARCHITECTURE" "$BUILD_DOCS" "$CHECKLIST" "$KB" "$AGENTS"; do

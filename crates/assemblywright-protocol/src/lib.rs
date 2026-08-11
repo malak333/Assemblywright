@@ -46,8 +46,14 @@ pub const MAX_FEATURE_CONVEYOR_DEPENDENCIES: usize = 100;
 pub const MAX_FEATURE_CONVEYOR_IDENTIFIER_BYTES: usize = 128;
 pub const MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES: usize = 8 * 1024;
 pub const MAX_FEATURE_CONVEYOR_SNAPSHOT_CLAIM_REQUEST_BYTES: usize = 12 * 1024;
+pub const MAX_FEATURE_CONVEYOR_CODING_DISPATCH_REQUEST_BYTES: usize = 8 * 1024;
 pub const MAX_FEATURE_CONVEYOR_REPOSITORY_PATH_BYTES: usize = 4 * 1024;
 pub const MAX_FEATURE_CONVEYOR_BASE_BRANCH_BYTES: usize = 255;
+pub const LOCAL_CODING_CAPABILITY_ID: &str = "local.coding.v1";
+pub const LOCAL_CODING_PROVIDER: &str = "assemblywright-agent";
+pub const LOCAL_CODING_MODEL: &str = "assemblywright-local-coding-v1";
+pub const MAX_LOCAL_CODING_CONTEXT_BYTES: usize = 8 * 1024;
+pub const MAX_LOCAL_CODING_RESULT_BYTES: usize = 32 * 1024;
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum ProtocolError {
@@ -119,6 +125,12 @@ pub enum ProtocolError {
     InvalidMlxJob,
     #[error("MLX result must use the exact bounded generate-text contract")]
     InvalidMlxResult,
+    #[error("local coding capability must use the exact local.coding.v1 contract")]
+    InvalidLocalCodingCapability,
+    #[error("local coding job must use the exact snapshot-bound metadata-only contract")]
+    InvalidLocalCodingJob,
+    #[error("local coding result must use the exact bounded metadata-only contract")]
+    InvalidLocalCodingResult,
     #[error("feature conveyor owner-control request is invalid")]
     InvalidFeatureConveyorOwnerControl,
 }
@@ -157,6 +169,7 @@ pub enum DeviceRole {
 #[serde(rename_all = "snake_case")]
 pub enum CapabilityKind {
     LocalInference,
+    LocalCoding,
     AppleIntegration,
 }
 
@@ -354,6 +367,9 @@ impl CapabilityDescriptor {
         {
             return Err(ProtocolError::InvalidMlxCapability);
         }
+        if self.id == LOCAL_CODING_CAPABILITY_ID && *self != CapabilityDescriptor::local_coding() {
+            return Err(ProtocolError::InvalidLocalCodingCapability);
+        }
         Ok(())
     }
 
@@ -380,6 +396,17 @@ impl CapabilityDescriptor {
             model: model.into(),
             max_context_bytes,
             max_result_bytes,
+        }
+    }
+
+    pub fn local_coding() -> Self {
+        Self {
+            id: LOCAL_CODING_CAPABILITY_ID.to_string(),
+            kind: CapabilityKind::LocalCoding,
+            provider: LOCAL_CODING_PROVIDER.to_string(),
+            model: LOCAL_CODING_MODEL.to_string(),
+            max_context_bytes: MAX_LOCAL_CODING_CONTEXT_BYTES as u32,
+            max_result_bytes: MAX_LOCAL_CODING_RESULT_BYTES as u32,
         }
     }
 }
@@ -907,6 +934,194 @@ impl FeatureConveyorRepositorySnapshotClaimReceipt {
     }
 }
 
+/// Bounded, path-free metadata for one owner-approved coding work packet.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorCodingWorkPacketMetadata {
+    pub packet_id: Uuid,
+    pub ordinal: u16,
+    pub acceptance_criteria_count: u16,
+}
+
+impl FeatureConveyorCodingWorkPacketMetadata {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_uuid("packet_id", self.packet_id)?;
+        if self.ordinal == 0 || self.acceptance_criteria_count == 0 {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        Ok(())
+    }
+}
+
+/// Explicit owner-token loopback action for one already-claimed snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorCodingDispatchRequest {
+    pub schema_version: u16,
+    pub feature_id: Uuid,
+    pub specification_revision: u64,
+    pub expected_lifecycle_revision: u64,
+    pub feature_lease_id: Uuid,
+    pub snapshot_id: Uuid,
+    pub snapshot_sha256: [u8; 32],
+    pub work_packet_sha256: [u8; 32],
+    pub work_packet: FeatureConveyorCodingWorkPacketMetadata,
+    pub device_id: DeviceId,
+    pub device_registry_revision: u64,
+    pub expected_queue_revision: u64,
+    pub expected_emergency_pause_revision: u64,
+}
+
+impl FeatureConveyorCodingDispatchRequest {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "feature_conveyor_coding_dispatch_request",
+            frame,
+            MAX_FEATURE_CONVEYOR_CODING_DISPATCH_REQUEST_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_fixed_value(
+            "schema_version",
+            self.schema_version.to_string(),
+            FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION.to_string(),
+        )?;
+        validate_uuid("feature_id", self.feature_id)?;
+        validate_uuid("feature_lease_id", self.feature_lease_id)?;
+        validate_uuid("snapshot_id", self.snapshot_id)?;
+        validate_uuid("device_id", self.device_id.0)?;
+        validate_positive_limit(
+            "specification_revision",
+            self.specification_revision,
+            u64::MAX,
+        )?;
+        validate_positive_limit(
+            "expected_lifecycle_revision",
+            self.expected_lifecycle_revision,
+            u64::MAX,
+        )?;
+        validate_positive_limit(
+            "device_registry_revision",
+            self.device_registry_revision,
+            u64::MAX,
+        )?;
+        self.work_packet.validate()?;
+        if self.snapshot_sha256 == [0; 32] || self.work_packet_sha256 == [0; 32] {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        validate_serialized_limit(
+            "feature_conveyor_coding_dispatch_request",
+            self,
+            MAX_FEATURE_CONVEYOR_CODING_DISPATCH_REQUEST_BYTES,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureConveyorCodingDispatchStatus {
+    Queued,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorCodingDispatchReceipt {
+    pub schema_version: u16,
+    pub feature_id: Uuid,
+    pub specification_revision: u64,
+    pub lifecycle_revision: u64,
+    pub feature_lease_id: Uuid,
+    pub snapshot_id: Uuid,
+    pub snapshot_sha256: [u8; 32],
+    pub work_packet_sha256: [u8; 32],
+    pub packet_id: Uuid,
+    pub device_id: DeviceId,
+    pub device_registry_revision: u64,
+    pub queue_revision: u64,
+    pub emergency_pause_revision: u64,
+    pub task_id: TaskId,
+    pub step_id: StepId,
+    pub status: FeatureConveyorCodingDispatchStatus,
+}
+
+impl FeatureConveyorCodingDispatchReceipt {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "feature_conveyor_coding_dispatch_receipt",
+            frame,
+            MAX_FEATURE_CONVEYOR_CODING_DISPATCH_REQUEST_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        let request = FeatureConveyorCodingDispatchRequest {
+            schema_version: self.schema_version,
+            feature_id: self.feature_id,
+            specification_revision: self.specification_revision,
+            expected_lifecycle_revision: self.lifecycle_revision,
+            feature_lease_id: self.feature_lease_id,
+            snapshot_id: self.snapshot_id,
+            snapshot_sha256: self.snapshot_sha256,
+            work_packet_sha256: self.work_packet_sha256,
+            work_packet: FeatureConveyorCodingWorkPacketMetadata {
+                packet_id: self.packet_id,
+                ordinal: 1,
+                acceptance_criteria_count: 1,
+            },
+            device_id: self.device_id,
+            device_registry_revision: self.device_registry_revision,
+            expected_queue_revision: self.queue_revision,
+            expected_emergency_pause_revision: self.emergency_pause_revision,
+        };
+        request.validate()?;
+        validate_uuid("task_id", self.task_id.0)?;
+        validate_uuid("step_id", self.step_id.0)
+    }
+}
+
+/// The only context accepted by `local.coding.v1`. It contains no repository
+/// bytes, repository path, allowed path, command, provider prompt, or credentials.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalCodingJobRequest {
+    pub feature_id: Uuid,
+    pub specification_revision: u64,
+    pub lifecycle_revision: u64,
+    pub feature_lease_id: Uuid,
+    pub snapshot_id: Uuid,
+    pub snapshot_sha256: [u8; 32],
+    pub work_packet_sha256: [u8; 32],
+    pub work_packet: FeatureConveyorCodingWorkPacketMetadata,
+    pub device_id: DeviceId,
+    pub device_registry_revision: u64,
+    pub queue_revision: u64,
+    pub emergency_pause_revision: u64,
+}
+
+impl LocalCodingJobRequest {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        let owner_request = FeatureConveyorCodingDispatchRequest {
+            schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+            feature_id: self.feature_id,
+            specification_revision: self.specification_revision,
+            expected_lifecycle_revision: self.lifecycle_revision,
+            feature_lease_id: self.feature_lease_id,
+            snapshot_id: self.snapshot_id,
+            snapshot_sha256: self.snapshot_sha256,
+            work_packet_sha256: self.work_packet_sha256,
+            work_packet: self.work_packet.clone(),
+            device_id: self.device_id,
+            device_registry_revision: self.device_registry_revision,
+            expected_queue_revision: self.queue_revision,
+            expected_emergency_pause_revision: self.emergency_pause_revision,
+        };
+        owner_request.validate()
+    }
+}
+
 pub fn feature_conveyor_provider_binding_sha256(provider_id: &str, model_id: &str) -> [u8; 32] {
     let mut digest = Sha256::new();
     digest.update(b"assemblywright.feature-provider-binding.v1\0");
@@ -1382,6 +1597,30 @@ impl JobEnvelope {
         request.validate()?;
         Ok(request)
     }
+
+    pub fn validate_local_coding(&self) -> Result<LocalCodingJobRequest, ProtocolError> {
+        self.validate()?;
+        if self.capability_id != LOCAL_CODING_CAPABILITY_ID
+            || self.selected_model != LOCAL_CODING_MODEL
+            || self.sensitivity != Sensitivity::Workspace
+            || self.context_handling != ContextHandlingPolicy::EphemeralNoRetention
+            || serde_json::to_vec(&self.context)
+                .map_err(|error| ProtocolError::Serialization {
+                    field: "local_coding_context",
+                    message: error.to_string(),
+                })?
+                .len()
+                > MAX_LOCAL_CODING_CONTEXT_BYTES
+        {
+            return Err(ProtocolError::InvalidLocalCodingJob);
+        }
+        let request: LocalCodingJobRequest = serde_json::from_value(self.context.clone())
+            .map_err(|_| ProtocolError::InvalidLocalCodingJob)?;
+        request
+            .validate()
+            .map_err(|_| ProtocolError::InvalidLocalCodingJob)?;
+        Ok(request)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1452,6 +1691,17 @@ pub struct MlxJobResult {
     pub operation: String,
     pub output: String,
     pub model: String,
+}
+
+/// Metadata-only acknowledgement for this default-off kernel slice. The agent
+/// does not receive repository material and cannot report a repository mutation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalCodingJobResult {
+    pub status: String,
+    pub work_packet_sha256: [u8; 32],
+    pub admission_sha256: [u8; 32],
+    pub mutation_performed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1664,6 +1914,22 @@ impl JobResultEnvelope {
             || result.model != job.selected_model
         {
             return Err(ProtocolError::InvalidMlxResult);
+        }
+        Ok(())
+    }
+
+    pub fn validate_local_coding_result(&self, job: &JobEnvelope) -> Result<(), ProtocolError> {
+        let request = job.validate_local_coding()?;
+        self.validate_for_job(job)?;
+        let result: LocalCodingJobResult = serde_json::from_value(self.payload.clone())
+            .map_err(|_| ProtocolError::InvalidLocalCodingResult)?;
+        if self.status != JobResultStatus::Completed
+            || result.status != "dispatch_acknowledged"
+            || result.work_packet_sha256 != request.work_packet_sha256
+            || result.admission_sha256 == [0; 32]
+            || result.mutation_performed
+        {
+            return Err(ProtocolError::InvalidLocalCodingResult);
         }
         Ok(())
     }

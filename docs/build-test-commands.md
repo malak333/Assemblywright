@@ -68,7 +68,8 @@ swift build --disable-sandbox --package-path apps/mac
 
 ## Windows Distributed Gate
 
-The schema-v9 snapshot-claim slice has focused portable coverage:
+The schema-v9 snapshot-claim and schema-v10 metadata coding-dispatch slices
+have focused portable coverage:
 
 ```sh
 cargo test -p assemblywright-protocol --test protocol_contract repository_snapshot_claim_contract_is_strict_exact_and_path_free_on_receipt
@@ -77,6 +78,11 @@ cargo test -p assemblywright-master --test feature_conveyor_kernel
 cargo test -p assemblywright-master --test master_process_e2e repository_preflight_is_owner_only_filesystem_identity_observation_and_redacted
 cargo test -p assemblywright-master --test master_process_e2e repository_snapshot_claim_is_authenticated_path_free_and_durable
 cargo test -p assemblywright-master --bin assemblywright-master snapshot_claim_reservation_survives_blocking_task_timeout
+cargo test -p assemblywright-protocol --test local_coding_contract
+cargo test -p assemblywright-master --test feature_conveyor_kernel coding_dispatch
+cargo test -p assemblywright-master --test feature_conveyor_kernel emergency_pause_cancels_coding_attempt_and_resume_rejects_pre_pause_acknowledgement
+cargo test -p assemblywright-master --test feature_conveyor_kernel terminal_coding_ack_allows_validation_and_lifecycle_change_invalidates_replay
+cargo test -p assemblywright-agent --test local_coding_admission
 ```
 
 The portable real-process route test proves authentication, path-free response,
@@ -122,8 +128,8 @@ executable changes as release evidence.
 | Whole workspace | `cargo test --workspace` |
 | Protocol contract | `cargo test -p assemblywright-protocol` |
 | Master kernel | `cargo test -p assemblywright-master` |
-| Feature Conveyor kernel, grant CAS/projection, owner designation, enqueue, and status | `cargo test -p assemblywright-master --test feature_conveyor_kernel` |
-| Master process E2E, including authenticated loopback grant/preflight/status/designation routes | `cargo test -p assemblywright-master --test master_process_e2e` |
+| Feature Conveyor kernel, grant CAS/projection, owner designation, enqueue, snapshot claim, coding dispatch, and status | `cargo test -p assemblywright-master --test feature_conveyor_kernel` |
+| Master process E2E, including authenticated loopback grant/preflight/snapshot/dispatch/status/designation routes | `cargo test -p assemblywright-master --test master_process_e2e` |
 | Windows remote mTLS observer and designated-owner enqueue denial/success | `cargo test -p assemblywright-master --test remote_mtls_e2e remote_listener_requires_enrollment_tls13_and_channel_bound_identity -- --nocapture` |
 | Swift strict Feature Conveyor observer, one-shot owner action, and helper lifecycle | `swift test --disable-sandbox --package-path apps/mac --filter DeveloperBridgeTests` |
 | Enrollment, two-phase capability rebind, and identity | `cargo test -p assemblywright-master --test enrollment_identity_e2e` |
@@ -131,6 +137,7 @@ executable changes as release evidence.
 | Event cursor | `cargo test -p assemblywright-master --test event_cursor_e2e` |
 | Windows service lifecycle | `cargo test -p assemblywright-master --test windows_service_lifecycle_e2e -- --ignored` |
 | Mac agent relay | `cargo test -p assemblywright-agent --test local_relay_e2e` |
+| Native metadata-only coding admission | `cargo test -p assemblywright-agent --test local_coding_admission` |
 | Local transport and release | `cargo test -p assemblywright-core` |
 | Readiness protocol proof unit | `cargo test -p assemblywright-core protocol_readiness_proof_is_version_independent` |
 | CLI naming contract E2E | `cargo test -p assemblywright-cli --test naming_contract_e2e` |
@@ -254,6 +261,14 @@ Deterministic cross-process coverage proves:
   from the enrolled-device router. It does not claim clean-tree or content
   validation. This is native process E2E; no browser or Playwright surface is
   involved.
+  Schema-v10 coding-dispatch coverage proves strict path-free protocol framing,
+  exact capability/device registration, feature/specification/lifecycle lease,
+  snapshot ID/digest, queue and Emergency Pause binding, atomic queued-step/
+  immutable-row/event/audit creation, audit rollback, owner authentication,
+  enrolled-device route absence, cancellation dominance, lifecycle blocking,
+  and restart quarantine. Native-agent coverage validates admission without
+  repository material or execution. It does not prove snapshot transport,
+  coding runtime containment, mutation, or integration.
   The designated-owner POST is bound to the exact queue, designation, and pause
   revisions and reuses the manifest, grants, dependency, capacity, immutable-
   specification, and atomic-enqueue checks without claiming a lease. Swift tests

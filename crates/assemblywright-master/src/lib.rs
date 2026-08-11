@@ -2,11 +2,14 @@ use assemblywright_protocol::{
     AttemptId, CancellationAcknowledgement, CancellationId, CancellationInstruction,
     CapabilityDescriptor, ContextHandlingPolicy, DeviceId, DeviceRole, DistributedEvent,
     DistributedEventBatch, DistributedEventBatchRequest, DistributedEventCursor,
-    DistributedEventKind, FeatureConveyorApprovedSpecification, FeatureConveyorRepositoryGrantSet,
+    DistributedEventKind, FeatureConveyorApprovedSpecification,
+    FeatureConveyorCodingDispatchReceipt, FeatureConveyorCodingDispatchRequest,
+    FeatureConveyorCodingDispatchStatus, FeatureConveyorRepositoryGrantSet,
     FeatureConveyorRepositoryGrantView, HandshakeRequest, HandshakeResponse, HandshakeStatus,
-    JobEnvelope, JobResultEnvelope, JobResultStatus, LeaseId, ProtocolError, Sensitivity, StepId,
-    TaskId, CANCELLATION_ACK_DEADLINE_MS, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
-    FIXTURE_REASONING_CAPABILITY_ID, MAX_CAPABILITY_ID_BYTES, MAX_JOB_CONTEXT_BYTES,
+    JobEnvelope, JobResultEnvelope, JobResultStatus, LeaseId, LocalCodingJobRequest, ProtocolError,
+    Sensitivity, StepId, TaskId, CANCELLATION_ACK_DEADLINE_MS,
+    FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, FIXTURE_REASONING_CAPABILITY_ID,
+    LOCAL_CODING_CAPABILITY_ID, MAX_CAPABILITY_ID_BYTES, MAX_JOB_CONTEXT_BYTES,
     MAX_LEASE_DURATION_MS, MAX_STEP_DEADLINE_MS, MLX_REASONING_CAPABILITY_ID, PROTOCOL_VERSION,
 };
 use rusqlite::{
@@ -38,7 +41,7 @@ pub use identity::{
     SERVER_CERTIFICATE_LIFETIME_MS,
 };
 
-pub const MASTER_SCHEMA_VERSION: i64 = 9;
+pub const MASTER_SCHEMA_VERSION: i64 = 10;
 pub const MAX_QUEUED_OR_LEASED_STEPS: u64 = 256;
 pub const MAX_CONCURRENT_JOBS: u64 = 4;
 pub const MAX_CONVEYOR_NONTERMINAL_FEATURES: u64 = 100;
@@ -232,6 +235,10 @@ pub enum MasterError {
     FeatureLeaseAlreadyActive,
     #[error("the requested feature lifecycle transition is invalid")]
     InvalidFeatureTransition,
+    #[error("the exact snapshot-bound coding dispatch binding is stale or unavailable")]
+    FeatureCodingDispatchUnavailable,
+    #[error("feature coding work must be terminal before lifecycle advancement")]
+    FeatureCodingWorkOutstanding,
     #[error(
         "feature cancellation retains the active lease and requires explicit safe abandonment"
     )]
@@ -260,15 +267,12 @@ pub struct DeviceRegistration {
 pub enum RemoteWorkContract {
     Fixture,
     Mlx(CapabilityDescriptor),
+    LocalCoding,
 }
 
 impl RemoteWorkContract {
     pub fn from_registration(registration: &DeviceRegistration) -> Result<Self, MasterError> {
-        if !matches!(
-            registration.role,
-            DeviceRole::MacBridge | DeviceRole::InferenceWorker
-        ) || registration.capabilities.len() != 1
-        {
+        if registration.capabilities.len() != 1 {
             return Err(MasterError::InvalidRemoteWorkContract);
         }
         let capability = &registration.capabilities[0];
@@ -279,6 +283,11 @@ impl RemoteWorkContract {
         if capability.id == MLX_REASONING_CAPABILITY_ID {
             return Ok(Self::Mlx(capability.clone()));
         }
+        if registration.role == DeviceRole::InferenceWorker
+            && *capability == CapabilityDescriptor::local_coding()
+        {
+            return Ok(Self::LocalCoding);
+        }
         Err(MasterError::InvalidRemoteWorkContract)
     }
 
@@ -286,6 +295,7 @@ impl RemoteWorkContract {
         match self {
             Self::Fixture => CapabilityDescriptor::fixture_reasoning(),
             Self::Mlx(capability) => capability.clone(),
+            Self::LocalCoding => CapabilityDescriptor::local_coding(),
         }
     }
 
@@ -299,6 +309,9 @@ impl RemoteWorkContract {
                 if job.selected_model != capability.model {
                     return Err(MasterError::InvalidRemoteWorkContract);
                 }
+            }
+            Self::LocalCoding => {
+                job.validate_local_coding()?;
             }
         }
         Ok(())
@@ -317,6 +330,7 @@ impl RemoteWorkContract {
                     return Err(MasterError::InvalidRemoteWorkContract);
                 }
             }
+            Self::LocalCoding => result.validate_local_coding_result(job)?,
         }
         Ok(())
     }
@@ -1871,6 +1885,215 @@ impl MasterKernel {
         ))
     }
 
+    /// Atomically maps one explicit, snapshot-bound owner dispatch onto the
+    /// existing durable distributed-step lane. No repository path or bytes are
+    /// accepted, stored, audited, or returned by this transition.
+    pub fn dispatch_feature_coding(
+        &mut self,
+        request: &FeatureConveyorCodingDispatchRequest,
+        now_ms: u64,
+    ) -> Result<FeatureConveyorCodingDispatchReceipt, MasterError> {
+        request.validate()?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_queue_revision_tx(&tx, request.expected_queue_revision)?;
+        require_emergency_pause_revision_tx(&tx, request.expected_emergency_pause_revision)?;
+        require_emergency_unpaused_tx(&tx)?;
+
+        let binding = tx
+            .query_row(
+                "SELECT f.current_specification_revision, f.lifecycle_revision, f.status,
+                        l.lease_id, l.snapshot_id, c.snapshot_sha256
+                 FROM feature_conveyor_features f
+                 JOIN feature_active_lease l ON l.feature_id = f.feature_id
+                 JOIN feature_repository_snapshot_claims c
+                   ON c.snapshot_id = l.snapshot_id AND c.feature_id = f.feature_id
+                  AND c.lease_id = l.lease_id
+                 WHERE f.feature_id = ?1",
+                [request.feature_id.to_string()],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, Vec<u8>>(5)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((
+            specification_revision,
+            lifecycle_revision,
+            status,
+            lease_id,
+            snapshot_id,
+            snapshot_sha256,
+        )) = binding
+        else {
+            return Err(MasterError::FeatureCodingDispatchUnavailable);
+        };
+        if i64_to_u64(specification_revision)? != request.specification_revision
+            || i64_to_u64(lifecycle_revision)? != request.expected_lifecycle_revision
+            || status != FeatureLifecycleStatus::Implementing.as_str()
+            || parse_uuid(&lease_id)? != request.feature_lease_id
+            || parse_uuid(&snapshot_id)? != request.snapshot_id
+            || digest_array(&snapshot_sha256)? != request.snapshot_sha256
+        {
+            return Err(MasterError::FeatureCodingDispatchUnavailable);
+        }
+
+        let (role_json, registry_revision, capabilities_json, revoked) = tx
+            .query_row(
+                "SELECT role_json, registry_revision, capabilities_json, revoked
+                 FROM master_devices WHERE device_id = ?1",
+                [request.device_id.0.to_string()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or(MasterError::FeatureCodingDispatchUnavailable)?;
+        let role: DeviceRole = serde_json::from_str(&role_json)?;
+        let capabilities: Vec<CapabilityDescriptor> = serde_json::from_str(&capabilities_json)?;
+        if revoked != 0
+            || role != DeviceRole::InferenceWorker
+            || i64_to_u64(registry_revision)? != request.device_registry_revision
+            || capabilities != vec![CapabilityDescriptor::local_coding()]
+        {
+            return Err(MasterError::FeatureCodingDispatchUnavailable);
+        }
+        let nonterminal: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM master_steps WHERE status IN ('queued', 'leased')",
+            [],
+            |row| row.get(0),
+        )?;
+        if i64_to_u64(nonterminal)? >= MAX_QUEUED_OR_LEASED_STEPS {
+            return Err(MasterError::QueueFull);
+        }
+
+        let task_id = TaskId::new(Uuid::new_v4());
+        let step_id = StepId::new(Uuid::new_v4());
+        let context = serde_json::to_value(LocalCodingJobRequest {
+            feature_id: request.feature_id,
+            specification_revision: request.specification_revision,
+            lifecycle_revision: request.expected_lifecycle_revision,
+            feature_lease_id: request.feature_lease_id,
+            snapshot_id: request.snapshot_id,
+            snapshot_sha256: request.snapshot_sha256,
+            work_packet_sha256: request.work_packet_sha256,
+            work_packet: request.work_packet.clone(),
+            device_id: request.device_id,
+            device_registry_revision: request.device_registry_revision,
+            queue_revision: request.expected_queue_revision,
+            emergency_pause_revision: request.expected_emergency_pause_revision,
+        })?;
+        let context_json = serde_json::to_string(&context)?;
+        let context_sha256 = json_sha256(&context)?;
+        tx.execute(
+            "INSERT INTO master_steps
+             (task_id, step_id, status, capability_id, sensitivity_json, context_json,
+              context_sha256, lease_duration_ms, deadline_after_ms, created_at_ms,
+              accepted_payload_json, accepted_payload_sha256, completed_at_ms)
+             VALUES (?1, ?2, 'queued', ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL, NULL, NULL)",
+            params![
+                task_id.0.to_string(),
+                step_id.0.to_string(),
+                LOCAL_CODING_CAPABILITY_ID,
+                serde_json::to_string(&Sensitivity::Workspace)?,
+                context_json,
+                context_sha256.as_slice(),
+                u64_to_i64(MAX_LEASE_DURATION_MS)?,
+                u64_to_i64(MAX_LEASE_DURATION_MS)?,
+                u64_to_i64(now_ms)?,
+            ],
+        )?;
+        tx.execute(
+            "INSERT INTO feature_coding_dispatches (
+               packet_id, feature_id, specification_revision, lifecycle_revision,
+               feature_lease_id, snapshot_id, snapshot_sha256, work_packet_sha256,
+               work_packet_metadata_json, device_id, device_registry_revision,
+               queue_revision, emergency_pause_revision, task_id, step_id, dispatched_at_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            params![
+                request.work_packet.packet_id.to_string(),
+                request.feature_id.to_string(),
+                u64_to_i64(request.specification_revision)?,
+                u64_to_i64(request.expected_lifecycle_revision)?,
+                request.feature_lease_id.to_string(),
+                request.snapshot_id.to_string(),
+                request.snapshot_sha256.as_slice(),
+                request.work_packet_sha256.as_slice(),
+                serde_json::to_string(&request.work_packet)?,
+                request.device_id.0.to_string(),
+                u64_to_i64(request.device_registry_revision)?,
+                u64_to_i64(request.expected_queue_revision)?,
+                u64_to_i64(request.expected_emergency_pause_revision)?,
+                task_id.0.to_string(),
+                step_id.0.to_string(),
+                u64_to_i64(now_ms)?,
+            ],
+        )?;
+        append_distributed_event_tx(
+            &tx,
+            DistributedEventKind::StepQueued,
+            now_ms,
+            DistributedEventIdentity {
+                task_id: Some(task_id),
+                step_id: Some(step_id),
+                device_id: None,
+                connection_epoch: None,
+            },
+        )?;
+        append_feature_audit_tx(
+            &tx,
+            "feature_coding_dispatched",
+            Some(request.feature_id),
+            now_ms,
+            serde_json::json!({
+                "lifecycle_revision": request.expected_lifecycle_revision,
+                "queue_revision": request.expected_queue_revision,
+                "emergency_pause_revision": request.expected_emergency_pause_revision,
+                "snapshot_id_present": true,
+                "snapshot_digest_present": true,
+                "work_packet_digest_present": true,
+                "work_packet_metadata_present": true,
+                "device_binding_present": true,
+                "registration_revision": request.device_registry_revision,
+                "queued_step_present": true,
+                "repository_material_present": false,
+                "effect_possible": false,
+                "side_effect_executed": false
+            }),
+        )?;
+        tx.commit()?;
+        Ok(FeatureConveyorCodingDispatchReceipt {
+            schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+            feature_id: request.feature_id,
+            specification_revision: request.specification_revision,
+            lifecycle_revision: request.expected_lifecycle_revision,
+            feature_lease_id: request.feature_lease_id,
+            snapshot_id: request.snapshot_id,
+            snapshot_sha256: request.snapshot_sha256,
+            work_packet_sha256: request.work_packet_sha256,
+            packet_id: request.work_packet.packet_id,
+            device_id: request.device_id,
+            device_registry_revision: request.device_registry_revision,
+            queue_revision: request.expected_queue_revision,
+            emergency_pause_revision: request.expected_emergency_pause_revision,
+            task_id,
+            step_id,
+            status: FeatureConveyorCodingDispatchStatus::Queued,
+        })
+    }
+
     pub fn advance_feature_lifecycle(
         &mut self,
         feature_id: Uuid,
@@ -1920,6 +2143,7 @@ impl MasterKernel {
         if !valid {
             return Err(MasterError::InvalidFeatureTransition);
         }
+        require_feature_coding_work_terminal_tx(&tx, feature_id)?;
         let changed = tx.execute(
             "UPDATE feature_conveyor_features
              SET status = ?1, lifecycle_revision = lifecycle_revision + 1,
@@ -2007,6 +2231,7 @@ impl MasterKernel {
              WHERE feature_id = ?2",
             params![u64_to_i64(now_ms)?, feature_id.to_string()],
         )?;
+        cancel_feature_coding_dispatches_tx(&tx, feature_id, now_ms)?;
         append_feature_audit_tx(
             &tx,
             "feature_cancelled",
@@ -2732,19 +2957,28 @@ impl MasterKernel {
             }
         }
         let queued = load_queued_steps(&tx)?;
-        let (step, capability) = queued
-            .into_iter()
-            .find_map(|step| {
-                capabilities
-                    .iter()
-                    .find(|candidate| {
-                        candidate.id == step.capability_id
-                            && step.context_json.len() <= candidate.max_context_bytes as usize
-                    })
-                    .cloned()
-                    .map(|capability| (step, capability))
-            })
-            .ok_or(MasterError::NoEligibleStep)?;
+        let mut selected = None;
+        for step in queued {
+            let Some(capability) = capabilities
+                .iter()
+                .find(|candidate| {
+                    candidate.id == step.capability_id
+                        && step.context_json.len() <= candidate.max_context_bytes as usize
+                })
+                .cloned()
+            else {
+                continue;
+            };
+            if capability.id == LOCAL_CODING_CAPABILITY_ID
+                && (!matches!(remote_contract, Some(RemoteWorkContract::LocalCoding))
+                    || !coding_step_binding_is_current_tx(&tx, &step, device_id)?)
+            {
+                continue;
+            }
+            selected = Some((step, capability));
+            break;
+        }
+        let (step, capability) = selected.ok_or(MasterError::NoEligibleStep)?;
 
         let attempt_id = AttemptId::new(Uuid::new_v4());
         let lease_id = LeaseId::new(Uuid::new_v4());
@@ -2894,6 +3128,11 @@ impl MasterKernel {
             return Err(MasterError::ResultDeviceMismatch);
         }
         let job: JobEnvelope = serde_json::from_str(&attempt.job_json)?;
+        if job.capability_id == LOCAL_CODING_CAPABILITY_ID
+            && !matches!(remote_contract, Some(RemoteWorkContract::LocalCoding))
+        {
+            return Err(MasterError::InvalidRemoteWorkContract);
+        }
         if let Some(contract) = remote_contract {
             contract.validate_result(result, &job)?;
             let registered = capability_for_device(&tx, attempt.device_id, &job.capability_id)?;
@@ -2902,6 +3141,12 @@ impl MasterKernel {
             }
         } else {
             result.validate_for_job(&job)?;
+        }
+        if job.capability_id == LOCAL_CODING_CAPABILITY_ID {
+            let context = job.validate_local_coding()?;
+            if !coding_job_binding_is_current_tx(&tx, &context, job.step_id, attempt.device_id)? {
+                return Err(MasterError::FeatureCodingDispatchUnavailable);
+            }
         }
         if attempt.status != AttemptStatus::Leased {
             return Err(MasterError::ResultNotAccepting(attempt.status));
@@ -3985,6 +4230,42 @@ impl MasterKernel {
             )?;
         }
         let version = self.schema_version()?;
+        if version == 9 {
+            self.connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 CREATE TABLE feature_coding_dispatches (
+                   packet_id TEXT PRIMARY KEY NOT NULL,
+                   feature_id TEXT NOT NULL REFERENCES feature_conveyor_features(feature_id),
+                   specification_revision INTEGER NOT NULL CHECK (specification_revision > 0),
+                   lifecycle_revision INTEGER NOT NULL CHECK (lifecycle_revision > 0),
+                   feature_lease_id TEXT NOT NULL,
+                   snapshot_id TEXT NOT NULL REFERENCES feature_repository_snapshot_claims(snapshot_id),
+                   snapshot_sha256 BLOB NOT NULL CHECK (length(snapshot_sha256) = 32),
+                   work_packet_sha256 BLOB NOT NULL CHECK (length(work_packet_sha256) = 32),
+                   work_packet_metadata_json TEXT NOT NULL,
+                   device_id TEXT NOT NULL REFERENCES master_devices(device_id),
+                   device_registry_revision INTEGER NOT NULL CHECK (device_registry_revision > 0),
+                   queue_revision INTEGER NOT NULL CHECK (queue_revision >= 0),
+                   emergency_pause_revision INTEGER NOT NULL CHECK (emergency_pause_revision >= 0),
+                   task_id TEXT NOT NULL,
+                   step_id TEXT NOT NULL UNIQUE REFERENCES master_steps(step_id),
+                   dispatched_at_ms INTEGER NOT NULL CHECK (dispatched_at_ms > 0),
+                   FOREIGN KEY (feature_id, specification_revision)
+                     REFERENCES feature_specification_revisions(feature_id, revision),
+                   UNIQUE (feature_id, packet_id),
+                   UNIQUE (task_id, step_id)
+                 );
+                 CREATE TRIGGER feature_coding_dispatches_no_update
+                   BEFORE UPDATE ON feature_coding_dispatches
+                   BEGIN SELECT RAISE(ABORT, 'immutable feature coding dispatch'); END;
+                 CREATE TRIGGER feature_coding_dispatches_no_delete
+                   BEFORE DELETE ON feature_coding_dispatches
+                   BEGIN SELECT RAISE(ABORT, 'durable feature coding dispatch evidence'); END;
+                 PRAGMA user_version = 10;
+                 COMMIT;",
+            )?;
+        }
+        let version = self.schema_version()?;
         if version != MASTER_SCHEMA_VERSION {
             return Err(MasterError::UnsupportedSchemaVersion {
                 expected: MASTER_SCHEMA_VERSION,
@@ -4236,6 +4517,9 @@ fn validate_new_step(step: &NewStep) -> Result<(), MasterError> {
     {
         return Err(MasterError::InvalidCapabilityIdentifier);
     }
+    if step.capability_id == LOCAL_CODING_CAPABILITY_ID {
+        return Err(MasterError::FeatureCodingDispatchUnavailable);
+    }
     if !step.context.is_object() {
         return Err(MasterError::InvalidStepContext);
     }
@@ -4247,6 +4531,61 @@ fn validate_new_step(step: &NewStep) -> Result<(), MasterError> {
     }
     if step.deadline_after_ms == 0 || step.deadline_after_ms > MAX_STEP_DEADLINE_MS {
         return Err(MasterError::InvalidStepDeadline);
+    }
+    Ok(())
+}
+
+fn cancel_feature_coding_dispatches_tx(
+    tx: &Transaction<'_>,
+    feature_id: Uuid,
+    now_ms: u64,
+) -> Result<(), MasterError> {
+    let mut statement = tx.prepare(
+        "SELECT d.task_id, d.step_id, s.status
+         FROM feature_coding_dispatches d
+         JOIN master_steps s ON s.step_id = d.step_id
+         WHERE d.feature_id = ?1 AND s.status IN ('queued', 'leased')
+         ORDER BY d.dispatched_at_ms, d.step_id",
+    )?;
+    let dispatches = statement
+        .query_map([feature_id.to_string()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+    for (task_id, step_id, status) in dispatches {
+        let task_id = TaskId::new(parse_uuid(&task_id)?);
+        let step_id = StepId::new(parse_uuid(&step_id)?);
+        match status.as_str() {
+            "queued" => {
+                tx.execute(
+                    "UPDATE master_steps SET status = 'cancelled', completed_at_ms = ?1
+                     WHERE step_id = ?2 AND status = 'queued'",
+                    params![u64_to_i64(now_ms)?, step_id.0.to_string()],
+                )?;
+                append_distributed_event_tx(
+                    tx,
+                    DistributedEventKind::StepCancelled,
+                    now_ms,
+                    DistributedEventIdentity {
+                        task_id: Some(task_id),
+                        step_id: Some(step_id),
+                        device_id: None,
+                        connection_epoch: None,
+                    },
+                )?;
+            }
+            "leased" => request_leased_step_cancellation_tx(tx, task_id, step_id, now_ms)?,
+            _ => {
+                return Err(MasterError::InvalidStoredState(
+                    "feature coding dispatch had an unexpected nonterminal status".to_string(),
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -4338,15 +4677,55 @@ fn request_active_remote_work_cancellations_tx(
     tx: &Transaction<'_>,
     now_ms: u64,
 ) -> Result<(), MasterError> {
+    let mut queued_statement = tx.prepare(
+        "SELECT task_id, step_id FROM master_steps
+         WHERE capability_id = ?1 AND status = 'queued'
+         ORDER BY created_at_ms, step_id",
+    )?;
+    let queued_coding = queued_statement
+        .query_map([LOCAL_CODING_CAPABILITY_ID], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(queued_statement);
+    for (task_id, step_id) in queued_coding {
+        let task_id = TaskId::new(parse_uuid(&task_id)?);
+        let step_id = StepId::new(parse_uuid(&step_id)?);
+        let changed = tx.execute(
+            "UPDATE master_steps SET status = 'cancelled', completed_at_ms = ?1
+             WHERE step_id = ?2 AND status = 'queued'",
+            params![u64_to_i64(now_ms)?, step_id.0.to_string()],
+        )?;
+        if changed != 1 {
+            return Err(MasterError::InvalidStoredState(
+                "queued coding step changed before emergency-pause cancellation".to_string(),
+            ));
+        }
+        append_distributed_event_tx(
+            tx,
+            DistributedEventKind::StepCancelled,
+            now_ms,
+            DistributedEventIdentity {
+                task_id: Some(task_id),
+                step_id: Some(step_id),
+                device_id: None,
+                connection_epoch: None,
+            },
+        )?;
+    }
     let mut statement = tx.prepare(
         "SELECT s.task_id, s.step_id FROM master_steps s\n\
          JOIN master_attempts a ON a.step_id = s.step_id\n\
-         WHERE s.capability_id IN (?1, ?2) AND s.status = 'leased' AND a.status = 'leased'\n\
+         WHERE s.capability_id IN (?1, ?2, ?3) AND s.status = 'leased' AND a.status = 'leased'\n\
          ORDER BY a.leased_at_ms ASC",
     )?;
     let remote_steps = statement
         .query_map(
-            [FIXTURE_REASONING_CAPABILITY_ID, MLX_REASONING_CAPABILITY_ID],
+            [
+                FIXTURE_REASONING_CAPABILITY_ID,
+                MLX_REASONING_CAPABILITY_ID,
+                LOCAL_CODING_CAPABILITY_ID,
+            ],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         )?
         .collect::<Result<Vec<_>, _>>()?;
@@ -4860,6 +5239,98 @@ fn load_queued_steps(tx: &Transaction<'_>) -> Result<Vec<StoredStep>, MasterErro
             },
         )
         .collect()
+}
+
+fn coding_step_binding_is_current_tx(
+    tx: &Transaction<'_>,
+    step: &StoredStep,
+    leasing_device_id: DeviceId,
+) -> Result<bool, MasterError> {
+    let context: LocalCodingJobRequest = match serde_json::from_str(&step.context_json) {
+        Ok(context) => context,
+        Err(_) => return Ok(false),
+    };
+    if context.validate().is_err() || context.device_id != leasing_device_id {
+        return Ok(false);
+    }
+    coding_job_binding_is_current_tx(tx, &context, step.step_id, leasing_device_id)
+}
+
+fn coding_job_binding_is_current_tx(
+    tx: &Transaction<'_>,
+    context: &LocalCodingJobRequest,
+    step_id: StepId,
+    device_id: DeviceId,
+) -> Result<bool, MasterError> {
+    if context.validate().is_err() || context.device_id != device_id {
+        return Ok(false);
+    }
+    let mapped: bool = tx.query_row(
+        "SELECT EXISTS(
+           SELECT 1 FROM feature_coding_dispatches d
+           JOIN master_devices device ON device.device_id = d.device_id
+           JOIN feature_conveyor_features f ON f.feature_id = d.feature_id
+           JOIN feature_active_lease l
+             ON l.feature_id = d.feature_id AND l.lease_id = d.feature_lease_id
+            AND l.snapshot_id = d.snapshot_id
+           JOIN feature_repository_snapshot_claims c
+             ON c.snapshot_id = d.snapshot_id AND c.snapshot_sha256 = d.snapshot_sha256
+           JOIN feature_conveyor_state q ON q.singleton = 1
+           JOIN master_metadata pause ON pause.key = 'emergency_pause_revision'
+           WHERE d.step_id = ?1 AND d.device_id = ?2
+             AND d.device_registry_revision = ?3 AND device.registry_revision = ?3
+             AND device.revoked = 0
+             AND d.feature_id = ?4 AND d.specification_revision = ?5
+             AND f.current_specification_revision = ?5
+             AND d.lifecycle_revision = ?6 AND f.lifecycle_revision = ?6
+             AND f.status = 'implementing'
+             AND d.feature_lease_id = ?7 AND d.snapshot_id = ?8
+             AND d.snapshot_sha256 = ?9 AND d.work_packet_sha256 = ?10
+             AND d.queue_revision = ?11 AND q.queue_revision = ?11
+             AND d.emergency_pause_revision = ?12 AND pause.integer_value = ?12
+         )",
+        params![
+            step_id.0.to_string(),
+            device_id.0.to_string(),
+            u64_to_i64(context.device_registry_revision)?,
+            context.feature_id.to_string(),
+            u64_to_i64(context.specification_revision)?,
+            u64_to_i64(context.lifecycle_revision)?,
+            context.feature_lease_id.to_string(),
+            context.snapshot_id.to_string(),
+            context.snapshot_sha256.as_slice(),
+            context.work_packet_sha256.as_slice(),
+            u64_to_i64(context.queue_revision)?,
+            u64_to_i64(context.emergency_pause_revision)?,
+        ],
+        |row| row.get(0),
+    )?;
+    Ok(mapped)
+}
+
+fn require_feature_coding_work_terminal_tx(
+    tx: &Transaction<'_>,
+    feature_id: Uuid,
+) -> Result<(), MasterError> {
+    let outstanding: bool = tx.query_row(
+        "SELECT EXISTS(
+           SELECT 1 FROM feature_coding_dispatches d
+           JOIN master_steps s ON s.step_id = d.step_id
+           LEFT JOIN master_attempts a ON a.step_id = d.step_id
+           WHERE d.feature_id = ?1
+             AND (
+               s.status IN ('queued', 'leased')
+               OR a.status = 'cancellation_pending'
+             )
+         )",
+        [feature_id.to_string()],
+        |row| row.get(0),
+    )?;
+    if outstanding {
+        Err(MasterError::FeatureCodingWorkOutstanding)
+    } else {
+        Ok(())
+    }
 }
 
 fn load_attempt(

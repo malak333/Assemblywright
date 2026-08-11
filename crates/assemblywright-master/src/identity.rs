@@ -1507,9 +1507,11 @@ fn require_rebind_source_and_target(
         crate::RemoteWorkContract::Mlx(_) => Err(MasterError::InvalidEnrollmentGrant(
             "capability rebind target MLX bounds are not exact".to_string(),
         )),
-        crate::RemoteWorkContract::Fixture => Err(MasterError::InvalidEnrollmentGrant(
-            "capability rebind target must be the exact singleton mlx descriptor".to_string(),
-        )),
+        crate::RemoteWorkContract::Fixture | crate::RemoteWorkContract::LocalCoding => {
+            Err(MasterError::InvalidEnrollmentGrant(
+                "capability rebind target must be the exact singleton mlx descriptor".to_string(),
+            ))
+        }
     }
 }
 

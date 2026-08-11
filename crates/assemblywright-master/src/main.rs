@@ -15,7 +15,8 @@ use assemblywright_protocol::{
     CapabilityDescriptor, DeviceId, DeviceRole, DistributedEventBatch,
     DistributedEventBatchRequest, EnrollmentCsrReply, EnrollmentInvitation,
     FeatureConveyorApprovedFeatureReceipt, FeatureConveyorApprovedFeatureRequest,
-    FeatureConveyorApprovedFeatureStatus, FeatureConveyorOwnerBridgeDesignationReceipt,
+    FeatureConveyorApprovedFeatureStatus, FeatureConveyorCodingDispatchReceipt,
+    FeatureConveyorCodingDispatchRequest, FeatureConveyorOwnerBridgeDesignationReceipt,
     FeatureConveyorOwnerBridgeDesignationRequest, FeatureConveyorOwnerBridgeDesignationStatus,
     FeatureConveyorRepositoryGrantKind, FeatureConveyorRepositoryGrantReceipt,
     FeatureConveyorRepositoryGrantRequest, FeatureConveyorRepositoryGrantSet,
@@ -26,7 +27,8 @@ use assemblywright_protocol::{
     HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope, JobResultStatus,
     Sensitivity, StepId, TaskId, ENROLLMENT_INVITATION_READY_STATUS,
     ENROLLMENT_PAIRING_SCHEMA_VERSION, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
-    MAX_ENROLLMENT_PAIRING_FRAME_BYTES, MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES,
+    MAX_ENROLLMENT_PAIRING_FRAME_BYTES, MAX_FEATURE_CONVEYOR_CODING_DISPATCH_REQUEST_BYTES,
+    MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES,
     MAX_FEATURE_CONVEYOR_SNAPSHOT_CLAIM_REQUEST_BYTES, MAX_WIRE_FRAME_BYTES, PROTOCOL_VERSION,
 };
 use axum::body::Bytes;
@@ -1466,6 +1468,12 @@ async fn serve_runtime(
             )),
         )
         .route(
+            "/v1/feature-conveyor/coding-dispatches",
+            post(feature_coding_dispatch).layer(DefaultBodyLimit::max(
+                MAX_FEATURE_CONVEYOR_CODING_DISPATCH_REQUEST_BYTES,
+            )),
+        )
+        .route(
             "/v1/feature-conveyor/repositories/:repository_id/grants",
             get(get_repository_grants),
         )
@@ -2434,6 +2442,39 @@ async fn repository_snapshot_claim(
         ),
         status: FeatureConveyorRepositorySnapshotClaimStatus::SnapshotBound,
     };
+    receipt
+        .validate()
+        .map_err(|_| fixed_error(StatusCode::INTERNAL_SERVER_ERROR, "internal_error"))?;
+    Ok(Json(receipt))
+}
+
+async fn feature_coding_dispatch(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<FeatureConveyorCodingDispatchReceipt> {
+    authorize(&headers, &state)?;
+    let body = body.map_err(|_| {
+        fixed_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "feature_coding_dispatch_request_rejected",
+        )
+    })?;
+    let request = FeatureConveyorCodingDispatchRequest::decode_frame(&body).map_err(|_| {
+        fixed_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "feature_coding_dispatch_request_rejected",
+        )
+    })?;
+    let receipt = lock_process(&state)?
+        .kernel_mut()
+        .dispatch_feature_coding(
+            &request,
+            current_time_ms().map_err(|_| {
+                fixed_error(StatusCode::CONFLICT, "feature_coding_dispatch_rejected")
+            })?,
+        )
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "feature_coding_dispatch_rejected"))?;
     receipt
         .validate()
         .map_err(|_| fixed_error(StatusCode::INTERNAL_SERVER_ERROR, "internal_error"))?;

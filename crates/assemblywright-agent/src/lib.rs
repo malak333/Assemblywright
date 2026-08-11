@@ -1,8 +1,8 @@
 use assemblywright_protocol::{
     CancellationAcknowledgement, CancellationAcknowledgementStatus, CancellationId,
     CancellationInstruction, DistributedEventBatch, DistributedEventCursor, FixtureJobResult,
-    JobEnvelope, JobResultEnvelope, JobResultStatus, MlxJobResult, ProtocolError,
-    MAX_JOB_RESULT_BYTES, MLX_GENERATE_TEXT_OPERATION, PROTOCOL_VERSION,
+    JobEnvelope, JobResultEnvelope, JobResultStatus, LocalCodingJobRequest, MlxJobResult,
+    ProtocolError, MAX_JOB_RESULT_BYTES, MLX_GENERATE_TEXT_OPERATION, PROTOCOL_VERSION,
 };
 use fs2::FileExt;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
@@ -32,6 +32,15 @@ use uuid::Uuid;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 
 pub const AGENT_SCHEMA_VERSION: i64 = 1;
+
+/// Native-agent admission for the default-off coding-dispatch kernel. This
+/// validates the exact path-free binding only; it deliberately grants no
+/// repository access, process execution, provider call, or mutation runtime.
+pub fn validate_local_coding_dispatch(
+    job: &JobEnvelope,
+) -> Result<LocalCodingJobRequest, ProtocolError> {
+    job.validate_local_coding()
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum FixtureRuntimeError {

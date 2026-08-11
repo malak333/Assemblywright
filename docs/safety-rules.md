@@ -156,7 +156,7 @@ release requirements, not optional UX guidance.
   a simultaneous or late result is suppressed. This lane grants no tool, file,
   repository, credential, network, Codex, Git, publication, or unattended
   authority.
-- The Windows `assemblywright-master` schema-v9 database retains the schema-v5
+- The Windows `assemblywright-master` schema-v10 database retains the schema-v5
   Durable Feature Conveyor kernel and is
   default-inert. The owner-token-authenticated loopback
   `GET /v1/feature-conveyor/status` and the dedicated enrolled-device
@@ -264,6 +264,22 @@ release requirements, not optional UX guidance.
   content, config, remote, credential, or raw error may enter SQLite, audit, or
   the receipt. This grants no dispatch, provider, review, publication, Mac, or
   autonomous activation authority.
+- Coding dispatch is a separate owner-token-authenticated loopback-only action
+  and must remain absent from the enrolled-device router. It may accept only a
+  bounded path-free work-packet digest and ordinal/acceptance-count metadata
+  after an exact snapshot claim. It binds the current feature/specification/
+  lifecycle revision, feature lease, snapshot ID/digest, queue and Emergency
+  Pause revisions, and one exact current non-revoked `InferenceWorker` whose
+  singleton capability is `local.coding.v1`. The distributed queued step,
+  immutable dispatch row, event, and structurally redacted audit commit
+  atomically. Lease and acknowledgement acceptance recheck every binding;
+  cancellation, Emergency Pause, lifecycle departure, registration drift or
+  revocation, and restart quarantine prevent later acceptance. The protocol
+  and native agent reject repository bytes or paths, commands, credentials,
+  mutation claims, and unknown fields. This metadata admission kernel grants no
+  snapshot transport/materialization, process or tool execution, provider
+  access, mutation, integration, review, publication, queue advancement, or
+  autonomous activation.
 - Remote approved-feature enqueue is permitted only on
   `POST /v1/distributed/feature-conveyor/approved-features`, after a fresh
   exporter-bound application handshake is accepted and revalidated for the

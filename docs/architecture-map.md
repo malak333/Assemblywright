@@ -25,7 +25,7 @@ flowchart LR
   Process --> Service["Windows SCM host: automatic start, bounded recovery, status, maintenance, uninstall"]
   Service --> Maintenance["Durable fail-closed marker blocks new enqueue and lease admission"]
   Master --> Durable["Registered devices, epochs, queue, attempts, cancellation, expiry, restart reconciliation, exact results"]
-  Master --> Conveyor["Default-inert Feature Conveyor repository kernel retained through schema v9"]
+  Master --> Conveyor["Default-inert Feature Conveyor repository kernel retained through schema v10"]
   Conveyor --> ConveyorSafety["Immutable approved specs and grants, strict CAS queue, one active lease, atomic redacted audit, and startup quarantine"]
   Conveyor --> Observer["Exact bounded status projection: local owner route plus accepted-session MacBridge-only remote GET"]
   Observer --> Helper
@@ -33,6 +33,8 @@ flowchart LR
   Conveyor --> GrantControl["Loopback-only contiguous CAS repository-grant revisions and current digest projection"]
   GrantControl --> RepositoryPreflight["Owner-local filesystem-only identity preflight; path-free digest receipt and redacted audit"]
   RepositoryPreflight --> SnapshotClaim["Loopback-only isolated raw-object snapshot plus atomic strict queue-head claim"]
+  SnapshotClaim --> CodingDispatch["Explicit loopback-only metadata dispatch bound to exact snapshot, lease, worker, queue, and pause revisions"]
+  CodingDispatch --> Agent
   OwnerDesignation --> OwnerAction["Exact designated non-fixture MacBridge-only approved-feature POST; queue insertion only"]
   OwnerAction --> Helper
   Protocol --> Feature["Dormant assemblywright-core distributed-development feature"]
@@ -58,7 +60,7 @@ a headless master executable. The contract seam provides the current protocol
 version, typed device/task/step/attempt/lease/cancellation identifiers, bounded
 capability advertisements, handshake messages, job and result envelopes, strict
 bound-before-decode JSON entry points, nil-identity rejection, and a golden
-compatibility fixture. `assemblywright-master` schema version 9 preserves the
+compatibility fixture. `assemblywright-master` schema version 10 preserves the
 schema-v4 distributed-device lifecycle, the schema-v5 Feature Conveyor, and
 schema-v6 dedicated pending capability-rebind evidence, then adds the durable
 Emergency Pause revision, then adds one nullable compare-and-set owner-control
@@ -73,7 +75,7 @@ abandonment, and startup quarantine commit with redacted audit evidence in the
 same immediate transaction. Success releases the lease only with verified
 healthy-main evidence; cancellation retains it until explicit safe
 abandonment, and restart ambiguity is quarantined without automatic retry.
-Master-process upgrades from supported legacy schemas v1-v8 to v9 are
+Master-process upgrades from supported legacy schemas v1-v9 to v10 are
 backup-first under the owner lock, verify the versioned backup before migration,
 and restore through a fsynced sibling plus atomic replacement when
 migration-open fails. Direct file-backed legacy migration through
@@ -118,6 +120,18 @@ HTTP timeout until the blocking task exits. The finalizer atomically records onl
 commit plus bound revisions. No database transaction spans filesystem work;
 failure and request cancellation remove unreferenced state, while startup
 cleans abandoned directories and quarantines a finalized active lease.
+The schema-v10 owner-token loopback-only coding-dispatch action atomically maps
+one exact path-free packet digest onto the existing distributed queued-step
+lane. Its immutable row binds the active feature/specification/lifecycle,
+feature lease, snapshot ID/digest, queue and Emergency Pause revisions, and one
+current non-revoked `InferenceWorker` registration whose singleton capability
+is `local.coding.v1`; the distributed event and redacted audit share the same
+transaction. The owner route is absent from enrolled-device routing. Lease and
+acknowledgement acceptance recheck the binding, while cancellation, Emergency
+Pause, lifecycle departure, or restart quarantine blocks later acceptance.
+The native agent validates metadata only. No snapshot bytes/path, command,
+credential, coding process, mutation, integration, review, publication, queue
+advance, or autonomous activation is implemented.
 Another owner-token-authenticated loopback action designates one exact current,
 non-fixture MacBridge. Only that designated device may submit one revision-bound
 already-approved specification through the dedicated remote POST; the signed

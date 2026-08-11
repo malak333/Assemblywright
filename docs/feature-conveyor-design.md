@@ -120,6 +120,24 @@ It does not create grants or brainstorming proof, claim or dispatch the queue,
 invoke a worker or provider, access a repository, or grant Git/publication or
 autonomous activation. The SwiftUI app remains observation only.
 
+Master schema v10 adds the first separate metadata-only coding-dispatch
+admission kernel. The owner-token loopback-only
+`POST /v1/feature-conveyor/coding-dispatches` accepts one strict path-free work-
+packet digest and bounded ordinal/acceptance-count metadata only after schema
+v9 has claimed the exact queue head and snapshot. It binds the exact active
+feature and specification/lifecycle revisions, feature lease, snapshot ID and
+digest, queue and Emergency Pause revisions, and one current non-revoked
+`InferenceWorker` registration whose only capability is `local.coding.v1`.
+Dispatch evidence, one existing distributed queued step and event, and a
+redacted Feature Conveyor audit commit atomically. The owner action is absent
+from the enrolled-device router. Remote lease and result acceptance fail closed
+when any bound authority changes; cancellation, Emergency Pause, lifecycle
+departure, or restart quarantine prevents later acknowledgement. The native
+agent validates the envelope but receives no repository bytes or path and runs
+no coding process. This is dispatch admission evidence only, not repository
+transport, materialization, worker execution, mutation, integration, review,
+publication, queue advancement, or autonomous activation.
+
 ## Understanding Summary
 
 - Assemblywright will add an owner-managed autonomous development queue for personal,
@@ -230,6 +248,13 @@ repository snapshot with its own Git metadata and no remote. It cannot read the
 canonical repository, master database, canonical memory, credentials, or
 unrelated files. General network access is disabled; only a narrowly controlled
 local-model connection is allowed.
+
+The implemented schema-v10 kernel reaches only the metadata admission edge of
+this target: one explicit owner action may queue a path-free snapshot-bound
+packet for one exact registered worker, and the native agent can validate and
+acknowledge that envelope without mutation. Snapshot transport/materialization,
+process containment, file ownership enforcement, coding execution, and result
+integration remain unimplemented.
 
 #### Evidence Gate
 

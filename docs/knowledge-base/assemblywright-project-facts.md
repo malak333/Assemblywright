@@ -569,7 +569,27 @@ an old one.
   it and leaves no lease. Startup removes unreferenced UUID
   directories; a finalized `implementing` lease still becomes quarantined with
   no automatic retry. The schema-v8 observer projection remains wire-compatible
-  even though the durable database is schema v9.
+  even though the durable database is schema v10.
+- Schema v10 is the first metadata-only coding-dispatch admission slice. The
+  explicit owner-token loopback route accepts no repository path, bytes,
+  command, prompt, credential, patch, or commit. It binds one work-packet
+  digest and bounded ordinal/acceptance-count metadata to the exact active
+  feature/specification/lifecycle revision, feature lease, snapshot ID/digest,
+  queue and Emergency Pause revisions, and a current non-revoked
+  `InferenceWorker` registration whose only capability is `local.coding.v1`.
+  One distributed queued step, immutable dispatch row, event, and redacted
+  Feature Conveyor audit commit atomically.
+- A queued coding dispatch is not reusable authority. Lease and acknowledgement
+  acceptance recheck the feature lifecycle and lease, snapshot, queue/pause,
+  device registration, and capability. Explicit cancellation, Emergency Pause,
+  lifecycle departure, registration drift or revocation, and restart quarantine
+  make it ineligible; a pre-pause or out-of-phase acknowledgement must never be
+  accepted after state returns to a superficially compatible condition.
+- The Rust Mac agent currently validates and may acknowledge only the exact
+  path-free metadata envelope with `mutation_performed:false`. Windows-to-Mac
+  snapshot transport/materialization, contained coding execution, allowed-path
+  enforcement, result integration, review, publication, and autonomous
+  activation remain separate unimplemented boundaries.
 
 ## Safety Guardrails
 

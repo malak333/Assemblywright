@@ -61,10 +61,18 @@ Before starting a release pass, confirm the claim you intend to make.
   task exits; and atomically binds one durable snapshot receipt to one lease and
   redacted audit. Prove failure/cancellation leaves no lease or referenced snapshot,
   and restart cleans unreferenced state and quarantines a finalized lease.
-  The slice
-  exposes no worker
-  dispatcher, repository execution, review provider,
-  publication coordinator, Mac control UI, or autonomous activation.
+  Schema v10 separately exposes one owner-token loopback-only metadata coding-
+  dispatch POST. Confirm it is absent from the enrolled-device router, binds
+  the exact feature/specification/lifecycle, feature lease, snapshot ID/digest,
+  queue/pause revisions and current singleton `local.coding.v1` worker
+  registration, and atomically commits its queued step, immutable binding,
+  event, and redacted audit. Prove stale authority, cancellation, Emergency
+  Pause, lifecycle departure, registration drift, and restart quarantine block
+  lease or acknowledgement. Confirm protocol and native-agent tests accept no
+  repository bytes/path, commands, credentials, or mutation claim. This slice
+  exposes no snapshot transport/materialization, coding execution, result
+  integration, review provider, publication coordinator, Mac control UI, queue
+  advancement, or autonomous activation.
 - Confirm `docs/architecture-map.md` matches the code for any surface that
   changed in this cycle.
 - Confirm the version is consistent:

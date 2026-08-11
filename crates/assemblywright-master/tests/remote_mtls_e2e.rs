@@ -7,9 +7,13 @@ use assemblywright_master::{
 use assemblywright_protocol::{
     AuthenticatedHandshakeRequest, CapabilityDescriptor, DeviceRole, DistributedEventBatch,
     DistributedEventBatchRequest, DistributedEventKind, FeatureConveyorApprovedFeatureRequest,
-    FeatureConveyorApprovedSpecification, FeatureConveyorGrantRevisions, HandshakeRequest,
-    HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope, JobResultStatus,
-    Sensitivity, StepId, TaskId, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, PROTOCOL_VERSION,
+    FeatureConveyorApprovedSpecification, FeatureConveyorCodingDispatchReceipt,
+    FeatureConveyorCodingDispatchRequest, FeatureConveyorCodingWorkPacketMetadata,
+    FeatureConveyorGrantRevisions, FeatureConveyorRepositoryScopeDocument,
+    FeatureConveyorRepositorySnapshotClaimReceipt, FeatureConveyorRepositorySnapshotClaimRequest,
+    HandshakeRequest, HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope,
+    JobResultStatus, LocalCodingJobResult, Sensitivity, StepId, TaskId,
+    FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, PROTOCOL_VERSION,
 };
 use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
@@ -352,6 +356,19 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
     assert!(
         local_snapshot_over_remote.starts_with("HTTP/1.1 404 Not Found"),
         "owner-token repository snapshot claim leaked onto the remote router: {local_snapshot_over_remote}"
+    );
+    let (local_dispatch_handshake, local_dispatch_over_remote) = authenticated_application_request(
+        remote_endpoint,
+        &valid,
+        "POST",
+        "/v1/feature-conveyor/coding-dispatches",
+        &serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(local_dispatch_handshake.status, HandshakeStatus::Accepted);
+    assert!(
+        local_dispatch_over_remote.starts_with("HTTP/1.1 404 Not Found"),
+        "owner-token coding dispatch leaked onto the remote router: {local_dispatch_over_remote}"
     );
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -736,6 +753,395 @@ fn assert_exact_object_keys(value: &Value, expected: &[&str]) {
     actual.sort_unstable();
     expected.sort_unstable();
     assert_eq!(actual, expected);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn remote_local_coding_dispatch_is_exporter_bound_exact_and_pause_dominant() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let directory = tempfile::tempdir().expect("remote coding data directory");
+    let binary = env!("CARGO_BIN_EXE_assemblywright-master");
+    let setup = Command::new(binary)
+        .arg("--data-dir")
+        .arg(directory.path())
+        .arg("setup")
+        .output()
+        .expect("run setup");
+    assert_success(&setup, "setup");
+
+    let repository = directory.path().join("coding-source");
+    std::fs::create_dir(&repository).expect("create coding source repository");
+    for arguments in [
+        vec!["init", "--initial-branch", "main"],
+        vec!["config", "user.email", "coding-e2e@assemblywright.invalid"],
+        vec!["config", "user.name", "Assemblywright Coding E2E"],
+    ] {
+        let output = Command::new("git")
+            .args(arguments)
+            .current_dir(&repository)
+            .output()
+            .expect("run Git fixture setup");
+        assert_success(&output, "Git fixture setup");
+    }
+    std::fs::write(
+        repository.join("bounded.txt"),
+        "metadata-bound coding fixture\n",
+    )
+    .expect("write committed coding fixture");
+    for arguments in [vec!["add", "bounded.txt"], vec!["commit", "-m", "fixture"]] {
+        let output = Command::new("git")
+            .args(arguments)
+            .current_dir(&repository)
+            .output()
+            .expect("commit Git fixture");
+        assert_success(&output, "commit Git fixture");
+    }
+    let head_output = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(&repository)
+        .output()
+        .expect("read fixture head");
+    assert_success(&head_output, "read fixture head");
+    let head = String::from_utf8(head_output.stdout)
+        .expect("UTF-8 fixture head")
+        .trim()
+        .to_string();
+
+    let owner = enroll_client_with_capabilities(
+        directory.path(),
+        "coding-owner-control",
+        DeviceRole::MacBridge,
+        false,
+        vec![CapabilityDescriptor::mlx_reasoning(
+            "owner-control-mlx",
+            32 * 1024,
+            32 * 1024,
+        )],
+    );
+    let coding = enroll_client_with_capabilities(
+        directory.path(),
+        "exact-local-coding-worker",
+        DeviceRole::InferenceWorker,
+        false,
+        vec![CapabilityDescriptor::local_coding()],
+    );
+    assert_eq!(coding.handshake.role, DeviceRole::InferenceWorker);
+    assert_eq!(
+        coding.handshake.capabilities,
+        vec![CapabilityDescriptor::local_coding()]
+    );
+    let repository_id = Uuid::new_v4();
+    let scope = FeatureConveyorRepositoryScopeDocument {
+        repository_id,
+        repository_path: repository.to_string_lossy().into_owned(),
+        expected_base_branch: "main".to_string(),
+        expected_head_commit: head.clone(),
+    };
+    let scope_sha256 = scope
+        .canonical_scope_sha256()
+        .expect("canonical scope digest");
+    {
+        let mut process = MasterProcess::acquire(directory.path()).expect("seed coding authority");
+        for (index, kind) in [
+            RepositoryGrantKind::Registration,
+            RepositoryGrantKind::CloudDisclosure,
+            RepositoryGrantKind::AutonomousPublication,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            process
+                .kernel_mut()
+                .record_repository_grant_revision(
+                    &RepositoryGrantRevision {
+                        repository_id,
+                        kind,
+                        revision: 1,
+                        scope_sha256,
+                        owner_approval_sha256: Sha256::digest(format!(
+                            "coding-owner-grant-{index}"
+                        ))
+                        .into(),
+                        expires_at_ms: None,
+                        revoked: false,
+                    },
+                    0,
+                    0,
+                    1,
+                )
+                .expect("record coding repository grant");
+        }
+        process
+            .kernel_mut()
+            .designate_owner_control_bridge(owner.handshake.device_id, 0, 2)
+            .expect("designate coding owner bridge");
+    }
+
+    let local_endpoint = unused_loopback_addr();
+    let remote_endpoint = unused_loopback_addr();
+    let mut server = spawn_server(binary, directory.path(), local_endpoint, remote_endpoint);
+    read_ready(&mut server.child);
+    let approved = approved_feature_request(repository_id);
+    let (_, enqueue_response) = authenticated_application_request(
+        remote_endpoint,
+        &owner,
+        "POST",
+        "/v1/distributed/feature-conveyor/approved-features",
+        &approved,
+    )
+    .await;
+    assert!(
+        enqueue_response.starts_with("HTTP/1.1 200 OK"),
+        "{enqueue_response}"
+    );
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let token = std::fs::read_to_string(directory.path().join("development.token"))
+        .expect("read owner token");
+    let claim_request = FeatureConveyorRepositorySnapshotClaimRequest {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        scope,
+        scope_sha256,
+        expected_feature_id: approved.specification.feature_id,
+        expected_specification_revision: 1,
+        expected_queue_revision: 1,
+        expected_emergency_pause_revision: 0,
+        grants: approved.specification.grants,
+        provider_id: approved.specification.provider_id.clone(),
+        model_id: approved.specification.model_id.clone(),
+    };
+    let claim_response = local_post(
+        local_endpoint,
+        "/v1/feature-conveyor/repository-snapshot-claims",
+        token.trim(),
+        &serde_json::to_string(&claim_request).expect("serialize coding snapshot claim"),
+    );
+    assert!(
+        claim_response.starts_with("HTTP/1.1 200 OK"),
+        "{claim_response}"
+    );
+    let claim: FeatureConveyorRepositorySnapshotClaimReceipt = response_json(&claim_response);
+
+    let (route_handshake, remote_owner_dispatch) = authenticated_application_request(
+        remote_endpoint,
+        &coding,
+        "POST",
+        "/v1/feature-conveyor/coding-dispatches",
+        &serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(route_handshake.status, HandshakeStatus::Accepted);
+    assert!(
+        remote_owner_dispatch.starts_with("HTTP/1.1 404 Not Found"),
+        "owner dispatch action leaked onto enrolled router: {remote_owner_dispatch}"
+    );
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let dispatch = |packet_id, work_packet_sha256| FeatureConveyorCodingDispatchRequest {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        feature_id: claim.feature_id,
+        specification_revision: claim.specification_revision,
+        expected_lifecycle_revision: claim.lifecycle_revision,
+        feature_lease_id: claim.lease_id,
+        snapshot_id: claim.snapshot_id,
+        snapshot_sha256: claim.snapshot_sha256,
+        work_packet_sha256,
+        work_packet: FeatureConveyorCodingWorkPacketMetadata {
+            packet_id,
+            ordinal: 1,
+            acceptance_criteria_count: 1,
+        },
+        device_id: coding.handshake.device_id,
+        device_registry_revision: coding.handshake.registry_revision,
+        expected_queue_revision: claim.queue_revision,
+        expected_emergency_pause_revision: claim.emergency_pause_revision,
+    };
+    let first_dispatch = dispatch(Uuid::new_v4(), Sha256::digest(b"coding-packet-one").into());
+    let first_dispatch_response = local_post(
+        local_endpoint,
+        "/v1/feature-conveyor/coding-dispatches",
+        token.trim(),
+        &serde_json::to_string(&first_dispatch).expect("serialize first coding dispatch"),
+    );
+    assert!(
+        first_dispatch_response.starts_with("HTTP/1.1 200 OK"),
+        "{first_dispatch_response}"
+    );
+    let first_receipt: FeatureConveyorCodingDispatchReceipt =
+        response_json(&first_dispatch_response);
+
+    let coding_tcp = tokio::net::TcpStream::connect(remote_endpoint)
+        .await
+        .expect("connect coding remote listener");
+    let server_name = ServerName::IpAddress(remote_endpoint.ip().into());
+    let mut coding_stream = TlsConnector::from(coding.config.clone())
+        .connect(server_name, coding_tcp)
+        .await
+        .expect("complete coding mutual TLS handshake");
+    let handshake_body = serde_json::to_vec(&AuthenticatedHandshakeRequest {
+        handshake: coding.handshake.clone(),
+        tls_exporter_sha256: exporter_digest(coding_stream.get_ref().1),
+    })
+    .expect("serialize coding exporter-bound handshake");
+    let handshake_response = send_http_keep_alive(
+        &mut coding_stream,
+        remote_endpoint,
+        "POST",
+        "/v1/distributed/connections/accept",
+        &handshake_body,
+    )
+    .await
+    .expect("accept coding application handshake");
+    assert!(
+        handshake_response.starts_with("HTTP/1.1 200 OK"),
+        "{handshake_response}"
+    );
+    let coding_handshake: HandshakeResponse = response_json(&handshake_response);
+    assert_eq!(coding_handshake.status, HandshakeStatus::Accepted);
+    let lease_body = serde_json::to_vec(&serde_json::json!({
+        "device_id": coding.handshake.device_id,
+        "connection_epoch": coding_handshake.connection_epoch
+    }))
+    .expect("serialize coding lease request");
+    let first_lease_response = send_http_keep_alive(
+        &mut coding_stream,
+        remote_endpoint,
+        "POST",
+        "/v1/distributed/leases/next",
+        &lease_body,
+    )
+    .await
+    .expect("lease first coding job");
+    assert!(
+        first_lease_response.starts_with("HTTP/1.1 200 OK"),
+        "{first_lease_response}"
+    );
+    let first_job: JobEnvelope = response_json(&first_lease_response);
+    let first_context = first_job
+        .validate_local_coding()
+        .expect("exact local.coding.v1 job wire contract");
+    assert_eq!(first_job.step_id, first_receipt.step_id);
+    assert_eq!(first_context.snapshot_id, claim.snapshot_id);
+    assert_eq!(
+        first_context.work_packet_sha256,
+        first_dispatch.work_packet_sha256
+    );
+
+    let result_for = |job: &JobEnvelope, packet_sha256, sequence| {
+        let payload = serde_json::to_value(LocalCodingJobResult {
+            status: "dispatch_acknowledged".to_string(),
+            work_packet_sha256: packet_sha256,
+            admission_sha256: Sha256::digest(b"coding-admission").into(),
+            mutation_performed: false,
+        })
+        .expect("serialize coding acknowledgement payload");
+        JobResultEnvelope {
+            protocol_version: PROTOCOL_VERSION,
+            connection_epoch: job.connection_epoch,
+            sequence,
+            task_id: job.task_id,
+            step_id: job.step_id,
+            attempt_id: job.attempt_id,
+            lease_id: job.lease_id,
+            cancellation_id: job.cancellation_id,
+            status: JobResultStatus::Completed,
+            context_sha256: job.context_sha256,
+            payload_sha256: Sha256::digest(serde_json::to_vec(&payload).unwrap()).into(),
+            payload,
+        }
+    };
+    let wrong = result_for(&first_job, [0x77; 32], first_job.sequence + 1);
+    let wrong_response = send_http_keep_alive(
+        &mut coding_stream,
+        remote_endpoint,
+        "POST",
+        "/v1/distributed/results",
+        &serde_json::to_vec(&wrong).expect("serialize wrong coding acknowledgement"),
+    )
+    .await
+    .expect("reject wrong coding acknowledgement");
+    assert!(
+        !wrong_response.starts_with("HTTP/1.1 200 OK"),
+        "wrong coding binding was accepted: {wrong_response}"
+    );
+    let exact = result_for(
+        &first_job,
+        first_dispatch.work_packet_sha256,
+        first_job.sequence + 1,
+    );
+    let exact_response = send_http_keep_alive(
+        &mut coding_stream,
+        remote_endpoint,
+        "POST",
+        "/v1/distributed/results",
+        &serde_json::to_vec(&exact).expect("serialize exact coding acknowledgement"),
+    )
+    .await
+    .expect("accept exact coding acknowledgement");
+    assert!(
+        exact_response.starts_with("HTTP/1.1 200 OK"),
+        "{exact_response}"
+    );
+
+    let second_dispatch = dispatch(Uuid::new_v4(), Sha256::digest(b"coding-packet-two").into());
+    let second_dispatch_response = local_post(
+        local_endpoint,
+        "/v1/feature-conveyor/coding-dispatches",
+        token.trim(),
+        &serde_json::to_string(&second_dispatch).expect("serialize second coding dispatch"),
+    );
+    assert!(
+        second_dispatch_response.starts_with("HTTP/1.1 200 OK"),
+        "{second_dispatch_response}"
+    );
+    let second_lease_response = send_http_keep_alive(
+        &mut coding_stream,
+        remote_endpoint,
+        "POST",
+        "/v1/distributed/leases/next",
+        &lease_body,
+    )
+    .await
+    .expect("lease second coding job");
+    assert!(
+        second_lease_response.starts_with("HTTP/1.1 200 OK"),
+        "{second_lease_response}"
+    );
+    let second_job: JobEnvelope = response_json(&second_lease_response);
+    second_job
+        .validate_local_coding()
+        .expect("second exact coding job");
+    let pause = local_post(
+        local_endpoint,
+        "/v1/development/emergency-pause/activate",
+        token.trim(),
+        "{}",
+    );
+    assert!(pause.starts_with("HTTP/1.1 200 OK"), "{pause}");
+    let resume = local_post(
+        local_endpoint,
+        "/v1/development/emergency-pause/resume",
+        token.trim(),
+        "{}",
+    );
+    assert!(resume.starts_with("HTTP/1.1 200 OK"), "{resume}");
+    let late = result_for(
+        &second_job,
+        second_dispatch.work_packet_sha256,
+        second_job.sequence + 2,
+    );
+    let late_response = send_http(
+        &mut coding_stream,
+        remote_endpoint,
+        "POST",
+        "/v1/distributed/results",
+        &serde_json::to_vec(&late).expect("serialize late coding acknowledgement"),
+    )
+    .await
+    .expect("reject late coding acknowledgement");
+    assert!(
+        !late_response.starts_with("HTTP/1.1 200 OK"),
+        "pause-stale coding acknowledgement was accepted: {late_response}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

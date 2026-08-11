@@ -2,11 +2,17 @@ use assemblywright_master::{
     ApprovedFeatureSpecification, DeviceRegistration, FeatureAbandonmentEvidence,
     FeatureConveyorGuidanceReason, FeatureConveyorGuidanceState, FeatureConveyorNextOwnerAction,
     FeatureGrantRevisions, FeatureLifecycleStatus, FeatureSnapshotClaimPlan,
-    FeatureTransitionEvidence, MasterError, MasterKernel, MasterProcess, RepositoryGrantKind,
-    RepositoryGrantRevision, RepositorySnapshotEvidence, VerifiedFeatureSuccess,
-    MAX_CONVEYOR_NONTERMINAL_FEATURES, MAX_CONVEYOR_STATUS_FEATURES,
+    FeatureTransitionEvidence, MasterError, MasterKernel, MasterProcess, RemoteWorkContract,
+    RepositoryGrantKind, RepositoryGrantRevision, RepositorySnapshotEvidence,
+    VerifiedFeatureSuccess, MASTER_SCHEMA_VERSION, MAX_CONVEYOR_NONTERMINAL_FEATURES,
+    MAX_CONVEYOR_STATUS_FEATURES,
 };
-use assemblywright_protocol::{CapabilityDescriptor, DeviceId, DeviceRole};
+use assemblywright_protocol::{
+    CapabilityDescriptor, DeviceId, DeviceRole, FeatureConveyorCodingDispatchRequest,
+    FeatureConveyorCodingWorkPacketMetadata, HandshakeRequest, JobEnvelope, JobResultEnvelope,
+    JobResultStatus, LocalCodingJobResult, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+    PROTOCOL_VERSION,
+};
 use rusqlite::Connection;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -170,12 +176,74 @@ fn bridge_registration(name: &str) -> DeviceRegistration {
     }
 }
 
+fn coding_registration(name: &str) -> DeviceRegistration {
+    DeviceRegistration {
+        device_id: DeviceId::new(Uuid::new_v4()),
+        device_name: name.to_string(),
+        role: DeviceRole::InferenceWorker,
+        registry_revision: 1,
+        capabilities: vec![CapabilityDescriptor::local_coding()],
+    }
+}
+
+fn coding_dispatch_request(
+    claim: &assemblywright_master::FeatureClaim,
+    device: &DeviceRegistration,
+    queue_revision: u64,
+    pause_revision: u64,
+) -> FeatureConveyorCodingDispatchRequest {
+    FeatureConveyorCodingDispatchRequest {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        feature_id: claim.feature_id,
+        specification_revision: claim.specification_revision,
+        expected_lifecycle_revision: claim.lifecycle_revision,
+        feature_lease_id: claim.lease_id,
+        snapshot_id: claim.snapshot_id,
+        snapshot_sha256: claim.snapshot_sha256,
+        work_packet_sha256: digest("bounded-work-packet"),
+        work_packet: FeatureConveyorCodingWorkPacketMetadata {
+            packet_id: Uuid::new_v4(),
+            ordinal: 1,
+            acceptance_criteria_count: 2,
+        },
+        device_id: device.device_id,
+        device_registry_revision: device.registry_revision,
+        expected_queue_revision: queue_revision,
+        expected_emergency_pause_revision: pause_revision,
+    }
+}
+
+fn coding_ack(job: &JobEnvelope, sequence: u64) -> JobResultEnvelope {
+    let context = job.validate_local_coding().unwrap();
+    let payload = serde_json::to_value(LocalCodingJobResult {
+        status: "dispatch_acknowledged".to_string(),
+        work_packet_sha256: context.work_packet_sha256,
+        admission_sha256: digest("coding-admission"),
+        mutation_performed: false,
+    })
+    .unwrap();
+    JobResultEnvelope {
+        protocol_version: PROTOCOL_VERSION,
+        connection_epoch: job.connection_epoch,
+        sequence,
+        task_id: job.task_id,
+        step_id: job.step_id,
+        attempt_id: job.attempt_id,
+        lease_id: job.lease_id,
+        cancellation_id: job.cancellation_id,
+        status: JobResultStatus::Completed,
+        context_sha256: job.context_sha256,
+        payload_sha256: Sha256::digest(serde_json::to_vec(&payload).unwrap()).into(),
+        payload,
+    }
+}
+
 #[test]
 fn owner_control_designation_is_explicit_cas_bound_role_checked_and_audited() {
     let directory = tempdir().unwrap();
     let database = directory.path().join("master.sqlite3");
     let mut kernel = MasterKernel::open(&database).unwrap();
-    assert_eq!(kernel.schema_version().unwrap(), 9);
+    assert_eq!(kernel.schema_version().unwrap(), MASTER_SCHEMA_VERSION);
     assert_eq!(kernel.owner_control_bridge_designation().unwrap(), None);
 
     let fixture = DeviceRegistration {
@@ -1577,6 +1645,305 @@ fn changed_grant_invalidates_active_feature_before_lifecycle_advancement() {
 }
 
 #[test]
+fn coding_dispatch_is_atomic_snapshot_device_and_revision_bound_then_cancellation_dominates() {
+    let directory = tempdir().unwrap();
+    let database = directory.path().join("master.sqlite3");
+    let mut kernel = MasterKernel::open(&database).unwrap();
+    let repository_id = Uuid::new_v4();
+    install_grants(&mut kernel, repository_id);
+    let feature = specification(Uuid::new_v4(), repository_id, vec![]);
+    kernel.enqueue_approved_feature(&feature, 0, 10).unwrap();
+    let claim = claim_feature(&mut kernel, &feature, 1, 11).unwrap();
+    let device = coding_registration("coding-worker");
+    kernel.register_device(&device).unwrap();
+    let request = coding_dispatch_request(
+        &claim,
+        &device,
+        kernel.feature_queue_revision().unwrap(),
+        kernel.emergency_pause_revision().unwrap(),
+    );
+
+    let mut stale = request.clone();
+    stale.snapshot_sha256 = digest("wrong-snapshot");
+    assert!(matches!(
+        kernel.dispatch_feature_coding(&stale, 12),
+        Err(MasterError::FeatureCodingDispatchUnavailable)
+    ));
+    stale = request.clone();
+    stale.device_registry_revision += 1;
+    assert!(matches!(
+        kernel.dispatch_feature_coding(&stale, 12),
+        Err(MasterError::FeatureCodingDispatchUnavailable)
+    ));
+    stale = request.clone();
+    stale.expected_queue_revision += 1;
+    assert!(matches!(
+        kernel.dispatch_feature_coding(&stale, 12),
+        Err(MasterError::StaleFeatureQueueRevision { .. })
+    ));
+
+    install_audit_failure(&database, "feature_coding_dispatched");
+    assert!(matches!(
+        kernel.dispatch_feature_coding(&request, 12),
+        Err(MasterError::Storage(_))
+    ));
+    let connection = Connection::open(&database).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM feature_coding_dispatches",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM master_steps WHERE capability_id = 'local.coding.v1'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+    drop(connection);
+    remove_audit_failure(&database);
+
+    let receipt = kernel.dispatch_feature_coding(&request, 13).unwrap();
+    assert_eq!(
+        kernel.step_snapshot(receipt.step_id).unwrap().status,
+        assemblywright_master::StepStatus::Queued
+    );
+    let transition_evidence = FeatureTransitionEvidence {
+        repository_snapshot_sha256: claim.snapshot_sha256,
+        accepted_evidence_sha256: digest("coding-complete-evidence"),
+    };
+    assert!(matches!(
+        kernel.advance_feature_lifecycle(
+            feature.feature_id,
+            claim.lifecycle_revision,
+            FeatureLifecycleStatus::Validating,
+            transition_evidence,
+            13,
+        ),
+        Err(MasterError::FeatureCodingWorkOutstanding)
+    ));
+    let audit: String = Connection::open(&database)
+        .unwrap()
+        .query_row(
+            "SELECT redacted_metadata_json FROM feature_conveyor_audit
+             WHERE event_kind = 'feature_coding_dispatched'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(!audit.contains(&request.device_id.0.to_string()));
+    assert!(!audit.contains(&request.snapshot_id.to_string()));
+    assert!(!audit.contains("path"));
+    assert!(audit.contains("\"repository_material_present\":false"));
+
+    let handshake = HandshakeRequest {
+        protocol_version: PROTOCOL_VERSION,
+        device_id: device.device_id,
+        device_name: device.device_name.clone(),
+        role: device.role,
+        registry_revision: device.registry_revision,
+        capabilities: device.capabilities.clone(),
+    };
+    let epoch = kernel
+        .accept_handshake(&handshake, 14)
+        .unwrap()
+        .connection_epoch;
+    let contract = RemoteWorkContract::from_registration(&device).unwrap();
+    let job = kernel
+        .lease_next_remote_step(device.device_id, epoch, 15, &contract)
+        .unwrap();
+    assert_eq!(job.step_id, receipt.step_id);
+    job.validate_local_coding().unwrap();
+    assert!(matches!(
+        kernel.advance_feature_lifecycle(
+            feature.feature_id,
+            claim.lifecycle_revision,
+            FeatureLifecycleStatus::Validating,
+            transition_evidence,
+            15,
+        ),
+        Err(MasterError::FeatureCodingWorkOutstanding)
+    ));
+
+    let cancelled = kernel
+        .cancel_active_feature(feature.feature_id, claim.lifecycle_revision, 16)
+        .unwrap();
+    assert_eq!(cancelled.status, FeatureLifecycleStatus::Cancelled);
+    assert_eq!(
+        kernel.attempt_status(job.attempt_id).unwrap(),
+        assemblywright_master::AttemptStatus::CancellationPending
+    );
+}
+
+#[test]
+fn coding_dispatch_stays_ineligible_after_restart_quarantines_active_feature() {
+    let directory = tempdir().unwrap();
+    let database = directory.path().join("master.sqlite3");
+    let (device, receipt) = {
+        let mut kernel = MasterKernel::open(&database).unwrap();
+        let repository_id = Uuid::new_v4();
+        install_grants(&mut kernel, repository_id);
+        let feature = specification(Uuid::new_v4(), repository_id, vec![]);
+        kernel.enqueue_approved_feature(&feature, 0, 10).unwrap();
+        let claim = claim_feature(&mut kernel, &feature, 1, 11).unwrap();
+        let device = coding_registration("restart-coding-worker");
+        kernel.register_device(&device).unwrap();
+        let request = coding_dispatch_request(
+            &claim,
+            &device,
+            kernel.feature_queue_revision().unwrap(),
+            kernel.emergency_pause_revision().unwrap(),
+        );
+        let receipt = kernel.dispatch_feature_coding(&request, 12).unwrap();
+        (device, receipt)
+    };
+    let mut restarted = MasterKernel::open(&database).unwrap();
+    assert_eq!(restarted.feature_startup_quarantines(), 1);
+    let epoch = restarted
+        .accept_handshake(
+            &HandshakeRequest {
+                protocol_version: PROTOCOL_VERSION,
+                device_id: device.device_id,
+                device_name: device.device_name.clone(),
+                role: device.role,
+                registry_revision: device.registry_revision,
+                capabilities: device.capabilities.clone(),
+            },
+            20,
+        )
+        .unwrap()
+        .connection_epoch;
+    let contract = RemoteWorkContract::from_registration(&device).unwrap();
+    assert!(matches!(
+        restarted.lease_next_remote_step(device.device_id, epoch, 21, &contract),
+        Err(MasterError::NoEligibleStep)
+    ));
+    assert_eq!(
+        restarted.step_snapshot(receipt.step_id).unwrap().status,
+        assemblywright_master::StepStatus::Queued
+    );
+}
+
+#[test]
+fn emergency_pause_cancels_coding_attempt_and_resume_rejects_pre_pause_acknowledgement() {
+    let mut kernel = MasterKernel::in_memory().unwrap();
+    let repository_id = Uuid::new_v4();
+    install_grants(&mut kernel, repository_id);
+    let feature = specification(Uuid::new_v4(), repository_id, vec![]);
+    kernel.enqueue_approved_feature(&feature, 0, 10).unwrap();
+    let claim = claim_feature(&mut kernel, &feature, 1, 11).unwrap();
+    let device = coding_registration("pause-coding-worker");
+    kernel.register_device(&device).unwrap();
+    let request = coding_dispatch_request(
+        &claim,
+        &device,
+        kernel.feature_queue_revision().unwrap(),
+        kernel.emergency_pause_revision().unwrap(),
+    );
+    kernel.dispatch_feature_coding(&request, 12).unwrap();
+    let epoch = kernel
+        .accept_handshake(
+            &HandshakeRequest {
+                protocol_version: PROTOCOL_VERSION,
+                device_id: device.device_id,
+                device_name: device.device_name.clone(),
+                role: device.role,
+                registry_revision: device.registry_revision,
+                capabilities: device.capabilities.clone(),
+            },
+            13,
+        )
+        .unwrap()
+        .connection_epoch;
+    let contract = RemoteWorkContract::from_registration(&device).unwrap();
+    let job = kernel
+        .lease_next_remote_step(device.device_id, epoch, 14, &contract)
+        .unwrap();
+    let pre_pause_ack = coding_ack(&job, job.sequence + 2);
+
+    kernel.set_emergency_paused_at(true, 15).unwrap();
+    assert_eq!(
+        kernel.attempt_status(job.attempt_id).unwrap(),
+        assemblywright_master::AttemptStatus::CancellationPending
+    );
+    kernel.set_emergency_paused_at(false, 16).unwrap();
+    assert!(matches!(
+        kernel.accept_remote_result_from(device.device_id, &pre_pause_ack, 17, &contract),
+        Err(MasterError::FeatureCodingDispatchUnavailable)
+    ));
+    assert_eq!(
+        kernel.attempt_status(job.attempt_id).unwrap(),
+        assemblywright_master::AttemptStatus::CancellationPending
+    );
+}
+
+#[test]
+fn terminal_coding_ack_allows_validation_and_lifecycle_change_invalidates_replay() {
+    let mut kernel = MasterKernel::in_memory().unwrap();
+    let repository_id = Uuid::new_v4();
+    install_grants(&mut kernel, repository_id);
+    let feature = specification(Uuid::new_v4(), repository_id, vec![]);
+    kernel.enqueue_approved_feature(&feature, 0, 10).unwrap();
+    let claim = claim_feature(&mut kernel, &feature, 1, 11).unwrap();
+    let device = coding_registration("terminal-coding-worker");
+    kernel.register_device(&device).unwrap();
+    let request = coding_dispatch_request(
+        &claim,
+        &device,
+        kernel.feature_queue_revision().unwrap(),
+        kernel.emergency_pause_revision().unwrap(),
+    );
+    kernel.dispatch_feature_coding(&request, 12).unwrap();
+    let epoch = kernel
+        .accept_handshake(
+            &HandshakeRequest {
+                protocol_version: PROTOCOL_VERSION,
+                device_id: device.device_id,
+                device_name: device.device_name.clone(),
+                role: device.role,
+                registry_revision: device.registry_revision,
+                capabilities: device.capabilities.clone(),
+            },
+            13,
+        )
+        .unwrap()
+        .connection_epoch;
+    let contract = RemoteWorkContract::from_registration(&device).unwrap();
+    let job = kernel
+        .lease_next_remote_step(device.device_id, epoch, 14, &contract)
+        .unwrap();
+    let ack = coding_ack(&job, job.sequence + 1);
+    kernel
+        .accept_remote_result_from(device.device_id, &ack, 15, &contract)
+        .unwrap();
+    let validating = kernel
+        .advance_feature_lifecycle(
+            feature.feature_id,
+            claim.lifecycle_revision,
+            FeatureLifecycleStatus::Validating,
+            FeatureTransitionEvidence {
+                repository_snapshot_sha256: claim.snapshot_sha256,
+                accepted_evidence_sha256: digest("terminal-coding-evidence"),
+            },
+            16,
+        )
+        .unwrap();
+    assert_eq!(validating.status, FeatureLifecycleStatus::Validating);
+    assert!(matches!(
+        kernel.accept_remote_result_from(device.device_id, &ack, 17, &contract),
+        Err(MasterError::FeatureCodingDispatchUnavailable)
+    ));
+}
+
+#[test]
 fn cancellation_blocks_until_safe_abandonment_and_merged_main_is_healthy() {
     let mut kernel = MasterKernel::in_memory().unwrap();
     let repository_id = Uuid::new_v4();
@@ -1898,6 +2265,9 @@ fn downgrade_v5_database_to_v4(path: &std::path::Path, sabotage: bool) {
              DROP TRIGGER feature_repository_snapshot_claims_no_update;
              DROP TRIGGER feature_repository_snapshot_claims_no_delete;
              DROP TRIGGER feature_active_lease_requires_snapshot;
+             DROP TRIGGER feature_coding_dispatches_no_update;
+             DROP TRIGGER feature_coding_dispatches_no_delete;
+             DROP TABLE feature_coding_dispatches;
              DROP TABLE master_identity_rebind_audit;
              DROP TABLE master_pending_capability_rebinds;
              DROP TABLE feature_owner_control_state;
@@ -1935,7 +2305,10 @@ fn master_process_v4_backup_migration_reopen_and_restore_on_failure() {
     ));
     {
         let process = MasterProcess::acquire(directory.path()).unwrap();
-        assert_eq!(process.kernel().schema_version().unwrap(), 9);
+        assert_eq!(
+            process.kernel().schema_version().unwrap(),
+            MASTER_SCHEMA_VERSION
+        );
         let backup = process.migration_backup_path().unwrap();
         assert!(backup.exists());
         let backup_connection = Connection::open(backup).unwrap();
@@ -1958,7 +2331,7 @@ fn master_process_v4_backup_migration_reopen_and_restore_on_failure() {
             .kernel()
             .schema_version()
             .unwrap(),
-        9
+        MASTER_SCHEMA_VERSION
     );
 
     let failed_directory = tempdir().unwrap();
@@ -1999,7 +2372,7 @@ fn master_process_v4_backup_migration_reopen_and_restore_on_failure() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v9.")));
+            .starts_with("master.pre-v10.")));
 }
 
 #[test]
@@ -2010,7 +2383,10 @@ fn master_process_v6_backup_migration_binds_pause_and_default_inert_owner_contro
     Connection::open(&database)
         .unwrap()
         .execute_batch(
-            "DROP TRIGGER feature_active_lease_requires_snapshot;
+            "DROP TRIGGER feature_coding_dispatches_no_update;
+             DROP TRIGGER feature_coding_dispatches_no_delete;
+             DROP TABLE feature_coding_dispatches;
+             DROP TRIGGER feature_active_lease_requires_snapshot;
              DROP TRIGGER feature_repository_snapshot_claims_no_update;
              DROP TRIGGER feature_repository_snapshot_claims_no_delete;
              ALTER TABLE feature_active_lease RENAME TO feature_active_lease_v9;
@@ -2036,7 +2412,10 @@ fn master_process_v6_backup_migration_binds_pause_and_default_inert_owner_contro
     ));
 
     let process = MasterProcess::acquire(directory.path()).unwrap();
-    assert_eq!(process.kernel().schema_version().unwrap(), 9);
+    assert_eq!(
+        process.kernel().schema_version().unwrap(),
+        MASTER_SCHEMA_VERSION
+    );
     assert_eq!(process.kernel().emergency_pause_revision().unwrap(), 0);
     assert_eq!(
         process.kernel().owner_control_bridge_designation().unwrap(),
@@ -2047,7 +2426,7 @@ fn master_process_v6_backup_migration_binds_pause_and_default_inert_owner_contro
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v9."));
+        .starts_with("master.pre-v10."));
     let backup = Connection::open(backup).unwrap();
     assert_eq!(
         backup
@@ -2069,13 +2448,59 @@ fn master_process_v6_backup_migration_binds_pause_and_default_inert_owner_contro
 }
 
 #[test]
+fn master_process_v9_backup_first_migration_adds_immutable_coding_dispatch_evidence() {
+    let directory = tempdir().unwrap();
+    let database = directory.path().join("master.sqlite3");
+    drop(MasterKernel::open(&database).unwrap());
+    Connection::open(&database)
+        .unwrap()
+        .execute_batch(
+            "DROP TRIGGER feature_coding_dispatches_no_update;
+             DROP TRIGGER feature_coding_dispatches_no_delete;
+             DROP TABLE feature_coding_dispatches;
+             PRAGMA user_version = 9;",
+        )
+        .unwrap();
+    assert!(matches!(
+        MasterKernel::open(&database),
+        Err(MasterError::MigrationBackup(_))
+    ));
+    let process = MasterProcess::acquire(directory.path()).unwrap();
+    assert_eq!(
+        process.kernel().schema_version().unwrap(),
+        MASTER_SCHEMA_VERSION
+    );
+    let backup = process.migration_backup_path().unwrap();
+    assert!(backup.exists());
+    let backup_connection = Connection::open(backup).unwrap();
+    assert_eq!(
+        backup_connection
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        9
+    );
+    assert_eq!(
+        Connection::open(&database)
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'table' AND name = 'feature_coding_dispatches'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
 fn forward_schema_version_fails_closed_without_backup() {
     let directory = tempdir().unwrap();
     let database = directory.path().join("master.sqlite3");
     drop(MasterKernel::open(&database).unwrap());
     Connection::open(&database)
         .unwrap()
-        .execute_batch("PRAGMA user_version = 10;")
+        .execute_batch("PRAGMA user_version = 11;")
         .unwrap();
     let forward_error = match MasterProcess::acquire(directory.path()) {
         Ok(_) => panic!("forward schema unexpectedly opened"),
@@ -2084,8 +2509,8 @@ fn forward_schema_version_fails_closed_without_backup() {
     assert!(matches!(
         forward_error,
         MasterError::UnsupportedSchemaVersion {
-            expected: 9,
-            found: 10
+            expected: MASTER_SCHEMA_VERSION,
+            found: 11
         }
     ));
     assert!(!directory
@@ -2096,5 +2521,5 @@ fn forward_schema_version_fails_closed_without_backup() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v9.")));
+            .starts_with("master.pre-v10.")));
 }

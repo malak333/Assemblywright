@@ -59,7 +59,7 @@ accepted designs and take precedence within their scope:
 
 ### Windows master
 
-`assemblywright-master` owns durable state and every authority decision. Its schema-v9
+`assemblywright-master` owns durable state and every authority decision. Its schema-v10
 SQLite database holds two kernels:
 
 - The distributed device lifecycle: registered devices, connection epochs,
@@ -143,6 +143,23 @@ specification to queue, designation, and Emergency Pause revisions. It may only
 append the immutable specification and queued lifecycle; it adds no claim,
 dispatch, worker, repository, provider, review, Git, publication, or activation
 authority.
+
+Schema v10 adds one separate owner-token-authenticated loopback-only coding-
+dispatch transition. It accepts only bounded path-free metadata and binds one
+work packet digest to the exact active feature, specification and lifecycle
+revision, feature lease, snapshot ID and digest, queue and Emergency Pause
+revisions, and exact current non-revoked `InferenceWorker` registration with
+the singleton `local.coding.v1` capability. The transition atomically inserts
+one existing distributed queued step, immutable dispatch evidence, the
+distributed event, and redacted Feature Conveyor audit. The enrolled-device
+router does not expose this owner action. Remote leasing and result acceptance
+recheck the exact device, registration, feature lifecycle, feature lease,
+snapshot, queue, and pause binding; cancellation, Emergency Pause, lifecycle
+departure, or startup quarantine prevents later acceptance. The native Mac
+agent only validates the metadata-only admission envelope. No repository bytes
+or path, command, tool, process, provider, credential, patch, commit, mutation,
+integration, review, publication, queue advancement, or autonomous activation
+exists in this slice.
 
 Every authoritative transition commits its redacted audit event in the same
 transaction. Migrations from supported legacy schemas are backup-first under
