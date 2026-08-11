@@ -42,7 +42,14 @@ Before starting a release pass, confirm the claim you intend to make.
   limited to each filesystem-observation await and does not cover authentication
   or database lock/audit latency. This does not create a cross-filesystem-and-
   SQLite snapshot. It does not prove clean-tree or content state and creates no reusable
-  snapshot or claimability. The slice
+  snapshot or claimability. A checkout containing valid `.git/worktrees`
+  metadata is deliberately ineligible; do not prune or delete that metadata to
+  force a pass. Use a dedicated standalone checkout for positive proof, obtain
+  the path-free receipt, record the next revoked grant revision, confirm it is
+  inactive, and remove only the disposable checkout created for the proof.
+  Windows fixtures must use the final normalized DOS path from the held
+  directory handle rather than a verbatim `\\?\` path from
+  `std::fs::canonicalize`. The slice
   exposes no worker
   dispatcher, repository execution, review provider,
   publication coordinator, Mac control UI, or autonomous activation.

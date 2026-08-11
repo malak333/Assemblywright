@@ -293,6 +293,12 @@ fn repository_preflight_scope_is_canonical_strict_bounded_and_revision_bound() {
     let mut relative_path = valid.clone();
     relative_path.scope.repository_path = "relative/repository".to_string();
     assert!(relative_path.validate().is_err());
+    let mut empty_path = valid.clone();
+    empty_path.scope.repository_path.clear();
+    assert!(empty_path.validate().is_err());
+    let mut control_path = valid.clone();
+    control_path.scope.repository_path = "/private/owner/repository\nsecret".to_string();
+    assert!(control_path.validate().is_err());
     for forbidden_path in [
         "//server/share/repository",
         r"\\server\share\repository",
@@ -313,12 +319,18 @@ fn repository_preflight_scope_is_canonical_strict_bounded_and_revision_bound() {
     let mut malformed_branch = valid.clone();
     malformed_branch.scope.expected_base_branch = "refs/heads/../secret".to_string();
     assert!(malformed_branch.validate().is_err());
+    let mut empty_branch = valid.clone();
+    empty_branch.scope.expected_base_branch.clear();
+    assert!(empty_branch.validate().is_err());
     let mut nested_branch = valid.clone();
     nested_branch.scope.expected_base_branch = "feature/nested".to_string();
     assert!(nested_branch.validate().is_err());
     let mut malformed_commit = valid.clone();
     malformed_commit.scope.expected_head_commit = "ABCDEF".repeat(7);
     assert!(malformed_commit.validate().is_err());
+    let mut empty_commit = valid.clone();
+    empty_commit.scope.expected_head_commit.clear();
+    assert!(empty_commit.validate().is_err());
     let mut wrong_schema = valid.clone();
     wrong_schema.schema_version += 1;
     assert!(wrong_schema.validate().is_err());
@@ -371,9 +383,21 @@ fn repository_preflight_scope_is_canonical_strict_bounded_and_revision_bound() {
         FeatureConveyorRepositoryPreflightReceipt::decode_frame(unknown_receipt.as_bytes())
             .is_err()
     );
-    let mut unbound = receipt;
+    let mut unbound = receipt.clone();
     unbound.observed_at_ms += 1;
     assert!(unbound.validate().is_err());
+    let mut unobserved = receipt;
+    unobserved.observed_at_ms = 0;
+    unobserved.preflight_fingerprint_sha256 = repository_preflight_fingerprint_sha256(
+        unobserved.repository_id,
+        unobserved.registration_grant_revision,
+        &unobserved.scope_sha256,
+        unobserved.emergency_pause_revision,
+        &unobserved.base_branch,
+        &unobserved.head_commit,
+        unobserved.observed_at_ms,
+    );
+    assert!(unobserved.validate().is_err());
 }
 
 fn sample_job() -> JobEnvelope {

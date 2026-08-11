@@ -73,6 +73,10 @@ success emits only a path-free digest receipt after an atomic redacted audit.
 The five-second timeout applies to each filesystem-observation await only; owner
 authentication and database lock/audit latency remain separately fail-closed
 but are not covered by that response-time claim.
+An existing `.git/worktrees` directory is a deliberate rejection, not an
+operator cleanup instruction. Positive admission proof uses a dedicated
+standalone checkout with independent Git metadata; a disposable proof grant is
+revoked by its next contiguous revision before that checkout is removed.
 This is admission evidence for the observed instant only: it creates no durable
 snapshot, claim, lease, mutation, worker, review, publication, or activation
 authority. Only the

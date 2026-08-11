@@ -367,7 +367,7 @@ fn repository_preflight_is_owner_only_filesystem_identity_observation_and_redact
         registration_grant_revision: 1,
         expected_emergency_pause_revision: 0,
     };
-    record_preflight_registration_grant(endpoint, token, &request, 0);
+    record_preflight_registration_grant(endpoint, token, &request, 0, false);
 
     let request_json = serde_json::to_string(&request).unwrap();
     let unauthorized = post_request(
@@ -546,7 +546,7 @@ fn repository_preflight_is_owner_only_filesystem_identity_observation_and_redact
         request.scope.repository_path = symlink.to_string_lossy().into_owned();
         request.scope_sha256 = request.scope.canonical_scope_sha256().unwrap();
         request.registration_grant_revision = 2;
-        record_preflight_registration_grant(endpoint, token, &request, 1);
+        record_preflight_registration_grant(endpoint, token, &request, 1, false);
         assert_preflight_rejected(endpoint, token, &request);
     }
 
@@ -561,8 +561,24 @@ fn repository_preflight_is_owner_only_filesystem_identity_observation_and_redact
         token,
         &request,
         request.registration_grant_revision - 1,
+        false,
     );
     assert_preflight_rejected(endpoint, token, &request);
+
+    let active_revision = request.registration_grant_revision;
+    request.registration_grant_revision += 1;
+    record_preflight_registration_grant(endpoint, token, &request, active_revision, true);
+    assert_preflight_rejected(endpoint, token, &request);
+    let grants = get_request(
+        endpoint,
+        &format!("/v1/feature-conveyor/repositories/{repository_id}/grants"),
+        Some(token),
+    );
+    assert!(grants.starts_with("HTTP/1.1 200 OK"), "{grants}");
+    let grants = response_json(&grants);
+    assert_eq!(grants["registration"]["revision"], active_revision + 1);
+    assert_eq!(grants["registration"]["revoked"], true);
+    assert_eq!(grants["registration"]["active"], false);
 
     let audit: String = Connection::open(directory.path().join("master.sqlite3"))
         .unwrap()
@@ -1052,6 +1068,7 @@ fn record_preflight_registration_grant(
     token: &str,
     request: &FeatureConveyorRepositoryPreflightRequest,
     expected_current_revision: u64,
+    revoked: bool,
 ) {
     let grant = FeatureConveyorRepositoryGrantRequest {
         schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
@@ -1063,12 +1080,13 @@ fn record_preflight_registration_grant(
             revision: request.registration_grant_revision,
             scope_sha256: request.scope_sha256,
             owner_approval_sha256: Sha256::digest(format!(
-                "owner-approved-preflight-revision-{}",
+                "owner-{}-preflight-revision-{}",
+                if revoked { "revoked" } else { "approved" },
                 request.registration_grant_revision
             ))
             .into(),
             expires_at_ms: None,
-            revoked: false,
+            revoked,
         },
     };
     let response = post_request(

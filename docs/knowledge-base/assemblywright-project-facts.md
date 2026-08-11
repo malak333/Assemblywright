@@ -296,6 +296,21 @@ an old one.
   authority atomically, appends only a structurally redacted audit, and returns
   a path-free digest receipt. A later claim must inspect again against a durable
   snapshot; this receipt grants no dispatch, mutation, review, or publication.
+- A primary development checkout with a real `.git/worktrees` control directory
+  is intentionally ineligible for repository preflight even when its current
+  branch and HEAD are otherwise exact. Do not prune or delete valid worktree
+  metadata merely to obtain a receipt. Use a dedicated standalone checkout with
+  independent `.git` metadata for a positive preflight, then record the next
+  revoked registration-grant revision before removing any disposable proof
+  checkout. The revoked projection must report `active:false`.
+- On Windows, `std::fs::canonicalize` may return a verbatim `\\?\` path that the
+  public scope contract correctly rejects. Native fixtures and operator tooling
+  that need the accepted canonical DOS spelling should derive it from the held
+  directory handle with `GetFinalPathNameByHandleW` and strip only the verbatim
+  DOS prefix; do not weaken UNC or device-path rejection. Rust's Windows rename
+  path may also fall back to POSIX rename semantics, so share modes are not an
+  immutability claim. The safety invariant is the final reopen and full identity-
+  vector comparison while both original and fresh handle sets remain held.
 - Windows is the sole canonical-manifest digest authority for approved-feature
   enqueue. The signed Swift helper validates exact nonzero digest shape but does
   not recompute canonical JSON because Foundation normalizes some numeric JSON

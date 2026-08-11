@@ -79,7 +79,10 @@ rustup toolchain install 1.95.0 --profile minimal --component clippy --component
 
 `.github/workflows/windows-protocol.yml` runs formatting, clippy, the protocol
 and master crates, the master-process E2E, and the elevated Windows SCM service
-lifecycle E2E.
+lifecycle E2E. The native master tests are the authoritative proof for Windows
+final-DOS-path normalization, alternate-path rejection, POSIX rename/replacement
+revalidation, and held-handle identity comparison; macOS execution cannot prove
+those Win32 behaviors.
 
 ## Focused Commands
 

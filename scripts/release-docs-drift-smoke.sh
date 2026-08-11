@@ -259,6 +259,10 @@ require_text "knowledge base repository grant mutation invariant" "$KB" \
   "sole public mutation primitive"
 require_text "knowledge base repository preflight boundary" "$KB" \
   "point-in-time admission check"
+require_text "knowledge base standalone preflight checkout" "$KB" \
+  "dedicated standalone checkout"
+require_text "knowledge base Windows final path rule" "$KB" \
+  "GetFinalPathNameByHandleW"
 require_text "knowledge base feature closeout" "$KB" \
   "Every feature or phase uses the closeout contract"
 require_text "knowledge base native E2E boundary" "$KB" \
@@ -280,6 +284,8 @@ require_text "release checklist repository grant boundary" "$CHECKLIST" \
   "owner-token loopback repository-grant routes"
 require_text "release checklist repository preflight boundary" "$CHECKLIST" \
   "loopback repository preflight"
+require_text "release checklist preserves worktree metadata" "$CHECKLIST" \
+  "do not prune or delete that metadata"
 require_text "release checklist feature closeout" "$CHECKLIST" \
   "docs/development-agent-workflow.md"
 
