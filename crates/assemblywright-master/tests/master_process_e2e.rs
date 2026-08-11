@@ -551,8 +551,7 @@ fn repository_preflight_is_owner_only_filesystem_identity_observation_and_redact
     }
 
     let non_git = tempdir().unwrap();
-    request.scope.repository_path = std::fs::canonicalize(non_git.path())
-        .unwrap()
+    request.scope.repository_path = canonical_repository_path(non_git.path())
         .to_string_lossy()
         .into_owned();
     request.scope_sha256 = request.scope.canonical_scope_sha256().unwrap();
