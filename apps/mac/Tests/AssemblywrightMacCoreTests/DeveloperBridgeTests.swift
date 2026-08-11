@@ -1459,9 +1459,12 @@ struct DeveloperBridgeTests {
         await gate.finish()
     }
 
-    @Test("Supervisor keeps one authenticated session for exact health samples")
+    @Test("Supervisor keeps one authenticated session across distinct master and projection schemas")
     func supervisorKeepsAuthenticatedSession() async throws {
-        let response = AssemblywrightMacBridgeHTTPResponse(status: 200, body: validRemoteHealthData())
+        let response = AssemblywrightMacBridgeHTTPResponse(
+            status: 200,
+            body: validRemoteHealthData(schemaVersion: 11)
+        )
         let session = FakeSupervisorSession(
             connectionEpoch: 41,
             outcomes: [.response(response), .response(response)]
@@ -1489,6 +1492,8 @@ struct DeveloperBridgeTests {
         #expect(first.phase == .authenticated)
         #expect(first.connectionEpoch == 41)
         #expect(first.masterStatus == "ok")
+        #expect(first.schemaVersion == 11)
+        #expect(first.featureConveyor?.schemaVersion == 8)
         #expect(first.featureConveyor?.ownerGuidance.state == .idle)
         #expect(first.errorCode == nil)
         #expect(strictlyDecodedSnapshot == first)
@@ -4848,9 +4853,9 @@ private func localCodingProfile() -> AssemblywrightMacBridgeProfile {
     )
 }
 
-private func validRemoteHealthData() -> Data {
+private func validRemoteHealthData(schemaVersion: UInt64 = 8) -> Data {
     Data(
-        #"{"status":"ok","mode":"developer_remote_master","host_mode":"windows_service","service_identity":"MIKE-PC\\mike","maintenance_active":false,"maintenance_reason":null,"emergency_paused":false,"protocol_version":3,"schema_version":8,"process_id":43752,"started_at_ms":1784749559000,"startup_reconciliation":{"disconnected_connections":0,"abandoned_attempts":0,"requeued_steps":0},"state":{"registered_devices":1,"active_device_certificates":1,"unconsumed_enrollment_grants":2,"active_connections":1,"queued_steps":0,"leased_steps":0,"terminal_steps":0,"active_attempts":0},"boundary":"TLS 1.3 mutual authentication with enrolled-device certificate and durable revocation checks"}"#.utf8
+        #"{"status":"ok","mode":"developer_remote_master","host_mode":"windows_service","service_identity":"MIKE-PC\\mike","maintenance_active":false,"maintenance_reason":null,"emergency_paused":false,"protocol_version":3,"schema_version":\#(schemaVersion),"process_id":43752,"started_at_ms":1784749559000,"startup_reconciliation":{"disconnected_connections":0,"abandoned_attempts":0,"requeued_steps":0},"state":{"registered_devices":1,"active_device_certificates":1,"unconsumed_enrollment_grants":2,"active_connections":1,"queued_steps":0,"leased_steps":0,"terminal_steps":0,"active_attempts":0},"boundary":"TLS 1.3 mutual authentication with enrolled-device certificate and durable revocation checks"}"#.utf8
     )
 }
 

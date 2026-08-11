@@ -351,6 +351,12 @@ an old one.
   Apple-signed bridge before live proof. A stale signed helper fails closed as
   `invalid_feature_conveyor_status`; source tests or an updated lifecycle marker
   do not refresh that external signed binary.
+- The remote health `schema_version` is the durable Windows master database
+  schema, while the nested Feature Conveyor `schema_version` is the independent
+  observer projection contract. Validate both strictly but never require them
+  to be equal: the schema-v11 service intentionally serves the unchanged
+  schema-v8 Conveyor projection. The live signed-helper monitor is the required
+  regression for this 11/8 boundary.
 
 ## Workflow
 

@@ -324,9 +324,6 @@ public struct AssemblywrightMacBridgeSupervisorSnapshot: Codable, Equatable, Sen
                     featureConveyor,
                     object: featureObject
                 )
-                guard snapshot.schemaVersion == Int64(featureConveyor.schemaVersion) else {
-                    throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
-                }
             }
         case .backingOff:
             guard snapshot.connectionEpoch == nil,
@@ -883,8 +880,7 @@ public actor AssemblywrightMacBridgeSupervisor {
                 let decoded = try AssemblywrightMacRemoteFeatureConveyorStatus.decode(
                     featureResponse
                 )
-                guard health.schemaVersion == Int64(decoded.schemaVersion),
-                      health.emergencyPaused
+                guard health.emergencyPaused
                         == (decoded.ownerGuidance.reasonCode == .emergencyPaused) else {
                     throw AssemblywrightMacRemoteFeatureConveyorStatusError.invalid
                 }
