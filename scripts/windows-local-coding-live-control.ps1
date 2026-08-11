@@ -136,6 +136,56 @@ function Assert-NoReparseTree {
     }
 }
 
+function Remove-BoundedCommitGraphCache {
+    param([Parameter(Mandatory = $true)][string]$Repository)
+    $cache = Join-Path $Repository ".git\objects\info\commit-graphs"
+    if (-not (Test-Path -LiteralPath $cache)) {
+        return
+    }
+    Assert-NoReparseComponents $cache $false
+    $cacheItem = Get-Item -LiteralPath $cache -Force
+    if (-not $cacheItem.PSIsContainer) {
+        throw "The disposable commit-graph cache was not a directory."
+    }
+    foreach ($entry in @(Get-ChildItem -LiteralPath $cache -Force)) {
+        if (
+            $entry.PSIsContainer -or
+            ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            ($entry.Name -cne "commit-graph-chain" -and
+                $entry.Name -cnotmatch "^graph-[0-9a-f]{64}\.graph$")
+        ) {
+            throw "The disposable commit-graph cache contained an unsupported entry."
+        }
+        Remove-Item -LiteralPath $entry.FullName -Force
+    }
+    Remove-Item -LiteralPath $cache -Force
+    if (Test-Path -LiteralPath $cache) {
+        throw "The disposable commit-graph cache was not removed."
+    }
+}
+
+function Assert-SnapshotCompatibleObjectStore {
+    param([Parameter(Mandatory = $true)][string]$Repository)
+    $objects = Join-Path $Repository ".git\objects"
+    Assert-NoReparseComponents $objects $false
+    foreach ($directory in @(Get-ChildItem -LiteralPath $objects -Force)) {
+        if (
+            -not $directory.PSIsContainer -or
+            ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+        ) {
+            throw "The disposable Git object store contained an unsupported root entry."
+        }
+        foreach ($entry in @(Get-ChildItem -LiteralPath $directory.FullName -Force)) {
+            if (
+                $entry.PSIsContainer -or
+                ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+            ) {
+                throw "The disposable Git object store was not snapshot-compatible."
+            }
+        }
+    }
+}
+
 function Invoke-Git {
     param([Parameter(Mandatory = $true)][string]$Repository, [Parameter(Mandatory = $true)][string[]]$Arguments)
     $output = @(& git -C $Repository @Arguments 2>&1)
@@ -411,7 +461,7 @@ switch ($Action) {
             # ErrorRecord values. Git writes normal clone progress there, so
             # capture it and make the native exit code the sole verdict.
             $ErrorActionPreference = "Continue"
-            $cloneOutput = @(& git clone --no-hardlinks --single-branch --branch main $paths.source $paths.proof 2>&1)
+            $cloneOutput = @(& git clone --no-local --single-branch --branch main $paths.source $paths.proof 2>&1)
             $cloneExitCode = $LASTEXITCODE
         } finally {
             $ErrorActionPreference = $cloneErrorActionPreference
@@ -419,6 +469,8 @@ switch ($Action) {
         if ($cloneExitCode -ne 0) { throw "Git could not create the standalone disposable checkout." }
         Assert-NoReparseComponents $paths.proof $false
         Invoke-Git $paths.proof @("remote", "remove", "origin") | Out-Null
+        Remove-BoundedCommitGraphCache $paths.proof
+        Assert-SnapshotCompatibleObjectStore $paths.proof
         $marker = [ordered]@{
             schema_version = 1
             status = "local_coding_disposable_checkout"
@@ -542,6 +594,9 @@ switch ($Action) {
         ) {
             throw "ClaimAndDispatch requires exact enqueue and local-coding identity bindings."
         }
+        Assert-ProofRepositoryClean $paths.proof $paths.source $RepositoryId $FeatureId $HeadCommit
+        Remove-BoundedCommitGraphCache $paths.proof
+        Assert-SnapshotCompatibleObjectStore $paths.proof
         Assert-ProofRepositoryClean $paths.proof $paths.source $RepositoryId $FeatureId $HeadCommit
         $scope = [ordered]@{
             expected_base_branch = "main"

@@ -236,6 +236,14 @@ Partial, mixed, or relayless worker profiles fail before network
 use. Standard and fixture MacBridge sessions retain strict health plus Feature
 Conveyor observation.
 
+The two-device proof controller creates its disposable repository with a
+non-local clone so Git does not copy source-maintenance caches into the snapshot
+authority boundary. Before a claim, it may remove only the strictly named,
+non-reparse commit-graph cache from that marker-bound disposable checkout, then
+requires the remaining object store to have exactly the flat directory/file
+shape accepted by the Rust snapshot reader. This changes no committed content,
+branch, grant, queue, or production checkout state.
+
 Every authoritative transition commits its redacted audit event in the same
 transaction. Migrations from supported legacy schemas are backup-first under
 the owner lock and fail closed.

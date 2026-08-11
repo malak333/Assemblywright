@@ -77,6 +77,11 @@ An existing `.git/worktrees` directory is a deliberate rejection, not an
 operator cleanup instruction. Positive admission proof uses a dedicated
 standalone checkout with independent Git metadata; a disposable proof grant is
 revoked by its next contiguous revision before that checkout is removed.
+The live controller uses a non-local clone and verifies the snapshot reader's
+flat object-store shape. A copied Git commit-graph cache is expendable metadata,
+not repository content: recovery removes it only after exact marker, path,
+entry-name, regular-file, and no-reparse checks, then revalidates the complete
+object-store shape before requesting the claim.
 This is admission evidence for the observed instant only: it creates no durable
 snapshot, claim, lease, mutation, worker, review, publication, or activation
 authority.

@@ -522,6 +522,13 @@ an old one.
   captures clone stderr under `Continue`, restores the fail-closed preference,
   and treats the exact native exit code as the sole clone verdict. Do not weaken
   error handling for the later HTTP or filesystem authority checks.
+- A local `git clone --no-hardlinks` can copy `.git/objects/info/commit-graphs`
+  from the source checkout. The Rust snapshot reader intentionally rejects that
+  nested object-store directory. The live controller therefore uses
+  `git clone --no-local`; recovery of an already marker-bound disposable clone
+  removes only a strictly named, regular-file, non-reparse commit-graph cache
+  and verifies the remaining flat object-store shape before claiming. It never
+  rewrites the source checkout or committed proof tree.
 - Take authenticated Windows health before and after a live fixture closeout.
   A reconnect may expire an abandoned queued fixture from an interrupted prior
   run; accept the closeout only when the final health is unpaused and reports

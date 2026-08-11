@@ -30,6 +30,9 @@ for required in \
   'local_coding_disposable_checkout' \
   'Assert-NoReparseComponents' \
   'Assert-NoReparseTree' \
+  'Remove-BoundedCommitGraphCache' \
+  'Assert-SnapshotCompatibleObjectStore' \
+  'git clone --no-local' \
   'non-resumable $kind grant revision' \
   'Cleanup without a checkout requires its exact prior binding.' \
   '$absentGrantCount += 1' \
@@ -54,14 +57,24 @@ clone_line="$(grep -nF '$cloneOutput = @(& git clone' "$CONTROLLER" | cut -d: -f
 clone_policy_line="$(grep -nF '$ErrorActionPreference = "Continue"' "$CONTROLLER" | cut -d: -f1)"
 clone_exit_line="$(grep -nF '$cloneExitCode = $LASTEXITCODE' "$CONTROLLER" | cut -d: -f1)"
 marker_recovery_line="$(grep -nF '$marker = Read-ProofMarker $paths.proof $paths.source' "$CONTROLLER" | tail -1 | cut -d: -f1)"
+normalize_line="$(grep -nF 'Remove-BoundedCommitGraphCache $paths.proof' "$CONTROLLER" | tail -1 | cut -d: -f1)"
+snapshot_compatibility_line="$(grep -nF 'Assert-SnapshotCompatibleObjectStore $paths.proof' "$CONTROLLER" | tail -1 | cut -d: -f1)"
+claim_marker_line="$(grep -nF 'Assert-ProofRepositoryClean $paths.proof $paths.source $RepositoryId $FeatureId $HeadCommit' "$CONTROLLER" | head -1 | cut -d: -f1)"
+claim_line="$(grep -nF '$claim = Invoke-ExactPost -Path "/v1/feature-conveyor/repository-snapshot-claims"' "$CONTROLLER" | cut -d: -f1)"
 [[ "$tree_check_line" =~ ^[0-9]+$ && "$delete_line" =~ ^[0-9]+$ \
   && "$terminal_grants_line" =~ ^[0-9]+$ \
   && "$prepare_status_line" =~ ^[0-9]+$ && "$clone_line" =~ ^[0-9]+$ \
   && "$clone_policy_line" =~ ^[0-9]+$ && "$clone_exit_line" =~ ^[0-9]+$ \
   && "$marker_recovery_line" =~ ^[0-9]+$ \
+  && "$normalize_line" =~ ^[0-9]+$ && "$snapshot_compatibility_line" =~ ^[0-9]+$ \
+  && "$claim_marker_line" =~ ^[0-9]+$ \
+  && "$claim_line" =~ ^[0-9]+$ \
   && "$prepare_status_line" -lt "$clone_line" \
   && "$clone_policy_line" -lt "$clone_line" && "$clone_line" -lt "$clone_exit_line" \
   && "$marker_recovery_line" -lt "$delete_line" \
+  && "$claim_marker_line" -lt "$normalize_line" \
+  && "$normalize_line" -lt "$snapshot_compatibility_line" \
+  && "$snapshot_compatibility_line" -lt "$claim_line" \
   && "$tree_check_line" -lt "$delete_line" \
   && "$terminal_grants_line" -lt "$delete_line" ]] \
   || fail "destructive cleanup was not ordered after exact reparse and grant checks"
