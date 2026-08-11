@@ -410,6 +410,8 @@ require_text "agent instructions feature closeout" "$AGENTS" \
   "Close every feature or phase"
 require_text "agent workflow closeout section" "$AGENT_WORKFLOW" \
   "## Feature And Phase Closeout"
+require_text "agent workflow conversation knowledge audit" "$AGENT_WORKFLOW" \
+  "Review the conversation for durable repository facts"
 require_text "agent workflow unit skill" "$AGENT_WORKFLOW" \
   "unit-testing-test-generate"
 require_text "agent workflow E2E skill" "$AGENT_WORKFLOW" \
@@ -418,6 +420,8 @@ require_text "agent workflow Playwright applicability" "$AGENT_WORKFLOW" \
   "Playwright, screenshots, visual"
 require_text "agent workflow native E2E boundary" "$AGENT_WORKFLOW" \
   "native cross-process"
+require_text "agent workflow Windows deployment parity" "$AGENT_WORKFLOW" \
+  "fast-forward the authoritative"
 
 require_text "build docs local gate" "$BUILD_DOCS" "./scripts/release-local.sh"
 require_text "build docs evidence boundary" "$BUILD_DOCS" "## Release Evidence Boundary"

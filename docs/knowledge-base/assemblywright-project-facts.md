@@ -535,6 +535,23 @@ an old one.
   use the relay's FIFO session permit. Fake-session coverage must deliberately
   suspend and reject overlap; an actor fake with no suspension can otherwise
   serialize accidentally and miss the production `requestInFlight` failure.
+- Cancellation of a queued local-coding request does not consume the session
+  permit or reach the authenticated channel. When that waiter reaches the FIFO
+  head, it observes cancellation and hands the permit directly to the next
+  waiter. Unit coverage must retain a suspended first request, a cancelled
+  second waiter, and a successful third request so this handoff cannot strand
+  the relay.
+- Foundation may serialize UUID values with uppercase hexadecimal while Rust
+  and Windows receipts use lowercase canonical UUID text. Compare parsed UUIDs
+  whenever possible; shell proof harnesses must lowercase both sides before a
+  textual identity comparison. Case normalization changes presentation only,
+  never the UUID bytes used by protocol digest transcripts.
+- Interactive SSH pseudo-terminals can impose canonical input-line limits on
+  long pasted JSON or controller commands. Keep authority documents in bounded
+  files or stdin and pass only their validated paths/IDs on the command line.
+  If an exact long-line interactive transfer is unavoidable, disable canonical
+  input and echo for that bounded transfer, then restore terminal settings;
+  terminal scrollback is never proof evidence.
 - Take authenticated Windows health before and after a live fixture closeout.
   A reconnect may expire an abandoned queued fixture from an interrupted prior
   run; accept the closeout only when the final health is unpaused and reports

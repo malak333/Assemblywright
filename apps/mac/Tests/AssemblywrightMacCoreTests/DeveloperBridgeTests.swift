@@ -1504,6 +1504,53 @@ struct DeveloperBridgeTests {
         await gate.finish()
     }
 
+    @Test("Local-coding FIFO skips a cancelled waiter and releases the next request")
+    func localCodingRequestFIFOHandlesCancelledWaiter() async throws {
+        let session = FakeLocalCodingBridgeSession(
+            connectionEpoch: 1,
+            eventBatch: emptyEventBatch(),
+            job: Data(),
+            chunks: [],
+            acceptedResult: nil,
+            rejectConcurrentRequests: true,
+            responseDelayMilliseconds: 50
+        )
+        let requests = AssemblywrightMacLocalCodingSessionRequests(session: session)
+        let firstRequest = AssemblywrightMacBridgeHTTPRequest(
+            method: "POST",
+            path: AssemblywrightMacDeveloperEventRelay.remoteCancellationPath,
+            body: Data("first".utf8)
+        )
+        let cancelledRequest = AssemblywrightMacBridgeHTTPRequest(
+            method: "POST",
+            path: AssemblywrightMacDeveloperEventRelay.remoteCancellationPath,
+            body: Data("cancelled".utf8)
+        )
+        let thirdRequest = AssemblywrightMacBridgeHTTPRequest(
+            method: "POST",
+            path: AssemblywrightMacDeveloperEventRelay.remoteCancellationPath,
+            body: Data("third".utf8)
+        )
+
+        let first = Task { try await requests.send(firstRequest) }
+        try await Task.sleep(for: .milliseconds(5))
+        let cancelled = Task { try await requests.send(cancelledRequest) }
+        try await Task.sleep(for: .milliseconds(5))
+        cancelled.cancel()
+        let third = Task { try await requests.send(thirdRequest) }
+
+        _ = try await first.value
+        do {
+            _ = try await cancelled.value
+            Issue.record("cancelled FIFO waiter unexpectedly reached the session")
+        } catch is CancellationError {
+            // Expected: cancellation is observed when the waiter reaches the FIFO head.
+        }
+        _ = try await third.value
+
+        #expect(await session.requests == [firstRequest, thirdRequest])
+    }
+
     @Test("Supervisor keeps one authenticated session across distinct master and projection schemas")
     func supervisorKeepsAuthenticatedSession() async throws {
         let response = AssemblywrightMacBridgeHTTPResponse(

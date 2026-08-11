@@ -79,3 +79,9 @@ Every feature or phase closes as one auditable slice. Before publication:
 7. When the owner requested publication, commit without bypassing hooks, push
    to `main`, verify local `HEAD` equals `origin/main`, and wait for every
    required hosted gate. A local pass or successful push alone is not closeout.
+8. For Windows-master or cross-device changes, fast-forward the authoritative
+   Windows checkout to that exact published SHA. Rebuild and restart the
+   `AssemblywrightMaster` service when its runtime inputs changed, then verify
+   source parity, protocol/schema compatibility, service health, queue/pause
+   state, and migration backup evidence when applicable. Record explicitly
+   when a docs/test-only slice leaves the deployed binary unchanged.

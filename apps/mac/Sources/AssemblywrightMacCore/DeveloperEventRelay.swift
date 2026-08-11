@@ -258,7 +258,7 @@ public protocol AssemblywrightMacDeveloperAgentLaunching: Sendable {
     ) async throws -> any AssemblywrightMacDeveloperAgentSession
 }
 
-private actor AssemblywrightMacLocalCodingSessionRequests {
+actor AssemblywrightMacLocalCodingSessionRequests {
     private let session: any AssemblywrightMacBridgeSession
     private var available = true
     private var waiters: [CheckedContinuation<Void, Never>] = []
