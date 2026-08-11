@@ -735,6 +735,24 @@ an old one.
   these routes and prove the feature queue, lease, distributed attempt, transfer
   staging, and Mac workspace are empty; direct SQLite mutation or deleting
   state as proof remains forbidden.
+- The 2026-08-11 owner-coordinated two-device contained-coding proof completed
+  against the deployed Windows schema-11/protocol-3 service. The marker-bound
+  snapshot source was `80fed217`; the production Apple-development-signed Mac
+  helper was built from `01afff03` and had binary SHA-256
+  `0cbb9e85e445936b5b276c59210719f0ee5f5bc7e805be65fb2bc2d446d77aa5`.
+  After fail-closed recovery exposed the copied commit-graph cache and the
+  overlapping-request bug, the real `local-coding` identity and supervised
+  Rust agent completed task `738cc025-df36-4bbb-94e6-092e3d4f0cf5`, step
+  `eb694c9d-a837-4e91-9723-41c0bfbddd18`, with final lease/success sequences
+  3824/3825 on connection 1837. Windows terminal steps advanced 15 to 16 with
+  zero queued, leased, or active work; both Mac snapshot directories and
+  Windows staging were empty. Owner cancellation advanced lifecycle 2 to 3
+  while retaining the lease; abandonment advanced 3 to 4, released it, and
+  produced safe-reconciliation digest
+  `9a48d01079760733a3924bdbf3bf944cc7ba6676e353497d74774ff9df778a44`;
+  cleanup revoked all three grants and removed the exact disposable checkout.
+  This is functional live proof, not Developer ID distribution, notarization,
+  clean-profile installation, Finder launch, or arbitrary coding authority.
 - Validate bundle manifest paths from the raw UTF-8 bytes before constructing a
   platform path. `PathBuf` may normalize repeated or boundary separators, so
   traversal, empty segments, `.git`, Windows-reserved names, invalid UTF-8,

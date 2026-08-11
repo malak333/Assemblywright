@@ -827,6 +827,14 @@ The Arbiter then returned `APPROVED`:
 
 ## Final Disposition
 
-APPROVED. The Windows-master repository-kernel slice above is implemented; all
-execution, review, publication, UI, live-evidence, and activation layers remain
-design.
+APPROVED. The Windows-master repository kernel, owner resolution, snapshot
+dispatch, and fixed contained-coding live lane are implemented. The 2026-08-11
+two-device proof used Windows snapshot source `80fed217`, the production
+Apple-development-signed helper built from `01afff03`, and the real supervised
+Rust agent. The recovered terminal suffix was lease sequence 3824 followed by
+success sequence 3825 on one connection; both Mac snapshot directories and
+Windows transfer staging were empty. Owner cancellation retained the lease,
+abandonment released it with queue-empty reconciliation, and cleanup revoked
+all three repository grants before removing the marker-bound checkout. General
+coding, review, publication, autonomous activation, and external Apple release
+evidence remain outside this proof.
