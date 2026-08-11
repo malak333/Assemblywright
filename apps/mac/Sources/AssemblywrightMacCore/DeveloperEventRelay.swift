@@ -258,6 +258,55 @@ public protocol AssemblywrightMacDeveloperAgentLaunching: Sendable {
     ) async throws -> any AssemblywrightMacDeveloperAgentSession
 }
 
+private actor AssemblywrightMacLocalCodingSessionRequests {
+    private let session: any AssemblywrightMacBridgeSession
+    private var available = true
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(session: any AssemblywrightMacBridgeSession) {
+        self.session = session
+    }
+
+    func send(
+        _ request: AssemblywrightMacBridgeHTTPRequest
+    ) async throws -> AssemblywrightMacBridgeHTTPResponse {
+        try await acquire()
+        do {
+            let response = try await session.send(request)
+            release()
+            return response
+        } catch {
+            release()
+            throw error
+        }
+    }
+
+    private func acquire() async throws {
+        try Task.checkCancellation()
+        if available {
+            available = false
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+        do {
+            try Task.checkCancellation()
+        } catch {
+            release()
+            throw error
+        }
+    }
+
+    private func release() {
+        if waiters.isEmpty {
+            available = true
+        } else {
+            waiters.removeFirst().resume()
+        }
+    }
+}
+
 public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventRelaying {
     public static let remoteEventsPath = "/v1/distributed/events/next"
     public static let remoteLeasePath = "/v1/distributed/leases/next"
@@ -523,6 +572,9 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
         do {
             try await agent.admitLocalCodingSnapshot(job.body)
             let resolution = AssemblywrightMacFixtureRaceResolution()
+            let sessionRequests = AssemblywrightMacLocalCodingSessionRequests(
+                session: session
+            )
             let outcome = try await withThrowingTaskGroup(
                 of: LocalCodingRaceOutcome.self,
                 returning: LocalCodingRaceOutcome.self
@@ -530,7 +582,7 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
                 group.addTask {
                     do {
                         return .result(try await Self.transferLocalCodingSnapshot(
-                            using: session,
+                            using: sessionRequests,
                             job: job,
                             agent: agent
                         ))
@@ -548,7 +600,7 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
                     while !Task.isCancelled {
                         if await resolution.isResolved() { return .settled }
                         if let cancellation = try await Self.pollLocalCodingCancellation(
-                            using: session,
+                            using: sessionRequests,
                             job: job
                         ) {
                             await resolution.markCancellationInProgress()
@@ -656,7 +708,7 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
     }
 
     private static func transferLocalCodingSnapshot(
-        using session: any AssemblywrightMacBridgeSession,
+        using sessionRequests: AssemblywrightMacLocalCodingSessionRequests,
         job: ValidatedLocalCodingJob,
         agent: any AssemblywrightMacDeveloperAgentSession
     ) async throws -> Data {
@@ -665,7 +717,7 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
         while true {
             try Task.checkCancellation()
             let request = try localCodingChunkRequest(for: job, offset: offset)
-            let response = try await session.send(
+            let response = try await sessionRequests.send(
                 AssemblywrightMacBridgeHTTPRequest(
                     method: "POST",
                     path: remoteSnapshotChunksPath,
@@ -696,17 +748,17 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
     }
 
     private static func pollLocalCodingCancellation(
-        using session: any AssemblywrightMacBridgeSession,
+        using sessionRequests: AssemblywrightMacLocalCodingSessionRequests,
         job: ValidatedLocalCodingJob
     ) async throws -> ValidatedCancellation? {
         let request = try JSONSerialization.data(
             withJSONObject: [
                 "protocol_version": Int(AssemblywrightMacMTLSBridgeTransport.protocolVersion),
-                "connection_epoch": NSNumber(value: session.connectionEpoch)
+                "connection_epoch": NSNumber(value: job.connectionEpoch)
             ],
             options: [.sortedKeys]
         )
-        let response = try await session.send(
+        let response = try await sessionRequests.send(
             AssemblywrightMacBridgeHTTPRequest(
                 method: "POST",
                 path: remoteCancellationPath,

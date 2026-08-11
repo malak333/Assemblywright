@@ -530,6 +530,11 @@ an old one.
   (admitting Git's 40-hex SHA-1 and 64-hex SHA-256 graph names) and verifies
   the remaining flat object-store shape before claiming. It never rewrites the
   source checkout or committed proof tree.
+- The production authenticated bridge rejects overlapping requests. Local-coding
+  snapshot transfer and cancellation polling are concurrent tasks, so both must
+  use the relay's FIFO session permit. Fake-session coverage must deliberately
+  suspend and reject overlap; an actor fake with no suspension can otherwise
+  serialize accidentally and miss the production `requestInFlight` failure.
 - Take authenticated Windows health before and after a live fixture closeout.
   A reconnect may expire an abandoned queued fixture from an interrupted prior
   run; accept the closeout only when the final health is unpaused and reports

@@ -216,6 +216,9 @@ projection, emits neither observation, and fails before connection when
 partial, mixed, or relayless. Standard and fixture
 MacBridge profiles continue to require strict health plus Feature Conveyor
 observation.
+Snapshot transfer and cancellation polling remain concurrent for cancellation
+dominance, but every network request crosses one relay-local FIFO permit so the
+production authenticated session still has exactly one request in flight.
 
 ## Understanding Summary
 

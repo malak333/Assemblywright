@@ -304,6 +304,8 @@ private actor FakeLocalCodingBridgeSession: AssemblywrightMacBridgeSession {
     let acceptedResult: Data?
     let cancellationRequiresFinalChunk: Bool
     let cancellationDelayAfterFinalChunkMilliseconds: UInt64
+    let rejectConcurrentRequests: Bool
+    let responseDelayMilliseconds: UInt64
     let cleanupDirectoryURL: URL?
     private(set) var requests: [AssemblywrightMacBridgeHTTPRequest] = []
     private(set) var cancelled = false
@@ -312,6 +314,7 @@ private actor FakeLocalCodingBridgeSession: AssemblywrightMacBridgeSession {
     private(set) var cancellationDeliveredAtNanoseconds: UInt64?
     private(set) var cancellationAcknowledgedAtNanoseconds: UInt64?
     private(set) var cleanupWasCompleteAtAcknowledgement: Bool?
+    private var requestActive = false
 
     init(
         connectionEpoch: UInt64,
@@ -322,7 +325,9 @@ private actor FakeLocalCodingBridgeSession: AssemblywrightMacBridgeSession {
         acceptedResult: Data?,
         cancellationRequiresFinalChunk: Bool = false,
         cancellationDelayAfterFinalChunkMilliseconds: UInt64 = 0,
-        cleanupDirectoryURL: URL? = nil
+        cleanupDirectoryURL: URL? = nil,
+        rejectConcurrentRequests: Bool = false,
+        responseDelayMilliseconds: UInt64 = 0
     ) {
         self.connectionEpoch = connectionEpoch
         self.eventBatch = eventBatch
@@ -334,11 +339,21 @@ private actor FakeLocalCodingBridgeSession: AssemblywrightMacBridgeSession {
         self.cancellationDelayAfterFinalChunkMilliseconds =
             cancellationDelayAfterFinalChunkMilliseconds
         self.cleanupDirectoryURL = cleanupDirectoryURL
+        self.rejectConcurrentRequests = rejectConcurrentRequests
+        self.responseDelayMilliseconds = responseDelayMilliseconds
     }
 
     func send(_ request: AssemblywrightMacBridgeHTTPRequest) async throws
         -> AssemblywrightMacBridgeHTTPResponse
     {
+        if rejectConcurrentRequests, requestActive {
+            throw AssemblywrightMacDeveloperBridgeError.requestInFlight
+        }
+        requestActive = true
+        defer { requestActive = false }
+        if responseDelayMilliseconds > 0 {
+            try await Task.sleep(for: .milliseconds(responseDelayMilliseconds))
+        }
         requests.append(request)
         switch request.path {
         case AssemblywrightMacDeveloperEventRelay.remoteEventsPath:
@@ -2846,7 +2861,9 @@ struct DeveloperBridgeTests {
             eventBatch: emptyEventBatch(),
             job: documents.job,
             chunks: documents.chunks,
-            acceptedResult: documents.acceptedResult
+            acceptedResult: documents.acceptedResult,
+            rejectConcurrentRequests: true,
+            responseDelayMilliseconds: 5
         )
 
         let progress = try await relay.relayEvents(using: master)

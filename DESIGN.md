@@ -232,6 +232,9 @@ only. The Swift supervisor validates that exact worker role/capability before
 connecting, requires the production relay, authenticates and checks health,
 then leases through the worker path without requesting either the MacBridge-only
 event stream or Feature Conveyor projection and emits neither observation.
+Snapshot chunks and cancellation polling share a relay-local FIFO permit so the
+race remains cancellation-aware without violating the authenticated channel's
+single-in-flight request contract.
 Partial, mixed, or relayless worker profiles fail before network
 use. Standard and fixture MacBridge sessions retain strict health plus Feature
 Conveyor observation.
