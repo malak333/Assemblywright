@@ -1,9 +1,10 @@
 use assemblywright_master::{
     ApprovedFeatureSpecification, DeviceRegistration, FeatureAbandonmentEvidence,
     FeatureConveyorGuidanceReason, FeatureConveyorGuidanceState, FeatureConveyorNextOwnerAction,
-    FeatureGrantRevisions, FeatureLifecycleStatus, FeatureTransitionEvidence, MasterError,
-    MasterKernel, MasterProcess, RepositoryGrantKind, RepositoryGrantRevision,
-    VerifiedFeatureSuccess, MAX_CONVEYOR_NONTERMINAL_FEATURES, MAX_CONVEYOR_STATUS_FEATURES,
+    FeatureGrantRevisions, FeatureLifecycleStatus, FeatureSnapshotClaimPlan,
+    FeatureTransitionEvidence, MasterError, MasterKernel, MasterProcess, RepositoryGrantKind,
+    RepositoryGrantRevision, RepositorySnapshotEvidence, VerifiedFeatureSuccess,
+    MAX_CONVEYOR_NONTERMINAL_FEATURES, MAX_CONVEYOR_STATUS_FEATURES,
 };
 use assemblywright_protocol::{CapabilityDescriptor, DeviceId, DeviceRole};
 use rusqlite::Connection;
@@ -113,6 +114,48 @@ fn specification(
     }
 }
 
+fn snapshot_plan(
+    feature: &ApprovedFeatureSpecification,
+    expected_queue_revision: u64,
+    expected_emergency_pause_revision: u64,
+) -> FeatureSnapshotClaimPlan {
+    FeatureSnapshotClaimPlan {
+        feature_id: feature.feature_id,
+        specification_revision: feature.revision,
+        repository_id: feature.repository_id,
+        expected_queue_revision,
+        expected_emergency_pause_revision,
+        scope_sha256: digest("scope-0"),
+        provider_id: feature.provider_id.clone(),
+        model_id: feature.model_id.clone(),
+        grants: feature.grants,
+        base_commit: "1234567890abcdef1234567890abcdef12345678".to_string(),
+    }
+}
+
+fn claim_feature(
+    kernel: &mut MasterKernel,
+    feature: &ApprovedFeatureSpecification,
+    expected_queue_revision: u64,
+    now_ms: u64,
+) -> Result<assemblywright_master::FeatureClaim, MasterError> {
+    let plan = snapshot_plan(
+        feature,
+        expected_queue_revision,
+        kernel.emergency_pause_revision()?,
+    );
+    let plan = kernel.prepare_repository_snapshot_claim(&plan, now_ms)?;
+    kernel.finalize_repository_snapshot_claim(
+        &plan,
+        &RepositorySnapshotEvidence {
+            snapshot_id: Uuid::new_v4(),
+            snapshot_sha256: digest(&format!("snapshot-{}", feature.feature_id)),
+            base_commit: plan.base_commit.clone(),
+        },
+        now_ms,
+    )
+}
+
 fn bridge_registration(name: &str) -> DeviceRegistration {
     DeviceRegistration {
         device_id: DeviceId::new(Uuid::new_v4()),
@@ -132,7 +175,7 @@ fn owner_control_designation_is_explicit_cas_bound_role_checked_and_audited() {
     let directory = tempdir().unwrap();
     let database = directory.path().join("master.sqlite3");
     let mut kernel = MasterKernel::open(&database).unwrap();
-    assert_eq!(kernel.schema_version().unwrap(), 8);
+    assert_eq!(kernel.schema_version().unwrap(), 9);
     assert_eq!(kernel.owner_control_bridge_designation().unwrap(), None);
 
     let fixture = DeviceRegistration {
@@ -728,9 +771,13 @@ fn complete_feature(kernel: &mut MasterKernel, feature: &ApprovedFeatureSpecific
     kernel
         .enqueue_approved_feature(feature, queue_revision, now)
         .unwrap();
-    let claim = kernel
-        .claim_next_feature(kernel.feature_queue_revision().unwrap(), now + 1)
-        .unwrap();
+    let claim = claim_feature(
+        kernel,
+        feature,
+        kernel.feature_queue_revision().unwrap(),
+        now + 1,
+    )
+    .unwrap();
     let evidence = FeatureTransitionEvidence {
         repository_snapshot_sha256: digest("history-snapshot"),
         accepted_evidence_sha256: digest("history-evidence"),
@@ -772,9 +819,13 @@ fn abandon_feature(kernel: &mut MasterKernel, feature: &ApprovedFeatureSpecifica
     kernel
         .enqueue_approved_feature(feature, kernel.feature_queue_revision().unwrap(), now)
         .unwrap();
-    let claim = kernel
-        .claim_next_feature(kernel.feature_queue_revision().unwrap(), now + 1)
-        .unwrap();
+    let claim = claim_feature(
+        kernel,
+        feature,
+        kernel.feature_queue_revision().unwrap(),
+        now + 1,
+    )
+    .unwrap();
     let cancelled = kernel
         .cancel_active_feature(feature.feature_id, claim.lifecycle_revision, now + 2)
         .unwrap();
@@ -835,9 +886,13 @@ fn status_projection_is_empty_bounded_and_redacted() {
             .enqueue_approved_feature(feature, index as u64, 10 + index as u64)
             .unwrap();
     }
-    let claim = kernel
-        .claim_next_feature(MAX_CONVEYOR_NONTERMINAL_FEATURES, 200)
-        .unwrap();
+    let claim = claim_feature(
+        &mut kernel,
+        &features[0],
+        MAX_CONVEYOR_NONTERMINAL_FEATURES,
+        200,
+    )
+    .unwrap();
     kernel
         .cancel_active_feature(claim.feature_id, claim.lifecycle_revision, 201)
         .unwrap();
@@ -1057,7 +1112,7 @@ fn feature_conveyor_owner_journey_persists_end_to_end() {
     {
         let mut process = MasterProcess::acquire(directory.path()).unwrap();
         assert_eq!(process.kernel().feature_startup_quarantines(), 0);
-        let claim = process.kernel_mut().claim_next_feature(1, 20).unwrap();
+        let claim = claim_feature(process.kernel_mut(), &feature, 1, 20).unwrap();
         assert_eq!(claim.feature_id, feature.feature_id);
         assert_eq!(claim.provider_id, feature.provider_id);
         let active = process.kernel().feature_conveyor_status().unwrap();
@@ -1160,7 +1215,7 @@ fn feature_conveyor_owner_journey_persists_end_to_end() {
             .collect::<Vec<_>>(),
         vec![
             "feature_enqueued",
-            "feature_claimed",
+            "feature_snapshot_claimed",
             "feature_lifecycle_advanced",
             "feature_lifecycle_advanced",
             "feature_lifecycle_advanced",
@@ -1258,7 +1313,9 @@ fn stale_cas_blocked_head_no_skip_reorder_and_singleton_lease() {
         .unwrap();
     assert_eq!(revision, 3);
     assert!(matches!(
-        kernel.claim_next_feature(3, 14).unwrap_err(),
+        kernel
+            .prepare_repository_snapshot_claim(&snapshot_plan(&blocked, 3, 0), 14)
+            .unwrap_err(),
         MasterError::FeatureDependencyBlocked
     ));
     assert_eq!(
@@ -1272,14 +1329,101 @@ fn stale_cas_blocked_head_no_skip_reorder_and_singleton_lease() {
     let revision = kernel
         .reorder_queued_features(&[dependency.feature_id, blocked.feature_id], 3, 15)
         .unwrap();
-    let claim = kernel.claim_next_feature(revision, 16).unwrap();
+    let claim = claim_feature(&mut kernel, &dependency, revision, 16).unwrap();
     assert_eq!(claim.feature_id, dependency.feature_id);
     assert!(matches!(
         kernel
-            .claim_next_feature(kernel.feature_queue_revision().unwrap(), 17)
+            .prepare_repository_snapshot_claim(
+                &snapshot_plan(&blocked, kernel.feature_queue_revision().unwrap(), 0),
+                17,
+            )
             .unwrap_err(),
         MasterError::FeatureLeaseAlreadyActive
     ));
+}
+
+#[test]
+fn snapshot_claim_finalizer_rechecks_stale_queue_pause_grants_and_zero_evidence() {
+    let mut kernel = MasterKernel::in_memory().unwrap();
+    let repository_id = Uuid::new_v4();
+    install_grants(&mut kernel, repository_id);
+    let head = specification(Uuid::new_v4(), repository_id, vec![]);
+    let tail = specification(Uuid::new_v4(), repository_id, vec![]);
+    kernel.enqueue_approved_feature(&head, 0, 10).unwrap();
+    let plan = snapshot_plan(&head, 1, 0);
+    kernel.prepare_repository_snapshot_claim(&plan, 11).unwrap();
+    kernel.enqueue_approved_feature(&tail, 1, 12).unwrap();
+    let evidence = RepositorySnapshotEvidence {
+        snapshot_id: Uuid::new_v4(),
+        snapshot_sha256: digest("stale-queue-snapshot"),
+        base_commit: plan.base_commit.clone(),
+    };
+    assert!(matches!(
+        kernel
+            .finalize_repository_snapshot_claim(&plan, &evidence, 13)
+            .unwrap_err(),
+        MasterError::StaleFeatureQueueRevision {
+            expected: 1,
+            found: 2
+        }
+    ));
+    assert!(kernel.repository_snapshot_ids().unwrap().is_empty());
+    assert!(kernel
+        .feature_snapshot(head.feature_id)
+        .unwrap()
+        .active_lease_id
+        .is_none());
+
+    let plan = snapshot_plan(&head, 2, 0);
+    kernel.prepare_repository_snapshot_claim(&plan, 14).unwrap();
+    kernel.set_emergency_paused_at(true, 15).unwrap();
+    assert!(matches!(
+        kernel
+            .finalize_repository_snapshot_claim(&plan, &evidence, 16)
+            .unwrap_err(),
+        MasterError::StaleEmergencyPauseRevision { .. }
+    ));
+    assert!(kernel.repository_snapshot_ids().unwrap().is_empty());
+    kernel.set_emergency_paused_at(false, 17).unwrap();
+
+    let plan = snapshot_plan(&head, 2, 2);
+    assert!(matches!(
+        kernel
+            .finalize_repository_snapshot_claim(
+                &plan,
+                &RepositorySnapshotEvidence {
+                    snapshot_id: Uuid::new_v4(),
+                    snapshot_sha256: [0; 32],
+                    base_commit: plan.base_commit.clone(),
+                },
+                18,
+            )
+            .unwrap_err(),
+        MasterError::InvalidFeatureConveyorInput(_)
+    ));
+    kernel
+        .record_repository_grant_revision(
+            &RepositoryGrantRevision {
+                repository_id,
+                kind: RepositoryGrantKind::CloudDisclosure,
+                revision: 2,
+                scope_sha256: digest("new-cloud-scope"),
+                owner_approval_sha256: digest("new-cloud-owner"),
+                expires_at_ms: None,
+                revoked: true,
+            },
+            1,
+            2,
+            19,
+        )
+        .unwrap();
+    assert!(matches!(
+        kernel
+            .prepare_repository_snapshot_claim(&plan, 20)
+            .unwrap_err(),
+        MasterError::RepositoryGrantUnavailable
+    ));
+    assert!(kernel.repository_snapshot_ids().unwrap().is_empty());
 }
 
 #[test]
@@ -1305,7 +1449,7 @@ fn exact_lifecycle_requires_lease_evidence_and_verified_healthy_main() {
             .unwrap_err(),
         MasterError::InvalidFeatureTransition
     ));
-    let claim = kernel.claim_next_feature(1, 11).unwrap();
+    let claim = claim_feature(&mut kernel, &feature, 1, 11).unwrap();
 
     let zero_evidence = FeatureTransitionEvidence {
         repository_snapshot_sha256: [0; 32],
@@ -1393,7 +1537,7 @@ fn changed_grant_invalidates_active_feature_before_lifecycle_advancement() {
     install_grants(&mut kernel, repository_id);
     let feature = specification(Uuid::new_v4(), repository_id, vec![]);
     kernel.enqueue_approved_feature(&feature, 0, 10).unwrap();
-    let claim = kernel.claim_next_feature(1, 11).unwrap();
+    let claim = claim_feature(&mut kernel, &feature, 1, 11).unwrap();
     kernel
         .record_repository_grant_revision(
             &RepositoryGrantRevision {
@@ -1439,7 +1583,7 @@ fn cancellation_blocks_until_safe_abandonment_and_merged_main_is_healthy() {
     install_grants(&mut kernel, repository_id);
     let feature = specification(Uuid::new_v4(), repository_id, vec![]);
     kernel.enqueue_approved_feature(&feature, 0, 10).unwrap();
-    let claim = kernel.claim_next_feature(1, 11).unwrap();
+    let claim = claim_feature(&mut kernel, &feature, 1, 11).unwrap();
     let cancelled = kernel
         .cancel_active_feature(feature.feature_id, claim.lifecycle_revision, 12)
         .unwrap();
@@ -1447,7 +1591,10 @@ fn cancellation_blocks_until_safe_abandonment_and_merged_main_is_healthy() {
     assert_eq!(cancelled.active_lease_id, Some(claim.lease_id));
     assert!(matches!(
         kernel
-            .claim_next_feature(kernel.feature_queue_revision().unwrap(), 13)
+            .prepare_repository_snapshot_claim(
+                &snapshot_plan(&feature, kernel.feature_queue_revision().unwrap(), 0),
+                13,
+            )
             .unwrap_err(),
         MasterError::FeatureLeaseAlreadyActive
     ));
@@ -1563,13 +1710,15 @@ fn emergency_pause_and_audit_failures_roll_back_authoritative_mutations() {
 
     kernel.set_emergency_paused_at(true, 11).unwrap();
     assert!(matches!(
-        kernel.claim_next_feature(1, 12).unwrap_err(),
+        kernel
+            .prepare_repository_snapshot_claim(&snapshot_plan(&feature, 1, 1), 12)
+            .unwrap_err(),
         MasterError::EmergencyPaused
     ));
     kernel.set_emergency_paused_at(false, 13).unwrap();
-    install_audit_failure(&database, "feature_claimed");
+    install_audit_failure(&database, "feature_snapshot_claimed");
     assert!(matches!(
-        kernel.claim_next_feature(1, 14).unwrap_err(),
+        claim_feature(&mut kernel, &feature, 1, 14).unwrap_err(),
         MasterError::Storage(_)
     ));
     let snapshot = kernel.feature_snapshot(feature.feature_id).unwrap();
@@ -1578,7 +1727,7 @@ fn emergency_pause_and_audit_failures_roll_back_authoritative_mutations() {
     assert_eq!(kernel.feature_queue_revision().unwrap(), 1);
     remove_audit_failure(&database);
 
-    let claim = kernel.claim_next_feature(1, 15).unwrap();
+    let claim = claim_feature(&mut kernel, &feature, 1, 15).unwrap();
     let transition = FeatureTransitionEvidence {
         repository_snapshot_sha256: digest("audit-snapshot"),
         accepted_evidence_sha256: digest("audit-evidence"),
@@ -1660,7 +1809,9 @@ fn restart_quarantines_ambiguous_active_feature_without_retry() {
         let mut kernel = MasterKernel::open(&database).unwrap();
         install_grants(&mut kernel, repository_id);
         kernel.enqueue_approved_feature(&feature, 0, 10).unwrap();
-        lease_id = kernel.claim_next_feature(1, 11).unwrap().lease_id;
+        lease_id = claim_feature(&mut kernel, &feature, 1, 11)
+            .unwrap()
+            .lease_id;
     }
     let kernel = MasterKernel::open(&database).unwrap();
     assert_eq!(kernel.feature_startup_quarantines(), 1);
@@ -1695,7 +1846,7 @@ fn startup_quarantine_audit_failure_rolls_back_and_blocks_open() {
         let mut kernel = MasterKernel::open(&database).unwrap();
         install_grants(&mut kernel, repository_id);
         kernel.enqueue_approved_feature(&feature, 0, 10).unwrap();
-        claim = kernel.claim_next_feature(1, 11).unwrap();
+        claim = claim_feature(&mut kernel, &feature, 1, 11).unwrap();
         install_audit_failure(&database, "feature_startup_quarantined");
     }
 
@@ -1744,12 +1895,16 @@ fn downgrade_v5_database_to_v4(path: &std::path::Path, sabotage: bool) {
              DROP TRIGGER master_identity_rebind_audit_no_delete;
              DROP TRIGGER master_pending_capability_rebinds_no_delete;
              DROP TRIGGER master_pending_capability_rebinds_terminal_only;
+             DROP TRIGGER feature_repository_snapshot_claims_no_update;
+             DROP TRIGGER feature_repository_snapshot_claims_no_delete;
+             DROP TRIGGER feature_active_lease_requires_snapshot;
              DROP TABLE master_identity_rebind_audit;
              DROP TABLE master_pending_capability_rebinds;
              DROP TABLE feature_owner_control_state;
              DROP TABLE feature_conveyor_audit;
              DROP TABLE feature_transition_evidence;
              DROP TABLE feature_active_lease;
+             DROP TABLE feature_repository_snapshot_claims;
              DROP TABLE feature_conveyor_queue;
              DROP TABLE feature_dependencies;
              DROP TABLE feature_conveyor_features;
@@ -1780,7 +1935,7 @@ fn master_process_v4_backup_migration_reopen_and_restore_on_failure() {
     ));
     {
         let process = MasterProcess::acquire(directory.path()).unwrap();
-        assert_eq!(process.kernel().schema_version().unwrap(), 8);
+        assert_eq!(process.kernel().schema_version().unwrap(), 9);
         let backup = process.migration_backup_path().unwrap();
         assert!(backup.exists());
         let backup_connection = Connection::open(backup).unwrap();
@@ -1803,7 +1958,7 @@ fn master_process_v4_backup_migration_reopen_and_restore_on_failure() {
             .kernel()
             .schema_version()
             .unwrap(),
-        8
+        9
     );
 
     let failed_directory = tempdir().unwrap();
@@ -1844,7 +1999,7 @@ fn master_process_v4_backup_migration_reopen_and_restore_on_failure() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v8.")));
+            .starts_with("master.pre-v9.")));
 }
 
 #[test]
@@ -1855,7 +2010,21 @@ fn master_process_v6_backup_migration_binds_pause_and_default_inert_owner_contro
     Connection::open(&database)
         .unwrap()
         .execute_batch(
-            "DROP TABLE feature_owner_control_state;
+            "DROP TRIGGER feature_active_lease_requires_snapshot;
+             DROP TRIGGER feature_repository_snapshot_claims_no_update;
+             DROP TRIGGER feature_repository_snapshot_claims_no_delete;
+             ALTER TABLE feature_active_lease RENAME TO feature_active_lease_v9;
+             CREATE TABLE feature_active_lease (
+               singleton INTEGER PRIMARY KEY NOT NULL CHECK (singleton = 1),
+               feature_id TEXT NOT NULL UNIQUE REFERENCES feature_conveyor_features(feature_id),
+               lease_id TEXT NOT NULL UNIQUE,
+               claimed_at_ms INTEGER NOT NULL CHECK (claimed_at_ms >= 0)
+             );
+             INSERT INTO feature_active_lease (singleton, feature_id, lease_id, claimed_at_ms)
+               SELECT singleton, feature_id, lease_id, claimed_at_ms FROM feature_active_lease_v9;
+             DROP TABLE feature_active_lease_v9;
+             DROP TABLE feature_repository_snapshot_claims;
+             DROP TABLE feature_owner_control_state;
              DELETE FROM master_metadata WHERE key = 'emergency_pause_revision';
              PRAGMA user_version = 6;",
         )
@@ -1867,7 +2036,7 @@ fn master_process_v6_backup_migration_binds_pause_and_default_inert_owner_contro
     ));
 
     let process = MasterProcess::acquire(directory.path()).unwrap();
-    assert_eq!(process.kernel().schema_version().unwrap(), 8);
+    assert_eq!(process.kernel().schema_version().unwrap(), 9);
     assert_eq!(process.kernel().emergency_pause_revision().unwrap(), 0);
     assert_eq!(
         process.kernel().owner_control_bridge_designation().unwrap(),
@@ -1878,7 +2047,7 @@ fn master_process_v6_backup_migration_binds_pause_and_default_inert_owner_contro
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v8."));
+        .starts_with("master.pre-v9."));
     let backup = Connection::open(backup).unwrap();
     assert_eq!(
         backup
@@ -1906,7 +2075,7 @@ fn forward_schema_version_fails_closed_without_backup() {
     drop(MasterKernel::open(&database).unwrap());
     Connection::open(&database)
         .unwrap()
-        .execute_batch("PRAGMA user_version = 9;")
+        .execute_batch("PRAGMA user_version = 10;")
         .unwrap();
     let forward_error = match MasterProcess::acquire(directory.path()) {
         Ok(_) => panic!("forward schema unexpectedly opened"),
@@ -1915,8 +2084,8 @@ fn forward_schema_version_fails_closed_without_backup() {
     assert!(matches!(
         forward_error,
         MasterError::UnsupportedSchemaVersion {
-            expected: 8,
-            found: 9
+            expected: 9,
+            found: 10
         }
     ));
     assert!(!directory
@@ -1927,5 +2096,5 @@ fn forward_schema_version_fails_closed_without_backup() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v8.")));
+            .starts_with("master.pre-v9.")));
 }

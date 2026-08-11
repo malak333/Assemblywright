@@ -156,7 +156,7 @@ release requirements, not optional UX guidance.
   a simultaneous or late result is suppressed. This lane grants no tool, file,
   repository, credential, network, Codex, Git, publication, or unattended
   authority.
-- The Windows `assemblywright-master` schema-v8 database retains the schema-v5
+- The Windows `assemblywright-master` schema-v9 database retains the schema-v5
   Durable Feature Conveyor kernel and is
   default-inert. The owner-token-authenticated loopback
   `GET /v1/feature-conveyor/status` and the dedicated enrolled-device
@@ -238,6 +238,32 @@ release requirements, not optional UX guidance.
   evidence only and grants no snapshot, claim, lease, worker, repository
   mutation, provider, credential, network, Git publication, or activation
   authority.
+- Repository snapshot claiming is owner-token-authenticated and loopback-only;
+  it must be absent from the enrolled-device router. The strict request binds
+  the exact scope digest, branch, base commit, queue head/specification,
+  provider/model, all three specification grant revisions, queue revision, and
+  Emergency Pause revision. No SQLite transaction may span filesystem work.
+  The source identity must be revalidated immediately before and after raw
+  object snapshot construction and again before one immediate finalizer
+  rechecks the head, dependencies, singleton, pause, current grants and exact
+  bindings, then atomically records immutable path-free evidence, inserts the
+  lease, advances lifecycle/queue revisions, and appends redacted audit. The
+  snapshot must not execute Git or trust source/local/global config, hooks,
+  attributes, credentials, PATH, alternates, links/reparse entries, gitlinks,
+  remotes, or hardlinks. It must copy only the exact current commit/tree/blob
+  graph, mark the base commit shallow, and exclude parent history and deleted
+  objects. Every ODB body read must be preceded by a header type/declared-size
+  check and aggregate-budget charge before decompression or allocation. A
+  singleton reservation must reject concurrent claims immediately.
+  Snapshot work is capped at 50,000 objects, 256 MiB total, 32 MiB per blob and
+  a 30-second HTTP wait. Timeout must not pretend to cancel a blocking thread:
+  that thread retains the reservation and cleanup ownership until it exits.
+  Failure or request cancellation before finalization
+  must leave no lease and remove the snapshot; startup removes unreferenced
+  UUID directories and quarantines a finalized lease. No source path,
+  content, config, remote, credential, or raw error may enter SQLite, audit, or
+  the receipt. This grants no dispatch, provider, review, publication, Mac, or
+  autonomous activation authority.
 - Remote approved-feature enqueue is permitted only on
   `POST /v1/distributed/feature-conveyor/approved-features`, after a fresh
   exporter-bound application handshake is accepted and revalidated for the

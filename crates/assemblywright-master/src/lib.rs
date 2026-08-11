@@ -15,6 +15,7 @@ use rusqlite::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -24,6 +25,9 @@ use uuid::Uuid;
 use fs2::FileExt;
 
 mod identity;
+mod snapshot;
+
+pub use snapshot::{PreparedRepositorySnapshot, RepositorySnapshotError, RepositorySnapshotStore};
 
 pub use identity::{
     CapabilityRebindAcknowledgement, CapabilityRebindActivation, EnrollmentGrantReceipt,
@@ -34,12 +38,13 @@ pub use identity::{
     SERVER_CERTIFICATE_LIFETIME_MS,
 };
 
-pub const MASTER_SCHEMA_VERSION: i64 = 8;
+pub const MASTER_SCHEMA_VERSION: i64 = 9;
 pub const MAX_QUEUED_OR_LEASED_STEPS: u64 = 256;
 pub const MAX_CONCURRENT_JOBS: u64 = 4;
 pub const MAX_CONVEYOR_NONTERMINAL_FEATURES: u64 = 100;
 pub const MAX_CONVEYOR_STATUS_FEATURES: usize = 100;
 pub const MAX_APPROVED_FEATURE_SPECIFICATION_BYTES: usize = 256 * 1024;
+pub const FEATURE_CONVEYOR_STATUS_SCHEMA_VERSION: i64 = 8;
 
 const REASON_UNKNOWN_DEVICE: &str = "unknown_device";
 const REASON_REVOKED_DEVICE: &str = "revoked_device";
@@ -237,6 +242,8 @@ pub enum MasterError {
     MigrationBackup(String),
     #[error("feature migration failed and backup restoration also failed: migration={migration}; restore={restore}")]
     MigrationAndRestoreFailed { migration: String, restore: String },
+    #[error(transparent)]
+    RepositorySnapshot(#[from] RepositorySnapshotError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -713,6 +720,30 @@ pub struct FeatureClaim {
     pub provider_id: String,
     pub model_id: String,
     pub grants: FeatureGrantRevisions,
+    pub snapshot_id: Uuid,
+    pub snapshot_sha256: [u8; 32],
+    pub base_commit: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FeatureSnapshotClaimPlan {
+    pub feature_id: Uuid,
+    pub specification_revision: u64,
+    pub repository_id: Uuid,
+    pub expected_queue_revision: u64,
+    pub expected_emergency_pause_revision: u64,
+    pub scope_sha256: [u8; 32],
+    pub provider_id: String,
+    pub model_id: String,
+    pub grants: FeatureGrantRevisions,
+    pub base_commit: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepositorySnapshotEvidence {
+    pub snapshot_id: Uuid,
+    pub snapshot_sha256: [u8; 32],
+    pub base_commit: String,
 }
 
 pub struct MasterKernel {
@@ -787,6 +818,8 @@ impl MasterProcess {
                 return Err(error);
             }
         };
+        RepositorySnapshotStore::open(&data_dir)?
+            .cleanup_unreferenced(&kernel.repository_snapshot_ids()?)?;
         Ok(Self {
             _owner_lock: owner_lock,
             data_dir,
@@ -959,6 +992,20 @@ impl MasterKernel {
         i64_to_u64(revision)
     }
 
+    pub fn repository_snapshot_ids(&self) -> Result<HashSet<Uuid>, MasterError> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT snapshot_id FROM feature_repository_snapshot_claims")?;
+        let ids = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .map(|row| {
+                let value = row?;
+                parse_uuid(&value)
+            })
+            .collect::<Result<HashSet<_>, MasterError>>()?;
+        Ok(ids)
+    }
+
     pub fn owner_control_bridge_designation(
         &self,
     ) -> Result<Option<OwnerControlBridgeDesignation>, MasterError> {
@@ -1031,7 +1078,6 @@ impl MasterKernel {
     }
 
     pub fn feature_conveyor_status(&self) -> Result<FeatureConveyorStatus, MasterError> {
-        let schema_version = self.schema_version()?;
         let queue_revision = self.feature_queue_revision()?;
         let (emergency_paused, emergency_pause_revision) = self.emergency_pause_snapshot()?;
         let owner_guidance = self.feature_conveyor_owner_guidance(
@@ -1109,7 +1155,7 @@ impl MasterKernel {
             })
             .collect::<Result<Vec<_>, MasterError>>()?;
         Ok(FeatureConveyorStatus {
-            schema_version,
+            schema_version: FEATURE_CONVEYOR_STATUS_SCHEMA_VERSION,
             queue_revision,
             startup_quarantine_count: self.feature_startup_quarantines,
             counts_by_status,
@@ -1690,110 +1736,97 @@ impl MasterKernel {
         Ok(next)
     }
 
-    pub fn claim_next_feature(
+    pub fn prepare_repository_snapshot_claim(
         &mut self,
-        expected_queue_revision: u64,
+        requested: &FeatureSnapshotClaimPlan,
+        now_ms: u64,
+    ) -> Result<FeatureSnapshotClaimPlan, MasterError> {
+        validate_snapshot_claim_plan(requested, now_ms)?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)?;
+        require_snapshot_claim_plan_tx(&tx, requested, now_ms)?;
+        tx.commit()?;
+        Ok(requested.clone())
+    }
+
+    pub fn finalize_repository_snapshot_claim(
+        &mut self,
+        plan: &FeatureSnapshotClaimPlan,
+        snapshot: &RepositorySnapshotEvidence,
         now_ms: u64,
     ) -> Result<FeatureClaim, MasterError> {
+        validate_snapshot_claim_plan(plan, now_ms)?;
+        if snapshot.snapshot_id.is_nil()
+            || snapshot.snapshot_sha256 == [0; 32]
+            || snapshot.base_commit != plan.base_commit
+        {
+            return Err(MasterError::InvalidFeatureConveyorInput(
+                "snapshot claim requires an exact nonzero snapshot binding".to_string(),
+            ));
+        }
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        require_queue_revision_tx(&tx, expected_queue_revision)?;
-        if emergency_paused_tx(&tx)? {
-            return Err(MasterError::EmergencyPaused);
-        }
-        let lease_exists: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM feature_active_lease WHERE singleton = 1)",
-            [],
-            |row| row.get(0),
-        )?;
-        if lease_exists {
-            return Err(MasterError::FeatureLeaseAlreadyActive);
-        }
-        let (feature_id, specification_revision): (String, i64) = tx
-            .query_row(
-                "SELECT f.feature_id, f.current_specification_revision
-                 FROM feature_conveyor_queue q
-                 JOIN feature_conveyor_features f ON f.feature_id = q.feature_id
-                 WHERE f.status = 'queued'
-                 ORDER BY q.queue_position ASC LIMIT 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?
-            .ok_or(MasterError::FeatureNotFound)?;
-        let dependency_blocked: bool = tx.query_row(
-            "SELECT EXISTS(
-               SELECT 1 FROM feature_dependencies d
-               JOIN feature_conveyor_features dependency
-                 ON dependency.feature_id = d.dependency_feature_id
-               WHERE d.feature_id = ?1 AND dependency.status <> 'succeeded'
-             )",
-            [&feature_id],
-            |row| row.get(0),
-        )?;
-        if dependency_blocked {
-            return Err(MasterError::FeatureDependencyBlocked);
-        }
-        let (repository_id, registration, cloud_disclosure, publication, provider_id, model_id): (
-            String,
-            i64,
-            i64,
-            i64,
-            String,
-            String,
-        ) = tx.query_row(
-            "SELECT repository_id, registration_grant_revision,
-                    cloud_disclosure_grant_revision, publication_grant_revision,
-                    provider_id, model_id
-             FROM feature_specification_revisions
-             WHERE feature_id = ?1 AND revision = ?2",
-            params![feature_id, specification_revision],
-            |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                ))
-            },
-        )?;
-        let grants = FeatureGrantRevisions {
-            registration: i64_to_u64(registration)?,
-            cloud_disclosure: i64_to_u64(cloud_disclosure)?,
-            autonomous_publication: i64_to_u64(publication)?,
-        };
-        require_grants_tx(&tx, parse_uuid(&repository_id)?, grants, now_ms)?;
-        let feature_uuid = parse_uuid(&feature_id)?;
+        require_snapshot_claim_plan_tx(&tx, plan, now_ms)?;
         let lease_id = Uuid::new_v4();
         tx.execute(
+            "INSERT INTO feature_repository_snapshot_claims (
+               snapshot_id, snapshot_sha256, feature_id, specification_revision,
+               lease_id, base_commit, scope_sha256, provider_id, model_id,
+               registration_grant_revision, cloud_disclosure_grant_revision,
+               publication_grant_revision, emergency_pause_revision,
+               queue_revision, claimed_at_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            params![
+                snapshot.snapshot_id.to_string(),
+                snapshot.snapshot_sha256.as_slice(),
+                plan.feature_id.to_string(),
+                u64_to_i64(plan.specification_revision)?,
+                lease_id.to_string(),
+                plan.base_commit,
+                plan.scope_sha256.as_slice(),
+                plan.provider_id,
+                plan.model_id,
+                u64_to_i64(plan.grants.registration)?,
+                u64_to_i64(plan.grants.cloud_disclosure)?,
+                u64_to_i64(plan.grants.autonomous_publication)?,
+                u64_to_i64(plan.expected_emergency_pause_revision)?,
+                u64_to_i64(plan.expected_queue_revision)?,
+                u64_to_i64(now_ms)?,
+            ],
+        )?;
+        tx.execute(
             "INSERT INTO feature_active_lease (
-               singleton, feature_id, lease_id, claimed_at_ms
-             ) VALUES (1, ?1, ?2, ?3)",
-            params![feature_id, lease_id.to_string(), u64_to_i64(now_ms)?],
+               singleton, feature_id, lease_id, claimed_at_ms, snapshot_id
+             ) VALUES (1, ?1, ?2, ?3, ?4)",
+            params![
+                plan.feature_id.to_string(),
+                lease_id.to_string(),
+                u64_to_i64(now_ms)?,
+                snapshot.snapshot_id.to_string(),
+            ],
         )?;
         let changed = tx.execute(
             "UPDATE feature_conveyor_features
              SET status = 'implementing', lifecycle_revision = lifecycle_revision + 1,
                  updated_at_ms = ?1
              WHERE feature_id = ?2 AND status = 'queued'",
-            params![u64_to_i64(now_ms)?, feature_id],
+            params![u64_to_i64(now_ms)?, plan.feature_id.to_string()],
         )?;
         if changed != 1 {
             return Err(MasterError::InvalidFeatureTransition);
         }
         let lifecycle_revision = tx.query_row(
             "SELECT lifecycle_revision FROM feature_conveyor_features WHERE feature_id = ?1",
-            [feature_uuid.to_string()],
+            [plan.feature_id.to_string()],
             |row| row.get::<_, i64>(0),
         )?;
-        let next_queue_revision = increment_queue_revision_tx(&tx, expected_queue_revision)?;
+        let next_queue_revision = increment_queue_revision_tx(&tx, plan.expected_queue_revision)?;
         append_feature_audit_tx(
             &tx,
-            "feature_claimed",
-            Some(feature_uuid),
+            "feature_snapshot_claimed",
+            Some(plan.feature_id),
             now_ms,
             serde_json::json!({
                 "from_status": "queued",
@@ -1803,20 +1836,39 @@ impl MasterKernel {
                 "lease_present": true,
                 "provider_snapshot_present": true,
                 "grant_snapshot_present": true,
+                "repository_snapshot_id_present": true,
+                "repository_snapshot_digest_present": true,
+                "base_commit_present": true,
+                "scope_digest_present": true,
+                "emergency_pause_revision": plan.expected_emergency_pause_revision,
                 "effect_possible": false,
                 "side_effect_executed": false
             }),
         )?;
         tx.commit()?;
         Ok(FeatureClaim {
-            feature_id: feature_uuid,
-            specification_revision: i64_to_u64(specification_revision)?,
+            feature_id: plan.feature_id,
+            specification_revision: plan.specification_revision,
             lifecycle_revision: i64_to_u64(lifecycle_revision)?,
             lease_id,
-            provider_id,
-            model_id,
-            grants,
+            provider_id: plan.provider_id.clone(),
+            model_id: plan.model_id.clone(),
+            grants: plan.grants,
+            snapshot_id: snapshot.snapshot_id,
+            snapshot_sha256: snapshot.snapshot_sha256,
+            base_commit: snapshot.base_commit.clone(),
         })
+    }
+
+    /// Legacy unbound claiming is deliberately unavailable in schema v9.
+    pub fn claim_next_feature(
+        &mut self,
+        _expected_queue_revision: u64,
+        _now_ms: u64,
+    ) -> Result<FeatureClaim, MasterError> {
+        Err(MasterError::InvalidFeatureConveyorInput(
+            "repository snapshot evidence is required before feature claim".to_string(),
+        ))
     }
 
     pub fn advance_feature_lifecycle(
@@ -3882,6 +3934,57 @@ impl MasterKernel {
             )?;
         }
         let version = self.schema_version()?;
+        if version == 8 {
+            self.connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 CREATE TABLE feature_repository_snapshot_claims (
+                   snapshot_id TEXT PRIMARY KEY NOT NULL,
+                   snapshot_sha256 BLOB NOT NULL
+                     CHECK (length(snapshot_sha256) = 32),
+                   feature_id TEXT NOT NULL
+                     REFERENCES feature_conveyor_features(feature_id),
+                   specification_revision INTEGER NOT NULL
+                     CHECK (specification_revision > 0),
+                   lease_id TEXT NOT NULL UNIQUE,
+                   base_commit TEXT NOT NULL CHECK (length(base_commit) = 40),
+                   scope_sha256 BLOB NOT NULL CHECK (length(scope_sha256) = 32),
+                   provider_id TEXT NOT NULL CHECK (length(provider_id) BETWEEN 1 AND 128),
+                   model_id TEXT NOT NULL CHECK (length(model_id) BETWEEN 1 AND 128),
+                   registration_grant_revision INTEGER NOT NULL
+                     CHECK (registration_grant_revision > 0),
+                   cloud_disclosure_grant_revision INTEGER NOT NULL
+                     CHECK (cloud_disclosure_grant_revision > 0),
+                   publication_grant_revision INTEGER NOT NULL
+                     CHECK (publication_grant_revision > 0),
+                   emergency_pause_revision INTEGER NOT NULL
+                     CHECK (emergency_pause_revision >= 0),
+                   queue_revision INTEGER NOT NULL CHECK (queue_revision >= 0),
+                   claimed_at_ms INTEGER NOT NULL CHECK (claimed_at_ms > 0),
+                   FOREIGN KEY (feature_id, specification_revision)
+                     REFERENCES feature_specification_revisions(feature_id, revision)
+                 );
+                 CREATE TRIGGER feature_repository_snapshot_claims_no_update
+                   BEFORE UPDATE ON feature_repository_snapshot_claims
+                   BEGIN SELECT RAISE(ABORT, 'immutable repository snapshot claim'); END;
+                 CREATE TRIGGER feature_repository_snapshot_claims_no_delete
+                   BEFORE DELETE ON feature_repository_snapshot_claims
+                   BEGIN SELECT RAISE(ABORT, 'durable repository snapshot claim evidence'); END;
+                 ALTER TABLE feature_active_lease ADD COLUMN snapshot_id TEXT
+                   REFERENCES feature_repository_snapshot_claims(snapshot_id);
+                 CREATE TRIGGER feature_active_lease_requires_snapshot
+                   BEFORE INSERT ON feature_active_lease
+                   WHEN NEW.snapshot_id IS NULL OR NOT EXISTS (
+                     SELECT 1 FROM feature_repository_snapshot_claims claim
+                     WHERE claim.snapshot_id = NEW.snapshot_id
+                       AND claim.feature_id = NEW.feature_id
+                       AND claim.lease_id = NEW.lease_id
+                   )
+                   BEGIN SELECT RAISE(ABORT, 'active feature lease requires snapshot claim'); END;
+                 PRAGMA user_version = 9;
+                 COMMIT;",
+            )?;
+        }
+        let version = self.schema_version()?;
         if version != MASTER_SCHEMA_VERSION {
             return Err(MasterError::UnsupportedSchemaVersion {
                 expected: MASTER_SCHEMA_VERSION,
@@ -5276,6 +5379,130 @@ fn increment_queue_revision_tx(
         });
     }
     Ok(next)
+}
+
+fn validate_snapshot_claim_plan(
+    plan: &FeatureSnapshotClaimPlan,
+    now_ms: u64,
+) -> Result<(), MasterError> {
+    let valid_commit = plan.base_commit.len() == 40
+        && plan
+            .base_commit
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
+    let valid_provider = |value: &str| {
+        !value.is_empty()
+            && value.len() <= 128
+            && value.trim() == value
+            && value.bytes().all(|byte| byte.is_ascii_graphic())
+    };
+    if plan.feature_id.is_nil()
+        || plan.repository_id.is_nil()
+        || plan.specification_revision == 0
+        || plan.scope_sha256 == [0; 32]
+        || plan.grants.registration == 0
+        || plan.grants.cloud_disclosure == 0
+        || plan.grants.autonomous_publication == 0
+        || !valid_commit
+        || !valid_provider(&plan.provider_id)
+        || !valid_provider(&plan.model_id)
+        || now_ms == 0
+    {
+        return Err(MasterError::InvalidFeatureConveyorInput(
+            "snapshot claim plan requires exact bounded nonzero bindings".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn require_snapshot_claim_plan_tx(
+    tx: &Transaction<'_>,
+    plan: &FeatureSnapshotClaimPlan,
+    now_ms: u64,
+) -> Result<(), MasterError> {
+    require_queue_revision_tx(tx, plan.expected_queue_revision)?;
+    require_unpaused_revision_tx(tx, plan.expected_emergency_pause_revision)?;
+    require_repository_preflight_binding(
+        tx,
+        plan.repository_id,
+        plan.grants.registration,
+        &plan.scope_sha256,
+        plan.expected_emergency_pause_revision,
+        now_ms,
+    )?;
+    let lease_exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM feature_active_lease WHERE singleton = 1)",
+        [],
+        |row| row.get(0),
+    )?;
+    if lease_exists {
+        return Err(MasterError::FeatureLeaseAlreadyActive);
+    }
+    let (feature_id, specification_revision): (String, i64) = tx
+        .query_row(
+            "SELECT f.feature_id, f.current_specification_revision
+             FROM feature_conveyor_queue q
+             JOIN feature_conveyor_features f ON f.feature_id = q.feature_id
+             WHERE f.status = 'queued'
+             ORDER BY q.queue_position ASC LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?
+        .ok_or(MasterError::FeatureNotFound)?;
+    if parse_uuid(&feature_id)? != plan.feature_id
+        || i64_to_u64(specification_revision)? != plan.specification_revision
+    {
+        return Err(MasterError::InvalidFeatureConveyorInput(
+            "snapshot claim does not bind the exact strict queue head".to_string(),
+        ));
+    }
+    let dependency_blocked: bool = tx.query_row(
+        "SELECT EXISTS(
+           SELECT 1 FROM feature_dependencies d
+           JOIN feature_conveyor_features dependency
+             ON dependency.feature_id = d.dependency_feature_id
+           WHERE d.feature_id = ?1 AND dependency.status <> 'succeeded'
+         )",
+        [&feature_id],
+        |row| row.get(0),
+    )?;
+    if dependency_blocked {
+        return Err(MasterError::FeatureDependencyBlocked);
+    }
+    let stored: (String, i64, i64, i64, String, String) = tx.query_row(
+        "SELECT repository_id, registration_grant_revision,
+                cloud_disclosure_grant_revision, publication_grant_revision,
+                provider_id, model_id
+         FROM feature_specification_revisions
+         WHERE feature_id = ?1 AND revision = ?2",
+        params![feature_id, specification_revision],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
+        },
+    )?;
+    let stored_grants = FeatureGrantRevisions {
+        registration: i64_to_u64(stored.1)?,
+        cloud_disclosure: i64_to_u64(stored.2)?,
+        autonomous_publication: i64_to_u64(stored.3)?,
+    };
+    if parse_uuid(&stored.0)? != plan.repository_id
+        || stored_grants != plan.grants
+        || stored.4 != plan.provider_id
+        || stored.5 != plan.model_id
+    {
+        return Err(MasterError::InvalidFeatureConveyorInput(
+            "snapshot claim binding differs from the approved specification".to_string(),
+        ));
+    }
+    require_grants_tx(tx, plan.repository_id, plan.grants, now_ms)
 }
 
 fn validate_repository_preflight_binding(

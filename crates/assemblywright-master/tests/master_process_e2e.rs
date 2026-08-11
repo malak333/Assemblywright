@@ -1,12 +1,14 @@
 use assemblywright_master::{
-    ApprovedFeatureSpecification, DeviceRegistration, FeatureGrantRevisions, MasterProcess,
-    RepositoryGrantKind, RepositoryGrantRevision, MAX_CONVEYOR_NONTERMINAL_FEATURES,
+    ApprovedFeatureSpecification, DeviceRegistration, FeatureGrantRevisions,
+    FeatureSnapshotClaimPlan, MasterProcess, RepositoryGrantKind, RepositoryGrantRevision,
+    RepositorySnapshotEvidence, MAX_CONVEYOR_NONTERMINAL_FEATURES,
 };
 use assemblywright_protocol::{
-    CapabilityDescriptor, DeviceId, DeviceRole, FeatureConveyorOwnerBridgeDesignationRequest,
-    FeatureConveyorRepositoryGrantKind, FeatureConveyorRepositoryGrantRequest,
-    FeatureConveyorRepositoryGrantRevision, FeatureConveyorRepositoryPreflightRequest,
-    FeatureConveyorRepositoryScopeDocument, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+    CapabilityDescriptor, DeviceId, DeviceRole, FeatureConveyorGrantRevisions,
+    FeatureConveyorOwnerBridgeDesignationRequest, FeatureConveyorRepositoryGrantKind,
+    FeatureConveyorRepositoryGrantRequest, FeatureConveyorRepositoryGrantRevision,
+    FeatureConveyorRepositoryPreflightRequest, FeatureConveyorRepositoryScopeDocument,
+    FeatureConveyorRepositorySnapshotClaimRequest, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
     MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES, MAX_WIRE_FRAME_BYTES,
 };
 use rusqlite::Connection;
@@ -370,6 +372,42 @@ fn repository_preflight_is_owner_only_filesystem_identity_observation_and_redact
     record_preflight_registration_grant(endpoint, token, &request, 0, false);
 
     let request_json = serde_json::to_string(&request).unwrap();
+    let snapshot_claim = FeatureConveyorRepositorySnapshotClaimRequest {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        scope: request.scope.clone(),
+        scope_sha256: request.scope_sha256,
+        expected_feature_id: Uuid::new_v4(),
+        expected_specification_revision: 1,
+        expected_queue_revision: 0,
+        expected_emergency_pause_revision: 0,
+        grants: FeatureConveyorGrantRevisions {
+            registration: 1,
+            cloud_disclosure: 1,
+            autonomous_publication: 1,
+        },
+        provider_id: "local.review".to_string(),
+        model_id: "review-v1".to_string(),
+    };
+    let snapshot_claim_json = serde_json::to_string(&snapshot_claim).unwrap();
+    let snapshot_unauthorized = post_request(
+        endpoint,
+        "/v1/feature-conveyor/repository-snapshot-claims",
+        None,
+        &snapshot_claim_json,
+    );
+    assert!(snapshot_unauthorized.starts_with("HTTP/1.1 401 Unauthorized"));
+    let snapshot_malformed = post_request(
+        endpoint,
+        "/v1/feature-conveyor/repository-snapshot-claims",
+        Some(token),
+        r#"{"schema_version":1,"repository_path":"must-not-leak"}"#,
+    );
+    assert!(snapshot_malformed.starts_with("HTTP/1.1 422 Unprocessable Entity"));
+    assert_eq!(
+        response_json(&snapshot_malformed),
+        serde_json::json!({"error":"repository_snapshot_claim_request_rejected"})
+    );
+    assert!(!snapshot_malformed.contains("must-not-leak"));
     let unauthorized = post_request(
         endpoint,
         "/v1/feature-conveyor/repository-preflight",
@@ -606,6 +644,261 @@ fn repository_preflight_is_owner_only_filesystem_identity_observation_and_redact
 }
 
 #[test]
+fn repository_snapshot_claim_is_authenticated_path_free_and_durable() {
+    let directory = tempdir().expect("temporary repository-snapshot master directory");
+    let repository = tempdir().expect("temporary repository-snapshot Git directory");
+    let binary = env!("CARGO_BIN_EXE_assemblywright-master");
+    assert_success(&run(binary, directory.path(), ["setup"]), "setup");
+    git(repository.path(), &["init", "-b", "main"]);
+    git(
+        repository.path(),
+        &["config", "user.name", "Assemblywright Test"],
+    );
+    git(
+        repository.path(),
+        &["config", "user.email", "assemblywright@example.invalid"],
+    );
+    std::fs::write(
+        repository.path().join("README.md"),
+        "process-snapshot-content-marker\n",
+    )
+    .unwrap();
+    git(repository.path(), &["add", "README.md"]);
+    git(repository.path(), &["commit", "-m", "snapshot fixture"]);
+    let head = git_stdout(repository.path(), &["rev-parse", "HEAD"]);
+    let repository_path = canonical_repository_path(repository.path());
+    let repository_id = Uuid::new_v4();
+    let feature_id = Uuid::new_v4();
+    let scope = FeatureConveyorRepositoryScopeDocument {
+        repository_id,
+        repository_path: repository_path.to_string_lossy().into_owned(),
+        expected_base_branch: "main".to_string(),
+        expected_head_commit: head.clone(),
+    };
+    let scope_sha256 = scope.canonical_scope_sha256().unwrap();
+    let grants = FeatureGrantRevisions {
+        registration: 1,
+        cloud_disclosure: 1,
+        autonomous_publication: 1,
+    };
+    {
+        let mut process = MasterProcess::acquire(directory.path()).unwrap();
+        for (index, kind) in [
+            RepositoryGrantKind::Registration,
+            RepositoryGrantKind::CloudDisclosure,
+            RepositoryGrantKind::AutonomousPublication,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            process
+                .kernel_mut()
+                .record_repository_grant_revision(
+                    &RepositoryGrantRevision {
+                        repository_id,
+                        kind,
+                        revision: 1,
+                        scope_sha256: if kind == RepositoryGrantKind::Registration {
+                            scope_sha256
+                        } else {
+                            Sha256::digest(format!("snapshot-scope-{index}")).into()
+                        },
+                        owner_approval_sha256: Sha256::digest(format!(
+                            "snapshot-owner-approval-{index}"
+                        ))
+                        .into(),
+                        expires_at_ms: None,
+                        revoked: false,
+                    },
+                    0,
+                    0,
+                    1,
+                )
+                .unwrap();
+        }
+        let manifest = serde_json::json!({
+            "feature_id": feature_id,
+            "outcome": "bounded process snapshot"
+        });
+        let canonical_manifest =
+            format!(r#"{{"feature_id":"{feature_id}","outcome":"bounded process snapshot"}}"#);
+        process
+            .kernel_mut()
+            .enqueue_approved_feature(
+                &ApprovedFeatureSpecification {
+                    feature_id,
+                    revision: 1,
+                    repository_id,
+                    manifest,
+                    manifest_sha256: Sha256::digest(canonical_manifest).into(),
+                    design_sha256: Sha256::digest("snapshot-design").into(),
+                    brainstorming_sha256: Sha256::digest("snapshot-brainstorming").into(),
+                    owner_approval_sha256: Sha256::digest("snapshot-feature-approval").into(),
+                    grants,
+                    provider_id: "local.review".to_string(),
+                    model_id: "review-v1".to_string(),
+                    dependencies: vec![],
+                },
+                0,
+                10,
+            )
+            .unwrap();
+    }
+
+    let endpoint = unused_loopback_addr();
+    let mut server = spawn_server(binary, directory.path(), endpoint);
+    read_ready(&mut server.child);
+    let token = std::fs::read_to_string(directory.path().join("development.token")).unwrap();
+    let token = token.trim();
+    let preflight = FeatureConveyorRepositoryPreflightRequest {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        scope: scope.clone(),
+        scope_sha256,
+        registration_grant_revision: 1,
+        expected_emergency_pause_revision: 0,
+    };
+    let preflight_response = post_request(
+        endpoint,
+        "/v1/feature-conveyor/repository-preflight",
+        Some(token),
+        &serde_json::to_string(&preflight).unwrap(),
+    );
+    assert!(
+        preflight_response.starts_with("HTTP/1.1 200 OK"),
+        "{preflight_response}"
+    );
+
+    let mut claim = FeatureConveyorRepositorySnapshotClaimRequest {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        scope,
+        scope_sha256,
+        expected_feature_id: feature_id,
+        expected_specification_revision: 1,
+        expected_queue_revision: 0,
+        expected_emergency_pause_revision: 0,
+        grants: FeatureConveyorGrantRevisions {
+            registration: 1,
+            cloud_disclosure: 1,
+            autonomous_publication: 1,
+        },
+        provider_id: "local.review".to_string(),
+        model_id: "review-v1".to_string(),
+    };
+    let rejected = post_request(
+        endpoint,
+        "/v1/feature-conveyor/repository-snapshot-claims",
+        Some(token),
+        &serde_json::to_string(&claim).unwrap(),
+    );
+    assert!(rejected.starts_with("HTTP/1.1 409 Conflict"), "{rejected}");
+    let database_path = directory.path().join("master.sqlite3");
+    let connection = Connection::open(&database_path).unwrap();
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM feature_active_lease", [], |row| row
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM feature_repository_snapshot_claims",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+    drop(connection);
+
+    claim.expected_queue_revision = 1;
+    let accepted = post_request(
+        endpoint,
+        "/v1/feature-conveyor/repository-snapshot-claims",
+        Some(token),
+        &serde_json::to_string(&claim).unwrap(),
+    );
+    assert!(accepted.starts_with("HTTP/1.1 200 OK"), "{accepted}");
+    assert!(!accepted.contains(&claim.scope.repository_path));
+    assert!(!accepted.contains("process-snapshot-content-marker"));
+    let receipt = response_json(&accepted);
+    assert_exact_object_keys(
+        &receipt,
+        &[
+            "schema_version",
+            "feature_id",
+            "specification_revision",
+            "lifecycle_revision",
+            "queue_revision",
+            "emergency_pause_revision",
+            "lease_id",
+            "snapshot_id",
+            "snapshot_sha256",
+            "base_commit",
+            "grants",
+            "provider_binding_sha256",
+            "status",
+        ],
+    );
+    assert_eq!(receipt["feature_id"], feature_id.to_string());
+    assert_eq!(receipt["base_commit"], head);
+    assert_eq!(receipt["queue_revision"], 2);
+    assert_eq!(receipt["status"], "snapshot_bound");
+    let snapshot_id = receipt["snapshot_id"].as_str().unwrap();
+    let lease_id = receipt["lease_id"].as_str().unwrap();
+    drop(server);
+
+    let connection = Connection::open(&database_path).unwrap();
+    let durable: (String, String, String) = connection
+        .query_row(
+            "SELECT lease.snapshot_id, lease.lease_id, claim.base_commit
+             FROM feature_active_lease lease
+             JOIN feature_repository_snapshot_claims claim
+               ON claim.snapshot_id = lease.snapshot_id",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        durable,
+        (snapshot_id.to_string(), lease_id.to_string(), head)
+    );
+    let audit: String = connection
+        .query_row(
+            "SELECT redacted_metadata_json FROM feature_conveyor_audit
+             WHERE event_kind = 'feature_snapshot_claimed'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(!audit.contains(&claim.scope.repository_path));
+    assert!(!audit.contains("process-snapshot-content-marker"));
+    drop(connection);
+    let database_bytes = std::fs::read(&database_path).unwrap();
+    assert!(!contains_bytes(
+        &database_bytes,
+        claim.scope.repository_path.as_bytes()
+    ));
+    assert!(!contains_bytes(
+        &database_bytes,
+        b"process-snapshot-content-marker"
+    ));
+    let snapshot_path = directory
+        .path()
+        .join("feature-conveyor-repository-snapshots")
+        .join("snapshots")
+        .join(snapshot_id);
+    assert!(snapshot_path.join(".git").join("shallow").is_file());
+    assert_eq!(
+        std::fs::read(snapshot_path.join("README.md")).unwrap(),
+        b"process-snapshot-content-marker\n"
+    );
+}
+
+#[test]
 fn feature_conveyor_status_is_owner_authenticated_bounded_and_redacted() {
     let directory = tempdir().expect("temporary feature status directory");
     let binary = env!("CARGO_BIN_EXE_assemblywright-master");
@@ -712,7 +1005,7 @@ fn windows_master_process_owns_state_and_completes_cross_process_fixture() {
     let setup_receipt: Value = serde_json::from_slice(&setup.stdout).expect("setup JSON receipt");
     assert_eq!(setup_receipt["status"], "setup_complete");
     assert_eq!(setup_receipt["protocol_version"], 2);
-    assert_eq!(setup_receipt["schema_version"], 8);
+    assert_eq!(setup_receipt["schema_version"], 9);
     assert!(directory.path().join("master.sqlite3").is_file());
     assert!(directory.path().join("development.token").is_file());
     let development_token = std::fs::read_to_string(directory.path().join("development.token"))
@@ -1284,9 +1577,34 @@ fn seed_bounded_feature_status(data_dir: &Path) {
             .enqueue_approved_feature(feature, index as u64, 10 + index as u64)
             .expect("enqueue status seed");
     }
+    let head = &features[0];
+    let plan = FeatureSnapshotClaimPlan {
+        feature_id: head.feature_id,
+        specification_revision: head.revision,
+        repository_id,
+        expected_queue_revision: MAX_CONVEYOR_NONTERMINAL_FEATURES,
+        expected_emergency_pause_revision: 0,
+        scope_sha256: Sha256::digest("scope-0").into(),
+        provider_id: head.provider_id.clone(),
+        model_id: head.model_id.clone(),
+        grants: head.grants,
+        base_commit: "1234567890abcdef1234567890abcdef12345678".to_string(),
+    };
+    process
+        .kernel_mut()
+        .prepare_repository_snapshot_claim(&plan, 200)
+        .expect("prepare status blocker claim");
     let claim = process
         .kernel_mut()
-        .claim_next_feature(MAX_CONVEYOR_NONTERMINAL_FEATURES, 200)
+        .finalize_repository_snapshot_claim(
+            &plan,
+            &RepositorySnapshotEvidence {
+                snapshot_id: Uuid::new_v4(),
+                snapshot_sha256: Sha256::digest("status-snapshot").into(),
+                base_commit: plan.base_commit.clone(),
+            },
+            200,
+        )
         .expect("claim status blocker");
     process
         .kernel_mut()
@@ -1307,6 +1625,13 @@ fn response_json(response: &str) -> Value {
         .split_once("\r\n\r\n")
         .expect("HTTP response body delimiter");
     serde_json::from_str(body).expect("decode response JSON")
+}
+
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty()
+        && haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
 }
 
 fn assert_exact_object_keys(value: &Value, expected: &[&str]) {

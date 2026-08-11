@@ -68,6 +68,27 @@ swift build --disable-sandbox --package-path apps/mac
 
 ## Windows Distributed Gate
 
+The schema-v9 snapshot-claim slice has focused portable coverage:
+
+```sh
+cargo test -p assemblywright-protocol --test protocol_contract repository_snapshot_claim_contract_is_strict_exact_and_path_free_on_receipt
+cargo test -p assemblywright-master --lib snapshot::tests
+cargo test -p assemblywright-master --test feature_conveyor_kernel
+cargo test -p assemblywright-master --test master_process_e2e repository_preflight_is_owner_only_filesystem_identity_observation_and_redacted
+cargo test -p assemblywright-master --test master_process_e2e repository_snapshot_claim_is_authenticated_path_free_and_durable
+cargo test -p assemblywright-master --bin assemblywright-master snapshot_claim_reservation_survives_blocking_task_timeout
+```
+
+The portable real-process route test proves authentication, path-free response,
+failure-without-lease, durable snapshot/lease binding, and source path/content
+absence from durable authority. The additional positive identity proof is
+Windows-native because fixed-volume non-reparse handle admission is authoritative
+there. It must use a disposable standalone
+repository and additionally prove owner authentication, remote route absence,
+path-free receipt/audit, independent no-remote Git metadata, no lease on
+failure, unreferenced-snapshot cleanup, and restart quarantine. Portable/macOS success is
+repository implementation evidence, not live Windows-service proof.
+
 The portable distributed foundation has a separate Windows gate. For a fresh
 Windows checkout, install the MSVC Rust toolchain pinned by
 `rust-toolchain.toml` after the Visual Studio C++ Build Tools and Windows SDK
@@ -83,6 +104,11 @@ lifecycle E2E. The native master tests are the authoritative proof for Windows
 final-DOS-path normalization, alternate-path rejection, POSIX rename/replacement
 revalidation, and held-handle identity comparison; macOS execution cannot prove
 those Win32 behaviors.
+
+Use the workflow's package-scoped protocol and master clippy commands on
+Windows. Do not substitute the macOS/Linux workspace-wide clippy command: the
+workspace also contains Unix-only local transport targets, so that substitution
+fails before it reaches the authoritative Windows protocol/master lanes.
 
 ## Focused Commands
 

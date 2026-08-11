@@ -50,6 +50,18 @@ Before starting a release pass, confirm the claim you intend to make.
   Windows fixtures must use the final normalized DOS path from the held
   directory handle rather than a verbatim `\\?\` path from
   `std::fs::canonicalize`. The slice
+  also exposes a separate owner-token loopback snapshot-claim POST. Confirm it
+  is absent from the remote mTLS router; rejects stale head/dependency/lease,
+  queue/pause/grant/provider bindings; reads raw objects without Git process,
+  source config, hooks, attributes, credentials, global config, PATH,
+  alternates, links/reparse entries, gitlinks, remotes, or hardlinks; returns no
+  path; copies only the exact current commit/tree/blob graph with shallow
+  metadata and no parent/deleted history; fail-fast serializes bounded snapshot
+  work while retaining the reservation after HTTP timeout until the blocking
+  task exits; and atomically binds one durable snapshot receipt to one lease and
+  redacted audit. Prove failure/cancellation leaves no lease or referenced snapshot,
+  and restart cleans unreferenced state and quarantines a finalized lease.
+  The slice
   exposes no worker
   dispatcher, repository execution, review provider,
   publication coordinator, Mac control UI, or autonomous activation.

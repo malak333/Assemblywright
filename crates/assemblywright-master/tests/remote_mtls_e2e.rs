@@ -340,6 +340,19 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
         local_preflight_over_remote.starts_with("HTTP/1.1 404 Not Found"),
         "owner-token repository preflight leaked onto the remote router: {local_preflight_over_remote}"
     );
+    let (local_snapshot_handshake, local_snapshot_over_remote) = authenticated_application_request(
+        remote_endpoint,
+        &valid,
+        "POST",
+        "/v1/feature-conveyor/repository-snapshot-claims",
+        &serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(local_snapshot_handshake.status, HandshakeStatus::Accepted);
+    assert!(
+        local_snapshot_over_remote.starts_with("HTTP/1.1 404 Not Found"),
+        "owner-token repository snapshot claim leaked onto the remote router: {local_snapshot_over_remote}"
+    );
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     let (first_response, first_exporter) = tls_request_with_body(

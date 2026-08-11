@@ -1,20 +1,23 @@
 use assemblywright_protocol::{
-    repository_preflight_fingerprint_sha256, AttemptId, AuthenticatedHandshakeRequest,
-    CancellationId, CapabilityDescriptor, CapabilityKind, ContextHandlingPolicy, DeviceId,
-    DeviceRole, EnrollmentCsrReply, EnrollmentInvitation, FeatureConveyorApprovedFeatureRequest,
-    FeatureConveyorApprovedSpecification, FeatureConveyorGrantRevisions,
-    FeatureConveyorOwnerBridgeDesignationRequest, FeatureConveyorRepositoryGrantKind,
-    FeatureConveyorRepositoryGrantRequest, FeatureConveyorRepositoryGrantRevision,
-    FeatureConveyorRepositoryPreflightReceipt, FeatureConveyorRepositoryPreflightRequest,
-    FeatureConveyorRepositoryPreflightStatus, FeatureConveyorRepositoryScopeDocument,
+    feature_conveyor_provider_binding_sha256, repository_preflight_fingerprint_sha256, AttemptId,
+    AuthenticatedHandshakeRequest, CancellationId, CapabilityDescriptor, CapabilityKind,
+    ContextHandlingPolicy, DeviceId, DeviceRole, EnrollmentCsrReply, EnrollmentInvitation,
+    FeatureConveyorApprovedFeatureRequest, FeatureConveyorApprovedSpecification,
+    FeatureConveyorGrantRevisions, FeatureConveyorOwnerBridgeDesignationRequest,
+    FeatureConveyorRepositoryGrantKind, FeatureConveyorRepositoryGrantRequest,
+    FeatureConveyorRepositoryGrantRevision, FeatureConveyorRepositoryPreflightReceipt,
+    FeatureConveyorRepositoryPreflightRequest, FeatureConveyorRepositoryPreflightStatus,
+    FeatureConveyorRepositoryScopeDocument, FeatureConveyorRepositorySnapshotClaimReceipt,
+    FeatureConveyorRepositorySnapshotClaimRequest, FeatureConveyorRepositorySnapshotClaimStatus,
     HandshakeRequest, HandshakeResponse, JobEnvelope, JobResultEnvelope, JobResultStatus, LeaseId,
     ProtocolError, Sensitivity, StepId, TaskId, ENROLLMENT_CSR_READY_STATUS,
     ENROLLMENT_INVITATION_READY_STATUS, ENROLLMENT_PAIRING_SCHEMA_VERSION,
     FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, MAX_ENROLLMENT_CSR_PEM_BYTES,
     MAX_ENROLLMENT_PAIRING_FRAME_BYTES, MAX_FEATURE_CONVEYOR_DEPENDENCIES,
     MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES, MAX_FEATURE_CONVEYOR_REPOSITORY_PATH_BYTES,
-    MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES, MAX_JOB_CONTEXT_BYTES,
-    MAX_JOB_RESULT_BYTES, MAX_LEASE_DURATION_MS, MAX_WIRE_FRAME_BYTES, PROTOCOL_VERSION,
+    MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES,
+    MAX_FEATURE_CONVEYOR_SNAPSHOT_CLAIM_REQUEST_BYTES, MAX_JOB_CONTEXT_BYTES, MAX_JOB_RESULT_BYTES,
+    MAX_LEASE_DURATION_MS, MAX_WIRE_FRAME_BYTES, PROTOCOL_VERSION,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -22,6 +25,95 @@ use uuid::Uuid;
 
 fn fixed_uuid(value: &str) -> Uuid {
     Uuid::parse_str(value).expect("fixed UUID")
+}
+
+#[test]
+fn repository_snapshot_claim_contract_is_strict_exact_and_path_free_on_receipt() {
+    let preflight = repository_preflight_request();
+    let request = FeatureConveyorRepositorySnapshotClaimRequest {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        scope: preflight.scope,
+        scope_sha256: preflight.scope_sha256,
+        expected_feature_id: fixed_uuid("77777777-7777-4777-8777-777777777777"),
+        expected_specification_revision: 2,
+        expected_queue_revision: 4,
+        expected_emergency_pause_revision: 3,
+        grants: FeatureConveyorGrantRevisions {
+            registration: 5,
+            cloud_disclosure: 6,
+            autonomous_publication: 7,
+        },
+        provider_id: "local.review".to_string(),
+        model_id: "review-v1".to_string(),
+    };
+    request.validate().unwrap();
+    let encoded = serde_json::to_vec(&request).unwrap();
+    assert_eq!(
+        FeatureConveyorRepositorySnapshotClaimRequest::decode_frame(&encoded).unwrap(),
+        request
+    );
+    let duplicate = String::from_utf8(encoded.clone()).unwrap().replacen(
+        "\"scope\":{",
+        "\"scope\":{\"repository_path\":\"private\",",
+        1,
+    );
+    assert!(
+        FeatureConveyorRepositorySnapshotClaimRequest::decode_frame(duplicate.as_bytes()).is_err()
+    );
+    let unknown = String::from_utf8(encoded).unwrap().replacen(
+        "\"provider_id\":",
+        "\"owner_token\":\"forbidden\",\"provider_id\":",
+        1,
+    );
+    assert!(
+        FeatureConveyorRepositorySnapshotClaimRequest::decode_frame(unknown.as_bytes()).is_err()
+    );
+    let mut zero_grant = request.clone();
+    zero_grant.grants.cloud_disclosure = 0;
+    assert!(zero_grant.validate().is_err());
+    let mut stale_scope = request.clone();
+    stale_scope.scope.expected_head_commit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into();
+    assert!(stale_scope.validate().is_err());
+    assert_eq!(
+        FeatureConveyorRepositorySnapshotClaimRequest::decode_frame(&vec![
+            b' ';
+            MAX_FEATURE_CONVEYOR_SNAPSHOT_CLAIM_REQUEST_BYTES
+                + 1
+        ]),
+        Err(ProtocolError::FrameTooLarge {
+            field: "feature_conveyor_repository_snapshot_claim_request",
+            maximum: MAX_FEATURE_CONVEYOR_SNAPSHOT_CLAIM_REQUEST_BYTES,
+        })
+    );
+
+    let receipt = FeatureConveyorRepositorySnapshotClaimReceipt {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        feature_id: request.expected_feature_id,
+        specification_revision: request.expected_specification_revision,
+        lifecycle_revision: 2,
+        queue_revision: 5,
+        emergency_pause_revision: request.expected_emergency_pause_revision,
+        lease_id: fixed_uuid("11111111-1111-4111-8111-111111111111"),
+        snapshot_id: fixed_uuid("22222222-2222-4222-8222-222222222222"),
+        snapshot_sha256: [8; 32],
+        base_commit: request.scope.expected_head_commit.clone(),
+        grants: request.grants,
+        provider_binding_sha256: feature_conveyor_provider_binding_sha256(
+            &request.provider_id,
+            &request.model_id,
+        ),
+        status: FeatureConveyorRepositorySnapshotClaimStatus::SnapshotBound,
+    };
+    receipt.validate().unwrap();
+    let receipt_json = serde_json::to_vec(&receipt).unwrap();
+    assert_eq!(
+        FeatureConveyorRepositorySnapshotClaimReceipt::decode_frame(&receipt_json).unwrap(),
+        receipt
+    );
+    let text = String::from_utf8(receipt_json).unwrap();
+    assert!(!text.contains("repository_path"));
+    assert!(!text.contains("provider_id"));
+    assert!(!text.contains("model_id"));
 }
 
 fn repository_preflight_request() -> FeatureConveyorRepositoryPreflightRequest {

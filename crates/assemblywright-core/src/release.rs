@@ -1984,14 +1984,14 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "distributed_master_kernel",
             "implemented",
-            "The portable `assemblywright-master` schema-v8 SQLite database retains the schema-v4 distributed-device kernel and persists registered devices, connection epochs, queued steps, immutable leased job envelopes, attempts, cancellation and expiry outcomes, accepted payload digests, and a metadata-only event journal with one server-issued stream ID and contiguous sequence. It enforces the 256-step admission ceiling, four global leases, one live lease per device connection, exact leased-attempt result identity, and durable abandon-before-reissue.",
+            "The portable `assemblywright-master` schema-v9 SQLite database retains the schema-v4 distributed-device kernel and persists registered devices, connection epochs, queued steps, immutable leased job envelopes, attempts, cancellation and expiry outcomes, accepted payload digests, and a metadata-only event journal with one server-issued stream ID and contiguous sequence. It enforces the 256-step admission ceiling, four global leases, one live lease per device connection, exact leased-attempt result identity, and durable abandon-before-reissue.",
             "Durable single-owner state only; it is not the production runtime authority and carries no live cross-device reliability claim.",
         ),
         feature(
             "feature_conveyor_repository_kernel",
             "implemented",
-            "The default-inert schema-v8 Feature Conveyor kernel persists immutable owner-approved specification revisions, three independent repository-grant revisions, a bounded owner-ordered queue with strict head/dependency ordering, compare-and-set revisions, one durable active lease, exact lifecycle advancement, cancellation without advancement, explicit safe abandonment, startup quarantine, and same-transaction redacted audits. Its owner-authenticated loopback read-only status route and accepted-session MacBridge route add bounded lifecycle observation and fixed-enum owner guidance bound to queue, Emergency Pause, and optional feature lifecycle revisions. Owner-token loopback routes record and inspect strict contiguous, pause-bound, digest-only repository-grant revisions; a separate owner-local route performs one bounded point-in-time filesystem-only repository identity preflight bound to the exact active registration grant and returns no path; a separate designation permits only the exact MacBridge to enqueue one already-approved specification.",
-            "Bounded observation, repository-grant preparation, point-in-time identity-only preflight, and queue insertion only. Guidance labels are display-only and do not establish claimability. Grant recording performs no repository access; preflight executes no Git process, stores no path, proves no clean-tree or content state, and creates no reusable snapshot; enqueue does not claim or dispatch. No worker dispatcher, repository mutation, review provider, publication coordinator, Mac queue UI, or autonomous activation is implemented.",
+            "The default-inert schema-v9 Feature Conveyor kernel persists immutable owner-approved specification revisions, three independent repository-grant revisions, a bounded owner-ordered queue with strict head/dependency ordering, compare-and-set revisions, one durable snapshot-bound active lease, exact lifecycle advancement, cancellation without advancement, explicit safe abandonment, startup quarantine, and same-transaction redacted audits. Its owner-authenticated loopback read-only status route and accepted-session MacBridge route add bounded lifecycle observation and fixed-enum owner guidance bound to queue, Emergency Pause, and optional feature lifecycle revisions. Owner-token loopback routes record and inspect strict contiguous, pause-bound, digest-only repository-grant revisions; a separate owner-local route performs one bounded point-in-time filesystem-only repository identity preflight bound to the exact active registration grant and returns no path; another owner-local route serially constructs one independent no-remote shallow raw-object snapshot containing only the current commit/tree/blob graph and atomically binds it to the exact strict queue head, provider, grants, queue, and pause revisions; a separate designation permits only the exact MacBridge to enqueue one already-approved specification.",
+            "Bounded observation, repository-grant preparation, identity-only preflight, queue insertion, and one default-off isolated snapshot/lease claim only. Guidance labels are display-only. Snapshot claiming does not dispatch a worker or invoke a provider and returns/stores no path. No worker dispatcher, repository mutation, review provider, publication coordinator, Mac queue UI, or autonomous activation is implemented.",
         ),
         feature(
             "enrollment_identity_and_mtls",
@@ -2179,15 +2179,16 @@ mod tests {
         assert!(feature
             .proof
             .contains("point-in-time filesystem-only repository identity preflight"));
-        assert!(feature.boundary.contains("queue insertion only"));
-        assert!(feature.boundary.contains("stores no path"));
-        assert!(feature.boundary.contains("executes no Git process"));
         assert!(feature
             .boundary
-            .contains("proves no clean-tree or content state"));
-        assert!(feature.boundary.contains("creates no reusable snapshot"));
+            .contains("one default-off isolated snapshot/lease claim only"));
+        assert!(feature.boundary.contains("stores no path"));
+        assert!(feature
+            .boundary
+            .contains("does not dispatch a worker or invoke a provider"));
+        assert!(feature.boundary.contains("No worker dispatcher"));
         assert!(feature.boundary.contains("display-only"));
-        assert!(feature.boundary.contains("do not establish claimability"));
+        assert!(feature.boundary.contains("autonomous activation"));
         for forbidden in [
             "mutation authority",
             "repository execution authority",

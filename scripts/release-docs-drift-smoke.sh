@@ -155,7 +155,7 @@ require_text "README non-claims" "$README" "Autonomous dispatch"
 require_text "DESIGN conveyor pointer" "$DESIGN" "docs/feature-conveyor-design.md"
 require_text "DESIGN distributed pointer" "$DESIGN" "docs/distributed-developer-mode-design.md"
 require_text "DESIGN assistant non-goal" "$DESIGN" "No general-purpose assistant surface."
-require_text "DESIGN current master schema" "$DESIGN" "schema-v8"
+require_text "DESIGN current master schema" "$DESIGN" "schema-v9"
 
 require_text "conveyor design status" "$FEATURE_CONVEYOR_DESIGN" "default-inert"
 require_text "conveyor design approval" "$FEATURE_CONVEYOR_DESIGN" "Approve and Enqueue"
@@ -169,6 +169,12 @@ require_text "conveyor owner designation route" "$FEATURE_CONVEYOR_DESIGN" \
   "POST /v1/distributed/feature-conveyor/approved-features"
 require_text "conveyor repository preflight boundary" "$FEATURE_CONVEYOR_DESIGN" \
   "owner-token loopback-only repository preflight"
+require_text "conveyor repository snapshot claim boundary" "$FEATURE_CONVEYOR_DESIGN" \
+  "repository-snapshot-claims"
+require_text "conveyor snapshot excludes history" "$FEATURE_CONVEYOR_DESIGN" \
+  "never copies parent history or"
+require_text "conveyor snapshot singleton reservation" "$FEATURE_CONVEYOR_DESIGN" \
+  "fail-fast singleton reservation"
 require_text "conveyor claimability limit" "$FEATURE_CONVEYOR_DESIGN" \
   "does not establish"
 require_text "conveyor local status implementation" "$MASTER_PROCESS" \
@@ -183,6 +189,8 @@ require_text "conveyor repository grant status implementation" "$MASTER_PROCESS"
   '"/v1/feature-conveyor/repositories/:repository_id/grants"'
 require_text "conveyor repository preflight implementation" "$MASTER_PROCESS" \
   '"/v1/feature-conveyor/repository-preflight"'
+require_text "conveyor repository snapshot claim implementation" "$MASTER_PROCESS" \
+  '"/v1/feature-conveyor/repository-snapshot-claims"'
 require_text "conveyor remote owner action implementation" "$MASTER_PROCESS" \
   '"/v1/distributed/feature-conveyor/approved-features"'
 require_text "conveyor owner guidance implementation" "$MASTER_CRATE" \
@@ -203,6 +211,8 @@ require_text "conveyor local grant routes remote absence" "$MASTER_REMOTE_MTLS_E
   "repository-grant mutation leaked onto the remote router"
 require_text "conveyor local preflight remote absence" "$MASTER_REMOTE_MTLS_E2E" \
   "repository preflight leaked onto the remote router"
+require_text "conveyor local snapshot claim remote absence" "$MASTER_REMOTE_MTLS_E2E" \
+  "repository snapshot claim leaked onto the remote router"
 require_text "conveyor Swift strict decoder" "$MAC_BRIDGE_SUPERVISOR" \
   "invalid_feature_conveyor_status"
 require_text "conveyor authenticated snapshot only" "$MAC_BRIDGE_SUPERVISOR" \
@@ -311,6 +321,16 @@ require_text "build docs readiness unit test" "$BUILD_DOCS" \
   "cargo test -p assemblywright-core protocol_readiness_proof_is_version_independent"
 require_text "build docs readiness E2E" "$BUILD_DOCS" \
   "cargo test -p assemblywright-cli --test release_readiness_e2e"
+require_text "build docs snapshot claim process E2E" "$BUILD_DOCS" \
+  "repository_snapshot_claim_is_authenticated_path_free_and_durable"
+require_text "build docs Windows package-scoped clippy boundary" "$BUILD_DOCS" \
+  "Do not substitute the macOS/Linux workspace-wide clippy command"
+require_text "safety snapshot blocking timeout boundary" "$SAFETY_RULES" \
+  "Timeout must not pretend to cancel a blocking thread"
+require_text "safety snapshot pre-allocation header gate" "$SAFETY_RULES" \
+  "header type/declared-size"
+require_text "knowledge base shallow snapshot boundary" "$KB" \
+  "parent commits and deleted historical objects are absent"
 
 # Documents must not advertise the removed assistant surface.
 for file in "$README" "$DESIGN" "$ARCHITECTURE" "$BUILD_DOCS" "$CHECKLIST" "$KB" "$AGENTS"; do

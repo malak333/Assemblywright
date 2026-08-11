@@ -59,7 +59,7 @@ accepted designs and take precedence within their scope:
 
 ### Windows master
 
-`assemblywright-master` owns durable state and every authority decision. Its schema-v8
+`assemblywright-master` owns durable state and every authority decision. Its schema-v9
 SQLite database holds two kernels:
 
 - The distributed device lifecycle: registered devices, connection epochs,
@@ -107,8 +107,35 @@ does not establish clean working-tree or object-content state. It retains no
 path or repository content and returns only a path-free point-in-time digest
 receipt after the
 grant and Emergency Pause revision are rechecked with a same-transaction
-redacted audit. It does not create a snapshot or establish claimability. The
-separate remote
+redacted audit. It does not create a snapshot or establish claimability.
+
+Schema v9 adds one owner-token-authenticated loopback-only snapshot-claim
+transition. A strict request binds the exact queue head, immutable
+specification, repository scope, branch and base commit, all three grant
+revisions, provider/model, queue revision, and Emergency Pause revision. The
+master performs the database precheck without retaining a transaction across
+filesystem work, revalidates the held repository identity immediately around
+snapshot creation and again before finalization, then atomically rechecks every
+binding, records immutable path-free snapshot evidence, creates the singleton
+lease, advances to `implementing`, increments the queue revision, and appends a
+redacted audit. Snapshot construction reads raw Git objects through a library,
+not a Git process: source config, hooks, attributes, credentials, global config,
+PATH lookup, alternates, symlinks/reparse entries, gitlinks, and remotes are not
+trusted. It copies only the exact base commit and its current tree/blob graph,
+marks that commit shallow, and excludes parent history and deleted historical
+objects. Every commit/tree/blob read first validates the ODB header type and
+declared size and charges the aggregate budget before decompression/allocation.
+The result has independent Git metadata, raw current committed content,
+no remote, and a SHA-256 content binding. One fail-fast singleton reservation
+serializes claims. Snapshot work is capped at 50,000 objects, 256 MiB total and
+32 MiB per blob; the HTTP wait is 30 seconds. A timed-out blocking thread is not
+forcibly cancelled: it retains the reservation and RAII snapshot ownership until
+it exits. Failure or request cancellation before
+finalization removes the unreferenced snapshot; startup removes abandoned
+unreferenced UUID directories and quarantines a finalized active lease as before.
+The route adds no worker dispatch, provider invocation, review,
+GitHub/publication, Mac mutation, remote mTLS mutation, or autonomous
+activation. The separate remote
 `POST /v1/distributed/feature-conveyor/approved-features` remains unusable until
 the caller is the exact current designation on an accepted, revalidated,
 exporter-bound session. Its strict request binds one already-approved

@@ -45,6 +45,7 @@ pub const MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES: usize = 320 * 1024;
 pub const MAX_FEATURE_CONVEYOR_DEPENDENCIES: usize = 100;
 pub const MAX_FEATURE_CONVEYOR_IDENTIFIER_BYTES: usize = 128;
 pub const MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES: usize = 8 * 1024;
+pub const MAX_FEATURE_CONVEYOR_SNAPSHOT_CLAIM_REQUEST_BYTES: usize = 12 * 1024;
 pub const MAX_FEATURE_CONVEYOR_REPOSITORY_PATH_BYTES: usize = 4 * 1024;
 pub const MAX_FEATURE_CONVEYOR_BASE_BRANCH_BYTES: usize = 255;
 
@@ -759,6 +760,160 @@ pub fn repository_preflight_fingerprint_sha256(
     digest.update((head_commit.len() as u64).to_be_bytes());
     digest.update(head_commit.as_bytes());
     digest.update(observed_at_ms.to_be_bytes());
+    digest.finalize().into()
+}
+
+/// Exact owner-bound request to snapshot and atomically claim the strict queue head.
+///
+/// The repository path is consumed only by the owner-token loopback route. It is
+/// never stored and is absent from the receipt and audit evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorRepositorySnapshotClaimRequest {
+    pub schema_version: u16,
+    pub scope: FeatureConveyorRepositoryScopeDocument,
+    pub scope_sha256: [u8; 32],
+    pub expected_feature_id: Uuid,
+    pub expected_specification_revision: u64,
+    pub expected_queue_revision: u64,
+    pub expected_emergency_pause_revision: u64,
+    pub grants: FeatureConveyorGrantRevisions,
+    pub provider_id: String,
+    pub model_id: String,
+}
+
+impl FeatureConveyorRepositorySnapshotClaimRequest {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "feature_conveyor_repository_snapshot_claim_request",
+            frame,
+            MAX_FEATURE_CONVEYOR_SNAPSHOT_CLAIM_REQUEST_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_fixed_value(
+            "schema_version",
+            self.schema_version.to_string(),
+            FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION.to_string(),
+        )?;
+        self.scope.validate()?;
+        validate_uuid("expected_feature_id", self.expected_feature_id)?;
+        for (field, revision) in [
+            (
+                "expected_specification_revision",
+                self.expected_specification_revision,
+            ),
+            ("registration_grant_revision", self.grants.registration),
+            (
+                "cloud_disclosure_grant_revision",
+                self.grants.cloud_disclosure,
+            ),
+            (
+                "autonomous_publication_grant_revision",
+                self.grants.autonomous_publication,
+            ),
+        ] {
+            validate_positive_limit(field, revision, u64::MAX)?;
+        }
+        validate_identifier(
+            "provider_id",
+            &self.provider_id,
+            MAX_FEATURE_CONVEYOR_IDENTIFIER_BYTES,
+        )?;
+        validate_identifier(
+            "model_id",
+            &self.model_id,
+            MAX_FEATURE_CONVEYOR_IDENTIFIER_BYTES,
+        )?;
+        if self.scope_sha256 == [0; 32]
+            || self.scope.canonical_scope_sha256()? != self.scope_sha256
+            || self.scope.repository_id.is_nil()
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        validate_serialized_limit(
+            "feature_conveyor_repository_snapshot_claim_request",
+            self,
+            MAX_FEATURE_CONVEYOR_SNAPSHOT_CLAIM_REQUEST_BYTES,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureConveyorRepositorySnapshotClaimStatus {
+    SnapshotBound,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorRepositorySnapshotClaimReceipt {
+    pub schema_version: u16,
+    pub feature_id: Uuid,
+    pub specification_revision: u64,
+    pub lifecycle_revision: u64,
+    pub queue_revision: u64,
+    pub emergency_pause_revision: u64,
+    pub lease_id: Uuid,
+    pub snapshot_id: Uuid,
+    pub snapshot_sha256: [u8; 32],
+    pub base_commit: String,
+    pub grants: FeatureConveyorGrantRevisions,
+    pub provider_binding_sha256: [u8; 32],
+    pub status: FeatureConveyorRepositorySnapshotClaimStatus,
+}
+
+impl FeatureConveyorRepositorySnapshotClaimReceipt {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "feature_conveyor_repository_snapshot_claim_receipt",
+            frame,
+            MAX_FEATURE_CONVEYOR_SNAPSHOT_CLAIM_REQUEST_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_fixed_value(
+            "schema_version",
+            self.schema_version.to_string(),
+            FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION.to_string(),
+        )?;
+        validate_uuid("feature_id", self.feature_id)?;
+        validate_uuid("lease_id", self.lease_id)?;
+        validate_uuid("snapshot_id", self.snapshot_id)?;
+        validate_positive_limit(
+            "specification_revision",
+            self.specification_revision,
+            u64::MAX,
+        )?;
+        validate_positive_limit("lifecycle_revision", self.lifecycle_revision, u64::MAX)?;
+        validate_git_commit(&self.base_commit)?;
+        if self.snapshot_sha256 == [0; 32]
+            || self.provider_binding_sha256 == [0; 32]
+            || self.grants.registration == 0
+            || self.grants.cloud_disclosure == 0
+            || self.grants.autonomous_publication == 0
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        validate_serialized_limit(
+            "feature_conveyor_repository_snapshot_claim_receipt",
+            self,
+            MAX_FEATURE_CONVEYOR_SNAPSHOT_CLAIM_REQUEST_BYTES,
+        )
+    }
+}
+
+pub fn feature_conveyor_provider_binding_sha256(provider_id: &str, model_id: &str) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"assemblywright.feature-provider-binding.v1\0");
+    digest.update((provider_id.len() as u64).to_be_bytes());
+    digest.update(provider_id.as_bytes());
+    digest.update((model_id.len() as u64).to_be_bytes());
+    digest.update(model_id.as_bytes());
     digest.finalize().into()
 }
 

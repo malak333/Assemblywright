@@ -23,10 +23,11 @@ advertisements; handshake, job, and result envelopes; strict bound-before-decode
 JSON entry points; nil-identity rejection; fixed-schema Feature Conveyor owner-
 control request/receipt contracts; and a golden compatibility fixture.
 
-**`assemblywright-master`** — a portable schema-v8 SQLite database retaining
+**`assemblywright-master`** — a portable schema-v9 SQLite database retaining
 the schema-v4 device lifecycle, schema-v5 Feature Conveyor, schema-v6
 capability rebind evidence, schema-v7 Emergency Pause revision, and schema-v8
-single owner-control bridge designation, plus a headless single-owner
+single owner-control bridge designation, and schema-v9 immutable repository
+snapshot-claim evidence, plus a headless single-owner
 executable.
 
 - *Distributed device lifecycle*: registered device metadata, connection epochs
@@ -41,7 +42,13 @@ executable.
   three independent repository-grant revisions, dependencies, and a snapshotted
   review provider. Its queue has a 100-item nonterminal ceiling, one global
   compare-and-set revision, strict head and dependency ordering, and one durable
-  active lease. Enqueue, reorder, claim, lifecycle, cancellation, abandonment,
+  active lease. A loopback-only owner action creates one independent,
+  credential-free, no-remote shallow snapshot from only the exact current
+  commit/tree/blob graph, excluding parent history and deleted objects, and
+  atomically binds it to the exact strict queue head, provider, grants, pause,
+  and queue revisions. A fail-fast singleton reservation serializes bounded
+  snapshot work and remains held by any timed-out blocking task until cleanup.
+  Enqueue, reorder, claim, lifecycle, cancellation, abandonment,
   and startup quarantine commit with redacted audit evidence in the same
   transaction. Success releases the lease only with verified healthy-main
   evidence; cancellation retains it until explicit safe abandonment. One
@@ -135,8 +142,9 @@ decision must be auditable. Do not describe this as a finished product.
 Not yet implemented, and not claimed:
 
 - Autonomous dispatch, repository mutation, or publication of any kind. The
-  implemented repository preflight is read-only, point-in-time, owner-local,
-  and does not create a reusable snapshot or establish claimability.
+  implemented preflight remains read-only; the separate default-off owner-local
+  snapshot-claim action creates durable isolated state and one lease but does
+  not dispatch work or invoke a provider.
 - Worker execution against real repositories, review-provider invocation, or
   GitHub branch/PR/merge authority.
 - Mac Feature Conveyor UI controls or hosted brainstorming. The app remains

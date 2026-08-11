@@ -79,7 +79,35 @@ standalone checkout with independent Git metadata; a disposable proof grant is
 revoked by its next contiguous revision before that checkout is removed.
 This is admission evidence for the observed instant only: it creates no durable
 snapshot, claim, lease, mutation, worker, review, publication, or activation
-authority. Only the
+authority.
+
+Master schema v9 adds the separate owner-token loopback-only
+`POST /v1/feature-conveyor/repository-snapshot-claims`. Its strict request binds
+the exact preflight scope, queue head and specification revision, provider/model,
+all three grant revisions, queue revision, Emergency Pause revision, branch,
+and base commit. Planning and filesystem work occur without an open SQLite
+transaction. The source identity is freshly revalidated immediately around raw
+object snapshot construction and once more before an immediate finalizer
+atomically rechecks every binding, records immutable path-free snapshot
+ID/digest/base-commit evidence, inserts the singleton lease, advances the
+lifecycle, increments the queue revision, and appends redacted audit. Snapshot
+construction executes no Git process and reads no source config, hooks,
+attributes, credentials, global config, or PATH; alternates, symlink/reparse
+entries, gitlinks, non-fixed/ambiguous paths, and invalid object graphs fail
+closed. It copies only the exact base commit and its current tree/blob graph,
+writes that commit to shallow metadata, and never copies parent history or
+deleted historical objects. The result contains raw current committed content,
+independent Git metadata, an empty hook lane, no remote, no hardlinks, and no
+source path. A process-wide fail-fast singleton reservation permits only one
+claim. The snapshot task is capped at 50,000 objects, 256 MiB total, and 32 MiB
+per blob; its HTTP wait is 30 seconds. Because blocking threads cannot be safely
+force-cancelled, a timed-out task retains the reservation and RAII cleanup
+ownership until it actually exits. Request
+cancellation or any failure before finalization removes the snapshot, and
+startup removes unreferenced UUID directories. A finalized lease is
+quarantined on restart without retry. This slice grants no worker dispatch,
+provider call, review, repository mutation, publication, Mac mutation, remote
+mTLS action, queue advancement, or autonomous activation. Only the
 exact designated device may use
 `POST /v1/distributed/feature-conveyor/approved-features` after a revalidated,
 exporter-bound application handshake. Its fixed-schema request carries one

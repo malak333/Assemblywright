@@ -797,7 +797,7 @@ fn schema_v1_migrates_transactionally_through_capability_rebind_v7() {
 
     let process = MasterProcess::acquire(directory.path()).expect("migrate v1 database");
     let master = process.kernel();
-    assert_eq!(master.schema_version().expect("schema version"), 8);
+    assert_eq!(master.schema_version().expect("schema version"), 9);
     let health = master.health_snapshot().expect("migrated health");
     assert_eq!(health.registered_devices, 1);
     assert_eq!(health.active_device_certificates, 0);

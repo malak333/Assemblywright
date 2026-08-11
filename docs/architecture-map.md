@@ -25,13 +25,14 @@ flowchart LR
   Process --> Service["Windows SCM host: automatic start, bounded recovery, status, maintenance, uninstall"]
   Service --> Maintenance["Durable fail-closed marker blocks new enqueue and lease admission"]
   Master --> Durable["Registered devices, epochs, queue, attempts, cancellation, expiry, restart reconciliation, exact results"]
-  Master --> Conveyor["Default-inert Feature Conveyor repository kernel retained through schema v8"]
+  Master --> Conveyor["Default-inert Feature Conveyor repository kernel retained through schema v9"]
   Conveyor --> ConveyorSafety["Immutable approved specs and grants, strict CAS queue, one active lease, atomic redacted audit, and startup quarantine"]
   Conveyor --> Observer["Exact bounded status projection: local owner route plus accepted-session MacBridge-only remote GET"]
   Observer --> Helper
   Conveyor --> OwnerDesignation["Nullable CAS owner-control bridge designation with atomic redacted audit"]
   Conveyor --> GrantControl["Loopback-only contiguous CAS repository-grant revisions and current digest projection"]
   GrantControl --> RepositoryPreflight["Owner-local filesystem-only identity preflight; path-free digest receipt and redacted audit"]
+  RepositoryPreflight --> SnapshotClaim["Loopback-only isolated raw-object snapshot plus atomic strict queue-head claim"]
   OwnerDesignation --> OwnerAction["Exact designated non-fixture MacBridge-only approved-feature POST; queue insertion only"]
   OwnerAction --> Helper
   Protocol --> Feature["Dormant assemblywright-core distributed-development feature"]
@@ -57,7 +58,7 @@ a headless master executable. The contract seam provides the current protocol
 version, typed device/task/step/attempt/lease/cancellation identifiers, bounded
 capability advertisements, handshake messages, job and result envelopes, strict
 bound-before-decode JSON entry points, nil-identity rejection, and a golden
-compatibility fixture. `assemblywright-master` schema version 8 preserves the
+compatibility fixture. `assemblywright-master` schema version 9 preserves the
 schema-v4 distributed-device lifecycle, the schema-v5 Feature Conveyor, and
 schema-v6 dedicated pending capability-rebind evidence, then adds the durable
 Emergency Pause revision, then adds one nullable compare-and-set owner-control
@@ -72,7 +73,7 @@ abandonment, and startup quarantine commit with redacted audit evidence in the
 same immediate transaction. Success releases the lease only with verified
 healthy-main evidence; cancellation retains it until explicit safe
 abandonment, and restart ambiguity is quarantined without automatic retry.
-Master-process upgrades from supported legacy schemas v1-v7 to v8 are
+Master-process upgrades from supported legacy schemas v1-v8 to v9 are
 backup-first under the owner lock, verify the versioned backup before migration,
 and restore through a fsynced sibling plus atomic replacement when
 migration-open fails. Direct file-backed legacy migration through
@@ -105,6 +106,18 @@ repository config or attributes, rejects network/reparse/worktree/submodule
 paths, and does not prove clean-tree or content state. It stores and returns no
 path, appends only redacted audit,
 and emits a path-free digest receipt that grants no snapshot or claimability.
+The separate loopback-only snapshot-claim route rechecks that exact scope plus
+the strict queue head, dependencies, singleton lease, Emergency Pause, current
+three specification grant revisions, and provider/model before and after
+filesystem work. It uses raw object-database reads rather than a Git process,
+rejects alternates, links/reparse entries and gitlinks, writes independent Git
+metadata with no remote, copies only the current commit/tree/blob graph, marks
+the base shallow, and excludes parent/deleted history. A fail-fast singleton
+reservation serializes resource-capped work and remains task-owned after an
+HTTP timeout until the blocking task exits. The finalizer atomically records only snapshot ID/digest/base
+commit plus bound revisions. No database transaction spans filesystem work;
+failure and request cancellation remove unreferenced state, while startup
+cleans abandoned directories and quarantines a finalized active lease.
 Another owner-token-authenticated loopback action designates one exact current,
 non-fixture MacBridge. Only that designated device may submit one revision-bound
 already-approved specification through the dedicated remote POST; the signed

@@ -2,29 +2,32 @@ use anyhow::{bail, Context};
 use assemblywright_master::{
     current_time_ms, AcceptedCancellation, AcceptedResult, ApprovedFeatureSpecification,
     CapabilityRebindAcknowledgement, DeviceRegistration, EnrollmentGrantSpec, EnrollmentRequest,
-    EphemeralServerIdentity, FeatureConveyorStatus, IdentityAuthority, MasterHealthSnapshot,
-    MasterProcess, NewStep, PlatformSecretProtector, RemoteWorkContract, RepositoryGrantKind,
-    RepositoryGrantRevision, StartupReconciliation,
+    EphemeralServerIdentity, FeatureConveyorStatus, FeatureGrantRevisions,
+    FeatureSnapshotClaimPlan, IdentityAuthority, MasterHealthSnapshot, MasterProcess, NewStep,
+    PlatformSecretProtector, RemoteWorkContract, RepositoryGrantKind, RepositoryGrantRevision,
+    RepositorySnapshotEvidence, RepositorySnapshotStore, StartupReconciliation,
 };
 #[cfg(test)]
 use assemblywright_protocol::CapabilityKind;
 use assemblywright_protocol::{
-    repository_preflight_fingerprint_sha256, AuthenticatedHandshakeRequest,
-    CancellationAcknowledgement, CancellationPollRequest, CapabilityDescriptor, DeviceId,
-    DeviceRole, DistributedEventBatch, DistributedEventBatchRequest, EnrollmentCsrReply,
-    EnrollmentInvitation, FeatureConveyorApprovedFeatureReceipt,
-    FeatureConveyorApprovedFeatureRequest, FeatureConveyorApprovedFeatureStatus,
-    FeatureConveyorOwnerBridgeDesignationReceipt, FeatureConveyorOwnerBridgeDesignationRequest,
-    FeatureConveyorOwnerBridgeDesignationStatus, FeatureConveyorRepositoryGrantKind,
-    FeatureConveyorRepositoryGrantReceipt, FeatureConveyorRepositoryGrantRequest,
-    FeatureConveyorRepositoryGrantSet, FeatureConveyorRepositoryGrantStatus,
-    FeatureConveyorRepositoryPreflightReceipt, FeatureConveyorRepositoryPreflightRequest,
-    FeatureConveyorRepositoryPreflightStatus, FixtureJobResult, HandshakeRequest,
+    feature_conveyor_provider_binding_sha256, repository_preflight_fingerprint_sha256,
+    AuthenticatedHandshakeRequest, CancellationAcknowledgement, CancellationPollRequest,
+    CapabilityDescriptor, DeviceId, DeviceRole, DistributedEventBatch,
+    DistributedEventBatchRequest, EnrollmentCsrReply, EnrollmentInvitation,
+    FeatureConveyorApprovedFeatureReceipt, FeatureConveyorApprovedFeatureRequest,
+    FeatureConveyorApprovedFeatureStatus, FeatureConveyorOwnerBridgeDesignationReceipt,
+    FeatureConveyorOwnerBridgeDesignationRequest, FeatureConveyorOwnerBridgeDesignationStatus,
+    FeatureConveyorRepositoryGrantKind, FeatureConveyorRepositoryGrantReceipt,
+    FeatureConveyorRepositoryGrantRequest, FeatureConveyorRepositoryGrantSet,
+    FeatureConveyorRepositoryGrantStatus, FeatureConveyorRepositoryPreflightReceipt,
+    FeatureConveyorRepositoryPreflightRequest, FeatureConveyorRepositoryPreflightStatus,
+    FeatureConveyorRepositorySnapshotClaimReceipt, FeatureConveyorRepositorySnapshotClaimRequest,
+    FeatureConveyorRepositorySnapshotClaimStatus, FixtureJobResult, HandshakeRequest,
     HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope, JobResultStatus,
     Sensitivity, StepId, TaskId, ENROLLMENT_INVITATION_READY_STATUS,
     ENROLLMENT_PAIRING_SCHEMA_VERSION, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
     MAX_ENROLLMENT_PAIRING_FRAME_BYTES, MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES,
-    MAX_WIRE_FRAME_BYTES, PROTOCOL_VERSION,
+    MAX_FEATURE_CONVEYOR_SNAPSHOT_CLAIM_REQUEST_BYTES, MAX_WIRE_FRAME_BYTES, PROTOCOL_VERSION,
 };
 use axum::body::Bytes;
 use axum::extract::rejection::BytesRejection;
@@ -76,6 +79,10 @@ const MASTER_STATE_NAMESPACE: &str = "Assemblywright";
 const LEGACY_MASTER_STATE_NAMESPACE: &str = "Jarvis";
 const MAINTENANCE_MARKER_FILE: &str = "maintenance-mode.json";
 const REPOSITORY_FILESYSTEM_OBSERVATION_TIMEOUT: Duration = Duration::from_secs(5);
+// This bounds API wait, not OS-thread execution: spawn_blocking cannot be
+// forcibly cancelled safely. The singleton reservation remains owned by a
+// timed-out task until it exits and drops any staged snapshot.
+const REPOSITORY_SNAPSHOT_CLAIM_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Parser)]
 #[command(
@@ -363,6 +370,7 @@ struct AppState {
     token_sha256: [u8; 32],
     started_at_ms: u64,
     lifecycle: RuntimeLifecycle,
+    repository_snapshot_claim_reservation: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Clone)]
@@ -1428,6 +1436,7 @@ async fn serve_runtime(
         token_sha256: Sha256::digest(token.as_bytes()).into(),
         started_at_ms: current_time_ms()?,
         lifecycle,
+        repository_snapshot_claim_reservation: Arc::new(tokio::sync::Mutex::new(())),
     };
 
     let app = Router::new()
@@ -1448,6 +1457,12 @@ async fn serve_runtime(
             "/v1/feature-conveyor/repository-preflight",
             post(repository_preflight).layer(DefaultBodyLimit::max(
                 MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES,
+            )),
+        )
+        .route(
+            "/v1/feature-conveyor/repository-snapshot-claims",
+            post(repository_snapshot_claim).layer(DefaultBodyLimit::max(
+                MAX_FEATURE_CONVEYOR_SNAPSHOT_CLAIM_REQUEST_BYTES,
             )),
         )
         .route(
@@ -2291,6 +2306,137 @@ async fn repository_preflight(
         .validate()
         .map_err(|_| fixed_error(StatusCode::INTERNAL_SERVER_ERROR, "internal_error"))?;
     drop(observation_guard);
+    Ok(Json(receipt))
+}
+
+async fn repository_snapshot_claim(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<FeatureConveyorRepositorySnapshotClaimReceipt> {
+    authorize(&headers, &state)?;
+    let body = body.map_err(|_| {
+        fixed_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "repository_snapshot_claim_request_rejected",
+        )
+    })?;
+    let request =
+        FeatureConveyorRepositorySnapshotClaimRequest::decode_frame(&body).map_err(|_| {
+            fixed_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "repository_snapshot_claim_request_rejected",
+            )
+        })?;
+    let reservation = state
+        .repository_snapshot_claim_reservation
+        .clone()
+        .try_lock_owned()
+        .map_err(|_| {
+            fixed_error(
+                StatusCode::CONFLICT,
+                "repository_snapshot_claim_in_progress",
+            )
+        })?;
+    let plan = FeatureSnapshotClaimPlan {
+        feature_id: request.expected_feature_id,
+        specification_revision: request.expected_specification_revision,
+        repository_id: request.scope.repository_id,
+        expected_queue_revision: request.expected_queue_revision,
+        expected_emergency_pause_revision: request.expected_emergency_pause_revision,
+        scope_sha256: request.scope_sha256,
+        provider_id: request.provider_id.clone(),
+        model_id: request.model_id.clone(),
+        grants: FeatureGrantRevisions {
+            registration: request.grants.registration,
+            cloud_disclosure: request.grants.cloud_disclosure,
+            autonomous_publication: request.grants.autonomous_publication,
+        },
+        base_commit: request.scope.expected_head_commit.clone(),
+    };
+    let before_ms = current_time_ms()
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "repository_snapshot_claim_rejected"))?;
+    let data_dir = {
+        let mut process = lock_process(&state)?;
+        process
+            .kernel_mut()
+            .prepare_repository_snapshot_claim(&plan, before_ms)
+            .map_err(|_| fixed_error(StatusCode::CONFLICT, "repository_snapshot_claim_rejected"))?;
+        process.data_dir().to_path_buf()
+    };
+    let repository_path = request.scope.repository_path.clone();
+    let expected_base_branch = request.scope.expected_base_branch.clone();
+    let expected_head_commit = request.scope.expected_head_commit.clone();
+    let source_path = PathBuf::from(&request.scope.repository_path);
+    let base_commit = request.scope.expected_head_commit.clone();
+    let (reservation, observation_guard, prepared) = tokio::time::timeout(
+        REPOSITORY_SNAPSHOT_CLAIM_TIMEOUT,
+        tokio::task::spawn_blocking(move || {
+            let reservation = reservation;
+            let mut observation_guard = observe_standard_repository_identity(
+                &repository_path,
+                &expected_base_branch,
+                &expected_head_commit,
+            )?;
+            observation_guard.revalidate()?;
+            let store = RepositorySnapshotStore::open(&data_dir).map_err(|_| ())?;
+            let prepared = store.prepare(&source_path, &base_commit).map_err(|_| ())?;
+            observation_guard.revalidate()?;
+            Ok::<_, ()>((reservation, observation_guard, prepared))
+        }),
+    )
+    .await
+    .map_err(|_| fixed_error(StatusCode::CONFLICT, "repository_snapshot_claim_rejected"))?
+    .map_err(|_| fixed_error(StatusCode::CONFLICT, "repository_snapshot_claim_rejected"))?
+    .map_err(|_| fixed_error(StatusCode::CONFLICT, "repository_snapshot_claim_rejected"))?;
+    let (reservation, observation_guard, prepared) = tokio::time::timeout(
+        REPOSITORY_FILESYSTEM_OBSERVATION_TIMEOUT,
+        tokio::task::spawn_blocking(move || {
+            let reservation = reservation;
+            let mut observation_guard = observation_guard;
+            observation_guard.revalidate()?;
+            Ok::<_, ()>((reservation, observation_guard, prepared))
+        }),
+    )
+    .await
+    .map_err(|_| fixed_error(StatusCode::CONFLICT, "repository_snapshot_claim_rejected"))?
+    .map_err(|_| fixed_error(StatusCode::CONFLICT, "repository_snapshot_claim_rejected"))?
+    .map_err(|_| fixed_error(StatusCode::CONFLICT, "repository_snapshot_claim_rejected"))?;
+    let finalized_at_ms = current_time_ms()
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "repository_snapshot_claim_rejected"))?;
+    let snapshot = RepositorySnapshotEvidence {
+        snapshot_id: prepared.snapshot_id,
+        snapshot_sha256: prepared.snapshot_sha256,
+        base_commit: prepared.base_commit.clone(),
+    };
+    let claim = lock_process(&state)?
+        .kernel_mut()
+        .finalize_repository_snapshot_claim(&plan, &snapshot, finalized_at_ms)
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "repository_snapshot_claim_rejected"))?;
+    drop(observation_guard);
+    prepared.retain();
+    drop(reservation);
+    let receipt = FeatureConveyorRepositorySnapshotClaimReceipt {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        feature_id: claim.feature_id,
+        specification_revision: claim.specification_revision,
+        lifecycle_revision: claim.lifecycle_revision,
+        queue_revision: plan.expected_queue_revision + 1,
+        emergency_pause_revision: plan.expected_emergency_pause_revision,
+        lease_id: claim.lease_id,
+        snapshot_id: claim.snapshot_id,
+        snapshot_sha256: claim.snapshot_sha256,
+        base_commit: claim.base_commit,
+        grants: request.grants,
+        provider_binding_sha256: feature_conveyor_provider_binding_sha256(
+            &claim.provider_id,
+            &claim.model_id,
+        ),
+        status: FeatureConveyorRepositorySnapshotClaimStatus::SnapshotBound,
+    };
+    receipt
+        .validate()
+        .map_err(|_| fixed_error(StatusCode::INTERNAL_SERVER_ERROR, "internal_error"))?;
     Ok(Json(receipt))
 }
 
@@ -3623,10 +3769,47 @@ mod tests {
             token_sha256: [1; 32],
             started_at_ms: 1,
             lifecycle,
+            repository_snapshot_claim_reservation: Arc::new(tokio::sync::Mutex::new(())),
         };
         let rejection = require_work_admission(&state).expect_err("pause must dominate work");
         assert_eq!(rejection.0, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(rejection.1.error, "emergency_pause_blocks_work");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn snapshot_claim_reservation_survives_blocking_task_timeout() {
+        let reservation = Arc::new(tokio::sync::Mutex::new(()));
+        let guard = reservation.clone().try_lock_owned().unwrap();
+        assert!(reservation.clone().try_lock_owned().is_err());
+
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let blocking = tokio::task::spawn_blocking(move || {
+            let _guard = guard;
+            let _ = started_tx.send(());
+            release_rx.recv().unwrap();
+        });
+        started_rx.await.unwrap();
+        assert!(tokio::time::timeout(Duration::from_millis(10), blocking)
+            .await
+            .is_err());
+        assert!(
+            reservation.clone().try_lock_owned().is_err(),
+            "dropping a timed-out JoinHandle must not release its task-owned reservation"
+        );
+
+        release_tx.send(()).unwrap();
+        let reacquired = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if let Ok(guard) = reservation.clone().try_lock_owned() {
+                    break guard;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("blocking task eventually releases reservation");
+        drop(reacquired);
     }
 
     #[test]

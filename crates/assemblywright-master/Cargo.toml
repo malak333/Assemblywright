@@ -20,6 +20,7 @@ base64.workspace = true
 clap.workspace = true
 fs2.workspace = true
 getrandom.workspace = true
+git2.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 assemblywright-protocol = { path = "../assemblywright-protocol", version = "0.1.4" }

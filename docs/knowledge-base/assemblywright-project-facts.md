@@ -516,6 +516,60 @@ an old one.
   it. Use sorted keys plus unescaped slashes for every Swift recomputation of a
   Rust-owned context or payload digest, and retain slash-bearing fixture and
   MLX regression cases.
+- Schema v9 is the first durable snapshot-bound activation slice. The owner
+  loopback request binds the exact queue head/specification, canonical
+  registration scope, branch/base commit, provider/model, all three current
+  grant revisions, queue revision, and Emergency Pause revision. SQLite is not
+  held during snapshot construction; the finalizer atomically repeats every
+  authority check, stores only snapshot ID/digest/base commit and revisions,
+  inserts the singleton lease, advances lifecycle/queue state, and appends
+  redacted audit.
+- Snapshot construction uses libgit2 raw object-database reads without a Git
+  subprocess or source repository/config checkout. It rejects alternates,
+  symlink/reparse entries, gitlinks, unsafe/case-colliding Windows paths, and
+  invalid or oversized object graphs; materializes raw committed blobs into an
+  independent repository with no remote, hardlinks, source path, credentials,
+  or active hooks; and binds a separate SHA-256 content digest. Only the exact
+  base commit plus its current tree/blob graph is copied. The base is marked
+  shallow, so parent commits and deleted historical objects are absent rather
+  than exposed through the destination ODB. Each commit/tree/blob header is
+  type- and declared-size-checked and charged once to the aggregate budget
+  before its body is decompressed or allocated; materialization rechecks the
+  header without double-charging already copied objects. A prepared snapshot is
+  built directly in one private random-UUID final directory and remains
+  unreferenced until the later SQLite finalizer commits its digest binding.
+  This avoids a Windows directory-rename failure caused by libgit2/antivirus
+  handle sharing; RAII and startup cleanup remove every unreferenced partial or
+  completed UUID directory.
+  Windows also requires a writable file handle for `sync_all`/
+  `FlushFileBuffers`. Close the destination libgit2 ODB/repository handles
+  before opening the generated object files for that flush. Libgit2 marks loose
+  objects read-only, so the Windows flush helper temporarily clears that bit,
+  flushes through a writable handle, and restores it; otherwise Win32 returns
+  access denied even though the snapshot builder owns the files. Fail-closed
+  RAII and startup cleanup likewise clear the bit only on ordinary
+  non-reparse files immediately before deletion and best-effort restore it if
+  deletion fails.
+- Snapshot claims are process-wide singleton work. Concurrent requests fail
+  immediately. The raw-object task is limited to 50,000 objects, 256 MiB total,
+  32 MiB per blob, and a 30-second HTTP wait. Timeout detaches rather than
+  force-cancels the blocking thread; that thread keeps the reservation and
+  RAII cleanup ownership until it exits.
+  This does not
+  grant worker dispatch, provider/review invocation, GitHub publication, Mac
+  mutation, or autonomous activation.
+- Windows validation intentionally uses package-scoped clippy for
+  `assemblywright-protocol` and `assemblywright-master`, matching
+  `.github/workflows/windows-protocol.yml`. A workspace-wide Windows clippy run
+  also selects Unix-only local transport code and can fail before exercising
+  the authoritative Windows crates; keep workspace-wide clippy in the canonical
+  macOS/Linux release gate instead.
+- A prepared snapshot is RAII-owned until the database finalizer commits. HTTP
+  cancellation, finalizer rejection, or any other precommit failure removes
+  it and leaves no lease. Startup removes unreferenced UUID
+  directories; a finalized `implementing` lease still becomes quarantined with
+  no automatic retry. The schema-v8 observer projection remains wire-compatible
+  even though the durable database is schema v9.
 
 ## Safety Guardrails
 
