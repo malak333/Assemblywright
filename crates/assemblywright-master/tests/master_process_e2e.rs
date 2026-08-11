@@ -1342,11 +1342,59 @@ fn post_request(endpoint: SocketAddr, path: &str, token: Option<&str>, body: &st
         body.len()
     )
     .expect("write owner action request");
-    let mut response = String::new();
-    stream
-        .read_to_string(&mut response)
-        .expect("read owner action response");
-    response
+    read_content_length_response(&mut stream)
+}
+
+fn read_content_length_response(stream: &mut TcpStream) -> String {
+    let mut response = Vec::new();
+    let expected_length = loop {
+        if let Some(expected_length) = expected_http_response_length(&response) {
+            if response.len() >= expected_length {
+                break expected_length;
+            }
+        }
+        let mut chunk = [0_u8; 4_096];
+        let read = stream.read(&mut chunk).expect("read owner action response");
+        assert!(
+            read > 0,
+            "owner action response ended before its declared body"
+        );
+        response.extend_from_slice(&chunk[..read]);
+    };
+    assert_eq!(
+        response.len(),
+        expected_length,
+        "owner action response exceeded its declared body"
+    );
+    String::from_utf8(response).expect("owner action response is UTF-8")
+}
+
+fn expected_http_response_length(response: &[u8]) -> Option<usize> {
+    let header_end = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")?;
+    let headers = std::str::from_utf8(&response[..header_end]).ok()?;
+    let content_length = headers.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.eq_ignore_ascii_case("content-length")
+            .then(|| value.trim().parse::<usize>().ok())
+            .flatten()
+    })?;
+    Some(header_end + 4 + content_length)
+}
+
+#[test]
+fn owner_action_response_reader_requires_the_complete_declared_body() {
+    let complete = b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\n{}";
+    assert_eq!(
+        expected_http_response_length(complete),
+        Some(complete.len())
+    );
+    let truncated = &complete[..complete.len() - 1];
+    assert_eq!(
+        expected_http_response_length(truncated),
+        Some(complete.len())
+    );
 }
 
 fn post_bytes_request(
