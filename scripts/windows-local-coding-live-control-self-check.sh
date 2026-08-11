@@ -32,22 +32,22 @@ for required in \
   'grant_cleanup_status = "absent_or_revoked"' \
   'transfer_staging_empty' \
   'proof_checkout_removed'; do
-  rg -Fq -- "$required" "$CONTROLLER" \
+  grep -Fq -- "$required" "$CONTROLLER" \
     || fail "Windows local-coding controller omitted: $required"
 done
 
-if rg -Fq -- '/v1/distributed/feature-conveyor/cancel-active-feature' "$CONTROLLER" \
-  || rg -Fq -- '/v1/distributed/feature-conveyor/abandon-and-advance' "$CONTROLLER" \
-  || rg -iq -- 'sqlite|master\.sqlite3' "$CONTROLLER"; then
+if grep -Fq -- '/v1/distributed/feature-conveyor/cancel-active-feature' "$CONTROLLER" \
+  || grep -Fq -- '/v1/distributed/feature-conveyor/abandon-and-advance' "$CONTROLLER" \
+  || grep -Eiq -- 'sqlite|master\.sqlite3' "$CONTROLLER"; then
   fail "Windows local-coding controller crossed the owner-local or persistence boundary"
 fi
 
-tree_check_line="$(rg -n -F 'Assert-NoReparseTree $paths.proof' "$CONTROLLER" | cut -d: -f1)"
-delete_line="$(rg -n -F 'Remove-Item -LiteralPath $paths.proof -Recurse -Force' "$CONTROLLER" | cut -d: -f1)"
-terminal_grants_line="$(rg -n -F 'Cleanup did not reach an absent-or-revoked terminal grant state.' "$CONTROLLER" | cut -d: -f1)"
-prepare_status_line="$(rg -n -F '$status = Get-ConveyorStatus' "$CONTROLLER" | head -1 | cut -d: -f1)"
-clone_line="$(rg -n -F '$cloneOutput = @(& git clone' "$CONTROLLER" | cut -d: -f1)"
-marker_recovery_line="$(rg -n -F '$marker = Read-ProofMarker $paths.proof $paths.source' "$CONTROLLER" | tail -1 | cut -d: -f1)"
+tree_check_line="$(grep -nF 'Assert-NoReparseTree $paths.proof' "$CONTROLLER" | cut -d: -f1)"
+delete_line="$(grep -nF 'Remove-Item -LiteralPath $paths.proof -Recurse -Force' "$CONTROLLER" | cut -d: -f1)"
+terminal_grants_line="$(grep -nF 'Cleanup did not reach an absent-or-revoked terminal grant state.' "$CONTROLLER" | cut -d: -f1)"
+prepare_status_line="$(grep -nF '$status = Get-ConveyorStatus' "$CONTROLLER" | head -1 | cut -d: -f1)"
+clone_line="$(grep -nF '$cloneOutput = @(& git clone' "$CONTROLLER" | cut -d: -f1)"
+marker_recovery_line="$(grep -nF '$marker = Read-ProofMarker $paths.proof $paths.source' "$CONTROLLER" | tail -1 | cut -d: -f1)"
 [[ "$tree_check_line" =~ ^[0-9]+$ && "$delete_line" =~ ^[0-9]+$ \
   && "$terminal_grants_line" =~ ^[0-9]+$ \
   && "$prepare_status_line" =~ ^[0-9]+$ && "$clone_line" =~ ^[0-9]+$ \

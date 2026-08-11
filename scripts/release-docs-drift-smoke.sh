@@ -219,6 +219,10 @@ require_text "conveyor live controller cancellation" "$WINDOWS_LOCAL_CODING_LIVE
   '"/v1/feature-conveyor/cancel-active-feature"'
 require_text "conveyor live controller Mac cleanup binding" "$WINDOWS_LOCAL_CODING_LIVE_CONTROL" \
   "mac_cleanup_sha256"
+require_text "conveyor live controller self-check portable scanner" \
+  "$WINDOWS_LOCAL_CODING_LIVE_CONTROL_SELF_CHECK" "grep -Fq --"
+forbid_text "conveyor live controller self-check ripgrep dependency" \
+  "$WINDOWS_LOCAL_CODING_LIVE_CONTROL_SELF_CHECK" "rg -Fq --"
 require_text "conveyor remote owner action implementation" "$MASTER_PROCESS" \
   '"/v1/distributed/feature-conveyor/approved-features"'
 require_text "conveyor owner guidance implementation" "$MASTER_CRATE" \
