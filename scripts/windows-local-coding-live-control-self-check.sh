@@ -47,12 +47,16 @@ delete_line="$(grep -nF 'Remove-Item -LiteralPath $paths.proof -Recurse -Force' 
 terminal_grants_line="$(grep -nF 'Cleanup did not reach an absent-or-revoked terminal grant state.' "$CONTROLLER" | cut -d: -f1)"
 prepare_status_line="$(grep -nF '$status = Get-ConveyorStatus' "$CONTROLLER" | head -1 | cut -d: -f1)"
 clone_line="$(grep -nF '$cloneOutput = @(& git clone' "$CONTROLLER" | cut -d: -f1)"
+clone_policy_line="$(grep -nF '$ErrorActionPreference = "Continue"' "$CONTROLLER" | cut -d: -f1)"
+clone_exit_line="$(grep -nF '$cloneExitCode = $LASTEXITCODE' "$CONTROLLER" | cut -d: -f1)"
 marker_recovery_line="$(grep -nF '$marker = Read-ProofMarker $paths.proof $paths.source' "$CONTROLLER" | tail -1 | cut -d: -f1)"
 [[ "$tree_check_line" =~ ^[0-9]+$ && "$delete_line" =~ ^[0-9]+$ \
   && "$terminal_grants_line" =~ ^[0-9]+$ \
   && "$prepare_status_line" =~ ^[0-9]+$ && "$clone_line" =~ ^[0-9]+$ \
+  && "$clone_policy_line" =~ ^[0-9]+$ && "$clone_exit_line" =~ ^[0-9]+$ \
   && "$marker_recovery_line" =~ ^[0-9]+$ \
   && "$prepare_status_line" -lt "$clone_line" \
+  && "$clone_policy_line" -lt "$clone_line" && "$clone_line" -lt "$clone_exit_line" \
   && "$marker_recovery_line" -lt "$delete_line" \
   && "$tree_check_line" -lt "$delete_line" \
   && "$terminal_grants_line" -lt "$delete_line" ]] \

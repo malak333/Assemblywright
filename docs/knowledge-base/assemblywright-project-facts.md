@@ -516,6 +516,12 @@ an old one.
   the emitted device UUID. The same form with
   `-Action Resume -ConfirmAction` returns the strict
   `mlx_emergency_resumed` receipt.
+- Windows PowerShell 5 promotes a native process's stderr records under
+  `$ErrorActionPreference = "Stop"`, while `git clone` writes ordinary progress
+  to stderr even when it succeeds. The local-coding live controller temporarily
+  captures clone stderr under `Continue`, restores the fail-closed preference,
+  and treats the exact native exit code as the sole clone verdict. Do not weaken
+  error handling for the later HTTP or filesystem authority checks.
 - Take authenticated Windows health before and after a live fixture closeout.
   A reconnect may expire an abandoned queued fixture from an interrupted prior
   run; accept the closeout only when the final health is unpaused and reports

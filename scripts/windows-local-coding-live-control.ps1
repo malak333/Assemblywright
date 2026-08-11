@@ -398,8 +398,18 @@ switch ($Action) {
         }
         $repository = [guid]::NewGuid().ToString().ToLowerInvariant()
         $feature = [guid]::NewGuid().ToString().ToLowerInvariant()
-        $cloneOutput = @(& git clone --no-hardlinks --single-branch --branch main $paths.source $paths.proof 2>&1)
-        if ($LASTEXITCODE -ne 0) { throw "Git could not create the standalone disposable checkout." }
+        $cloneErrorActionPreference = $ErrorActionPreference
+        try {
+            # Windows PowerShell 5 surfaces a native process's stderr as
+            # ErrorRecord values. Git writes normal clone progress there, so
+            # capture it and make the native exit code the sole verdict.
+            $ErrorActionPreference = "Continue"
+            $cloneOutput = @(& git clone --no-hardlinks --single-branch --branch main $paths.source $paths.proof 2>&1)
+            $cloneExitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $cloneErrorActionPreference
+        }
+        if ($cloneExitCode -ne 0) { throw "Git could not create the standalone disposable checkout." }
         Assert-NoReparseComponents $paths.proof $false
         Invoke-Git $paths.proof @("remote", "remove", "origin") | Out-Null
         $marker = [ordered]@{
