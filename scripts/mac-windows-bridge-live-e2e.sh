@@ -431,8 +431,11 @@ if [[ "$MODE" == "--run-local-coding" ]]; then
     || fail "the approved local-coding request digest drifted"
   enqueue_receipt="$(printf '%s' "$local_coding_approved_request" \
     | "$BRIDGE_BIN" feature-conveyor approve-and-enqueue --confirm)"
+  enqueue_receipt_feature_id="$(
+    json_value "$enqueue_receipt" feature_id | tr '[:upper:]' '[:lower:]'
+  )"
   [[ "$(json_value "$enqueue_receipt" status)" == "queued" \
-    && "$(json_value "$enqueue_receipt" feature_id)" == "$local_coding_feature_id" \
+    && "$enqueue_receipt_feature_id" == "$local_coding_feature_id" \
     && "$(json_value "$enqueue_receipt" specification_revision)" == "1" \
     && "$(json_value "$enqueue_receipt" lifecycle_revision)" == "1" \
     && "$(json_value "$enqueue_receipt" queue_revision)" -eq $((local_coding_prepare_queue_revision + 1)) \

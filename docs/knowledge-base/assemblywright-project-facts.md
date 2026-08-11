@@ -619,8 +619,9 @@ an old one.
 - The production Swift supervisor must not request the MacBridge-only Feature
   Conveyor projection for the separate local-coding `InferenceWorker` identity.
   It validates the exact singleton `local.coding.v1` profile and required relay
-  before connecting, then authenticates, health-checks, and relays without
-  emitting an owner projection. Partial, mixed, drifted, or relayless worker
+  before connecting, then authenticates, health-checks, and leases without
+  requesting the MacBridge-only event stream or Conveyor projection and emits
+  neither owner observation. Partial, mixed, drifted, or relayless worker
   profiles fail before network use; standard and fixture MacBridge observation
   remains strict and unchanged.
 - Production enrollment uses `--identity-profile local-coding`, a separate

@@ -215,7 +215,7 @@ public enum AssemblywrightMacDeveloperAgentSnapshotChunkAcceptance: Equatable, S
 }
 
 public struct AssemblywrightMacDeveloperEventRelayProgress: Equatable, Sendable {
-    public let cursor: AssemblywrightMacDeveloperEventCursor
+    public let cursor: AssemblywrightMacDeveloperEventCursor?
     public let acceptedEventCount: Int
     public let hasMore: Bool
     public let requiresFreshConnection: Bool
@@ -324,6 +324,22 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
             activeAgent = launched
         }
         let before = try await activeAgent.health()
+        if configuration.localCodingSnapshotsEnabled {
+            guard let deviceID else {
+                throw AssemblywrightMacDeveloperEventRelayError.localCodingSnapshotRejected
+            }
+            let requiresFreshConnection = try await relayOneLocalCodingSnapshot(
+                using: session,
+                deviceID: deviceID,
+                agent: activeAgent
+            )
+            return AssemblywrightMacDeveloperEventRelayProgress(
+                cursor: before.cursor,
+                acceptedEventCount: 0,
+                hasMore: false,
+                requiresFreshConnection: requiresFreshConnection
+            )
+        }
         let request = try Self.eventRequest(
             connectionEpoch: session.connectionEpoch,
             after: before.cursor
@@ -361,22 +377,6 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
                 throw AssemblywrightMacDeveloperEventRelayError.mlxJobRejected
             }
             let requiresFreshConnection = try await relayOneMLXJob(
-                using: session,
-                deviceID: deviceID,
-                agent: activeAgent
-            )
-            return AssemblywrightMacDeveloperEventRelayProgress(
-                cursor: batch.cursor,
-                acceptedEventCount: batch.eventCount,
-                hasMore: batch.hasMore,
-                requiresFreshConnection: requiresFreshConnection
-            )
-        }
-        if configuration.localCodingSnapshotsEnabled {
-            guard let deviceID else {
-                throw AssemblywrightMacDeveloperEventRelayError.localCodingSnapshotRejected
-            }
-            let requiresFreshConnection = try await relayOneLocalCodingSnapshot(
                 using: session,
                 deviceID: deviceID,
                 agent: activeAgent

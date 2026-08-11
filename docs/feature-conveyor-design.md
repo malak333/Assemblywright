@@ -206,8 +206,9 @@ remain `mac_bridge`-only. The production helper selects the isolated profile
 only for the explicit local-coding snapshot opt-in and never reuses owner-control
 bridge authority. That exact `inference_worker` plus singleton-capability
 profile must have a production relay, authenticates and health-checks without
-requesting or emitting the MacBridge-only Feature Conveyor projection, and
-fails before connection when partial, mixed, or relayless. Standard and fixture
+requesting either the MacBridge-only event stream or Feature Conveyor
+projection, emits neither observation, and fails before connection when
+partial, mixed, or relayless. Standard and fixture
 MacBridge profiles continue to require strict health plus Feature Conveyor
 observation.
 

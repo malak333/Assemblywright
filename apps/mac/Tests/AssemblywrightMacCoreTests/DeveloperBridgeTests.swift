@@ -2849,13 +2849,20 @@ struct DeveloperBridgeTests {
             acceptedResult: documents.acceptedResult
         )
 
-        _ = try await relay.relayEvents(using: master)
+        let progress = try await relay.relayEvents(using: master)
 
+        #expect(progress.cursor == nil)
+        #expect(progress.acceptedEventCount == 0)
+        #expect(progress.hasMore == false)
         #expect(await agent.admittedLocalCodingJobs == [documents.job])
         #expect(await agent.acceptedLocalCodingChunks == documents.chunks)
+        #expect(await agent.acceptedBatches.isEmpty)
         #expect(await agent.executedJobs.isEmpty)
         #expect(await agent.executedMLXJobs.isEmpty)
         let requests = await master.requests
+        #expect(!requests.map(\.path).contains(
+            AssemblywrightMacDeveloperEventRelay.remoteEventsPath
+        ))
         let chunkRequests = requests.filter {
             $0.path == AssemblywrightMacDeveloperEventRelay.remoteSnapshotChunksPath
         }

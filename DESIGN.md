@@ -230,8 +230,9 @@ process lifecycle selects that identity only when the local-coding snapshot
 opt-in is explicitly enabled, and capability rebind remains standard-profile
 only. The Swift supervisor validates that exact worker role/capability before
 connecting, requires the production relay, authenticates and checks health,
-then relays without requesting or emitting the MacBridge-only Feature Conveyor
-projection. Partial, mixed, or relayless worker profiles fail before network
+then leases through the worker path without requesting either the MacBridge-only
+event stream or Feature Conveyor projection and emits neither observation.
+Partial, mixed, or relayless worker profiles fail before network
 use. Standard and fixture MacBridge sessions retain strict health plus Feature
 Conveyor observation.
 
