@@ -37,7 +37,7 @@ flowchart LR
   CodingDispatch --> SnapshotChunks["Exact leased-attempt bounded snapshot bundle chunks with before-and-after authorization"]
   SnapshotChunks --> Helper
   Helper --> Agent
-  Agent --> Materialization["Private independent Git materialization proof, then immediate cleanup; no execution"]
+  Agent --> Materialization["Private Git materialization plus fixed forked-child README fixture through a pre-opened directory; bounded evidence, then cleanup before result"]
   OwnerDesignation --> OwnerAction["Exact designated non-fixture MacBridge-only approved-feature POST; queue insertion only"]
   OwnerAction --> Helper
   Protocol --> Feature["Dormant assemblywright-core distributed-development feature"]
@@ -136,11 +136,28 @@ After an exact lease, the default-off snapshot lane reauthorizes every bounded
 sequential bundle read and binds each chunk to the full attempt, lease,
 cancellation, and snapshot identity. The Mac bridge strictly relays those
 chunks over the authenticated local socket. The native agent reconstructs and
-verifies an independent shallow no-remote Git repository in private
-per-attempt state and immediately deletes it before returning a path-free
-non-mutation receipt. No source repository path, command, credential, retained
-worker checkout, coding process, mutation, integration, review, publication,
-queue advance, or autonomous activation is implemented.
+  verifies an independent shallow no-remote Git repository in private
+  per-attempt state while enforcing an aggregate materialized-output byte
+  budget. It then forks only one fixed contained-coding child from the running
+  agent, with no `exec` or remote input. Before `fork`, the parent pre-opens the
+  workspace, blocks signals, and captures the descriptor-table bound and
+  effective UID. The child scans every descriptor slot with `F_GETFD`, closes
+  every open descriptor except the workspace and group gate, and waits for the
+  parent-established process group. Its fixed file-mutation path covers the
+  validated `README.md` open, truncate, seek, write, sync, close, and `_exit`.
+  It does not inspect errno or mutable global state, use environment APIs, or
+  call `geteuid`, `getdtablesize`, or `setpgid` post-fork.
+  The parent verifies the singleton
+  changed-path set and fixed
+  output, emits bounded work-packet/admission/snapshot/allowed-path/patch
+  digests with truthful `test_status:not_run`, and deletes all attempt state
+  before returning the path-free result. Cancellation, pause-driven durable
+  cancellation, lease/deadline loss, shutdown, and failure dominate completion
+  and cleanup. No caller-selected command, tool, path, provider, test, network,
+  or credential authority exists; no host sandbox or host-egress enforcement is
+  claimed. No retained worker checkout, canonical-repository mutation,
+  integration, review, publication, queue advance, or autonomous activation is
+  implemented.
 Another owner-token-authenticated loopback action designates one exact current,
 non-fixture MacBridge. Only that designated device may submit one revision-bound
 already-approved specification through the dedicated remote POST; the signed

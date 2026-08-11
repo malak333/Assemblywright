@@ -113,7 +113,7 @@ struct AcceptedBatch {
     cursor: AgentCursorSnapshot,
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_target(false)
@@ -140,6 +140,7 @@ async fn serve(data_dir: PathBuf) -> anyhow::Result<()> {
             .context("decode bounded assemblywright-agent startup document")?;
         startup_bytes.zeroize();
         validate_startup(&startup)?;
+        validate_local_coding_parent_environment(&startup)?;
         verify_supervised_parent(startup.supervised_parent_pid)?;
         let mlx_config = mlx_config_from_startup(&startup)?;
 
@@ -256,6 +257,35 @@ fn validate_startup(startup: &AgentStartupDocument) -> anyhow::Result<()> {
     .map_err(anyhow::Error::new)?;
     let _ = digest_bearer_token(&startup.bearer_token)?;
     let _ = mlx_config_from_startup(startup)?;
+    Ok(())
+}
+
+fn validate_local_coding_parent_environment(startup: &AgentStartupDocument) -> anyhow::Result<()> {
+    if !startup.local_coding_snapshots_enabled {
+        return Ok(());
+    }
+    let inherited_names = std::env::vars_os()
+        .map(|(name, _)| name)
+        .collect::<Vec<_>>();
+    if inherited_names
+        .iter()
+        .any(|name| name != std::ffi::OsStr::new("__CF_USER_TEXT_ENCODING"))
+    {
+        bail!("local-coding snapshot runtime requires an empty parent environment");
+    }
+    if !inherited_names.is_empty() {
+        // macOS inserts this CoreFoundation bookkeeping variable even when the
+        // supervisor supplies an empty environment. This current-thread runtime
+        // removes that one system-added value before any task or child exists;
+        // every caller-supplied variable remains a hard startup rejection.
+        let result = unsafe { libc::unsetenv(c"__CF_USER_TEXT_ENCODING".as_ptr()) };
+        if result != 0 {
+            bail!("local-coding snapshot runtime could not clear its parent environment");
+        }
+    }
+    if std::env::vars_os().next().is_some() {
+        bail!("local-coding snapshot runtime requires an empty parent environment");
+    }
     Ok(())
 }
 
@@ -377,7 +407,7 @@ async fn health(
         } else if state.mlx_jobs_enabled {
             "metadata_cursor_plus_bounded_public_mlx_jobs_no_retention"
         } else if state.local_coding_snapshots_enabled {
-            "metadata_cursor_plus_ephemeral_snapshot_materialization_no_execution"
+            "metadata_cursor_plus_fixed_contained_coding_fixture_ephemeral_workspace"
         } else {
             "metadata_only_no_authoritative_state"
         },
@@ -405,11 +435,12 @@ async fn accept_local_coding_snapshot_chunk(
     State(state): State<AgentState>,
     Json(chunk): Json<LocalCodingSnapshotChunk>,
 ) -> Result<Response, (StatusCode, Json<serde_json::Value>)> {
-    match state
-        .local_coding_snapshot_runtime
-        .accept_chunk(chunk)
-        .map_err(local_coding_snapshot_error)?
-    {
+    let runtime = Arc::clone(&state.local_coding_snapshot_runtime);
+    let acceptance = tokio::task::spawn_blocking(move || runtime.accept_chunk(chunk))
+        .await
+        .map_err(|_| internal_error())?
+        .map_err(local_coding_snapshot_error)?;
+    match acceptance {
         LocalCodingSnapshotAcceptance::Continue { next_offset } => Ok((
             StatusCode::ACCEPTED,
             Json(json!({
@@ -455,6 +486,8 @@ fn local_coding_snapshot_error(
         ),
         LocalCodingSnapshotError::Io(_)
         | LocalCodingSnapshotError::Git(_)
+        | LocalCodingSnapshotError::EffectPossible
+        | LocalCodingSnapshotError::VerificationTimeout
         | LocalCodingSnapshotError::Unavailable => internal_error(),
     }
 }

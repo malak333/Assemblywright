@@ -29,6 +29,7 @@ MASTER_IDENTITY="crates/assemblywright-master/src/identity.rs"
 MASTER_SERVICE_HOST="crates/assemblywright-master/src/windows_service_host.rs"
 AGENT_CRATE="crates/assemblywright-agent/src/lib.rs"
 AGENT_PROCESS="crates/assemblywright-agent/src/main.rs"
+AGENT_SNAPSHOT="crates/assemblywright-agent/src/snapshot.rs"
 CLI_MAIN="crates/assemblywright-cli/src/main.rs"
 
 PROTOCOL_E2E="crates/assemblywright-protocol/tests/distributed_protocol_contract_e2e.rs"
@@ -230,9 +231,61 @@ require_text "conveyor coding protocol path-free contract" "$PROTOCOL_LOCAL_CODI
   "owner_dispatch_is_strict_bounded_digest_bound_and_path_free"
 require_text "conveyor native coding admission" "$AGENT_LOCAL_CODING_E2E" \
   "native_agent_admits_only_path_free_snapshot_bound_metadata_without_executing_it"
+require_text "conveyor protocol fixed contained result" "$PROTOCOL_CRATE" \
+  'LOCAL_CODING_COMPLETED_STATUS: &str = "contained_coding_completed"'
+require_text "conveyor protocol truthful tests-not-run result" "$PROTOCOL_CRATE" \
+  'LOCAL_CODING_FIXTURE_TEST_STATUS: &str = "not_run"'
+require_text "conveyor fixed README allowlist" "$PROTOCOL_CRATE" \
+  'LOCAL_CODING_FIXTURE_ALLOWED_PATH: &str = "README.md"'
+require_text "conveyor protocol exact admission digest helper" "$PROTOCOL_CRATE" \
+  'local_coding_admission_sha256'
+require_text "conveyor protocol admission golden transcript" "$PROTOCOL_LOCAL_CODING_E2E" \
+  'admission_digest_has_a_fixed_cross_language_transcript'
+require_text "conveyor Swift exact admission domain" "$MAC_EVENT_RELAY" \
+  'assemblywright.local-coding-admission.v1\0'
+require_text "conveyor Swift admission binds protocol version" "$MAC_EVENT_RELAY" \
+  'protocolVersion: AssemblywrightMacMTLSBridgeTransport.protocolVersion'
+require_text "conveyor Swift admission binds lease duration" "$MAC_EVENT_RELAY" \
+  'leaseDurationMilliseconds: leaseDuration'
+require_text "conveyor Swift admission binds deadline" "$MAC_EVENT_RELAY" \
+  'deadlineAfterMilliseconds: deadline'
+require_text "conveyor Swift admission golden matches Rust" "$MAC_BRIDGE_TESTS" \
+  'ef9e10566ae691ac90bc99aab0615944c7d91a6eba54efca49d20fda6852608f'
+forbid_text "conveyor Swift result excludes obsolete runner digest" "$MAC_EVENT_RELAY" \
+  'runner_sha256'
+require_text "conveyor fixed forked child" "$AGENT_SNAPSHOT" \
+  'spawn_fixed_contained_child'
+require_text "conveyor child uses pre-opened workspace" "$AGENT_SNAPSHOT" \
+  'libc::openat'
+require_text "conveyor Swift launches agent with empty environment" "$MAC_EVENT_RELAY" \
+  'process.environment = [:]'
+require_text "conveyor agent rejects nonempty local-coding parent environment" "$AGENT_PROCESS" \
+  'validate_local_coding_parent_environment'
+require_text "conveyor parent captures inherited descriptor close bound" "$AGENT_SNAPSHOT" \
+  'fd_close_limit'
+require_text "conveyor parent blocks signals before fork" "$AGENT_SNAPSHOT" \
+  'block_signals_for_fork'
+require_text "conveyor child scans descriptor slots" "$AGENT_SNAPSHOT" \
+  'libc::F_GETFD'
+require_text "conveyor child waits for parent process-group gate" "$AGENT_SNAPSHOT" \
+  'gate_read_fd'
+require_text "conveyor child fixed seek" "$AGENT_SNAPSHOT" \
+  'libc::lseek'
+require_text "conveyor aggregate materialized-output budget" "$AGENT_SNAPSHOT" \
+  'max_materialized_bytes'
+forbid_text "conveyor fork child does not inspect environment APIs" "$AGENT_SNAPSHOT" \
+  'static mut environ'
+require_text "conveyor cleanup before result" "$AGENT_SNAPSHOT" \
+  'let cleanup_result = cleanup_attempt_state'
 require_text "conveyor native Swift-to-Rust snapshot E2E" \
   "$MAC_LOCAL_CODING_SNAPSHOT_E2E" \
   "localCodingSnapshotRelayUsesRealSupervisedAgent"
+require_text "conveyor native Swift-to-Rust cancellation proof" \
+  "$MAC_LOCAL_CODING_SNAPSHOT_E2E" \
+  "assemblywright_mac_local_coding_native_cancellation_e2e_ok"
+require_text "conveyor Swift sends local cancellation during final verification" \
+  "$MAC_EVENT_RELAY" \
+  "let acknowledgement = try await agent.cancelLocalCodingSnapshot"
 require_text "conveyor native snapshot E2E release gate" "$LOCAL_GATE" \
   "./scripts/mac-local-coding-snapshot-e2e.sh"
 require_text "conveyor Swift strict decoder" "$MAC_BRIDGE_SUPERVISOR" \
@@ -365,6 +418,12 @@ require_text "knowledge base coding dispatch boundary" "$KB" \
   "metadata-only coding-dispatch admission"
 require_text "knowledge base production Swift-to-Rust snapshot E2E" "$KB" \
   "production Swift relay and code-identity launcher"
+require_text "knowledge base contained-coding result" "$KB" \
+  'contained_coding_completed'
+require_text "safety contained-coding host boundary" "$SAFETY_RULES" \
+  "does not claim a host sandbox or host-level egress control"
+require_text "release checklist truthful tests-not-run evidence" "$CHECKLIST" \
+  'test_status:not_run'
 require_text "knowledge base raw manifest path rule" "$KB" \
   "raw UTF-8 bytes before constructing a"
 

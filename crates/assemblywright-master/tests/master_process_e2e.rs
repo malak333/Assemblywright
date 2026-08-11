@@ -1023,7 +1023,7 @@ fn windows_master_process_owns_state_and_completes_cross_process_fixture() {
     assert_success(&setup, "setup");
     let setup_receipt: Value = serde_json::from_slice(&setup.stdout).expect("setup JSON receipt");
     assert_eq!(setup_receipt["status"], "setup_complete");
-    assert_eq!(setup_receipt["protocol_version"], 2);
+    assert_eq!(setup_receipt["protocol_version"], 3);
     assert_eq!(setup_receipt["schema_version"], 10);
     assert!(directory.path().join("master.sqlite3").is_file());
     assert!(directory.path().join("development.token").is_file());
@@ -1046,7 +1046,7 @@ fn windows_master_process_owns_state_and_completes_cross_process_fixture() {
         endpoint,
         "/v1/development/events/next",
         None,
-        r#"{"protocol_version":2,"connection_epoch":1,"after":null,"limit":64}"#,
+        r#"{"protocol_version":3,"connection_epoch":1,"after":null,"limit":64}"#,
     );
     assert!(
         unauthorized_events.starts_with("HTTP/1.1 401 Unauthorized"),
@@ -1184,7 +1184,7 @@ fn windows_master_process_owns_state_and_completes_cross_process_fixture() {
         endpoint,
         "/v1/development/events/next",
         Some(development_token),
-        r#"{"protocol_version":2,"connection_epoch":1,"after":null,"limit":64}"#,
+        r#"{"protocol_version":3,"connection_epoch":1,"after":null,"limit":64}"#,
     );
     assert!(
         event_response.starts_with("HTTP/1.1 200 OK"),

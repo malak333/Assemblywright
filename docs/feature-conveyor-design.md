@@ -139,10 +139,37 @@ bind the job, attempt, lease, cancellation, snapshot ID/digest, offset, total,
 chunk digest, and completion state. The master reauthorizes around every
 filesystem read. The native agent reconstructs and verifies the independent
 shallow Git snapshot in a fresh private per-attempt directory, rejects unsafe
-paths, links, duplicates, trailing bytes, object/digest drift, and then removes
-the materialized repository before returning a path-free
-`snapshot_materialized` result. This proves ephemeral repository transport and
-materialization only, not retained worker execution state, coding execution,
+paths, links, duplicates, trailing bytes, and object/digest drift, and charges
+every manifest entry against an aggregate materialized-output byte budget. It
+then forks one fixed child from the already-running agent with no `exec`,
+argument parsing, or remote input. Before `fork`, the parent pre-opens the
+workspace, blocks signals, and captures the descriptor-table bound and
+effective UID. The
+Swift parent launches the agent with an empty environment and the agent refuses
+local-coding startup if it observes a nonempty parent environment. The child
+scans every descriptor slot with `F_GETFD`, closes every open descriptor except
+the workspace and group gate, and waits for the parent-established process
+group. Its fixed path validates, truncates, seeks, writes, syncs, closes, and
+exits after opening only `README.md` relative to the workspace. It does not
+inspect errno or mutable global state, use environment APIs, or call `geteuid`,
+`getdtablesize`, or `setpgid` post-fork. The parent rejects
+any other file drift and returns bounded path-free
+work-packet/admission/snapshot/allowed-path/changed-path/patch digests,
+one changed file, `test_status:not_run`, mutation true, workspace-retained false,
+and ambiguity false, and removes all attempt state before the result is
+available. The protocol-owned admission digest is the SHA-256 of one fixed
+domain, protocol version as big-endian `u16`, the raw context digest, five raw
+UUIDs, then connection epoch, sequence, lease duration, and deadline as
+big-endian `u64`; Swift mirrors that exact transcript. Cancellation,
+Emergency Pause through durable cancellation,
+lease/deadline loss, shutdown, restart, and failure dominate completion; the
+child's own process group is boundedly TERM-to-KILL reaped before cleanup. The
+Swift cancellation task sends local cancellation before cancelling the blocked
+Unix request; native proof requires cleanup-before-acknowledgement, no result
+post, and acknowledgement strictly inside two seconds. This
+proves one deterministic contained-coding fixture, not arbitrary
+commands, tools, paths, providers, tests, credential/network access, a host
+sandbox or host-egress enforcement, retained worker state, canonical-repository
 mutation, integration, review, publication, queue advancement, or autonomous
 activation.
 
@@ -264,18 +291,28 @@ canonical repository, master database, canonical memory, credentials, or
 unrelated files. General network access is disabled; only a narrowly controlled
 local-model connection is allowed.
 
-The implemented schema-v10 kernel reaches the ephemeral materialization edge of
-this target: one explicit owner action may queue a path-free snapshot-bound
-packet for one exact registered worker; after the exact lease, a separate
-default-off route streams a bounded authenticated snapshot bundle to the Mac
-bridge and native agent. The agent reconstructs an independent no-remote Git
-repository, verifies its object graph, paths, modes, sizes, and aggregate
-digest, and removes it before returning a non-mutation receipt. Manifest paths
-are rejected from their raw UTF-8 form before filesystem path normalization so
-empty, repeated, leading, or trailing separators cannot acquire a different
-meaning on the Mac or Windows boundary. Retaining that
-workspace for a contained coding process, allowed-path mutation enforcement,
-patch/result integration, review, and publication remain unimplemented.
+The implemented schema-v10 kernel reaches one fixed contained-coding fixture:
+one explicit owner action may queue a path-free snapshot-bound packet for one
+exact registered worker; after the exact lease, a separate default-off route
+streams a bounded authenticated snapshot bundle to the Mac bridge and native
+agent. The agent reconstructs an independent no-remote Git repository, verifies
+its object graph, paths, modes, sizes, and aggregate digest, enforces an
+aggregate materialized-output byte budget, and forks one fixed child from the
+running agent with no `exec` or remote input. The parent blocks signals and
+captures the open workspace, descriptor-table bound, and effective UID before
+`fork`. The child scans descriptor slots, retains only the workspace and group
+gate, waits for the parent-established process group, and follows the fixed
+validated README mutation path without consulting environment APIs or
+post-fork identity, descriptor-table, or process-group discovery. The parent
+verifies that exact mutation, returns digest-only bounded
+evidence while truthfully reporting that tests were not run, and removes the
+workspace before returning. Manifest paths are rejected from their raw UTF-8
+form before filesystem path normalization so empty, repeated, leading, or
+trailing separators cannot acquire a different meaning on the Mac or Windows
+boundary. Arbitrary worker commands and paths, real implementation packets,
+test execution, retained workspaces, patch/result integration, review, and
+publication remain unimplemented. This child boundary does not establish
+an OS sandbox or host-level egress control.
 
 #### Evidence Gate
 

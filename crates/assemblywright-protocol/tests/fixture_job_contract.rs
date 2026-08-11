@@ -129,12 +129,14 @@ fn fixture_result_revalidates_the_stored_job_and_exact_output_contract() {
 // The fixture capability's provider and model are wire values, not cosmetic
 // names: an enrolled Mac agent advertises them verbatim and the master rejects
 // anything that is not an exact match. The rename changed them, which is why
-// PROTOCOL_VERSION moved to 2 — a peer still on version 1 advertises the former
-// provider and must be rejected on version rather than deep inside capability
-// validation. Pin the pairing so the two can never drift apart again.
+// PROTOCOL_VERSION moved from 1 to 2 when the rename changed these wire values.
+// It later moved to 3 for the incompatible contained-coding result contract.
+// A peer still on version 1 advertises the former provider and must be rejected
+// on version rather than deep inside capability validation. Pin the current
+// version and capability identity so the two can never drift apart again.
 #[test]
-fn fixture_capability_identity_is_bound_to_protocol_version_2() {
-    assert_eq!(PROTOCOL_VERSION, 2);
+fn fixture_capability_identity_is_bound_to_current_protocol_version() {
+    assert_eq!(PROTOCOL_VERSION, 3);
     assert_eq!(FIXTURE_REASONING_CAPABILITY_ID, "fixture.reasoning");
     assert_eq!(FIXTURE_REASONING_PROVIDER, "assemblywright-fixture");
     assert_eq!(FIXTURE_REASONING_MODEL, "assemblywright-fixture-v1");

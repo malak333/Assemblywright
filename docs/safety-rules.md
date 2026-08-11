@@ -276,7 +276,10 @@ release requirements, not optional UX guidance.
   cancellation, Emergency Pause, lifecycle departure, registration drift or
   revocation, and restart quarantine prevent later acceptance. The metadata
   envelope rejects repository bytes or paths, commands, credentials, mutation
-  claims, and unknown fields. After an exact current lease, a separate
+  instructions, and unknown fields. Owner approval of dispatch authorizes only
+  the protocol-fixed contained-coding fixture described below; it never grants
+  a general command, tool, path, provider, test, or network authority. After an
+  exact current lease, a separate
   default-off snapshot route may expose only bounded sequential chunks of the
   immutable master-owned bundle. Every request binds the exact job, attempt,
   lease, cancellation, snapshot ID/digest, and offset; the master must
@@ -286,17 +289,45 @@ release requirements, not optional UX guidance.
   fresh owner-private per-attempt directory with independent shallow Git
   metadata, no remote or active hooks, and safe regular/executable paths;
   links, traversal, reserved/case-colliding paths, hardlinks, and object
-  identity drift fail closed. Successful proof must remove the repository
-  before returning a path-free `snapshot_materialized` receipt; cancellation,
-  shutdown, restart, and failure remove partial state. Cancellation during
-  verification is checked between bounded object/file operations and may be
-  acknowledged only after verification stops and the attempt directory is
-  removed. Snapshot bundle reads must retain no-follow/no-reparse handles for
+  identity drift fail closed. Every manifest entry must be charged against an
+  aggregate materialized-output byte budget before writing. The only permitted
+  process is one fixed child
+  forked from the already-running agent, with no `exec`, argument parsing, or
+  remote input. Before `fork`, the parent pre-opens the workspace, blocks
+  signals, and captures the descriptor-table bound and effective UID. Swift
+  must launch
+  the agent with an empty environment and the agent must reject local-coding
+  startup if it observes a nonempty parent environment. The child scans every
+  descriptor slot with `F_GETFD`, closes every open descriptor except the
+  workspace and group gate, and waits for the parent-established process group.
+  Its fixed mutation path opens and validates only the protocol-fixed relative
+  `README.md`, then truncates, seeks, writes, syncs, closes, and exits. Post-fork
+  it must not inspect errno or mutable global state, use environment APIs, or
+  call `geteuid`, `getdtablesize`, or `setpgid`. Before and after the
+  child, the agent hashes every workspace file and rejects any changed path
+  outside that singleton allowlist or any output
+  other than the fixed fixture bytes. Its bounded path-free result must bind
+  the work packet, admission, snapshot, allowed/changed path-set, and patch
+  digests; assert exactly one changed file, mutation performed, workspace
+  not retained, ambiguity false, and truthfully record `test_status:not_run`.
+  Admission evidence must equal the protocol-owned SHA-256 transcript of the
+  fixed domain, protocol version as big-endian `u16`, raw context digest, five
+  raw UUIDs, connection epoch, sequence, lease duration, and deadline as
+  big-endian `u64`; a merely nonzero or differently serialized value fails
+  closed in both Rust and Swift.
+  Successful proof must remove materialized and transfer state before returning
+  `contained_coding_completed`. Cancellation, Emergency Pause through durable
+  cancellation, deadline or lease loss, shutdown, restart, and failure
+  boundedly TERM-to-KILL reap the child's own process group and remove partial
+  state before acknowledgement; late output is suppressed. Snapshot bundle
+  reads must retain no-follow/no-reparse handles for
   every state-directory component and the single-link bundle leaf through the
-  read. This grants no process
-  or tool execution, retained workspace, provider access, mutation,
+  read. Durable audit/event surfaces remain metadata-only; result acceptance
+  retains the bounded payload digest, not repository content or paths. This
+  fixture grants no arbitrary process or tool execution, retained workspace,
+  provider, credential or network access, canonical-repository mutation,
   integration, review, publication, queue advancement, or autonomous
-  activation.
+  activation. It does not claim a host sandbox or host-level egress control.
 - Local-coding snapshot traffic must use a separate Mac `local-coding`
   Secure Enclave/Keychain namespace enrolled as `InferenceWorker` with exactly
   one `local.coding.v1` capability. It must never reuse the standard owner

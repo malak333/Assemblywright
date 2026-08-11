@@ -27,11 +27,15 @@ These notes capture durable facts for future agents working on this repository.
   a pre-rename Windows master state directory. The gate pins it by name and caps
   how many lines of that file may mention the old namespace, so the exception
   cannot grow.
-- `PROTOCOL_VERSION` is 2. It moved from 1 because the rename changed wire
+- `PROTOCOL_VERSION` is 3. It moved from 1 to 2 because the rename changed wire
   values: the TLS exporter label, the fixture capability provider and model, and
   the certificate subject and SAN URI. Two builds both claiming version 1 while
   disagreeing on those would be mutually incompatible, which is exactly what the
-  version field exists to prevent. A pre-rename peer now fails on version.
+  version field exists to prevent. A pre-rename peer now fails on version. It
+  moved from 2 to 3 because `LocalCodingJobResult` replaced the snapshot-only
+  receipt with wire-incompatible contained-coding evidence: fixed allowed and
+  changed path-set digests, admission and patch digests, changed-file count,
+  truthful test status, mutation, workspace-retention, and ambiguity fields.
 - The current identity surface: code-signing identifier
   `com.nobiletechnology.assemblywright` and its `.core` suffix for the bundled
   CLI; bundle executable `AssemblywrightMacApp`; bundled CLI
@@ -421,6 +425,10 @@ an old one.
   MLX enqueue fail with `unsupported protocol version: expected 2, received 1`;
   those scripts have no test suite at all, so only an owner-driven live run
   could surface it.
+- The 2-to-3 bump is required by the wire-incompatible `LocalCodingJobResult`
+  expansion for the fixed contained-coding fixture. Version 3 peers must reject
+  version 2 at the handshake rather than interpreting a snapshot-only receipt
+  as mutation evidence.
 - `./scripts/release-protocol-version-contract-smoke.sh --check` compares all
   four and rejects a hardcoded `protocol_version` literal in either PowerShell
   script, since a literal at a request site drifts independently of the
@@ -607,23 +615,77 @@ an old one.
   raw Git object IDs, rejects links, traversal, reserved/case-colliding or
   duplicate paths, reconstructs only safe regular/executable files with
   independent shallow Git metadata and no remote/hooks, and recomputes the
-  original snapshot SHA-256. It removes the materialized repository before
-  returning `snapshot_materialized` with `mutation_performed:false`; completion,
-  cancellation, failure, shutdown, and startup leave no partial attempt state.
-- Cancellation during native verification sets an atomic stop request, waits
-  for bounded parser checkpoints and cleanup, and emits `cancelled` only after
-  the verifier has removed active attempt state. Master bundle reads retain
+  original snapshot SHA-256 while enforcing an aggregate materialized-output
+  byte budget. It then forks one fixed child from the
+  already-running process with no `exec` or
+  remote input. Before `fork`, the parent pre-opens the workspace, blocks
+  signals, and captures the descriptor-table bound and effective UID.
+  Swift launches the agent with an empty environment and the agent refuses this
+  lane if it observes a nonempty parent environment. The child scans every
+  descriptor slot with `F_GETFD`, closes every open descriptor except the
+  workspace and group gate, and waits for the parent-established process group.
+  Its fixed path opens and validates only relative `README.md`, then truncates,
+  seeks, writes fixed bytes, syncs, closes, and exits. It does not inspect errno
+  or mutable global state, use environment APIs, or call `geteuid`,
+  `getdtablesize`, or `setpgid` post-fork. The parent rejects every other
+  changed path or unexpected output.
+- `contained_coding_completed` is a bounded path-free result: it binds work
+  packet, admission, snapshot, fixed allowed/changed path set, and patch
+  digests; reports exactly one changed file, `test_status:not_run`, mutation
+  performed, workspace not retained, and ambiguity false. Both the materialized
+  repository and transfer staging directory are removed before this result is
+  returned. The accepted distributed state retains the payload digest rather
+  than paths, source, output, or raw errors.
+- The admission digest is not an arbitrary nonzero marker. Its protocol-owned
+  transcript is the domain `assemblywright.local-coding-admission.v1\0`, protocol
+  version as big-endian `u16`, the raw 32-byte context digest, raw network-order
+  task/step/attempt/lease/cancellation UUID bytes, then connection epoch,
+  sequence, lease duration, and deadline as big-endian `u64`. The Rust
+  producer/master and Swift relay recompute that exact transcript.
+- Cancellation during native verification or child execution sets an atomic
+  stop request, kills and reaps the child when present, waits for bounded
+  checkpoints and cleanup, and emits `cancelled` only after the agent removes
+  active attempt state. The production Swift-to-real-agent negative E2E delivers
+  authoritative cancellation during final verification, sends local
+  cancellation before cancelling the blocked Unix request, observes an empty
+  attempt root before forwarding the acknowledgement, posts no result, and
+  requires acknowledgement strictly inside two seconds. Deadline/lease loss,
+  Emergency Pause through durable
+  cancellation, failure, shutdown, and startup likewise suppress late results
+  and leave no partial attempt state. Master bundle reads retain
   component-by-component no-follow/no-reparse directory handles plus the
   single-link bundle handle until the bounded read completes, preventing an
   intermediate path replacement from redirecting authority.
-- This is ephemeral Windows-to-Mac snapshot replication/materialization proof.
+- This is ephemeral Windows-to-Mac snapshot replication plus one deterministic
+  contained-coding fixture. Dispatch approval cannot select a command, tool,
+  executable, path, provider, or test, and grants no credential or network
+  access. The forked-child boundary does not prove an OS sandbox or
+  host-level egress enforcement.
   Repository, protocol, Windows master-route/mTLS, agent-library, and real UDS
   process seams are covered, and the canonical Mac native E2E now drives the
   production Swift relay and code-identity launcher against the real supervised
-  Rust agent. It is still not one live two-device transfer or a retained coding
-  workspace. Contained coding execution, allowed-path mutation enforcement,
-  patch/result integration, review, publication, and autonomous activation
-  remain separate unimplemented boundaries.
+  Rust agent. It is still not one live two-device transfer, a retained coding
+  workspace, arbitrary implementation, test execution, patch/result
+  integration, review, publication, or autonomous activation.
+- The 2026-08-11 contained-coding source closeout was validated by the full Mac
+  release gate, independent high-risk review, native Rust UDS/process E2E, and
+  the production Swift-to-real-agent cancellation E2E. A disposable Windows
+  worktree based on `e0ba81f` also passed protocol/master Clippy, protocol
+  contracts, the Feature Conveyor kernel, master-process E2E, remote-mTLS
+  coding dispatch, and the master build. That worktree and its transfer patch
+  were removed after proof; the installed Windows service was deliberately
+  left clean on schema 10/protocol 2 at `e0ba81f`. Protocol 3 deployment must
+  therefore be coordinated with rebuilding the Mac helper rather than
+  upgrading only one peer and breaking version negotiation.
+- A disposable live two-device contained-coding closeout is not yet safe on the
+  schema-10 owner surface. After the fixed fixture completes, the feature and
+  its lease remain active; the kernel has exact cancellation and
+  abandon-and-advance operations, but no owner-local HTTP or CLI routes expose
+  them. Do not use direct SQLite mutation or deletion of a temporary data
+  directory as cleanup evidence. A later phase must add owner-token,
+  loopback-only, revision-bound cancel and abandon routes, then prove the
+  feature queue, lease, attempt, and Mac workspace are empty before tearing
+  down a live harness.
 - Validate bundle manifest paths from the raw UTF-8 bytes before constructing a
   platform path. `PathBuf` may normalize repeated or boundary separators, so
   traversal, empty segments, `.git`, Windows-reserved names, invalid UTF-8,

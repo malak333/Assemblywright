@@ -421,6 +421,7 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
         let leaseID: UUID
         let cancellationID: UUID
         let contextDigest: [UInt8]
+        let admissionDigest: [UInt8]
         let snapshotID: UUID
         let snapshotDigest: [UInt8]
         let workPacketDigest: [UInt8]
@@ -430,7 +431,7 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
 
     private enum LocalCodingRaceOutcome: Sendable {
         case result(Data)
-        case cancellation(ValidatedCancellation)
+        case cancellation(ValidatedCancellation, acknowledgement: Data)
         case timedOut
         case settled
     }
@@ -498,7 +499,18 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
                             using: session,
                             job: job
                         ) {
-                            return .cancellation(cancellation)
+                            let acknowledgement = try await agent.cancelLocalCodingSnapshot(
+                                cancellation.body
+                            )
+                            try Self.validateLocalCodingCancellationAcknowledgement(
+                                acknowledgement,
+                                instruction: cancellation,
+                                job: job
+                            )
+                            return .cancellation(
+                                cancellation,
+                                acknowledgement: acknowledgement
+                            )
                         }
                         if await resolution.isResolved() { return .settled }
                         try await Task.sleep(for: .milliseconds(25))
@@ -551,15 +563,7 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
                     for: job,
                     expectedPayloadDigest: resultDigest
                 )
-            case let .cancellation(instruction):
-                let acknowledgement = try await agent.cancelLocalCodingSnapshot(
-                    instruction.body
-                )
-                try Self.validateLocalCodingCancellationAcknowledgement(
-                    acknowledgement,
-                    instruction: instruction,
-                    job: job
-                )
+            case let .cancellation(_, acknowledgement):
                 let accepted = try await session.send(
                     AssemblywrightMacBridgeHTTPRequest(
                         method: "POST",
@@ -1333,6 +1337,19 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
             leaseID: leaseID,
             cancellationID: cancellationID,
             contextDigest: contextDigest,
+            admissionDigest: localCodingAdmissionDigest(
+                protocolVersion: AssemblywrightMacMTLSBridgeTransport.protocolVersion,
+                contextDigest: contextDigest,
+                taskID: taskID,
+                stepID: stepID,
+                attemptID: attemptID,
+                leaseID: leaseID,
+                cancellationID: cancellationID,
+                connectionEpoch: expectedConnectionEpoch,
+                sequence: sequence,
+                leaseDurationMilliseconds: leaseDuration,
+                deadlineAfterMilliseconds: deadline
+            ),
             snapshotID: snapshotID,
             snapshotDigest: snapshotDigest,
             workPacketDigest: workPacketDigest,
@@ -1440,6 +1457,57 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
         return result.overflow ? nil : result.partialValue
     }
 
+    private static func localCodingFixtureAllowedPathsDigest() -> [UInt8] {
+        let path = Data("README.md".utf8)
+        var input = Data("assemblywright.local-coding-allowed-paths.v1\0".utf8)
+        var count = UInt16(1).bigEndian
+        Swift.withUnsafeBytes(of: &count) { input.append(contentsOf: $0) }
+        var length = UInt64(path.count).bigEndian
+        Swift.withUnsafeBytes(of: &length) { input.append(contentsOf: $0) }
+        input.append(path)
+        return Array(SHA256.hash(data: input))
+    }
+
+    private static func localCodingAdmissionDigest(
+        protocolVersion: UInt16,
+        contextDigest: [UInt8],
+        taskID: UUID,
+        stepID: UUID,
+        attemptID: UUID,
+        leaseID: UUID,
+        cancellationID: UUID,
+        connectionEpoch: UInt64,
+        sequence: UInt64,
+        leaseDurationMilliseconds: UInt64,
+        deadlineAfterMilliseconds: UInt64
+    ) -> [UInt8] {
+        var transcript = Data("assemblywright.local-coding-admission.v1\0".utf8)
+        var encodedProtocolVersion = protocolVersion.bigEndian
+        Swift.withUnsafeBytes(of: &encodedProtocolVersion) {
+            transcript.append(contentsOf: $0)
+        }
+        transcript.append(contentsOf: contextDigest)
+        for identifier in [taskID, stepID, attemptID, leaseID, cancellationID] {
+            var bytes = identifier.uuid
+            Swift.withUnsafeBytes(of: &bytes) { transcript.append(contentsOf: $0) }
+        }
+        var encodedConnectionEpoch = connectionEpoch.bigEndian
+        Swift.withUnsafeBytes(of: &encodedConnectionEpoch) {
+            transcript.append(contentsOf: $0)
+        }
+        var encodedSequence = sequence.bigEndian
+        Swift.withUnsafeBytes(of: &encodedSequence) { transcript.append(contentsOf: $0) }
+        var encodedLeaseDuration = leaseDurationMilliseconds.bigEndian
+        Swift.withUnsafeBytes(of: &encodedLeaseDuration) {
+            transcript.append(contentsOf: $0)
+        }
+        var encodedDeadline = deadlineAfterMilliseconds.bigEndian
+        Swift.withUnsafeBytes(of: &encodedDeadline) {
+            transcript.append(contentsOf: $0)
+        }
+        return Array(SHA256.hash(data: transcript))
+    }
+
     private static func validateLocalCodingResult(
         _ body: Data,
         for job: ValidatedLocalCodingJob
@@ -1467,14 +1535,25 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
               let payload = object["payload"] as? [String: Any],
               Set(payload.keys) == Set([
                   "status", "work_packet_sha256", "admission_sha256",
-                  "snapshot_sha256", "mutation_performed"
+                  "snapshot_sha256", "allowed_paths_sha256",
+                  "changed_paths_sha256", "patch_sha256",
+                  "changed_file_count", "test_status", "mutation_performed",
+                  "workspace_retained", "ambiguous"
               ]),
-              payload["status"] as? String == "snapshot_materialized",
+              payload["status"] as? String == "contained_coding_completed",
               strictDigest(payload["work_packet_sha256"]) == job.workPacketDigest,
-              let admissionDigest = strictDigest(payload["admission_sha256"]),
-              admissionDigest != [UInt8](repeating: 0, count: 32),
+              strictDigest(payload["admission_sha256"]) == job.admissionDigest,
               strictDigest(payload["snapshot_sha256"]) == job.snapshotDigest,
-              payload["mutation_performed"] as? Bool == false,
+              let allowedPathsDigest = strictDigest(payload["allowed_paths_sha256"]),
+              allowedPathsDigest == localCodingFixtureAllowedPathsDigest(),
+              strictDigest(payload["changed_paths_sha256"]) == allowedPathsDigest,
+              let patchDigest = strictDigest(payload["patch_sha256"]),
+              patchDigest != [UInt8](repeating: 0, count: 32),
+              strictInteger(payload["changed_file_count"]) == 1,
+              payload["test_status"] as? String == "not_run",
+              payload["mutation_performed"] as? Bool == true,
+              payload["workspace_retained"] as? Bool == false,
+              payload["ambiguous"] as? Bool == false,
               let payloadData = try? protocolDigestJSON(payload),
               Array(SHA256.hash(data: payloadData)) == payloadDigest else {
             throw AssemblywrightMacDeveloperEventRelayError.localCodingSnapshotRejected
@@ -2310,7 +2389,7 @@ private actor FoundationAssemblywrightMacDeveloperAgentSession:
             return "metadata_cursor_plus_bounded_public_mlx_jobs_no_retention"
         }
         if configurationLocalCodingSnapshotsEnabled {
-            return "metadata_cursor_plus_ephemeral_snapshot_materialization_no_execution"
+            return "metadata_cursor_plus_fixed_contained_coding_fixture_ephemeral_workspace"
         }
         return "metadata_only_no_authoritative_state"
     }

@@ -163,14 +163,41 @@ both before and after each filesystem read. The Mac bridge strictly validates
 every response and forwards it over the authenticated local socket to the
 native agent, which reconstructs the exact raw-object graph and safe regular or
 executable files in a fresh private per-attempt directory, verifies object,
-chunk, bundle, path, and aggregate digests, and immediately removes the
-materialized repository before returning a path-free
-`snapshot_materialized` receipt. Cancellation, shutdown, restart, malformed or
-out-of-order chunks, identity drift, links, duplicate/colliding/unsafe paths,
-trailing data, and digest or size drift fail closed and clean partial state. No
-repository source path, command, tool, coding process, provider, credential,
-patch, retained workspace, commit, mutation, integration, review, publication,
-queue advancement, or autonomous activation exists in this slice.
+chunk, bundle, path, and aggregate digests, charges every manifest entry
+against an aggregate materialized-output byte budget before writing it, and
+forks exactly one deterministic
+child from the already-running agent with no `exec` and no remote input. The
+Swift parent launches the agent with an empty environment, and the agent refuses
+local-coding startup if that parent environment is nonempty. Before `fork`, the
+agent opens the workspace, blocks signals, and captures the descriptor-table
+bound and effective UID. The child scans every descriptor slot with `F_GETFD`,
+closes every open descriptor except the workspace and process-group gate,
+waits for the parent-established process group through that gate, and then uses
+the fixed `openat`/`fstat`/`ftruncate`/`lseek`/`write`/`fsync`/`close`/`_exit`
+file-mutation path to replace the protocol-fixed relative `README.md` fixture.
+Post-fork it does not inspect errno or mutable global state, use environment
+APIs, or call `geteuid`, `getdtablesize`, or `setpgid`. The parent
+hashes the fixed allowed/changed path set and before/after patch evidence, reports
+one changed file with `test_status:not_run`, and removes both materialized and
+transfer state before returning the path-free `contained_coding_completed`
+result. Its admission digest is protocol-owned and hashes the fixed domain,
+protocol version as big-endian `u16`, context digest, five raw UUIDs, then
+connection epoch, sequence, lease duration, and deadline as big-endian `u64`;
+Rust and Swift recompute the same transcript rather than accepting any nonzero
+value. Cancellation, Emergency Pause through distributed cancellation, lease
+or deadline expiry, shutdown, restart, malformed or out-of-order chunks,
+identity drift, links, duplicate/colliding/unsafe paths, unexpected file drift,
+trailing data, and digest or size drift fail closed; the child's own process
+group is boundedly TERM-to-KILL reaped before cleanup and no late result is
+accepted. During final verification, the Swift cancellation task sends the
+local cancellation immediately, then cancels the in-flight Unix request; the
+native E2E requires cleanup before acknowledgement, no result post, and an
+acknowledgement strictly inside two seconds. The dispatch approval
+authorizes only this fixed fixture, not an arbitrary command, tool, executable,
+path, provider, test, or network/credential access. This slice claims no host
+sandbox or host-level egress enforcement and adds no retained workspace,
+canonical-repository mutation, commit, integration, review, publication, queue
+advancement, or autonomous activation.
 
 The local-coding lane uses a separate `local-coding` Secure Enclave/Keychain
 identity namespace. Its enrollment profile accepts only the
@@ -272,8 +299,9 @@ and digests, never raw payloads or credentials.
 - Deterministic cross-process E2E across the real boundaries: the protocol
   contract seam, a real master process with fake workers, enrollment and mTLS
   over loopback, the event cursor, the Windows SCM service, and the Mac
-  agent relay. The local-coding snapshot lane additionally runs the production
-  Swift relay and launcher against the real supervised Rust agent process.
+  agent relay. The local-coding lane additionally runs the production Swift
+  relay and launcher against the real supervised Rust agent process, including
+  the fixed contained-coding child and cleanup-before-result contract.
 - Owner-controlled live closeouts for the Mac/Windows bridge, kept explicitly
   separate from repository validation.
 - Repository validation stays distinct from signing, notarization, live-device

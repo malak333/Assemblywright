@@ -10,7 +10,7 @@ use assemblywright_protocol::{
 };
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
-use git2::{IndexAddOption, ObjectType, Repository, Signature};
+use git2::{ObjectType, Repository, Signature};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -299,7 +299,7 @@ fn authenticated_uds_local_coding_snapshot_admission_cancellation_and_restart_cl
     assert_eq!(health_body["local_coding_snapshots_enabled"], true);
     assert_eq!(
         health_body["boundary"],
-        "metadata_cursor_plus_ephemeral_snapshot_materialization_no_execution"
+        "metadata_cursor_plus_fixed_contained_coding_fixture_ephemeral_workspace"
     );
 
     let (bundle, snapshot_sha256) = local_coding_bundle();
@@ -346,7 +346,20 @@ fn authenticated_uds_local_coding_snapshot_admission_cancellation_and_restart_cl
     assert_eq!(materialized["status"], 200);
     assert_eq!(
         response_body(&materialized)["payload"]["status"],
-        "snapshot_materialized"
+        "contained_coding_completed"
+    );
+    let completed = response_body(&materialized);
+    assert_eq!(completed["payload"]["changed_file_count"], 1);
+    assert_eq!(completed["payload"]["test_status"], "not_run");
+    assert_eq!(completed["payload"]["mutation_performed"], true);
+    assert_eq!(completed["payload"]["workspace_retained"], false);
+    assert_eq!(completed["payload"]["ambiguous"], false);
+    assert_eq!(
+        fs::read_dir(data_dir.join("local-coding-snapshots"))
+            .unwrap()
+            .count(),
+        0,
+        "the contained workspace must be gone before the receipt is returned"
     );
     let cancelled = send(
         &socket_path,
@@ -383,6 +396,175 @@ fn authenticated_uds_local_coding_snapshot_admission_cancellation_and_restart_cl
         0
     );
     ChildGuard(restarted);
+}
+
+#[test]
+fn local_coding_cancel_is_serviced_during_blocking_verification_without_late_result() {
+    let temporary = tempfile::tempdir().expect("agent local coding concurrent cancellation");
+    let runtime_dir = temporary.path().join("run");
+    fs::create_dir(&runtime_dir).expect("create runtime");
+    fs::set_permissions(&runtime_dir, fs::Permissions::from_mode(0o700)).expect("secure runtime");
+    let data_dir = temporary.path().join("data");
+    let socket_path = runtime_dir.join("local-coding-cancel.sock");
+    let child = start_local_coding_agent(&data_dir, &socket_path);
+    let bearer = Some(format!("Bearer {TOKEN}"));
+    let mut paths = vec!["README.md".to_string()];
+    paths.extend((0..5_000).map(|index| format!("file-{index:05}.txt")));
+    let (bundle, snapshot_sha256) = local_coding_bundle_with_repeated_content(b"x", &paths);
+    let job = local_coding_job(snapshot_sha256);
+    let admitted = send(
+        &socket_path,
+        request(
+            "POST",
+            "/v1/local-coding/snapshots/admit",
+            bearer.clone(),
+            Some(serde_json::to_value(&job).unwrap()),
+        ),
+    );
+    assert_eq!(admitted["status"], 200);
+
+    let final_chunk_bytes = 64 * 1024;
+    let prefix_end = bundle.len() - final_chunk_bytes;
+    let mut offset = 0_usize;
+    while offset < prefix_end {
+        let end = (offset + 128 * 1024).min(prefix_end);
+        let accepted = send(
+            &socket_path,
+            request(
+                "POST",
+                "/v1/local-coding/snapshots/accept",
+                bearer.clone(),
+                Some(
+                    serde_json::to_value(local_coding_chunk(
+                        &job,
+                        snapshot_sha256,
+                        offset,
+                        bundle.len(),
+                        &bundle[offset..end],
+                    ))
+                    .unwrap(),
+                ),
+            ),
+        );
+        assert_eq!(accepted["status"], 202);
+        offset = end;
+    }
+
+    let final_request = request(
+        "POST",
+        "/v1/local-coding/snapshots/accept",
+        bearer.clone(),
+        Some(
+            serde_json::to_value(local_coding_chunk(
+                &job,
+                snapshot_sha256,
+                offset,
+                bundle.len(),
+                &bundle[offset..],
+            ))
+            .unwrap(),
+        ),
+    );
+    let accept_socket = socket_path.clone();
+    let (started_sender, started_receiver) = std::sync::mpsc::channel();
+    let accepting = thread::spawn(move || {
+        started_sender.send(()).unwrap();
+        send(&accept_socket, final_request)
+    });
+    started_receiver.recv().unwrap();
+    let partial_bundle = data_dir
+        .join("local-coding-snapshots")
+        .join(job.attempt_id.0.to_string())
+        .join("snapshot.bundle.partial");
+    let verification_deadline = Instant::now() + Duration::from_secs(2);
+    while fs::metadata(&partial_bundle)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0)
+        != bundle.len() as u64
+    {
+        assert!(
+            Instant::now() < verification_deadline,
+            "final snapshot chunk did not enter verification"
+        );
+        thread::sleep(Duration::from_millis(2));
+    }
+
+    let cancellation_started = Instant::now();
+    let cancelled = send(
+        &socket_path,
+        request(
+            "POST",
+            "/v1/local-coding/snapshots/cancel",
+            bearer,
+            Some(serde_json::to_value(cancellation(&job)).unwrap()),
+        ),
+    );
+    assert_eq!(cancelled["status"], 200);
+    assert_eq!(response_body(&cancelled)["status"], "cancelled");
+    assert!(
+        cancellation_started.elapsed() < Duration::from_millis(CANCELLATION_ACK_DEADLINE_MS),
+        "cancellation acknowledgement exceeded the protocol deadline"
+    );
+    let late = accepting.join().expect("join blocked verification request");
+    assert_eq!(late["status"], 422);
+    assert_eq!(
+        response_body(&late)["error"],
+        "local_coding_snapshot_rejected"
+    );
+    assert_eq!(
+        fs::read_dir(data_dir.join("local-coding-snapshots"))
+            .unwrap()
+            .count(),
+        0
+    );
+    ChildGuard(child);
+}
+
+#[test]
+fn local_coding_snapshot_startup_rejects_a_nonempty_parent_environment() {
+    let temporary = tempfile::tempdir().expect("agent local coding environment policy");
+    let socket_path = temporary.path().join("local-coding.sock");
+    let startup = json!({
+        "version": 2,
+        "supervised_parent_pid": std::process::id(),
+        "socket_path": socket_path,
+        "peer_code_requirement": current_process_designated_requirement(),
+        "peer_identity_profile": "adhoc_exact",
+        "bearer_token": TOKEN,
+        "fixture_jobs_enabled": false,
+        "mlx_jobs_enabled": false,
+        "local_coding_snapshots_enabled": true
+    })
+    .to_string();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_assemblywright-agent"))
+        .args([
+            "--data-dir",
+            temporary.path().join("data").to_str().expect("data path"),
+            "serve",
+        ])
+        .env_clear()
+        .env("ASSEMBLYWRIGHT_FORBIDDEN_INHERITED_VALUE", "secret")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn local coding environment rejection agent");
+    child
+        .stdin
+        .take()
+        .expect("startup stdin")
+        .write_all(startup.as_bytes())
+        .expect("write local coding startup document");
+    let output = child
+        .wait_with_output()
+        .expect("wait for startup rejection");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("local-coding snapshot runtime requires an empty parent environment"),
+        "{stderr}"
+    );
+    assert!(!socket_path.exists());
 }
 
 #[test]
@@ -696,16 +878,28 @@ fn local_coding_job(snapshot_sha256: [u8; 32]) -> JobEnvelope {
 }
 
 fn local_coding_bundle() -> (Vec<u8>, [u8; 32]) {
+    local_coding_bundle_with_content(b"native process materialization\n")
+}
+
+fn local_coding_bundle_with_content(content: &[u8]) -> (Vec<u8>, [u8; 32]) {
+    local_coding_bundle_with_repeated_content(content, &["README.md".to_string()])
+}
+
+fn local_coding_bundle_with_repeated_content(
+    content: &[u8],
+    paths: &[String],
+) -> (Vec<u8>, [u8; 32]) {
     const MAGIC: &[u8] = b"AW-SNAPSHOT-BUNDLE-V1\n";
     const END_MAGIC: &[u8] = b"AW-SNAPSHOT-END-V1\n";
     let source = tempfile::tempdir().unwrap();
     let repository = Repository::init(source.path()).unwrap();
-    let content = b"native process materialization\n";
-    fs::write(source.path().join("README.md"), content).unwrap();
+    for path in paths {
+        fs::write(source.path().join(path), content).unwrap();
+    }
     let mut index = repository.index().unwrap();
-    index
-        .add_all(["README.md"].iter(), IndexAddOption::DEFAULT, None)
-        .unwrap();
+    for path in paths {
+        index.add_path(Path::new(path)).unwrap();
+    }
     index.write().unwrap();
     let tree_oid = index.write_tree().unwrap();
     let tree = repository.find_tree(tree_oid).unwrap();
@@ -745,26 +939,61 @@ fn local_coding_bundle() -> (Vec<u8>, [u8; 32]) {
         bundle.extend_from_slice(object.data());
     }
     bundle.push(0);
-    bundle.push(1);
-    bundle.extend_from_slice(&("README.md".len() as u16).to_be_bytes());
-    bundle.extend_from_slice(b"README.md");
-    bundle.extend_from_slice(&0o100644_u32.to_be_bytes());
-    bundle.extend_from_slice(blob_oid.as_bytes());
-    bundle.extend_from_slice(&(content.len() as u64).to_be_bytes());
-    bundle.push(0);
     let mut digest = Sha256::new();
     digest.update(b"assemblywright.repository-snapshot.v1\0");
     digest.update(commit_oid.as_bytes());
-    digest.update(("README.md".len() as u64).to_be_bytes());
-    digest.update(b"README.md");
-    digest.update(0o100644_u32.to_be_bytes());
-    digest.update(blob_oid.as_bytes());
-    digest.update((content.len() as u64).to_be_bytes());
-    digest.update(content);
+    for path in paths {
+        bundle.push(1);
+        bundle.extend_from_slice(&(path.len() as u16).to_be_bytes());
+        bundle.extend_from_slice(path.as_bytes());
+        bundle.extend_from_slice(&0o100644_u32.to_be_bytes());
+        bundle.extend_from_slice(blob_oid.as_bytes());
+        bundle.extend_from_slice(&(content.len() as u64).to_be_bytes());
+        digest.update((path.len() as u64).to_be_bytes());
+        digest.update(path.as_bytes());
+        digest.update(0o100644_u32.to_be_bytes());
+        digest.update(blob_oid.as_bytes());
+        digest.update((content.len() as u64).to_be_bytes());
+        digest.update(content);
+    }
+    bundle.push(0);
     let snapshot_sha256: [u8; 32] = digest.finalize().into();
     bundle.extend_from_slice(END_MAGIC);
     bundle.extend_from_slice(&snapshot_sha256);
     (bundle, snapshot_sha256)
+}
+
+fn local_coding_chunk(
+    job: &JobEnvelope,
+    snapshot_sha256: [u8; 32],
+    offset: usize,
+    total_bytes: usize,
+    content: &[u8],
+) -> LocalCodingSnapshotChunk {
+    let snapshot_id = serde_json::from_value::<LocalCodingJobRequest>(job.context.clone())
+        .unwrap()
+        .snapshot_id;
+    let mut content_hex = String::with_capacity(content.len() * 2);
+    for byte in content {
+        use std::fmt::Write as _;
+        write!(&mut content_hex, "{byte:02x}").unwrap();
+    }
+    LocalCodingSnapshotChunk {
+        protocol_version: job.protocol_version,
+        connection_epoch: job.connection_epoch,
+        task_id: job.task_id,
+        step_id: job.step_id,
+        attempt_id: job.attempt_id,
+        lease_id: job.lease_id,
+        cancellation_id: job.cancellation_id,
+        snapshot_id,
+        snapshot_sha256,
+        offset: offset as u64,
+        total_bytes: total_bytes as u64,
+        content_sha256: Sha256::digest(content).into(),
+        content_hex,
+        complete: offset + content.len() == total_bytes,
+    }
 }
 
 fn cancellation(job: &JobEnvelope) -> CancellationInstruction {
@@ -908,6 +1137,7 @@ fn start_local_coding_agent(data_dir: &Path, socket_path: &Path) -> Child {
     .to_string();
     let mut child = Command::new(env!("CARGO_BIN_EXE_assemblywright-agent"))
         .args(["--data-dir", data_dir.to_str().expect("data path"), "serve"])
+        .env_clear()
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())

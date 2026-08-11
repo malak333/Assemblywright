@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::net::SocketAddr;
 use uuid::Uuid;
 
-pub const PROTOCOL_VERSION: u16 = 2;
+pub const PROTOCOL_VERSION: u16 = 3;
 pub const MAX_DEVICE_NAME_BYTES: usize = 128;
 pub const MAX_CAPABILITIES_PER_DEVICE: usize = 64;
 pub const MAX_CAPABILITY_ID_BYTES: usize = 64;
@@ -52,6 +52,11 @@ pub const MAX_FEATURE_CONVEYOR_BASE_BRANCH_BYTES: usize = 255;
 pub const LOCAL_CODING_CAPABILITY_ID: &str = "local.coding.v1";
 pub const LOCAL_CODING_PROVIDER: &str = "assemblywright-agent";
 pub const LOCAL_CODING_MODEL: &str = "assemblywright-local-coding-v1";
+/// The contained-coding phase is intentionally one deterministic fixture. No
+/// caller may select a command, executable, or broader writable path set.
+pub const LOCAL_CODING_FIXTURE_ALLOWED_PATH: &str = "README.md";
+pub const LOCAL_CODING_COMPLETED_STATUS: &str = "contained_coding_completed";
+pub const LOCAL_CODING_FIXTURE_TEST_STATUS: &str = "not_run";
 pub const MAX_LOCAL_CODING_CONTEXT_BYTES: usize = 8 * 1024;
 pub const MAX_LOCAL_CODING_RESULT_BYTES: usize = 32 * 1024;
 pub const MAX_LOCAL_CODING_SNAPSHOT_CHUNK_BYTES: usize = 128 * 1024;
@@ -1892,8 +1897,8 @@ pub struct MlxJobResult {
     pub model: String,
 }
 
-/// Metadata-only receipt for an exact snapshot materialization proof. The
-/// transferred repository remains ephemeral and no mutation is permitted.
+/// Metadata-only receipt for the exact contained-coding fixture. Its mutation
+/// exists only inside an ephemeral attempt workspace removed before return.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LocalCodingJobResult {
@@ -1901,7 +1906,44 @@ pub struct LocalCodingJobResult {
     pub work_packet_sha256: [u8; 32],
     pub admission_sha256: [u8; 32],
     pub snapshot_sha256: [u8; 32],
+    pub allowed_paths_sha256: [u8; 32],
+    pub changed_paths_sha256: [u8; 32],
+    pub patch_sha256: [u8; 32],
+    pub changed_file_count: u16,
+    pub test_status: String,
     pub mutation_performed: bool,
+    pub workspace_retained: bool,
+    pub ambiguous: bool,
+}
+
+pub fn local_coding_fixture_allowed_paths_sha256() -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"assemblywright.local-coding-allowed-paths.v1\0");
+    digest.update(1_u16.to_be_bytes());
+    digest.update((LOCAL_CODING_FIXTURE_ALLOWED_PATH.len() as u64).to_be_bytes());
+    digest.update(LOCAL_CODING_FIXTURE_ALLOWED_PATH.as_bytes());
+    digest.finalize().into()
+}
+
+/// Hashes the exact cross-language admission transcript for one job:
+/// domain separator, protocol version as u16 BE, context SHA-256 bytes,
+/// task/step/attempt/lease/cancellation UUID bytes in network order, then
+/// connection epoch, sequence, lease duration, and deadline as u64 BE.
+pub fn local_coding_admission_sha256(job: &JobEnvelope) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"assemblywright.local-coding-admission.v1\0");
+    digest.update(job.protocol_version.to_be_bytes());
+    digest.update(job.context_sha256);
+    digest.update(job.task_id.0.as_bytes());
+    digest.update(job.step_id.0.as_bytes());
+    digest.update(job.attempt_id.0.as_bytes());
+    digest.update(job.lease_id.0.as_bytes());
+    digest.update(job.cancellation_id.0.as_bytes());
+    digest.update(job.connection_epoch.to_be_bytes());
+    digest.update(job.sequence.to_be_bytes());
+    digest.update(job.lease_duration_ms.to_be_bytes());
+    digest.update(job.deadline_after_ms.to_be_bytes());
+    digest.finalize().into()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2124,11 +2166,18 @@ impl JobResultEnvelope {
         let result: LocalCodingJobResult = serde_json::from_value(self.payload.clone())
             .map_err(|_| ProtocolError::InvalidLocalCodingResult)?;
         if self.status != JobResultStatus::Completed
-            || result.status != "snapshot_materialized"
+            || result.status != LOCAL_CODING_COMPLETED_STATUS
             || result.work_packet_sha256 != request.work_packet_sha256
-            || result.admission_sha256 == [0; 32]
+            || result.admission_sha256 != local_coding_admission_sha256(job)
             || result.snapshot_sha256 != request.snapshot_sha256
-            || result.mutation_performed
+            || result.allowed_paths_sha256 != local_coding_fixture_allowed_paths_sha256()
+            || result.changed_paths_sha256 != result.allowed_paths_sha256
+            || result.patch_sha256 == [0; 32]
+            || result.changed_file_count != 1
+            || result.test_status != LOCAL_CODING_FIXTURE_TEST_STATUS
+            || !result.mutation_performed
+            || result.workspace_retained
+            || result.ambiguous
         {
             return Err(ProtocolError::InvalidLocalCodingResult);
         }

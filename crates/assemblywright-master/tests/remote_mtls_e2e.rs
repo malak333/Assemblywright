@@ -5,16 +5,17 @@ use assemblywright_master::{
     NewStep, PlatformSecretProtector, RepositoryGrantKind, RepositoryGrantRevision,
 };
 use assemblywright_protocol::{
-    AuthenticatedHandshakeRequest, CapabilityDescriptor, DeviceRole, DistributedEventBatch,
-    DistributedEventBatchRequest, DistributedEventKind, FeatureConveyorApprovedFeatureRequest,
-    FeatureConveyorApprovedSpecification, FeatureConveyorCodingDispatchReceipt,
-    FeatureConveyorCodingDispatchRequest, FeatureConveyorCodingWorkPacketMetadata,
-    FeatureConveyorGrantRevisions, FeatureConveyorRepositoryScopeDocument,
-    FeatureConveyorRepositorySnapshotClaimReceipt, FeatureConveyorRepositorySnapshotClaimRequest,
-    HandshakeRequest, HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope,
-    JobResultStatus, LocalCodingJobResult, LocalCodingSnapshotChunk,
-    LocalCodingSnapshotChunkRequest, Sensitivity, StepId, TaskId,
-    FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, PROTOCOL_VERSION,
+    local_coding_admission_sha256, AuthenticatedHandshakeRequest, CapabilityDescriptor, DeviceRole,
+    DistributedEventBatch, DistributedEventBatchRequest, DistributedEventKind,
+    FeatureConveyorApprovedFeatureRequest, FeatureConveyorApprovedSpecification,
+    FeatureConveyorCodingDispatchReceipt, FeatureConveyorCodingDispatchRequest,
+    FeatureConveyorCodingWorkPacketMetadata, FeatureConveyorGrantRevisions,
+    FeatureConveyorRepositoryScopeDocument, FeatureConveyorRepositorySnapshotClaimReceipt,
+    FeatureConveyorRepositorySnapshotClaimRequest, HandshakeRequest, HandshakeResponse,
+    HandshakeStatus, JobEnvelope, JobResultEnvelope, JobResultStatus, LocalCodingJobResult,
+    LocalCodingSnapshotChunk, LocalCodingSnapshotChunkRequest, Sensitivity, StepId, TaskId,
+    FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, LOCAL_CODING_COMPLETED_STATUS,
+    LOCAL_CODING_FIXTURE_TEST_STATUS, PROTOCOL_VERSION,
 };
 use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
@@ -1124,12 +1125,21 @@ async fn remote_local_coding_dispatch_is_exporter_bound_exact_and_pause_dominant
     );
 
     let result_for = |job: &JobEnvelope, packet_sha256, sequence| {
+        let allowed_paths_sha256 =
+            assemblywright_protocol::local_coding_fixture_allowed_paths_sha256();
         let payload = serde_json::to_value(LocalCodingJobResult {
-            status: "snapshot_materialized".to_string(),
+            status: LOCAL_CODING_COMPLETED_STATUS.to_string(),
             work_packet_sha256: packet_sha256,
-            admission_sha256: Sha256::digest(b"coding-admission").into(),
+            admission_sha256: local_coding_admission_sha256(job),
             snapshot_sha256: job.validate_local_coding().unwrap().snapshot_sha256,
-            mutation_performed: false,
+            allowed_paths_sha256,
+            changed_paths_sha256: allowed_paths_sha256,
+            patch_sha256: Sha256::digest(b"contained-patch").into(),
+            changed_file_count: 1,
+            test_status: LOCAL_CODING_FIXTURE_TEST_STATUS.to_string(),
+            mutation_performed: true,
+            workspace_retained: false,
+            ambiguous: false,
         })
         .expect("serialize coding acknowledgement payload");
         JobResultEnvelope {

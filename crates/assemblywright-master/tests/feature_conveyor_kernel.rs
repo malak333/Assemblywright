@@ -8,10 +8,11 @@ use assemblywright_master::{
     MAX_CONVEYOR_STATUS_FEATURES,
 };
 use assemblywright_protocol::{
-    CapabilityDescriptor, DeviceId, DeviceRole, FeatureConveyorCodingDispatchRequest,
-    FeatureConveyorCodingWorkPacketMetadata, HandshakeRequest, JobEnvelope, JobResultEnvelope,
-    JobResultStatus, LocalCodingJobResult, LocalCodingSnapshotChunkRequest,
-    FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, PROTOCOL_VERSION,
+    local_coding_admission_sha256, CapabilityDescriptor, DeviceId, DeviceRole,
+    FeatureConveyorCodingDispatchRequest, FeatureConveyorCodingWorkPacketMetadata,
+    HandshakeRequest, JobEnvelope, JobResultEnvelope, JobResultStatus, LocalCodingJobResult,
+    LocalCodingSnapshotChunkRequest, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+    LOCAL_CODING_COMPLETED_STATUS, LOCAL_CODING_FIXTURE_TEST_STATUS, PROTOCOL_VERSION,
 };
 use rusqlite::Connection;
 use serde_json::{json, Value};
@@ -215,12 +216,20 @@ fn coding_dispatch_request(
 
 fn coding_ack(job: &JobEnvelope, sequence: u64) -> JobResultEnvelope {
     let context = job.validate_local_coding().unwrap();
+    let allowed_paths_sha256 = assemblywright_protocol::local_coding_fixture_allowed_paths_sha256();
     let payload = serde_json::to_value(LocalCodingJobResult {
-        status: "snapshot_materialized".to_string(),
+        status: LOCAL_CODING_COMPLETED_STATUS.to_string(),
         work_packet_sha256: context.work_packet_sha256,
-        admission_sha256: digest("coding-admission"),
+        admission_sha256: local_coding_admission_sha256(job),
         snapshot_sha256: context.snapshot_sha256,
-        mutation_performed: false,
+        allowed_paths_sha256,
+        changed_paths_sha256: allowed_paths_sha256,
+        patch_sha256: digest("contained-patch"),
+        changed_file_count: 1,
+        test_status: LOCAL_CODING_FIXTURE_TEST_STATUS.to_string(),
+        mutation_performed: true,
+        workspace_retained: false,
+        ambiguous: false,
     })
     .unwrap();
     JobResultEnvelope {

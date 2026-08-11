@@ -15,6 +15,10 @@ set -euo pipefail
 # planes, which have no test suite at all: they kept POSTing version 1 and the
 # master answered "unsupported protocol version: expected 2, received 1" on
 # every enqueue, so the fixture and MLX live lanes could not run.
+# Moving 2 -> 3 is separately required because LocalCodingJobResult replaced
+# its snapshot-only receipt with wire-incompatible fixed contained-coding
+# evidence. A stale peer must fail at handshake instead of accepting a result
+# shape with different mutation, retention, ambiguity, and test semantics.
 #
 # This gate compares the four declarations directly, and requires the PowerShell
 # scripts to route every request and assertion through one named variable so a
@@ -178,23 +182,23 @@ self_test() {
   }
 
   # A fully aligned set is the only shape that passes.
-  write_rust_fixture 2
-  write_swift_fixture 2
-  write_powershell_fixture "aligned.ps1" 2 '$protocolVersion'
+  write_rust_fixture 3
+  write_swift_fixture 3
+  write_powershell_fixture "aligned.ps1" 3 '$protocolVersion'
   compare_declarations "$fixture_dir/lib.rs" "$fixture_dir/Bridge.swift" \
     "$fixture_dir/aligned.ps1" >/dev/null 2>&1 \
     || fail "self-test: the comparator rejected an aligned declaration set"
 
-  # The f6339c9 defect: Rust moved and Swift did not.
-  write_swift_fixture 1
+  # A stale Swift declaration must fail, including the historical 1 -> 2 defect.
+  write_swift_fixture 2
   if compare_declarations "$fixture_dir/lib.rs" "$fixture_dir/Bridge.swift" \
     "$fixture_dir/aligned.ps1" >/dev/null 2>&1; then
     fail "self-test: the comparator accepted a stale Swift declaration"
   fi
-  write_swift_fixture 2
+  write_swift_fixture 3
 
-  # The defect this gate was added for: both control planes kept version 1.
-  write_powershell_fixture "stale.ps1" 1 '$protocolVersion'
+  # A stale control plane must fail, including the historical version-1 scripts.
+  write_powershell_fixture "stale.ps1" 2 '$protocolVersion'
   if compare_declarations "$fixture_dir/lib.rs" "$fixture_dir/Bridge.swift" \
     "$fixture_dir/stale.ps1" >/dev/null 2>&1; then
     fail "self-test: the comparator accepted a stale PowerShell declaration"
@@ -202,7 +206,7 @@ self_test() {
 
   # A literal at a request site drifts independently of the declaration, so the
   # aligned declaration above must not be enough to pass on its own.
-  write_powershell_fixture "literal.ps1" 2 '1'
+  write_powershell_fixture "literal.ps1" 3 '2'
   if compare_declarations "$fixture_dir/lib.rs" "$fixture_dir/Bridge.swift" \
     "$fixture_dir/literal.ps1" >/dev/null 2>&1; then
     fail "self-test: the comparator accepted a hardcoded PowerShell literal"
@@ -221,7 +225,7 @@ self_test() {
   fi
 
   # One misaligned file among several aligned ones must still fail.
-  write_powershell_fixture "second-stale.ps1" 1 '$protocolVersion'
+  write_powershell_fixture "second-stale.ps1" 2 '$protocolVersion'
   if compare_declarations "$fixture_dir/lib.rs" "$fixture_dir/Bridge.swift" \
     "$fixture_dir/aligned.ps1" "$fixture_dir/second-stale.ps1" >/dev/null 2>&1; then
     fail "self-test: the comparator accepted one stale file beside an aligned one"

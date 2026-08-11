@@ -166,6 +166,11 @@ subject are all wire values, `PROTOCOL_VERSION` moved from 1 to 2. Two builds
 that both claimed version 1 while disagreeing on those values would be mutually
 incompatible in a way the version field exists to prevent; the bump makes a
 pre-rename peer fail on version instead of failing later and less clearly.
+It later moved from 2 to 3 because the local-coding result changed from a
+snapshot-only receipt to wire-incompatible contained-coding evidence with fixed
+path-set, patch, test-status, mutation, retention, and ambiguity fields.
+That bump makes an older peer fail at handshake instead of misreading mutation
+evidence.
 
 The one surviving reference to the former name is a read path:
 `LEGACY_MASTER_STATE_NAMESPACE` in `crates/assemblywright-master/src/main.rs`,

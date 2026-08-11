@@ -1978,7 +1978,7 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "distributed_protocol_contract",
             "implemented",
-            "`assemblywright-protocol` owns the current protocol version: typed device/task/step/attempt/lease/cancellation identifiers, bounded capability advertisements, handshake, job and result envelopes, strict bound-before-decode JSON entry points, nil-identity rejection, and a golden compatibility fixture.",
+            "`assemblywright-protocol` owns the current protocol version: typed device/task/step/attempt/lease/cancellation identifiers, bounded capability advertisements, handshake, job and result envelopes including the fixed contained-coding evidence shape, strict bound-before-decode JSON entry points, nil-identity rejection, and a golden compatibility fixture.",
             "A versioned wire contract with golden-fixture coverage only; it is not proof of live two-device behavior.",
         ),
         feature(
@@ -1990,8 +1990,8 @@ fn contract_features() -> Vec<ContractFeature> {
         feature(
             "feature_conveyor_repository_kernel",
             "implemented",
-            "The default-inert schema-v10 Feature Conveyor kernel persists immutable owner-approved specification revisions, three independent repository-grant revisions, a bounded owner-ordered queue with strict head/dependency ordering, compare-and-set revisions, one durable snapshot-bound active lease, exact lifecycle advancement, cancellation without advancement, explicit safe abandonment, startup quarantine, and same-transaction redacted audits. Its owner-authenticated loopback read-only status route and accepted-session MacBridge route add bounded lifecycle observation and fixed-enum owner guidance bound to queue, Emergency Pause, and optional feature lifecycle revisions. Owner-token loopback routes record and inspect strict contiguous, pause-bound, digest-only repository-grant revisions; a separate owner-local route performs one bounded point-in-time filesystem-only repository identity preflight bound to the exact active registration grant and returns no path; another owner-local route serially constructs one independent no-remote shallow raw-object snapshot containing only the current commit/tree/blob graph and atomically binds it to the exact strict queue head, provider, grants, queue, and pause revisions; one explicit owner-local metadata dispatch atomically binds a path-free packet digest to that exact lease/snapshot and one exact current local.coding.v1 worker registration; after the exact lease, a separate bounded route reauthorizes every immutable snapshot-bundle chunk and the authenticated Mac bridge plus native agent reconstruct and verify an ephemeral independent repository; a separate designation permits only the exact MacBridge to enqueue one already-approved specification.",
-            "Bounded observation, repository-grant preparation, identity-only preflight, queue insertion, one default-off isolated snapshot/lease claim, explicit coding admission, and default-off authenticated snapshot replication with ephemeral materialization proof are implemented. Guidance labels are display-only. No retained coding workspace or process, repository mutation, result integration, review provider, publication coordinator, Mac queue UI, queue advancement, or autonomous activation is implemented.",
+            "The default-inert schema-v10 Feature Conveyor kernel persists immutable owner-approved specification revisions, three independent repository-grant revisions, a bounded owner-ordered queue with strict head/dependency ordering, compare-and-set revisions, one durable snapshot-bound active lease, exact lifecycle advancement, cancellation without advancement, explicit safe abandonment, startup quarantine, and same-transaction redacted audits. Its owner-authenticated loopback read-only status route and accepted-session MacBridge route add bounded lifecycle observation and fixed-enum owner guidance bound to queue, Emergency Pause, and optional feature lifecycle revisions. Owner-token loopback routes record and inspect strict contiguous, pause-bound, digest-only repository-grant revisions; a separate owner-local route performs one bounded point-in-time filesystem-only repository identity preflight bound to the exact active registration grant and returns no path; another owner-local route serially constructs one independent no-remote shallow raw-object snapshot containing only the current commit/tree/blob graph and atomically binds it to the exact strict queue head, provider, grants, queue, and pause revisions; one explicit owner-local metadata dispatch atomically binds a path-free packet digest to that exact lease/snapshot and one exact current local.coding.v1 worker registration; after the exact lease, a separate bounded route reauthorizes every immutable snapshot-bundle chunk and the authenticated Mac bridge plus native agent reconstruct and verify an aggregate-budgeted ephemeral independent repository; before forking one fixed README child from the running agent with no exec or remote input, the parent opens the workspace, blocks signals, and captures the descriptor-table bound and effective UID; the child scans descriptor slots with F_GETFD, closes every open descriptor except workspace and group gate, waits for the parent-established process group, and follows a fixed validated open/truncate/seek/write/sync/close/exit path without post-fork errno, mutable-global, environment, identity, descriptor-table, or process-group discovery; bounded path-free evidence includes the exact protocol-owned admission transcript and attempt state is clean before result or cancellation acknowledgement; the Swift parent supplies an empty environment and the agent rejects local-coding startup otherwise; a separate designation permits only the exact MacBridge to enqueue one already-approved specification.",
+            "Bounded observation, repository-grant preparation, identity-only preflight, queue insertion, one default-off isolated snapshot/lease claim, explicit coding admission, authenticated snapshot replication, and one fixed contained-coding fixture are implemented. Guidance labels are display-only. The fixture grants no arbitrary command, tool, path, provider, test, credential, or network authority and proves no host sandbox or host-egress enforcement. No retained coding workspace, canonical-repository mutation, result integration, review provider, publication coordinator, Mac queue UI, queue advancement, or autonomous activation is implemented.",
         ),
         feature(
             "enrollment_identity_and_mtls",
@@ -2183,7 +2183,7 @@ mod tests {
             .boundary
             .contains("one default-off isolated snapshot/lease claim"));
         assert!(feature.boundary.contains("explicit coding admission"));
-        assert!(feature.boundary.contains("ephemeral materialization proof"));
+        assert!(feature.boundary.contains("fixed contained-coding fixture"));
         assert!(feature.boundary.contains("repository mutation"));
         assert!(feature.boundary.contains("display-only"));
         assert!(feature.boundary.contains("autonomous activation"));
@@ -2195,6 +2195,38 @@ mod tests {
             assert!(
                 !feature.proof.contains(forbidden),
                 "readiness proof broadened authority: {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn feature_conveyor_readiness_limits_contained_coding_authority() {
+        let feature = contract_features()
+            .into_iter()
+            .find(|feature| feature.key == "feature_conveyor_repository_kernel")
+            .expect("Feature Conveyor readiness feature");
+        for required in [
+            "one fixed README child",
+            "no exec or remote input",
+            "aggregate-budgeted ephemeral independent repository",
+            "blocks signals",
+            "descriptor-table bound and effective UID",
+            "F_GETFD",
+            "parent-established process group",
+            "fixed validated open/truncate/seek/write/sync/close/exit path",
+            "without post-fork errno, mutable-global, environment, identity, descriptor-table, or process-group discovery",
+            "exact protocol-owned admission transcript",
+            "attempt state is clean before result or cancellation acknowledgement",
+            "no arbitrary command, tool, path, provider, test, credential, or network authority",
+            "no host sandbox or host-egress enforcement",
+            "No retained coding workspace",
+            "canonical-repository mutation",
+            "result integration",
+            "autonomous activation",
+        ] {
+            assert!(
+                feature.proof.contains(required) || feature.boundary.contains(required),
+                "readiness metadata omitted contained-coding boundary: {required}"
             );
         }
     }

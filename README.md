@@ -12,8 +12,8 @@ observation surface.
 This repository is foundation work. The durable contracts, the master kernel,
 the enrollment and mTLS identity path, the Windows service lifecycle, the Mac
 bridge and worker agent, and the release gate are implemented. Autonomous
-dispatch, repository execution, review-provider invocation, GitHub publication,
-and the queue control UI are still design.
+dispatch, general-purpose repository execution, review-provider invocation,
+GitHub publication, and the queue control UI are still design.
 
 ## What Is Implemented
 
@@ -54,9 +54,25 @@ executable.
   snapshot ID and digest, lifecycle, queue and Emergency Pause revisions, and
   one exact current `InferenceWorker` registration. The action, queued step,
   distributed event, immutable dispatch binding, and redacted audit commit in
-  one transaction. The native agent validates only the path-free admission
-  envelope and cannot receive repository bytes, a path, commands, credentials,
-  or mutation authority in this slice.
+  one transaction. After the exact lease, the separate default-off transfer
+  lane gives the native agent only bounded authenticated snapshot chunks. It
+  reconstructs a private no-remote workspace, forks one fixed child from the
+  running agent with no `exec` or remote input. Materialization is charged to
+  an aggregate output-byte budget. Before `fork`, the parent pre-opens the
+  workspace descriptor, blocks signals, and captures the descriptor-table bound
+  and effective UID.
+  Swift launches the agent with an empty environment, the agent rejects a
+  nonempty parent environment for this lane, and after `fork` the child scans
+  every descriptor slot with `F_GETFD`, closes every open descriptor except the
+  workspace and process-group gate, and waits for the parent-established group.
+  Its fixed file-mutation path includes `openat`, validation, truncation, seek,
+  write, sync, close, and `_exit` for the exact `README.md` replacement. It does
+  not inspect errno or mutable global state, use environment APIs, or call
+  `geteuid`, `getdtablesize`, or `setpgid` post-fork. The parent
+  verifies bounded path-free mutation evidence and removes all attempt state before
+  returning. It accepts no caller-selected command, executable, tool, path,
+  provider, test, credential, or network authority; this does not claim a host
+  sandbox or host-level egress control.
   Enqueue, reorder, claim, lifecycle, cancellation, abandonment,
   and startup quarantine commit with redacted audit evidence in the same
   transaction. Success releases the lease only with verified healthy-main
@@ -125,6 +141,9 @@ memory. Its default-off singleton MLX lane runs one bounded, no-retention
 request with a cleared offline environment, prompt-only stdin, bounded stdout,
 null stderr, and dedicated process-group reaping. Cancellation, timeout,
 disconnect, or emergency pause dominates completion and suppresses late output.
+Its mutually exclusive local-coding lane runs only the fixed contained-coding
+`README.md` fixture in an ephemeral per-attempt workspace, reports tests as not
+run, and cleans the workspace before returning bounded digest evidence.
 
 **`assemblywright-core`** — the shared local foundation: the peer-identity Unix-socket
 transport, its startup validation, and read-only release readiness and evidence
@@ -154,8 +173,11 @@ Not yet implemented, and not claimed:
   implemented preflight remains read-only; the default-off owner-local
   snapshot claim creates durable isolated state and one lease, and a separate
   explicit owner-local action may queue one snapshot-bound metadata-only coding
-  admission. It does not transfer repository material, execute a coding
-  runtime, mutate a snapshot, integrate a result, or invoke a provider.
+  admission. The exact leased lane transfers repository material and performs
+  only the fixed ephemeral `README.md` contained-coding mutation. It does not
+  retain a workspace, accept arbitrary implementation commands or paths,
+  execute tests, mutate the canonical repository, integrate a result, or invoke
+  a provider.
 - Worker execution against real repositories, review-provider invocation, or
   GitHub branch/PR/merge authority.
 - Mac Feature Conveyor UI controls or hosted brainstorming. The app remains

@@ -71,16 +71,40 @@ Before starting a release pass, confirm the claim you intend to make.
   event, and redacted audit. Prove stale authority, cancellation, Emergency
   Pause, lifecycle departure, registration drift, and restart quarantine block
   lease or acknowledgement. Confirm protocol and native-agent tests accept no
-  repository bytes/path, commands, credentials, or mutation claim. Then prove
+  repository bytes/path, caller-selected commands, tools, providers, tests, or
+  credentials. Then prove
   the separate default-off snapshot lane authorizes only exact active
   attempt/lease/cancellation/snapshot bindings, rechecks around every bounded
   read, rejects stale or out-of-order frames, and materializes through the
   authenticated Mac local socket into fresh private per-attempt state. Prove
-  object/chunk/bundle/path/digest validation, no remote/hooks/links, and cleanup
-  on completion, cancellation, failure, shutdown, and restart. This slice
-  exposes no retained worker checkout, coding execution, mutation/result
-  integration, review provider, publication coordinator, Mac control UI, queue
-  advancement, or autonomous activation.
+  object/chunk/bundle/path/digest validation, an aggregate materialized-output
+  byte budget, and no remote/hooks/links. Confirm
+  the only execution is one fixed child forked from the running agent with no
+  `exec`, argument parsing, or remote input; parent pre-opens the workspace,
+  blocks signals, and captures the descriptor-table bound and effective UID
+  before `fork`; child scans with `F_GETFD`, closes every open descriptor except
+  the workspace and gate, waits for the parent-established process group, and
+  follows the fixed validated open/truncate/seek/write/sync/close/exit path for
+  `README.md`; no post-fork errno, mutable-global, environment, identity,
+  descriptor-table, or process-group discovery. Prove Swift launches the agent
+  with an empty environment, the agent rejects local-coding startup under a
+  nonempty parent environment, and it rejects any
+  changed path or output outside the fixed contract; emits bounded path-free
+  work-packet/admission/snapshot/path-set/patch digests, one changed file,
+  `test_status:not_run`, mutation true, workspace-retained false, and ambiguity
+  false. Prove Rust and Swift recompute the exact protocol-owned admission
+  transcript, including protocol version, all five identities, epoch, sequence,
+  lease duration, and deadline, rather than accepting any nonzero digest, and
+  prove cleanup of transfer/materialized state before returning. Prove
+  cancellation, pause-driven durable cancellation, deadline/lease loss,
+  failure, shutdown, and restart dominate completion, boundedly TERM-to-KILL
+  reap the child process group, clean state before acknowledgement, suppress late
+  results, and unblock an in-flight local Unix request so cancellation can meet
+  its strict two-second acknowledgement deadline. Do not
+  infer a host sandbox or host-egress control from the forked child. This slice exposes no retained
+  worker checkout, arbitrary coding/test execution, canonical-repository
+  mutation, result integration, review provider, publication coordinator, Mac
+  control UI, queue advancement, or autonomous activation.
 - Confirm `docs/architecture-map.md` matches the code for any surface that
   changed in this cycle.
 - Confirm the version is consistent:

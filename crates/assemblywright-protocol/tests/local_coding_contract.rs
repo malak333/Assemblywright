@@ -1,11 +1,12 @@
 use assemblywright_protocol::{
-    AttemptId, CancellationId, CapabilityDescriptor, CapabilityKind, ContextHandlingPolicy,
-    DeviceId, FeatureConveyorCodingDispatchRequest, FeatureConveyorCodingWorkPacketMetadata,
-    JobEnvelope, JobResultEnvelope, JobResultStatus, LeaseId, LocalCodingJobRequest,
-    LocalCodingJobResult, LocalCodingSnapshotChunk, LocalCodingSnapshotChunkRequest, ProtocolError,
-    Sensitivity, StepId, TaskId, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
-    LOCAL_CODING_CAPABILITY_ID, LOCAL_CODING_MODEL, LOCAL_CODING_PROVIDER,
-    MAX_FEATURE_CONVEYOR_CODING_DISPATCH_REQUEST_BYTES, PROTOCOL_VERSION,
+    local_coding_admission_sha256, AttemptId, CancellationId, CapabilityDescriptor, CapabilityKind,
+    ContextHandlingPolicy, DeviceId, FeatureConveyorCodingDispatchRequest,
+    FeatureConveyorCodingWorkPacketMetadata, JobEnvelope, JobResultEnvelope, JobResultStatus,
+    LeaseId, LocalCodingJobRequest, LocalCodingJobResult, LocalCodingSnapshotChunk,
+    LocalCodingSnapshotChunkRequest, ProtocolError, Sensitivity, StepId, TaskId,
+    FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, LOCAL_CODING_CAPABILITY_ID,
+    LOCAL_CODING_COMPLETED_STATUS, LOCAL_CODING_FIXTURE_TEST_STATUS, LOCAL_CODING_MODEL,
+    LOCAL_CODING_PROVIDER, MAX_FEATURE_CONVEYOR_CODING_DISPATCH_REQUEST_BYTES, PROTOCOL_VERSION,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -169,7 +170,30 @@ fn owner_dispatch_is_strict_bounded_digest_bound_and_path_free() {
 }
 
 #[test]
-fn coding_job_and_ack_are_exact_attempt_bound_and_forbid_mutation_claims() {
+fn admission_digest_has_a_fixed_cross_language_transcript() {
+    let mut job = coding_job(&request());
+    job.protocol_version = 3;
+    job.context_sha256 = [0x11; 32];
+    job.task_id = TaskId::new(Uuid::parse_str("00010203-0405-0607-0809-0a0b0c0d0e0f").unwrap());
+    job.step_id = StepId::new(Uuid::parse_str("10111213-1415-1617-1819-1a1b1c1d1e1f").unwrap());
+    job.attempt_id =
+        AttemptId::new(Uuid::parse_str("20212223-2425-2627-2829-2a2b2c2d2e2f").unwrap());
+    job.lease_id = LeaseId::new(Uuid::parse_str("30313233-3435-3637-3839-3a3b3c3d3e3f").unwrap());
+    job.cancellation_id =
+        CancellationId::new(Uuid::parse_str("40414243-4445-4647-4849-4a4b4c4d4e4f").unwrap());
+    job.connection_epoch = 0x0102_0304_0506_0708;
+    job.sequence = 0x1112_1314_1516_1718;
+    job.lease_duration_ms = 0x2122_2324_2526_2728;
+    job.deadline_after_ms = 0x3132_3334_3536_3738;
+
+    assert_eq!(
+        lower_hex(&local_coding_admission_sha256(&job)),
+        "ef9e10566ae691ac90bc99aab0615944c7d91a6eba54efca49d20fda6852608f"
+    );
+}
+
+#[test]
+fn coding_job_and_result_are_exact_attempt_bound_and_reject_unbounded_mutation_claims() {
     let owner = request();
     let mut job = coding_job(&owner);
     job.validate_local_coding().unwrap();
@@ -186,11 +210,18 @@ fn coding_job_and_ack_are_exact_attempt_bound_and_forbid_mutation_claims() {
         .remove("repository_path");
     job.context_sha256 = Sha256::digest(serde_json::to_vec(&job.context).unwrap()).into();
     let payload = serde_json::to_value(LocalCodingJobResult {
-        status: "snapshot_materialized".to_string(),
+        status: LOCAL_CODING_COMPLETED_STATUS.to_string(),
         work_packet_sha256: owner.work_packet_sha256,
-        admission_sha256: [9; 32],
+        admission_sha256: local_coding_admission_sha256(&job),
         snapshot_sha256: owner.snapshot_sha256,
-        mutation_performed: false,
+        allowed_paths_sha256: assemblywright_protocol::local_coding_fixture_allowed_paths_sha256(),
+        changed_paths_sha256: assemblywright_protocol::local_coding_fixture_allowed_paths_sha256(),
+        patch_sha256: [7; 32],
+        changed_file_count: 1,
+        test_status: LOCAL_CODING_FIXTURE_TEST_STATUS.to_string(),
+        mutation_performed: true,
+        workspace_retained: false,
+        ambiguous: false,
     })
     .unwrap();
     let result = JobResultEnvelope {
@@ -208,14 +239,14 @@ fn coding_job_and_ack_are_exact_attempt_bound_and_forbid_mutation_claims() {
         payload,
     };
     result.validate_local_coding_result(&job).unwrap();
-    let valid_result = result;
+    let valid_result = result.clone();
     let refresh_digest = |value: &mut JobResultEnvelope| {
         value.payload_sha256 = Sha256::digest(serde_json::to_vec(&value.payload).unwrap()).into();
     };
     let mut wrong_envelope_status = valid_result.clone();
     wrong_envelope_status.status = JobResultStatus::Failed;
     let mut wrong_result_status = valid_result.clone();
-    wrong_result_status.payload["status"] = json!("completed");
+    wrong_result_status.payload["status"] = json!("snapshot_materialized");
     refresh_digest(&mut wrong_result_status);
     let mut wrong_packet = valid_result.clone();
     wrong_packet.payload["work_packet_sha256"] = serde_json::to_value([8_u8; 32]).unwrap();
@@ -223,9 +254,27 @@ fn coding_job_and_ack_are_exact_attempt_bound_and_forbid_mutation_claims() {
     let mut zero_admission = valid_result.clone();
     zero_admission.payload["admission_sha256"] = serde_json::to_value([0_u8; 32]).unwrap();
     refresh_digest(&mut zero_admission);
-    let mut mutation_claim = valid_result.clone();
-    mutation_claim.payload["mutation_performed"] = json!(true);
-    refresh_digest(&mut mutation_claim);
+    let mut missing_mutation = valid_result.clone();
+    missing_mutation.payload["mutation_performed"] = json!(false);
+    refresh_digest(&mut missing_mutation);
+    let mut retained_workspace = valid_result.clone();
+    retained_workspace.payload["workspace_retained"] = json!(true);
+    refresh_digest(&mut retained_workspace);
+    let mut ambiguous = valid_result.clone();
+    ambiguous.payload["ambiguous"] = json!(true);
+    refresh_digest(&mut ambiguous);
+    let mut outside_path_digest = valid_result.clone();
+    outside_path_digest.payload["changed_paths_sha256"] = serde_json::to_value([5_u8; 32]).unwrap();
+    refresh_digest(&mut outside_path_digest);
+    let mut zero_patch = valid_result.clone();
+    zero_patch.payload["patch_sha256"] = serde_json::to_value([0_u8; 32]).unwrap();
+    refresh_digest(&mut zero_patch);
+    let mut wrong_changed_count = valid_result.clone();
+    wrong_changed_count.payload["changed_file_count"] = json!(2);
+    refresh_digest(&mut wrong_changed_count);
+    let mut fabricated_test_claim = valid_result.clone();
+    fabricated_test_claim.payload["test_status"] = json!("passed");
+    refresh_digest(&mut fabricated_test_claim);
     let mut unknown_payload_field = valid_result;
     unknown_payload_field.payload["repository_path"] = json!("/private/repo");
     refresh_digest(&mut unknown_payload_field);
@@ -234,7 +283,13 @@ fn coding_job_and_ack_are_exact_attempt_bound_and_forbid_mutation_claims() {
         wrong_result_status,
         wrong_packet,
         zero_admission,
-        mutation_claim,
+        missing_mutation,
+        retained_workspace,
+        ambiguous,
+        outside_path_digest,
+        zero_patch,
+        wrong_changed_count,
+        fabricated_test_claim,
         unknown_payload_field,
     ] {
         assert_eq!(
@@ -242,6 +297,18 @@ fn coding_job_and_ack_are_exact_attempt_bound_and_forbid_mutation_claims() {
             Err(ProtocolError::InvalidLocalCodingResult)
         );
     }
+    let mut changed_lease = job.clone();
+    changed_lease.lease_duration_ms += 1;
+    assert_eq!(
+        result.validate_local_coding_result(&changed_lease),
+        Err(ProtocolError::InvalidLocalCodingResult)
+    );
+    let mut changed_deadline = job.clone();
+    changed_deadline.deadline_after_ms += 1;
+    assert_eq!(
+        result.validate_local_coding_result(&changed_deadline),
+        Err(ProtocolError::InvalidLocalCodingResult)
+    );
 }
 
 #[test]

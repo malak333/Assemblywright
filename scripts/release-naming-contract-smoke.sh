@@ -211,7 +211,7 @@ require_text "keychain namespace" "$MAC_KEYCHAIN" \
 # and a current peer disagree on the exporter label, the fixture capability
 # identity, and the certificate subject, and must reject each other on version
 # rather than failing somewhere less obvious.
-require_text "protocol version bump" "$PROTOCOL_CRATE" 'PROTOCOL_VERSION: u16 = 2'
+require_text "protocol version bump" "$PROTOCOL_CRATE" 'PROTOCOL_VERSION: u16 = 3'
 require_text "fixture capability provider" "$PROTOCOL_CRATE" \
   'FIXTURE_REASONING_PROVIDER: &str = "assemblywright-fixture"'
 require_text "fixture capability model" "$PROTOCOL_CRATE" \
