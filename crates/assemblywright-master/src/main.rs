@@ -2224,10 +2224,10 @@ async fn repository_preflight(
     let repository_path = request.scope.repository_path.clone();
     let expected_base_branch = request.scope.expected_base_branch.clone();
     let expected_head_commit = request.scope.expected_head_commit.clone();
-    // Only the blocking filesystem observation await is bounded to five
-    // seconds. The grant precheck above and atomic grant/pause/audit recheck
-    // below intentionally remain outside this timeout rather than converting
-    // database-lock contention into filesystem-timeout semantics.
+    // Each blocking filesystem-observation await is independently bounded to
+    // five seconds. The grant precheck above and atomic grant/pause/audit
+    // recheck below intentionally remain outside these timeouts rather than
+    // converting database-lock contention into filesystem-timeout semantics.
     let observation_guard = tokio::time::timeout(
         REPOSITORY_FILESYSTEM_OBSERVATION_TIMEOUT,
         tokio::task::spawn_blocking(move || {
@@ -2242,9 +2242,18 @@ async fn repository_preflight(
     .map_err(|_| fixed_error(StatusCode::CONFLICT, "repository_preflight_rejected"))?
     .map_err(|_| fixed_error(StatusCode::CONFLICT, "repository_preflight_rejected"))?
     .map_err(|_| fixed_error(StatusCode::CONFLICT, "repository_preflight_rejected"))?;
-    observation_guard
-        .revalidate()
-        .map_err(|_| fixed_error(StatusCode::CONFLICT, "repository_preflight_rejected"))?;
+    let observation_guard = tokio::time::timeout(
+        REPOSITORY_FILESYSTEM_OBSERVATION_TIMEOUT,
+        tokio::task::spawn_blocking(move || {
+            let mut observation_guard = observation_guard;
+            observation_guard.revalidate()?;
+            Ok::<_, ()>(observation_guard)
+        }),
+    )
+    .await
+    .map_err(|_| fixed_error(StatusCode::CONFLICT, "repository_preflight_rejected"))?
+    .map_err(|_| fixed_error(StatusCode::CONFLICT, "repository_preflight_rejected"))?
+    .map_err(|_| fixed_error(StatusCode::CONFLICT, "repository_preflight_rejected"))?;
     let observed_at_ms = current_time_ms()
         .map_err(|_| fixed_error(StatusCode::CONFLICT, "repository_preflight_rejected"))?;
     lock_process(&state)?
@@ -2295,7 +2304,7 @@ impl Drop for RepositoryIdentityObservationGuard {
 
 #[cfg(not(windows))]
 impl RepositoryIdentityObservationGuard {
-    fn revalidate(&self) -> Result<(), ()> {
+    fn revalidate(&mut self) -> Result<(), ()> {
         Ok(())
     }
 }
@@ -2303,6 +2312,10 @@ impl RepositoryIdentityObservationGuard {
 #[cfg(windows)]
 struct RepositoryIdentityObservationGuard {
     held: WindowsHeldHandleSet,
+    requested: String,
+    expected_base_branch: String,
+    expected_head_commit: String,
+    path_revalidation: Option<WindowsHeldHandleSet>,
 }
 
 #[cfg(windows)]
@@ -2312,8 +2325,18 @@ impl Drop for RepositoryIdentityObservationGuard {
 
 #[cfg(windows)]
 impl RepositoryIdentityObservationGuard {
-    fn revalidate(&self) -> Result<(), ()> {
-        self.held.revalidate()
+    fn revalidate(&mut self) -> Result<(), ()> {
+        self.held.revalidate()?;
+        let path_revalidation = open_windows_repository_identity_handles(
+            &self.requested,
+            &self.expected_base_branch,
+            &self.expected_head_commit,
+        )?;
+        if path_revalidation.identities != self.held.identities {
+            return Err(());
+        }
+        self.path_revalidation = Some(path_revalidation);
+        Ok(())
     }
 }
 
@@ -2378,6 +2401,26 @@ fn observe_standard_repository_identity(
     expected_base_branch: &str,
     expected_head_commit: &str,
 ) -> Result<RepositoryIdentityObservationGuard, ()> {
+    let held = open_windows_repository_identity_handles(
+        requested,
+        expected_base_branch,
+        expected_head_commit,
+    )?;
+    Ok(RepositoryIdentityObservationGuard {
+        held,
+        requested: requested.to_string(),
+        expected_base_branch: expected_base_branch.to_string(),
+        expected_head_commit: expected_head_commit.to_string(),
+        path_revalidation: None,
+    })
+}
+
+#[cfg(windows)]
+fn open_windows_repository_identity_handles(
+    requested: &str,
+    expected_base_branch: &str,
+    expected_head_commit: &str,
+) -> Result<WindowsHeldHandleSet, ()> {
     let requested_path = PathBuf::from(requested);
     let mut held = open_windows_fixed_directory_chain(requested)?;
     require_windows_handle_path_matches_requested(held.handles.last().ok_or(())?, &requested_path)?;
@@ -2437,7 +2480,7 @@ fn observe_standard_repository_identity(
         return Err(());
     }
     held.revalidate()?;
-    Ok(RepositoryIdentityObservationGuard { held })
+    Ok(held)
 }
 
 #[cfg(windows)]
@@ -2495,6 +2538,15 @@ fn require_windows_handle_path_matches_requested(
     handle: &fs::File,
     requested: &Path,
 ) -> Result<(), ()> {
+    let resolved = windows_final_dos_path_by_handle(handle)?;
+    if !repository_paths_match(&resolved, requested) {
+        return Err(());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn windows_final_dos_path_by_handle(handle: &fs::File) -> Result<PathBuf, ()> {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::{
         GetFinalPathNameByHandleW, FILE_NAME_NORMALIZED, VOLUME_NAME_DOS,
@@ -2515,10 +2567,14 @@ fn require_windows_handle_path_matches_requested(
         return Err(());
     }
     let resolved = String::from_utf16(&buffer[..length]).map_err(|_| ())?;
-    if !repository_paths_match(Path::new(&resolved), requested) {
-        return Err(());
-    }
-    Ok(())
+    let dos_path = if let Some(rest) = resolved.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = resolved.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        resolved
+    };
+    Ok(PathBuf::from(dos_path))
 }
 
 #[cfg(windows)]
@@ -3367,10 +3423,15 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let held = open_windows_fixed_directory_chain(directory.path().to_str().unwrap()).unwrap();
         held.revalidate().unwrap();
-        let moved = directory.path().with_extension("moved-while-held");
-        assert!(std::fs::rename(directory.path(), &moved).is_err());
+        let directory_path =
+            windows_final_dos_path_by_handle(held.handles.last().unwrap()).unwrap();
+        require_windows_handle_path_matches_requested(
+            held.handles.last().unwrap(),
+            &directory_path,
+        )
+        .unwrap();
         drop(held);
-        let long_name = directory.path().join("Repository Identity Long Name");
+        let long_name = directory_path.join("Repository Identity Long Name");
         std::fs::create_dir(&long_name).unwrap();
         if let Some(short_name) = windows_short_path(&long_name) {
             if !repository_paths_match(&short_name, &long_name) {
@@ -3383,8 +3444,8 @@ mod tests {
                 .is_err());
             }
         }
-        let target = directory.path().join("target");
-        let link = directory.path().join("junction-or-symlink");
+        let target = directory_path.join("target");
+        let link = directory_path.join("junction-or-symlink");
         std::fs::create_dir(&target).unwrap();
         if std::os::windows::fs::symlink_dir(&target, &link).is_ok() {
             assert!(validate_windows_fixed_local_repository_path(link.to_str().unwrap()).is_err());
@@ -3393,9 +3454,14 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn repository_identity_handles_hold_ancestors_and_identity_files_stable() {
+    fn repository_identity_handles_revalidate_pathnames_and_identity_files() {
         let repository = tempfile::tempdir().unwrap();
-        let git = repository.path().join(".git");
+        let initial =
+            open_windows_fixed_directory_chain(repository.path().to_str().unwrap()).unwrap();
+        let repository_path =
+            windows_final_dos_path_by_handle(initial.handles.last().unwrap()).unwrap();
+        drop(initial);
+        let git = repository_path.join(".git");
         std::fs::create_dir(&git).unwrap();
         std::fs::create_dir(git.join("objects")).unwrap();
         std::fs::create_dir_all(git.join("refs").join("heads")).unwrap();
@@ -3406,18 +3472,35 @@ mod tests {
             format!("{commit}\n"),
         )
         .unwrap();
-        let guard = observe_standard_repository_identity(
-            repository.path().to_str().unwrap(),
-            "main",
-            commit,
-        )
-        .unwrap();
-        assert!(std::fs::rename(git.join("HEAD"), git.join("HEAD.moved")).is_err());
-        assert!(
-            std::fs::rename(repository.path(), repository.path().with_extension("moved")).is_err()
-        );
-        drop(guard);
-        std::fs::rename(git.join("HEAD"), git.join("HEAD.moved")).unwrap();
+        let mut guard =
+            observe_standard_repository_identity(repository_path.to_str().unwrap(), "main", commit)
+                .unwrap();
+        guard.revalidate().unwrap();
+
+        let moved_repository = repository_path.with_extension("moved");
+        if std::fs::rename(&repository_path, &moved_repository).is_ok() {
+            assert!(guard.revalidate().is_err());
+            drop(guard);
+            std::fs::rename(&moved_repository, &repository_path).unwrap();
+        } else {
+            guard.revalidate().unwrap();
+            drop(guard);
+        }
+
+        let mut guard =
+            observe_standard_repository_identity(repository_path.to_str().unwrap(), "main", commit)
+                .unwrap();
+        let moved_head = git.join("HEAD.moved");
+        if std::fs::rename(git.join("HEAD"), &moved_head).is_ok() {
+            std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+            assert!(guard.revalidate().is_err());
+            std::fs::remove_file(git.join("HEAD")).unwrap();
+            drop(guard);
+            std::fs::rename(&moved_head, git.join("HEAD")).unwrap();
+        } else {
+            guard.revalidate().unwrap();
+            drop(guard);
+        }
     }
 
     #[cfg(windows)]

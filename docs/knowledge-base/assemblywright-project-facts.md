@@ -282,9 +282,12 @@ an old one.
   shape, symbolic HEAD, and exact loose branch ref, and rejects UNC, device,
   mapped/non-fixed-volume, reparse, worktree, submodule, detached, mismatched,
   symlinked, non-Git, stale, revoked, expired, or paused state. Windows holds
-  non-reparse handles for the complete fixed-volume identity chain without
-  delete sharing until the final grant, pause, and audit transaction recheck.
-  Its five-second timeout bounds only the filesystem-observation await, not
+  non-reparse handles for the complete fixed-volume identity chain, reopens and
+  compares the canonical pathname and identities immediately before the final
+  grant, pause, and audit transaction recheck, and retains the fresh handles
+  through that transaction. This is still point-in-time evidence rather than a
+  cross-filesystem-and-SQLite snapshot.
+  Its five-second timeout bounds each filesystem-observation await, not
   owner authentication or database lock/audit latency; a blocked filesystem
   thread cannot be forcibly cancelled.
   It does not

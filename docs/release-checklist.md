@@ -36,10 +36,12 @@ Before starting a release pass, confirm the claim you intend to make.
   grant and Emergency Pause revision, limits the base branch to one component, uses only bounded point-in-time
   filesystem identity inspection with no Git process or configuration load,
   returns and stores no path, and commits only redacted audit plus a path-free
-  receipt. On Windows it must hold non-reparse, no-delete identity-chain handles
-  through the final atomic recheck. Confirm the five-second timeout claim is
-  limited to the filesystem-observation await and does not cover authentication
-  or database lock/audit latency. It does not prove clean-tree or content state and creates no reusable
+  receipt. On Windows it must hold non-reparse identity-chain handles, reopen
+  and compare the complete canonical pathname and identities immediately before
+  the final atomic recheck, and retain the fresh handles through it. Confirm the five-second timeout claim is
+  limited to each filesystem-observation await and does not cover authentication
+  or database lock/audit latency. This does not create a cross-filesystem-and-
+  SQLite snapshot. It does not prove clean-tree or content state and creates no reusable
   snapshot or claimability. The slice
   exposes no worker
   dispatcher, repository execution, review provider,

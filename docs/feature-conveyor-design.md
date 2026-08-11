@@ -62,13 +62,15 @@ canonical digest, registration-grant revision, exact single-component base branc
 and Emergency Pause revision must all still match. It performs a point-in-time
 filesystem identity inspection of only a standard local `.git` directory,
 objects directory, symbolic HEAD, and exact loose branch ref. Windows holds
-non-reparse handles for the complete fixed-volume identity chain without delete
-sharing through the final atomic grant, pause, and audit recheck. It runs no Git
+non-reparse handles for the complete fixed-volume identity chain, then reopens
+and compares the canonical pathname and identities immediately before the final
+atomic grant, pause, and audit recheck and retains the fresh handles through it.
+It runs no Git
 process, loads no repository configuration or attributes, rejects network,
 device, reparse, worktree, and submodule paths, and does not prove clean-tree,
 index, object, or content state. The canonical path is neither stored nor returned;
 success emits only a path-free digest receipt after an atomic redacted audit.
-The five-second timeout applies to the filesystem-observation await only; owner
+The five-second timeout applies to each filesystem-observation await only; owner
 authentication and database lock/audit latency remain separately fail-closed
 but are not covered by that response-time claim.
 This is admission evidence for the observed instant only: it creates no durable

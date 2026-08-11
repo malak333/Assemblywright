@@ -97,8 +97,10 @@ the remote router. A separate owner-token-authenticated loopback preflight binds
 one strict canonical scope to the exact active registration grant and pause
 revision, then performs only bounded point-in-time standard `.git`, symbolic
 HEAD, and exact loose-ref identity observation for one single-component branch.
-Windows holds the fixed-volume path and identity-chain handles without delete
-sharing through the final atomic authorization and audit recheck. It executes no Git process, loads no
+Windows holds the fixed-volume path and identity-chain handles, then reopens and
+compares the complete canonical pathname and identities immediately before the
+final atomic authorization and audit recheck and retains the fresh handles
+through it. It executes no Git process, loads no
 repository config or attributes, rejects network/reparse/worktree/submodule
 paths, and does not prove clean-tree or content state. It stores and returns no
 path, appends only redacted audit,

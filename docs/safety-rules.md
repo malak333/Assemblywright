@@ -217,13 +217,16 @@ release requirements, not optional UX guidance.
   directory, standard `.git` and objects directories, symbolic HEAD, and exact
   loose ref for a single-component branch. On Windows, non-reparse handles for
   the fixed-volume root, every repository component, identity directories,
-  symbolic HEAD, and loose ref must remain held without delete sharing through
-  the final grant, Emergency Pause, and audit transaction recheck. Worktree,
+  symbolic HEAD, and loose ref must remain held while the complete canonical
+  pathname and identities are reopened and compared immediately before the
+  final grant, Emergency Pause, and audit transaction recheck; the fresh handles
+  remain held through that transaction. This is not a cross-filesystem-and-
+  SQLite snapshot. Worktree,
   submodule, detached, wrong-branch, wrong-HEAD,
   non-Git, symlinked, stale, expired, revoked, paused, malformed, or ambiguous
   state fails closed with a fixed error. It does not inspect or prove clean
   working-tree, index, object, configuration, attribute, or source-content
-  state. A five-second timeout bounds the filesystem-observation await, not
+  state. A five-second timeout bounds each filesystem-observation await, not
   owner authentication or database lock/audit latency. A blocked local
   filesystem thread cannot be forcibly cancelled, so the observation remains
   limited to fixed local volumes and performs no external process or write.

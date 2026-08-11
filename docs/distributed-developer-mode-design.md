@@ -192,9 +192,10 @@ other roles, and is decoded into authenticated read-only Mac app state. It
   active registration grant and Emergency Pause revision. It runs only bounded
   filesystem-only identity observation of a standard local `.git` directory,
   symbolic HEAD, and exact loose ref for a single-component branch. Windows
-  holds non-reparse handles for the complete fixed-volume identity chain
-  without delete sharing through the final atomic grant, pause, and audit
-  recheck. It executes no Git process, loads
+  holds non-reparse handles for the complete fixed-volume identity chain, then
+  reopens and compares the canonical pathname and identities immediately before
+  the final atomic grant, pause, and audit recheck and retains the fresh handles
+  through it. It executes no Git process, loads
   no repository configuration or attributes, rejects network/reparse/worktree/
   submodule paths, does not prove clean-tree or content state, retains no path
   or content, and returns a path-free point-in-time digest receipt after atomic

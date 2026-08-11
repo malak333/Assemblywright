@@ -97,8 +97,10 @@ revision must match the exact current active registration grant. The master
 performs only a filesystem identity check of a canonical non-symlink fixed-
 volume repository, standard `.git` and objects directories, symbolic HEAD, and
 exact loose ref for a single-component branch. On Windows, non-reparse handles
-for that complete path and identity chain remain held without delete sharing
-through the final grant, Emergency Pause, and audit transaction recheck. It
+stabilize that complete path and identity chain; the master reopens and compares
+the canonical pathname and identities immediately before the final grant,
+Emergency Pause, and audit transaction recheck, then retains the fresh handles
+through that transaction. It
 executes no Git process, loads no repository config
 or attributes, rejects network/device/reparse/worktree/submodule paths, and
 does not establish clean working-tree or object-content state. It retains no

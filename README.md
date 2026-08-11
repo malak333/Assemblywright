@@ -73,8 +73,9 @@ executable.
   Git process, loads no repository configuration or attributes, and rejects
   UNC, device, mapped/non-fixed-volume, reparse, worktree, and submodule paths.
   On Windows it holds non-reparse filesystem handles for the fixed-volume path,
-  identity directories, symbolic HEAD, and loose ref through the final grant,
-  Emergency Pause, and audit transaction recheck.
+  identity directories, symbolic HEAD, and loose ref, then reopens and compares
+  the complete canonical pathname and identities immediately before the final
+  grant, Emergency Pause, and audit transaction recheck.
   It does not prove a clean tree or inspect repository content. The path is
   neither returned nor stored; success returns a
   path-free digest receipt only after the active grant and Emergency Pause
