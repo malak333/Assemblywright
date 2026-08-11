@@ -755,6 +755,41 @@ fn assert_exact_object_keys(value: &Value, expected: &[&str]) {
     assert_eq!(actual, expected);
 }
 
+fn canonical_repository_path(path: &Path) -> std::path::PathBuf {
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFinalPathNameByHandleW, FILE_FLAG_BACKUP_SEMANTICS, FILE_NAME_NORMALIZED,
+        FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        VOLUME_NAME_DOS,
+    };
+
+    let handle = std::fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+        .expect("open disposable repository directory");
+    let mut buffer = vec![0_u16; 32_768];
+    let length = unsafe {
+        GetFinalPathNameByHandleW(
+            handle.as_raw_handle().cast(),
+            buffer.as_mut_ptr(),
+            buffer.len() as u32,
+            FILE_NAME_NORMALIZED | VOLUME_NAME_DOS,
+        )
+    } as usize;
+    assert!(length > 0 && length < buffer.len());
+    let resolved = String::from_utf16(&buffer[..length]).expect("Windows final DOS path");
+    if let Some(rest) = resolved.strip_prefix(r"\\?\UNC\") {
+        std::path::PathBuf::from(format!(r"\\{rest}"))
+    } else if let Some(rest) = resolved.strip_prefix(r"\\?\") {
+        std::path::PathBuf::from(rest)
+    } else {
+        std::path::PathBuf::from(resolved)
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn remote_local_coding_dispatch_is_exporter_bound_exact_and_pause_dominant() {
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -829,10 +864,11 @@ async fn remote_local_coding_dispatch_is_exporter_bound_exact_and_pause_dominant
         coding.handshake.capabilities,
         vec![CapabilityDescriptor::local_coding()]
     );
+    let repository_path = canonical_repository_path(&repository);
     let repository_id = Uuid::new_v4();
     let scope = FeatureConveyorRepositoryScopeDocument {
         repository_id,
-        repository_path: repository.to_string_lossy().into_owned(),
+        repository_path: repository_path.to_string_lossy().into_owned(),
         expected_base_branch: "main".to_string(),
         expected_head_commit: head.clone(),
     };
