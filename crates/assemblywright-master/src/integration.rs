@@ -23,7 +23,7 @@ enum CleanupHookPhase {
     BeforeCapture,
     AfterCapture,
     #[cfg(windows)]
-    AfterContainment,
+    AfterInventory,
 }
 
 #[cfg(test)]
@@ -33,7 +33,7 @@ thread_local! {
     static CLEANUP_AFTER_CAPTURE_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         std::cell::RefCell::new(None);
     #[cfg(windows)]
-    static CLEANUP_AFTER_CONTAINMENT_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+    static CLEANUP_AFTER_INVENTORY_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         std::cell::RefCell::new(None);
 }
 
@@ -47,8 +47,8 @@ fn run_cleanup_test_hook(phase: CleanupHookPhase) {
             CLEANUP_AFTER_CAPTURE_HOOK.with(|hook| hook.borrow_mut().take())
         }
         #[cfg(windows)]
-        CleanupHookPhase::AfterContainment => {
-            CLEANUP_AFTER_CONTAINMENT_HOOK.with(|hook| hook.borrow_mut().take())
+        CleanupHookPhase::AfterInventory => {
+            CLEANUP_AFTER_INVENTORY_HOOK.with(|hook| hook.borrow_mut().take())
         }
     };
     if let Some(hook) = hook {
@@ -2026,45 +2026,143 @@ fn remove_windows_entry(
         .join(format!(".assemblywright-delete-{}", Uuid::new_v4()));
     fs::rename(path, &captured)?;
     run_cleanup_test_hook(CleanupHookPhase::AfterCapture);
-    let captured_handle = open_identity_handle(&captured, directory)?;
-    let captured_valid = if directory {
-        validate_open_plain_directory(&captured_handle)
+    let captured_entries = if directory {
+        collect_windows_cleanup_entries(&captured)
     } else {
-        validate_open_plain_file(&captured_handle)
+        open_windows_cleanup_entry(&captured, PathBuf::new(), false).map(|entry| vec![entry])
     };
-    if captured_valid.is_err() || platform_identity(&captured_handle).ok() != Some(identity) {
-        let _ = windows_move_noreplace(&captured, path);
-        return Err(ArtifactIntegrationError::Rejected);
-    }
-    let containment_handle = match open_containment_handle(&captured, directory) {
-        Ok(handle) => handle,
-        Err(_) => {
+    let mut captured_entries = match captured_entries {
+        Ok(entries)
+            if entries.iter().any(|entry| {
+                entry.relative.as_os_str().is_empty() && entry.identity == identity
+            }) =>
+        {
+            entries
+        }
+        _ => {
             let _ = windows_move_noreplace(&captured, path);
             return Err(ArtifactIntegrationError::Rejected);
         }
     };
-    let containment_valid = if directory {
-        validate_open_plain_directory(&containment_handle)
-    } else {
-        validate_open_plain_file(&containment_handle)
-    };
-    if containment_valid.is_err() || platform_identity(&containment_handle).ok() != Some(identity) {
-        drop(containment_handle);
+    if platform_identity(&original)? != identity {
         let _ = windows_move_noreplace(&captured, path);
         return Err(ArtifactIntegrationError::Rejected);
     }
-    run_cleanup_test_hook(CleanupHookPhase::AfterContainment);
-    if directory {
-        for entry in fs::read_dir(&captured)? {
-            let child = entry?.path();
-            if remove_windows_entry(&child, None, true).is_err()
-                && remove_windows_entry(&child, None, false).is_err()
-            {
-                drop(containment_handle);
-                let _ = windows_move_noreplace(&captured, path);
-                return Err(ArtifactIntegrationError::Rejected);
+    run_cleanup_test_hook(CleanupHookPhase::AfterInventory);
+    captured_entries.sort_by(|left, right| {
+        right
+            .relative
+            .components()
+            .count()
+            .cmp(&left.relative.components().count())
+            .then_with(|| right.directory.cmp(&left.directory))
+    });
+    for entry in captured_entries {
+        if platform_identity(&open_identity_handle(&captured, true)?)? != identity {
+            return Err(ArtifactIntegrationError::Rejected);
+        }
+        remove_windows_captured_entry(
+            &captured.join(&entry.relative),
+            entry.identity,
+            entry.directory,
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+struct WindowsCleanupEntry {
+    relative: PathBuf,
+    identity: PlatformIdentity,
+    directory: bool,
+    _handle: File,
+}
+
+#[cfg(windows)]
+fn collect_windows_cleanup_entries(
+    root: &Path,
+) -> Result<Vec<WindowsCleanupEntry>, ArtifactIntegrationError> {
+    fn collect(
+        root: &Path,
+        path: &Path,
+        entries: &mut Vec<WindowsCleanupEntry>,
+    ) -> Result<(), ArtifactIntegrationError> {
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|_| ArtifactIntegrationError::Rejected)?
+            .to_path_buf();
+        let directory = open_windows_cleanup_entry(path, relative, true)?;
+        for child in fs::read_dir(path)? {
+            let child = child?;
+            let child_path = child.path();
+            let metadata = fs::symlink_metadata(&child_path)?;
+            if metadata.is_dir() && !metadata.file_type().is_symlink() {
+                collect(root, &child_path, entries)?;
+            } else {
+                let relative = child_path
+                    .strip_prefix(root)
+                    .map_err(|_| ArtifactIntegrationError::Rejected)?
+                    .to_path_buf();
+                entries.push(open_windows_cleanup_entry(&child_path, relative, false)?);
             }
         }
+        entries.push(directory);
+        Ok(())
+    }
+
+    let mut entries = Vec::new();
+    collect(root, root, &mut entries)?;
+    Ok(entries)
+}
+
+#[cfg(windows)]
+fn open_windows_cleanup_entry(
+    path: &Path,
+    relative: PathBuf,
+    directory: bool,
+) -> Result<WindowsCleanupEntry, ArtifactIntegrationError> {
+    let handle = open_identity_handle(path, directory)?;
+    if directory {
+        validate_open_plain_directory(&handle)?;
+    } else {
+        validate_open_plain_file(&handle)?;
+    }
+    Ok(WindowsCleanupEntry {
+        relative,
+        identity: platform_identity(&handle)?,
+        directory,
+        _handle: handle,
+    })
+}
+
+#[cfg(windows)]
+fn remove_windows_captured_entry(
+    path: &Path,
+    expected: PlatformIdentity,
+    directory: bool,
+) -> Result<(), ArtifactIntegrationError> {
+    let identity_handle = open_identity_handle(path, directory)?;
+    if directory {
+        validate_open_plain_directory(&identity_handle)?;
+    } else {
+        validate_open_plain_file(&identity_handle)?;
+    }
+    if platform_identity(&identity_handle)? != expected {
+        return Err(ArtifactIntegrationError::Rejected);
+    }
+    let recaptured = path
+        .parent()
+        .ok_or(ArtifactIntegrationError::Rejected)?
+        .join(format!(".assemblywright-delete-{}", Uuid::new_v4()));
+    fs::rename(path, &recaptured)?;
+    let containment_handle = open_containment_handle(&recaptured, directory)?;
+    if directory {
+        validate_open_plain_directory(&containment_handle)?;
+    } else {
+        validate_open_plain_file(&containment_handle)?;
+    }
+    if platform_identity(&containment_handle)? != expected {
+        return Err(ArtifactIntegrationError::Rejected);
     }
     mark_delete_by_handle(&containment_handle)
 }
@@ -2695,7 +2793,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_cleanup_holds_captured_directory_against_path_rebinding() {
+    fn windows_cleanup_rejects_captured_directory_rebinding_without_deleting_it() {
         let directory = tempdir().unwrap();
         let tree = directory.path().join("tree");
         let rebound = directory.path().join("rebound");
@@ -2704,7 +2802,7 @@ mod tests {
 
         let parent = directory.path().to_path_buf();
         let rebound_for_hook = rebound.clone();
-        CLEANUP_AFTER_CONTAINMENT_HOOK.with(|hook| {
+        CLEANUP_AFTER_INVENTORY_HOOK.with(|hook| {
             *hook.borrow_mut() = Some(Box::new(move || {
                 let captured = fs::read_dir(&parent)
                     .unwrap()
@@ -2716,12 +2814,55 @@ mod tests {
                             .starts_with(".assemblywright-delete-")
                     })
                     .unwrap();
-                assert!(fs::rename(captured, &rebound_for_hook).is_err());
+                fs::rename(captured, &rebound_for_hook).unwrap();
             }));
         });
 
-        remove_windows_entry(&tree, None, true).unwrap();
+        assert!(matches!(
+            remove_windows_entry(&tree, None, true),
+            Err(ArtifactIntegrationError::Io(_)) | Err(ArtifactIntegrationError::Rejected)
+        ));
         assert!(!tree.exists());
-        assert!(!rebound.exists());
+        assert_eq!(fs::read(rebound.join("child")).unwrap(), b"content");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_cleanup_quarantines_unexpected_post_inventory_entry_without_clobbering() {
+        let directory = tempdir().unwrap();
+        let tree = directory.path().join("tree");
+        fs::create_dir(&tree).unwrap();
+        fs::write(tree.join("expected"), b"expected").unwrap();
+
+        let parent = directory.path().to_path_buf();
+        let canonical = tree.clone();
+        CLEANUP_AFTER_INVENTORY_HOOK.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                let captured = fs::read_dir(&parent)
+                    .unwrap()
+                    .map(|entry| entry.unwrap().path())
+                    .find(|path| {
+                        path.file_name()
+                            .unwrap()
+                            .to_string_lossy()
+                            .starts_with(".assemblywright-delete-")
+                    })
+                    .unwrap();
+                fs::write(captured.join("unexpected"), b"unexpected").unwrap();
+                fs::create_dir(&canonical).unwrap();
+                fs::write(canonical.join("occupied"), b"occupied").unwrap();
+            }));
+        });
+
+        assert!(remove_windows_entry(&tree, None, true).is_err());
+        assert_eq!(fs::read(tree.join("occupied")).unwrap(), b"occupied");
+        assert!(fs::read_dir(directory.path()).unwrap().any(|entry| {
+            let entry = entry.unwrap();
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".assemblywright-delete-")
+                && fs::read(entry.path().join("unexpected")).ok().as_deref() == Some(b"unexpected")
+        }));
     }
 }
