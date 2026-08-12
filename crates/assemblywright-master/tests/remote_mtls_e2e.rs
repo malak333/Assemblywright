@@ -5,17 +5,18 @@ use assemblywright_master::{
     NewStep, PlatformSecretProtector, RepositoryGrantKind, RepositoryGrantRevision,
 };
 use assemblywright_protocol::{
-    local_coding_admission_sha256, AuthenticatedHandshakeRequest, CapabilityDescriptor, DeviceRole,
-    DistributedEventBatch, DistributedEventBatchRequest, DistributedEventKind,
-    FeatureConveyorApprovedFeatureRequest, FeatureConveyorApprovedSpecification,
-    FeatureConveyorCodingDispatchReceipt, FeatureConveyorCodingDispatchRequest,
-    FeatureConveyorCodingWorkPacketMetadata, FeatureConveyorGrantRevisions,
-    FeatureConveyorRepositoryScopeDocument, FeatureConveyorRepositorySnapshotClaimReceipt,
-    FeatureConveyorRepositorySnapshotClaimRequest, HandshakeRequest, HandshakeResponse,
-    HandshakeStatus, JobEnvelope, JobResultEnvelope, JobResultStatus, LocalCodingJobResult,
-    LocalCodingSnapshotChunk, LocalCodingSnapshotChunkRequest, Sensitivity, StepId, TaskId,
-    FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, LOCAL_CODING_COMPLETED_STATUS,
-    LOCAL_CODING_FIXTURE_TEST_STATUS, PROTOCOL_VERSION,
+    build_local_coding_fixture_patch_artifact, local_coding_admission_sha256,
+    AuthenticatedHandshakeRequest, CapabilityDescriptor, DeviceRole, DistributedEventBatch,
+    DistributedEventBatchRequest, DistributedEventKind, FeatureConveyorApprovedFeatureRequest,
+    FeatureConveyorApprovedSpecification, FeatureConveyorCodingDispatchReceipt,
+    FeatureConveyorCodingDispatchRequest, FeatureConveyorCodingWorkPacketMetadata,
+    FeatureConveyorGrantRevisions, FeatureConveyorRepositoryScopeDocument,
+    FeatureConveyorRepositorySnapshotClaimReceipt, FeatureConveyorRepositorySnapshotClaimRequest,
+    HandshakeRequest, HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope,
+    JobResultStatus, LocalCodingJobResult, LocalCodingResultArtifact,
+    LocalCodingResultArtifactAdmission, LocalCodingSnapshotChunk, LocalCodingSnapshotChunkRequest,
+    Sensitivity, StepId, TaskId, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+    LOCAL_CODING_COMPLETED_STATUS, LOCAL_CODING_FIXTURE_TEST_STATUS, PROTOCOL_VERSION,
 };
 use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
@@ -1143,16 +1144,23 @@ async fn remote_local_coding_dispatch_is_exporter_bound_exact_and_pause_dominant
     );
 
     let result_for = |job: &JobEnvelope, packet_sha256, sequence| {
+        let context = job.validate_local_coding().unwrap();
+        let artifact_bytes = build_local_coding_fixture_patch_artifact([0x42; 32]).unwrap();
+        let artifact =
+            LocalCodingResultArtifact::from_bytes(Uuid::new_v4(), &artifact_bytes).unwrap();
         let allowed_paths_sha256 =
             assemblywright_protocol::local_coding_fixture_allowed_paths_sha256();
         let payload = serde_json::to_value(LocalCodingJobResult {
             status: LOCAL_CODING_COMPLETED_STATUS.to_string(),
             work_packet_sha256: packet_sha256,
             admission_sha256: local_coding_admission_sha256(job),
-            snapshot_sha256: job.validate_local_coding().unwrap().snapshot_sha256,
+            snapshot_sha256: context.snapshot_sha256,
             allowed_paths_sha256,
             changed_paths_sha256: allowed_paths_sha256,
-            patch_sha256: Sha256::digest(b"contained-patch").into(),
+            patch_sha256: artifact.artifact_sha256,
+            artifact_id: artifact.artifact_id,
+            artifact_sha256: artifact.artifact_sha256,
+            artifact_size_bytes: artifact.artifact_size_bytes,
             changed_file_count: 1,
             test_status: LOCAL_CODING_FIXTURE_TEST_STATUS.to_string(),
             mutation_performed: true,
@@ -1160,7 +1168,7 @@ async fn remote_local_coding_dispatch_is_exporter_bound_exact_and_pause_dominant
             ambiguous: false,
         })
         .expect("serialize coding acknowledgement payload");
-        JobResultEnvelope {
+        let result = JobResultEnvelope {
             protocol_version: PROTOCOL_VERSION,
             connection_epoch: job.connection_epoch,
             sequence,
@@ -1173,9 +1181,27 @@ async fn remote_local_coding_dispatch_is_exporter_bound_exact_and_pause_dominant
             context_sha256: job.context_sha256,
             payload_sha256: Sha256::digest(serde_json::to_vec(&payload).unwrap()).into(),
             payload,
-        }
+        };
+        let admission = LocalCodingResultArtifactAdmission {
+            protocol_version: job.protocol_version,
+            connection_epoch: job.connection_epoch,
+            sequence,
+            task_id: job.task_id,
+            step_id: job.step_id,
+            attempt_id: job.attempt_id,
+            lease_id: job.lease_id,
+            cancellation_id: job.cancellation_id,
+            context_sha256: job.context_sha256,
+            feature_id: context.feature_id,
+            feature_lease_id: context.feature_lease_id,
+            snapshot_id: context.snapshot_id,
+            snapshot_sha256: context.snapshot_sha256,
+            work_packet_sha256: context.work_packet_sha256,
+            artifact,
+        };
+        (result, admission)
     };
-    let wrong = result_for(&first_job, [0x77; 32], first_job.sequence + 1);
+    let (wrong, _) = result_for(&first_job, [0x77; 32], first_job.sequence + 1);
     let wrong_response = send_http_keep_alive(
         &mut coding_stream,
         remote_endpoint,
@@ -1189,11 +1215,82 @@ async fn remote_local_coding_dispatch_is_exporter_bound_exact_and_pause_dominant
         !wrong_response.starts_with("HTTP/1.1 200 OK"),
         "wrong coding binding was accepted: {wrong_response}"
     );
-    let exact = result_for(
+    let (exact, exact_artifact) = result_for(
         &first_job,
         first_dispatch.work_packet_sha256,
         first_job.sequence + 1,
     );
+    let local_artifact_route = local_post(
+        local_endpoint,
+        "/v1/distributed/feature-conveyor/result-artifacts",
+        token.trim(),
+        &serde_json::to_string(&exact_artifact).expect("serialize local route probe"),
+    );
+    assert!(
+        local_artifact_route.starts_with("HTTP/1.1 404 Not Found"),
+        "result artifact route leaked onto loopback router: {local_artifact_route}"
+    );
+    let (_, wrong_role_artifact_response) = authenticated_application_request(
+        remote_endpoint,
+        &owner,
+        "POST",
+        "/v1/distributed/feature-conveyor/result-artifacts",
+        &exact_artifact,
+    )
+    .await;
+    assert!(
+        wrong_role_artifact_response.starts_with("HTTP/1.1 401 Unauthorized"),
+        "MacBridge admitted a coding artifact: {wrong_role_artifact_response}"
+    );
+    let exact_artifact_response = send_http_keep_alive(
+        &mut coding_stream,
+        remote_endpoint,
+        "POST",
+        "/v1/distributed/feature-conveyor/result-artifacts",
+        &serde_json::to_vec(&exact_artifact).expect("serialize exact result artifact"),
+    )
+    .await
+    .expect("admit exact coding result artifact");
+    assert!(
+        exact_artifact_response.starts_with("HTTP/1.1 200 OK"),
+        "{exact_artifact_response}"
+    );
+    let artifact_path = directory
+        .path()
+        .join("feature-result-artifacts")
+        .join(exact_artifact.artifact.artifact_id.to_string())
+        .join("artifact.patch");
+    let artifact_bytes = exact_artifact
+        .artifact
+        .validate()
+        .expect("decode admitted artifact bytes");
+    let mut tampered = artifact_bytes.clone();
+    tampered[0] ^= 1;
+    std::fs::write(&artifact_path, tampered).expect("tamper admitted artifact");
+    let tampered_result_response = send_http_keep_alive(
+        &mut coding_stream,
+        remote_endpoint,
+        "POST",
+        "/v1/distributed/results",
+        &serde_json::to_vec(&exact).expect("serialize tampered artifact result"),
+    )
+    .await
+    .expect("reject result after artifact tamper");
+    assert!(
+        !tampered_result_response.starts_with("HTTP/1.1 200 OK"),
+        "tampered artifact result was accepted: {tampered_result_response}"
+    );
+    let mut restored = std::fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(&artifact_path)
+        .expect("open artifact for exact restoration");
+    use std::io::Write as _;
+    restored
+        .write_all(&artifact_bytes)
+        .expect("restore exact artifact bytes");
+    restored.sync_all().expect("flush restored artifact");
+    drop(restored);
     let exact_response = send_http_keep_alive(
         &mut coding_stream,
         remote_endpoint,
@@ -1250,7 +1347,7 @@ async fn remote_local_coding_dispatch_is_exporter_bound_exact_and_pause_dominant
         "{}",
     );
     assert!(resume.starts_with("HTTP/1.1 200 OK"), "{resume}");
-    let late = result_for(
+    let (late, _) = result_for(
         &second_job,
         second_dispatch.work_packet_sha256,
         second_job.sequence + 2,

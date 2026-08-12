@@ -30,7 +30,7 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-$protocolVersion = 3
+$protocolVersion = 4
 $masterSchemaVersion = 11
 $featureConveyorProjectionSchemaVersion = 8
 $ownerControlSchemaVersion = 1
@@ -400,7 +400,7 @@ if ($Action -eq "Check") {
     $testDigest = Convert-BytesToHex (Get-Sha256Bytes "assemblywright-local-coding-live-control-check-v1")
     if (
         $testDigest.Length -ne 64 -or
-        $protocolVersion -ne 3 -or
+        $protocolVersion -ne 4 -or
         $masterSchemaVersion -ne 11 -or
         $featureConveyorProjectionSchemaVersion -ne 8 -or
         $ownerControlSchemaVersion -ne 1

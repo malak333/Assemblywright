@@ -331,7 +331,7 @@ canonical repository, master database, canonical memory, credentials, or
 unrelated files. General network access is disabled; only a narrowly controlled
 local-model connection is allowed.
 
-The implemented schema-v10 kernel reaches one fixed contained-coding fixture:
+The implemented schema-v12 kernel reaches one fixed contained-coding fixture:
 one explicit owner action may queue a path-free snapshot-bound packet for one
 exact registered worker; after the exact lease, a separate default-off route
 streams a bounded authenticated snapshot bundle to the Mac bridge and native
@@ -346,11 +346,19 @@ validated README mutation path without consulting environment APIs or
 post-fork identity, descriptor-table, or process-group discovery. The parent
 verifies that exact mutation, returns digest-only bounded
 evidence while truthfully reporting that tests were not run, and removes the
-workspace before returning. Manifest paths are rejected from their raw UTF-8
+workspace before returning. It also constructs one canonical protocol-owned
+replacement artifact in memory. The Swift relay admits those exact bytes over
+the existing authenticated FIFO cancellation race before posting a
+metadata-only result. Windows keeps bytes outside SQLite and records only
+immutable ID/digest/size plus exact attempt, registration, feature, snapshot,
+work-packet, pause, and lifecycle bindings with redacted audit. Result
+acceptance requires the admitted artifact; exact retry is idempotent and drift
+fails closed. Startup deletes unreferenced artifact directories but preserves
+referenced ambiguity under the existing active-feature quarantine. Manifest paths are rejected from their raw UTF-8
 form before filesystem path normalization so empty, repeated, leading, or
 trailing separators cannot acquire a different meaning on the Mac or Windows
 boundary. Arbitrary worker commands and paths, real implementation packets,
-test execution, retained workspaces, patch/result integration, review, and
+test execution, retained workspaces, patch application/result integration, review, and
 publication remain unimplemented. This child boundary does not establish
 an OS sandbox or host-level egress control.
 

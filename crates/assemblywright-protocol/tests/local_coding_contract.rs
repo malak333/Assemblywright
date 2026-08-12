@@ -1,10 +1,11 @@
 use assemblywright_protocol::{
-    local_coding_admission_sha256, AttemptId, CancellationId, CapabilityDescriptor, CapabilityKind,
-    ContextHandlingPolicy, DeviceId, FeatureConveyorCodingDispatchRequest,
+    build_local_coding_fixture_patch_artifact, local_coding_admission_sha256,
+    validate_local_coding_fixture_patch_artifact, AttemptId, CancellationId, CapabilityDescriptor,
+    CapabilityKind, ContextHandlingPolicy, DeviceId, FeatureConveyorCodingDispatchRequest,
     FeatureConveyorCodingWorkPacketMetadata, JobEnvelope, JobResultEnvelope, JobResultStatus,
-    LeaseId, LocalCodingJobRequest, LocalCodingJobResult, LocalCodingSnapshotChunk,
-    LocalCodingSnapshotChunkRequest, ProtocolError, Sensitivity, StepId, TaskId,
-    FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, LOCAL_CODING_CAPABILITY_ID,
+    LeaseId, LocalCodingJobRequest, LocalCodingJobResult, LocalCodingResultArtifact,
+    LocalCodingSnapshotChunk, LocalCodingSnapshotChunkRequest, ProtocolError, Sensitivity, StepId,
+    TaskId, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, LOCAL_CODING_CAPABILITY_ID,
     LOCAL_CODING_COMPLETED_STATUS, LOCAL_CODING_FIXTURE_TEST_STATUS, LOCAL_CODING_MODEL,
     LOCAL_CODING_PROVIDER, MAX_FEATURE_CONVEYOR_CODING_DISPATCH_REQUEST_BYTES, PROTOCOL_VERSION,
 };
@@ -172,7 +173,7 @@ fn owner_dispatch_is_strict_bounded_digest_bound_and_path_free() {
 #[test]
 fn admission_digest_has_a_fixed_cross_language_transcript() {
     let mut job = coding_job(&request());
-    job.protocol_version = 3;
+    job.protocol_version = 4;
     job.context_sha256 = [0x11; 32];
     job.task_id = TaskId::new(Uuid::parse_str("00010203-0405-0607-0809-0a0b0c0d0e0f").unwrap());
     job.step_id = StepId::new(Uuid::parse_str("10111213-1415-1617-1819-1a1b1c1d1e1f").unwrap());
@@ -188,8 +189,33 @@ fn admission_digest_has_a_fixed_cross_language_transcript() {
 
     assert_eq!(
         lower_hex(&local_coding_admission_sha256(&job)),
-        "ef9e10566ae691ac90bc99aab0615944c7d91a6eba54efca49d20fda6852608f"
+        "04eb22b8b2928b9475403b8dfccc7dd3d61132c67a89510ae47c9b19bd15140d"
     );
+}
+
+#[test]
+fn canonical_result_artifact_is_exact_digest_bound_and_bounded() {
+    let bytes = build_local_coding_fixture_patch_artifact([0x42; 32]).unwrap();
+    let digest = validate_local_coding_fixture_patch_artifact(&bytes).unwrap();
+    let artifact = LocalCodingResultArtifact::from_bytes(Uuid::new_v4(), &bytes).unwrap();
+    assert_eq!(artifact.artifact_sha256, digest);
+    assert_eq!(artifact.artifact_size_bytes, bytes.len() as u64);
+    assert_eq!(artifact.validate().unwrap(), bytes);
+
+    assert!(validate_local_coding_fixture_patch_artifact(&[]).is_err());
+    assert!(validate_local_coding_fixture_patch_artifact(&vec![
+        b'x';
+        assemblywright_protocol::MAX_LOCAL_CODING_RESULT_ARTIFACT_BYTES
+            + 1
+    ])
+    .is_err());
+    let mut malformed = bytes.clone();
+    malformed.push(b' ');
+    assert!(validate_local_coding_fixture_patch_artifact(&malformed).is_err());
+    let reordered =
+        serde_json::to_vec(&serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()).unwrap();
+    assert_ne!(reordered, bytes);
+    assert!(validate_local_coding_fixture_patch_artifact(&reordered).is_err());
 }
 
 #[test]
@@ -216,7 +242,18 @@ fn coding_job_and_result_are_exact_attempt_bound_and_reject_unbounded_mutation_c
         snapshot_sha256: owner.snapshot_sha256,
         allowed_paths_sha256: assemblywright_protocol::local_coding_fixture_allowed_paths_sha256(),
         changed_paths_sha256: assemblywright_protocol::local_coding_fixture_allowed_paths_sha256(),
-        patch_sha256: [7; 32],
+        patch_sha256: validate_local_coding_fixture_patch_artifact(
+            &build_local_coding_fixture_patch_artifact([9; 32]).unwrap(),
+        )
+        .unwrap(),
+        artifact_id: Uuid::new_v4(),
+        artifact_sha256: validate_local_coding_fixture_patch_artifact(
+            &build_local_coding_fixture_patch_artifact([9; 32]).unwrap(),
+        )
+        .unwrap(),
+        artifact_size_bytes: build_local_coding_fixture_patch_artifact([9; 32])
+            .unwrap()
+            .len() as u64,
         changed_file_count: 1,
         test_status: LOCAL_CODING_FIXTURE_TEST_STATUS.to_string(),
         mutation_performed: true,

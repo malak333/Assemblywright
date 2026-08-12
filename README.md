@@ -23,12 +23,13 @@ advertisements; handshake, job, and result envelopes; strict bound-before-decode
 JSON entry points; nil-identity rejection; fixed-schema Feature Conveyor owner-
 control request/receipt contracts; and a golden compatibility fixture.
 
-**`assemblywright-master`** — a portable schema-v11 SQLite database retaining
+**`assemblywright-master`** — a portable schema-v12 SQLite database retaining
 the schema-v4 device lifecycle, schema-v5 Feature Conveyor, schema-v6
 capability rebind evidence, schema-v7 Emergency Pause revision, and schema-v8
 single owner-control bridge designation, schema-v9 immutable repository
 snapshot-claim evidence, schema-v10 metadata-only coding-dispatch evidence, and
-schema-v11 immutable owner-resolution origin evidence with a backup-first
+schema-v11 immutable owner-resolution origin evidence and schema-v12 immutable
+result-artifact metadata with a backup-first
 fail-closed v10 compatibility migration,
 plus a headless single-owner
 executable.
@@ -154,7 +155,8 @@ null stderr, and dedicated process-group reaping. Cancellation, timeout,
 disconnect, or emergency pause dominates completion and suppresses late output.
 Its mutually exclusive local-coding lane runs only the fixed contained-coding
 `README.md` fixture in an ephemeral per-attempt workspace, reports tests as not
-run, and cleans the workspace before returning bounded digest evidence.
+run, constructs one protocol-owned canonical bounded replacement artifact in
+memory, and cleans the workspace before returning the strict result/artifact pair.
 
 **`assemblywright-core`** — the shared local foundation: the peer-identity Unix-socket
 transport, its startup validation, and read-only release readiness and evidence
@@ -186,7 +188,9 @@ Not yet implemented, and not claimed:
   explicit owner-local action may queue one snapshot-bound metadata-only coding
   admission. The exact leased lane transfers repository material and performs
   only the fixed ephemeral `README.md` contained-coding mutation. It does not
-  retain a workspace, accept arbitrary implementation commands or paths,
+  retain a workspace, accept arbitrary implementation commands or paths. The
+  schema-v12 master can admit the exact patch bytes into private state and bind
+  a metadata-only result to them, but cannot apply or integrate them,
   execute tests, mutate the canonical repository, integrate a result, or invoke
   a provider.
 - Worker execution against real repositories, review-provider invocation, or

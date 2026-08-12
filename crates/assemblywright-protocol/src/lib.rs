@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::net::SocketAddr;
 use uuid::Uuid;
 
-pub const PROTOCOL_VERSION: u16 = 3;
+pub const PROTOCOL_VERSION: u16 = 4;
 pub const MAX_DEVICE_NAME_BYTES: usize = 128;
 pub const MAX_CAPABILITIES_PER_DEVICE: usize = 64;
 pub const MAX_CAPABILITY_ID_BYTES: usize = 64;
@@ -63,6 +63,11 @@ pub const MAX_LOCAL_CODING_RESULT_BYTES: usize = 32 * 1024;
 pub const MAX_LOCAL_CODING_SNAPSHOT_CHUNK_BYTES: usize = 128 * 1024;
 pub const MAX_LOCAL_CODING_SNAPSHOT_BUNDLE_BYTES: u64 = 320 * 1024 * 1024;
 pub const MAX_LOCAL_CODING_SNAPSHOT_CHUNK_FRAME_BYTES: usize = 384 * 1024;
+pub const MAX_LOCAL_CODING_RESULT_ARTIFACT_BYTES: usize = 64 * 1024;
+pub const MAX_LOCAL_CODING_RESULT_ARTIFACT_FRAME_BYTES: usize = 160 * 1024;
+pub const LOCAL_CODING_RESULT_ARTIFACT_FORMAT: &str = "assemblywright.readme-replacement.v1";
+pub const LOCAL_CODING_RESULT_ARTIFACT_STATUS: &str = "result_artifact_admitted";
+pub const LOCAL_CODING_FIXTURE_CONTENT: &[u8] = b"assemblywright contained coding fixture\n";
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum ProtocolError {
@@ -142,6 +147,8 @@ pub enum ProtocolError {
     InvalidLocalCodingResult,
     #[error("local coding snapshot transfer must use the exact leased-attempt contract")]
     InvalidLocalCodingSnapshotTransfer,
+    #[error("local coding result artifact must use the exact bounded leased-attempt contract")]
+    InvalidLocalCodingResultArtifact,
     #[error("feature conveyor owner-control request is invalid")]
     InvalidFeatureConveyorOwnerControl,
 }
@@ -2118,11 +2125,254 @@ pub struct LocalCodingJobResult {
     pub allowed_paths_sha256: [u8; 32],
     pub changed_paths_sha256: [u8; 32],
     pub patch_sha256: [u8; 32],
+    pub artifact_id: Uuid,
+    pub artifact_sha256: [u8; 32],
+    pub artifact_size_bytes: u64,
     pub changed_file_count: u16,
     pub test_status: String,
     pub mutation_performed: bool,
     pub workspace_retained: bool,
     pub ambiguous: bool,
+}
+
+/// Protocol-owned canonical replacement artifact for the sole contained-coding
+/// fixture. It carries no arbitrary path or command. The expected-before digest
+/// makes later application (which is outside this slice) compare-and-set only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LocalCodingCanonicalPatchArtifact {
+    format: String,
+    path: String,
+    expected_before_sha256: [u8; 32],
+    replacement_sha256: [u8; 32],
+    replacement_hex: String,
+}
+
+pub fn build_local_coding_fixture_patch_artifact(
+    expected_before_sha256: [u8; 32],
+) -> Result<Vec<u8>, ProtocolError> {
+    if expected_before_sha256 == [0; 32] {
+        return Err(ProtocolError::InvalidLocalCodingResultArtifact);
+    }
+    let document = LocalCodingCanonicalPatchArtifact {
+        format: LOCAL_CODING_RESULT_ARTIFACT_FORMAT.to_string(),
+        path: LOCAL_CODING_FIXTURE_ALLOWED_PATH.to_string(),
+        expected_before_sha256,
+        replacement_sha256: Sha256::digest(LOCAL_CODING_FIXTURE_CONTENT).into(),
+        replacement_hex: hex_lower(LOCAL_CODING_FIXTURE_CONTENT),
+    };
+    let bytes = serde_json::to_vec(&document).map_err(|error| ProtocolError::Serialization {
+        field: "local_coding_result_artifact",
+        message: error.to_string(),
+    })?;
+    validate_local_coding_fixture_patch_artifact(&bytes)?;
+    Ok(bytes)
+}
+
+pub fn validate_local_coding_fixture_patch_artifact(
+    bytes: &[u8],
+) -> Result<[u8; 32], ProtocolError> {
+    if bytes.is_empty() || bytes.len() > MAX_LOCAL_CODING_RESULT_ARTIFACT_BYTES {
+        return Err(ProtocolError::InvalidLocalCodingResultArtifact);
+    }
+    let document: LocalCodingCanonicalPatchArtifact =
+        decode_strict_json("local_coding_result_artifact", bytes)?;
+    let replacement = decode_lower_hex(&document.replacement_hex)
+        .ok_or(ProtocolError::InvalidLocalCodingResultArtifact)?;
+    if document.format != LOCAL_CODING_RESULT_ARTIFACT_FORMAT
+        || document.path != LOCAL_CODING_FIXTURE_ALLOWED_PATH
+        || document.expected_before_sha256 == [0; 32]
+        || replacement != LOCAL_CODING_FIXTURE_CONTENT
+        || document.replacement_sha256 != <[u8; 32]>::from(Sha256::digest(&replacement))
+        || serde_json::to_vec(&document).map_err(|error| ProtocolError::Serialization {
+            field: "local_coding_result_artifact",
+            message: error.to_string(),
+        })? != bytes
+    {
+        return Err(ProtocolError::InvalidLocalCodingResultArtifact);
+    }
+    Ok(Sha256::digest(bytes).into())
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalCodingAgentCompletion {
+    pub result: JobResultEnvelope,
+    pub artifact: LocalCodingResultArtifact,
+}
+
+impl LocalCodingAgentCompletion {
+    pub fn validate_for_job(&self, job: &JobEnvelope) -> Result<(), ProtocolError> {
+        self.result.validate_local_coding_result(job)?;
+        self.artifact.validate()?;
+        let result: LocalCodingJobResult = serde_json::from_value(self.result.payload.clone())
+            .map_err(|_| ProtocolError::InvalidLocalCodingResult)?;
+        if result.artifact_id != self.artifact.artifact_id
+            || result.patch_sha256 != self.artifact.artifact_sha256
+            || result.artifact_sha256 != self.artifact.artifact_sha256
+            || result.artifact_size_bytes != self.artifact.artifact_size_bytes
+        {
+            return Err(ProtocolError::InvalidLocalCodingResultArtifact);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalCodingResultArtifact {
+    pub artifact_id: Uuid,
+    pub artifact_sha256: [u8; 32],
+    pub artifact_size_bytes: u64,
+    pub artifact_hex: String,
+}
+
+impl LocalCodingResultArtifact {
+    pub fn from_bytes(artifact_id: Uuid, bytes: &[u8]) -> Result<Self, ProtocolError> {
+        let artifact_sha256 = validate_local_coding_fixture_patch_artifact(bytes)?;
+        Ok(Self {
+            artifact_id,
+            artifact_sha256,
+            artifact_size_bytes: bytes.len() as u64,
+            artifact_hex: hex_lower(bytes),
+        })
+    }
+
+    pub fn validate(&self) -> Result<Vec<u8>, ProtocolError> {
+        validate_uuid("artifact_id", self.artifact_id)?;
+        let bytes = decode_lower_hex(&self.artifact_hex)
+            .ok_or(ProtocolError::InvalidLocalCodingResultArtifact)?;
+        if self.artifact_size_bytes == 0
+            || self.artifact_size_bytes > MAX_LOCAL_CODING_RESULT_ARTIFACT_BYTES as u64
+            || bytes.len() as u64 != self.artifact_size_bytes
+            || validate_local_coding_fixture_patch_artifact(&bytes)? != self.artifact_sha256
+        {
+            return Err(ProtocolError::InvalidLocalCodingResultArtifact);
+        }
+        Ok(bytes)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalCodingResultArtifactAdmission {
+    pub protocol_version: u16,
+    pub connection_epoch: u64,
+    pub sequence: u64,
+    pub task_id: TaskId,
+    pub step_id: StepId,
+    pub attempt_id: AttemptId,
+    pub lease_id: LeaseId,
+    pub cancellation_id: CancellationId,
+    pub context_sha256: [u8; 32],
+    pub feature_id: Uuid,
+    pub feature_lease_id: Uuid,
+    pub snapshot_id: Uuid,
+    pub snapshot_sha256: [u8; 32],
+    pub work_packet_sha256: [u8; 32],
+    pub artifact: LocalCodingResultArtifact,
+}
+
+impl LocalCodingResultArtifactAdmission {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "local_coding_result_artifact_admission",
+            frame,
+            MAX_LOCAL_CODING_RESULT_ARTIFACT_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_version(self.protocol_version)?;
+        validate_positive_limit("connection_epoch", self.connection_epoch, u64::MAX)?;
+        validate_positive_limit("sequence", self.sequence, u64::MAX)?;
+        validate_uuid("task_id", self.task_id.0)?;
+        validate_uuid("step_id", self.step_id.0)?;
+        validate_uuid("attempt_id", self.attempt_id.0)?;
+        validate_uuid("lease_id", self.lease_id.0)?;
+        validate_uuid("cancellation_id", self.cancellation_id.0)?;
+        validate_uuid("feature_id", self.feature_id)?;
+        validate_uuid("feature_lease_id", self.feature_lease_id)?;
+        validate_uuid("snapshot_id", self.snapshot_id)?;
+        if self.context_sha256 == [0; 32]
+            || self.snapshot_sha256 == [0; 32]
+            || self.work_packet_sha256 == [0; 32]
+        {
+            return Err(ProtocolError::InvalidLocalCodingResultArtifact);
+        }
+        self.artifact.validate()?;
+        validate_serialized_limit(
+            "local_coding_result_artifact_admission",
+            self,
+            MAX_LOCAL_CODING_RESULT_ARTIFACT_FRAME_BYTES,
+        )
+    }
+
+    pub fn validate_for_job(&self, job: &JobEnvelope) -> Result<Vec<u8>, ProtocolError> {
+        self.validate()?;
+        let context = job.validate_local_coding()?;
+        if self.protocol_version != job.protocol_version
+            || self.connection_epoch != job.connection_epoch
+            || self.sequence <= job.sequence
+            || self.task_id != job.task_id
+            || self.step_id != job.step_id
+            || self.attempt_id != job.attempt_id
+            || self.lease_id != job.lease_id
+            || self.cancellation_id != job.cancellation_id
+            || self.context_sha256 != job.context_sha256
+            || self.feature_id != context.feature_id
+            || self.feature_lease_id != context.feature_lease_id
+            || self.snapshot_id != context.snapshot_id
+            || self.snapshot_sha256 != context.snapshot_sha256
+            || self.work_packet_sha256 != context.work_packet_sha256
+        {
+            return Err(ProtocolError::InvalidLocalCodingResultArtifact);
+        }
+        self.artifact.validate()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalCodingResultArtifactReceipt {
+    pub protocol_version: u16,
+    pub connection_epoch: u64,
+    pub sequence: u64,
+    pub task_id: TaskId,
+    pub step_id: StepId,
+    pub attempt_id: AttemptId,
+    pub lease_id: LeaseId,
+    pub cancellation_id: CancellationId,
+    pub artifact_id: Uuid,
+    pub artifact_sha256: [u8; 32],
+    pub artifact_size_bytes: u64,
+    pub status: String,
+}
+
+impl LocalCodingResultArtifactReceipt {
+    pub fn validate_for_admission(
+        &self,
+        admission: &LocalCodingResultArtifactAdmission,
+    ) -> Result<(), ProtocolError> {
+        admission.validate()?;
+        if self.protocol_version != admission.protocol_version
+            || self.connection_epoch != admission.connection_epoch
+            || self.sequence != admission.sequence
+            || self.task_id != admission.task_id
+            || self.step_id != admission.step_id
+            || self.attempt_id != admission.attempt_id
+            || self.lease_id != admission.lease_id
+            || self.cancellation_id != admission.cancellation_id
+            || self.artifact_id != admission.artifact.artifact_id
+            || self.artifact_sha256 != admission.artifact.artifact_sha256
+            || self.artifact_size_bytes != admission.artifact.artifact_size_bytes
+            || self.status != LOCAL_CODING_RESULT_ARTIFACT_STATUS
+        {
+            return Err(ProtocolError::InvalidLocalCodingResultArtifact);
+        }
+        Ok(())
+    }
 }
 
 pub fn local_coding_fixture_allowed_paths_sha256() -> [u8; 32] {
@@ -2382,6 +2632,10 @@ impl JobResultEnvelope {
             || result.allowed_paths_sha256 != local_coding_fixture_allowed_paths_sha256()
             || result.changed_paths_sha256 != result.allowed_paths_sha256
             || result.patch_sha256 == [0; 32]
+            || result.artifact_id.is_nil()
+            || result.artifact_sha256 != result.patch_sha256
+            || result.artifact_size_bytes == 0
+            || result.artifact_size_bytes > MAX_LOCAL_CODING_RESULT_ARTIFACT_BYTES as u64
             || result.changed_file_count != 1
             || result.test_status != LOCAL_CODING_FIXTURE_TEST_STATUS
             || !result.mutation_performed
@@ -2765,4 +3019,57 @@ where
         })?;
     validate(&value)?;
     Ok(value)
+}
+
+fn decode_strict_json<T>(field: &'static str, frame: &[u8]) -> Result<T, ProtocolError>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let strict = serde_json::from_slice::<StrictJsonValue>(frame).map_err(|error| {
+        ProtocolError::Deserialization {
+            field,
+            message: error.to_string(),
+        }
+    })?;
+    serde_json::from_value(strict.0).map_err(|error| ProtocolError::Deserialization {
+        field,
+        message: error.to_string(),
+    })
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
+}
+
+fn decode_lower_hex(value: &str) -> Option<Vec<u8>> {
+    if value.len() % 2 != 0
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return None;
+    }
+    value
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|pair| {
+            let high = match pair[0] {
+                b'0'..=b'9' => pair[0] - b'0',
+                b'a'..=b'f' => pair[0] - b'a' + 10,
+                _ => return None,
+            };
+            let low = match pair[1] {
+                b'0'..=b'9' => pair[1] - b'0',
+                b'a'..=b'f' => pair[1] - b'a' + 10,
+                _ => return None,
+            };
+            Some((high << 4) | low)
+        })
+        .collect()
 }

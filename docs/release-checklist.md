@@ -105,6 +105,23 @@ Before starting a release pass, confirm the claim you intend to make.
   worker checkout, arbitrary coding/test execution, canonical-repository
   mutation, result integration, review provider, publication coordinator, Mac
   control UI, queue advancement, or autonomous activation.
+- Confirm protocol-v4/schema-v12 result-artifact admission uses only the fixed
+  canonical README replacement bytes; the SHA-256 covers exact artifact bytes;
+  the agent cleans workspace/transfer state before returning result plus
+  artifact; Swift strictly validates and uploads it through the existing FIFO
+  cancellation race; the remote route is mTLS-only and exact-attempt bound;
+  SQLite/audit retain no bytes or paths; immutable metadata and redacted audit
+  commit together; exact retry is idempotent; missing/mismatched/stale/paused/
+  cancelled/expired admission rejects result acceptance; startup removes
+  unreferenced artifact directories but retains referenced ambiguity under
+  active-feature quarantine. Record Windows remote-mTLS and live-device proof
+  separately from repository tests. Do not claim apply or integration.
+- Confirm crash-prepared/concurrent exact retries recover; cleanup is guarded;
+  referenced missing, corrupt, reparse/symlink, hardlinked, wrong-permission,
+  or identity-drifted evidence blocks startup and terminal result acceptance
+  without deleting referenced state. Record live Windows proof for file flush,
+  same-volume rename, service-account ACL ownership, reparse/link rejection,
+  and crash recovery; do not claim portable Windows directory flush.
 - Confirm the owner-token loopback-only `cancel-active-feature` and
   `abandon-and-advance` routes are absent from enrolled-device mTLS. Prove
   strict duplicate/unknown/oversized-frame denial; exact feature, lifecycle,

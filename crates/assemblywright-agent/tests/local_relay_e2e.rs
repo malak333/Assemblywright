@@ -3,10 +3,10 @@
 use assemblywright_protocol::{
     AttemptId, CancellationId, CancellationInstruction, ContextHandlingPolicy, DistributedEvent,
     DistributedEventBatch, DistributedEventCursor, DistributedEventKind,
-    FeatureConveyorCodingWorkPacketMetadata, JobEnvelope, LeaseId, LocalCodingJobRequest,
-    LocalCodingSnapshotChunk, Sensitivity, StepId, TaskId, CANCELLATION_ACK_DEADLINE_MS,
-    FIXTURE_REASONING_CAPABILITY_ID, FIXTURE_REASONING_MODEL, LOCAL_CODING_CAPABILITY_ID,
-    LOCAL_CODING_MODEL, MLX_REASONING_CAPABILITY_ID, PROTOCOL_VERSION,
+    FeatureConveyorCodingWorkPacketMetadata, JobEnvelope, LeaseId, LocalCodingAgentCompletion,
+    LocalCodingJobRequest, LocalCodingSnapshotChunk, Sensitivity, StepId, TaskId,
+    CANCELLATION_ACK_DEADLINE_MS, FIXTURE_REASONING_CAPABILITY_ID, FIXTURE_REASONING_MODEL,
+    LOCAL_CODING_CAPABILITY_ID, LOCAL_CODING_MODEL, MLX_REASONING_CAPABILITY_ID, PROTOCOL_VERSION,
 };
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
@@ -19,11 +19,19 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use std::sync::{Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 const TOKEN: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+static AGENT_E2E_LOCK: Mutex<()> = Mutex::new(());
+
+fn serialize_agent_e2e() -> MutexGuard<'static, ()> {
+    AGENT_E2E_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 struct ChildGuard(Child);
 
@@ -36,6 +44,7 @@ impl Drop for ChildGuard {
 
 #[test]
 fn supervised_agent_uds_requires_identity_and_bearer_and_persists_exact_cursor() {
+    let _agent_e2e_guard = serialize_agent_e2e();
     let temporary = tempfile::tempdir().expect("agent relay fixture");
     let runtime_dir = temporary.path().join("run");
     fs::create_dir(&runtime_dir).expect("create runtime directory");
@@ -125,6 +134,7 @@ fn supervised_agent_uds_requires_identity_and_bearer_and_persists_exact_cursor()
 
 #[test]
 fn authenticated_uds_fixture_success_and_cancellation_suppress_late_output() {
+    let _agent_e2e_guard = serialize_agent_e2e();
     let temporary = tempfile::tempdir().expect("agent fixture job");
     let runtime_dir = temporary.path().join("run");
     fs::create_dir(&runtime_dir).expect("create runtime");
@@ -190,6 +200,7 @@ fn authenticated_uds_fixture_success_and_cancellation_suppress_late_output() {
 
 #[test]
 fn authenticated_uds_mlx_success_and_cancellation_are_separate_and_bounded() {
+    let _agent_e2e_guard = serialize_agent_e2e();
     let temporary = tempfile::tempdir().expect("agent MLX job");
     let runtime_dir = temporary.path().join("run");
     fs::create_dir(&runtime_dir).expect("create runtime");
@@ -283,6 +294,7 @@ printf 'mlx:%s' "$prompt"
 
 #[test]
 fn authenticated_uds_local_coding_snapshot_admission_cancellation_and_restart_cleanup() {
+    let _agent_e2e_guard = serialize_agent_e2e();
     let temporary = tempfile::tempdir().expect("agent local coding snapshot");
     let runtime_dir = temporary.path().join("run");
     fs::create_dir(&runtime_dir).expect("create runtime");
@@ -344,16 +356,19 @@ fn authenticated_uds_local_coding_snapshot_admission_cancellation_and_restart_cl
         ),
     );
     assert_eq!(materialized["status"], 200);
+    let completion: LocalCodingAgentCompletion =
+        serde_json::from_value(response_body(&materialized)).unwrap();
+    completion.validate_for_job(&job).unwrap();
     assert_eq!(
-        response_body(&materialized)["payload"]["status"],
+        completion.result.payload["status"],
         "contained_coding_completed"
     );
-    let completed = response_body(&materialized);
-    assert_eq!(completed["payload"]["changed_file_count"], 1);
-    assert_eq!(completed["payload"]["test_status"], "not_run");
-    assert_eq!(completed["payload"]["mutation_performed"], true);
-    assert_eq!(completed["payload"]["workspace_retained"], false);
-    assert_eq!(completed["payload"]["ambiguous"], false);
+    assert_eq!(completion.result.payload["changed_file_count"], 1);
+    assert_eq!(completion.result.payload["test_status"], "not_run");
+    assert_eq!(completion.result.payload["mutation_performed"], true);
+    assert_eq!(completion.result.payload["workspace_retained"], false);
+    assert_eq!(completion.result.payload["ambiguous"], false);
+    completion.artifact.validate().unwrap();
     assert_eq!(
         fs::read_dir(data_dir.join("local-coding-snapshots"))
             .unwrap()
@@ -400,6 +415,7 @@ fn authenticated_uds_local_coding_snapshot_admission_cancellation_and_restart_cl
 
 #[test]
 fn local_coding_cancel_is_serviced_during_blocking_verification_without_late_result() {
+    let _agent_e2e_guard = serialize_agent_e2e();
     let temporary = tempfile::tempdir().expect("agent local coding concurrent cancellation");
     let runtime_dir = temporary.path().join("run");
     fs::create_dir(&runtime_dir).expect("create runtime");
@@ -476,7 +492,11 @@ fn local_coding_cancel_is_serviced_during_blocking_verification_without_late_res
         .join("local-coding-snapshots")
         .join(job.attempt_id.0.to_string())
         .join("snapshot.bundle.partial");
-    let verification_deadline = Instant::now() + Duration::from_secs(2);
+    // The complete workspace test runs several real agent processes in parallel.
+    // Allow the final request to reach this agent under that load; the separate
+    // cancellation assertion below still enforces the protocol acknowledgement
+    // deadline once verification has actually begun.
+    let verification_deadline = Instant::now() + Duration::from_secs(10);
     while fs::metadata(&partial_bundle)
         .map(|metadata| metadata.len())
         .unwrap_or(0)
@@ -522,6 +542,7 @@ fn local_coding_cancel_is_serviced_during_blocking_verification_without_late_res
 
 #[test]
 fn local_coding_snapshot_startup_rejects_a_nonempty_parent_environment() {
+    let _agent_e2e_guard = serialize_agent_e2e();
     let temporary = tempfile::tempdir().expect("agent local coding environment policy");
     let socket_path = temporary.path().join("local-coding.sock");
     let startup = json!({
@@ -569,6 +590,7 @@ fn local_coding_snapshot_startup_rejects_a_nonempty_parent_environment() {
 
 #[test]
 fn agent_sigterm_reaps_active_mlx_process_group_before_exit() {
+    let _agent_e2e_guard = serialize_agent_e2e();
     let temporary = tempfile::tempdir().expect("agent MLX shutdown");
     let runtime_dir = temporary.path().join("run");
     fs::create_dir(&runtime_dir).expect("create runtime");
@@ -642,6 +664,7 @@ fn agent_sigterm_reaps_active_mlx_process_group_before_exit() {
 
 #[test]
 fn agent_rejects_parent_mismatch_before_creating_durable_state() {
+    let _agent_e2e_guard = serialize_agent_e2e();
     let temporary = tempfile::tempdir().expect("parent mismatch fixture");
     let data_dir = temporary.path().join("data");
     let startup = json!({
@@ -678,6 +701,7 @@ fn agent_rejects_parent_mismatch_before_creating_durable_state() {
 
 #[test]
 fn agent_rejects_non_exact_peer_requirement_before_creating_durable_state() {
+    let _agent_e2e_guard = serialize_agent_e2e();
     let temporary = tempfile::tempdir().expect("peer requirement fixture");
     let data_dir = temporary.path().join("data");
     let startup = json!({
@@ -714,6 +738,7 @@ fn agent_rejects_non_exact_peer_requirement_before_creating_durable_state() {
 
 #[test]
 fn agent_rejects_partial_or_disabled_mlx_startup_authority_before_storage() {
+    let _agent_e2e_guard = serialize_agent_e2e();
     let temporary = tempfile::tempdir().expect("partial MLX startup fixture");
     let data_dir = temporary.path().join("data");
     for startup in [

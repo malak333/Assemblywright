@@ -27,7 +27,7 @@ These notes capture durable facts for future agents working on this repository.
   a pre-rename Windows master state directory. The gate pins it by name and caps
   how many lines of that file may mention the old namespace, so the exception
   cannot grow.
-- `PROTOCOL_VERSION` is 3. It moved from 1 to 2 because the rename changed wire
+- `PROTOCOL_VERSION` is 4. It moved from 1 to 2 because the rename changed wire
   values: the TLS exporter label, the fixture capability provider and model, and
   the certificate subject and SAN URI. Two builds both claiming version 1 while
   disagreeing on those would be mutually incompatible, which is exactly what the
@@ -36,6 +36,9 @@ These notes capture durable facts for future agents working on this repository.
   receipt with wire-incompatible contained-coding evidence: fixed allowed and
   changed path-set digests, admission and patch digests, changed-file count,
   truthful test status, mutation, workspace-retention, and ambiguity fields.
+  It moved from 3 to 4 because the local-coding terminal response is now a
+  strict result/artifact pair and the result carries immutable artifact ID,
+  exact-byte SHA-256, and size. Version-3 peers must reject this shape.
 - The current identity surface: code-signing identifier
   `com.nobiletechnology.assemblywright` and its `.core` suffix for the bundled
   CLI; bundle executable `AssemblywrightMacApp`; bundled CLI
@@ -805,6 +808,30 @@ an old one.
   `Connection: close` response into a macOS-only connection-reset failure when
   the server closes with unread request bytes. Truncated or malformed response
   bodies must still fail the harness.
+- Schema v12 admits only one protocol-owned canonical `README.md` replacement
+  artifact for the fixed contained-coding fixture. The Rust agent constructs it
+  in memory, hashes exact bytes, cleans workspace and transfer state, then
+  returns a strict result/artifact pair. Swift validates the canonical bytes,
+  result binding, and receipt while uploading over the existing FIFO mTLS
+  cancellation race; it posts only the metadata result afterward.
+- Result-artifact bytes live under private Windows master state, never SQLite or
+  audit. SQLite stores immutable artifact ID, digest, size, and exact device,
+  registration, session, epoch, task, step, attempt, lease, cancellation,
+  feature, snapshot, and work-packet bindings with a same-transaction redacted
+  audit row. Exact retry is idempotent. Mismatch, replay, stale identity,
+  cancellation, pause, expiry, lifecycle drift, missing admission, and result
+  metadata drift fail closed.
+- Startup removes unreferenced artifact directories. Referenced ambiguous state
+  is retained as evidence, and active-feature startup quarantine remains the
+  dominant recovery rule. Artifact admission is not apply/integration: it adds
+  no canonical repository mutation, lifecycle advancement, test execution,
+  provider/review, Git/publication, or autonomous-dispatch authority.
+- The artifact store uses owner-private fixed-shape paths, stable no-follow or
+  Windows by-handle validation, hardlink/reparse rejection, coordinated exact
+  retry guards, startup verification of every referenced file, and immediate
+  pre-result re-hashing while handles remain live through the transaction.
+  File flush plus same-volume rename is implemented; portable Windows directory
+  flush, service-account ACL, and crash durability remain live release proof.
 
 ## Safety Guardrails
 

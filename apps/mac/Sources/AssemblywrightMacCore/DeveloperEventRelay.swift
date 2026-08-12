@@ -316,6 +316,8 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
         "/v1/distributed/cancellations/ack"
     public static let remoteSnapshotChunksPath =
         "/v1/distributed/feature-conveyor/snapshot-chunks"
+    public static let remoteResultArtifactsPath =
+        "/v1/distributed/feature-conveyor/result-artifacts"
     public static let maximumEventsPerBatch = 64
 
     nonisolated public let routingMode: AssemblywrightMacBridgeEventRelayRoutingMode
@@ -512,11 +514,22 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
         let cancellationID: UUID
         let contextDigest: [UInt8]
         let admissionDigest: [UInt8]
+        let featureID: UUID
+        let featureLeaseID: UUID
         let snapshotID: UUID
         let snapshotDigest: [UInt8]
         let workPacketDigest: [UInt8]
         let leaseDurationMilliseconds: UInt64
         let deadlineAfterMilliseconds: UInt64
+    }
+
+    private struct ValidatedLocalCodingCompletion: Sendable {
+        let resultBody: Data
+        let resultPayloadDigest: [UInt8]
+        let artifactAdmissionBody: Data
+        let artifactID: UUID
+        let artifactDigest: [UInt8]
+        let artifactSize: UInt64
     }
 
     private enum LocalCodingRaceOutcome: Sendable {
@@ -733,11 +746,38 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
             expectedTotal = chunk.totalBytes
             let acceptance = try await agent.acceptLocalCodingSnapshotChunk(response.body)
             if chunk.complete {
-                guard case let .result(result) = acceptance else {
+                guard case let .result(completionBody) = acceptance else {
                     throw AssemblywrightMacDeveloperEventRelayError
                         .localCodingSnapshotRejected
                 }
-                return result
+                let completion = try validateLocalCodingCompletion(
+                    completionBody,
+                    for: job
+                )
+                do {
+                    let receipt = try await sessionRequests.send(
+                        AssemblywrightMacBridgeHTTPRequest(
+                            method: "POST",
+                            path: remoteResultArtifactsPath,
+                            body: completion.artifactAdmissionBody
+                        )
+                    )
+                    try validateLocalCodingArtifactReceipt(
+                        receipt,
+                        completion: completion,
+                        job: job
+                    )
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    // Admission denial and receipt drift participate in the
+                    // same cancellation-aware transfer rejection as a final
+                    // chunk denial. If cancellation has already won, the race
+                    // still validates and posts its acknowledgement.
+                    throw AssemblywrightMacDeveloperEventRelayError
+                        .localCodingSnapshotRejected
+                }
+                return completion.resultBody
             }
             guard case let .nextOffset(agentOffset) = acceptance,
                   agentOffset == chunk.nextOffset else {
@@ -1417,10 +1457,10 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
                   "device_registry_revision", "queue_revision",
                   "emergency_pause_revision"
               ]),
-              strictUUID(context["feature_id"]) != nil,
+              let featureID = strictUUID(context["feature_id"]),
               strictInteger(context["specification_revision"]).map({ $0 > 0 }) == true,
               strictInteger(context["lifecycle_revision"]).map({ $0 > 0 }) == true,
-              strictUUID(context["feature_lease_id"]) != nil,
+              let featureLeaseID = strictUUID(context["feature_lease_id"]),
               let snapshotID = strictUUID(context["snapshot_id"]),
               let snapshotDigest = strictDigest(context["snapshot_sha256"]),
               snapshotDigest != [UInt8](repeating: 0, count: 32),
@@ -1467,6 +1507,8 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
                 leaseDurationMilliseconds: leaseDuration,
                 deadlineAfterMilliseconds: deadline
             ),
+            featureID: featureID,
+            featureLeaseID: featureLeaseID,
             snapshotID: snapshotID,
             snapshotDigest: snapshotDigest,
             workPacketDigest: workPacketDigest,
@@ -1654,6 +1696,7 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
                   "status", "work_packet_sha256", "admission_sha256",
                   "snapshot_sha256", "allowed_paths_sha256",
                   "changed_paths_sha256", "patch_sha256",
+                  "artifact_id", "artifact_sha256", "artifact_size_bytes",
                   "changed_file_count", "test_status", "mutation_performed",
                   "workspace_retained", "ambiguous"
               ]),
@@ -1666,6 +1709,10 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
               strictDigest(payload["changed_paths_sha256"]) == allowedPathsDigest,
               let patchDigest = strictDigest(payload["patch_sha256"]),
               patchDigest != [UInt8](repeating: 0, count: 32),
+              strictUUID(payload["artifact_id"]) != nil,
+              strictDigest(payload["artifact_sha256"]) == patchDigest,
+              strictInteger(payload["artifact_size_bytes"])
+                .map({ (1 ... 64 * 1_024).contains($0) }) == true,
               strictInteger(payload["changed_file_count"]) == 1,
               payload["test_status"] as? String == "not_run",
               payload["mutation_performed"] as? Bool == true,
@@ -1676,6 +1723,135 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
             throw AssemblywrightMacDeveloperEventRelayError.localCodingSnapshotRejected
         }
         return payloadDigest
+    }
+
+    private static func validateLocalCodingCompletion(
+        _ body: Data,
+        for job: ValidatedLocalCodingJob
+    ) throws -> ValidatedLocalCodingCompletion {
+        guard !body.isEmpty,
+              body.count <= 160 * 1_024,
+              let object = strictJSONObject(body),
+              Set(object.keys) == Set(["result", "artifact"]),
+              let result = object["result"] as? [String: Any],
+              let resultSequence = strictInteger(result["sequence"]),
+              resultSequence > job.sequence,
+              let artifact = object["artifact"] as? [String: Any],
+              Set(artifact.keys) == Set([
+                  "artifact_id", "artifact_sha256", "artifact_size_bytes", "artifact_hex"
+              ]),
+              let artifactID = strictUUID(artifact["artifact_id"]),
+              let artifactDigest = strictDigest(artifact["artifact_sha256"]),
+              let artifactSize = strictInteger(artifact["artifact_size_bytes"]),
+              (1 ... 64 * 1_024).contains(artifactSize),
+              let artifactHex = artifact["artifact_hex"] as? String,
+              artifactHex.utf8.count == Int(artifactSize) * 2,
+              let artifactBytes = decodeLowerHex(artifactHex),
+              UInt64(artifactBytes.count) == artifactSize,
+              Array(SHA256.hash(data: artifactBytes)) == artifactDigest,
+              validateCanonicalLocalCodingArtifact(artifactBytes),
+              let resultPayload = result["payload"] as? [String: Any],
+              strictUUID(resultPayload["artifact_id"]) == artifactID,
+              strictDigest(resultPayload["patch_sha256"]) == artifactDigest,
+              strictDigest(resultPayload["artifact_sha256"]) == artifactDigest,
+              strictInteger(resultPayload["artifact_size_bytes"]) == artifactSize else {
+            throw AssemblywrightMacDeveloperEventRelayError.localCodingSnapshotRejected
+        }
+        let resultBody = try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys])
+        let resultPayloadDigest = try validateLocalCodingResult(resultBody, for: job)
+        let admission: [String: Any] = [
+            "protocol_version": Int(AssemblywrightMacMTLSBridgeTransport.protocolVersion),
+            "connection_epoch": NSNumber(value: job.connectionEpoch),
+            "sequence": NSNumber(value: resultSequence),
+            "task_id": job.taskID.uuidString.lowercased(),
+            "step_id": job.stepID.uuidString.lowercased(),
+            "attempt_id": job.attemptID.uuidString.lowercased(),
+            "lease_id": job.leaseID.uuidString.lowercased(),
+            "cancellation_id": job.cancellationID.uuidString.lowercased(),
+            "context_sha256": job.contextDigest,
+            "feature_id": job.featureID.uuidString.lowercased(),
+            "feature_lease_id": job.featureLeaseID.uuidString.lowercased(),
+            "snapshot_id": job.snapshotID.uuidString.lowercased(),
+            "snapshot_sha256": job.snapshotDigest,
+            "work_packet_sha256": job.workPacketDigest,
+            "artifact": artifact
+        ]
+        return ValidatedLocalCodingCompletion(
+            resultBody: resultBody,
+            resultPayloadDigest: resultPayloadDigest,
+            artifactAdmissionBody: try JSONSerialization.data(
+                withJSONObject: admission,
+                options: [.sortedKeys]
+            ),
+            artifactID: artifactID,
+            artifactDigest: artifactDigest,
+            artifactSize: artifactSize
+        )
+    }
+
+    private static func validateCanonicalLocalCodingArtifact(_ bytes: Data) -> Bool {
+        let fixture = Data("assemblywright contained coding fixture\n".utf8)
+        let replacementDigest = Array(SHA256.hash(data: fixture))
+        guard let object = strictJSONObject(bytes),
+              Set(object.keys) == Set([
+                  "format", "path", "expected_before_sha256",
+                  "replacement_sha256", "replacement_hex"
+              ]),
+              object["format"] as? String == "assemblywright.readme-replacement.v1",
+              object["path"] as? String == "README.md",
+              let beforeDigest = strictDigest(object["expected_before_sha256"]),
+              beforeDigest != [UInt8](repeating: 0, count: 32),
+              strictDigest(object["replacement_sha256"]) == replacementDigest,
+              object["replacement_hex"] as? String == encodeLowerHex(fixture) else {
+            return false
+        }
+        let before = beforeDigest.map(String.init).joined(separator: ",")
+        let replacement = replacementDigest.map(String.init).joined(separator: ",")
+        let expected = "{\"format\":\"assemblywright.readme-replacement.v1\","
+            + "\"path\":\"README.md\",\"expected_before_sha256\":[\(before)],"
+            + "\"replacement_sha256\":[\(replacement)],"
+            + "\"replacement_hex\":\"\(encodeLowerHex(fixture))\"}"
+        return bytes == Data(expected.utf8)
+    }
+
+    private static func validateLocalCodingArtifactReceipt(
+        _ response: AssemblywrightMacBridgeHTTPResponse,
+        completion: ValidatedLocalCodingCompletion,
+        job: ValidatedLocalCodingJob
+    ) throws {
+        guard response.status == 200,
+              let object = strictJSONObject(response.body),
+              Set(object.keys) == Set([
+                  "protocol_version", "connection_epoch", "sequence", "task_id",
+                  "step_id", "attempt_id", "lease_id", "cancellation_id",
+                  "artifact_id", "artifact_sha256", "artifact_size_bytes", "status"
+              ]),
+              strictInteger(object["protocol_version"])
+                == UInt64(AssemblywrightMacMTLSBridgeTransport.protocolVersion),
+              strictInteger(object["connection_epoch"]) == job.connectionEpoch,
+              strictInteger(object["sequence"]).map({ $0 > job.sequence }) == true,
+              strictUUID(object["task_id"]) == job.taskID,
+              strictUUID(object["step_id"]) == job.stepID,
+              strictUUID(object["attempt_id"]) == job.attemptID,
+              strictUUID(object["lease_id"]) == job.leaseID,
+              strictUUID(object["cancellation_id"]) == job.cancellationID,
+              strictUUID(object["artifact_id"]) == completion.artifactID,
+              strictDigest(object["artifact_sha256"]) == completion.artifactDigest,
+              strictInteger(object["artifact_size_bytes"]) == completion.artifactSize,
+              object["status"] as? String == "result_artifact_admitted" else {
+            throw AssemblywrightMacDeveloperEventRelayError.invalidMasterResponse
+        }
+    }
+
+    private static func encodeLowerHex(_ data: Data) -> String {
+        let digits = Array("0123456789abcdef".utf8)
+        var output = [UInt8]()
+        output.reserveCapacity(data.count * 2)
+        for byte in data {
+            output.append(digits[Int(byte >> 4)])
+            output.append(digits[Int(byte & 0x0f)])
+        }
+        return String(decoding: output, as: UTF8.self)
     }
 
     private static func validateAcceptedLocalCodingResult(

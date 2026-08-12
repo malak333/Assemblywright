@@ -1,9 +1,10 @@
 use assemblywright_protocol::{
-    local_coding_admission_sha256, local_coding_fixture_allowed_paths_sha256,
-    CancellationAcknowledgement, CancellationAcknowledgementStatus, CancellationInstruction,
-    JobEnvelope, JobResultEnvelope, JobResultStatus, LocalCodingJobResult,
+    build_local_coding_fixture_patch_artifact, local_coding_admission_sha256,
+    local_coding_fixture_allowed_paths_sha256, CancellationAcknowledgement,
+    CancellationAcknowledgementStatus, CancellationInstruction, JobEnvelope, JobResultEnvelope,
+    JobResultStatus, LocalCodingAgentCompletion, LocalCodingJobResult, LocalCodingResultArtifact,
     LocalCodingSnapshotChunk, LocalCodingSnapshotChunkRequest, ProtocolError,
-    LOCAL_CODING_COMPLETED_STATUS, LOCAL_CODING_FIXTURE_ALLOWED_PATH,
+    LOCAL_CODING_COMPLETED_STATUS, LOCAL_CODING_FIXTURE_ALLOWED_PATH, LOCAL_CODING_FIXTURE_CONTENT,
     LOCAL_CODING_FIXTURE_TEST_STATUS, MAX_LOCAL_CODING_SNAPSHOT_BUNDLE_BYTES, PROTOCOL_VERSION,
 };
 use git2::{ObjectType, Oid, Repository, TreeWalkMode, TreeWalkResult};
@@ -32,7 +33,6 @@ const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_PATH_BYTES: usize = 1024;
 #[cfg(not(test))]
 const MAX_CHILD_FD_CLOSE_LIMIT: i32 = 1_048_576;
-const CONTAINED_FIXTURE_CONTENT: &[u8] = b"assemblywright contained coding fixture\n";
 #[cfg(not(test))]
 const CONTAINED_FIXTURE_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(not(test))]
@@ -67,7 +67,7 @@ pub enum LocalCodingSnapshotError {
 #[derive(Debug)]
 pub enum LocalCodingSnapshotAcceptance {
     Continue { next_offset: u64 },
-    Complete(JobResultEnvelope),
+    Complete(Box<LocalCodingAgentCompletion>),
 }
 
 #[derive(Debug)]
@@ -87,7 +87,7 @@ struct ActiveMaterialization {
 #[derive(Debug)]
 struct ContainedCodingEvidence {
     changed_paths_sha256: [u8; 32],
-    patch_sha256: [u8; 32],
+    artifact_bytes: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -331,7 +331,7 @@ impl LocalCodingSnapshotRuntime {
             .map_err(|_| LocalCodingSnapshotError::Unavailable)? = Some(verification.job);
         guard.take();
         self.state_changed.notify_all();
-        Ok(LocalCodingSnapshotAcceptance::Complete(result))
+        Ok(LocalCodingSnapshotAcceptance::Complete(Box::new(result)))
     }
 
     pub fn cancel(
@@ -494,8 +494,10 @@ fn request_for_job(
 fn build_result(
     job: &JobEnvelope,
     evidence: &ContainedCodingEvidence,
-) -> Result<JobResultEnvelope, LocalCodingSnapshotError> {
+) -> Result<LocalCodingAgentCompletion, LocalCodingSnapshotError> {
     let context = job.validate_local_coding()?;
+    let artifact =
+        LocalCodingResultArtifact::from_bytes(uuid::Uuid::new_v4(), &evidence.artifact_bytes)?;
     let payload = serde_json::to_value(LocalCodingJobResult {
         status: LOCAL_CODING_COMPLETED_STATUS.to_string(),
         work_packet_sha256: context.work_packet_sha256,
@@ -503,7 +505,10 @@ fn build_result(
         snapshot_sha256: context.snapshot_sha256,
         allowed_paths_sha256: local_coding_fixture_allowed_paths_sha256(),
         changed_paths_sha256: evidence.changed_paths_sha256,
-        patch_sha256: evidence.patch_sha256,
+        patch_sha256: artifact.artifact_sha256,
+        artifact_id: artifact.artifact_id,
+        artifact_sha256: artifact.artifact_sha256,
+        artifact_size_bytes: artifact.artifact_size_bytes,
         changed_file_count: 1,
         test_status: LOCAL_CODING_FIXTURE_TEST_STATUS.to_string(),
         mutation_performed: true,
@@ -512,7 +517,7 @@ fn build_result(
     })
     .map_err(|_| LocalCodingSnapshotError::Rejected)?;
     let payload_sha256 = json_sha256(&payload)?;
-    Ok(JobResultEnvelope {
+    let result = JobResultEnvelope {
         protocol_version: job.protocol_version,
         connection_epoch: job.connection_epoch,
         sequence: job
@@ -528,7 +533,10 @@ fn build_result(
         context_sha256: job.context_sha256,
         payload_sha256,
         payload,
-    })
+    };
+    let completion = LocalCodingAgentCompletion { result, artifact };
+    completion.validate_for_job(job)?;
+    Ok(completion)
 }
 
 fn materialize_verify_and_execute(
@@ -605,27 +613,18 @@ fn run_contained_coding_fixture(
     let allowed_after = after
         .get(LOCAL_CODING_FIXTURE_ALLOWED_PATH)
         .ok_or(LocalCodingSnapshotError::Rejected)?;
-    let expected_output_sha256: [u8; 32] = Sha256::digest(CONTAINED_FIXTURE_CONTENT).into();
+    let expected_output_sha256: [u8; 32] = Sha256::digest(LOCAL_CODING_FIXTURE_CONTENT).into();
     if allowed_before == *allowed_after
         || allowed_before.mode != allowed_after.mode
-        || allowed_after.size != CONTAINED_FIXTURE_CONTENT.len() as u64
+        || allowed_after.size != LOCAL_CODING_FIXTURE_CONTENT.len() as u64
         || allowed_after.sha256 != expected_output_sha256
     {
         return Err(LocalCodingSnapshotError::Rejected);
     }
     let changed_paths_sha256 = local_coding_fixture_allowed_paths_sha256();
-    let mut patch = Sha256::new();
-    patch.update(b"assemblywright.local-coding-contained-patch.v1\0");
-    patch.update(changed_paths_sha256);
-    patch.update(allowed_before.mode.to_be_bytes());
-    patch.update(allowed_before.size.to_be_bytes());
-    patch.update(allowed_before.sha256);
-    patch.update(allowed_after.mode.to_be_bytes());
-    patch.update(allowed_after.size.to_be_bytes());
-    patch.update(allowed_after.sha256);
     Ok(ContainedCodingEvidence {
         changed_paths_sha256,
-        patch_sha256: patch.finalize().into(),
+        artifact_bytes: build_local_coding_fixture_patch_artifact(allowed_before.sha256)?,
     })
 }
 
@@ -647,7 +646,7 @@ fn run_contained_coding_fixture_child_in(workspace: &Path) -> Result<(), LocalCo
     }
     file.set_len(0)?;
     file.seek(SeekFrom::Start(0))?;
-    file.write_all(CONTAINED_FIXTURE_CONTENT)?;
+    file.write_all(LOCAL_CODING_FIXTURE_CONTENT)?;
     file.sync_all()?;
     Ok(())
 }
@@ -882,12 +881,12 @@ unsafe fn run_fixed_child_syscalls(
         unsafe { libc::_exit(44) }
     }
     let mut written = 0_usize;
-    while written < CONTAINED_FIXTURE_CONTENT.len() {
+    while written < LOCAL_CODING_FIXTURE_CONTENT.len() {
         let count = unsafe {
             libc::write(
                 file,
-                CONTAINED_FIXTURE_CONTENT[written..].as_ptr().cast(),
-                CONTAINED_FIXTURE_CONTENT.len() - written,
+                LOCAL_CODING_FIXTURE_CONTENT[written..].as_ptr().cast(),
+                LOCAL_CODING_FIXTURE_CONTENT.len() - written,
             )
         };
         if count < 0 {
@@ -1899,12 +1898,12 @@ mod tests {
                 LocalCodingSnapshotAcceptance::Continue { next_offset } => {
                     assert_eq!(next_offset, end as u64)
                 }
-                LocalCodingSnapshotAcceptance::Complete(result) => completed = Some(result),
+                LocalCodingSnapshotAcceptance::Complete(result) => completed = Some(*result),
             }
             offset = end;
         }
         let result = completed.expect("final chunk returns one receipt");
-        result.validate_local_coding_result(&job).unwrap();
+        result.validate_for_job(&job).unwrap();
         let acknowledgement = runtime.cancel(&cancellation(&job)).unwrap();
         assert_eq!(
             acknowledgement.status,

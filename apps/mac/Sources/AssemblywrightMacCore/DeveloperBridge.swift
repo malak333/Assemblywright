@@ -732,7 +732,7 @@ public struct AssemblywrightMacMTLSBridgeTransport: Sendable {
     /// `release-docs-drift-smoke.sh` compares them: neither test suite can catch
     /// a mismatch on its own, and a disagreement authenticates over mTLS and then
     /// fails at the application handshake.
-    public static let protocolVersion: UInt16 = 3
+    public static let protocolVersion: UInt16 = 4
     public static let exporterLabel = "EXPORTER-Assemblywright-Developer-Mode-v1"
     private let factory: any AssemblywrightMacAuthenticatedTLSChannelFactory
 

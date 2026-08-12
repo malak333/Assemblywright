@@ -165,7 +165,9 @@ require_text "README non-claims" "$README" "Autonomous dispatch"
 require_text "DESIGN conveyor pointer" "$DESIGN" "docs/feature-conveyor-design.md"
 require_text "DESIGN distributed pointer" "$DESIGN" "docs/distributed-developer-mode-design.md"
 require_text "DESIGN assistant non-goal" "$DESIGN" "No general-purpose assistant surface."
-require_text "DESIGN current master schema" "$DESIGN" "schema-v11"
+require_text "DESIGN current master schema" "$DESIGN" "schema-v12"
+require_text "DESIGN result artifact boundary" "$DESIGN" \
+  "Schema v12 adds result-artifact admission"
 
 require_text "conveyor design status" "$FEATURE_CONVEYOR_DESIGN" "default-inert"
 require_text "conveyor design approval" "$FEATURE_CONVEYOR_DESIGN" "Approve and Enqueue"
@@ -276,7 +278,7 @@ require_text "conveyor Swift admission binds lease duration" "$MAC_EVENT_RELAY" 
 require_text "conveyor Swift admission binds deadline" "$MAC_EVENT_RELAY" \
   'deadlineAfterMilliseconds: deadline'
 require_text "conveyor Swift admission golden matches Rust" "$MAC_BRIDGE_TESTS" \
-  'ef9e10566ae691ac90bc99aab0615944c7d91a6eba54efca49d20fda6852608f'
+  '04eb22b8b2928b9475403b8dfccc7dd3d61132c67a89510ae47c9b19bd15140d'
 forbid_text "conveyor Swift result excludes obsolete runner digest" "$MAC_EVENT_RELAY" \
   'runner_sha256'
 require_text "conveyor fixed forked child" "$AGENT_SNAPSHOT" \
@@ -405,6 +407,18 @@ require_text "release checklist owner resolution" "$CHECKLIST" \
   "abandon-and-advance"
 require_text "release checklist schema-v11 migration invariant" "$CHECKLIST" \
   "schema-v11 backup-first"
+require_text "release checklist schema-v12 artifact invariant" "$CHECKLIST" \
+  "protocol-v4/schema-v12 result-artifact admission"
+require_text "architecture schema-v12 artifact store" "$ARCHITECTURE" \
+  "Private bytes outside SQLite; immutable schema-v12 metadata and redacted audit"
+require_text "knowledge base schema-v12 artifact boundary" "$KB" \
+  "Schema v12 admits only one protocol-owned canonical"
+require_text "design stable artifact evidence" "$DESIGN" \
+  "Terminal result acceptance re-hashes a stable handle"
+require_text "safety guarded artifact retry" "$SAFETY_RULES" \
+  "Preparation guards make exact crash/concurrent retry"
+require_text "release checklist Windows artifact durability proof" "$CHECKLIST" \
+  "do not claim portable Windows directory flush"
 
 require_text "agent instructions feature closeout" "$AGENTS" \
   "Close every feature or phase"

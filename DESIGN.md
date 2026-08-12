@@ -59,7 +59,7 @@ accepted designs and take precedence within their scope:
 
 ### Windows master
 
-`assemblywright-master` owns durable state and every authority decision. Its schema-v11
+`assemblywright-master` owns durable state and every authority decision. Its schema-v12
 SQLite database holds two kernels:
 
 - The distributed device lifecycle: registered devices, connection epochs,
@@ -202,6 +202,39 @@ path, provider, test, or network/credential access. This slice claims no host
 sandbox or host-level egress enforcement and adds no retained workspace,
 canonical-repository mutation, commit, integration, review, publication, queue
 advancement, or autonomous activation.
+
+Schema v12 adds result-artifact admission without adding integration authority.
+The agent constructs one protocol-owned canonical `README.md` replacement
+artifact in memory and hashes its exact bytes, then removes workspace and
+transfer state before returning the strict result/artifact pair. During the
+existing cancellation race, Swift strictly validates both documents and uploads
+the artifact over the FIFO exporter-bound `InferenceWorker` session before it
+posts the metadata-only result. The remote route rechecks the exact current
+device registration, connection epoch, task, step, attempt, lease,
+cancellation, feature, snapshot, work packet, lifecycle, queue, pause, and
+expiry bindings. Artifact bytes live only in the private Windows master state
+directory; SQLite stores immutable ID, digest, size, and bindings with no-update
+and no-delete triggers plus same-transaction redacted audit. Exact retries are
+idempotent, while mismatch, replay, stale identity, cancellation, pause,
+lifecycle drift, or missing admission fails closed. Result acceptance now
+requires that exact admitted artifact. Startup removes only unreferenced
+artifact directories; referenced ambiguous evidence remains, and active-feature
+restart quarantine continues to dominate. This adds no apply, repository
+mutation, test, provider, review, publication, lifecycle advancement, or
+autonomous dispatch authority.
+
+The artifact tree is owner-private and fixed-shape. Unix uses no-follow,
+directory-relative handles and rejects wrong-owner, group/world access,
+hardlinks, and symlinks. Windows opens reparse points themselves, validates
+by-handle identity/link count, and withholds delete sharing while checking
+evidence. Coordinated preparation guards recover exact crash-prepared or
+concurrent retries without allowing one failed request to delete another's
+bytes. Startup validates every referenced file against immutable SQLite
+metadata. Terminal result acceptance re-hashes a stable handle immediately
+before the transaction and retains file/directory handles through it. Files are
+flushed before same-volume rename. Portable Windows directory
+`FlushFileBuffers` is not claimed; renamed-tree crash durability remains live
+Windows release evidence.
 
 Two further owner-token-authenticated loopback-only schema-v11 resolution
 routes expose the kernel's exact `cancel active feature` and `abandon and

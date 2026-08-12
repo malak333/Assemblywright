@@ -156,7 +156,7 @@ release requirements, not optional UX guidance.
   a simultaneous or late result is suppressed. This lane grants no tool, file,
   repository, credential, network, Codex, Git, publication, or unattended
   authority.
-- The Windows `assemblywright-master` schema-v11 database retains the schema-v5
+- The Windows `assemblywright-master` schema-v12 database retains the schema-v5
   Durable Feature Conveyor kernel and is
   default-inert. The owner-token-authenticated loopback
   `GET /v1/feature-conveyor/status` and the dedicated enrolled-device
@@ -323,7 +323,26 @@ release requirements, not optional UX guidance.
   reads must retain no-follow/no-reparse handles for
   every state-directory component and the single-link bundle leaf through the
   read. Durable audit/event surfaces remain metadata-only; result acceptance
-  retains the bounded payload digest, not repository content or paths. This
+  retains the bounded payload digest, not repository content or paths. The
+  protocol-v4 result must name one exact canonical bounded patch artifact whose
+  SHA-256 covers its exact bytes. The agent constructs it in memory and cleans
+  workspace/transfer state before returning a strict result/artifact pair.
+  Swift uploads it during the existing FIFO cancellation race, validates the
+  metadata-only receipt, and only then posts the result. Schema v12 must store
+  bytes outside SQLite/audit and atomically retain only immutable artifact ID,
+  digest, size, exact authority bindings, and redacted audit. Exact retry is
+  idempotent; mismatch, replay, missing admission, stale registration,
+  cancellation, pause, expiry, lifecycle drift, or restart quarantine rejects.
+  Startup may remove only unreferenced artifact directories and must preserve
+  referenced ambiguous evidence. Artifact directories and files must be
+  owner-private and fixed-shape; reject symlink/reparse traversal, hardlinks,
+  wrong owner or group/world Unix access, unexpected children, and path/handle
+  identity drift. Preparation guards make exact crash/concurrent retry
+  recoverable without cross-request deletion. Startup verifies every referenced
+  digest/size/format, and terminal result acceptance re-hashes a stable handle
+  immediately before its transaction while retaining handles through it. File
+  flush plus same-volume rename is required. Portable Windows directory flush
+  is not repository proof and requires live crash-recovery evidence. This
   fixture grants no arbitrary process or tool execution, retained workspace,
   provider, credential or network access, canonical-repository mutation,
   integration, review, publication, queue advancement, or autonomous

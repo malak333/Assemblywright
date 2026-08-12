@@ -7,6 +7,7 @@ use assemblywright_protocol::{
     FeatureConveyorCodingDispatchStatus, FeatureConveyorRepositoryGrantSet,
     FeatureConveyorRepositoryGrantView, HandshakeRequest, HandshakeResponse, HandshakeStatus,
     JobEnvelope, JobResultEnvelope, JobResultStatus, LeaseId, LocalCodingJobRequest,
+    LocalCodingJobResult, LocalCodingResultArtifactAdmission, LocalCodingResultArtifactReceipt,
     LocalCodingSnapshotChunkRequest, ProtocolError, Sensitivity, StepId, TaskId,
     CANCELLATION_ACK_DEADLINE_MS, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
     FIXTURE_REASONING_CAPABILITY_ID, LOCAL_CODING_CAPABILITY_ID, MAX_CAPABILITY_ID_BYTES,
@@ -29,8 +30,13 @@ use uuid::Uuid;
 use fs2::FileExt;
 
 mod identity;
+mod result_artifact;
 mod snapshot;
 
+pub use result_artifact::{
+    PreparedResultArtifact, ResultArtifactReference, ResultArtifactStore, ResultArtifactStoreError,
+    VerifiedResultArtifact,
+};
 pub use snapshot::{PreparedRepositorySnapshot, RepositorySnapshotError, RepositorySnapshotStore};
 
 pub use identity::{
@@ -42,7 +48,7 @@ pub use identity::{
     SERVER_CERTIFICATE_LIFETIME_MS,
 };
 
-pub const MASTER_SCHEMA_VERSION: i64 = 11;
+pub const MASTER_SCHEMA_VERSION: i64 = 12;
 pub const MAX_QUEUED_OR_LEASED_STEPS: u64 = 256;
 pub const MAX_CONCURRENT_JOBS: u64 = 4;
 pub const MAX_CONVEYOR_NONTERMINAL_FEATURES: u64 = 100;
@@ -238,6 +244,8 @@ pub enum MasterError {
     InvalidFeatureTransition,
     #[error("the exact snapshot-bound coding dispatch binding is stale or unavailable")]
     FeatureCodingDispatchUnavailable,
+    #[error("the exact local-coding result artifact admission is stale or unavailable")]
+    ResultArtifactUnavailable,
     #[error("feature coding work must be terminal before lifecycle advancement")]
     FeatureCodingWorkOutstanding,
     #[error(
@@ -784,6 +792,7 @@ pub struct MasterProcess {
     data_dir: PathBuf,
     database_path: PathBuf,
     migration_backup_path: Option<PathBuf>,
+    result_artifact_store: ResultArtifactStore,
     kernel: MasterKernel,
 }
 
@@ -835,11 +844,26 @@ impl MasterProcess {
         };
         RepositorySnapshotStore::open(&data_dir)?
             .cleanup_unreferenced(&kernel.repository_snapshot_ids()?)?;
+        let result_artifact_store = ResultArtifactStore::open(&data_dir)
+            .map_err(|error| MasterError::InvalidStoredState(error.to_string()))?;
+        let result_artifacts = kernel.result_artifact_references()?;
+        result_artifact_store
+            .cleanup_unreferenced(
+                &result_artifacts
+                    .iter()
+                    .map(|reference| reference.artifact_id)
+                    .collect(),
+            )
+            .map_err(|error| MasterError::InvalidStoredState(error.to_string()))?;
+        result_artifact_store
+            .verify_referenced(&result_artifacts)
+            .map_err(|error| MasterError::InvalidStoredState(error.to_string()))?;
         Ok(Self {
             _owner_lock: owner_lock,
             data_dir,
             database_path,
             migration_backup_path,
+            result_artifact_store,
             kernel,
         })
     }
@@ -854,6 +878,10 @@ impl MasterProcess {
 
     pub fn migration_backup_path(&self) -> Option<&Path> {
         self.migration_backup_path.as_deref()
+    }
+
+    pub fn result_artifact_store(&self) -> ResultArtifactStore {
+        self.result_artifact_store.clone()
     }
 
     pub fn kernel(&self) -> &MasterKernel {
@@ -1019,6 +1047,46 @@ impl MasterKernel {
             })
             .collect::<Result<HashSet<_>, MasterError>>()?;
         Ok(ids)
+    }
+
+    pub fn result_artifact_ids(&self) -> Result<HashSet<Uuid>, MasterError> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT artifact_id FROM feature_result_artifacts")?;
+        let ids = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .map(|value| {
+                value
+                    .map_err(MasterError::from)
+                    .and_then(|value| parse_uuid(&value))
+            })
+            .collect::<Result<HashSet<_>, _>>()?;
+        Ok(ids)
+    }
+
+    pub fn result_artifact_references(&self) -> Result<Vec<ResultArtifactReference>, MasterError> {
+        let mut statement = self.connection.prepare(
+            "SELECT artifact_id, artifact_sha256, artifact_size_bytes
+             FROM feature_result_artifacts ORDER BY artifact_id",
+        )?;
+        let references = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })?
+            .map(|row| {
+                let (artifact_id, digest, size) = row?;
+                Ok(ResultArtifactReference {
+                    artifact_id: parse_uuid(&artifact_id)?,
+                    artifact_sha256: digest_array(&digest)?,
+                    artifact_size_bytes: i64_to_u64(size)?,
+                })
+            })
+            .collect::<Result<Vec<_>, MasterError>>()?;
+        Ok(references)
     }
 
     pub fn owner_control_bridge_designation(
@@ -2983,6 +3051,153 @@ impl MasterKernel {
         Ok(())
     }
 
+    /// Read-only phase of result-artifact admission. Callers perform bounded
+    /// filesystem work only after this check, without retaining the SQLite
+    /// transaction, then call `finalize_local_coding_result_artifact`.
+    pub fn authorize_local_coding_result_artifact(
+        &self,
+        authenticated_device_id: DeviceId,
+        admission: &LocalCodingResultArtifactAdmission,
+        now_ms: u64,
+    ) -> Result<bool, MasterError> {
+        admission.validate()?;
+        let tx = self.connection.unchecked_transaction()?;
+        validate_result_artifact_admission_tx(&tx, authenticated_device_id, admission, now_ms)?;
+        let already_admitted: bool = tx.query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM feature_result_artifacts WHERE artifact_id = ?1
+             )",
+            [admission.artifact.artifact_id.to_string()],
+            |row| row.get(0),
+        )?;
+        Ok(already_admitted)
+    }
+
+    /// Immediate-transaction phase. Every authority binding is rechecked and
+    /// immutable metadata plus redacted audit commit atomically. Exact retry
+    /// returns the original binding without adding a second row or audit event.
+    pub fn finalize_local_coding_result_artifact(
+        &mut self,
+        authenticated_device_id: DeviceId,
+        admission: &LocalCodingResultArtifactAdmission,
+        now_ms: u64,
+    ) -> Result<LocalCodingResultArtifactReceipt, MasterError> {
+        admission.validate()?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let job =
+            validate_result_artifact_admission_tx(&tx, authenticated_device_id, admission, now_ms)?;
+        let context = job.validate_local_coding()?;
+        let existing: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM feature_result_artifacts
+             WHERE artifact_id = ?1 AND artifact_sha256 = ?2
+               AND artifact_size_bytes = ?3 AND device_id = ?4
+               AND device_registry_revision = ?5 AND connection_epoch = ?6
+               AND sequence = ?7 AND task_id = ?8 AND step_id = ?9
+               AND attempt_id = ?10 AND lease_id = ?11 AND cancellation_id = ?12
+               AND context_sha256 = ?13 AND feature_id = ?14
+               AND feature_lease_id = ?15 AND snapshot_id = ?16
+               AND snapshot_sha256 = ?17 AND work_packet_sha256 = ?18",
+            params![
+                admission.artifact.artifact_id.to_string(),
+                admission.artifact.artifact_sha256.as_slice(),
+                u64_to_i64(admission.artifact.artifact_size_bytes)?,
+                authenticated_device_id.0.to_string(),
+                u64_to_i64(context.device_registry_revision)?,
+                u64_to_i64(admission.connection_epoch)?,
+                u64_to_i64(admission.sequence)?,
+                admission.task_id.0.to_string(),
+                admission.step_id.0.to_string(),
+                admission.attempt_id.0.to_string(),
+                admission.lease_id.0.to_string(),
+                admission.cancellation_id.0.to_string(),
+                admission.context_sha256.as_slice(),
+                admission.feature_id.to_string(),
+                admission.feature_lease_id.to_string(),
+                admission.snapshot_id.to_string(),
+                admission.snapshot_sha256.as_slice(),
+                admission.work_packet_sha256.as_slice(),
+            ],
+            |row| row.get(0),
+        )?;
+        if existing == 0 {
+            let collision: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM feature_result_artifacts
+                 WHERE artifact_id = ?1 OR attempt_id = ?2",
+                params![
+                    admission.artifact.artifact_id.to_string(),
+                    admission.attempt_id.0.to_string()
+                ],
+                |row| row.get(0),
+            )?;
+            if collision != 0 {
+                return Err(MasterError::ResultArtifactUnavailable);
+            }
+            tx.execute(
+                "INSERT INTO feature_result_artifacts (
+                   artifact_id, artifact_sha256, artifact_size_bytes, device_id,
+                   device_registry_revision, connection_epoch, sequence, task_id,
+                   step_id, attempt_id, lease_id, cancellation_id, context_sha256,
+                   feature_id, feature_lease_id, snapshot_id, snapshot_sha256,
+                   work_packet_sha256, admitted_at_ms
+                 ) VALUES (
+                   ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+                   ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19
+                 )",
+                params![
+                    admission.artifact.artifact_id.to_string(),
+                    admission.artifact.artifact_sha256.as_slice(),
+                    u64_to_i64(admission.artifact.artifact_size_bytes)?,
+                    authenticated_device_id.0.to_string(),
+                    u64_to_i64(context.device_registry_revision)?,
+                    u64_to_i64(admission.connection_epoch)?,
+                    u64_to_i64(admission.sequence)?,
+                    admission.task_id.0.to_string(),
+                    admission.step_id.0.to_string(),
+                    admission.attempt_id.0.to_string(),
+                    admission.lease_id.0.to_string(),
+                    admission.cancellation_id.0.to_string(),
+                    admission.context_sha256.as_slice(),
+                    admission.feature_id.to_string(),
+                    admission.feature_lease_id.to_string(),
+                    admission.snapshot_id.to_string(),
+                    admission.snapshot_sha256.as_slice(),
+                    admission.work_packet_sha256.as_slice(),
+                    u64_to_i64(now_ms)?,
+                ],
+            )?;
+            append_feature_audit_tx(
+                &tx,
+                "result_artifact_admitted",
+                Some(admission.feature_id),
+                now_ms,
+                serde_json::json!({
+                    "artifact_id": admission.artifact.artifact_id,
+                    "artifact_sha256": lower_hex(&admission.artifact.artifact_sha256),
+                    "artifact_size_bytes": admission.artifact.artifact_size_bytes,
+                    "attempt_id": admission.attempt_id,
+                    "step_id": admission.step_id
+                }),
+            )?;
+        }
+        tx.commit()?;
+        Ok(LocalCodingResultArtifactReceipt {
+            protocol_version: admission.protocol_version,
+            connection_epoch: admission.connection_epoch,
+            sequence: admission.sequence,
+            task_id: admission.task_id,
+            step_id: admission.step_id,
+            attempt_id: admission.attempt_id,
+            lease_id: admission.lease_id,
+            cancellation_id: admission.cancellation_id,
+            artifact_id: admission.artifact.artifact_id,
+            artifact_sha256: admission.artifact.artifact_sha256,
+            artifact_size_bytes: admission.artifact.artifact_size_bytes,
+            status: assemblywright_protocol::LOCAL_CODING_RESULT_ARTIFACT_STATUS.to_string(),
+        })
+    }
+
     fn lease_next_step_bound(
         &mut self,
         device_id: DeviceId,
@@ -3147,7 +3362,7 @@ impl MasterKernel {
         result: &JobResultEnvelope,
         now_ms: u64,
     ) -> Result<AcceptedResult, MasterError> {
-        self.accept_result_bound(None, result, now_ms, None)
+        self.accept_result_bound(None, result, now_ms, None, None)
     }
 
     pub fn accept_result_from(
@@ -3156,7 +3371,7 @@ impl MasterKernel {
         result: &JobResultEnvelope,
         now_ms: u64,
     ) -> Result<AcceptedResult, MasterError> {
-        self.accept_result_bound(Some(authenticated_device_id), result, now_ms, None)
+        self.accept_result_bound(Some(authenticated_device_id), result, now_ms, None, None)
     }
 
     pub fn accept_fixture_result_from(
@@ -3170,6 +3385,7 @@ impl MasterKernel {
             result,
             now_ms,
             Some(&RemoteWorkContract::Fixture),
+            None,
         )
     }
 
@@ -3185,6 +3401,28 @@ impl MasterKernel {
             result,
             now_ms,
             Some(contract),
+            None,
+        )
+    }
+
+    pub fn accept_remote_result_from_with_artifact(
+        &mut self,
+        authenticated_device_id: DeviceId,
+        result: &JobResultEnvelope,
+        now_ms: u64,
+        contract: &RemoteWorkContract,
+        store: &ResultArtifactStore,
+        artifact: &mut VerifiedResultArtifact,
+    ) -> Result<AcceptedResult, MasterError> {
+        artifact
+            .revalidate(store)
+            .map_err(|_| MasterError::ResultArtifactUnavailable)?;
+        self.accept_result_bound(
+            Some(authenticated_device_id),
+            result,
+            now_ms,
+            Some(contract),
+            Some(artifact.reference()),
         )
     }
 
@@ -3194,6 +3432,7 @@ impl MasterKernel {
         result: &JobResultEnvelope,
         now_ms: u64,
         remote_contract: Option<&RemoteWorkContract>,
+        artifact_evidence: Option<ResultArtifactReference>,
     ) -> Result<AcceptedResult, MasterError> {
         result.validate()?;
         let tx = self
@@ -3223,6 +3462,53 @@ impl MasterKernel {
             let context = job.validate_local_coding()?;
             if !coding_job_binding_is_current_tx(&tx, &context, job.step_id, attempt.device_id)? {
                 return Err(MasterError::FeatureCodingDispatchUnavailable);
+            }
+            let payload: LocalCodingJobResult = serde_json::from_value(result.payload.clone())?;
+            let evidence = artifact_evidence.ok_or(MasterError::ResultArtifactUnavailable)?;
+            if evidence
+                != (ResultArtifactReference {
+                    artifact_id: payload.artifact_id,
+                    artifact_sha256: payload.artifact_sha256,
+                    artifact_size_bytes: payload.artifact_size_bytes,
+                })
+            {
+                return Err(MasterError::ResultArtifactUnavailable);
+            }
+            let artifact_matches: bool = tx.query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM feature_result_artifacts
+                   WHERE artifact_id = ?1 AND artifact_sha256 = ?2
+                     AND artifact_size_bytes = ?3 AND device_id = ?4
+                     AND connection_epoch = ?5 AND sequence = ?6
+                     AND task_id = ?7 AND step_id = ?8 AND attempt_id = ?9
+                     AND lease_id = ?10 AND cancellation_id = ?11
+                     AND context_sha256 = ?12 AND feature_id = ?13
+                     AND feature_lease_id = ?14 AND snapshot_id = ?15
+                     AND snapshot_sha256 = ?16 AND work_packet_sha256 = ?17
+                 )",
+                params![
+                    payload.artifact_id.to_string(),
+                    payload.artifact_sha256.as_slice(),
+                    u64_to_i64(payload.artifact_size_bytes)?,
+                    attempt.device_id.0.to_string(),
+                    u64_to_i64(result.connection_epoch)?,
+                    u64_to_i64(result.sequence)?,
+                    result.task_id.0.to_string(),
+                    result.step_id.0.to_string(),
+                    result.attempt_id.0.to_string(),
+                    result.lease_id.0.to_string(),
+                    result.cancellation_id.0.to_string(),
+                    result.context_sha256.as_slice(),
+                    context.feature_id.to_string(),
+                    context.feature_lease_id.to_string(),
+                    context.snapshot_id.to_string(),
+                    context.snapshot_sha256.as_slice(),
+                    context.work_packet_sha256.as_slice(),
+                ],
+                |row| row.get(0),
+            )?;
+            if !artifact_matches || payload.patch_sha256 != payload.artifact_sha256 {
+                return Err(MasterError::ResultArtifactUnavailable);
             }
         }
         if attempt.status != AttemptStatus::Leased {
@@ -4352,6 +4638,43 @@ impl MasterKernel {
             tx.commit()?;
         }
         let version = self.schema_version()?;
+        if version == 11 {
+            self.connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 CREATE TABLE feature_result_artifacts (
+                   artifact_id TEXT PRIMARY KEY NOT NULL,
+                   artifact_sha256 BLOB NOT NULL CHECK (length(artifact_sha256) = 32),
+                   artifact_size_bytes INTEGER NOT NULL
+                     CHECK (artifact_size_bytes BETWEEN 1 AND 65536),
+                   device_id TEXT NOT NULL REFERENCES master_devices(device_id),
+                   device_registry_revision INTEGER NOT NULL CHECK (device_registry_revision > 0),
+                   connection_epoch INTEGER NOT NULL CHECK (connection_epoch > 0),
+                   sequence INTEGER NOT NULL CHECK (sequence > 0),
+                   task_id TEXT NOT NULL,
+                   step_id TEXT NOT NULL REFERENCES master_steps(step_id),
+                   attempt_id TEXT NOT NULL UNIQUE REFERENCES master_attempts(attempt_id),
+                   lease_id TEXT NOT NULL,
+                   cancellation_id TEXT NOT NULL,
+                   context_sha256 BLOB NOT NULL CHECK (length(context_sha256) = 32),
+                   feature_id TEXT NOT NULL REFERENCES feature_conveyor_features(feature_id),
+                   feature_lease_id TEXT NOT NULL,
+                   snapshot_id TEXT NOT NULL REFERENCES feature_repository_snapshot_claims(snapshot_id),
+                   snapshot_sha256 BLOB NOT NULL CHECK (length(snapshot_sha256) = 32),
+                   work_packet_sha256 BLOB NOT NULL CHECK (length(work_packet_sha256) = 32),
+                   admitted_at_ms INTEGER NOT NULL CHECK (admitted_at_ms > 0),
+                   UNIQUE (task_id, step_id, attempt_id, lease_id, cancellation_id)
+                 );
+                 CREATE TRIGGER feature_result_artifacts_no_update
+                   BEFORE UPDATE ON feature_result_artifacts
+                   BEGIN SELECT RAISE(ABORT, 'immutable feature result artifact'); END;
+                 CREATE TRIGGER feature_result_artifacts_no_delete
+                   BEFORE DELETE ON feature_result_artifacts
+                   BEGIN SELECT RAISE(ABORT, 'durable feature result artifact evidence'); END;
+                 PRAGMA user_version = 12;
+                 COMMIT;",
+            )?;
+        }
+        let version = self.schema_version()?;
         if version != MASTER_SCHEMA_VERSION {
             return Err(MasterError::UnsupportedSchemaVersion {
                 expected: MASTER_SCHEMA_VERSION,
@@ -5405,6 +5728,91 @@ fn coding_job_binding_is_current_tx(
     Ok(mapped)
 }
 
+fn validate_result_artifact_admission_tx(
+    tx: &Transaction<'_>,
+    authenticated_device_id: DeviceId,
+    admission: &LocalCodingResultArtifactAdmission,
+    now_ms: u64,
+) -> Result<JobEnvelope, MasterError> {
+    require_emergency_unpaused_tx(tx)?;
+    let attempt =
+        load_attempt(tx, admission.attempt_id)?.ok_or(MasterError::ResultArtifactUnavailable)?;
+    if attempt.device_id != authenticated_device_id
+        || attempt.status != AttemptStatus::Leased
+        || attempt.lease_expires_at_ms <= now_ms
+    {
+        return Err(MasterError::ResultArtifactUnavailable);
+    }
+    let job: JobEnvelope = serde_json::from_str(&attempt.job_json)?;
+    admission.validate_for_job(&job)?;
+    let connection = connection_state(tx, authenticated_device_id)?;
+    if !connection.active
+        || connection.epoch != admission.connection_epoch
+        || admission.sequence <= connection.last_sequence
+    {
+        return Err(MasterError::ResultArtifactUnavailable);
+    }
+    if step_status_tx(tx, admission.step_id)? != StepStatus::Leased {
+        return Err(MasterError::ResultArtifactUnavailable);
+    }
+    let context = job.validate_local_coding()?;
+    if !coding_job_binding_is_current_tx(tx, &context, job.step_id, authenticated_device_id)? {
+        return Err(MasterError::ResultArtifactUnavailable);
+    }
+    let capability =
+        capability_for_device(tx, authenticated_device_id, LOCAL_CODING_CAPABILITY_ID)?;
+    if capability != RemoteWorkContract::LocalCoding.capability() {
+        return Err(MasterError::ResultArtifactUnavailable);
+    }
+    let collision: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM feature_result_artifacts
+         WHERE artifact_id = ?1 OR attempt_id = ?2",
+        params![
+            admission.artifact.artifact_id.to_string(),
+            admission.attempt_id.0.to_string()
+        ],
+        |row| row.get(0),
+    )?;
+    if collision != 0 {
+        let exact: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM feature_result_artifacts
+             WHERE artifact_id = ?1 AND artifact_sha256 = ?2
+               AND artifact_size_bytes = ?3 AND device_id = ?4
+               AND device_registry_revision = ?5 AND connection_epoch = ?6
+               AND sequence = ?7 AND task_id = ?8 AND step_id = ?9
+               AND attempt_id = ?10 AND lease_id = ?11 AND cancellation_id = ?12
+               AND context_sha256 = ?13 AND feature_id = ?14
+               AND feature_lease_id = ?15 AND snapshot_id = ?16
+               AND snapshot_sha256 = ?17 AND work_packet_sha256 = ?18",
+            params![
+                admission.artifact.artifact_id.to_string(),
+                admission.artifact.artifact_sha256.as_slice(),
+                u64_to_i64(admission.artifact.artifact_size_bytes)?,
+                authenticated_device_id.0.to_string(),
+                u64_to_i64(context.device_registry_revision)?,
+                u64_to_i64(admission.connection_epoch)?,
+                u64_to_i64(admission.sequence)?,
+                admission.task_id.0.to_string(),
+                admission.step_id.0.to_string(),
+                admission.attempt_id.0.to_string(),
+                admission.lease_id.0.to_string(),
+                admission.cancellation_id.0.to_string(),
+                admission.context_sha256.as_slice(),
+                admission.feature_id.to_string(),
+                admission.feature_lease_id.to_string(),
+                admission.snapshot_id.to_string(),
+                admission.snapshot_sha256.as_slice(),
+                admission.work_packet_sha256.as_slice(),
+            ],
+            |row| row.get(0),
+        )?;
+        if exact != 1 || collision != 1 {
+            return Err(MasterError::ResultArtifactUnavailable);
+        }
+    }
+    Ok(job)
+}
+
 fn require_feature_coding_work_terminal_tx(
     tx: &Transaction<'_>,
     feature_id: Uuid,
@@ -5500,6 +5908,16 @@ fn digest_array(value: &[u8]) -> Result<[u8; 32], MasterError> {
 fn parse_uuid(value: &str) -> Result<Uuid, MasterError> {
     Uuid::parse_str(value)
         .map_err(|_| MasterError::InvalidStoredState("stored UUID is invalid".to_string()))
+}
+
+fn lower_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
 }
 
 fn u64_to_i64(value: u64) -> Result<i64, MasterError> {

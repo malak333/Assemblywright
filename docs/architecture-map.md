@@ -25,7 +25,7 @@ flowchart LR
   Process --> Service["Windows SCM host: automatic start, bounded recovery, status, maintenance, uninstall"]
   Service --> Maintenance["Durable fail-closed marker blocks new enqueue and lease admission"]
   Master --> Durable["Registered devices, epochs, queue, attempts, cancellation, expiry, restart reconciliation, exact results"]
-  Master --> Conveyor["Default-inert Feature Conveyor repository kernel retained through schema v11"]
+  Master --> Conveyor["Default-inert Feature Conveyor repository kernel retained through schema v12"]
   Conveyor --> ConveyorSafety["Immutable approved specs and grants, strict CAS queue, one active lease, atomic redacted audit, and startup quarantine"]
   Conveyor --> Observer["Exact bounded status projection: local owner route plus accepted-session MacBridge-only remote GET"]
   Observer --> Helper
@@ -39,6 +39,10 @@ flowchart LR
   SnapshotChunks --> Helper
   Helper --> Agent
   Agent --> Materialization["Private Git materialization plus fixed forked-child README fixture through a pre-opened directory; bounded evidence, then cleanup before result"]
+  Materialization --> Artifact["Protocol-v4 canonical bounded patch artifact constructed in memory"]
+  Artifact --> ArtifactAdmission["FIFO mTLS admission during cancellation race; exact binding recheck"]
+  ArtifactAdmission --> ArtifactStore["Private bytes outside SQLite; immutable schema-v12 metadata and redacted audit; owner-private fixed shape and guarded crash/concurrent retry"]
+  ArtifactStore --> ResultGate["Startup and immediate pre-transaction stable-handle verification; metadata-only result accepted only for exact evidence"]
   OwnerDesignation --> OwnerAction["Exact designated non-fixture MacBridge-only approved-feature POST; queue insertion only"]
   OwnerAction --> Helper
   Protocol --> Feature["Dormant assemblywright-core distributed-development feature"]
@@ -64,7 +68,7 @@ a headless master executable. The contract seam provides the current protocol
 version, typed device/task/step/attempt/lease/cancellation identifiers, bounded
 capability advertisements, handshake messages, job and result envelopes, strict
 bound-before-decode JSON entry points, nil-identity rejection, and a golden
-compatibility fixture. `assemblywright-master` schema version 11 preserves the
+compatibility fixture. `assemblywright-master` schema version 12 preserves the
 schema-v4 distributed-device lifecycle, the schema-v5 Feature Conveyor, and
 schema-v6 dedicated pending capability-rebind evidence, then adds the durable
 Emergency Pause revision, then adds one nullable compare-and-set owner-control
@@ -84,7 +88,9 @@ missing, ambiguous, malformed, or non-active-origin evidence. The
 Success path releases the lease only with verified
 healthy-main evidence; cancellation retains it until explicit safe
 abandonment, and restart ambiguity is quarantined without automatic retry.
-Master-process upgrades from supported legacy schemas v1-v10 to v11 are
+Schema v12 adds immutable result-artifact bindings and a private filesystem
+store; it grants no apply or integration authority. Master-process upgrades
+from supported legacy schemas v1-v11 to v12 are
 backup-first under the owner lock, verify the versioned backup before migration,
 and restore through a fsynced sibling plus atomic replacement when
 migration-open fails. Direct file-backed legacy migration through

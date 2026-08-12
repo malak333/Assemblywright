@@ -6,7 +6,7 @@ use assemblywright_master::{
     FeatureGrantRevisions, FeatureSnapshotClaimPlan, IdentityAuthority, MasterHealthSnapshot,
     MasterProcess, NewStep, PlatformSecretProtector, RemoteWorkContract, RepositoryGrantKind,
     RepositoryGrantRevision, RepositorySnapshotEvidence, RepositorySnapshotStore,
-    StartupReconciliation,
+    ResultArtifactReference, StartupReconciliation,
 };
 #[cfg(test)]
 use assemblywright_protocol::CapabilityKind;
@@ -29,6 +29,7 @@ use assemblywright_protocol::{
     FeatureConveyorRepositorySnapshotClaimReceipt, FeatureConveyorRepositorySnapshotClaimRequest,
     FeatureConveyorRepositorySnapshotClaimStatus, FixtureJobResult, HandshakeRequest,
     HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope, JobResultStatus,
+    LocalCodingJobResult, LocalCodingResultArtifactAdmission, LocalCodingResultArtifactReceipt,
     LocalCodingSnapshotChunk, LocalCodingSnapshotChunkRequest, Sensitivity, StepId, TaskId,
     ENROLLMENT_INVITATION_READY_STATUS, ENROLLMENT_PAIRING_SCHEMA_VERSION,
     FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, MAX_ENROLLMENT_PAIRING_FRAME_BYTES,
@@ -1736,6 +1737,10 @@ fn remote_router(state: AppState) -> Router {
             "/v1/distributed/feature-conveyor/snapshot-chunks",
             post(remote_local_coding_snapshot_chunk),
         )
+        .route(
+            "/v1/distributed/feature-conveyor/result-artifacts",
+            post(remote_local_coding_result_artifact),
+        )
         .route("/v1/distributed/results", post(remote_accept_result))
         .route(
             "/v1/distributed/cancellations/next",
@@ -2006,6 +2011,125 @@ fn snapshot_transfer_error(_error: assemblywright_master::MasterError) -> ApiErr
     fixed_error(StatusCode::CONFLICT, "snapshot_transfer_rejected")
 }
 
+async fn remote_local_coding_result_artifact(
+    State(state): State<AppState>,
+    Extension(session): Extension<RemoteSession>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<LocalCodingResultArtifactReceipt> {
+    require_work_admission(&state)?;
+    let body = body.map_err(|_| {
+        fixed_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "result_artifact_admission_rejected",
+        )
+    })?;
+    let admission = LocalCodingResultArtifactAdmission::decode_frame(&body).map_err(|_| {
+        fixed_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "result_artifact_admission_rejected",
+        )
+    })?;
+    let registration =
+        require_remote_application_session(&state, &session, Some(admission.connection_epoch))?;
+    if !matches!(
+        RemoteWorkContract::from_registration(&registration),
+        Ok(RemoteWorkContract::LocalCoding)
+    ) {
+        return Err(unauthorized());
+    }
+    let now_ms = current_time_ms().map_err(api_error)?;
+    let (store, artifact_bytes, already_admitted) = {
+        let process = lock_process(&state)?;
+        let already_admitted = process
+            .kernel()
+            .authorize_local_coding_result_artifact(registration.device_id, &admission, now_ms)
+            .map_err(result_artifact_error)?;
+        (
+            process.result_artifact_store(),
+            admission.artifact.validate().map_err(|_| {
+                result_artifact_error(assemblywright_master::MasterError::ResultArtifactUnavailable)
+            })?,
+            already_admitted,
+        )
+    };
+    let reference = ResultArtifactReference {
+        artifact_id: admission.artifact.artifact_id,
+        artifact_sha256: admission.artifact.artifact_sha256,
+        artifact_size_bytes: admission.artifact.artifact_size_bytes,
+    };
+    let mut existing = if already_admitted {
+        Some(store.open_verified(reference).map_err(|_| {
+            result_artifact_error(assemblywright_master::MasterError::ResultArtifactUnavailable)
+        })?)
+    } else {
+        None
+    };
+    let mut prepared = if already_admitted {
+        None
+    } else {
+        Some(
+            store
+                .prepare(
+                    admission.artifact.artifact_id,
+                    admission.artifact.artifact_sha256,
+                    &artifact_bytes,
+                )
+                .map_err(|_| {
+                    result_artifact_error(
+                        assemblywright_master::MasterError::ResultArtifactUnavailable,
+                    )
+                })?,
+        )
+    };
+    if let Some(verified) = existing.as_mut() {
+        verified.revalidate(&store).map_err(|_| {
+            result_artifact_error(assemblywright_master::MasterError::ResultArtifactUnavailable)
+        })?;
+    }
+    if let Some(prepared) = prepared.as_mut() {
+        prepared.verified_mut().revalidate(&store).map_err(|_| {
+            result_artifact_error(assemblywright_master::MasterError::ResultArtifactUnavailable)
+        })?;
+    }
+    let finalized = lock_process(&state)?
+        .kernel_mut()
+        .finalize_local_coding_result_artifact(
+            registration.device_id,
+            &admission,
+            current_time_ms().map_err(api_error)?,
+        );
+    match finalized {
+        Ok(receipt) => {
+            if let Some(prepared) = prepared.as_mut() {
+                prepared.mark_committed().map_err(|_| {
+                    result_artifact_error(
+                        assemblywright_master::MasterError::ResultArtifactUnavailable,
+                    )
+                })?;
+            }
+            Ok(Json(receipt))
+        }
+        Err(error) => {
+            if let Some(prepared) = prepared {
+                let referenced = lock_process(&state)
+                    .ok()
+                    .and_then(|process| process.kernel().result_artifact_ids().ok())
+                    .is_some_and(|ids| ids.contains(&admission.artifact.artifact_id));
+                prepared.cleanup_if_unreferenced(referenced).map_err(|_| {
+                    result_artifact_error(
+                        assemblywright_master::MasterError::ResultArtifactUnavailable,
+                    )
+                })?;
+            }
+            Err(result_artifact_error(error))
+        }
+    }
+}
+
+fn result_artifact_error(_error: assemblywright_master::MasterError) -> ApiError {
+    fixed_error(StatusCode::CONFLICT, "result_artifact_admission_rejected")
+}
+
 async fn remote_accept_result(
     State(state): State<AppState>,
     Extension(session): Extension<RemoteSession>,
@@ -2016,15 +2140,53 @@ async fn remote_accept_result(
         require_remote_application_session(&state, &session, Some(result.connection_epoch))?;
     let contract =
         RemoteWorkContract::from_registration(&registration).map_err(|_| unauthorized())?;
-    let accepted = lock_process(&state)?
-        .kernel_mut()
-        .accept_remote_result_from(
+    let artifact_reference = if matches!(contract, RemoteWorkContract::LocalCoding) {
+        result.validate().map_err(|_| {
+            result_artifact_error(assemblywright_master::MasterError::ResultArtifactUnavailable)
+        })?;
+        let payload: LocalCodingJobResult = serde_json::from_value(result.payload.clone())
+            .map_err(|_| {
+                result_artifact_error(assemblywright_master::MasterError::ResultArtifactUnavailable)
+            })?;
+        Some(ResultArtifactReference {
+            artifact_id: payload.artifact_id,
+            artifact_sha256: payload.artifact_sha256,
+            artifact_size_bytes: payload.artifact_size_bytes,
+        })
+    } else {
+        None
+    };
+    let mut process = lock_process(&state)?;
+    let store = process.result_artifact_store();
+    let mut verified = artifact_reference
+        .map(|reference| store.open_verified(reference))
+        .transpose()
+        .map_err(|_| {
+            result_artifact_error(assemblywright_master::MasterError::ResultArtifactUnavailable)
+        })?;
+    let now_ms = current_time_ms().map_err(api_error)?;
+    let accepted = if let Some(verified) = verified.as_mut() {
+        // The kernel re-hashes this no-follow handle before opening SQLite and
+        // keeps the borrowed file/directory handles live through commit.
+        process
+            .kernel_mut()
+            .accept_remote_result_from_with_artifact(
+                registration.device_id,
+                &result,
+                now_ms,
+                &contract,
+                &store,
+                verified,
+            )
+    } else {
+        process.kernel_mut().accept_remote_result_from(
             registration.device_id,
             &result,
-            current_time_ms().map_err(api_error)?,
+            now_ms,
             &contract,
         )
-        .map_err(bound_worker_error)?;
+    }
+    .map_err(bound_worker_error)?;
     Ok(Json(accepted))
 }
 

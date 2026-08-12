@@ -8,15 +8,19 @@ use assemblywright_master::{
     MAX_CONVEYOR_STATUS_FEATURES,
 };
 use assemblywright_protocol::{
-    local_coding_admission_sha256, CapabilityDescriptor, DeviceId, DeviceRole,
-    FeatureConveyorCodingDispatchRequest, FeatureConveyorCodingWorkPacketMetadata,
-    HandshakeRequest, JobEnvelope, JobResultEnvelope, JobResultStatus, LocalCodingJobResult,
-    LocalCodingSnapshotChunkRequest, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
-    LOCAL_CODING_COMPLETED_STATUS, LOCAL_CODING_FIXTURE_TEST_STATUS, PROTOCOL_VERSION,
+    build_local_coding_fixture_patch_artifact, local_coding_admission_sha256, CapabilityDescriptor,
+    DeviceId, DeviceRole, FeatureConveyorCodingDispatchRequest,
+    FeatureConveyorCodingWorkPacketMetadata, HandshakeRequest, JobEnvelope, JobResultEnvelope,
+    JobResultStatus, LocalCodingJobResult, LocalCodingResultArtifact,
+    LocalCodingResultArtifactAdmission, LocalCodingSnapshotChunkRequest,
+    FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, LOCAL_CODING_COMPLETED_STATUS,
+    LOCAL_CODING_FIXTURE_TEST_STATUS, PROTOCOL_VERSION,
 };
 use rusqlite::Connection;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
+use std::fs;
 use tempfile::tempdir;
 use uuid::Uuid;
 
@@ -217,6 +221,8 @@ fn coding_dispatch_request(
 fn coding_ack(job: &JobEnvelope, sequence: u64) -> JobResultEnvelope {
     let context = job.validate_local_coding().unwrap();
     let allowed_paths_sha256 = assemblywright_protocol::local_coding_fixture_allowed_paths_sha256();
+    let artifact_bytes = build_local_coding_fixture_patch_artifact([0x42; 32]).unwrap();
+    let artifact = LocalCodingResultArtifact::from_bytes(Uuid::new_v4(), &artifact_bytes).unwrap();
     let payload = serde_json::to_value(LocalCodingJobResult {
         status: LOCAL_CODING_COMPLETED_STATUS.to_string(),
         work_packet_sha256: context.work_packet_sha256,
@@ -224,7 +230,10 @@ fn coding_ack(job: &JobEnvelope, sequence: u64) -> JobResultEnvelope {
         snapshot_sha256: context.snapshot_sha256,
         allowed_paths_sha256,
         changed_paths_sha256: allowed_paths_sha256,
-        patch_sha256: digest("contained-patch"),
+        patch_sha256: artifact.artifact_sha256,
+        artifact_id: artifact.artifact_id,
+        artifact_sha256: artifact.artifact_sha256,
+        artifact_size_bytes: artifact.artifact_size_bytes,
         changed_file_count: 1,
         test_status: LOCAL_CODING_FIXTURE_TEST_STATUS.to_string(),
         mutation_performed: true,
@@ -246,6 +255,93 @@ fn coding_ack(job: &JobEnvelope, sequence: u64) -> JobResultEnvelope {
         payload_sha256: Sha256::digest(serde_json::to_vec(&payload).unwrap()).into(),
         payload,
     }
+}
+
+fn coding_artifact_admission(
+    job: &JobEnvelope,
+    result: &JobResultEnvelope,
+) -> LocalCodingResultArtifactAdmission {
+    let context = job.validate_local_coding().unwrap();
+    let payload: LocalCodingJobResult = serde_json::from_value(result.payload.clone()).unwrap();
+    let artifact_bytes = build_local_coding_fixture_patch_artifact([0x42; 32]).unwrap();
+    LocalCodingResultArtifactAdmission {
+        protocol_version: job.protocol_version,
+        connection_epoch: job.connection_epoch,
+        sequence: result.sequence,
+        task_id: job.task_id,
+        step_id: job.step_id,
+        attempt_id: job.attempt_id,
+        lease_id: job.lease_id,
+        cancellation_id: job.cancellation_id,
+        context_sha256: job.context_sha256,
+        feature_id: context.feature_id,
+        feature_lease_id: context.feature_lease_id,
+        snapshot_id: context.snapshot_id,
+        snapshot_sha256: context.snapshot_sha256,
+        work_packet_sha256: context.work_packet_sha256,
+        artifact: LocalCodingResultArtifact::from_bytes(payload.artifact_id, &artifact_bytes)
+            .unwrap(),
+    }
+}
+
+fn persist_referenced_result_artifact(
+    data_dir: &std::path::Path,
+    create_file: bool,
+) -> (LocalCodingResultArtifactAdmission, Vec<u8>) {
+    let database = data_dir.join("master.sqlite3");
+    let mut kernel = MasterKernel::open(&database).unwrap();
+    let repository_id = Uuid::new_v4();
+    install_grants(&mut kernel, repository_id);
+    let feature = specification(Uuid::new_v4(), repository_id, vec![]);
+    kernel.enqueue_approved_feature(&feature, 0, 10).unwrap();
+    let claim = claim_feature(&mut kernel, &feature, 1, 11).unwrap();
+    let device = coding_registration("persisted-artifact-worker");
+    kernel.register_device(&device).unwrap();
+    let request = coding_dispatch_request(
+        &claim,
+        &device,
+        kernel.feature_queue_revision().unwrap(),
+        kernel.emergency_pause_revision().unwrap(),
+    );
+    kernel.dispatch_feature_coding(&request, 12).unwrap();
+    let epoch = kernel
+        .accept_handshake(
+            &HandshakeRequest {
+                protocol_version: PROTOCOL_VERSION,
+                device_id: device.device_id,
+                device_name: device.device_name.clone(),
+                role: device.role,
+                registry_revision: device.registry_revision,
+                capabilities: device.capabilities.clone(),
+            },
+            13,
+        )
+        .unwrap()
+        .connection_epoch;
+    let contract = RemoteWorkContract::from_registration(&device).unwrap();
+    let job = kernel
+        .lease_next_remote_step(device.device_id, epoch, 14, &contract)
+        .unwrap();
+    let result = coding_ack(&job, job.sequence + 1);
+    let admission = coding_artifact_admission(&job, &result);
+    kernel
+        .finalize_local_coding_result_artifact(device.device_id, &admission, 15)
+        .unwrap();
+    drop(kernel);
+    let bytes = admission.artifact.validate().unwrap();
+    if create_file {
+        let store = assemblywright_master::ResultArtifactStore::open(data_dir).unwrap();
+        drop(
+            store
+                .prepare(
+                    admission.artifact.artifact_id,
+                    admission.artifact.artifact_sha256,
+                    &bytes,
+                )
+                .unwrap(),
+        );
+    }
+    (admission, bytes)
 }
 
 #[test]
@@ -1977,8 +2073,33 @@ fn terminal_coding_ack_allows_validation_and_lifecycle_change_invalidates_replay
         .lease_next_remote_step(device.device_id, epoch, 14, &contract)
         .unwrap();
     let ack = coding_ack(&job, job.sequence + 1);
+    let artifact = coding_artifact_admission(&job, &ack);
     kernel
-        .accept_remote_result_from(device.device_id, &ack, 15, &contract)
+        .authorize_local_coding_result_artifact(device.device_id, &artifact, 15)
+        .unwrap();
+    kernel
+        .finalize_local_coding_result_artifact(device.device_id, &artifact, 15)
+        .unwrap();
+    let artifact_directory = tempdir().unwrap();
+    let store =
+        assemblywright_master::ResultArtifactStore::open(artifact_directory.path()).unwrap();
+    let artifact_bytes = artifact.artifact.validate().unwrap();
+    let mut prepared = store
+        .prepare(
+            artifact.artifact.artifact_id,
+            artifact.artifact.artifact_sha256,
+            &artifact_bytes,
+        )
+        .unwrap();
+    kernel
+        .accept_remote_result_from_with_artifact(
+            device.device_id,
+            &ack,
+            15,
+            &contract,
+            &store,
+            prepared.verified_mut(),
+        )
         .unwrap();
     let validating = kernel
         .advance_feature_lifecycle(
@@ -1994,9 +2115,423 @@ fn terminal_coding_ack_allows_validation_and_lifecycle_change_invalidates_replay
         .unwrap();
     assert_eq!(validating.status, FeatureLifecycleStatus::Validating);
     assert!(matches!(
-        kernel.accept_remote_result_from(device.device_id, &ack, 17, &contract),
+        kernel.accept_remote_result_from_with_artifact(
+            device.device_id,
+            &ack,
+            17,
+            &contract,
+            &store,
+            prepared.verified_mut()
+        ),
         Err(MasterError::FeatureCodingDispatchUnavailable)
     ));
+}
+
+#[test]
+fn result_artifact_admission_is_exact_idempotent_and_required_before_result() {
+    let kernel_directory = tempdir().unwrap();
+    let database = kernel_directory.path().join("master.sqlite3");
+    let mut kernel = MasterKernel::open(&database).unwrap();
+    let repository_id = Uuid::new_v4();
+    install_grants(&mut kernel, repository_id);
+    let feature = specification(Uuid::new_v4(), repository_id, vec![]);
+    kernel.enqueue_approved_feature(&feature, 0, 10).unwrap();
+    let claim = claim_feature(&mut kernel, &feature, 1, 11).unwrap();
+    let device = coding_registration("artifact-worker");
+    kernel.register_device(&device).unwrap();
+    let request = coding_dispatch_request(
+        &claim,
+        &device,
+        kernel.feature_queue_revision().unwrap(),
+        kernel.emergency_pause_revision().unwrap(),
+    );
+    kernel.dispatch_feature_coding(&request, 12).unwrap();
+    let epoch = kernel
+        .accept_handshake(
+            &HandshakeRequest {
+                protocol_version: PROTOCOL_VERSION,
+                device_id: device.device_id,
+                device_name: device.device_name.clone(),
+                role: device.role,
+                registry_revision: device.registry_revision,
+                capabilities: device.capabilities.clone(),
+            },
+            13,
+        )
+        .unwrap()
+        .connection_epoch;
+    let contract = RemoteWorkContract::from_registration(&device).unwrap();
+    let job = kernel
+        .lease_next_remote_step(device.device_id, epoch, 14, &contract)
+        .unwrap();
+    let result = coding_ack(&job, job.sequence + 1);
+    assert!(matches!(
+        kernel.accept_remote_result_from(device.device_id, &result, 15, &contract),
+        Err(MasterError::ResultArtifactUnavailable)
+    ));
+
+    let admission = coding_artifact_admission(&job, &result);
+    assert!(!kernel
+        .authorize_local_coding_result_artifact(device.device_id, &admission, 15)
+        .unwrap());
+    let first = kernel
+        .finalize_local_coding_result_artifact(device.device_id, &admission, 15)
+        .unwrap();
+    let retry = kernel
+        .finalize_local_coding_result_artifact(device.device_id, &admission, 16)
+        .unwrap();
+    assert_eq!(retry, first);
+    assert!(kernel
+        .authorize_local_coding_result_artifact(device.device_id, &admission, 16)
+        .unwrap());
+    assert_eq!(
+        kernel.result_artifact_ids().unwrap(),
+        HashSet::from([first.artifact_id])
+    );
+    let audit_connection = Connection::open(&database).unwrap();
+    let audits: Vec<String> = audit_connection
+        .prepare(
+            "SELECT redacted_metadata_json FROM feature_conveyor_audit
+             WHERE event_kind = 'result_artifact_admitted'",
+        )
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(audits.len(), 1);
+    let audit: serde_json::Value = serde_json::from_str(&audits[0]).unwrap();
+    assert_eq!(
+        audit
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<HashSet<_>>(),
+        HashSet::from([
+            "artifact_id".to_string(),
+            "artifact_sha256".to_string(),
+            "artifact_size_bytes".to_string(),
+            "attempt_id".to_string(),
+            "step_id".to_string(),
+        ])
+    );
+    assert!(!audits[0].contains("artifact_hex"));
+    assert!(!audits[0].contains("README.md"));
+
+    let mut mismatch = admission.clone();
+    mismatch.artifact.artifact_id = Uuid::new_v4();
+    assert!(matches!(
+        kernel.authorize_local_coding_result_artifact(device.device_id, &mismatch, 16),
+        Err(MasterError::ResultArtifactUnavailable)
+    ));
+
+    let artifact_directory = tempdir().unwrap();
+    let store =
+        assemblywright_master::ResultArtifactStore::open(artifact_directory.path()).unwrap();
+    let artifact_bytes = build_local_coding_fixture_patch_artifact([0x42; 32]).unwrap();
+    let mut prepared = store
+        .prepare(
+            admission.artifact.artifact_id,
+            admission.artifact.artifact_sha256,
+            &artifact_bytes,
+        )
+        .unwrap();
+    prepared.verified_mut().revalidate(&store).unwrap();
+
+    let mut mismatched_result = result.clone();
+    let mut mismatched_payload: LocalCodingJobResult =
+        serde_json::from_value(mismatched_result.payload.clone()).unwrap();
+    mismatched_payload.artifact_id = Uuid::new_v4();
+    mismatched_result.payload = serde_json::to_value(mismatched_payload).unwrap();
+    mismatched_result.payload_sha256 =
+        Sha256::digest(serde_json::to_vec(&mismatched_result.payload).unwrap()).into();
+    assert!(matches!(
+        kernel.accept_remote_result_from_with_artifact(
+            device.device_id,
+            &mismatched_result,
+            16,
+            &contract,
+            &store,
+            prepared.verified_mut()
+        ),
+        Err(MasterError::ResultArtifactUnavailable)
+    ));
+
+    let artifact_path = artifact_directory
+        .path()
+        .join("feature-result-artifacts")
+        .join(admission.artifact.artifact_id.to_string())
+        .join("artifact.patch");
+    let mut tampered = artifact_bytes.clone();
+    tampered[0] ^= 1;
+    fs::write(&artifact_path, tampered).unwrap();
+    assert!(matches!(
+        kernel.accept_remote_result_from_with_artifact(
+            device.device_id,
+            &result,
+            16,
+            &contract,
+            &store,
+            prepared.verified_mut()
+        ),
+        Err(MasterError::ResultArtifactUnavailable)
+    ));
+    {
+        use std::io::Write;
+        let mut restored = fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(&artifact_path)
+            .unwrap();
+        restored.write_all(&artifact_bytes).unwrap();
+        restored.sync_all().unwrap();
+    }
+    kernel
+        .accept_remote_result_from_with_artifact(
+            device.device_id,
+            &result,
+            16,
+            &contract,
+            &store,
+            prepared.verified_mut(),
+        )
+        .unwrap();
+    kernel.set_emergency_paused_at(true, 17).unwrap();
+    assert!(matches!(
+        kernel.authorize_local_coding_result_artifact(device.device_id, &admission, 18),
+        Err(MasterError::EmergencyPaused)
+    ));
+}
+
+#[test]
+fn artifact_store_exact_retry_and_startup_orphan_cleanup_fail_closed() {
+    let directory = tempdir().unwrap();
+    let bytes = build_local_coding_fixture_patch_artifact([0x42; 32]).unwrap();
+    let artifact = LocalCodingResultArtifact::from_bytes(Uuid::new_v4(), &bytes).unwrap();
+    let store = assemblywright_master::ResultArtifactStore::open(directory.path()).unwrap();
+    let first = store
+        .prepare(artifact.artifact_id, artifact.artifact_sha256, &bytes)
+        .unwrap();
+    let retry = store
+        .prepare(artifact.artifact_id, artifact.artifact_sha256, &bytes)
+        .unwrap();
+    let mut mismatch = bytes.clone();
+    mismatch.push(b' ');
+    assert!(store
+        .prepare(artifact.artifact_id, artifact.artifact_sha256, &mismatch)
+        .is_err());
+    drop(retry);
+    drop(first);
+    drop(store);
+
+    let process = MasterProcess::acquire(directory.path()).unwrap();
+    assert!(process.kernel().result_artifact_ids().unwrap().is_empty());
+    assert!(!directory
+        .path()
+        .join("feature-result-artifacts")
+        .join(artifact.artifact_id.to_string())
+        .exists());
+}
+
+#[test]
+fn artifact_store_recovers_crash_prepared_and_concurrent_exact_retries() {
+    let directory = tempdir().unwrap();
+    let bytes = build_local_coding_fixture_patch_artifact([0x43; 32]).unwrap();
+    let artifact = LocalCodingResultArtifact::from_bytes(Uuid::new_v4(), &bytes).unwrap();
+    let store = assemblywright_master::ResultArtifactStore::open(directory.path()).unwrap();
+
+    // Dropping the guard models a process crash after durable rename but before
+    // the SQLite finalizer. Exact bytes must remain recoverable.
+    drop(
+        store
+            .prepare(artifact.artifact_id, artifact.artifact_sha256, &bytes)
+            .unwrap(),
+    );
+    drop(
+        store
+            .prepare(artifact.artifact_id, artifact.artifact_sha256, &bytes)
+            .unwrap(),
+    );
+
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+    let mut threads = Vec::new();
+    for _ in 0..2 {
+        let store = store.clone();
+        let bytes = bytes.clone();
+        let barrier = barrier.clone();
+        threads.push(std::thread::spawn(move || {
+            let guard = store
+                .prepare(artifact.artifact_id, artifact.artifact_sha256, &bytes)
+                .unwrap();
+            barrier.wait();
+            barrier.wait();
+            drop(guard);
+        }));
+    }
+    barrier.wait();
+    barrier.wait();
+    for thread in threads {
+        thread.join().unwrap();
+    }
+
+    let first_cleanup = store
+        .prepare(artifact.artifact_id, artifact.artifact_sha256, &bytes)
+        .unwrap();
+    let second_cleanup = store
+        .prepare(artifact.artifact_id, artifact.artifact_sha256, &bytes)
+        .unwrap();
+    first_cleanup.cleanup_if_unreferenced(false).unwrap();
+    let artifact_path = directory
+        .path()
+        .join("feature-result-artifacts")
+        .join(artifact.artifact_id.to_string());
+    assert!(artifact_path.exists());
+    second_cleanup.cleanup_if_unreferenced(false).unwrap();
+    assert!(!artifact_path.exists());
+
+    // Recreate for portable permission assertions below.
+    drop(
+        store
+            .prepare(artifact.artifact_id, artifact.artifact_sha256, &bytes)
+            .unwrap(),
+    );
+    let failed_cleanup = store
+        .prepare(artifact.artifact_id, artifact.artifact_sha256, &bytes)
+        .unwrap();
+    let mut committed_retry = store
+        .prepare(artifact.artifact_id, artifact.artifact_sha256, &bytes)
+        .unwrap();
+    committed_retry.mark_committed().unwrap();
+    failed_cleanup.cleanup_if_unreferenced(false).unwrap();
+    committed_retry.cleanup_if_unreferenced(false).unwrap();
+    assert!(artifact_path.exists());
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let root = directory.path().join("feature-result-artifacts");
+        let artifact_directory = root.join(artifact.artifact_id.to_string());
+        let artifact_file = artifact_directory.join("artifact.patch");
+        assert_eq!(fs::metadata(root).unwrap().mode() & 0o777, 0o700);
+        assert_eq!(
+            fs::metadata(artifact_directory).unwrap().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(fs::metadata(artifact_file).unwrap().mode() & 0o777, 0o600);
+        assert_eq!(
+            fs::metadata(
+                directory
+                    .path()
+                    .join("feature-result-artifacts")
+                    .join(artifact.artifact_id.to_string())
+                    .join("artifact.patch")
+            )
+            .unwrap()
+            .nlink(),
+            1
+        );
+    }
+}
+
+#[test]
+fn referenced_artifact_missing_or_corrupt_blocks_startup_and_is_not_cleaned() {
+    let missing = tempdir().unwrap();
+    let (missing_admission, _) = persist_referenced_result_artifact(missing.path(), false);
+    assert!(MasterProcess::acquire(missing.path()).is_err());
+    assert_eq!(
+        Connection::open(missing.path().join("master.sqlite3"))
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM feature_result_artifacts WHERE artifact_id = ?1",
+                [missing_admission.artifact.artifact_id.to_string()],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        1
+    );
+
+    let corrupt = tempdir().unwrap();
+    let (corrupt_admission, bytes) = persist_referenced_result_artifact(corrupt.path(), true);
+    let corrupt_path = corrupt
+        .path()
+        .join("feature-result-artifacts")
+        .join(corrupt_admission.artifact.artifact_id.to_string())
+        .join("artifact.patch");
+    let mut tampered = bytes;
+    tampered[0] ^= 1;
+    fs::write(&corrupt_path, tampered).unwrap();
+    assert!(MasterProcess::acquire(corrupt.path()).is_err());
+    assert!(corrupt_path.exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn referenced_artifact_reparse_hardlink_and_permissions_block_startup() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+
+    let reparse = tempdir().unwrap();
+    let (reparse_admission, bytes) = persist_referenced_result_artifact(reparse.path(), true);
+    let reparse_path = reparse
+        .path()
+        .join("feature-result-artifacts")
+        .join(reparse_admission.artifact.artifact_id.to_string())
+        .join("artifact.patch");
+    fs::remove_file(&reparse_path).unwrap();
+    let target = reparse.path().join("outside.patch");
+    fs::write(&target, &bytes).unwrap();
+    symlink(&target, &reparse_path).unwrap();
+    assert!(MasterProcess::acquire(reparse.path()).is_err());
+    assert!(fs::symlink_metadata(&reparse_path)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+
+    let hardlink = tempdir().unwrap();
+    let (hardlink_admission, _) = persist_referenced_result_artifact(hardlink.path(), true);
+    let hardlink_path = hardlink
+        .path()
+        .join("feature-result-artifacts")
+        .join(hardlink_admission.artifact.artifact_id.to_string())
+        .join("artifact.patch");
+    fs::hard_link(
+        &hardlink_path,
+        hardlink.path().join("outside-hardlink.patch"),
+    )
+    .unwrap();
+    assert!(MasterProcess::acquire(hardlink.path()).is_err());
+    assert!(hardlink_path.exists());
+
+    let permissions = tempdir().unwrap();
+    let (permissions_admission, _) = persist_referenced_result_artifact(permissions.path(), true);
+    let permissions_path = permissions
+        .path()
+        .join("feature-result-artifacts")
+        .join(permissions_admission.artifact.artifact_id.to_string())
+        .join("artifact.patch");
+    fs::set_permissions(&permissions_path, fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(MasterProcess::acquire(permissions.path()).is_err());
+    assert!(permissions_path.exists());
+}
+
+#[test]
+fn post_admission_artifact_tamper_invalidates_stable_result_evidence() {
+    let directory = tempdir().unwrap();
+    let bytes = build_local_coding_fixture_patch_artifact([0x44; 32]).unwrap();
+    let artifact = LocalCodingResultArtifact::from_bytes(Uuid::new_v4(), &bytes).unwrap();
+    let store = assemblywright_master::ResultArtifactStore::open(directory.path()).unwrap();
+    let mut prepared = store
+        .prepare(artifact.artifact_id, artifact.artifact_sha256, &bytes)
+        .unwrap();
+    let path = directory
+        .path()
+        .join("feature-result-artifacts")
+        .join(artifact.artifact_id.to_string())
+        .join("artifact.patch");
+    let mut tampered = bytes;
+    tampered[0] ^= 1;
+    fs::write(path, tampered).unwrap();
+    assert!(prepared.verified_mut().revalidate(&store).is_err());
 }
 
 #[test]
@@ -2659,7 +3194,10 @@ fn downgrade_v5_database_to_v4(path: &std::path::Path, sabotage: bool) {
     let connection = Connection::open(path).unwrap();
     connection
         .execute_batch(
-            "DROP TRIGGER feature_specification_revisions_no_update;
+            "DROP TRIGGER feature_result_artifacts_no_update;
+             DROP TRIGGER feature_result_artifacts_no_delete;
+             DROP TABLE feature_result_artifacts;
+             DROP TRIGGER feature_specification_revisions_no_update;
              DROP TRIGGER feature_specification_revisions_no_delete;
              DROP TRIGGER feature_repository_grants_no_update;
              DROP TRIGGER feature_repository_grants_no_delete;
@@ -2759,7 +3297,12 @@ fn remove_resolution_receipt_for_v10_fixture(
             .unwrap();
     }
     connection
-        .execute_batch("PRAGMA user_version = 10;")
+        .execute_batch(
+            "DROP TRIGGER feature_result_artifacts_no_update;
+             DROP TRIGGER feature_result_artifacts_no_delete;
+             DROP TABLE feature_result_artifacts;
+             PRAGMA user_version = 10;",
+        )
         .unwrap();
 }
 
@@ -2809,13 +3352,16 @@ fn master_process_v10_backfills_resolution_receipts_from_exact_immutable_audit()
         );
 
         let mut process = MasterProcess::acquire(directory.path()).unwrap();
-        assert_eq!(process.kernel().schema_version().unwrap(), 11);
+        assert_eq!(
+            process.kernel().schema_version().unwrap(),
+            MASTER_SCHEMA_VERSION
+        );
         let backup = process.migration_backup_path().unwrap();
         assert!(backup
             .file_name()
             .unwrap()
             .to_string_lossy()
-            .starts_with("master.pre-v11."));
+            .starts_with("master.pre-v12."));
         assert_eq!(
             Connection::open(backup)
                 .unwrap()
@@ -2939,7 +3485,7 @@ fn master_process_v10_ambiguous_resolution_audit_fails_closed_and_restores_backu
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v11.")));
+            .starts_with("master.pre-v12.")));
 }
 
 #[test]
@@ -3107,7 +3653,7 @@ fn master_process_v4_backup_migration_reopen_and_restore_on_failure() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v11.")));
+            .starts_with("master.pre-v12.")));
 }
 
 #[test]
@@ -3118,7 +3664,10 @@ fn master_process_v6_backup_migration_binds_pause_and_default_inert_owner_contro
     Connection::open(&database)
         .unwrap()
         .execute_batch(
-            "DROP TRIGGER feature_coding_dispatches_no_update;
+            "DROP TRIGGER feature_result_artifacts_no_update;
+             DROP TRIGGER feature_result_artifacts_no_delete;
+             DROP TABLE feature_result_artifacts;
+             DROP TRIGGER feature_coding_dispatches_no_update;
              DROP TRIGGER feature_coding_dispatches_no_delete;
              DROP TABLE feature_coding_dispatches;
              DROP TRIGGER feature_active_lease_requires_snapshot;
@@ -3161,7 +3710,7 @@ fn master_process_v6_backup_migration_binds_pause_and_default_inert_owner_contro
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v11."));
+        .starts_with("master.pre-v12."));
     let backup = Connection::open(backup).unwrap();
     assert_eq!(
         backup
@@ -3190,7 +3739,10 @@ fn master_process_v9_backup_first_migration_adds_immutable_coding_dispatch_evide
     Connection::open(&database)
         .unwrap()
         .execute_batch(
-            "DROP TRIGGER feature_coding_dispatches_no_update;
+            "DROP TRIGGER feature_result_artifacts_no_update;
+             DROP TRIGGER feature_result_artifacts_no_delete;
+             DROP TABLE feature_result_artifacts;
+             DROP TRIGGER feature_coding_dispatches_no_update;
              DROP TRIGGER feature_coding_dispatches_no_delete;
              DROP TABLE feature_coding_dispatches;
              PRAGMA user_version = 9;",
@@ -3235,7 +3787,7 @@ fn forward_schema_version_fails_closed_without_backup() {
     drop(MasterKernel::open(&database).unwrap());
     Connection::open(&database)
         .unwrap()
-        .execute_batch("PRAGMA user_version = 12;")
+        .execute_batch("PRAGMA user_version = 13;")
         .unwrap();
     let forward_error = match MasterProcess::acquire(directory.path()) {
         Ok(_) => panic!("forward schema unexpectedly opened"),
@@ -3245,7 +3797,7 @@ fn forward_schema_version_fails_closed_without_backup() {
         forward_error,
         MasterError::UnsupportedSchemaVersion {
             expected: MASTER_SCHEMA_VERSION,
-            found: 12
+            found: 13
         }
     ));
     assert!(!directory
@@ -3256,5 +3808,5 @@ fn forward_schema_version_fails_closed_without_backup() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v11.")));
+            .starts_with("master.pre-v12.")));
 }
