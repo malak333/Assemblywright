@@ -916,3 +916,17 @@ an old one.
   and size match. The compatibility validator is migration-only: new prepare,
   handle revalidation, result admission, and terminal acceptance reject it and
   remain strictly protocol-v5.
+- A protocol-v5 live success must not reuse the protocol-v4 assertion that the
+  Mac snapshot root is empty. The production agent deliberately leaves exactly
+  one owner-private `<attempt>.sealed` directory and one matching
+  `<attempt>.retention.json` recovery record. A live harness may validate and
+  remove that exact pair only because it owns the disposable temporary root; it
+  must label this as harness cleanup, not product cancellation. Native relay
+  coverage remains authoritative for restart reconstruction, exact cancel,
+  expiry, tamper/orphan rejection, and cleanup.
+- Work-packet `expected_before_sha256` binds the immutable Git blob bytes, not
+  the platform-normalized working-tree file. Windows checkouts can expose CRLF
+  bytes while `git cat-file blob <commit>:README.md` returns the committed LF
+  bytes. The Windows live controller self-check creates both forms and requires
+  their hashes to differ while the packet keeps the immutable blob digest; it
+  also rejects case-drifted blob paths.

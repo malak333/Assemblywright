@@ -59,23 +59,15 @@ executable.
   distributed event, immutable dispatch binding, and redacted audit commit in
   one transaction. After the exact lease, the separate default-off transfer
   lane gives the native agent only bounded authenticated snapshot chunks. It
-  reconstructs a private no-remote workspace, forks one fixed child from the
-  running agent with no `exec` or remote input. Materialization is charged to
-  an aggregate output-byte budget. Before `fork`, the parent pre-opens the
-  workspace descriptor, blocks signals, and captures the descriptor-table bound
-  and effective UID.
-  Swift launches the agent with an empty environment, the agent rejects a
-  nonempty parent environment for this lane, and after `fork` the child scans
-  every descriptor slot with `F_GETFD`, closes every open descriptor except the
-  workspace and process-group gate, and waits for the parent-established group.
-  Its fixed file-mutation path includes `openat`, validation, truncation, seek,
-  write, sync, close, and `_exit` for the exact `README.md` replacement. It does
-  not inspect errno or mutable global state, use environment APIs, or call
-  `geteuid`, `getdtablesize`, or `setpgid` post-fork. The parent
-  verifies bounded path-free mutation evidence and removes all attempt state before
-  returning. It accepts no caller-selected command, executable, tool, path,
-  provider, test, credential, or network authority; this does not claim a host
-  sandbox or host-level egress control.
+  reconstructs a private no-remote workspace and applies only the immutable
+  protocol-v5 packet's bounded deterministic `file.write.v1` and
+  `file.delete.v1` operations across its sorted normalized relative-path
+  allowlist. Descriptor-relative no-follow traversal, atomic create/swap/delete,
+  exact changed-path verification, and a canonical multi-file artifact remain
+  bounded by the packet. There is no child, shell, `exec`, provider, test,
+  credential, or network authority. Success seals the workspace plus one
+  separate private recovery record until exact resolution or bounded expiry;
+  this does not claim a host sandbox or host-level egress control.
   Two additional owner-token loopback-only resolution actions cancel one exact
   active feature and explicitly abandon-and-advance one already cancelled or
   quarantined feature. Both bind the feature, lifecycle, queue, and Emergency

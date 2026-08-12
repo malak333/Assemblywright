@@ -51,7 +51,9 @@ printf '%s\n' "$output"
   || fail "the native local-coding snapshot E2E omitted its proof marker"
 [[ "$output" == *"assemblywright_mac_local_coding_native_cancellation_e2e_ok"* ]] \
   || fail "the native local-coding cancellation E2E omitted its proof marker"
-[[ "$output" == *"final_verification_cancellation=verified"* \
+[[ "$output" == *"general_coding=verified"* \
+  && "$output" == *"retained_attempt_pair=verified"* \
+  && "$output" == *"final_verification_cancellation=verified"* \
   && "$output" == *"transport_unblock=verified"* \
   && "$output" == *"local_cancel=verified"* \
   && "$output" == *"cleanup_before_ack=verified"* \

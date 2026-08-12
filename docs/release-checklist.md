@@ -63,7 +63,8 @@ Before starting a release pass, confirm the claim you intend to make.
   and restart cleans unreferenced state and quarantines a finalized lease. The
   snapshot also contains one deterministic bounded transfer bundle whose raw
   object graph and file manifest are independently digest-bound.
-  Schema v10 separately exposes one owner-token loopback-only metadata coding-
+  For the retained historical protocol-v4/schema-v12 compatibility proof,
+  schema v10 separately exposes one owner-token loopback-only metadata coding-
   dispatch POST. Confirm it is absent from the enrolled-device router, binds
   the exact feature/specification/lifecycle, feature lease, snapshot ID/digest,
   queue/pause revisions and current singleton `local.coding.v1` worker

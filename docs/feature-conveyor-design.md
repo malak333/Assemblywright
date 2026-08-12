@@ -125,7 +125,8 @@ It does not create grants or brainstorming proof, claim or dispatch the queue,
 invoke a worker or provider, access a repository, or grant Git/publication or
 autonomous activation. The SwiftUI app remains observation only.
 
-Master schema v10 adds the first separate metadata-only coding-dispatch
+The following paragraph records the historical protocol-v4/schema-v12 worker.
+Master schema v10 added the first separate metadata-only coding-dispatch
 admission kernel. The owner-token loopback-only
 `POST /v1/feature-conveyor/coding-dispatches` accepts one strict path-free work-
 packet digest and bounded ordinal/acceptance-count metadata only after schema
@@ -855,9 +856,9 @@ The Arbiter then returned `APPROVED`:
 - Decision Log complete.
 - No unresolved blocking issue remains.
 
-## Final Disposition
+## Historical Schema-v12 Disposition
 
-APPROVED. The Windows-master repository kernel, owner resolution, snapshot
+The schema-v12 slice was approved. The Windows-master repository kernel, owner resolution, snapshot
 dispatch, and fixed contained-coding live lane are implemented. The 2026-08-11
 two-device proof used Windows snapshot source `80fed217`, the production
 Apple-development-signed helper built from `01afff03`, and the real supervised
@@ -866,5 +867,6 @@ success sequence 3825 on one connection; both Mac snapshot directories and
 Windows transfer staging were empty. Owner cancellation retained the lease,
 abandonment released it with queue-empty reconciliation, and cleanup revoked
 all three repository grants before removing the marker-bound checkout. General
-coding, review, publication, autonomous activation, and external Apple release
-evidence remain outside this proof.
+coding was outside that historical proof; review, publication, autonomous
+activation, and external Apple release evidence remain outside the current
+protocol-v5/schema-v13 proof.

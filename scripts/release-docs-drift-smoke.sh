@@ -48,6 +48,7 @@ AGENT_E2E="crates/assemblywright-agent/tests/local_relay_e2e.rs"
 AGENT_LOCAL_CODING_E2E="crates/assemblywright-agent/tests/local_coding_admission.rs"
 CLI_NAMING_E2E="crates/assemblywright-cli/tests/naming_contract_e2e.rs"
 CLI_READINESS_E2E="crates/assemblywright-cli/tests/release_readiness_e2e.rs"
+AGENT_MAIN="crates/assemblywright-agent/src/main.rs"
 
 MAC_BRIDGE="apps/mac/Sources/AssemblywrightMacCore/DeveloperBridge.swift"
 MAC_BRIDGE_CLI="apps/mac/Sources/AssemblywrightMacBridgeCLI/AssemblywrightMacBridgeCLI.swift"
@@ -221,6 +222,26 @@ require_text "conveyor live controller cancellation" "$WINDOWS_LOCAL_CODING_LIVE
   '"/v1/feature-conveyor/cancel-active-feature"'
 require_text "conveyor live controller Mac cleanup binding" "$WINDOWS_LOCAL_CODING_LIVE_CONTROL" \
   "mac_cleanup_sha256"
+require_text "conveyor live controller Git blob CRLF unit regression" \
+  "$WINDOWS_LOCAL_CODING_LIVE_CONTROL" "git_blob_crlf_regression"
+forbid_text "conveyor live controller stale no-retention criterion" \
+  "$WINDOWS_LOCAL_CODING_LIVE_CONTROL" "retain no workspace"
+require_text "conveyor live Mac retained-attempt pair-shape proof" "$MAC_BRIDGE_LIVE_E2E" \
+  "mac_retained_attempt_pair_shape=verified"
+require_text "native relay general-coding proof" "$MAC_LOCAL_CODING_SNAPSHOT_E2E" \
+  "general_coding=verified"
+require_text "agent current general-coding health boundary" "$AGENT_MAIN" \
+  "metadata_cursor_plus_bounded_general_coding_retained_attempt"
+forbid_text "agent stale fixed-fixture health boundary" "$AGENT_MAIN" \
+  "metadata_cursor_plus_fixed_contained_coding_fixture_ephemeral_workspace"
+require_text "release readiness current general-coding boundary" "$CORE_RELEASE" \
+  "explicit general-coding admission"
+forbid_text "release readiness stale fixed-fixture boundary" "$CORE_RELEASE" \
+  "one fixed contained-coding fixture are implemented"
+require_text "conveyor live harness-owned retained cleanup proof" "$MAC_BRIDGE_LIVE_E2E" \
+  "harness_owned_pair_cleanup=verified"
+forbid_text "conveyor live stale empty Mac workspace proof" "$MAC_BRIDGE_LIVE_E2E" \
+  "mac_workspace_empty=verified"
 require_text "conveyor live controller self-check portable scanner" \
   "$WINDOWS_LOCAL_CODING_LIVE_CONTROL_SELF_CHECK" "grep -Fq --"
 forbid_text "conveyor live controller self-check ripgrep dependency" \
@@ -435,6 +456,10 @@ require_text "knowledge base schema-v13 artifact boundary" "$KB" \
   "Protocol v5/schema v13 replaces the fixed README fixture"
 require_text "knowledge base schema-v13 live closeout" "$KB" \
   "seals the attempt workspace for at most one hour"
+require_text "knowledge base retained live-attempt pair" "$KB" \
+  'one owner-private `<attempt>.sealed` directory'
+require_text "knowledge base immutable Git blob CRLF boundary" "$KB" \
+  "binds the immutable Git blob bytes"
 require_text "knowledge base live receipt integrity" "$KB" \
   "one unchanged JSON line on stdin"
 require_text "design stable artifact evidence" "$DESIGN" \
@@ -468,6 +493,8 @@ require_text "build docs local-coding live closeout" "$BUILD_DOCS" \
   "./scripts/mac-windows-bridge-live-e2e.sh --run-local-coding"
 require_text "build docs result-artifact live boundary" "$BUILD_DOCS" \
   "terminal success proves the protocol-v5 result"
+require_text "build docs retained-attempt live boundary" "$BUILD_DOCS" \
+  "private retained-state shape"
 require_text "build docs evidence boundary" "$BUILD_DOCS" "## Release Evidence Boundary"
 require_text "build docs windows gate" "$BUILD_DOCS" "windows-protocol.yml"
 require_text "build docs Windows coding dispatch E2E command" "$BUILD_DOCS" \
@@ -488,6 +515,10 @@ require_text "build docs native snapshot relay E2E" "$BUILD_DOCS" \
   "./scripts/mac-local-coding-snapshot-e2e.sh"
 require_text "build docs live local-coding E2E" "$BUILD_DOCS" \
   "./scripts/mac-windows-bridge-live-e2e.sh --run-local-coding"
+require_text "build docs Windows live-controller unit regression" "$BUILD_DOCS" \
+  "windows-local-coding-live-control.ps1 -Action Check"
+require_text "hosted Windows live-controller unit regression" "$WINDOWS_PROTOCOL_WORKFLOW" \
+  "windows-local-coding-live-control.ps1 -Action Check"
 require_text "build docs Windows package-scoped clippy boundary" "$BUILD_DOCS" \
   "Do not substitute the macOS/Linux workspace-wide clippy command"
 require_text "safety snapshot blocking timeout boundary" "$SAFETY_RULES" \

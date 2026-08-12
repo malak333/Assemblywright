@@ -264,8 +264,11 @@ release requirements, not optional UX guidance.
   content, config, remote, credential, or raw error may enter SQLite, audit, or
   the receipt. This grants no dispatch, provider, review, publication, Mac, or
   autonomous activation authority.
-- Coding dispatch is a separate owner-token-authenticated loopback-only action
-  and must remain absent from the enrolled-device router. It may accept only a
+- The following coding-dispatch and execution description records the
+  historical protocol-v4/schema-v12 fixed-fixture boundary. Coding dispatch
+  remains a separate owner-token-authenticated loopback-only action and must
+  remain absent from the enrolled-device router. In that historical boundary it
+  accepted only a
   bounded path-free work-packet digest and ordinal/acceptance-count metadata
   after an exact snapshot claim. It binds the current feature/specification/
   lifecycle revision, feature lease, snapshot ID/digest, queue and Emergency
@@ -275,11 +278,11 @@ release requirements, not optional UX guidance.
   atomically. Lease and acknowledgement acceptance recheck every binding;
   cancellation, Emergency Pause, lifecycle departure, registration drift or
   revocation, and restart quarantine prevent later acceptance. The metadata
-  envelope rejects repository bytes or paths, commands, credentials, mutation
-  instructions, and unknown fields. Owner approval of dispatch authorizes only
-  the protocol-fixed contained-coding fixture described below; it never grants
-  a general command, tool, path, provider, test, or network authority. After an
-  exact current lease, a separate
+  envelope rejected repository bytes or paths, commands, credentials, mutation
+  instructions, and unknown fields. Owner approval of that dispatch authorized
+  only the protocol-fixed contained-coding fixture described below; it never
+  granted a general command, tool, path, provider, test, or network authority.
+  After an exact current lease, a separate
   default-off snapshot route may expose only bounded sequential chunks of the
   immutable master-owned bundle. Every request binds the exact job, attempt,
   lease, cancellation, snapshot ID/digest, and offset; the master must

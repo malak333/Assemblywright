@@ -95,6 +95,7 @@ cargo test -p assemblywright-agent snapshot::tests
 cargo test -p assemblywright-agent --test local_relay_e2e authenticated_uds_local_coding_snapshot_admission_cancellation_and_restart_cleanup -- --nocapture
 cargo test -p assemblywright-master --test remote_mtls_e2e remote_local_coding_dispatch_is_exporter_bound_exact_and_pause_dominant -- --nocapture
 swift test --disable-sandbox --package-path apps/mac --filter DeveloperBridgeTests
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows-local-coding-live-control.ps1 -Action Check
 ./scripts/mac-windows-bridge-live-e2e.sh --run-local-coding
 ```
 
@@ -152,8 +153,9 @@ executable changes as release evidence.
 | Windows service lifecycle | `cargo test -p assemblywright-master --test windows_service_lifecycle_e2e -- --ignored` |
 | Mac agent relay | `cargo test -p assemblywright-agent --test local_relay_e2e` |
 | Native metadata-only coding admission | `cargo test -p assemblywright-agent --test local_coding_admission` |
-| Native ephemeral snapshot, fixed contained-coding fixture, cancellation, and cleanup | `cargo test -p assemblywright-agent snapshot::tests` |
-| Production Swift relay to supervised Rust-agent contained-coding success plus final-verification cancellation/cleanup-before-ack E2E | `./scripts/mac-local-coding-snapshot-e2e.sh` |
+| Native ephemeral snapshot, descriptor-relative general coding, retained-attempt restart/tamper/expiry, cancellation, and cleanup | `cargo test -p assemblywright-agent snapshot::tests` |
+| Production Swift relay to supervised Rust-agent general-coding success plus final-verification cancellation/restart cleanup E2E | `./scripts/mac-local-coding-snapshot-e2e.sh` |
+| Windows live-controller immutable Git-blob/CRLF unit regression | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows-local-coding-live-control.ps1 -Action Check` |
 | Local transport and release | `cargo test -p assemblywright-core` |
 | Readiness protocol proof unit | `cargo test -p assemblywright-core protocol_readiness_proof_is_version_independent` |
 | CLI naming contract E2E | `cargo test -p assemblywright-cli --test naming_contract_e2e` |
@@ -238,11 +240,17 @@ owner controller. It binds a disposable repository snapshot to the exact
 feature, worker registration, queue/lifecycle/pause revisions, task, step,
 attempt, and work packet. A terminal success proves the protocol-v5 result was
 accepted only after its exact schema-v13 artifact admission. The lane then
-proves owner cancellation, safe abandonment, empty queue/lease/attempt and
-transfer state, empty Mac workspace state, revocation of all temporary grants,
-and removal of the marker-bound disposable checkout. It is functional native
-two-device evidence, not arbitrary coding, artifact application, integration,
-Developer ID distribution, notarization, or clean-profile release evidence.
+proves the private retained-state shape: one `.sealed` workspace plus a
+filename-matched `.retention.json` recovery record after success. The live lane
+does not parse that private record or claim its semantic bindings. The
+disposable harness then removes only that validated shape from its harness-owned temporary root; native relay
+tests separately prove product restart recovery, exact cancellation, expiry,
+tamper/orphan rejection, and cleanup. The lane finally proves owner
+cancellation, safe abandonment, empty queue/lease/attempt and Windows transfer
+state, revocation of all temporary grants, and removal of the marker-bound
+disposable checkout. It is functional native two-device evidence, not artifact
+application, integration, Developer ID distribution, notarization, or
+clean-profile release evidence.
 
 ## Release Evidence Boundary
 

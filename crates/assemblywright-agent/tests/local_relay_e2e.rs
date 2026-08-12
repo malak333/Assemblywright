@@ -311,7 +311,7 @@ fn authenticated_uds_local_coding_snapshot_admission_cancellation_and_restart_cl
     assert_eq!(health_body["local_coding_snapshots_enabled"], true);
     assert_eq!(
         health_body["boundary"],
-        "metadata_cursor_plus_fixed_contained_coding_fixture_ephemeral_workspace"
+        "metadata_cursor_plus_bounded_general_coding_retained_attempt"
     );
 
     let (bundle, snapshot_sha256) = local_coding_bundle();

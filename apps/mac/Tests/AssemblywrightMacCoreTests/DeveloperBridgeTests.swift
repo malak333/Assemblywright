@@ -3346,7 +3346,8 @@ struct DeveloperBridgeTests {
         print(
             "assemblywright_mac_local_coding_native_e2e_ok "
                 + "agent_supervision=verified sequential_transfer=verified "
-                + "git_materialization=verified fixed_contained_coding=verified cleanup=verified"
+                + "git_materialization=verified general_coding=verified "
+                + "retained_attempt_pair=verified"
         )
         print(
             "assemblywright_mac_local_coding_native_cancellation_e2e_ok "

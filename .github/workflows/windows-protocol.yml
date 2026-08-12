@@ -35,6 +35,10 @@ jobs:
           rustc --version
           cargo --version
 
+      - name: Test live-controller immutable Git blob binding
+        shell: powershell
+        run: ./scripts/windows-local-coding-live-control.ps1 -Action Check
+
       - name: Check formatting
         run: cargo fmt --all --check
 

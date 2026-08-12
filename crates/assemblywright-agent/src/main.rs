@@ -407,7 +407,7 @@ async fn health(
         } else if state.mlx_jobs_enabled {
             "metadata_cursor_plus_bounded_public_mlx_jobs_no_retention"
         } else if state.local_coding_snapshots_enabled {
-            "metadata_cursor_plus_fixed_contained_coding_fixture_ephemeral_workspace"
+            "metadata_cursor_plus_bounded_general_coding_retained_attempt"
         } else {
             "metadata_only_no_authoritative_state"
         },

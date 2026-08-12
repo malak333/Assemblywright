@@ -443,6 +443,75 @@ function Wait-ExactLocalCodingEvents {
 
 if ($Action -eq "Check") {
     $testDigest = Convert-BytesToHex (Get-Sha256Bytes "assemblywright-local-coding-live-control-check-v1")
+    $checkLeaf = "assemblywright-local-coding-live-control-check-$([Guid]::NewGuid().ToString('N'))"
+    $checkRepository = Join-Path ([IO.Path]::GetTempPath()) $checkLeaf
+    New-Item -ItemType Directory -Path $checkRepository | Out-Null
+    $checkHooks = Join-Path $checkRepository ".assemblywright-empty-hooks"
+    New-Item -ItemType Directory -Path $checkHooks | Out-Null
+    $checkGitConfig = @(
+        "-c", "commit.gpgSign=false",
+        "-c", "core.autocrlf=false",
+        "-c", "core.hooksPath=$checkHooks",
+        "-c", "core.safecrlf=false",
+        "-c", "init.templateDir="
+    )
+    $priorErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & git @checkGitConfig -C $checkRepository init --quiet 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Git init failed in the blob-binding regression." }
+        & git @checkGitConfig -C $checkRepository config user.name "Assemblywright Live Control Check" 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Git user.name setup failed in the blob-binding regression." }
+        & git @checkGitConfig -C $checkRepository config user.email "assemblywright-live-control-check@invalid" 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Git user.email setup failed in the blob-binding regression." }
+        $checkReadme = Join-Path $checkRepository "README.md"
+        [IO.File]::WriteAllBytes($checkReadme, [Text.Encoding]::UTF8.GetBytes("immutable blob`n"))
+        & git @checkGitConfig -C $checkRepository add -- README.md 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Git add failed in the blob-binding regression." }
+        & git @checkGitConfig -C $checkRepository commit --quiet -m "blob binding fixture" 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Git commit failed in the blob-binding regression." }
+        $checkCommit = (& git @checkGitConfig -C $checkRepository rev-parse HEAD).Trim()
+        if ($LASTEXITCODE -ne 0 -or $checkCommit -notmatch $commitPattern) {
+            throw "Git revision lookup failed in the blob-binding regression."
+        }
+
+        [IO.File]::WriteAllBytes($checkReadme, [Text.Encoding]::UTF8.GetBytes("immutable blob`r`n"))
+        $blobDigest = Convert-BytesToHex (Get-GitBlobSha256Bytes $checkRepository $checkCommit "README.md")
+        $expectedBlobDigest = Convert-BytesToHex (Get-Sha256Bytes "immutable blob`n")
+        $worktreeAlgorithm = [Security.Cryptography.SHA256]::Create()
+        try {
+            $worktreeDigest = Convert-BytesToHex (@($worktreeAlgorithm.ComputeHash([IO.File]::ReadAllBytes($checkReadme))))
+        } finally {
+            $worktreeAlgorithm.Dispose()
+        }
+        $invalidPathRejected = $false
+        try {
+            Get-GitBlobSha256Bytes $checkRepository $checkCommit "readme.md" | Out-Null
+        } catch {
+            $invalidPathRejected = $true
+        }
+        if (
+            $blobDigest -cne $expectedBlobDigest -or
+            $blobDigest -ceq $worktreeDigest -or
+            -not $invalidPathRejected
+        ) {
+            throw "Immutable Git blob binding did not reject CRLF working-tree or path drift."
+        }
+    } finally {
+        $ErrorActionPreference = $priorErrorActionPreference
+        $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd(
+            [IO.Path]::DirectorySeparatorChar,
+            [IO.Path]::AltDirectorySeparatorChar
+        )
+        $checkParent = [IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($checkRepository)).TrimEnd(
+            [IO.Path]::DirectorySeparatorChar,
+            [IO.Path]::AltDirectorySeparatorChar
+        )
+        if ($checkParent -cne $tempRoot -or [IO.Path]::GetFileName($checkRepository) -cne $checkLeaf) {
+            throw "The blob-binding regression temporary path escaped its exact bounded leaf."
+        }
+        Remove-Item -LiteralPath $checkRepository -Recurse -Force
+    }
     if (
         $testDigest.Length -ne 64 -or
         $protocolVersion -ne 5 -or
@@ -452,7 +521,7 @@ if ($Action -eq "Check") {
     ) {
         throw "Local-coding live controller self-check failed."
     }
-    '{"schema_version":1,"status":"local_coding_live_control_ready"}'
+    '{"git_blob_crlf_regression":"verified","schema_version":1,"status":"local_coding_live_control_ready"}'
     exit 0
 }
 
@@ -590,7 +659,7 @@ switch ($Action) {
             throw "The repository preflight receipt drifted."
         }
         $manifest = [ordered]@{
-            acceptance_criteria = @("execute the fixed contained-coding README fixture and retain no workspace")
+            acceptance_criteria = @("execute the exact bounded README.md file.write.v1 packet, admit its canonical artifact, and retain one sealed attempt plus recovery record until resolution")
             feature_kind = "contained_coding_live_proof"
             outcome = "prove one owner-approved snapshot-bound local-coding attempt"
         }

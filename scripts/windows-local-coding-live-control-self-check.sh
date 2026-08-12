@@ -20,6 +20,12 @@ for required in \
   'allowed_paths = @("README.md")' \
   'tool_id = "file.write.v1"' \
   'expected_before_sha256 = @(Get-GitBlobSha256Bytes $paths.proof $HeadCommit "README.md")' \
+  'Immutable Git blob binding did not reject CRLF working-tree or path drift.' \
+  'git_blob_crlf_regression' \
+  'commit.gpgSign=false' \
+  'core.autocrlf=false' \
+  'core.hooksPath=$checkHooks' \
+  '$ErrorActionPreference = $priorErrorActionPreference' \
   '$packetJson = $packetDocument | ConvertTo-Json -Compress -Depth 12' \
   '$packetDigest = @(Get-Sha256Bytes $packetJson)' \
   '[UInt64]$status.schema_version -ne $featureConveyorProjectionSchemaVersion' \
@@ -58,12 +64,15 @@ if grep -Fq -- '/v1/distributed/feature-conveyor/cancel-active-feature' "$CONTRO
   fail "Windows local-coding controller crossed the owner-local or persistence boundary"
 fi
 
+grep -Fq -- 'retain no workspace' "$CONTROLLER" \
+  && fail "Windows local-coding controller retained the stale protocol-v4 no-retention criterion"
+
 tree_check_line="$(grep -nF 'Assert-NoReparseTree $paths.proof' "$CONTROLLER" | cut -d: -f1)"
 delete_line="$(grep -nF 'Remove-Item -LiteralPath $paths.proof -Recurse -Force' "$CONTROLLER" | cut -d: -f1)"
 terminal_grants_line="$(grep -nF 'Cleanup did not reach an absent-or-revoked terminal grant state.' "$CONTROLLER" | cut -d: -f1)"
 prepare_status_line="$(grep -nF '$status = Get-ConveyorStatus' "$CONTROLLER" | head -1 | cut -d: -f1)"
 clone_line="$(grep -nF '$cloneOutput = @(& git clone' "$CONTROLLER" | cut -d: -f1)"
-clone_policy_line="$(grep -nF '$ErrorActionPreference = "Continue"' "$CONTROLLER" | cut -d: -f1)"
+clone_policy_line="$(grep -nF '$ErrorActionPreference = "Continue"' "$CONTROLLER" | tail -1 | cut -d: -f1)"
 clone_exit_line="$(grep -nF '$cloneExitCode = $LASTEXITCODE' "$CONTROLLER" | cut -d: -f1)"
 marker_recovery_line="$(grep -nF '$marker = Read-ProofMarker $paths.proof $paths.source' "$CONTROLLER" | tail -1 | cut -d: -f1)"
 normalize_line="$(grep -nF 'Remove-BoundedCommitGraphCache $paths.proof' "$CONTROLLER" | tail -1 | cut -d: -f1)"

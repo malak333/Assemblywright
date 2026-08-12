@@ -2762,7 +2762,7 @@ private actor FoundationAssemblywrightMacDeveloperAgentSession:
             return "metadata_cursor_plus_bounded_public_mlx_jobs_no_retention"
         }
         if configurationLocalCodingSnapshotsEnabled {
-            return "metadata_cursor_plus_fixed_contained_coding_fixture_ephemeral_workspace"
+            return "metadata_cursor_plus_bounded_general_coding_retained_attempt"
         }
         return "metadata_only_no_authoritative_state"
     }

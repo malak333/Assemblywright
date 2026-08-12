@@ -498,12 +498,58 @@ if [[ "$MODE" == "--run-local-coding" ]]; then
   wait "$local_coding_pid" >/dev/null 2>&1 || true
   local_coding_pid=""
   local_coding_snapshot_root="$relay_data_directory/local-coding-snapshots"
-  [[ -d "$local_coding_snapshot_root" \
-    && -z "$(find "$local_coding_snapshot_root" -mindepth 1 -maxdepth 1 -print -quit)" ]] \
-    || fail "the Mac retained local-coding transfer or workspace state"
+  [[ -d "$local_coding_snapshot_root" && ! -L "$local_coding_snapshot_root" \
+    && "$(stat -f '%Lp' "$local_coding_snapshot_root")" == "700" ]] \
+    || fail "the Mac local-coding retention root was absent, linked, or not private"
+  shopt -s nullglob
+  local_coding_retained_entries=("$local_coding_snapshot_root"/*)
+  shopt -u nullglob
+  [[ "${#local_coding_retained_entries[@]}" -eq 2 ]] \
+    || fail "the Mac did not retain exactly one sealed workspace and recovery record"
+  local_coding_sealed_workspace=""
+  local_coding_retention_record=""
+  for local_coding_retained_entry in \
+    ${local_coding_retained_entries[@]+"${local_coding_retained_entries[@]}"}; do
+    case "$(basename "$local_coding_retained_entry")" in
+      *.sealed)
+        [[ -z "$local_coding_sealed_workspace" \
+          && -d "$local_coding_retained_entry" \
+          && ! -L "$local_coding_retained_entry" \
+          && "$(stat -f '%Lp' "$local_coding_retained_entry")" == "700" ]] \
+          || fail "the retained Mac workspace was ambiguous, linked, or not private"
+        local_coding_sealed_workspace="$local_coding_retained_entry"
+        ;;
+      *.retention.json)
+        [[ -z "$local_coding_retention_record" \
+          && -f "$local_coding_retained_entry" \
+          && ! -L "$local_coding_retained_entry" \
+          && "$(stat -f '%Lp' "$local_coding_retained_entry")" == "600" ]] \
+          || fail "the retained Mac recovery record was ambiguous, linked, or not private"
+        local_coding_retention_record="$local_coding_retained_entry"
+        ;;
+      *)
+        fail "the Mac retained an unexpected local-coding entry"
+        ;;
+    esac
+  done
+  [[ -n "$local_coding_sealed_workspace" && -n "$local_coding_retention_record" ]] \
+    || fail "the Mac retained an incomplete local-coding attempt pair"
+  local_coding_retained_attempt="$(basename "$local_coding_sealed_workspace" .sealed)"
+  [[ "$local_coding_retained_attempt" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ \
+    && "$(basename "$local_coding_retention_record")" == "$local_coding_retained_attempt.retention.json" ]] \
+    || fail "the retained Mac workspace and recovery record were not one exact attempt pair"
+
+  # This disposable harness owns the temporary relay root. Product cancellation
+  # and restart recovery are proved by the native relay E2E; this live lane first
+  # proves retention, then removes only the validated harness-owned pair.
+  rm -rf -- "$local_coding_sealed_workspace"
+  rm -f -- "$local_coding_retention_record"
+  [[ -z "$(find "$local_coding_snapshot_root" -mindepth 1 -maxdepth 1 -print -quit)" ]] \
+    || fail "the harness did not remove its exact retained Mac attempt pair"
   local_coding_mac_cleanup_sha="$(printf \
-    'assemblywright.local-coding-live.mac-cleanup.v1\\0%s\\0%s\\0%s' \
+    'assemblywright.local-coding-live.mac-retained-cleanup.v2\\0%s\\0%s\\0%s\\0%s' \
     "$local_coding_feature_id" "$local_coding_task_id" "$local_coding_step_id" \
+    "$local_coding_retained_attempt" \
     | shasum -a 256 | awk '{print $1}')"
 
   printf '%s\n' \
@@ -553,7 +599,7 @@ if [[ "$MODE" == "--run-local-coding" ]]; then
     && "$(json_value "$local_coding_status_after" device_id)" == "$local_coding_device_id" \
     && "$(json_value "$local_coding_status_after" registry_revision)" == "$local_coding_registry_revision" ]] \
     || fail "the live proof changed the separate local-coding identity"
-  printf 'assemblywright_mac_windows_local_coding_live_e2e_ok endpoint=%s feature_id=%s task_id=%s step_id=%s queued_sequence=%s leased_sequence=%s succeeded_sequence=%s snapshot_sha256=%s work_packet_sha256=%s separate_identity=verified signed_swift_relay=verified real_rust_agent=verified owner_cancel=verified owner_abandon=verified queue_empty=verified feature_lease_empty=verified distributed_active_state_empty=verified windows_transfer_staging_empty=verified mac_workspace_empty=verified grants_revoked=verified disposable_checkout_removed=verified\n' \
+  printf 'assemblywright_mac_windows_local_coding_live_e2e_ok endpoint=%s feature_id=%s task_id=%s step_id=%s queued_sequence=%s leased_sequence=%s succeeded_sequence=%s snapshot_sha256=%s work_packet_sha256=%s separate_identity=verified signed_swift_relay=verified real_rust_agent=verified mac_retained_attempt_pair_shape=verified harness_owned_pair_cleanup=verified owner_cancel=verified owner_abandon=verified queue_empty=verified feature_lease_empty=verified distributed_active_state_empty=verified windows_transfer_staging_empty=verified grants_revoked=verified disposable_checkout_removed=verified\n' \
     "$local_coding_endpoint" "$local_coding_feature_id" "$local_coding_task_id" \
     "$local_coding_step_id" "$local_coding_queued_sequence" "$local_coding_leased_sequence" \
     "$local_coding_succeeded_sequence" "$local_coding_snapshot_sha" "$local_coding_packet_sha"
