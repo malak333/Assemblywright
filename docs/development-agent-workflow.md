@@ -85,3 +85,8 @@ Every feature or phase closes as one auditable slice. Before publication:
    source parity, protocol/schema compatibility, service health, queue/pause
    state, and migration backup evidence when applicable. Record explicitly
    when a docs/test-only slice leaves the deployed binary unchanged.
+9. In the closeout report, state explicit verdicts for documentation and safety
+   compliance, conversation-derived knowledge (facts added or no durable facts),
+   `unit-testing-test-generate` coverage, `e2e-testing` coverage and technology
+   choice, publication/hosted gates, and deployment or its stated
+   non-applicability. A silently omitted verdict is an incomplete closeout.

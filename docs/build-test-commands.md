@@ -215,6 +215,11 @@ gate and are recorded as external evidence.
 ./scripts/mac-windows-bridge-live-e2e.sh --run-mlx
 ```
 
+```sh
+ASSEMBLYWRIGHT_FEATURE_CONVEYOR_OWNER_CONTROL_DESIGNATION_REVISION=<exact-current-revision> \
+  ./scripts/mac-windows-bridge-live-e2e.sh --run-local-coding
+```
+
 The fixture closeout binds a synthetic echo job to exact event sequences over
 the authenticated Windows loopback control plane. The MLX closeout binds one
 real local completion and a pause-dominated cancellation. Neither is
@@ -226,6 +231,18 @@ production app lifecycle to receive and strictly decode the schema-v8 Feature
 Conveyor snapshot over the accepted MacBridge session. This proves live
 read-only observation only; it grants no queue mutation or owner-action
 authority.
+
+The `--run-local-coding` lane uses the separately enrolled local-coding
+identity, production signed Swift relay, real Rust agent, and Windows-local
+owner controller. It binds a disposable repository snapshot to the exact
+feature, worker registration, queue/lifecycle/pause revisions, task, step,
+attempt, and work packet. A terminal success proves the protocol-v4 result was
+accepted only after its exact schema-v12 artifact admission. The lane then
+proves owner cancellation, safe abandonment, empty queue/lease/attempt and
+transfer state, empty Mac workspace state, revocation of all temporary grants,
+and removal of the marker-bound disposable checkout. It is functional native
+two-device evidence, not arbitrary coding, artifact application, integration,
+Developer ID distribution, notarization, or clean-profile release evidence.
 
 ## Release Evidence Boundary
 

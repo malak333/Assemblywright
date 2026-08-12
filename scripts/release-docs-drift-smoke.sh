@@ -413,6 +413,10 @@ require_text "architecture schema-v12 artifact store" "$ARCHITECTURE" \
   "Private bytes outside SQLite; immutable schema-v12 metadata and redacted audit"
 require_text "knowledge base schema-v12 artifact boundary" "$KB" \
   "Schema v12 admits only one protocol-owned canonical"
+require_text "knowledge base schema-v12 live closeout" "$KB" \
+  "protocol-v4/schema-v12 result-artifact closeout"
+require_text "knowledge base live receipt integrity" "$KB" \
+  "one unchanged JSON line on stdin"
 require_text "design stable artifact evidence" "$DESIGN" \
   "Terminal result acceptance re-hashes a stable handle"
 require_text "safety guarded artifact retry" "$SAFETY_RULES" \
@@ -436,8 +440,14 @@ require_text "agent workflow native E2E boundary" "$AGENT_WORKFLOW" \
   "native cross-process"
 require_text "agent workflow Windows deployment parity" "$AGENT_WORKFLOW" \
   "fast-forward the authoritative"
+require_text "agent workflow explicit closeout verdicts" "$AGENT_WORKFLOW" \
+  "state explicit verdicts for documentation and safety"
 
 require_text "build docs local gate" "$BUILD_DOCS" "./scripts/release-local.sh"
+require_text "build docs local-coding live closeout" "$BUILD_DOCS" \
+  "./scripts/mac-windows-bridge-live-e2e.sh --run-local-coding"
+require_text "build docs result-artifact live boundary" "$BUILD_DOCS" \
+  "terminal success proves the protocol-v4 result"
 require_text "build docs evidence boundary" "$BUILD_DOCS" "## Release Evidence Boundary"
 require_text "build docs windows gate" "$BUILD_DOCS" "windows-protocol.yml"
 require_text "build docs Windows coding dispatch E2E command" "$BUILD_DOCS" \

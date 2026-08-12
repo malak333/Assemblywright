@@ -832,6 +832,23 @@ an old one.
   pre-result re-hashing while handles remain live through the transaction.
   File flush plus same-volume rename is implemented; portable Windows directory
   flush, service-account ACL, and crash durability remain live release proof.
+- The 2026-08-11 protocol-v4/schema-v12 result-artifact closeout reached
+  `origin/main` at `ea6a543`. Both exact-SHA hosted gates passed, the Windows
+  service migrated with a verified schema-11 backup and reported healthy on
+  schema 12/protocol 4, and the signed Mac-to-Windows `--run-local-coding` lane
+  completed through the production Swift relay and real Rust agent. Terminal
+  success therefore included exact artifact admission before result
+  acceptance; owner cancellation and abandonment then left the queue, feature
+  lease, distributed attempt, Windows transfer staging, and Mac workspace
+  empty, revoked all three temporary grants, and removed the disposable
+  checkout. This is functional development evidence, not artifact application,
+  integration, Developer ID distribution, notarization, or clean-profile QA.
+- The live local-coding preparation receipt contains a bounded but relatively
+  long canonical base64 request. Deliver each sanitized controller receipt to
+  the harness as one unchanged JSON line on stdin; terminal tooling that
+  truncates or reserializes the line invalidates the approved-request digest.
+  A pipe or FIFO is acceptable operator coordination, but it grants no product
+  authority and must not bypass the harness's strict digest and binding checks.
 
 ## Safety Guardrails
 
