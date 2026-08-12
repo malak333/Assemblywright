@@ -326,6 +326,8 @@ impl ArtifactIntegrationStore {
         validate_stable_git_shape(&source_handles, GitRepositoryShape::Snapshot)?;
         validate_snapshot_binding_stable(&source_handles, base_commit)?;
         let stable_source = StableOdb::from_entries(&self.root.join("staging"), &source_handles)?;
+        #[cfg(all(test, windows))]
+        eprintln!("candidate-stage stable-source");
         let source = stable_source.odb();
         let base_oid = Oid::from_str(base_commit)?;
         let base_object = source.read(base_oid)?;
@@ -334,6 +336,8 @@ impl ArtifactIntegrationStore {
         }
         let base_tree_oid = commit_tree_oid(base_object.data())?;
         let destination = Repository::init(&staging_path)?;
+        #[cfg(all(test, windows))]
+        eprintln!("candidate-stage initialized");
         {
             let mut config = git2::Config::open(&staging_path.join(".git").join("config"))?;
             config.set_bool("core.autocrlf", false)?;
@@ -343,12 +347,16 @@ impl ArtifactIntegrationStore {
         }
         drop(destination);
         normalize_candidate_git_metadata(&staging_path.join(".git"))?;
+        #[cfg(all(test, windows))]
+        eprintln!("candidate-stage normalized");
         let destination = Repository::open(&staging_path)?;
         fs::write(
             staging_path.join(".git").join("shallow"),
             format!("{base_commit}\n"),
         )?;
         copy_commit_tree(source, &destination, base_oid)?;
+        #[cfg(all(test, windows))]
+        eprintln!("candidate-stage copied");
 
         let mut index = destination.index()?;
         index.read_tree(&destination.find_tree(base_tree_oid)?)?;
@@ -372,6 +380,8 @@ impl ArtifactIntegrationStore {
             }
             cleanup.artifacts.push(verified);
         }
+        #[cfg(all(test, windows))]
+        eprintln!("candidate-stage applied");
         let tree_oid = index.write_tree_to(&destination)?;
         let tree = destination.find_tree(tree_oid)?;
         let parent = destination.find_commit(base_oid)?;
@@ -392,6 +402,8 @@ impl ArtifactIntegrationStore {
         index.write()?;
         materialize_tree(&destination, &staging_path, tree_oid)?;
         verify_materialized_tree(&destination, &staging_path, tree_oid)?;
+        #[cfg(all(test, windows))]
+        eprintln!("candidate-stage materialized");
         #[cfg(test)]
         if let Some(hook) = self
             .source_revalidation_hook
@@ -413,6 +425,8 @@ impl ArtifactIntegrationStore {
         drop(tree);
         drop(base_object);
         drop(destination);
+        #[cfg(all(test, windows))]
+        eprintln!("candidate-stage dropped");
         secure_tree_permissions(&staging_path)?;
         secure_materialized_permissions(
             &Repository::open(&staging_path)?,
@@ -420,7 +434,11 @@ impl ArtifactIntegrationStore {
             tree_oid,
         )?;
         sync_plain_tree(&staging_path)?;
+        #[cfg(all(test, windows))]
+        eprintln!("candidate-stage synced");
         fs::rename(&staging_path, &final_path)?;
+        #[cfg(all(test, windows))]
+        eprintln!("candidate-stage frozen");
         sync_directory_portable(
             final_path
                 .parent()
@@ -430,6 +448,8 @@ impl ArtifactIntegrationStore {
         cleanup.evidence.candidate_commit = commit_oid.to_string();
         cleanup.evidence.candidate_tree = tree_oid.to_string();
         cleanup.verified = self.open_verified_candidate(&cleanup.evidence)?;
+        #[cfg(all(test, windows))]
+        eprintln!("candidate-stage verified");
         Ok(cleanup)
     }
 }
