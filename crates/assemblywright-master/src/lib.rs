@@ -3,8 +3,11 @@ use assemblywright_protocol::{
     CapabilityDescriptor, ContextHandlingPolicy, DeviceId, DeviceRole, DistributedEvent,
     DistributedEventBatch, DistributedEventBatchRequest, DistributedEventCursor,
     DistributedEventKind, FeatureConveyorApprovedSpecification,
+    FeatureConveyorArtifactIntegrationPlan, FeatureConveyorArtifactIntegrationReceipt,
+    FeatureConveyorArtifactIntegrationRequest, FeatureConveyorArtifactIntegrationStatus,
     FeatureConveyorCodingDispatchReceipt, FeatureConveyorCodingDispatchRequest,
-    FeatureConveyorCodingDispatchStatus, FeatureConveyorRepositoryGrantSet,
+    FeatureConveyorCodingDispatchStatus, FeatureConveyorCodingWorkPacketMetadata,
+    FeatureConveyorGrantRevisions, FeatureConveyorRepositoryGrantSet,
     FeatureConveyorRepositoryGrantView, HandshakeRequest, HandshakeResponse, HandshakeStatus,
     JobEnvelope, JobResultEnvelope, JobResultStatus, LeaseId, LocalCodingJobRequest,
     LocalCodingJobResult, LocalCodingResultArtifactAdmission, LocalCodingResultArtifactReceipt,
@@ -30,9 +33,14 @@ use uuid::Uuid;
 use fs2::FileExt;
 
 mod identity;
+mod integration;
 mod result_artifact;
 mod snapshot;
 
+pub use integration::{
+    ArtifactIntegrationError, ArtifactIntegrationStore, CandidateEvidence, IntegrationArtifact,
+    PreparedCandidate,
+};
 pub use result_artifact::{
     PreparedResultArtifact, ResultArtifactReference, ResultArtifactStore, ResultArtifactStoreError,
     VerifiedResultArtifact,
@@ -48,7 +56,7 @@ pub use identity::{
     SERVER_CERTIFICATE_LIFETIME_MS,
 };
 
-pub const MASTER_SCHEMA_VERSION: i64 = 13;
+pub const MASTER_SCHEMA_VERSION: i64 = 14;
 pub const MAX_QUEUED_OR_LEASED_STEPS: u64 = 256;
 pub const MAX_CONCURRENT_JOBS: u64 = 4;
 pub const MAX_CONVEYOR_NONTERMINAL_FEATURES: u64 = 100;
@@ -247,6 +255,10 @@ pub enum MasterError {
     FeatureCodingDispatchUnavailable,
     #[error("the exact local-coding result artifact admission is stale or unavailable")]
     ResultArtifactUnavailable,
+    #[error("the exact artifact integration binding is stale or unavailable")]
+    ArtifactIntegrationUnavailable,
+    #[error("artifact integration conflicts with the immutable base")]
+    ArtifactIntegrationConflict,
     #[error("feature coding work must be terminal before lifecycle advancement")]
     FeatureCodingWorkOutstanding,
     #[error(
@@ -770,6 +782,18 @@ pub struct RepositorySnapshotEvidence {
     pub base_commit: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct ArtifactIntegrationPlan {
+    pub request: FeatureConveyorArtifactIntegrationRequest,
+    pub artifacts: Vec<IntegrationArtifact>,
+}
+
+#[derive(Debug, Clone)]
+pub enum ArtifactIntegrationAuthorization {
+    Existing(FeatureConveyorArtifactIntegrationReceipt),
+    Planned(ArtifactIntegrationPlan),
+}
+
 pub struct MasterKernel {
     connection: Connection,
     startup_reconciliation: StartupReconciliation,
@@ -794,6 +818,7 @@ pub struct MasterProcess {
     database_path: PathBuf,
     migration_backup_path: Option<PathBuf>,
     result_artifact_store: ResultArtifactStore,
+    artifact_integration_store: ArtifactIntegrationStore,
     kernel: MasterKernel,
 }
 
@@ -859,12 +884,27 @@ impl MasterProcess {
         result_artifact_store
             .verify_referenced(&result_artifacts)
             .map_err(|error| MasterError::InvalidStoredState(error.to_string()))?;
+        let artifact_integration_store = ArtifactIntegrationStore::open(&data_dir)
+            .map_err(|error| MasterError::InvalidStoredState(error.to_string()))?;
+        let candidates = kernel.candidate_references()?;
+        artifact_integration_store
+            .cleanup_unreferenced(
+                &candidates
+                    .iter()
+                    .map(|candidate| candidate.integration_id)
+                    .collect(),
+            )
+            .map_err(|error| MasterError::InvalidStoredState(error.to_string()))?;
+        artifact_integration_store
+            .verify_referenced(&candidates)
+            .map_err(|error| MasterError::InvalidStoredState(error.to_string()))?;
         Ok(Self {
             _owner_lock: owner_lock,
             data_dir,
             database_path,
             migration_backup_path,
             result_artifact_store,
+            artifact_integration_store,
             kernel,
         })
     }
@@ -883,6 +923,10 @@ impl MasterProcess {
 
     pub fn result_artifact_store(&self) -> ResultArtifactStore {
         self.result_artifact_store.clone()
+    }
+
+    pub fn artifact_integration_store(&self) -> ArtifactIntegrationStore {
+        self.artifact_integration_store.clone()
     }
 
     pub fn kernel(&self) -> &MasterKernel {
@@ -1088,6 +1132,366 @@ impl MasterKernel {
             })
             .collect::<Result<Vec<_>, MasterError>>()?;
         Ok(references)
+    }
+
+    pub fn integration_artifact_references(
+        &self,
+        integration_id: Uuid,
+    ) -> Result<Vec<ResultArtifactReference>, MasterError> {
+        let mut statement = self.connection.prepare(
+            "SELECT a.artifact_id,a.artifact_sha256,a.artifact_size_bytes
+             FROM feature_artifact_integration_artifacts ia
+             JOIN feature_result_artifacts a ON a.artifact_id=ia.artifact_id
+             WHERE ia.integration_id=?1 ORDER BY a.artifact_id",
+        )?;
+        let references = statement
+            .query_map([integration_id.to_string()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })?
+            .map(|row| {
+                let (artifact_id, digest, size) = row?;
+                Ok(ResultArtifactReference {
+                    artifact_id: parse_uuid(&artifact_id)?,
+                    artifact_sha256: digest_array(&digest)?,
+                    artifact_size_bytes: i64_to_u64(size)?,
+                })
+            })
+            .collect::<Result<Vec<_>, MasterError>>()?;
+        Ok(references)
+    }
+
+    pub fn candidate_references(&self) -> Result<Vec<CandidateEvidence>, MasterError> {
+        let mut statement = self.connection.prepare(
+            "SELECT integration_id, artifact_set_sha256, candidate_commit, candidate_tree, base_commit
+             FROM feature_artifact_integrations ORDER BY integration_id",
+        )?;
+        let references = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })?
+            .map(|row| {
+                let (id, digest, commit, tree, base) = row?;
+                Ok(CandidateEvidence {
+                    integration_id: parse_uuid(&id)?,
+                    artifact_set_sha256: digest_array(&digest)?,
+                    candidate_commit: commit,
+                    candidate_tree: tree,
+                    base_commit: base,
+                    artifact_ids: Vec::new(),
+                })
+            })
+            .collect::<Result<Vec<_>, MasterError>>()?;
+        let mut references = references;
+        for reference in &mut references {
+            let mut ids = self.connection.prepare(
+                "SELECT a.artifact_id,a.artifact_sha256,a.artifact_size_bytes
+                 FROM feature_artifact_integration_artifacts ia
+                 JOIN feature_result_artifacts a ON a.artifact_id=ia.artifact_id
+                 WHERE ia.integration_id=?1 ORDER BY a.artifact_id",
+            )?;
+            let artifact_references = ids
+                .query_map([reference.integration_id.to_string()], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Vec<u8>>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                })?
+                .map(|row| {
+                    let (id, digest, size) = row?;
+                    Ok(ResultArtifactReference {
+                        artifact_id: parse_uuid(&id)?,
+                        artifact_sha256: digest_array(&digest)?,
+                        artifact_size_bytes: i64_to_u64(size)?,
+                    })
+                })
+                .collect::<Result<Vec<_>, MasterError>>()?;
+            reference.artifact_ids = artifact_references
+                .iter()
+                .map(|artifact| artifact.artifact_id)
+                .collect();
+            if reference.artifact_ids.is_empty() {
+                return Err(MasterError::InvalidStoredState(
+                    "candidate artifact set is empty".to_string(),
+                ));
+            }
+            if integration::artifact_reference_set_sha256(&artifact_references)
+                != reference.artifact_set_sha256
+            {
+                return Err(MasterError::InvalidStoredState(
+                    "candidate artifact set digest is invalid".to_string(),
+                ));
+            }
+        }
+        Ok(references)
+    }
+
+    pub fn prepare_artifact_integration(
+        &self,
+        request: &FeatureConveyorArtifactIntegrationRequest,
+        now_ms: u64,
+    ) -> Result<ArtifactIntegrationAuthorization, MasterError> {
+        request.validate()?;
+        let tx = self.connection.unchecked_transaction()?;
+        if let Some(receipt) = load_integration_receipt_tx(&tx, request.integration_id)? {
+            if integration_receipt_matches_request(&receipt, request)
+                && integration_artifact_ids_tx(&tx, request.integration_id)? == request.artifact_ids
+            {
+                return Ok(ArtifactIntegrationAuthorization::Existing(receipt));
+            }
+            return Err(MasterError::ArtifactIntegrationUnavailable);
+        }
+        let previously_conflicted: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM feature_artifact_integration_conflicts
+            WHERE integration_id=?1)",
+            [request.integration_id.to_string()],
+            |row| row.get(0),
+        )?;
+        if previously_conflicted {
+            return Err(MasterError::ArtifactIntegrationUnavailable);
+        }
+        validate_integration_binding_tx(&tx, request, now_ms)?;
+        let artifacts = load_complete_integration_artifacts_tx(&tx, request, true)?;
+        Ok(ArtifactIntegrationAuthorization::Planned(
+            ArtifactIntegrationPlan {
+                request: request.clone(),
+                artifacts,
+            },
+        ))
+    }
+
+    pub fn artifact_integration_plan(
+        &self,
+        feature_id: Uuid,
+        now_ms: u64,
+    ) -> Result<FeatureConveyorArtifactIntegrationPlan, MasterError> {
+        let row = self.connection.query_row(
+            "SELECT f.current_specification_revision,f.lifecycle_revision,l.lease_id,l.snapshot_id,
+             c.snapshot_sha256,c.base_commit,c.registration_grant_revision,c.cloud_disclosure_grant_revision,
+             c.publication_grant_revision,q.queue_revision,p.integer_value
+             FROM feature_conveyor_features f JOIN feature_active_lease l ON l.feature_id=f.feature_id
+             JOIN feature_repository_snapshot_claims c ON c.snapshot_id=l.snapshot_id
+             JOIN feature_conveyor_state q ON q.singleton=1
+             JOIN master_metadata p ON p.key='emergency_pause_revision'
+             WHERE f.feature_id=?1 AND f.status='implementing'", [feature_id.to_string()], |r| Ok((
+                r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,
+                r.get::<_,Vec<u8>>(4)?,r.get::<_,String>(5)?,r.get::<_,i64>(6)?,r.get::<_,i64>(7)?,
+                r.get::<_,i64>(8)?,r.get::<_,i64>(9)?,r.get::<_,i64>(10)?)))
+            .optional()?.ok_or(MasterError::ArtifactIntegrationUnavailable)?;
+        let mut plan = FeatureConveyorArtifactIntegrationPlan {
+            schema_version: 1,
+            feature_id,
+            specification_revision: i64_to_u64(row.0)?,
+            lifecycle_revision: i64_to_u64(row.1)?,
+            feature_lease_id: parse_uuid(&row.2)?,
+            snapshot_id: parse_uuid(&row.3)?,
+            snapshot_sha256: digest_array(&row.4)?,
+            artifact_ids: vec![Uuid::from_u128(1)],
+            queue_revision: i64_to_u64(row.9)?,
+            emergency_pause_revision: i64_to_u64(row.10)?,
+            grants: FeatureConveyorGrantRevisions {
+                registration: i64_to_u64(row.6)?,
+                cloud_disclosure: i64_to_u64(row.7)?,
+                autonomous_publication: i64_to_u64(row.8)?,
+            },
+            base_commit: row.5,
+        };
+        let request = FeatureConveyorArtifactIntegrationRequest {
+            schema_version: 1,
+            integration_id: Uuid::from_u128(1),
+            feature_id: plan.feature_id,
+            specification_revision: plan.specification_revision,
+            expected_lifecycle_revision: plan.lifecycle_revision,
+            feature_lease_id: plan.feature_lease_id,
+            snapshot_id: plan.snapshot_id,
+            snapshot_sha256: plan.snapshot_sha256,
+            artifact_ids: plan.artifact_ids.clone(),
+            expected_queue_revision: plan.queue_revision,
+            expected_emergency_pause_revision: plan.emergency_pause_revision,
+            grants: plan.grants,
+            base_commit: plan.base_commit.clone(),
+        };
+        let tx = self.connection.unchecked_transaction()?;
+        validate_integration_binding_tx(&tx, &request, now_ms)?;
+        let artifacts =
+            load_complete_integration_artifacts_tx_without_requested_ids(&tx, &request)?;
+        plan.artifact_ids = artifacts
+            .iter()
+            .map(|artifact| artifact.reference.artifact_id)
+            .collect();
+        plan.artifact_ids.sort();
+        plan.validate()?;
+        Ok(plan)
+    }
+
+    pub fn record_artifact_integration_conflict(
+        &mut self,
+        request: &FeatureConveyorArtifactIntegrationRequest,
+        reason: &str,
+        now_ms: u64,
+    ) -> Result<(), MasterError> {
+        if !matches!(
+            reason,
+            "content_cas_mismatch" | "overlapping_path" | "duplicate_ordinal"
+        ) {
+            return Err(MasterError::ArtifactIntegrationConflict);
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        validate_integration_binding_tx(&tx, request, now_ms)?;
+        let binding_sha256: [u8; 32] = Sha256::digest(serde_json::to_vec(request)?).into();
+        let existing: Option<(Vec<u8>,String)>=tx.query_row(
+            "SELECT request_binding_sha256,reason_code FROM feature_artifact_integration_conflicts
+             WHERE integration_id=?1",[request.integration_id.to_string()],|row| Ok((row.get(0)?,row.get(1)?)))
+            .optional()?;
+        if let Some((binding, existing_reason)) = existing {
+            if digest_array(&binding)? == binding_sha256 && existing_reason == reason {
+                return Ok(());
+            }
+            return Err(MasterError::ArtifactIntegrationUnavailable);
+        }
+        tx.execute(
+            "INSERT OR IGNORE INTO feature_artifact_integration_conflicts
+            (integration_id, feature_id, lifecycle_revision, request_binding_sha256, reason_code, recorded_at_ms)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                request.integration_id.to_string(),
+                request.feature_id.to_string(),
+                u64_to_i64(request.expected_lifecycle_revision)?,
+                binding_sha256.as_slice(),
+                reason,
+                u64_to_i64(now_ms)?
+            ],
+        )?;
+        append_feature_audit_tx(
+            &tx,
+            "artifact_integration_conflict",
+            Some(request.feature_id),
+            now_ms,
+            serde_json::json!({"integration_id": request.integration_id, "reason_code": reason,
+                "path_present": false, "content_present": false, "candidate_created": false,
+                "lifecycle_advanced": false}),
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn finalize_artifact_integration(
+        &mut self,
+        plan: &ArtifactIntegrationPlan,
+        candidate: &CandidateEvidence,
+        now_ms: u64,
+    ) -> Result<FeatureConveyorArtifactIntegrationReceipt, MasterError> {
+        let request = &plan.request;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(receipt) = load_integration_receipt_tx(&tx, request.integration_id)? {
+            return if integration_receipt_matches_request(&receipt, request)
+                && integration_artifact_ids_tx(&tx, request.integration_id)? == request.artifact_ids
+                && receipt.candidate_commit == candidate.candidate_commit
+                && receipt.candidate_tree == candidate.candidate_tree
+                && receipt.artifact_set_sha256 == candidate.artifact_set_sha256
+            {
+                Ok(receipt)
+            } else {
+                Err(MasterError::ArtifactIntegrationUnavailable)
+            };
+        }
+        validate_integration_binding_tx(&tx, request, now_ms)?;
+        let current = load_complete_integration_artifacts_tx(&tx, request, true)?;
+        if current.iter().map(|a| a.reference).collect::<Vec<_>>()
+            != plan
+                .artifacts
+                .iter()
+                .map(|a| a.reference)
+                .collect::<Vec<_>>()
+        {
+            return Err(MasterError::ArtifactIntegrationUnavailable);
+        }
+        tx.execute(
+            "INSERT INTO feature_artifact_integrations
+            (integration_id, feature_id, specification_revision, lifecycle_revision,
+             feature_lease_id, snapshot_id, snapshot_sha256, artifact_set_sha256,
+             candidate_commit, candidate_tree, base_commit, queue_revision,
+             emergency_pause_revision, registration_grant_revision,
+             cloud_disclosure_grant_revision, publication_grant_revision, integrated_at_ms)
+            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
+            params![
+                request.integration_id.to_string(),
+                request.feature_id.to_string(),
+                u64_to_i64(request.specification_revision)?,
+                u64_to_i64(request.expected_lifecycle_revision)?,
+                request.feature_lease_id.to_string(),
+                request.snapshot_id.to_string(),
+                request.snapshot_sha256.as_slice(),
+                candidate.artifact_set_sha256.as_slice(),
+                candidate.candidate_commit,
+                candidate.candidate_tree,
+                candidate.base_commit,
+                u64_to_i64(request.expected_queue_revision)?,
+                u64_to_i64(request.expected_emergency_pause_revision)?,
+                u64_to_i64(request.grants.registration)?,
+                u64_to_i64(request.grants.cloud_disclosure)?,
+                u64_to_i64(request.grants.autonomous_publication)?,
+                u64_to_i64(now_ms)?
+            ],
+        )?;
+        for (position, artifact) in plan.artifacts.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO feature_artifact_integration_artifacts
+                 (integration_id, artifact_id, ordinal, packet_id, position)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    request.integration_id.to_string(),
+                    artifact.reference.artifact_id.to_string(),
+                    i64::from(artifact.packet.ordinal),
+                    artifact.packet.packet_id.to_string(),
+                    i64::try_from(position + 1)
+                        .map_err(|_| MasterError::ArtifactIntegrationUnavailable)?
+                ],
+            )?;
+        }
+        let next_lifecycle = request
+            .expected_lifecycle_revision
+            .checked_add(1)
+            .ok_or(MasterError::ArtifactIntegrationUnavailable)?;
+        if tx.execute("UPDATE feature_conveyor_features SET status='validating', lifecycle_revision=?1,
+            updated_at_ms=?2 WHERE feature_id=?3 AND status='implementing' AND lifecycle_revision=?4",
+            params![u64_to_i64(next_lifecycle)?, u64_to_i64(now_ms)?, request.feature_id.to_string(),
+                u64_to_i64(request.expected_lifecycle_revision)?])? != 1 {
+            return Err(MasterError::ArtifactIntegrationUnavailable);
+        }
+        tx.execute("INSERT INTO feature_transition_evidence
+            (feature_id,lifecycle_revision,from_status,to_status,accepted_evidence_sha256,recorded_at_ms)
+            VALUES (?1,?2,'implementing','validating',?3,?4)", params![request.feature_id.to_string(),
+                u64_to_i64(next_lifecycle)?, candidate.artifact_set_sha256.as_slice(), u64_to_i64(now_ms)?])?;
+        append_feature_audit_tx(
+            &tx,
+            "artifact_candidate_frozen",
+            Some(request.feature_id),
+            now_ms,
+            serde_json::json!({"integration_id": request.integration_id,
+                "artifact_count": request.artifact_ids.len(), "artifact_set_digest_present": true,
+                "candidate_commit_present": true, "candidate_tree_present": true,
+                "base_commit_present": true, "from_status":"implementing", "to_status":"validating",
+                "lifecycle_revision": next_lifecycle, "publication_authorized": false,
+                "test_authority_granted": false, "review_authority_granted": false}),
+        )?;
+        let receipt = integration_receipt(request, candidate, next_lifecycle);
+        tx.commit()?;
+        Ok(receipt)
     }
 
     pub fn owner_control_bridge_designation(
@@ -4706,6 +5110,66 @@ impl MasterKernel {
             )?;
         }
         let version = self.schema_version()?;
+        if version == 13 {
+            self.connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 CREATE TABLE feature_artifact_integrations (
+                   integration_id TEXT PRIMARY KEY NOT NULL,
+                   feature_id TEXT NOT NULL REFERENCES feature_conveyor_features(feature_id),
+                   specification_revision INTEGER NOT NULL CHECK(specification_revision>0),
+                   lifecycle_revision INTEGER NOT NULL CHECK(lifecycle_revision>0),
+                   feature_lease_id TEXT NOT NULL,
+                   snapshot_id TEXT NOT NULL REFERENCES feature_repository_snapshot_claims(snapshot_id),
+                   snapshot_sha256 BLOB NOT NULL CHECK(length(snapshot_sha256)=32),
+                   artifact_set_sha256 BLOB NOT NULL CHECK(length(artifact_set_sha256)=32),
+                   candidate_commit TEXT NOT NULL CHECK(length(candidate_commit)=40),
+                   candidate_tree TEXT NOT NULL CHECK(length(candidate_tree)=40),
+                   base_commit TEXT NOT NULL CHECK(length(base_commit)=40),
+                   queue_revision INTEGER NOT NULL CHECK(queue_revision>=0),
+                   emergency_pause_revision INTEGER NOT NULL CHECK(emergency_pause_revision>=0),
+                   registration_grant_revision INTEGER NOT NULL CHECK(registration_grant_revision>0),
+                   cloud_disclosure_grant_revision INTEGER NOT NULL CHECK(cloud_disclosure_grant_revision>0),
+                   publication_grant_revision INTEGER NOT NULL CHECK(publication_grant_revision>0),
+                   integrated_at_ms INTEGER NOT NULL CHECK(integrated_at_ms>0),
+                   UNIQUE(feature_id, specification_revision, feature_lease_id, snapshot_id)
+                 );
+                 CREATE TRIGGER feature_artifact_integrations_no_update BEFORE UPDATE ON feature_artifact_integrations
+                   BEGIN SELECT RAISE(ABORT,'immutable artifact integration'); END;
+                 CREATE TRIGGER feature_artifact_integrations_no_delete BEFORE DELETE ON feature_artifact_integrations
+                   BEGIN SELECT RAISE(ABORT,'durable artifact integration evidence'); END;
+                 CREATE TABLE feature_artifact_integration_artifacts (
+                   integration_id TEXT NOT NULL REFERENCES feature_artifact_integrations(integration_id),
+                   artifact_id TEXT NOT NULL REFERENCES feature_result_artifacts(artifact_id),
+                   ordinal INTEGER NOT NULL CHECK(ordinal BETWEEN 1 AND 65535),
+                   packet_id TEXT NOT NULL,
+                   position INTEGER NOT NULL CHECK(position BETWEEN 1 AND 3),
+                   PRIMARY KEY(integration_id, artifact_id),
+                   UNIQUE(integration_id, ordinal),
+                   UNIQUE(integration_id, packet_id),
+                   UNIQUE(integration_id, position)
+                 );
+                 CREATE TRIGGER feature_artifact_integration_artifacts_no_update BEFORE UPDATE ON feature_artifact_integration_artifacts
+                   BEGIN SELECT RAISE(ABORT,'immutable integrated artifact linkage'); END;
+                 CREATE TRIGGER feature_artifact_integration_artifacts_no_delete BEFORE DELETE ON feature_artifact_integration_artifacts
+                   BEGIN SELECT RAISE(ABORT,'durable integrated artifact linkage'); END;
+                 CREATE TABLE feature_artifact_integration_conflicts (
+                   integration_id TEXT NOT NULL,
+                   feature_id TEXT NOT NULL,
+                   lifecycle_revision INTEGER NOT NULL,
+                   request_binding_sha256 BLOB NOT NULL CHECK(length(request_binding_sha256)=32),
+                   reason_code TEXT NOT NULL CHECK(reason_code IN('content_cas_mismatch','overlapping_path','duplicate_ordinal')),
+                   recorded_at_ms INTEGER NOT NULL CHECK(recorded_at_ms>0),
+                   PRIMARY KEY(integration_id, reason_code)
+                 );
+                 CREATE TRIGGER feature_artifact_integration_conflicts_no_update BEFORE UPDATE ON feature_artifact_integration_conflicts
+                   BEGIN SELECT RAISE(ABORT,'immutable artifact integration conflict'); END;
+                 CREATE TRIGGER feature_artifact_integration_conflicts_no_delete BEFORE DELETE ON feature_artifact_integration_conflicts
+                   BEGIN SELECT RAISE(ABORT,'durable artifact integration conflict'); END;
+                 PRAGMA user_version=14;
+                 COMMIT;"
+            )?;
+        }
+        let version = self.schema_version()?;
         if version != MASTER_SCHEMA_VERSION {
             return Err(MasterError::UnsupportedSchemaVersion {
                 expected: MASTER_SCHEMA_VERSION,
@@ -6987,6 +7451,282 @@ fn require_active_lease_tx(tx: &Transaction<'_>, feature_id: Uuid) -> Result<(),
         return Err(MasterError::InvalidFeatureTransition);
     }
     Ok(())
+}
+
+fn validate_integration_binding_tx(
+    tx: &Transaction<'_>,
+    request: &FeatureConveyorArtifactIntegrationRequest,
+    now_ms: u64,
+) -> Result<(), MasterError> {
+    require_unpaused_revision_tx(tx, request.expected_emergency_pause_revision)?;
+    require_queue_revision_tx(tx, request.expected_queue_revision)?;
+    let binding = tx
+        .query_row(
+            "SELECT f.current_specification_revision, f.lifecycle_revision, f.status,
+                l.lease_id, l.snapshot_id, c.snapshot_sha256, c.base_commit,
+                c.registration_grant_revision, c.cloud_disclosure_grant_revision,
+                c.publication_grant_revision, s.repository_id
+         FROM feature_conveyor_features f
+         JOIN feature_active_lease l ON l.feature_id=f.feature_id
+         JOIN feature_repository_snapshot_claims c ON c.snapshot_id=l.snapshot_id
+         JOIN feature_specification_revisions s
+           ON s.feature_id=f.feature_id AND s.revision=f.current_specification_revision
+         WHERE f.feature_id=?1",
+            [request.feature_id.to_string()],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Vec<u8>>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, i64>(8)?,
+                    row.get::<_, i64>(9)?,
+                    row.get::<_, String>(10)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or(MasterError::ArtifactIntegrationUnavailable)?;
+    let repository_id = parse_uuid(&binding.10)?;
+    if i64_to_u64(binding.0)? != request.specification_revision
+        || i64_to_u64(binding.1)? != request.expected_lifecycle_revision
+        || binding.2 != "implementing"
+        || parse_uuid(&binding.3)? != request.feature_lease_id
+        || parse_uuid(&binding.4)? != request.snapshot_id
+        || digest_array(&binding.5)? != request.snapshot_sha256
+        || binding.6 != request.base_commit
+        || i64_to_u64(binding.7)? != request.grants.registration
+        || i64_to_u64(binding.8)? != request.grants.cloud_disclosure
+        || i64_to_u64(binding.9)? != request.grants.autonomous_publication
+    {
+        return Err(MasterError::ArtifactIntegrationUnavailable);
+    }
+    require_grants_tx(
+        tx,
+        repository_id,
+        FeatureGrantRevisions {
+            registration: request.grants.registration,
+            cloud_disclosure: request.grants.cloud_disclosure,
+            autonomous_publication: request.grants.autonomous_publication,
+        },
+        now_ms,
+    )
+    .map_err(|_| MasterError::ArtifactIntegrationUnavailable)
+}
+
+fn load_complete_integration_artifacts_tx(
+    tx: &Transaction<'_>,
+    request: &FeatureConveyorArtifactIntegrationRequest,
+    enforce_requested_ids: bool,
+) -> Result<Vec<IntegrationArtifact>, MasterError> {
+    let total: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM feature_coding_dispatches WHERE feature_id=?1",
+        [request.feature_id.to_string()],
+        |row| row.get(0),
+    )?;
+    if !(1..=3).contains(&total) {
+        return Err(MasterError::ArtifactIntegrationUnavailable);
+    }
+    let mut statement = tx.prepare(
+        "SELECT a.artifact_id, a.artifact_sha256, a.artifact_size_bytes,
+                d.work_packet_metadata_json, s.accepted_payload_json
+         FROM feature_coding_dispatches d
+         JOIN master_steps s ON s.step_id=d.step_id AND s.status='succeeded'
+         JOIN feature_result_artifacts a ON a.step_id=d.step_id AND a.feature_id=d.feature_id
+         WHERE d.feature_id=?1 AND d.specification_revision=?2 AND d.lifecycle_revision=?3
+           AND d.feature_lease_id=?4 AND d.snapshot_id=?5 AND d.snapshot_sha256=?6",
+    )?;
+    let rows = statement.query_map(
+        params![
+            request.feature_id.to_string(),
+            u64_to_i64(request.specification_revision)?,
+            u64_to_i64(request.expected_lifecycle_revision)?,
+            request.feature_lease_id.to_string(),
+            request.snapshot_id.to_string(),
+            request.snapshot_sha256.as_slice()
+        ],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        },
+    )?;
+    let mut artifacts = Vec::new();
+    let mut ordinals = HashSet::new();
+    for row in rows {
+        let (id, digest, size, packet_json, payload_json) = row?;
+        let packet: FeatureConveyorCodingWorkPacketMetadata = serde_json::from_str(&packet_json)?;
+        packet.validate()?;
+        if !ordinals.insert(packet.ordinal) {
+            return Err(MasterError::ArtifactIntegrationConflict);
+        }
+        let payload: LocalCodingJobResult = serde_json::from_str(&payload_json)?;
+        let reference = ResultArtifactReference {
+            artifact_id: parse_uuid(&id)?,
+            artifact_sha256: digest_array(&digest)?,
+            artifact_size_bytes: i64_to_u64(size)?,
+        };
+        if payload.artifact_id != reference.artifact_id
+            || payload.artifact_sha256 != reference.artifact_sha256
+            || payload.artifact_size_bytes != reference.artifact_size_bytes
+            || payload.ambiguous
+            || payload.status != assemblywright_protocol::LOCAL_CODING_COMPLETED_STATUS
+        {
+            return Err(MasterError::ArtifactIntegrationUnavailable);
+        }
+        artifacts.push(IntegrationArtifact { reference, packet });
+    }
+    if artifacts.len() as i64 != total {
+        return Err(MasterError::ArtifactIntegrationUnavailable);
+    }
+    let mut ids: Vec<_> = artifacts.iter().map(|a| a.reference.artifact_id).collect();
+    ids.sort();
+    if enforce_requested_ids && ids != request.artifact_ids {
+        return Err(MasterError::ArtifactIntegrationUnavailable);
+    }
+    artifacts.sort_by(|left, right| {
+        left.packet
+            .ordinal
+            .cmp(&right.packet.ordinal)
+            .then_with(|| left.packet.packet_id.cmp(&right.packet.packet_id))
+    });
+    Ok(artifacts)
+}
+
+fn load_complete_integration_artifacts_tx_without_requested_ids(
+    tx: &Transaction<'_>,
+    request: &FeatureConveyorArtifactIntegrationRequest,
+) -> Result<Vec<IntegrationArtifact>, MasterError> {
+    load_complete_integration_artifacts_tx(tx, request, false)
+}
+
+fn integration_receipt(
+    request: &FeatureConveyorArtifactIntegrationRequest,
+    candidate: &CandidateEvidence,
+    lifecycle_revision: u64,
+) -> FeatureConveyorArtifactIntegrationReceipt {
+    FeatureConveyorArtifactIntegrationReceipt {
+        schema_version:
+            assemblywright_protocol::FEATURE_CONVEYOR_ARTIFACT_INTEGRATION_SCHEMA_VERSION,
+        integration_id: request.integration_id,
+        feature_id: request.feature_id,
+        specification_revision: request.specification_revision,
+        lifecycle_revision,
+        feature_lease_id: request.feature_lease_id,
+        snapshot_id: request.snapshot_id,
+        snapshot_sha256: request.snapshot_sha256,
+        artifact_set_sha256: candidate.artifact_set_sha256,
+        candidate_commit: candidate.candidate_commit.clone(),
+        candidate_tree: candidate.candidate_tree.clone(),
+        base_commit: candidate.base_commit.clone(),
+        queue_revision: request.expected_queue_revision,
+        emergency_pause_revision: request.expected_emergency_pause_revision,
+        grants: request.grants,
+        status: FeatureConveyorArtifactIntegrationStatus::CandidateFrozen,
+    }
+}
+
+fn load_integration_receipt_tx(
+    tx: &Transaction<'_>,
+    integration_id: Uuid,
+) -> Result<Option<FeatureConveyorArtifactIntegrationReceipt>, MasterError> {
+    let row = tx
+        .query_row(
+            "SELECT feature_id,specification_revision,lifecycle_revision,feature_lease_id,
+        snapshot_id,snapshot_sha256,artifact_set_sha256,candidate_commit,candidate_tree,base_commit,
+        queue_revision,emergency_pause_revision,registration_grant_revision,
+        cloud_disclosure_grant_revision,publication_grant_revision
+        FROM feature_artifact_integrations WHERE integration_id=?1",
+            [integration_id.to_string()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Vec<u8>>(5)?,
+                    row.get::<_, Vec<u8>>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, String>(9)?,
+                    row.get::<_, i64>(10)?,
+                    row.get::<_, i64>(11)?,
+                    row.get::<_, i64>(12)?,
+                    row.get::<_, i64>(13)?,
+                    row.get::<_, i64>(14)?,
+                ))
+            },
+        )
+        .optional()?;
+    row.map(|r| {
+        Ok(FeatureConveyorArtifactIntegrationReceipt {
+            schema_version:
+                assemblywright_protocol::FEATURE_CONVEYOR_ARTIFACT_INTEGRATION_SCHEMA_VERSION,
+            integration_id,
+            feature_id: parse_uuid(&r.0)?,
+            specification_revision: i64_to_u64(r.1)?,
+            lifecycle_revision: i64_to_u64(r.2)?
+                .checked_add(1)
+                .ok_or(MasterError::ArtifactIntegrationUnavailable)?,
+            feature_lease_id: parse_uuid(&r.3)?,
+            snapshot_id: parse_uuid(&r.4)?,
+            snapshot_sha256: digest_array(&r.5)?,
+            artifact_set_sha256: digest_array(&r.6)?,
+            candidate_commit: r.7,
+            candidate_tree: r.8,
+            base_commit: r.9,
+            queue_revision: i64_to_u64(r.10)?,
+            emergency_pause_revision: i64_to_u64(r.11)?,
+            grants: assemblywright_protocol::FeatureConveyorGrantRevisions {
+                registration: i64_to_u64(r.12)?,
+                cloud_disclosure: i64_to_u64(r.13)?,
+                autonomous_publication: i64_to_u64(r.14)?,
+            },
+            status: FeatureConveyorArtifactIntegrationStatus::CandidateFrozen,
+        })
+    })
+    .transpose()
+}
+
+fn integration_artifact_ids_tx(
+    tx: &Transaction<'_>,
+    integration_id: Uuid,
+) -> Result<Vec<Uuid>, MasterError> {
+    let mut statement = tx.prepare(
+        "SELECT artifact_id FROM feature_artifact_integration_artifacts
+         WHERE integration_id=?1 ORDER BY artifact_id",
+    )?;
+    let ids = statement
+        .query_map([integration_id.to_string()], |row| row.get::<_, String>(0))?
+        .map(|value| parse_uuid(&value?))
+        .collect();
+    ids
+}
+
+fn integration_receipt_matches_request(
+    receipt: &FeatureConveyorArtifactIntegrationReceipt,
+    request: &FeatureConveyorArtifactIntegrationRequest,
+) -> bool {
+    receipt.integration_id == request.integration_id
+        && receipt.feature_id == request.feature_id
+        && receipt.specification_revision == request.specification_revision
+        && receipt.lifecycle_revision == request.expected_lifecycle_revision.saturating_add(1)
+        && receipt.feature_lease_id == request.feature_lease_id
+        && receipt.snapshot_id == request.snapshot_id
+        && receipt.snapshot_sha256 == request.snapshot_sha256
+        && receipt.base_commit == request.base_commit
+        && receipt.queue_revision == request.expected_queue_revision
+        && receipt.emergency_pause_revision == request.expected_emergency_pause_revision
+        && receipt.grants == request.grants
 }
 
 fn append_feature_audit_tx(

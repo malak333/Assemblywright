@@ -59,7 +59,7 @@ accepted designs and take precedence within their scope:
 
 ### Windows master
 
-`assemblywright-master` owns durable state and every authority decision. Its schema-v13
+`assemblywright-master` owns durable state and every authority decision. Its schema-v14
 SQLite database holds two kernels:
 
 - The distributed device lifecycle: registered devices, connection epochs,
@@ -310,6 +310,44 @@ single-in-flight request contract.
 Partial, mixed, or relayless worker profiles fail before network
 use. Standard and fixture MacBridge sessions retain strict health plus Feature
 Conveyor observation.
+
+Schema v14 adds artifact integration and candidate freezing without changing
+the protocol-v5 worker lane. One strict owner-token-authenticated loopback-only
+plan projection exposes only the path-free exact bindings and artifact IDs the
+owner needs to construct one strict request. That request binds a non-nil
+integration ID, the complete sorted set of terminal
+accepted artifact IDs, and the exact active feature, specification, lifecycle,
+lease, snapshot, base commit, grants, queue revision, and Emergency Pause
+revision. The master reopens and re-hashes every private artifact, decodes its
+canonical operations against the immutable dispatch, and derives application
+order from the immutable dispatch ordinal and packet ID. It never trusts caller
+order. The complete set must equal all terminal accepted artifact-backed
+dispatches for that active feature.
+
+Filesystem work occurs without an open SQLite transaction and under one
+fail-fast integration reservation that remains owned by detached work after a
+client disconnect. It creates a private, independent no-remote
+integration repository from the immutable master snapshot, applies only the
+validated operation set, and never opens or mutates the registered source
+checkout. Duplicate ordinals, case-folded exact or component-wise file/directory
+path overlaps, create/replace/delete compare-and-set drift, tree-shape conflicts,
+alternate object stores, links, unexpected repository metadata, artifact drift,
+or authority drift fail closed. Stable no-follow handles bracket source and
+candidate identities, and candidate handles remain live through the SQLite
+commit. A conflict records
+only bounded path-free reason and binding digests; it leaves no partial
+candidate and does not advance the feature. Success creates a deterministic
+Git commit and exact tree, flushes and seals the candidate repository, then one
+immediate transaction rechecks every authority binding, stores immutable
+artifact-to-candidate evidence, advances only `implementing` to `validating`,
+and appends a redacted audit. An exact retry revalidates the recorded candidate
+before returning the original receipt;
+integration-ID or binding drift rejects. Startup removes only unreferenced
+staging state, verifies every referenced candidate commit/tree and repository
+shape, and lets the existing active-feature restart quarantine dominate any
+ambiguous effect. This adds no test execution, evidence gate, review,
+publication, registered-source mutation, credential, network, or autonomous
+authority.
 
 The two-device proof controller creates its disposable repository with a
 non-local clone so Git does not copy source-maintenance caches into the snapshot

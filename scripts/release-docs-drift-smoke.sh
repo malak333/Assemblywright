@@ -36,6 +36,7 @@ PROTOCOL_E2E="crates/assemblywright-protocol/tests/distributed_protocol_contract
 PROTOCOL_EVENT_E2E="crates/assemblywright-protocol/tests/distributed_event_cursor_contract.rs"
 PROTOCOL_MLX_E2E="crates/assemblywright-protocol/tests/mlx_job_contract.rs"
 PROTOCOL_LOCAL_CODING_E2E="crates/assemblywright-protocol/tests/local_coding_contract.rs"
+PROTOCOL_ARTIFACT_INTEGRATION_E2E="crates/assemblywright-protocol/tests/artifact_integration_contract.rs"
 PROTOCOL_OWNER_RESOLUTION_E2E="crates/assemblywright-protocol/tests/owner_resolution_contract.rs"
 MASTER_E2E="crates/assemblywright-master/tests/master_lifecycle_e2e.rs"
 MASTER_PROCESS_E2E="crates/assemblywright-master/tests/master_process_e2e.rs"
@@ -43,6 +44,8 @@ MASTER_IDENTITY_E2E="crates/assemblywright-master/tests/enrollment_identity_e2e.
 MASTER_REMOTE_MTLS_E2E="crates/assemblywright-master/tests/remote_mtls_e2e.rs"
 MASTER_EVENT_E2E="crates/assemblywright-master/tests/event_cursor_e2e.rs"
 MASTER_CONVEYOR_E2E="crates/assemblywright-master/tests/feature_conveyor_kernel.rs"
+MASTER_ARTIFACT_INTEGRATION="crates/assemblywright-master/src/integration.rs"
+MASTER_ARTIFACT_INTEGRATION_E2E="crates/assemblywright-master/tests/artifact_integration_e2e.rs"
 MASTER_SERVICE_E2E="crates/assemblywright-master/tests/windows_service_lifecycle_e2e.rs"
 AGENT_E2E="crates/assemblywright-agent/tests/local_relay_e2e.rs"
 AGENT_LOCAL_CODING_E2E="crates/assemblywright-agent/tests/local_coding_admission.rs"
@@ -112,9 +115,11 @@ for file in \
   "$MASTER_CRATE" "$MASTER_PROCESS" "$MASTER_IDENTITY" "$MASTER_SERVICE_HOST" \
   "$AGENT_CRATE" "$AGENT_PROCESS" "$CLI_MAIN" \
   "$PROTOCOL_E2E" "$PROTOCOL_EVENT_E2E" "$PROTOCOL_MLX_E2E" \
-  "$PROTOCOL_LOCAL_CODING_E2E" "$PROTOCOL_OWNER_RESOLUTION_E2E" \
+  "$PROTOCOL_LOCAL_CODING_E2E" "$PROTOCOL_ARTIFACT_INTEGRATION_E2E" \
+  "$PROTOCOL_OWNER_RESOLUTION_E2E" \
   "$MASTER_E2E" "$MASTER_PROCESS_E2E" "$MASTER_IDENTITY_E2E" \
   "$MASTER_REMOTE_MTLS_E2E" "$MASTER_EVENT_E2E" "$MASTER_CONVEYOR_E2E" \
+  "$MASTER_ARTIFACT_INTEGRATION" "$MASTER_ARTIFACT_INTEGRATION_E2E" \
   "$MASTER_SERVICE_E2E" "$AGENT_E2E" "$AGENT_LOCAL_CODING_E2E" "$CLI_NAMING_E2E" \
   "$CLI_READINESS_E2E" \
   "$MAC_BRIDGE" "$MAC_BRIDGE_CLI" "$MAC_BRIDGE_KEYCHAIN" "$MAC_BRIDGE_NETWORK" \
@@ -166,7 +171,7 @@ require_text "README non-claims" "$README" "Autonomous dispatch"
 require_text "DESIGN conveyor pointer" "$DESIGN" "docs/feature-conveyor-design.md"
 require_text "DESIGN distributed pointer" "$DESIGN" "docs/distributed-developer-mode-design.md"
 require_text "DESIGN assistant non-goal" "$DESIGN" "No general-purpose assistant surface."
-require_text "DESIGN current master schema" "$DESIGN" "schema-v13"
+require_text "DESIGN current master schema" "$DESIGN" "schema-v14"
 require_text "DESIGN result artifact boundary" "$DESIGN" \
   "Schema v13 adds bounded general-worker packet"
 
@@ -186,6 +191,8 @@ require_text "conveyor repository snapshot claim boundary" "$FEATURE_CONVEYOR_DE
   "repository-snapshot-claims"
 require_text "conveyor coding dispatch boundary" "$FEATURE_CONVEYOR_DESIGN" \
   "coding-dispatches"
+require_text "conveyor artifact integration boundary" "$FEATURE_CONVEYOR_DESIGN" \
+  "artifact-integrations"
 require_text "conveyor cancellation boundary" "$FEATURE_CONVEYOR_DESIGN" \
   "cancel-active-feature"
 require_text "conveyor abandonment boundary" "$FEATURE_CONVEYOR_DESIGN" \
@@ -212,6 +219,10 @@ require_text "conveyor repository snapshot claim implementation" "$MASTER_PROCES
   '"/v1/feature-conveyor/repository-snapshot-claims"'
 require_text "conveyor coding dispatch implementation" "$MASTER_PROCESS" \
   '"/v1/feature-conveyor/coding-dispatches"'
+require_text "conveyor artifact integration implementation" "$MASTER_PROCESS" \
+  '"/v1/feature-conveyor/artifact-integrations"'
+require_text "conveyor artifact integration plan implementation" "$MASTER_PROCESS" \
+  '"/v1/feature-conveyor/features/:feature_id/integration-plan"'
 require_text "conveyor cancellation implementation" "$MASTER_PROCESS" \
   '"/v1/feature-conveyor/cancel-active-feature"'
 require_text "conveyor abandonment implementation" "$MASTER_PROCESS" \
@@ -436,14 +447,16 @@ require_text "release checklist schema-v11 migration invariant" "$CHECKLIST" \
   "schema-v11 backup-first"
 require_text "release checklist schema-v13 artifact invariant" "$CHECKLIST" \
   "protocol-v5/schema-v13 result-artifact admission"
+require_text "release checklist schema-v14 integration invariant" "$CHECKLIST" \
+  "schema-v14 artifact integration"
 require_text "architecture schema-v13 artifact store" "$ARCHITECTURE" \
   "Private bytes outside SQLite; immutable schema-v13 metadata and redacted audit"
 require_text "architecture current master schema" "$ARCHITECTURE" \
-  '`assemblywright-master` schema version 13'
+  '`assemblywright-master` schema version 14'
 require_text "architecture current general worker" "$ARCHITECTURE" \
   "Protocol v5 replaces the historical v4 fixed-child"
 require_text "feature design current general worker" "$FEATURE_CONVEYOR_DESIGN" \
-  "implemented protocol-v5/schema-v13 kernel"
+  "implemented protocol-v5/schema-v14 kernel"
 require_text "readme current general worker" "$README" \
   "packet-bound deterministic writes/deletes"
 require_text "knowledge base current protocol" "$KB" \
@@ -460,6 +473,12 @@ require_text "knowledge base retained live-attempt pair" "$KB" \
   'one owner-private `<attempt>.sealed` directory'
 require_text "knowledge base immutable Git blob CRLF boundary" "$KB" \
   "binds the immutable Git blob bytes"
+require_text "knowledge base schema-v14 candidate boundary" "$KB" \
+  "Schema v14 deliberately does not widen the protocol-v5 Mac worker contract"
+require_text "design schema-v14 candidate boundary" "$DESIGN" \
+  "Schema v14 adds artifact integration and candidate freezing"
+require_text "safety schema-v14 candidate boundary" "$SAFETY_RULES" \
+  "Schema v14 artifact integration is a distinct owner-token-authenticated"
 require_text "knowledge base live receipt integrity" "$KB" \
   "one unchanged JSON line on stdin"
 require_text "design stable artifact evidence" "$DESIGN" \
@@ -509,12 +528,20 @@ require_text "build docs snapshot claim process E2E" "$BUILD_DOCS" \
   "repository_snapshot_claim_is_authenticated_path_free_and_durable"
 require_text "build docs coding dispatch protocol" "$BUILD_DOCS" \
   "cargo test -p assemblywright-protocol --test local_coding_contract"
+require_text "build docs artifact-integration protocol" "$BUILD_DOCS" \
+  "cargo test -p assemblywright-protocol --test artifact_integration_contract"
+require_text "build docs native artifact-integration E2E" "$BUILD_DOCS" \
+  "cargo test -p assemblywright-master --test artifact_integration_e2e"
 require_text "build docs owner-resolution protocol" "$BUILD_DOCS" \
   "cargo test -p assemblywright-protocol --test owner_resolution_contract"
 require_text "build docs native snapshot relay E2E" "$BUILD_DOCS" \
   "./scripts/mac-local-coding-snapshot-e2e.sh"
 require_text "build docs live local-coding E2E" "$BUILD_DOCS" \
   "./scripts/mac-windows-bridge-live-e2e.sh --run-local-coding"
+require_text "live harness artifact integration" "$MAC_BRIDGE_LIVE_E2E" \
+  "assemblywright_mac_windows_artifact_integration_required"
+require_text "Windows live candidate integration" "$WINDOWS_LOCAL_CODING_LIVE_CONTROL" \
+  '"Integrate" {'
 require_text "build docs Windows live-controller unit regression" "$BUILD_DOCS" \
   "windows-local-coding-live-control.ps1 -Action Check"
 require_text "hosted Windows live-controller unit regression" "$WINDOWS_PROTOCOL_WORKFLOW" \

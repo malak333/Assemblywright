@@ -494,6 +494,33 @@ if [[ "$MODE" == "--run-local-coding" ]]; then
     && "$local_coding_packet_sha" =~ ^[0-9a-f]{64}$ ]] \
     || fail "the terminal local-coding receipt omitted exact revision or digest evidence"
 
+  printf '%s\n' \
+    "assemblywright_mac_windows_artifact_integration_required action=Integrate script=scripts/windows-local-coding-live-control.ps1 repository_id=$local_coding_repository_id feature_id=$local_coding_feature_id head_commit=$local_coding_head_commit receipt_stdin=required"
+  capture_local_coding_receipt "integration-control.json" "artifact integration"
+  integration_receipt="$(<"$local_coding_coordination_directory/integration-control.json")"
+  [[ "$(json_value "$integration_receipt" status)" == "artifact_integration_candidate_frozen" \
+    && "$(json_value "$integration_receipt" repository_id)" == "$local_coding_repository_id" \
+    && "$(json_value "$integration_receipt" feature_id)" == "$local_coding_feature_id" \
+    && "$(json_value "$integration_receipt" base_commit)" == "$local_coding_head_commit" \
+    && "$(json_value "$integration_receipt" candidate_detached)" == "true" \
+    && "$(json_value "$integration_receipt" candidate_remote_absent)" == "true" \
+    && "$(json_value "$integration_receipt" candidate_worktree_clean)" == "true" \
+    && "$(json_value "$integration_receipt" candidate_fsck_clean)" == "true" \
+    && "$(json_value "$integration_receipt" proof_checkout_clean)" == "true" \
+    && "$(json_value "$integration_receipt" exact_retry_idempotent)" == "true" ]] \
+    || fail "the artifact integration receipt drifted"
+  local_coding_lifecycle_revision="$(json_value "$integration_receipt" lifecycle_revision)"
+  local_coding_integration_id="$(json_value "$integration_receipt" integration_id)"
+  local_coding_candidate_commit="$(json_value "$integration_receipt" candidate_commit)"
+  local_coding_candidate_tree="$(json_value "$integration_receipt" candidate_tree)"
+  local_coding_artifact_set_sha="$(json_value "$integration_receipt" artifact_set_sha256)"
+  [[ "$local_coding_lifecycle_revision" =~ ^[0-9]+$ \
+    && "$local_coding_integration_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ \
+    && "$local_coding_candidate_commit" =~ ^[0-9a-f]{40}$ \
+    && "$local_coding_candidate_tree" =~ ^[0-9a-f]{40}$ \
+    && "$local_coding_artifact_set_sha" =~ ^[0-9a-f]{64}$ ]] \
+    || fail "the artifact integration receipt omitted exact candidate evidence"
+
   kill "$local_coding_pid" >/dev/null 2>&1 || true
   wait "$local_coding_pid" >/dev/null 2>&1 || true
   local_coding_pid=""
@@ -599,10 +626,12 @@ if [[ "$MODE" == "--run-local-coding" ]]; then
     && "$(json_value "$local_coding_status_after" device_id)" == "$local_coding_device_id" \
     && "$(json_value "$local_coding_status_after" registry_revision)" == "$local_coding_registry_revision" ]] \
     || fail "the live proof changed the separate local-coding identity"
-  printf 'assemblywright_mac_windows_local_coding_live_e2e_ok endpoint=%s feature_id=%s task_id=%s step_id=%s queued_sequence=%s leased_sequence=%s succeeded_sequence=%s snapshot_sha256=%s work_packet_sha256=%s separate_identity=verified signed_swift_relay=verified real_rust_agent=verified mac_retained_attempt_pair_shape=verified harness_owned_pair_cleanup=verified owner_cancel=verified owner_abandon=verified queue_empty=verified feature_lease_empty=verified distributed_active_state_empty=verified windows_transfer_staging_empty=verified grants_revoked=verified disposable_checkout_removed=verified\n' \
+  printf 'assemblywright_mac_windows_local_coding_live_e2e_ok endpoint=%s feature_id=%s task_id=%s step_id=%s queued_sequence=%s leased_sequence=%s succeeded_sequence=%s snapshot_sha256=%s work_packet_sha256=%s integration_id=%s candidate_commit=%s candidate_tree=%s artifact_set_sha256=%s separate_identity=verified signed_swift_relay=verified real_rust_agent=verified mac_retained_attempt_pair_shape=verified harness_owned_pair_cleanup=verified artifact_integration=verified detached_candidate=verified candidate_remote_absent=verified candidate_fsck_clean=verified exact_integration_retry=verified source_checkout_clean=verified owner_cancel=verified owner_abandon=verified queue_empty=verified feature_lease_empty=verified distributed_active_state_empty=verified windows_transfer_staging_empty=verified grants_revoked=verified disposable_checkout_removed=verified\n' \
     "$local_coding_endpoint" "$local_coding_feature_id" "$local_coding_task_id" \
     "$local_coding_step_id" "$local_coding_queued_sequence" "$local_coding_leased_sequence" \
-    "$local_coding_succeeded_sequence" "$local_coding_snapshot_sha" "$local_coding_packet_sha"
+    "$local_coding_succeeded_sequence" "$local_coding_snapshot_sha" "$local_coding_packet_sha" \
+    "$local_coding_integration_id" "$local_coding_candidate_commit" \
+    "$local_coding_candidate_tree" "$local_coding_artifact_set_sha"
 fi
 
 if [[ "$MODE" == "--run-mlx" ]]; then

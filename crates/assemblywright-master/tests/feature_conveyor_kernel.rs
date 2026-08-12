@@ -1,16 +1,17 @@
 use assemblywright_master::{
-    ApprovedFeatureSpecification, DeviceRegistration, FeatureAbandonmentEvidence,
-    FeatureConveyorGuidanceReason, FeatureConveyorGuidanceState, FeatureConveyorNextOwnerAction,
-    FeatureGrantRevisions, FeatureLifecycleStatus, FeatureSnapshotClaimPlan,
-    FeatureTransitionEvidence, MasterError, MasterKernel, MasterProcess, RemoteWorkContract,
-    RepositoryGrantKind, RepositoryGrantRevision, RepositorySnapshotEvidence,
-    VerifiedFeatureSuccess, MASTER_SCHEMA_VERSION, MAX_CONVEYOR_NONTERMINAL_FEATURES,
-    MAX_CONVEYOR_STATUS_FEATURES,
+    ApprovedFeatureSpecification, ArtifactIntegrationAuthorization, ArtifactIntegrationStore,
+    DeviceRegistration, FeatureAbandonmentEvidence, FeatureConveyorGuidanceReason,
+    FeatureConveyorGuidanceState, FeatureConveyorNextOwnerAction, FeatureGrantRevisions,
+    FeatureLifecycleStatus, FeatureSnapshotClaimPlan, FeatureTransitionEvidence, MasterError,
+    MasterKernel, MasterProcess, RemoteWorkContract, RepositoryGrantKind, RepositoryGrantRevision,
+    RepositorySnapshotEvidence, VerifiedFeatureSuccess, MASTER_SCHEMA_VERSION,
+    MAX_CONVEYOR_NONTERMINAL_FEATURES, MAX_CONVEYOR_STATUS_FEATURES,
 };
 use assemblywright_protocol::{
     build_local_coding_fixture_patch_artifact, local_coding_admission_sha256, CapabilityDescriptor,
-    DeviceId, DeviceRole, FeatureConveyorCodingDispatchRequest,
-    FeatureConveyorCodingWorkPacketMetadata, HandshakeRequest, JobEnvelope, JobResultEnvelope,
+    DeviceId, DeviceRole, FeatureConveyorArtifactIntegrationRequest,
+    FeatureConveyorCodingDispatchRequest, FeatureConveyorCodingWorkPacketMetadata,
+    FeatureConveyorGrantRevisions, HandshakeRequest, JobEnvelope, JobResultEnvelope,
     JobResultStatus, LocalCodingJobResult, LocalCodingResultArtifact,
     LocalCodingResultArtifactAdmission, LocalCodingSnapshotChunkRequest,
     FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, LOCAL_CODING_COMPLETED_STATUS,
@@ -24,6 +25,153 @@ use std::collections::HashSet;
 use std::fs;
 use tempfile::tempdir;
 use uuid::Uuid;
+
+#[test]
+fn artifact_integration_freezes_candidate_idempotently_and_rejects_drift() {
+    let directory = tempdir().unwrap();
+    let source_path = directory.path().join("source");
+    let source = git2::Repository::init(&source_path).unwrap();
+    fs::write(source_path.join("README.md"), b"before\n").unwrap();
+    let mut index = source.index().unwrap();
+    index.add_path(std::path::Path::new("README.md")).unwrap();
+    let tree_id = index.write_tree().unwrap();
+    let tree = source.find_tree(tree_id).unwrap();
+    let sig =
+        git2::Signature::new("fixture", "fixture@example.invalid", &git2::Time::new(1, 0)).unwrap();
+    let base = source
+        .commit(Some("HEAD"), &sig, &sig, "base", &tree, &[])
+        .unwrap()
+        .to_string();
+    drop(tree);
+    drop(source);
+    let snapshot = assemblywright_master::RepositorySnapshotStore::open(directory.path())
+        .unwrap()
+        .prepare(&source_path, &base)
+        .unwrap();
+    let database = directory.path().join("master.sqlite3");
+    let mut kernel = MasterKernel::open(&database).unwrap();
+    let repository_id = Uuid::new_v4();
+    install_grants(&mut kernel, repository_id);
+    let feature = specification(Uuid::new_v4(), repository_id, vec![]);
+    kernel.enqueue_approved_feature(&feature, 0, 10).unwrap();
+    let mut plan = snapshot_plan(&feature, 1, 0);
+    plan.base_commit = base.clone();
+    let plan = kernel.prepare_repository_snapshot_claim(&plan, 11).unwrap();
+    let claim = kernel
+        .finalize_repository_snapshot_claim(
+            &plan,
+            &RepositorySnapshotEvidence {
+                snapshot_id: snapshot.snapshot_id,
+                snapshot_sha256: snapshot.snapshot_sha256,
+                base_commit: base.clone(),
+            },
+            11,
+        )
+        .unwrap();
+    let device = coding_registration("integration-worker");
+    kernel.register_device(&device).unwrap();
+    let mut dispatch = coding_dispatch_request(&claim, &device, 2, 0);
+    dispatch.work_packet = FeatureConveyorCodingWorkPacketMetadata::fixture(
+        dispatch.work_packet.packet_id,
+        Sha256::digest(b"before\n").into(),
+    );
+    dispatch.work_packet_sha256 = dispatch.work_packet.canonical_sha256().unwrap();
+    kernel.dispatch_feature_coding(&dispatch, 12).unwrap();
+    let epoch = kernel
+        .accept_handshake(
+            &HandshakeRequest {
+                protocol_version: PROTOCOL_VERSION,
+                device_id: device.device_id,
+                device_name: device.device_name.clone(),
+                role: device.role,
+                registry_revision: 1,
+                capabilities: device.capabilities.clone(),
+            },
+            13,
+        )
+        .unwrap()
+        .connection_epoch;
+    let contract = RemoteWorkContract::from_registration(&device).unwrap();
+    let job = kernel
+        .lease_next_remote_step(device.device_id, epoch, 14, &contract)
+        .unwrap();
+    let result = coding_ack(&job, job.sequence + 1);
+    let admission = coding_artifact_admission(&job, &result);
+    kernel
+        .finalize_local_coding_result_artifact(device.device_id, &admission, 15)
+        .unwrap();
+    let artifact_store =
+        assemblywright_master::ResultArtifactStore::open(directory.path()).unwrap();
+    let bytes = admission.artifact.validate().unwrap();
+    let mut artifact = artifact_store
+        .prepare(
+            admission.artifact.artifact_id,
+            admission.artifact.artifact_sha256,
+            &bytes,
+        )
+        .unwrap();
+    artifact.mark_committed().unwrap();
+    kernel
+        .accept_remote_result_from_with_artifact(
+            device.device_id,
+            &result,
+            16,
+            &contract,
+            &artifact_store,
+            artifact.verified_mut(),
+        )
+        .unwrap();
+    let request = FeatureConveyorArtifactIntegrationRequest {
+        schema_version: 1,
+        integration_id: Uuid::new_v4(),
+        feature_id: feature.feature_id,
+        specification_revision: 1,
+        expected_lifecycle_revision: claim.lifecycle_revision,
+        feature_lease_id: claim.lease_id,
+        snapshot_id: claim.snapshot_id,
+        snapshot_sha256: claim.snapshot_sha256,
+        artifact_ids: vec![admission.artifact.artifact_id],
+        expected_queue_revision: 2,
+        expected_emergency_pause_revision: 0,
+        grants: FeatureConveyorGrantRevisions {
+            registration: 1,
+            cloud_disclosure: 1,
+            autonomous_publication: 1,
+        },
+        base_commit: base,
+    };
+    let planned = match kernel.prepare_artifact_integration(&request, 17).unwrap() {
+        ArtifactIntegrationAuthorization::Planned(p) => p,
+        _ => panic!(),
+    };
+    let store = ArtifactIntegrationStore::open(directory.path()).unwrap();
+    let mut candidate = store
+        .prepare(
+            request.integration_id,
+            request.snapshot_id,
+            &request.base_commit,
+            &planned.artifacts,
+        )
+        .unwrap();
+    candidate.revalidate_artifacts(&artifact_store).unwrap();
+    candidate.revalidate_candidate(&store).unwrap();
+    let receipt = kernel
+        .finalize_artifact_integration(&planned, &candidate.evidence, 18)
+        .unwrap();
+    candidate.retain();
+    snapshot.retain();
+    assert_eq!(receipt.lifecycle_revision, claim.lifecycle_revision + 1);
+    assert!(matches!(
+        kernel.prepare_artifact_integration(&request, 19).unwrap(),
+        ArtifactIntegrationAuthorization::Existing(_)
+    ));
+    let mut drift = request;
+    drift.expected_queue_revision += 1;
+    assert!(matches!(
+        kernel.prepare_artifact_integration(&drift, 19),
+        Err(MasterError::ArtifactIntegrationUnavailable)
+    ));
+}
 
 fn digest(label: &str) -> [u8; 32] {
     Sha256::digest(label.as_bytes()).into()
@@ -3265,7 +3413,16 @@ fn downgrade_v5_database_to_v4(path: &std::path::Path, sabotage: bool) {
     let connection = Connection::open(path).unwrap();
     connection
         .execute_batch(
-            "DROP TRIGGER feature_result_artifacts_no_update;
+            "DROP TRIGGER feature_artifact_integration_conflicts_no_update;
+             DROP TRIGGER feature_artifact_integration_conflicts_no_delete;
+             DROP TABLE feature_artifact_integration_conflicts;
+             DROP TRIGGER feature_artifact_integration_artifacts_no_update;
+             DROP TRIGGER feature_artifact_integration_artifacts_no_delete;
+             DROP TABLE feature_artifact_integration_artifacts;
+             DROP TRIGGER feature_artifact_integrations_no_update;
+             DROP TRIGGER feature_artifact_integrations_no_delete;
+             DROP TABLE feature_artifact_integrations;
+             DROP TRIGGER feature_result_artifacts_no_update;
              DROP TRIGGER feature_result_artifacts_no_delete;
              DROP TABLE feature_result_artifacts;
              DROP TRIGGER feature_specification_revisions_no_update;
@@ -3369,7 +3526,16 @@ fn remove_resolution_receipt_for_v10_fixture(
     }
     connection
         .execute_batch(
-            "DROP TRIGGER feature_result_artifacts_no_update;
+            "DROP TRIGGER feature_artifact_integration_conflicts_no_update;
+             DROP TRIGGER feature_artifact_integration_conflicts_no_delete;
+             DROP TABLE feature_artifact_integration_conflicts;
+             DROP TRIGGER feature_artifact_integration_artifacts_no_update;
+             DROP TRIGGER feature_artifact_integration_artifacts_no_delete;
+             DROP TABLE feature_artifact_integration_artifacts;
+             DROP TRIGGER feature_artifact_integrations_no_update;
+             DROP TRIGGER feature_artifact_integrations_no_delete;
+             DROP TABLE feature_artifact_integrations;
+             DROP TRIGGER feature_result_artifacts_no_update;
              DROP TRIGGER feature_result_artifacts_no_delete;
              DROP TABLE feature_result_artifacts;
              PRAGMA user_version = 10;",
@@ -3432,7 +3598,7 @@ fn master_process_v10_backfills_resolution_receipts_from_exact_immutable_audit()
             .file_name()
             .unwrap()
             .to_string_lossy()
-            .starts_with("master.pre-v13."));
+            .starts_with("master.pre-v14."));
         assert_eq!(
             Connection::open(backup)
                 .unwrap()
@@ -3556,7 +3722,7 @@ fn master_process_v10_ambiguous_resolution_audit_fails_closed_and_restores_backu
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v13.")));
+            .starts_with("master.pre-v14.")));
 }
 
 #[test]
@@ -3724,7 +3890,7 @@ fn master_process_v4_backup_migration_reopen_and_restore_on_failure() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v13.")));
+            .starts_with("master.pre-v14.")));
 }
 
 #[test]
@@ -3760,7 +3926,16 @@ fn master_process_v12_backup_first_migration_adds_retained_workspace_binding() {
         .unwrap();
     connection
         .execute_batch(
-            "CREATE TRIGGER feature_result_artifacts_no_update
+            "DROP TRIGGER feature_artifact_integration_conflicts_no_update;
+             DROP TRIGGER feature_artifact_integration_conflicts_no_delete;
+             DROP TABLE feature_artifact_integration_conflicts;
+             DROP TRIGGER feature_artifact_integration_artifacts_no_update;
+             DROP TRIGGER feature_artifact_integration_artifacts_no_delete;
+             DROP TABLE feature_artifact_integration_artifacts;
+             DROP TRIGGER feature_artifact_integrations_no_update;
+             DROP TRIGGER feature_artifact_integrations_no_delete;
+             DROP TABLE feature_artifact_integrations;
+             CREATE TRIGGER feature_result_artifacts_no_update
                BEFORE UPDATE ON feature_result_artifacts
                BEGIN SELECT RAISE(ABORT, 'immutable feature result artifact'); END;
              ALTER TABLE feature_result_artifacts DROP COLUMN workspace_expires_at_ms;
@@ -3771,13 +3946,16 @@ fn master_process_v12_backup_first_migration_adds_retained_workspace_binding() {
     drop(connection);
 
     let process = MasterProcess::acquire(directory.path()).unwrap();
-    assert_eq!(process.kernel().schema_version().unwrap(), 13);
+    assert_eq!(
+        process.kernel().schema_version().unwrap(),
+        MASTER_SCHEMA_VERSION
+    );
     let backup = process.migration_backup_path().unwrap();
     assert!(backup
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v13."));
+        .starts_with("master.pre-v14."));
     assert_eq!(
         Connection::open(backup)
             .unwrap()
@@ -3804,7 +3982,18 @@ fn master_process_v12_failed_migration_restores_verified_backup() {
     drop(MasterKernel::open(&database).unwrap());
     Connection::open(&database)
         .unwrap()
-        .execute_batch("PRAGMA user_version = 12;")
+        .execute_batch(
+            "DROP TRIGGER feature_artifact_integration_conflicts_no_update;
+             DROP TRIGGER feature_artifact_integration_conflicts_no_delete;
+             DROP TABLE feature_artifact_integration_conflicts;
+             DROP TRIGGER feature_artifact_integration_artifacts_no_update;
+             DROP TRIGGER feature_artifact_integration_artifacts_no_delete;
+             DROP TABLE feature_artifact_integration_artifacts;
+             DROP TRIGGER feature_artifact_integrations_no_update;
+             DROP TRIGGER feature_artifact_integrations_no_delete;
+             DROP TABLE feature_artifact_integrations;
+             PRAGMA user_version = 12;",
+        )
         .unwrap();
     assert!(matches!(
         MasterProcess::acquire(directory.path()),
@@ -3825,7 +4014,7 @@ fn master_process_v12_failed_migration_restores_verified_backup() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v13.")));
+            .starts_with("master.pre-v14.")));
 }
 
 #[test]
@@ -3838,6 +4027,15 @@ fn master_process_v6_backup_migration_binds_pause_and_default_inert_owner_contro
         .execute_batch(
             "DROP TRIGGER feature_result_artifacts_no_update;
              DROP TRIGGER feature_result_artifacts_no_delete;
+             DROP TRIGGER feature_artifact_integration_conflicts_no_update;
+             DROP TRIGGER feature_artifact_integration_conflicts_no_delete;
+             DROP TABLE feature_artifact_integration_conflicts;
+             DROP TRIGGER feature_artifact_integration_artifacts_no_update;
+             DROP TRIGGER feature_artifact_integration_artifacts_no_delete;
+             DROP TABLE feature_artifact_integration_artifacts;
+             DROP TRIGGER feature_artifact_integrations_no_update;
+             DROP TRIGGER feature_artifact_integrations_no_delete;
+             DROP TABLE feature_artifact_integrations;
              DROP TABLE feature_result_artifacts;
              DROP TRIGGER feature_coding_dispatches_no_update;
              DROP TRIGGER feature_coding_dispatches_no_delete;
@@ -3882,7 +4080,7 @@ fn master_process_v6_backup_migration_binds_pause_and_default_inert_owner_contro
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v13."));
+        .starts_with("master.pre-v14."));
     let backup = Connection::open(backup).unwrap();
     assert_eq!(
         backup
@@ -3911,7 +4109,16 @@ fn master_process_v9_backup_first_migration_adds_immutable_coding_dispatch_evide
     Connection::open(&database)
         .unwrap()
         .execute_batch(
-            "DROP TRIGGER feature_result_artifacts_no_update;
+            "DROP TRIGGER feature_artifact_integration_conflicts_no_update;
+             DROP TRIGGER feature_artifact_integration_conflicts_no_delete;
+             DROP TABLE feature_artifact_integration_conflicts;
+             DROP TRIGGER feature_artifact_integration_artifacts_no_update;
+             DROP TRIGGER feature_artifact_integration_artifacts_no_delete;
+             DROP TABLE feature_artifact_integration_artifacts;
+             DROP TRIGGER feature_artifact_integrations_no_update;
+             DROP TRIGGER feature_artifact_integrations_no_delete;
+             DROP TABLE feature_artifact_integrations;
+             DROP TRIGGER feature_result_artifacts_no_update;
              DROP TRIGGER feature_result_artifacts_no_delete;
              DROP TABLE feature_result_artifacts;
              DROP TRIGGER feature_coding_dispatches_no_update;
@@ -3981,5 +4188,5 @@ fn forward_schema_version_fails_closed_without_backup() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v13.")));
+            .starts_with("master.pre-v14.")));
 }

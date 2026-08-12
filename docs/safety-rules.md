@@ -156,7 +156,7 @@ release requirements, not optional UX guidance.
   a simultaneous or late result is suppressed. This lane grants no tool, file,
   repository, credential, network, Codex, Git, publication, or unattended
   authority.
-- The Windows `assemblywright-master` schema-v13 database retains the schema-v5
+- The Windows `assemblywright-master` schema-v14 database retains the schema-v5
   Durable Feature Conveyor kernel and is
   default-inert. The owner-token-authenticated loopback
   `GET /v1/feature-conveyor/status` and the dedicated enrolled-device
@@ -383,6 +383,41 @@ release requirements, not optional UX guidance.
   bytes are the exact canonical protocol-v4 README artifact and its stored digest
   and size match. That compatibility validator is migration-only and is forbidden
   from new prepare, handle revalidation, result admission, and terminal acceptance.
+- Schema v14 artifact integration is a distinct owner-token-authenticated
+  loopback-only action and must remain absent from enrolled-device mTLS. A
+  companion owner-loopback plan projection may return only the path-free exact
+  artifact IDs and authority bindings needed to construct the action; it adds
+  no mutation or inference authority and is likewise absent from mTLS. Its
+  strict request binds a non-nil integration ID, the complete sorted set of
+  terminal accepted artifact IDs, the exact active feature/specification/
+  lifecycle/lease/snapshot/base commit, all three current grant revisions, the
+  queue revision, and the Emergency Pause revision. The master must reopen,
+  re-hash, and independently decode every private artifact against its immutable
+  dispatch, require that the supplied set equals the complete terminal accepted
+  artifact-backed dispatch set, and derive application order only from immutable
+  dispatch ordinal and packet ID. Caller order is never authority. Filesystem
+  work must not retain an open SQLite transaction and must use one fail-fast
+  reservation that remains owned by detached work after client cancellation,
+  plus private staging ownership. The integration repository is an
+  independent no-remote copy of the immutable claimed snapshot; the registered
+  source checkout must never be opened or mutated by this action. Duplicate
+  ordinals, case-folded exact or component-wise file/directory path overlap,
+  compare-and-set mismatch, tree-shape conflict, alternate object store, link
+  or metadata drift, missing evidence, authority drift, cancellation, pause, or
+  restart ambiguity fails closed. Conflict evidence is bounded, path-free, and
+  redacted; no partial candidate or lifecycle advance is permitted. Success
+  freezes one deterministic exact Git commit/tree, flushes and seals the private
+  repository, then atomically rechecks every binding, stores immutable artifact-
+  to-candidate evidence, advances only `implementing` to `validating`, and
+  appends redacted audit. Stable no-follow handles must bracket source and
+  candidate identity verification, and candidate handles remain retained through
+  the SQLite commit. Exact retries revalidate the recorded candidate before
+  returning the original receipt; integration-ID or request drift rejects.
+  Startup removes only unreferenced staging state,
+  verifies every referenced candidate repository and commit/tree binding, and
+  quarantines ambiguous active state. This grants no test execution, evidence
+  gate, review, publication, registered-source mutation, credential, network, or
+  autonomous authority.
 - Owner resolution is available only through the owner-token-authenticated
   loopback `cancel-active-feature` and `abandon-and-advance` actions. Both must
   compare-and-set the exact feature, lifecycle, queue, and Emergency Pause

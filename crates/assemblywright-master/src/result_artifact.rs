@@ -92,6 +92,21 @@ impl VerifiedResultArtifact {
         }
         Ok(())
     }
+
+    /// Reads the exact bytes from the already-open stable handle after a full
+    /// re-hash and canonical-path identity check. The guard remains live so a
+    /// caller can retain it across a later authoritative transaction.
+    pub fn read_revalidated(
+        &mut self,
+        store: &ResultArtifactStore,
+    ) -> Result<Vec<u8>, ResultArtifactStoreError> {
+        self.revalidate(store)?;
+        self.file.seek(SeekFrom::Start(0))?;
+        let mut bytes = Vec::with_capacity(self.reference.artifact_size_bytes as usize);
+        self.file.read_to_end(&mut bytes)?;
+        verify_exact_bytes(&mut self.file, &bytes)?;
+        Ok(bytes)
+    }
 }
 
 pub struct PreparedResultArtifact {

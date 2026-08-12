@@ -1,7 +1,7 @@
 use assemblywright_master::{
     ApprovedFeatureSpecification, DeviceRegistration, FeatureGrantRevisions,
     FeatureSnapshotClaimPlan, MasterProcess, RepositoryGrantKind, RepositoryGrantRevision,
-    RepositorySnapshotEvidence, MAX_CONVEYOR_NONTERMINAL_FEATURES,
+    RepositorySnapshotEvidence, MASTER_SCHEMA_VERSION, MAX_CONVEYOR_NONTERMINAL_FEATURES,
 };
 use assemblywright_protocol::{
     CapabilityDescriptor, DeviceId, DeviceRole, FeatureConveyorAbandonAndAdvanceRequest,
@@ -28,6 +28,70 @@ use uuid::Uuid;
 
 struct ChildGuard {
     child: Child,
+}
+
+#[test]
+fn artifact_integration_routes_are_owner_loopback_only_strict_and_redacted() {
+    let directory = tempdir().unwrap();
+    let binary = env!("CARGO_BIN_EXE_assemblywright-master");
+    assert_success(&run(binary, directory.path(), ["setup"]), "setup");
+    let endpoint = unused_loopback_addr();
+    let mut server = spawn_server(binary, directory.path(), endpoint);
+    read_ready(&mut server.child);
+    let token = std::fs::read_to_string(directory.path().join("development.token")).unwrap();
+    let unauthorized = post_request(
+        endpoint,
+        "/v1/feature-conveyor/artifact-integrations",
+        None,
+        "{}",
+    );
+    assert!(unauthorized.starts_with("HTTP/1.1 401 Unauthorized"));
+    let malformed = post_request(
+        endpoint,
+        "/v1/feature-conveyor/artifact-integrations",
+        Some(token.trim()),
+        r#"{"schema_version":1,"repository_path":"must-not-leak"}"#,
+    );
+    assert!(malformed.starts_with("HTTP/1.1 422 Unprocessable Entity"));
+    assert_eq!(
+        response_json(&malformed),
+        serde_json::json!({"error":"artifact_integration_request_rejected"})
+    );
+    assert!(!malformed.contains("must-not-leak"));
+    let remote = post_request(
+        endpoint,
+        "/v1/distributed/feature-conveyor/artifact-integrations",
+        Some(token.trim()),
+        "{}",
+    );
+    assert!(remote.starts_with("HTTP/1.1 404 Not Found"));
+    let plan_path = format!(
+        "/v1/feature-conveyor/features/{}/integration-plan",
+        Uuid::new_v4()
+    );
+    assert!(get_request(endpoint, &plan_path, None).starts_with("HTTP/1.1 401 Unauthorized"));
+    let missing = get_request(endpoint, &plan_path, Some(token.trim()));
+    assert!(missing.starts_with("HTTP/1.1 409 Conflict"));
+    assert_eq!(
+        response_json(&missing),
+        serde_json::json!({"error":"integration_plan_unavailable"})
+    );
+    let malformed = get_request(
+        endpoint,
+        "/v1/feature-conveyor/features/private-secret/integration-plan",
+        Some(token.trim()),
+    );
+    assert!(malformed.starts_with("HTTP/1.1 404 Not Found"));
+    assert!(!malformed.contains("private-secret"));
+    assert!(get_request(
+        endpoint,
+        &format!(
+            "/v1/distributed/feature-conveyor/features/{}/integration-plan",
+            Uuid::new_v4()
+        ),
+        Some(token.trim())
+    )
+    .starts_with("HTTP/1.1 404 Not Found"));
 }
 
 impl Drop for ChildGuard {
@@ -1409,7 +1473,7 @@ fn windows_master_process_owns_state_and_completes_cross_process_fixture() {
     let setup_receipt: Value = serde_json::from_slice(&setup.stdout).expect("setup JSON receipt");
     assert_eq!(setup_receipt["status"], "setup_complete");
     assert_eq!(setup_receipt["protocol_version"], PROTOCOL_VERSION);
-    assert_eq!(setup_receipt["schema_version"], 13);
+    assert_eq!(setup_receipt["schema_version"], MASTER_SCHEMA_VERSION);
     assert!(directory.path().join("master.sqlite3").is_file());
     assert!(directory.path().join("development.token").is_file());
     let development_token = std::fs::read_to_string(directory.path().join("development.token"))

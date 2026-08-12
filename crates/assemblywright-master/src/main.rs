@@ -1,12 +1,13 @@
 use anyhow::{bail, Context};
 use assemblywright_master::{
     current_time_ms, AcceptedCancellation, AcceptedResult, ApprovedFeatureSpecification,
-    CapabilityRebindAcknowledgement, DeviceRegistration, EnrollmentGrantSpec, EnrollmentRequest,
-    EphemeralServerIdentity, FeatureAbandonmentEvidence, FeatureConveyorStatus,
-    FeatureGrantRevisions, FeatureSnapshotClaimPlan, IdentityAuthority, MasterHealthSnapshot,
-    MasterProcess, NewStep, PlatformSecretProtector, RemoteWorkContract, RepositoryGrantKind,
-    RepositoryGrantRevision, RepositorySnapshotEvidence, RepositorySnapshotStore,
-    ResultArtifactReference, StartupReconciliation,
+    ArtifactIntegrationAuthorization, ArtifactIntegrationError, CapabilityRebindAcknowledgement,
+    DeviceRegistration, EnrollmentGrantSpec, EnrollmentRequest, EphemeralServerIdentity,
+    FeatureAbandonmentEvidence, FeatureConveyorStatus, FeatureGrantRevisions,
+    FeatureSnapshotClaimPlan, IdentityAuthority, MasterHealthSnapshot, MasterProcess, NewStep,
+    PlatformSecretProtector, RemoteWorkContract, RepositoryGrantKind, RepositoryGrantRevision,
+    RepositorySnapshotEvidence, RepositorySnapshotStore, ResultArtifactReference,
+    StartupReconciliation,
 };
 #[cfg(test)]
 use assemblywright_protocol::CapabilityKind;
@@ -18,6 +19,7 @@ use assemblywright_protocol::{
     FeatureConveyorAbandonAndAdvanceReceipt, FeatureConveyorAbandonAndAdvanceRequest,
     FeatureConveyorAbandonAndAdvanceStatus, FeatureConveyorApprovedFeatureReceipt,
     FeatureConveyorApprovedFeatureRequest, FeatureConveyorApprovedFeatureStatus,
+    FeatureConveyorArtifactIntegrationPlan, FeatureConveyorArtifactIntegrationRequest,
     FeatureConveyorCancelActiveFeatureReceipt, FeatureConveyorCancelActiveFeatureRequest,
     FeatureConveyorCancelActiveFeatureStatus, FeatureConveyorCodingDispatchReceipt,
     FeatureConveyorCodingDispatchRequest, FeatureConveyorOwnerBridgeDesignationReceipt,
@@ -381,6 +383,7 @@ struct AppState {
     started_at_ms: u64,
     lifecycle: RuntimeLifecycle,
     repository_snapshot_claim_reservation: Arc<tokio::sync::Mutex<()>>,
+    artifact_integration_reservation: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Clone)]
@@ -1457,6 +1460,7 @@ async fn serve_runtime(
         started_at_ms: current_time_ms()?,
         lifecycle,
         repository_snapshot_claim_reservation: Arc::new(tokio::sync::Mutex::new(())),
+        artifact_integration_reservation: Arc::new(tokio::sync::Mutex::new(())),
     };
 
     let app = Router::new()
@@ -1490,6 +1494,14 @@ async fn serve_runtime(
             post(feature_coding_dispatch).layer(DefaultBodyLimit::max(
                 MAX_FEATURE_CONVEYOR_CODING_DISPATCH_REQUEST_BYTES,
             )),
+        )
+        .route(
+            "/v1/feature-conveyor/artifact-integrations",
+            post(feature_artifact_integration),
+        )
+        .route(
+            "/v1/feature-conveyor/features/:feature_id/integration-plan",
+            get(feature_artifact_integration_plan),
         )
         .route(
             "/v1/feature-conveyor/cancel-active-feature",
@@ -2747,6 +2759,217 @@ async fn feature_coding_dispatch(
         .validate()
         .map_err(|_| fixed_error(StatusCode::INTERNAL_SERVER_ERROR, "internal_error"))?;
     Ok(Json(receipt))
+}
+
+async fn feature_artifact_integration(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<Response, ApiError> {
+    authorize(&headers, &state)?;
+    let body = body.map_err(|_| {
+        fixed_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "artifact_integration_request_rejected",
+        )
+    })?;
+    let request = FeatureConveyorArtifactIntegrationRequest::decode_frame(&body).map_err(|_| {
+        fixed_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "artifact_integration_request_rejected",
+        )
+    })?;
+    let reservation = state
+        .artifact_integration_reservation
+        .clone()
+        .try_lock_owned()
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "artifact_integration_in_progress"))?;
+    let state_for_work = state.clone();
+    let work = spawn_reserved_blocking(reservation, move || {
+        perform_feature_artifact_integration(&state_for_work, request)
+    });
+    work.await
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "artifact_integration_rejected"))?
+}
+
+fn spawn_reserved_blocking<T, F>(
+    reservation: tokio::sync::OwnedMutexGuard<()>,
+    work: F,
+) -> tokio::task::JoinHandle<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    tokio::task::spawn_blocking(move || {
+        let _reservation = reservation;
+        work()
+    })
+}
+
+fn perform_feature_artifact_integration(
+    state: &AppState,
+    request: FeatureConveyorArtifactIntegrationRequest,
+) -> Result<Response, ApiError> {
+    let now_ms = current_time_ms()
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "artifact_integration_rejected"))?;
+    let authorization = {
+        let process = lock_process(state)?;
+        process
+            .kernel()
+            .prepare_artifact_integration(&request, now_ms)
+    };
+    let plan = match authorization {
+        Ok(ArtifactIntegrationAuthorization::Existing(receipt)) => {
+            let evidence = assemblywright_master::CandidateEvidence {
+                integration_id: receipt.integration_id,
+                artifact_set_sha256: receipt.artifact_set_sha256,
+                candidate_commit: receipt.candidate_commit.clone(),
+                candidate_tree: receipt.candidate_tree.clone(),
+                base_commit: receipt.base_commit.clone(),
+                artifact_ids: request.artifact_ids.clone(),
+            };
+            let process = lock_process(state)?;
+            let store = process.artifact_integration_store();
+            let artifact_store = process.result_artifact_store();
+            let references = process
+                .kernel()
+                .integration_artifact_references(receipt.integration_id)
+                .map_err(|_| fixed_error(StatusCode::CONFLICT, "artifact_integration_rejected"))?;
+            drop(process);
+            let _verified = store
+                .open_verified_candidate(&evidence)
+                .map_err(|_| fixed_error(StatusCode::CONFLICT, "artifact_integration_rejected"))?;
+            let mut artifact_guards = Vec::with_capacity(request.artifact_ids.len());
+            let mut exact_references = Vec::with_capacity(request.artifact_ids.len());
+            for artifact_id in &request.artifact_ids {
+                let reference = references
+                    .iter()
+                    .find(|reference| reference.artifact_id == *artifact_id)
+                    .copied()
+                    .ok_or_else(|| {
+                        fixed_error(StatusCode::CONFLICT, "artifact_integration_rejected")
+                    })?;
+                let mut guard = artifact_store.open_verified(reference).map_err(|_| {
+                    fixed_error(StatusCode::CONFLICT, "artifact_integration_rejected")
+                })?;
+                guard.revalidate(&artifact_store).map_err(|_| {
+                    fixed_error(StatusCode::CONFLICT, "artifact_integration_rejected")
+                })?;
+                exact_references.push(reference);
+                artifact_guards.push(guard);
+            }
+            if integration_artifact_set_sha256(&exact_references) != receipt.artifact_set_sha256 {
+                return Err(fixed_error(
+                    StatusCode::CONFLICT,
+                    "artifact_integration_rejected",
+                ));
+            }
+            receipt
+                .validate()
+                .map_err(|_| fixed_error(StatusCode::INTERNAL_SERVER_ERROR, "internal_error"))?;
+            return Ok(Json(receipt).into_response());
+        }
+        Ok(ArtifactIntegrationAuthorization::Planned(plan)) => plan,
+        Err(assemblywright_master::MasterError::ArtifactIntegrationConflict) => {
+            lock_process(state)?
+                .kernel_mut()
+                .record_artifact_integration_conflict(&request, "duplicate_ordinal", now_ms)
+                .map_err(|_| fixed_error(StatusCode::CONFLICT, "artifact_integration_rejected"))?;
+            return Err(fixed_error(
+                StatusCode::CONFLICT,
+                "artifact_integration_conflict",
+            ));
+        }
+        Err(_) => {
+            return Err(fixed_error(
+                StatusCode::CONFLICT,
+                "artifact_integration_rejected",
+            ))
+        }
+    };
+    let store = lock_process(state)?.artifact_integration_store();
+    let mut prepared = match store.prepare(
+        plan.request.integration_id,
+        plan.request.snapshot_id,
+        &plan.request.base_commit,
+        &plan.artifacts,
+    ) {
+        Ok(prepared) => prepared,
+        Err(
+            error @ (ArtifactIntegrationError::OverlappingPath
+            | ArtifactIntegrationError::ContentCasMismatch),
+        ) => {
+            let reason = if matches!(error, ArtifactIntegrationError::OverlappingPath) {
+                "overlapping_path"
+            } else {
+                "content_cas_mismatch"
+            };
+            let _ = lock_process(state)?
+                .kernel_mut()
+                .record_artifact_integration_conflict(&request, reason, now_ms);
+            return Err(fixed_error(
+                StatusCode::CONFLICT,
+                "artifact_integration_conflict",
+            ));
+        }
+        Err(_) => {
+            return Err(fixed_error(
+                StatusCode::CONFLICT,
+                "artifact_integration_rejected",
+            ))
+        }
+    };
+    let finalized_at_ms = current_time_ms()
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "artifact_integration_rejected"))?;
+    let mut process = lock_process(state)?;
+    prepared
+        .revalidate_artifacts(&process.result_artifact_store())
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "artifact_integration_rejected"))?;
+    prepared
+        .revalidate_candidate(&store)
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "artifact_integration_rejected"))?;
+    let receipt = process
+        .kernel_mut()
+        .finalize_artifact_integration(&plan, &prepared.evidence, finalized_at_ms)
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "artifact_integration_rejected"))?;
+    receipt
+        .validate()
+        .map_err(|_| fixed_error(StatusCode::INTERNAL_SERVER_ERROR, "internal_error"))?;
+    prepared.retain();
+    Ok(Json(receipt).into_response())
+}
+
+fn integration_artifact_set_sha256(references: &[ResultArtifactReference]) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"assemblywright.artifact-set.v1\0");
+    digest.update((references.len() as u64).to_be_bytes());
+    let mut entries = references.to_vec();
+    entries.sort_by_key(|reference| reference.artifact_id);
+    for reference in entries {
+        digest.update(reference.artifact_id.as_bytes());
+        digest.update(reference.artifact_sha256);
+        digest.update(reference.artifact_size_bytes.to_be_bytes());
+    }
+    digest.finalize().into()
+}
+
+async fn feature_artifact_integration_plan(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(feature_id): AxumPath<String>,
+) -> ApiResult<FeatureConveyorArtifactIntegrationPlan> {
+    authorize(&headers, &state)?;
+    let feature_id = Uuid::parse_str(&feature_id)
+        .map_err(|_| fixed_error(StatusCode::NOT_FOUND, "integration_plan_unavailable"))?;
+    let plan = lock_process(&state)?
+        .kernel()
+        .artifact_integration_plan(
+            feature_id,
+            current_time_ms()
+                .map_err(|_| fixed_error(StatusCode::CONFLICT, "integration_plan_unavailable"))?,
+        )
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "integration_plan_unavailable"))?;
+    Ok(Json(plan))
 }
 
 async fn cancel_active_feature(
@@ -4173,6 +4396,7 @@ mod tests {
             started_at_ms: 1,
             lifecycle,
             repository_snapshot_claim_reservation: Arc::new(tokio::sync::Mutex::new(())),
+            artifact_integration_reservation: Arc::new(tokio::sync::Mutex::new(())),
         };
         let rejection = require_work_admission(&state).expect_err("pause must dominate work");
         assert_eq!(rejection.0, StatusCode::SERVICE_UNAVAILABLE);
@@ -4212,6 +4436,37 @@ mod tests {
         })
         .await
         .expect("blocking task eventually releases reservation");
+        drop(reacquired);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn artifact_integration_reservation_survives_request_cancellation() {
+        let reservation = Arc::new(tokio::sync::Mutex::new(()));
+        let guard = reservation.clone().try_lock_owned().unwrap();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let work = spawn_reserved_blocking(guard, move || {
+            let _ = started_tx.send(());
+            release_rx.recv().unwrap();
+        });
+        started_rx.await.unwrap();
+        work.abort();
+        tokio::task::yield_now().await;
+        assert!(
+            reservation.clone().try_lock_owned().is_err(),
+            "cancelling the HTTP await must not release detached integration authority"
+        );
+        release_tx.send(()).unwrap();
+        let reacquired = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if let Ok(guard) = reservation.clone().try_lock_owned() {
+                    break guard;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("detached integration work eventually releases reservation");
         drop(reacquired);
     }
 

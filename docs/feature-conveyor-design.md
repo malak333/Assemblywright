@@ -212,6 +212,41 @@ record is not audit, SQLite, or remote content. This adds no arbitrary tool,
 canonical checkout, integration, test-gate, review, publication, lifecycle
 advancement, sandbox, egress enforcement, or autonomous authority.
 
+Schema v14 implements the separate owner-token loopback-only
+`POST /v1/feature-conveyor/artifact-integrations` action. It does not change the
+protocol-v5 worker lane. The companion owner-token loopback-only
+`GET /v1/feature-conveyor/features/:feature_id/integration-plan` returns the
+current path-free artifact IDs and exact authority bindings needed to construct
+that request; neither route exists on enrolled-device mTLS. The strict request
+supplies one non-nil integration ID
+and the complete sorted set of terminal accepted artifact IDs, bound to the
+exact active feature, specification, lifecycle, lease, snapshot, base commit,
+grants, queue revision, and Emergency Pause revision. Windows reopens and
+re-hashes every artifact, independently validates its operations against the
+immutable packet, requires the set to equal every terminal accepted artifact-
+backed dispatch for the feature, and orders application by immutable dispatch
+ordinal and packet ID rather than caller order.
+
+Under one fail-fast reservation that survives client cancellation, and without an open SQLite transaction, the
+master creates a private independent no-remote integration repository from the
+immutable claimed snapshot. It never opens or mutates the registered source
+checkout. Duplicate ordinals, case-folded exact or component-wise file/directory
+overlaps, create/replace/delete compare-and-set drift, tree-shape conflicts,
+alternate object stores, links, metadata drift, missing
+evidence, or authority drift record only bounded path-free conflict evidence;
+they leave no partial candidate and do not advance the lifecycle. Success
+freezes one deterministic exact Git commit and tree, flushes and seals the
+private repository, then atomically rechecks every binding, stores immutable
+artifact-to-candidate evidence, advances only `implementing -> validating`, and
+appends redacted audit. Stable no-follow handles bracket source and candidate
+identity verification, and candidate handles remain live through the SQLite
+commit. Exact retries revalidate the recorded candidate before returning the
+original receipt, and every
+binding drift rejects. Startup removes only unreferenced staging state, verifies
+every referenced candidate repository and commit/tree, and quarantines
+ambiguous active state. Test execution, review, publication, registered-source
+mutation, credential/network access, and autonomous activation remain absent.
+
 Schema v11 also exposes two separate owner-token loopback-only resolution
 actions: `POST /v1/feature-conveyor/cancel-active-feature` and
 `POST /v1/feature-conveyor/abandon-and-advance`. Both accept only strict,
@@ -361,7 +396,7 @@ canonical repository, master database, canonical memory, credentials, or
 unrelated files. General network access is disabled; only a narrowly controlled
 local-model connection is allowed.
 
-The implemented protocol-v5/schema-v13 kernel accepts one immutable
+The implemented protocol-v5/schema-v14 kernel accepts one immutable
 snapshot-bound general coding packet for one exact registered worker. After the
 exact lease, a separate default-off route streams a bounded authenticated
 snapshot bundle to the Mac bridge and native agent. The agent reconstructs an
@@ -380,8 +415,11 @@ artifact bytes over the existing authenticated FIFO cancellation race before
 posting a metadata-only result. Windows independently decodes those bytes
 against the immutable packet and records only immutable artifact and retention
 bindings with redacted audit. Exact retry is idempotent; drift fails closed;
-startup preserves referenced ambiguity under active-feature quarantine. Test
-execution, patch application/result integration, review, and publication remain
+startup preserves referenced ambiguity under active-feature quarantine. A
+separate owner-local integration action validates the complete accepted
+artifact set again, applies it only to an isolated no-remote master repository,
+and freezes one exact candidate commit before entering `validating`. Test
+execution, review, publication, and registered-source-checkout mutation remain
 unimplemented. This boundary does not establish an OS sandbox or host-level
 egress control.
 

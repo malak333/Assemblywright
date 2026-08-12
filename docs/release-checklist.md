@@ -125,6 +125,25 @@ Before starting a release pass, confirm the claim you intend to make.
   without deleting referenced state. Record live Windows proof for file flush,
   same-volume rename, service-account ACL ownership, reparse/link rejection,
   and crash recovery; do not claim portable Windows directory flush.
+- Confirm schema-v14 artifact integration remains owner-token loopback-only and
+  absent from enrolled-device mTLS. Prove the companion plan projection is also
+  owner-local, path-free, bounded, redacted, and returns only the exact current
+  artifact IDs and authority bindings. Require one non-nil integration ID and the
+  complete sorted terminal accepted artifact set, exact feature/specification/
+  lifecycle/lease/snapshot/base-commit/grant/queue/pause bindings, independent
+  stable-handle artifact re-hash and protocol-v5 semantic validation, and
+  deterministic application order from immutable dispatch ordinal plus packet
+  ID. Prove a private no-remote integration repository is derived only from the
+  immutable snapshot and the registered source checkout remains byte-for-byte
+  unchanged. Prove duplicate ordinal, overlap, create/replace/delete CAS drift,
+  tree-shape conflict, artifact or authority drift, cancellation, pause, and
+  concurrency leave no candidate and do not advance. Prove success flushes and
+  seals one exact commit/tree, atomically stores immutable artifact linkage plus
+  redacted audit, advances only `implementing -> validating`, and exact retry
+  returns the original receipt. Prove startup deletes only unreferenced staging,
+  validates referenced candidates, and quarantines ambiguity. Do not claim test,
+  review, publication, credential/network, registered-source, or autonomous
+  authority.
 - Confirm the owner-token loopback-only `cancel-active-feature` and
   `abandon-and-advance` routes are absent from enrolled-device mTLS. Prove
   strict duplicate/unknown/oversized-frame denial; exact feature, lifecycle,

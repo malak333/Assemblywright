@@ -1022,6 +1022,191 @@ impl LocalCodingWriteFileArguments {
         }
         Ok(())
     }
+
+    pub fn replacement_bytes(&self) -> Result<Vec<u8>, ProtocolError> {
+        self.validate()?;
+        decode_lower_hex(&self.replacement_hex)
+            .ok_or(ProtocolError::InvalidFeatureConveyorOwnerControl)
+    }
+}
+
+pub const FEATURE_CONVEYOR_ARTIFACT_INTEGRATION_SCHEMA_VERSION: u16 = 1;
+pub const MAX_FEATURE_CONVEYOR_INTEGRATION_ARTIFACTS: usize = 3;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorArtifactIntegrationPlan {
+    pub schema_version: u16,
+    pub feature_id: Uuid,
+    pub specification_revision: u64,
+    pub lifecycle_revision: u64,
+    pub feature_lease_id: Uuid,
+    pub snapshot_id: Uuid,
+    pub snapshot_sha256: [u8; 32],
+    pub artifact_ids: Vec<Uuid>,
+    pub queue_revision: u64,
+    pub emergency_pause_revision: u64,
+    pub grants: FeatureConveyorGrantRevisions,
+    pub base_commit: String,
+}
+
+impl FeatureConveyorArtifactIntegrationPlan {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "feature_conveyor_artifact_integration_plan",
+            frame,
+            MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES,
+            Self::validate,
+        )
+    }
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        FeatureConveyorArtifactIntegrationRequest {
+            schema_version: self.schema_version,
+            integration_id: Uuid::from_u128(1),
+            feature_id: self.feature_id,
+            specification_revision: self.specification_revision,
+            expected_lifecycle_revision: self.lifecycle_revision,
+            feature_lease_id: self.feature_lease_id,
+            snapshot_id: self.snapshot_id,
+            snapshot_sha256: self.snapshot_sha256,
+            artifact_ids: self.artifact_ids.clone(),
+            expected_queue_revision: self.queue_revision,
+            expected_emergency_pause_revision: self.emergency_pause_revision,
+            grants: self.grants,
+            base_commit: self.base_commit.clone(),
+        }
+        .validate()?;
+        validate_serialized_limit(
+            "feature_conveyor_artifact_integration_plan",
+            self,
+            MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES,
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorArtifactIntegrationRequest {
+    pub schema_version: u16,
+    pub integration_id: Uuid,
+    pub feature_id: Uuid,
+    pub specification_revision: u64,
+    pub expected_lifecycle_revision: u64,
+    pub feature_lease_id: Uuid,
+    pub snapshot_id: Uuid,
+    pub snapshot_sha256: [u8; 32],
+    pub artifact_ids: Vec<Uuid>,
+    pub expected_queue_revision: u64,
+    pub expected_emergency_pause_revision: u64,
+    pub grants: FeatureConveyorGrantRevisions,
+    pub base_commit: String,
+}
+
+impl FeatureConveyorArtifactIntegrationRequest {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "feature_conveyor_artifact_integration_request",
+            frame,
+            MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.schema_version != FEATURE_CONVEYOR_ARTIFACT_INTEGRATION_SCHEMA_VERSION
+            || self.integration_id.is_nil()
+            || self.feature_id.is_nil()
+            || self.feature_lease_id.is_nil()
+            || self.snapshot_id.is_nil()
+            || self.specification_revision == 0
+            || self.expected_lifecycle_revision == 0
+            || self.snapshot_sha256 == [0; 32]
+            || self.artifact_ids.is_empty()
+            || self.artifact_ids.len() > MAX_FEATURE_CONVEYOR_INTEGRATION_ARTIFACTS
+            || self.grants.registration == 0
+            || self.grants.cloud_disclosure == 0
+            || self.grants.autonomous_publication == 0
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        let mut prior = None;
+        for artifact_id in &self.artifact_ids {
+            if artifact_id.is_nil() || prior.is_some_and(|value| value >= *artifact_id) {
+                return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+            }
+            prior = Some(*artifact_id);
+        }
+        validate_git_commit(&self.base_commit)?;
+        validate_serialized_limit(
+            "feature_conveyor_artifact_integration_request",
+            self,
+            MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureConveyorArtifactIntegrationStatus {
+    CandidateFrozen,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorArtifactIntegrationReceipt {
+    pub schema_version: u16,
+    pub integration_id: Uuid,
+    pub feature_id: Uuid,
+    pub specification_revision: u64,
+    pub lifecycle_revision: u64,
+    pub feature_lease_id: Uuid,
+    pub snapshot_id: Uuid,
+    pub snapshot_sha256: [u8; 32],
+    pub artifact_set_sha256: [u8; 32],
+    pub candidate_commit: String,
+    pub candidate_tree: String,
+    pub base_commit: String,
+    pub queue_revision: u64,
+    pub emergency_pause_revision: u64,
+    pub grants: FeatureConveyorGrantRevisions,
+    pub status: FeatureConveyorArtifactIntegrationStatus,
+}
+
+impl FeatureConveyorArtifactIntegrationReceipt {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "feature_conveyor_artifact_integration_receipt",
+            frame,
+            MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.schema_version != FEATURE_CONVEYOR_ARTIFACT_INTEGRATION_SCHEMA_VERSION
+            || self.integration_id.is_nil()
+            || self.feature_id.is_nil()
+            || self.feature_lease_id.is_nil()
+            || self.snapshot_id.is_nil()
+            || self.specification_revision == 0
+            || self.lifecycle_revision == 0
+            || self.snapshot_sha256 == [0; 32]
+            || self.artifact_set_sha256 == [0; 32]
+            || self.grants.registration == 0
+            || self.grants.cloud_disclosure == 0
+            || self.grants.autonomous_publication == 0
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        validate_git_commit(&self.base_commit)?;
+        validate_git_commit(&self.candidate_commit)?;
+        validate_git_commit(&self.candidate_tree)?;
+        validate_serialized_limit(
+            "feature_conveyor_artifact_integration_receipt",
+            self,
+            MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES,
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

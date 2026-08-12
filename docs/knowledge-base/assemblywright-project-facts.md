@@ -930,3 +930,27 @@ an old one.
   bytes. The Windows live controller self-check creates both forms and requires
   their hashes to differ while the packet keeps the immutable blob digest; it
   also rejects case-drifted blob paths.
+- Schema v14 deliberately does not widen the protocol-v5 Mac worker contract.
+  Candidate creation is a separate Windows owner-loopback action: reopen and
+  independently validate the complete terminal accepted artifact set, derive
+  deterministic application order from immutable dispatch ordinal and packet
+  ID, apply only to a private no-remote repository created from the immutable
+  claimed snapshot, and freeze one exact commit/tree. The registered source
+  checkout is never the integration target.
+- Integration ID is the durable idempotency key. An exact retry returns the
+  original candidate receipt only after reopening and revalidating that candidate;
+  changing its feature, artifact set, authority
+  revisions, snapshot, grants, or base commit is a conflict rather than a new
+  attempt. A lost HTTP response therefore does not authorize another Git effect.
+- Artifact admission is still evidence-only. Only schema-v14 integration may
+  consume it, and only after the artifact set exactly equals every terminal
+  accepted artifact-backed dispatch for the active feature. Duplicate packet
+  ordinals, overlapping paths, file-content compare-and-set drift, or tree-shape
+  conflicts leave no partial candidate and no lifecycle advance. The resulting
+  `validating` state is a candidate boundary, not test, review, publication, or
+  registered-source mutation proof.
+- Integration brackets the immutable source snapshot and frozen candidate with
+  stable no-follow handle inventories, retains candidate handles through the
+  SQLite commit, rejects alternate object stores and component-wise
+  file/directory collisions, and keeps its singleton reservation alive when an
+  HTTP client disconnects.

@@ -12,8 +12,8 @@ fail() {
 [[ -f "$CONTROLLER" ]] || fail "missing Windows local-coding live controller"
 
 for required in \
-  '"Check", "Prepare", "ClaimAndDispatch", "Cancel", "Abandon", "Cleanup"' \
-  '$masterSchemaVersion = 13' \
+  '"Check", "Prepare", "ClaimAndDispatch", "Integrate", "Cancel", "Abandon", "Cleanup"' \
+  '$masterSchemaVersion = 14' \
   '$featureConveyorProjectionSchemaVersion = 8' \
   '$ownerControlSchemaVersion = 1' \
   'acceptance_criteria_count = 1' \
@@ -35,6 +35,12 @@ for required in \
   '/v1/feature-conveyor/repository-preflight' \
   '/v1/feature-conveyor/repository-snapshot-claims' \
   '/v1/feature-conveyor/coding-dispatches' \
+  '/v1/feature-conveyor/features/$FeatureId/integration-plan' \
+  '/v1/feature-conveyor/artifact-integrations' \
+  'artifact_integration_candidate_frozen' \
+  'candidate_remote_absent = $true' \
+  'candidate_fsck_clean = $true' \
+  'exact_retry_idempotent = $true' \
   '/v1/feature-conveyor/cancel-active-feature' \
   '/v1/feature-conveyor/abandon-and-advance' \
   'safe_reconciliation_sha256' \

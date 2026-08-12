@@ -13,7 +13,10 @@ This repository is foundation work. The durable contracts, the master kernel,
 the enrollment and mTLS identity path, the Windows service lifecycle, the Mac
 bridge and worker agent, and the release gate are implemented. Autonomous
 dispatch, general-purpose repository execution, review-provider invocation,
-GitHub publication, and the queue control UI are still design.
+GitHub publication, and the queue control UI are still design. The Windows
+master now implements the first repository-mutation boundary: admitted
+artifacts can be integrated only into an isolated master-owned candidate
+repository, never the registered source checkout.
 
 ## What Is Implemented
 
@@ -23,13 +26,14 @@ advertisements; handshake, job, and result envelopes; strict bound-before-decode
 JSON entry points; nil-identity rejection; fixed-schema Feature Conveyor owner-
 control request/receipt contracts; and a golden compatibility fixture.
 
-**`assemblywright-master`** — a portable schema-v13 SQLite database retaining
+**`assemblywright-master`** — a portable schema-v14 SQLite database retaining
 the schema-v4 device lifecycle, schema-v5 Feature Conveyor, schema-v6
 capability rebind evidence, schema-v7 Emergency Pause revision, and schema-v8
 single owner-control bridge designation, schema-v9 immutable repository
 snapshot-claim evidence, schema-v10 metadata-only coding-dispatch evidence, and
-schema-v11 immutable owner-resolution origin evidence and schema-v13 immutable
-result-artifact metadata with a backup-first
+schema-v11 immutable owner-resolution origin evidence, schema-v13 immutable
+result-artifact metadata, and schema-v14 immutable artifact-integration and
+candidate-commit evidence with a backup-first
 fail-closed v10 compatibility migration,
 plus a headless single-owner
 executable.
@@ -68,6 +72,20 @@ executable.
   credential, or network authority. Success seals the workspace plus one
   separate private recovery record until exact resolution or bounded expiry;
   this does not claim a host sandbox or host-level egress control.
+  A further owner-token loopback-only action integrates the complete exact set
+  of terminal accepted artifacts for the active feature; a path-free owner-local
+  plan projection supplies its current exact IDs and revision bindings. The
+  master reopens and
+  re-hashes each private artifact, independently validates its protocol-v5
+  operations against the immutable dispatch, derives application order from
+  immutable packet ordinals, and applies only non-overlapping changes to a
+  private no-remote integration repository created from the claimed snapshot.
+  Conflict or compare-and-set drift records bounded redacted evidence without a
+  partial candidate or lifecycle advance. Success freezes one exact Git commit
+  and tree, durably links every artifact to it, advances only
+  `implementing -> validating`, and makes exact retries idempotent. It never
+  mutates the registered source checkout and grants no test, review,
+  publication, credential, network, or autonomous authority.
   Two additional owner-token loopback-only resolution actions cancel one exact
   active feature and explicitly abandon-and-advance one already cancelled or
   quarantined feature. Both bind the feature, lifecycle, queue, and Emergency
@@ -174,7 +192,7 @@ decision must be auditable. Do not describe this as a finished product.
 
 Not yet implemented, and not claimed:
 
-- Autonomous dispatch, canonical-repository mutation, or publication of any kind. The
+- Autonomous dispatch, registered-source-checkout mutation, or publication of any kind. The
   implemented preflight remains read-only; the default-off owner-local
   snapshot claim creates durable isolated state and one lease, and a separate
   explicit owner-local action may queue one snapshot-bound metadata-only coding
@@ -185,9 +203,10 @@ Not yet implemented, and not claimed:
   accepts no shell, arbitrary tool, provider, test, network, or credential
   operation. The schema-v13 master can admit the exact canonical multi-file
   artifact bytes into private state and bind a metadata-only result and retention
-  expiry to them, but cannot apply or integrate them,
-  execute tests, mutate the canonical repository, integrate a result, or invoke
-  a provider.
+  expiry to them. Schema v14 can apply the complete accepted artifact set only
+  to a master-owned isolated integration repository and freeze an exact
+  candidate commit; it cannot execute tests, mutate the registered source
+  checkout, invoke a provider, review, publish, or activate the feature.
 - Worker execution against real repositories, review-provider invocation, or
   GitHub branch/PR/merge authority.
 - Mac Feature Conveyor UI controls or hosted brainstorming. The app remains

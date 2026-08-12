@@ -69,7 +69,8 @@ swift build --disable-sandbox --package-path apps/mac
 ## Windows Distributed Gate
 
 The schema-v9 snapshot-claim, schema-v10 coding-dispatch, schema-v11 owner-resolution,
-schema-v13 result-artifact admission, and ephemeral snapshot-transfer/materialization slices have focused portable
+schema-v13 result-artifact admission, schema-v14 artifact integration/candidate
+freezing, and ephemeral snapshot-transfer/materialization slices have focused portable
 coverage:
 
 ```sh
@@ -81,6 +82,7 @@ cargo test -p assemblywright-master --test master_process_e2e repository_preflig
 cargo test -p assemblywright-master --test master_process_e2e repository_snapshot_claim_is_authenticated_path_free_and_durable
 cargo test -p assemblywright-master --bin assemblywright-master snapshot_claim_reservation_survives_blocking_task_timeout
 cargo test -p assemblywright-protocol --test local_coding_contract
+cargo test -p assemblywright-protocol --test artifact_integration_contract
 cargo test -p assemblywright-protocol --test owner_resolution_contract
 cargo test -p assemblywright-master --test feature_conveyor_kernel coding_dispatch
 cargo test -p assemblywright-master --test feature_conveyor_kernel owner_resolution
@@ -90,6 +92,9 @@ cargo test -p assemblywright-master --test feature_conveyor_kernel emergency_pau
 cargo test -p assemblywright-master --test feature_conveyor_kernel terminal_coding_ack_allows_validation_and_lifecycle_change_invalidates_replay
 cargo test -p assemblywright-master --test feature_conveyor_kernel result_artifact_admission_is_exact_idempotent_and_required_before_result
 cargo test -p assemblywright-master --test feature_conveyor_kernel artifact_store_exact_retry_and_startup_orphan_cleanup_fail_closed
+cargo test -p assemblywright-master --test feature_conveyor_kernel artifact_integration -- --nocapture
+cargo test -p assemblywright-master --test artifact_integration_e2e -- --nocapture
+cargo test -p assemblywright-master --test master_process_e2e artifact_integration -- --nocapture
 cargo test -p assemblywright-agent --test local_coding_admission
 cargo test -p assemblywright-agent snapshot::tests
 cargo test -p assemblywright-agent --test local_relay_e2e authenticated_uds_local_coding_snapshot_admission_cancellation_and_restart_cleanup -- --nocapture
@@ -149,6 +154,7 @@ executable changes as release evidence.
 | Enrollment, two-phase capability rebind, and identity | `cargo test -p assemblywright-master --test enrollment_identity_e2e` |
 | Remote mTLS | `cargo test -p assemblywright-master --test remote_mtls_e2e` |
 | Windows snapshot-bound coding dispatch and bounded transfer mTLS/process E2E | `cargo test -p assemblywright-master --test remote_mtls_e2e remote_local_coding_dispatch_is_exporter_bound_exact_and_pause_dominant -- --nocapture` |
+| Master-owned artifact integration and exact candidate Git boundary | `cargo test -p assemblywright-master --test artifact_integration_e2e -- --nocapture` |
 | Event cursor | `cargo test -p assemblywright-master --test event_cursor_e2e` |
 | Windows service lifecycle | `cargo test -p assemblywright-master --test windows_service_lifecycle_e2e -- --ignored` |
 | Mac agent relay | `cargo test -p assemblywright-agent --test local_relay_e2e` |

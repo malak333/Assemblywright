@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("Check", "Prepare", "ClaimAndDispatch", "Cancel", "Abandon", "Cleanup")]
+    [ValidateSet("Check", "Prepare", "ClaimAndDispatch", "Integrate", "Cancel", "Abandon", "Cleanup")]
     [string]$Action,
 
     [string]$DataDir = (Join-Path $env:LOCALAPPDATA "Assemblywright\master"),
@@ -31,7 +31,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $protocolVersion = 5
-$masterSchemaVersion = 13
+$masterSchemaVersion = 14
 $featureConveyorProjectionSchemaVersion = 8
 $ownerControlSchemaVersion = 1
 $uuidPattern = "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
@@ -43,6 +43,16 @@ function Get-Sha256Bytes {
     $algorithm = [Security.Cryptography.SHA256]::Create()
     try {
         return @($algorithm.ComputeHash([Text.Encoding]::UTF8.GetBytes($Text)))
+    } finally {
+        $algorithm.Dispose()
+    }
+}
+
+function Get-Sha256FileBytes {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try {
+        return @($algorithm.ComputeHash([IO.File]::ReadAllBytes($Path)))
     } finally {
         $algorithm.Dispose()
     }
@@ -515,7 +525,7 @@ if ($Action -eq "Check") {
     if (
         $testDigest.Length -ne 64 -or
         $protocolVersion -ne 5 -or
-        $masterSchemaVersion -ne 13 -or
+        $masterSchemaVersion -ne 14 -or
         $featureConveyorProjectionSchemaVersion -ne 8 -or
         $ownerControlSchemaVersion -ne 1
     ) {
@@ -823,6 +833,141 @@ switch ($Action) {
             work_packet_sha256 = Convert-BytesToHex $dispatch.work_packet_sha256
             transfer_staging_empty = $true
             proof_checkout_clean = $true
+        } | ConvertTo-Json -Compress
+    }
+    "Integrate" {
+        if (
+            $RepositoryId -notmatch $uuidPattern -or $FeatureId -notmatch $uuidPattern -or
+            $HeadCommit -notmatch $commitPattern
+        ) {
+            throw "Integrate requires exact repository, feature, and base-commit bindings."
+        }
+        Assert-ProofRepositoryClean $paths.proof $paths.source $RepositoryId $FeatureId $HeadCommit
+        $plan = Invoke-ExactGet -Path "/v1/feature-conveyor/features/$FeatureId/integration-plan"
+        Assert-ExactKeys $plan @(
+            "schema_version", "feature_id", "specification_revision", "lifecycle_revision",
+            "feature_lease_id", "snapshot_id", "snapshot_sha256", "artifact_ids",
+            "queue_revision", "emergency_pause_revision", "grants", "base_commit"
+        ) "Artifact integration plan"
+        $artifactIds = @($plan.artifact_ids)
+        Assert-ExactKeys $plan.grants @(
+            "registration", "cloud_disclosure", "autonomous_publication"
+        ) "Artifact integration plan grants"
+        if (
+            [UInt64]$plan.schema_version -ne 1 -or $plan.feature_id -ne $FeatureId -or
+            $plan.base_commit -ne $HeadCommit -or [UInt64]$plan.specification_revision -ne 1 -or
+            [UInt64]$plan.lifecycle_revision -eq 0 -or
+            $plan.feature_lease_id -notmatch $uuidPattern -or $plan.snapshot_id -notmatch $uuidPattern -or
+            $artifactIds.Count -lt 1 -or $artifactIds.Count -gt 3 -or
+            [UInt64]$plan.grants.registration -eq 0 -or
+            [UInt64]$plan.grants.cloud_disclosure -eq 0 -or
+            [UInt64]$plan.grants.autonomous_publication -eq 0
+        ) {
+            throw "The artifact integration plan drifted."
+        }
+        Assert-Digest $plan.snapshot_sha256 "Artifact integration snapshot"
+        $sortedArtifactIds = @($artifactIds | Sort-Object)
+        if (($artifactIds -join "|") -cne ($sortedArtifactIds -join "|")) {
+            throw "The artifact integration IDs were not canonically sorted."
+        }
+        foreach ($artifactId in $artifactIds) {
+            if ($artifactId -notmatch $uuidPattern) {
+                throw "The artifact integration plan contained an invalid artifact ID."
+            }
+        }
+        $integrationId = [guid]::NewGuid().ToString().ToLowerInvariant()
+        $request = [ordered]@{
+            schema_version = 1
+            integration_id = $integrationId
+            feature_id = $FeatureId
+            specification_revision = [UInt64]$plan.specification_revision
+            expected_lifecycle_revision = [UInt64]$plan.lifecycle_revision
+            feature_lease_id = $plan.feature_lease_id
+            snapshot_id = $plan.snapshot_id
+            snapshot_sha256 = @($plan.snapshot_sha256)
+            artifact_ids = $artifactIds
+            expected_queue_revision = [UInt64]$plan.queue_revision
+            expected_emergency_pause_revision = [UInt64]$plan.emergency_pause_revision
+            grants = $plan.grants
+            base_commit = $plan.base_commit
+        }
+        $receipt = Invoke-ExactPost -Path "/v1/feature-conveyor/artifact-integrations" -Body $request
+        Assert-ExactKeys $receipt @(
+            "schema_version", "integration_id", "feature_id", "specification_revision",
+            "lifecycle_revision", "feature_lease_id", "snapshot_id", "snapshot_sha256",
+            "artifact_set_sha256", "candidate_commit", "candidate_tree", "base_commit",
+            "queue_revision", "emergency_pause_revision", "grants", "status"
+        ) "Artifact integration receipt"
+        Assert-Digest $receipt.artifact_set_sha256 "Artifact set receipt"
+        Assert-Digest $receipt.snapshot_sha256 "Artifact integration receipt snapshot"
+        Assert-ExactKeys $receipt.grants @(
+            "registration", "cloud_disclosure", "autonomous_publication"
+        ) "Artifact integration receipt grants"
+        if (
+            [UInt64]$receipt.schema_version -ne 1 -or $receipt.status -ne "candidate_frozen" -or
+            $receipt.integration_id -ne $integrationId -or $receipt.feature_id -ne $FeatureId -or
+            $receipt.candidate_commit -notmatch $commitPattern -or
+            $receipt.candidate_tree -notmatch $commitPattern -or $receipt.base_commit -ne $HeadCommit -or
+            $receipt.feature_lease_id -ne $plan.feature_lease_id -or
+            $receipt.snapshot_id -ne $plan.snapshot_id -or
+            (Convert-BytesToHex $receipt.snapshot_sha256) -cne (Convert-BytesToHex $plan.snapshot_sha256) -or
+            [UInt64]$receipt.lifecycle_revision -ne ([UInt64]$plan.lifecycle_revision + 1) -or
+            [UInt64]$receipt.queue_revision -ne [UInt64]$plan.queue_revision -or
+            [UInt64]$receipt.emergency_pause_revision -ne [UInt64]$plan.emergency_pause_revision -or
+            [UInt64]$receipt.grants.registration -ne [UInt64]$plan.grants.registration -or
+            [UInt64]$receipt.grants.cloud_disclosure -ne [UInt64]$plan.grants.cloud_disclosure -or
+            [UInt64]$receipt.grants.autonomous_publication -ne [UInt64]$plan.grants.autonomous_publication
+        ) {
+            throw "The artifact integration receipt drifted."
+        }
+        $candidate = Join-Path $DataDir "feature-conveyor-candidates\candidates\$integrationId"
+        Assert-NoReparseTree $candidate
+        $candidateHead = Invoke-Git $candidate @("rev-parse", "HEAD")
+        $candidateTree = Invoke-Git $candidate @("rev-parse", "HEAD^{tree}")
+        $candidateBranch = Invoke-Git $candidate @("branch", "--show-current")
+        $candidateStatus = Invoke-Git $candidate @("status", "--porcelain")
+        $candidateRemotes = Invoke-Git $candidate @("remote")
+        $candidateFsck = Invoke-Git $candidate @("fsck", "--no-dangling")
+        $candidateReadme = Join-Path $candidate "README.md"
+        $candidateContentSha256 = Convert-BytesToHex (Get-Sha256Bytes "assemblywright contained coding fixture`n")
+        $actualCandidateSha256 = Convert-BytesToHex (Get-Sha256FileBytes $candidateReadme)
+        if (
+            $candidateHead -ne $receipt.candidate_commit -or $candidateTree -ne $receipt.candidate_tree -or
+            $candidateBranch.Length -ne 0 -or $candidateStatus.Length -ne 0 -or
+            $candidateRemotes.Length -ne 0 -or $candidateFsck.Length -ne 0 -or
+            $actualCandidateSha256 -cne $candidateContentSha256
+        ) {
+            throw "The frozen candidate worktree did not match its exact receipt."
+        }
+        $retry = Invoke-ExactPost -Path "/v1/feature-conveyor/artifact-integrations" -Body $request
+        if (
+            $retry.integration_id -ne $receipt.integration_id -or
+            $retry.candidate_commit -ne $receipt.candidate_commit -or
+            $retry.candidate_tree -ne $receipt.candidate_tree -or
+            [UInt64]$retry.lifecycle_revision -ne [UInt64]$receipt.lifecycle_revision
+        ) {
+            throw "The exact artifact integration retry was not idempotent."
+        }
+        Assert-ProofRepositoryClean $paths.proof $paths.source $RepositoryId $FeatureId $HeadCommit
+        [ordered]@{
+            schema_version = 1
+            status = "artifact_integration_candidate_frozen"
+            repository_id = $RepositoryId
+            feature_id = $FeatureId
+            integration_id = $integrationId
+            lifecycle_revision = [UInt64]$receipt.lifecycle_revision
+            queue_revision = [UInt64]$receipt.queue_revision
+            emergency_pause_revision = [UInt64]$receipt.emergency_pause_revision
+            candidate_commit = $receipt.candidate_commit
+            candidate_tree = $receipt.candidate_tree
+            base_commit = $receipt.base_commit
+            artifact_set_sha256 = Convert-BytesToHex $receipt.artifact_set_sha256
+            candidate_detached = $true
+            candidate_remote_absent = $true
+            candidate_worktree_clean = $true
+            candidate_fsck_clean = $true
+            proof_checkout_clean = $true
+            exact_retry_idempotent = $true
         } | ConvertTo-Json -Compress
     }
     "Cancel" {
