@@ -2528,16 +2528,21 @@ mod tests {
         store
             .verify_referenced(std::slice::from_ref(&evidence))
             .unwrap();
-        fs::write(repo_path.join("README.md"), b"tampered-before-finalize").unwrap();
-        assert!(matches!(
-            prepared.revalidate_candidate(&store),
-            Err(ArtifactIntegrationError::Rejected)
-        ));
-        fs::write(
-            repo_path.join("README.md"),
-            assemblywright_protocol::LOCAL_CODING_FIXTURE_CONTENT,
-        )
-        .unwrap();
+        #[cfg(not(windows))]
+        {
+            fs::write(repo_path.join("README.md"), b"tampered-before-finalize").unwrap();
+            assert!(matches!(
+                prepared.revalidate_candidate(&store),
+                Err(ArtifactIntegrationError::Rejected)
+            ));
+            fs::write(
+                repo_path.join("README.md"),
+                assemblywright_protocol::LOCAL_CODING_FIXTURE_CONTENT,
+            )
+            .unwrap();
+        }
+        #[cfg(windows)]
+        assert!(fs::write(repo_path.join("README.md"), b"tampered-before-finalize").is_err());
         prepared.revalidate_candidate(&store).unwrap();
         prepared.retain();
         let repository = Repository::open(&repo_path).unwrap();
