@@ -380,7 +380,7 @@ public enum AssemblywrightMacBridgeIdentityProfile: String, Equatable, Sendable 
                     kind: "local_coding",
                     provider: "assemblywright-agent",
                     model: "assemblywright-local-coding-v1",
-                    maxContextBytes: 8 * 1_024,
+                    maxContextBytes: 12 * 1_024,
                     maxResultBytes: 32 * 1_024
                 )
             ]

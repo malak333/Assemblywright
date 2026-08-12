@@ -667,6 +667,16 @@ an old one.
   `local.coding.v1` descriptor. Standard/fixture identities remain
   `mac_bridge`-only, local-coding rebind is forbidden, and the process launcher
   selects this identity only for the local-coding snapshot opt-in.
+- Protocol v5 raises that exact local-coding descriptor's context limit from
+  the historical 8 KiB to 12 KiB. The production Swift enrollment and
+  supervisor validators must match the Rust protocol descriptor exactly; an
+  enrolled v4 worker is intentionally rejected and must be revoked and enrolled
+  again through the supported local-coding profile ceremony before live v5 work.
+- The Windows live controller must send the complete v5 work packet, including
+  sorted `allowed_paths` and exact tagged write/delete arguments, and bind
+  `work_packet_sha256` to its recursively sorted compact JSON bytes. The former
+  v4 three-field packet and domain-string digest are rejected after a snapshot
+  claim and must not be retained as a live-controller fallback.
 - Historical protocol-v4/schema-v12 fixture behavior (superseded for new v5
   jobs by the general-worker rules below): the Mac bridge strictly validates
   every chunk and forwards it over the authenticated owner-only Unix socket. The Rust agent writes through one

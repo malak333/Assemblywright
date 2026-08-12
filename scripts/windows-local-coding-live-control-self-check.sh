@@ -16,6 +16,12 @@ for required in \
   '$masterSchemaVersion = 13' \
   '$featureConveyorProjectionSchemaVersion = 8' \
   '$ownerControlSchemaVersion = 1' \
+  'acceptance_criteria_count = 1' \
+  'allowed_paths = @("README.md")' \
+  'tool_id = "file.write.v1"' \
+  'expected_before_sha256 = @(Get-GitBlobSha256Bytes $paths.proof $HeadCommit "README.md")' \
+  '$packetJson = $packetDocument | ConvertTo-Json -Compress -Depth 12' \
+  '$packetDigest = @(Get-Sha256Bytes $packetJson)' \
   '[UInt64]$status.schema_version -ne $featureConveyorProjectionSchemaVersion' \
   'schema_version = $ownerControlSchemaVersion' \
   'local_coding_live_control_ready' \
@@ -46,6 +52,8 @@ done
 
 if grep -Fq -- '/v1/distributed/feature-conveyor/cancel-active-feature' "$CONTROLLER" \
   || grep -Fq -- '/v1/distributed/feature-conveyor/abandon-and-advance' "$CONTROLLER" \
+  || grep -Fq -- 'assemblywright.local-coding-live.work-packet.v1' "$CONTROLLER" \
+  || grep -Fq -- 'work_packet = [ordered]@{ packet_id = $packet; ordinal = 1; acceptance_criteria_count = 1 }' "$CONTROLLER" \
   || grep -Eiq -- 'sqlite|master\.sqlite3' "$CONTROLLER"; then
   fail "Windows local-coding controller crossed the owner-local or persistence boundary"
 fi

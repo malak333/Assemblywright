@@ -48,6 +48,51 @@ function Get-Sha256Bytes {
     }
 }
 
+function Get-GitBlobSha256Bytes {
+    param(
+        [Parameter(Mandatory = $true)][string]$Repository,
+        [Parameter(Mandatory = $true)][string]$Commit,
+        [Parameter(Mandatory = $true)][string]$BlobPath
+    )
+    if (
+        $Commit -notmatch $commitPattern -or
+        $BlobPath -cne "README.md" -or
+        $Repository.Contains('"')
+    ) {
+        throw "The immutable Git blob binding was not exact."
+    }
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = "git"
+    $startInfo.Arguments = "-C `"$Repository`" cat-file blob `"$Commit`:$BlobPath`""
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    if (-not $process.Start()) {
+        $process.Dispose()
+        throw "Git did not start for the immutable blob binding."
+    }
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try {
+        $digest = @($algorithm.ComputeHash($process.StandardOutput.BaseStream))
+        $errorOutput = $process.StandardError.ReadToEnd()
+        $process.WaitForExit()
+        if ($process.ExitCode -ne 0) {
+            throw "Git rejected the immutable blob binding."
+        }
+        return $digest
+    } finally {
+        $algorithm.Dispose()
+        if (-not $process.HasExited) {
+            $process.Kill()
+            $process.WaitForExit()
+        }
+        $process.Dispose()
+    }
+}
+
 function Convert-BytesToHex {
     param([Parameter(Mandatory = $true)]$Bytes)
     return -join @($Bytes | ForEach-Object { ([byte]$_).ToString("x2") })
@@ -639,7 +684,30 @@ switch ($Action) {
             throw "The snapshot claim receipt drifted."
         }
         $packet = [guid]::NewGuid().ToString().ToLowerInvariant()
-        $packetDigest = @(Get-Sha256Bytes "assemblywright.local-coding-live.work-packet.v1`0$FeatureId`0$packet")
+        $replacementBytes = [Text.Encoding]::UTF8.GetBytes("assemblywright contained coding fixture`n")
+        $packetDocument = [ordered]@{
+            acceptance_criteria_count = 1
+            allowed_paths = @("README.md")
+            operations = @(
+                [ordered]@{
+                    arguments = [ordered]@{
+                        executable = $false
+                        expected_before_sha256 = @(Get-GitBlobSha256Bytes $paths.proof $HeadCommit "README.md")
+                        path = "README.md"
+                        replacement_hex = Convert-BytesToHex $replacementBytes
+                        replacement_sha256 = @(Get-Sha256Bytes "assemblywright contained coding fixture`n")
+                    }
+                    tool_id = "file.write.v1"
+                }
+            )
+            ordinal = 1
+            packet_id = $packet
+        }
+        # These ordered keys are the protocol-owned recursively sorted JSON
+        # order. Hash the exact compact UTF-8 bytes Rust will independently
+        # canonicalize and verify before dispatch.
+        $packetJson = $packetDocument | ConvertTo-Json -Compress -Depth 12
+        $packetDigest = @(Get-Sha256Bytes $packetJson)
         $dispatchRequest = [ordered]@{
             schema_version = $ownerControlSchemaVersion
             feature_id = $FeatureId
@@ -649,7 +717,7 @@ switch ($Action) {
             snapshot_id = $claim.snapshot_id
             snapshot_sha256 = @($claim.snapshot_sha256)
             work_packet_sha256 = $packetDigest
-            work_packet = [ordered]@{ packet_id = $packet; ordinal = 1; acceptance_criteria_count = 1 }
+            work_packet = $packetDocument
             device_id = $LocalCodingDeviceId
             device_registry_revision = $LocalCodingRegistryRevision
             expected_queue_revision = [UInt64]$claim.queue_revision

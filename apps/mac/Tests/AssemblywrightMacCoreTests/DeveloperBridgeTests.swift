@@ -5047,7 +5047,7 @@ private func localCodingCapability() -> AssemblywrightMacBridgeCapability {
         kind: "local_coding",
         provider: "assemblywright-agent",
         model: "assemblywright-local-coding-v1",
-        maxContextBytes: 8_192,
+        maxContextBytes: 12_288,
         maxResultBytes: 32_768
     )
 }
@@ -5063,7 +5063,7 @@ private func localCodingInvitationData() throws -> Data {
         "kind": "local_coding",
         "provider": "assemblywright-agent",
         "model": "assemblywright-local-coding-v1",
-        "max_context_bytes": 8_192,
+        "max_context_bytes": 12_288,
         "max_result_bytes": 32_768
     ]]
     return try JSONSerialization.data(withJSONObject: invitation, options: [.sortedKeys])
