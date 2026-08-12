@@ -2194,12 +2194,12 @@ fn open_containment_handle(path: &Path, directory: bool) -> Result<File, Artifac
     use std::os::windows::fs::OpenOptionsExt;
     use windows_sys::Win32::Storage::FileSystem::{
         DELETE, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
-        FILE_SHARE_READ, FILE_SHARE_WRITE,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
     };
     let mut options = OpenOptions::new();
     options
         .access_mode(DELETE | FILE_READ_ATTRIBUTES)
-        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
         .custom_flags(
             FILE_FLAG_OPEN_REPARSE_POINT
                 | if directory {
@@ -2793,7 +2793,7 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_cleanup_rejects_captured_directory_rebinding_without_deleting_it() {
+    fn windows_cleanup_inventory_holds_captured_directory_against_rebinding() {
         let directory = tempdir().unwrap();
         let tree = directory.path().join("tree");
         let rebound = directory.path().join("rebound");
@@ -2814,16 +2814,13 @@ mod tests {
                             .starts_with(".assemblywright-delete-")
                     })
                     .unwrap();
-                fs::rename(captured, &rebound_for_hook).unwrap();
+                assert!(fs::rename(captured, &rebound_for_hook).is_err());
             }));
         });
 
-        assert!(matches!(
-            remove_windows_entry(&tree, None, true),
-            Err(ArtifactIntegrationError::Io(_)) | Err(ArtifactIntegrationError::Rejected)
-        ));
+        remove_windows_entry(&tree, None, true).unwrap();
         assert!(!tree.exists());
-        assert_eq!(fs::read(rebound.join("child")).unwrap(), b"content");
+        assert!(!rebound.exists());
     }
 
     #[cfg(windows)]
