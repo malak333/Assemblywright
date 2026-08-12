@@ -5,18 +5,18 @@ use assemblywright_master::{
     NewStep, PlatformSecretProtector, RepositoryGrantKind, RepositoryGrantRevision,
 };
 use assemblywright_protocol::{
-    build_local_coding_fixture_patch_artifact, local_coding_admission_sha256,
-    AuthenticatedHandshakeRequest, CapabilityDescriptor, DeviceRole, DistributedEventBatch,
-    DistributedEventBatchRequest, DistributedEventKind, FeatureConveyorApprovedFeatureRequest,
-    FeatureConveyorApprovedSpecification, FeatureConveyorCodingDispatchReceipt,
-    FeatureConveyorCodingDispatchRequest, FeatureConveyorCodingWorkPacketMetadata,
-    FeatureConveyorGrantRevisions, FeatureConveyorRepositoryScopeDocument,
-    FeatureConveyorRepositorySnapshotClaimReceipt, FeatureConveyorRepositorySnapshotClaimRequest,
-    HandshakeRequest, HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope,
-    JobResultStatus, LocalCodingJobResult, LocalCodingResultArtifact,
-    LocalCodingResultArtifactAdmission, LocalCodingSnapshotChunk, LocalCodingSnapshotChunkRequest,
-    Sensitivity, StepId, TaskId, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
-    LOCAL_CODING_COMPLETED_STATUS, LOCAL_CODING_FIXTURE_TEST_STATUS, PROTOCOL_VERSION,
+    local_coding_admission_sha256, AuthenticatedHandshakeRequest, CapabilityDescriptor, DeviceRole,
+    DistributedEventBatch, DistributedEventBatchRequest, DistributedEventKind,
+    FeatureConveyorApprovedFeatureRequest, FeatureConveyorApprovedSpecification,
+    FeatureConveyorCodingDispatchReceipt, FeatureConveyorCodingDispatchRequest,
+    FeatureConveyorCodingWorkPacketMetadata, FeatureConveyorGrantRevisions,
+    FeatureConveyorRepositoryScopeDocument, FeatureConveyorRepositorySnapshotClaimReceipt,
+    FeatureConveyorRepositorySnapshotClaimRequest, HandshakeRequest, HandshakeResponse,
+    HandshakeStatus, JobEnvelope, JobResultEnvelope, JobResultStatus, LocalCodingJobResult,
+    LocalCodingResultArtifact, LocalCodingResultArtifactAdmission, LocalCodingSnapshotChunk,
+    LocalCodingSnapshotChunkRequest, Sensitivity, StepId, TaskId,
+    FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, LOCAL_CODING_COMPLETED_STATUS,
+    LOCAL_CODING_FIXTURE_TEST_STATUS, PROTOCOL_VERSION,
 };
 use rcgen::{CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
@@ -993,7 +993,7 @@ async fn remote_local_coding_dispatch_is_exporter_bound_exact_and_pause_dominant
     );
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    let dispatch = |packet_id, _work_packet_sha256| {
+    let dispatch = |packet_id| {
         let work_packet = FeatureConveyorCodingWorkPacketMetadata::fixture(packet_id, [0x42; 32]);
         FeatureConveyorCodingDispatchRequest {
             schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
@@ -1011,7 +1011,7 @@ async fn remote_local_coding_dispatch_is_exporter_bound_exact_and_pause_dominant
             expected_emergency_pause_revision: claim.emergency_pause_revision,
         }
     };
-    let first_dispatch = dispatch(Uuid::new_v4(), Sha256::digest(b"coding-packet-one").into());
+    let first_dispatch = dispatch(Uuid::new_v4());
     let first_dispatch_response = local_post(
         local_endpoint,
         "/v1/feature-conveyor/coding-dispatches",
@@ -1309,7 +1309,7 @@ async fn remote_local_coding_dispatch_is_exporter_bound_exact_and_pause_dominant
         "{exact_response}"
     );
 
-    let second_dispatch = dispatch(Uuid::new_v4(), Sha256::digest(b"coding-packet-two").into());
+    let second_dispatch = dispatch(Uuid::new_v4());
     let second_dispatch_response = local_post(
         local_endpoint,
         "/v1/feature-conveyor/coding-dispatches",
