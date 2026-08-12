@@ -699,13 +699,6 @@ fn platform_identity(
 }
 
 #[cfg(windows)]
-fn platform_identity(
-    _metadata: &fs::Metadata,
-) -> Result<PlatformFileIdentity, ResultArtifactStoreError> {
-    Err(ResultArtifactStoreError::Rejected)
-}
-
-#[cfg(windows)]
 fn windows_handle_information(
     file: &File,
 ) -> Result<
@@ -779,6 +772,17 @@ fn sync_directory(_path: &Path) -> Result<(), ResultArtifactStoreError> {
 }
 
 #[cfg(unix)]
+fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_symlink()
+}
+
+#[cfg(windows)]
+fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    metadata.file_attributes() & 0x400 != 0
+}
+
+#[cfg(not(any(unix, windows)))]
 fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
     metadata.file_type().is_symlink()
 }
@@ -876,15 +880,4 @@ mod tests {
             .join(artifact.artifact_id.to_string())
             .exists());
     }
-}
-
-#[cfg(windows)]
-fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt;
-    metadata.file_attributes() & 0x400 != 0
-}
-
-#[cfg(not(any(unix, windows)))]
-fn metadata_is_link_or_reparse(metadata: &fs::Metadata) -> bool {
-    metadata.file_type().is_symlink()
 }
