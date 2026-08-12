@@ -314,6 +314,8 @@ impl ArtifactIntegrationStore {
             .join("snapshots")
             .join(snapshot_id.to_string());
         let source_handles = open_stable_tree(&source_path)?;
+        #[cfg(all(test, windows))]
+        eprintln!("windows candidate stage: source-opened");
         #[cfg(test)]
         if let Some(hook) = self
             .source_capture_hook
@@ -325,7 +327,11 @@ impl ArtifactIntegrationStore {
         }
         validate_stable_git_shape(&source_handles, GitRepositoryShape::Snapshot)?;
         validate_snapshot_binding_stable(&source_handles, base_commit)?;
+        #[cfg(all(test, windows))]
+        eprintln!("windows candidate stage: source-validated");
         let stable_source = StableOdb::from_entries(&self.root.join("staging"), &source_handles)?;
+        #[cfg(all(test, windows))]
+        eprintln!("windows candidate stage: source-odb-copied");
         let source = stable_source.odb();
         let base_oid = Oid::from_str(base_commit)?;
         let base_object = source.read(base_oid)?;
