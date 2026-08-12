@@ -2129,8 +2129,6 @@ fn remove_windows_entry(
         .ok_or(ArtifactIntegrationError::Rejected)?
         .join(format!(".assemblywright-delete-{}", Uuid::new_v4()));
     fs::rename(path, &captured)?;
-    #[cfg(all(test, windows))]
-    eprintln!("cleanup-stage captured directory={directory}");
     run_cleanup_test_hook(CleanupHookPhase::AfterCapture);
     let captured_entries = if directory {
         collect_windows_cleanup_entries(&captured)
@@ -2150,8 +2148,6 @@ fn remove_windows_entry(
             return Err(ArtifactIntegrationError::Rejected);
         }
     };
-    #[cfg(all(test, windows))]
-    eprintln!("cleanup-stage inventoried directory={directory}");
     if platform_identity(&original)? != identity {
         let _ = windows_move_noreplace(&captured, path);
         return Err(ArtifactIntegrationError::Rejected);
@@ -2169,17 +2165,12 @@ fn remove_windows_entry(
         if platform_identity(&open_identity_handle(&captured, directory)?)? != identity {
             return Err(ArtifactIntegrationError::Rejected);
         }
-        #[cfg(all(test, windows))]
-        eprintln!(
-            "cleanup-stage deleting relative={} directory={}",
-            entry.relative.display(),
-            entry.directory
-        );
-        remove_windows_captured_entry(
-            &captured.join(&entry.relative),
-            entry.identity,
-            entry.directory,
-        )?;
+        let entry_path = if entry.relative.as_os_str().is_empty() {
+            captured.clone()
+        } else {
+            captured.join(&entry.relative)
+        };
+        remove_windows_captured_entry(&entry_path, entry.identity, entry.directory)?;
     }
     Ok(())
 }
@@ -2269,11 +2260,7 @@ fn remove_windows_captured_entry(
         .ok_or(ArtifactIntegrationError::Rejected)?
         .join(format!(".assemblywright-delete-{}", Uuid::new_v4()));
     fs::rename(path, &recaptured)?;
-    #[cfg(all(test, windows))]
-    eprintln!("cleanup-stage recaptured directory={directory}");
     let containment_handle = open_containment_handle(&recaptured, directory)?;
-    #[cfg(all(test, windows))]
-    eprintln!("cleanup-stage containment directory={directory}");
     if directory {
         validate_open_plain_directory(&containment_handle)?;
     } else {
@@ -2282,10 +2269,7 @@ fn remove_windows_captured_entry(
     if platform_identity(&containment_handle)? != expected {
         return Err(ArtifactIntegrationError::Rejected);
     }
-    let result = mark_delete_by_handle(&containment_handle);
-    #[cfg(all(test, windows))]
-    eprintln!("cleanup-stage disposition directory={directory} result={result:?}");
-    result
+    mark_delete_by_handle(&containment_handle)
 }
 
 #[cfg(windows)]
