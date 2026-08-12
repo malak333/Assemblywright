@@ -73,6 +73,7 @@ pub const MAX_LOCAL_CODING_EDIT_CONTENT_BYTES: usize = 4 * 1024;
 pub const LOCAL_CODING_WRITE_FILE_TOOL_ID: &str = "file.write.v1";
 pub const LOCAL_CODING_DELETE_FILE_TOOL_ID: &str = "file.delete.v1";
 pub const LOCAL_CODING_RESULT_ARTIFACT_FORMAT: &str = "assemblywright.multi-file-patch.v1";
+const LOCAL_CODING_V4_RESULT_ARTIFACT_FORMAT: &str = "assemblywright.readme-replacement.v1";
 pub const LOCAL_CODING_RESULT_ARTIFACT_STATUS: &str = "result_artifact_admitted";
 pub const LOCAL_CODING_FIXTURE_CONTENT: &[u8] = b"assemblywright contained coding fixture\n";
 
@@ -2319,6 +2320,19 @@ struct LocalCodingCanonicalPatchArtifact {
     changes: Vec<LocalCodingEditOperation>,
 }
 
+/// Historical protocol-v4 artifact retained only so a schema-v12 master can be
+/// migrated and reopened without discarding already-admitted immutable
+/// evidence. New admissions never call this validator.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HistoricalLocalCodingV4PatchArtifact {
+    format: String,
+    path: String,
+    expected_before_sha256: [u8; 32],
+    replacement_sha256: [u8; 32],
+    replacement_hex: String,
+}
+
 pub fn build_local_coding_patch_artifact(
     packet: &FeatureConveyorCodingWorkPacketMetadata,
 ) -> Result<Vec<u8>, ProtocolError> {
@@ -2408,6 +2422,31 @@ pub fn validate_local_coding_fixture_patch_artifact(
     bytes: &[u8],
 ) -> Result<[u8; 32], ProtocolError> {
     validate_local_coding_patch_artifact(bytes)
+}
+
+pub fn validate_historical_local_coding_v4_fixture_patch_artifact(
+    bytes: &[u8],
+) -> Result<[u8; 32], ProtocolError> {
+    if bytes.is_empty() || bytes.len() > MAX_LOCAL_CODING_RESULT_ARTIFACT_BYTES {
+        return Err(ProtocolError::InvalidLocalCodingResultArtifact);
+    }
+    let document: HistoricalLocalCodingV4PatchArtifact =
+        decode_strict_json("historical_local_coding_v4_result_artifact", bytes)?;
+    let replacement = decode_lower_hex(&document.replacement_hex)
+        .ok_or(ProtocolError::InvalidLocalCodingResultArtifact)?;
+    if document.format != LOCAL_CODING_V4_RESULT_ARTIFACT_FORMAT
+        || document.path != LOCAL_CODING_FIXTURE_ALLOWED_PATH
+        || document.expected_before_sha256 == [0; 32]
+        || replacement != LOCAL_CODING_FIXTURE_CONTENT
+        || document.replacement_sha256 != <[u8; 32]>::from(Sha256::digest(&replacement))
+        || serde_json::to_vec(&document).map_err(|error| ProtocolError::Serialization {
+            field: "historical_local_coding_v4_result_artifact",
+            message: error.to_string(),
+        })? != bytes
+    {
+        return Err(ProtocolError::InvalidLocalCodingResultArtifact);
+    }
+    Ok(Sha256::digest(bytes).into())
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

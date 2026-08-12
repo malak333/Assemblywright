@@ -14,9 +14,10 @@ use assemblywright_protocol::{
     JobResultStatus, LocalCodingJobResult, LocalCodingResultArtifact,
     LocalCodingResultArtifactAdmission, LocalCodingSnapshotChunkRequest,
     FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, LOCAL_CODING_COMPLETED_STATUS,
-    LOCAL_CODING_FIXTURE_TEST_STATUS, PROTOCOL_VERSION,
+    LOCAL_CODING_FIXTURE_CONTENT, LOCAL_CODING_FIXTURE_TEST_STATUS, PROTOCOL_VERSION,
 };
 use rusqlite::Connection;
+use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -26,6 +27,29 @@ use uuid::Uuid;
 
 fn digest(label: &str) -> [u8; 32] {
     Sha256::digest(label.as_bytes()).into()
+}
+
+#[derive(Serialize)]
+struct HistoricalV4Artifact<'a> {
+    format: &'a str,
+    path: &'a str,
+    expected_before_sha256: [u8; 32],
+    replacement_sha256: [u8; 32],
+    replacement_hex: String,
+}
+
+fn historical_v4_artifact_bytes() -> Vec<u8> {
+    serde_json::to_vec(&HistoricalV4Artifact {
+        format: "assemblywright.readme-replacement.v1",
+        path: "README.md",
+        expected_before_sha256: [0x42; 32],
+        replacement_sha256: Sha256::digest(LOCAL_CODING_FIXTURE_CONTENT).into(),
+        replacement_hex: LOCAL_CODING_FIXTURE_CONTENT
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+    })
+    .unwrap()
 }
 
 fn canonical_manifest(value: &Value) -> String {
@@ -3707,11 +3731,39 @@ fn master_process_v4_backup_migration_reopen_and_restore_on_failure() {
 fn master_process_v12_backup_first_migration_adds_retained_workspace_binding() {
     let directory = tempdir().unwrap();
     let database = directory.path().join("master.sqlite3");
-    drop(MasterKernel::open(&database).unwrap());
+    let (admission, _) = persist_referenced_result_artifact(directory.path(), true);
+    let historical_bytes = historical_v4_artifact_bytes();
+    fs::write(
+        directory
+            .path()
+            .join("feature-result-artifacts")
+            .join(admission.artifact.artifact_id.to_string())
+            .join("artifact.patch"),
+        &historical_bytes,
+    )
+    .unwrap();
     let connection = Connection::open(&database).unwrap();
     connection
+        .execute_batch("DROP TRIGGER feature_result_artifacts_no_update;")
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE feature_result_artifacts
+             SET artifact_sha256 = ?1, artifact_size_bytes = ?2
+             WHERE artifact_id = ?3",
+            rusqlite::params![
+                Sha256::digest(&historical_bytes).as_slice(),
+                historical_bytes.len() as i64,
+                admission.artifact.artifact_id.to_string()
+            ],
+        )
+        .unwrap();
+    connection
         .execute_batch(
-            "ALTER TABLE feature_result_artifacts DROP COLUMN workspace_expires_at_ms;
+            "CREATE TRIGGER feature_result_artifacts_no_update
+               BEFORE UPDATE ON feature_result_artifacts
+               BEGIN SELECT RAISE(ABORT, 'immutable feature result artifact'); END;
+             ALTER TABLE feature_result_artifacts DROP COLUMN workspace_expires_at_ms;
              ALTER TABLE feature_result_artifacts DROP COLUMN workspace_retained;
              PRAGMA user_version = 12;",
         )

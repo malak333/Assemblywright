@@ -1,18 +1,55 @@
 use assemblywright_protocol::{
     build_local_coding_fixture_patch_artifact, local_coding_admission_sha256,
+    validate_historical_local_coding_v4_fixture_patch_artifact,
     validate_local_coding_fixture_patch_artifact, AttemptId, CancellationId, CapabilityDescriptor,
     CapabilityKind, ContextHandlingPolicy, DeviceId, FeatureConveyorCodingDispatchRequest,
     FeatureConveyorCodingWorkPacketMetadata, JobEnvelope, JobResultEnvelope, JobResultStatus,
     LeaseId, LocalCodingJobRequest, LocalCodingJobResult, LocalCodingResultArtifact,
     LocalCodingResultArtifactAdmission, LocalCodingSnapshotChunk, LocalCodingSnapshotChunkRequest,
     ProtocolError, Sensitivity, StepId, TaskId, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
-    LOCAL_CODING_CAPABILITY_ID, LOCAL_CODING_COMPLETED_STATUS, LOCAL_CODING_FIXTURE_TEST_STATUS,
-    LOCAL_CODING_MODEL, LOCAL_CODING_PROVIDER, MAX_FEATURE_CONVEYOR_CODING_DISPATCH_REQUEST_BYTES,
-    MAX_LOCAL_CODING_EDIT_CONTENT_BYTES, MAX_LOCAL_CODING_JOB_FRAME_BYTES, PROTOCOL_VERSION,
+    LOCAL_CODING_CAPABILITY_ID, LOCAL_CODING_COMPLETED_STATUS, LOCAL_CODING_FIXTURE_CONTENT,
+    LOCAL_CODING_FIXTURE_TEST_STATUS, LOCAL_CODING_MODEL, LOCAL_CODING_PROVIDER,
+    MAX_FEATURE_CONVEYOR_CODING_DISPATCH_REQUEST_BYTES, MAX_LOCAL_CODING_EDIT_CONTENT_BYTES,
+    MAX_LOCAL_CODING_JOB_FRAME_BYTES, PROTOCOL_VERSION,
 };
+use serde::Serialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
+
+#[derive(Serialize)]
+struct HistoricalV4Artifact<'a> {
+    format: &'a str,
+    path: &'a str,
+    expected_before_sha256: [u8; 32],
+    replacement_sha256: [u8; 32],
+    replacement_hex: String,
+}
+
+fn historical_v4_artifact_bytes() -> Vec<u8> {
+    serde_json::to_vec(&HistoricalV4Artifact {
+        format: "assemblywright.readme-replacement.v1",
+        path: "README.md",
+        expected_before_sha256: [0x42; 32],
+        replacement_sha256: Sha256::digest(LOCAL_CODING_FIXTURE_CONTENT).into(),
+        replacement_hex: lower_hex(LOCAL_CODING_FIXTURE_CONTENT),
+    })
+    .unwrap()
+}
+
+#[test]
+fn historical_v4_artifact_is_read_only_migration_evidence() {
+    let bytes = historical_v4_artifact_bytes();
+    assert_eq!(
+        validate_historical_local_coding_v4_fixture_patch_artifact(&bytes).unwrap(),
+        <[u8; 32]>::from(Sha256::digest(&bytes))
+    );
+    assert!(validate_local_coding_fixture_patch_artifact(&bytes).is_err());
+
+    let mut noncanonical = bytes;
+    noncanonical.push(b' ');
+    assert!(validate_historical_local_coding_v4_fixture_patch_artifact(&noncanonical).is_err());
+}
 
 fn request() -> FeatureConveyorCodingDispatchRequest {
     let work_packet = FeatureConveyorCodingWorkPacketMetadata::fixture(Uuid::new_v4(), [9; 32]);

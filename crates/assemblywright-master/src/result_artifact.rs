@@ -1,4 +1,5 @@
 use assemblywright_protocol::{
+    validate_historical_local_coding_v4_fixture_patch_artifact,
     validate_local_coding_fixture_patch_artifact, MAX_LOCAL_CODING_RESULT_ARTIFACT_BYTES,
 };
 use sha2::{Digest, Sha256};
@@ -307,7 +308,7 @@ impl ResultArtifactStore {
         {
             return Err(ResultArtifactStoreError::Rejected);
         }
-        open_verified_platform(&self.root, reference)
+        open_verified_platform(&self.root, reference, false)
     }
 
     pub fn verify_referenced(
@@ -315,7 +316,10 @@ impl ResultArtifactStore {
         referenced: &[ResultArtifactReference],
     ) -> Result<(), ResultArtifactStoreError> {
         for reference in referenced {
-            self.open_verified(*reference)?;
+            // Schema-v12 rows may reference the immutable protocol-v4 fixture
+            // shape. Preserve that historical evidence at startup, but keep
+            // every new prepare/revalidate path strict to the v5 format.
+            open_verified_platform(&self.root, *reference, true)?;
         }
         Ok(())
     }
@@ -386,6 +390,14 @@ fn verify_open_file(
     file: &mut File,
     reference: ResultArtifactReference,
 ) -> Result<(), ResultArtifactStoreError> {
+    verify_open_file_with_compatibility(file, reference, false)
+}
+
+fn verify_open_file_with_compatibility(
+    file: &mut File,
+    reference: ResultArtifactReference,
+    allow_historical_v4: bool,
+) -> Result<(), ResultArtifactStoreError> {
     let metadata = file.metadata()?;
     validate_plain_file_metadata(&metadata)?;
     if metadata.len() != reference.artifact_size_bytes {
@@ -395,9 +407,12 @@ fn verify_open_file(
     let mut bytes = Vec::with_capacity(reference.artifact_size_bytes as usize);
     file.take(reference.artifact_size_bytes + 1)
         .read_to_end(&mut bytes)?;
+    let valid_format = validate_local_coding_fixture_patch_artifact(&bytes).is_ok()
+        || (allow_historical_v4
+            && validate_historical_local_coding_v4_fixture_patch_artifact(&bytes).is_ok());
     if bytes.len() as u64 != reference.artifact_size_bytes
         || Sha256::digest(&bytes).as_slice() != reference.artifact_sha256
-        || validate_local_coding_fixture_patch_artifact(&bytes).is_err()
+        || !valid_format
     {
         return Err(ResultArtifactStoreError::Rejected);
     }
@@ -485,6 +500,7 @@ fn create_owner_private_file(path: &Path) -> Result<File, ResultArtifactStoreErr
 fn open_verified_platform(
     root: &Path,
     reference: ResultArtifactReference,
+    allow_historical_v4: bool,
 ) -> Result<VerifiedResultArtifact, ResultArtifactStoreError> {
     use std::ffi::CString;
     use std::os::fd::{AsRawFd, FromRawFd};
@@ -524,7 +540,7 @@ fn open_verified_platform(
         return Err(ResultArtifactStoreError::Io(std::io::Error::last_os_error()));
     }
     let mut file = unsafe { File::from_raw_fd(file_descriptor) };
-    verify_open_file(&mut file, reference)?;
+    verify_open_file_with_compatibility(&mut file, reference, allow_historical_v4)?;
     let identity = ArtifactIdentity {
         directory: platform_identity(&directory_metadata)?,
         file: platform_identity(&file.metadata()?)?,
@@ -541,6 +557,7 @@ fn open_verified_platform(
 fn open_verified_platform(
     root: &Path,
     reference: ResultArtifactReference,
+    allow_historical_v4: bool,
 ) -> Result<VerifiedResultArtifact, ResultArtifactStoreError> {
     use std::os::windows::fs::OpenOptionsExt;
     use windows_sys::Win32::Storage::FileSystem::{
@@ -566,7 +583,7 @@ fn open_verified_platform(
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
         .open(directory.join(ARTIFACT_NAME))?;
     validate_windows_file_handle(&file)?;
-    verify_open_file(&mut file, reference)?;
+    verify_open_file_with_compatibility(&mut file, reference, allow_historical_v4)?;
     let identity = ArtifactIdentity {
         directory: windows_handle_identity(
             directory_handles
@@ -587,12 +604,13 @@ fn open_verified_platform(
 fn open_verified_platform(
     root: &Path,
     reference: ResultArtifactReference,
+    allow_historical_v4: bool,
 ) -> Result<VerifiedResultArtifact, ResultArtifactStoreError> {
     let directory = root.join(reference.artifact_id.to_string());
     validate_plain_directory_metadata(&fs::symlink_metadata(&directory)?)?;
     validate_exact_directory_shape(&directory)?;
     let mut file = File::open(directory.join(ARTIFACT_NAME))?;
-    verify_open_file(&mut file, reference)?;
+    verify_open_file_with_compatibility(&mut file, reference, allow_historical_v4)?;
     Ok(VerifiedResultArtifact {
         reference,
         identity: ArtifactIdentity {
@@ -792,10 +810,67 @@ mod tests {
     use super::*;
     use assemblywright_protocol::{
         build_local_coding_fixture_patch_artifact, LocalCodingResultArtifact,
+        LOCAL_CODING_FIXTURE_CONTENT,
     };
+    use serde::Serialize;
     use std::sync::{mpsc, Barrier};
     use std::time::Duration;
     use tempfile::tempdir;
+
+    #[derive(Serialize)]
+    struct HistoricalV4Artifact<'a> {
+        format: &'a str,
+        path: &'a str,
+        expected_before_sha256: [u8; 32],
+        replacement_sha256: [u8; 32],
+        replacement_hex: String,
+    }
+
+    fn historical_v4_artifact_bytes() -> Vec<u8> {
+        serde_json::to_vec(&HistoricalV4Artifact {
+            format: "assemblywright.readme-replacement.v1",
+            path: "README.md",
+            expected_before_sha256: [0x42; 32],
+            replacement_sha256: Sha256::digest(LOCAL_CODING_FIXTURE_CONTENT).into(),
+            replacement_hex: LOCAL_CODING_FIXTURE_CONTENT
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect(),
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn startup_preserves_historical_v4_artifact_but_new_paths_reject_it() {
+        let directory = tempdir().unwrap();
+        let store = ResultArtifactStore::open(directory.path()).unwrap();
+        let artifact_id = Uuid::new_v4();
+        let artifact_directory = directory
+            .path()
+            .join(ROOT_NAME)
+            .join(artifact_id.to_string());
+        create_owner_private_directory(&artifact_directory).unwrap();
+        let bytes = historical_v4_artifact_bytes();
+        let mut file = create_owner_private_file(&artifact_directory.join(ARTIFACT_NAME)).unwrap();
+        file.write_all(&bytes).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+        let reference = ResultArtifactReference {
+            artifact_id,
+            artifact_sha256: Sha256::digest(&bytes).into(),
+            artifact_size_bytes: bytes.len() as u64,
+        };
+
+        store.verify_referenced(&[reference]).unwrap();
+        assert!(matches!(
+            store.open_verified(reference),
+            Err(ResultArtifactStoreError::Rejected)
+        ));
+        assert!(matches!(
+            store.prepare(artifact_id, reference.artifact_sha256, &bytes),
+            Err(ResultArtifactStoreError::Rejected)
+        ));
+    }
 
     #[test]
     fn cleanup_excludes_prepare_until_identity_checked_unlink_finishes() {

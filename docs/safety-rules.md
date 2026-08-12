@@ -376,6 +376,10 @@ release requirements, not optional UX guidance.
   matches stored artifact ID/digest/size and retained/expiry fields to the validated
   result payload and exact attempt authority. Exact replay is idempotent; any drift
   fails closed.
+  Startup may preserve an already-referenced schema-v12 artifact only when its
+  bytes are the exact canonical protocol-v4 README artifact and its stored digest
+  and size match. That compatibility validator is migration-only and is forbidden
+  from new prepare, handle revalidation, result admission, and terminal acceptance.
 - Owner resolution is available only through the owner-token-authenticated
   loopback `cancel-active-feature` and `abandon-and-advance` actions. Both must
   compare-and-set the exact feature, lifecycle, queue, and Emergency Pause

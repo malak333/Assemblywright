@@ -901,3 +901,8 @@ an old one.
   independently validates canonical artifact operations and packet digest against
   the immutable job and matches stored artifact/retention/expiry metadata to the
   terminal result. Swift is defense in depth, not the Windows authority source.
+- Backup-first schema-v12 startup preserves an existing protocol-v4 result only
+  when it is the exact canonical README artifact and its immutable stored digest
+  and size match. The compatibility validator is migration-only: new prepare,
+  handle revalidation, result admission, and terminal acceptance reject it and
+  remain strictly protocol-v5.

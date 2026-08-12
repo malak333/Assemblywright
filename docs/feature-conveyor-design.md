@@ -195,7 +195,11 @@ verification; mismatch restores it atomically and no unverified replacement is
 removed. Windows independently decodes canonical artifact bytes against the
 immutable job packet, and terminal acceptance requires stored artifact and
 retention/expiry metadata to match the validated result. This authority does not
-depend on Swift validation, while exact replay remains idempotent.
+depend on Swift validation, while exact replay remains idempotent. For backup-
+first schema-v12 migration only, startup also recognizes the exact canonical
+protocol-v4 README artifact when its immutable row digest and size match. New
+preparation, handle revalidation, result admission, and terminal acceptance
+remain strictly protocol-v5 and reject that historical shape.
 
 Completion seals the workspace unchanged after evidence collection. A separate
 bounded owner-private recovery record outside that tree binds the exact job,

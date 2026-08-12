@@ -167,7 +167,10 @@ the remote protocol, and no integration/review/publication authority is added.
 Delete first atomically captures the leaf in the held parent and rolls mismatch
 back without deleting the replacement. Windows decodes canonical artifact bytes
 against the immutable packet and independently matches stored retention/expiry
-metadata to the terminal result; Swift remains defense in depth.
+metadata to the terminal result; Swift remains defense in depth. An already-
+referenced schema-v12 row may reopen only the exact canonical protocol-v4 README
+artifact with matching stored digest and size. That compatibility path is
+startup migration evidence only and cannot admit, revalidate, or accept new work.
 
 Standard and fixture MacBridge observation is unchanged. The native agent
 reconstructs and verifies an independent shallow no-remote Git repository in

@@ -275,7 +275,11 @@ deletes the unverified replacement. Windows independently decodes every admitted
 artifact and requires its canonical operations and packet digest to equal the
 immutable job packet. Terminal acceptance also requires stored artifact identity,
 retention, and expiry to equal the validated result payload; Swift is not trusted
-as the sole semantic validator.
+as the sole semantic validator. Startup compatibility is narrower than admission:
+a schema-v12 row may reopen only the exact canonical protocol-v4 README artifact
+with its stored digest and size intact. That validator is migration-only;
+prepare, revalidation, and every new protocol-v5 result continue to reject the
+legacy shape.
 
 After exact changed-path and canonical artifact evidence is complete, the agent
 renames the workspace into a sealed directory and writes a separate bounded
