@@ -2092,9 +2092,8 @@ fn open_identity_handle(path: &Path, directory: bool) -> Result<File, ArtifactIn
 #[cfg(windows)]
 fn open_containment_handle(path: &Path, directory: bool) -> Result<File, ArtifactIntegrationError> {
     use std::os::windows::fs::OpenOptionsExt;
-    use windows_sys::Win32::Foundation::DELETE;
     use windows_sys::Win32::Storage::FileSystem::{
-        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+        DELETE, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
         FILE_SHARE_READ, FILE_SHARE_WRITE,
     };
     let mut options = OpenOptions::new();
@@ -2140,7 +2139,7 @@ fn mark_delete_by_handle(file: &File) -> Result<(), ArtifactIntegrationError> {
     use windows_sys::Win32::Storage::FileSystem::{
         FileDispositionInfo, SetFileInformationByHandle, FILE_DISPOSITION_INFO,
     };
-    let disposition = FILE_DISPOSITION_INFO { DeleteFile: 1 };
+    let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
     if unsafe {
         SetFileInformationByHandle(
             file.as_raw_handle() as _,
