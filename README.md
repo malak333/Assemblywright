@@ -23,12 +23,12 @@ advertisements; handshake, job, and result envelopes; strict bound-before-decode
 JSON entry points; nil-identity rejection; fixed-schema Feature Conveyor owner-
 control request/receipt contracts; and a golden compatibility fixture.
 
-**`assemblywright-master`** — a portable schema-v12 SQLite database retaining
+**`assemblywright-master`** — a portable schema-v13 SQLite database retaining
 the schema-v4 device lifecycle, schema-v5 Feature Conveyor, schema-v6
 capability rebind evidence, schema-v7 Emergency Pause revision, and schema-v8
 single owner-control bridge designation, schema-v9 immutable repository
 snapshot-claim evidence, schema-v10 metadata-only coding-dispatch evidence, and
-schema-v11 immutable owner-resolution origin evidence and schema-v12 immutable
+schema-v11 immutable owner-resolution origin evidence and schema-v13 immutable
 result-artifact metadata with a backup-first
 fail-closed v10 compatibility migration,
 plus a headless single-owner
@@ -153,10 +153,10 @@ memory. Its default-off singleton MLX lane runs one bounded, no-retention
 request with a cleared offline environment, prompt-only stdin, bounded stdout,
 null stderr, and dedicated process-group reaping. Cancellation, timeout,
 disconnect, or emergency pause dominates completion and suppresses late output.
-Its mutually exclusive local-coding lane runs only the fixed contained-coding
-`README.md` fixture in an ephemeral per-attempt workspace, reports tests as not
-run, constructs one protocol-owned canonical bounded replacement artifact in
-memory, and cleans the workspace before returning the strict result/artifact pair.
+Its mutually exclusive local-coding lane applies only protocol-v5 deterministic
+write/delete operations inside a bounded normalized relative-path allowlist,
+reports tests as not run, constructs one canonical multi-file patch artifact,
+and seals the per-attempt workspace until exact resolution or bounded expiry.
 
 **`assemblywright-core`** — the shared local foundation: the peer-identity Unix-socket
 transport, its startup validation, and read-only release readiness and evidence
@@ -182,15 +182,18 @@ decision must be auditable. Do not describe this as a finished product.
 
 Not yet implemented, and not claimed:
 
-- Autonomous dispatch, repository mutation, or publication of any kind. The
+- Autonomous dispatch, canonical-repository mutation, or publication of any kind. The
   implemented preflight remains read-only; the default-off owner-local
   snapshot claim creates durable isolated state and one lease, and a separate
   explicit owner-local action may queue one snapshot-bound metadata-only coding
   admission. The exact leased lane transfers repository material and performs
-  only the fixed ephemeral `README.md` contained-coding mutation. It does not
-  retain a workspace, accept arbitrary implementation commands or paths. The
-  schema-v12 master can admit the exact patch bytes into private state and bind
-  a metadata-only result to them, but cannot apply or integrate them,
+  only packet-bound deterministic writes/deletes across at most 64 sorted
+  normalized relative paths with 4 KiB aggregate replacement data. It seals a
+  successful attempt workspace for exact resolution or bounded expiry, but
+  accepts no shell, arbitrary tool, provider, test, network, or credential
+  operation. The schema-v13 master can admit the exact canonical multi-file
+  artifact bytes into private state and bind a metadata-only result and retention
+  expiry to them, but cannot apply or integrate them,
   execute tests, mutate the canonical repository, integrate a result, or invoke
   a provider.
 - Worker execution against real repositories, review-provider invocation, or

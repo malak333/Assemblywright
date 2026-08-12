@@ -993,24 +993,23 @@ async fn remote_local_coding_dispatch_is_exporter_bound_exact_and_pause_dominant
     );
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    let dispatch = |packet_id, work_packet_sha256| FeatureConveyorCodingDispatchRequest {
-        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
-        feature_id: claim.feature_id,
-        specification_revision: claim.specification_revision,
-        expected_lifecycle_revision: claim.lifecycle_revision,
-        feature_lease_id: claim.lease_id,
-        snapshot_id: claim.snapshot_id,
-        snapshot_sha256: claim.snapshot_sha256,
-        work_packet_sha256,
-        work_packet: FeatureConveyorCodingWorkPacketMetadata {
-            packet_id,
-            ordinal: 1,
-            acceptance_criteria_count: 1,
-        },
-        device_id: coding.handshake.device_id,
-        device_registry_revision: coding.handshake.registry_revision,
-        expected_queue_revision: claim.queue_revision,
-        expected_emergency_pause_revision: claim.emergency_pause_revision,
+    let dispatch = |packet_id, _work_packet_sha256| {
+        let work_packet = FeatureConveyorCodingWorkPacketMetadata::fixture(packet_id, [0x42; 32]);
+        FeatureConveyorCodingDispatchRequest {
+            schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+            feature_id: claim.feature_id,
+            specification_revision: claim.specification_revision,
+            expected_lifecycle_revision: claim.lifecycle_revision,
+            feature_lease_id: claim.lease_id,
+            snapshot_id: claim.snapshot_id,
+            snapshot_sha256: claim.snapshot_sha256,
+            work_packet_sha256: work_packet.canonical_sha256().unwrap(),
+            work_packet,
+            device_id: coding.handshake.device_id,
+            device_registry_revision: coding.handshake.registry_revision,
+            expected_queue_revision: claim.queue_revision,
+            expected_emergency_pause_revision: claim.emergency_pause_revision,
+        }
     };
     let first_dispatch = dispatch(Uuid::new_v4(), Sha256::digest(b"coding-packet-one").into());
     let first_dispatch_response = local_post(
@@ -1145,7 +1144,9 @@ async fn remote_local_coding_dispatch_is_exporter_bound_exact_and_pause_dominant
 
     let result_for = |job: &JobEnvelope, packet_sha256, sequence| {
         let context = job.validate_local_coding().unwrap();
-        let artifact_bytes = build_local_coding_fixture_patch_artifact([0x42; 32]).unwrap();
+        let artifact_bytes =
+            assemblywright_protocol::build_local_coding_patch_artifact(&context.work_packet)
+                .unwrap();
         let artifact =
             LocalCodingResultArtifact::from_bytes(Uuid::new_v4(), &artifact_bytes).unwrap();
         let allowed_paths_sha256 =
@@ -1164,7 +1165,8 @@ async fn remote_local_coding_dispatch_is_exporter_bound_exact_and_pause_dominant
             changed_file_count: 1,
             test_status: LOCAL_CODING_FIXTURE_TEST_STATUS.to_string(),
             mutation_performed: true,
-            workspace_retained: false,
+            workspace_retained: true,
+            workspace_expires_at_ms: current_time_ms().unwrap() + 3_600_000,
             ambiguous: false,
         })
         .expect("serialize coding acknowledgement payload");
@@ -1197,6 +1199,8 @@ async fn remote_local_coding_dispatch_is_exporter_bound_exact_and_pause_dominant
             snapshot_id: context.snapshot_id,
             snapshot_sha256: context.snapshot_sha256,
             work_packet_sha256: context.work_packet_sha256,
+            workspace_retained: true,
+            workspace_expires_at_ms: current_time_ms().unwrap() + 3_600_000,
             artifact,
         };
         (result, admission)

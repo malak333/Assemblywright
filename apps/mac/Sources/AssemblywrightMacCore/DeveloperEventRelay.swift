@@ -519,6 +519,9 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
         let snapshotID: UUID
         let snapshotDigest: [UInt8]
         let workPacketDigest: [UInt8]
+        let allowedPathsDigest: [UInt8]
+        let changedFileCount: UInt64
+        let operationsCanonicalJSON: Data
         let leaseDurationMilliseconds: UInt64
         let deadlineAfterMilliseconds: UInt64
     }
@@ -1209,7 +1212,7 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
         expectedConnectionEpoch: UInt64
     ) throws -> ValidatedFixtureJob {
         guard !body.isEmpty,
-              body.count <= 16 * 1_024,
+              body.count <= 640 * 1_024,
               let object = strictJSONObject(body),
               Set(object.keys) == Set([
                   "protocol_version", "connection_epoch", "sequence",
@@ -1443,7 +1446,7 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
               object["capability_id"] as? String == "local.coding.v1",
               object["selected_model"] as? String == "assemblywright-local-coding-v1",
               object["sensitivity"] as? String == "workspace",
-              object["context_handling"] as? String == "ephemeral_no_retention",
+              object["context_handling"] as? String == "sealed_until_resolved_or_expired",
               let leaseDuration = strictInteger(object["lease_duration_ms"]),
               (1 ... 600_000).contains(leaseDuration),
               let deadline = strictInteger(object["deadline_after_ms"]),
@@ -1468,19 +1471,23 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
               workPacketDigest != [UInt8](repeating: 0, count: 32),
               let workPacket = context["work_packet"] as? [String: Any],
               Set(workPacket.keys) == Set([
-                  "packet_id", "ordinal", "acceptance_criteria_count"
+                  "packet_id", "ordinal", "acceptance_criteria_count",
+                  "allowed_paths", "operations"
               ]),
               strictUUID(workPacket["packet_id"]) != nil,
               strictInteger(workPacket["ordinal"]).map({ (1 ... 65_535).contains($0) })
                 == true,
               strictInteger(workPacket["acceptance_criteria_count"])
                 .map({ (1 ... 65_535).contains($0) }) == true,
+              let packetValidation = validateLocalCodingWorkPacket(workPacket),
+              let workPacketData = try? protocolDigestJSON(workPacket),
+              Array(SHA256.hash(data: workPacketData)) == workPacketDigest,
               strictUUID(context["device_id"]) == expectedDeviceID,
               strictInteger(context["device_registry_revision"]).map({ $0 > 0 }) == true,
               strictInteger(context["queue_revision"]) != nil,
               strictInteger(context["emergency_pause_revision"]) != nil,
               let contextData = try? protocolDigestJSON(context),
-              contextData.count <= 8 * 1_024,
+              contextData.count <= 12 * 1_024,
               Array(SHA256.hash(data: contextData)) == contextDigest else {
             throw AssemblywrightMacDeveloperEventRelayError.localCodingSnapshotRejected
         }
@@ -1512,6 +1519,9 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
             snapshotID: snapshotID,
             snapshotDigest: snapshotDigest,
             workPacketDigest: workPacketDigest,
+            allowedPathsDigest: packetValidation.allowedPathsDigest,
+            changedFileCount: packetValidation.changedFileCount,
+            operationsCanonicalJSON: packetValidation.operationsCanonicalJSON,
             leaseDurationMilliseconds: leaseDuration,
             deadlineAfterMilliseconds: deadline
         )
@@ -1616,14 +1626,80 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
         return result.overflow ? nil : result.partialValue
     }
 
-    private static func localCodingFixtureAllowedPathsDigest() -> [UInt8] {
-        let path = Data("README.md".utf8)
-        var input = Data("assemblywright.local-coding-allowed-paths.v1\0".utf8)
-        var count = UInt16(1).bigEndian
+    private static func validateLocalCodingWorkPacket(
+        _ packet: [String: Any]
+    ) -> (allowedPathsDigest: [UInt8], changedFileCount: UInt64, operationsCanonicalJSON: Data)? {
+        guard let allowedPaths = packet["allowed_paths"] as? [String],
+              !allowedPaths.isEmpty, allowedPaths.count <= 64,
+              allowedPaths == allowedPaths.sorted(),
+              Set(allowedPaths).count == allowedPaths.count,
+              allowedPaths.allSatisfy(validateLocalCodingRelativePath),
+              let operations = packet["operations"] as? [[String: Any]],
+              operations.count == allowedPaths.count, operations.count <= 64 else { return nil }
+        var operated = Set<String>()
+        var replacementBytes = 0
+        for operation in operations {
+            guard Set(operation.keys) == Set(["tool_id", "arguments"]),
+                  let toolID = operation["tool_id"] as? String,
+                  let arguments = operation["arguments"] as? [String: Any],
+                  let path = arguments["path"] as? String,
+                  allowedPaths.contains(path), operated.insert(path).inserted else { return nil }
+            if toolID == "file.write.v1" {
+                guard Set(arguments.keys) == Set([
+                    "path", "expected_before_sha256", "replacement_sha256",
+                    "replacement_hex", "executable"
+                ]),
+                arguments["executable"] is Bool,
+                arguments["expected_before_sha256"] is NSNull
+                    || strictDigest(arguments["expected_before_sha256"])?.contains(where: { $0 != 0 }) == true,
+                let replacementDigest = strictDigest(arguments["replacement_sha256"]),
+                let replacementHex = arguments["replacement_hex"] as? String,
+                replacementHex.utf8.count % 2 == 0,
+                let replacement = decodeLowerHex(replacementHex),
+                replacement.count <= 4 * 1_024,
+                Array(SHA256.hash(data: replacement)) == replacementDigest else { return nil }
+                replacementBytes += replacement.count
+            } else if toolID == "file.delete.v1" {
+                guard Set(arguments.keys) == Set(["path", "expected_before_sha256"]),
+                      strictDigest(arguments["expected_before_sha256"])?.contains(where: { $0 != 0 }) == true else { return nil }
+            } else {
+                return nil
+            }
+        }
+        guard replacementBytes <= 4 * 1_024,
+              JSONSerialization.isValidJSONObject(operations),
+              let operationsJSON = try? JSONSerialization.data(withJSONObject: operations, options: [.sortedKeys, .withoutEscapingSlashes]) else { return nil }
+        return (localCodingAllowedPathsDigest(allowedPaths), UInt64(allowedPaths.count), operationsJSON)
+    }
+
+    private static func validateLocalCodingRelativePath(_ path: String) -> Bool {
+        guard !path.isEmpty, path.utf8.count <= 1_024,
+              !path.hasPrefix("/"), !path.hasSuffix("/"),
+              !path.contains("\\"), !path.contains(":"), !path.contains("\0") else { return false }
+        for component in path.split(separator: "/", omittingEmptySubsequences: false) {
+            let value = String(component)
+            let stem = value.split(separator: ".", maxSplits: 1).first.map(String.init)?.uppercased() ?? value.uppercased()
+            let numberedReserved = stem.count == 4
+                && (stem.hasPrefix("COM") || stem.hasPrefix("LPT"))
+                && ("1" ... "9").contains(String(stem.last!))
+            if value.isEmpty || value == "." || value == ".."
+                || value.lowercased() == ".git" || value.hasSuffix(".") || value.hasSuffix(" ")
+                || value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
+                || ["CON", "PRN", "AUX", "NUL"].contains(stem) || numberedReserved { return false }
+        }
+        return true
+    }
+
+    private static func localCodingAllowedPathsDigest(_ allowedPaths: [String]) -> [UInt8] {
+        var input = Data("assemblywright.local-coding-allowed-paths.v2\0".utf8)
+        var count = UInt16(allowedPaths.count).bigEndian
         Swift.withUnsafeBytes(of: &count) { input.append(contentsOf: $0) }
-        var length = UInt64(path.count).bigEndian
-        Swift.withUnsafeBytes(of: &length) { input.append(contentsOf: $0) }
-        input.append(path)
+        for allowedPath in allowedPaths {
+            let path = Data(allowedPath.utf8)
+            var length = UInt64(path.count).bigEndian
+            Swift.withUnsafeBytes(of: &length) { input.append(contentsOf: $0) }
+            input.append(path)
+        }
         return Array(SHA256.hash(data: input))
     }
 
@@ -1698,25 +1774,26 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
                   "changed_paths_sha256", "patch_sha256",
                   "artifact_id", "artifact_sha256", "artifact_size_bytes",
                   "changed_file_count", "test_status", "mutation_performed",
-                  "workspace_retained", "ambiguous"
+                  "workspace_retained", "workspace_expires_at_ms", "ambiguous"
               ]),
               payload["status"] as? String == "contained_coding_completed",
               strictDigest(payload["work_packet_sha256"]) == job.workPacketDigest,
               strictDigest(payload["admission_sha256"]) == job.admissionDigest,
               strictDigest(payload["snapshot_sha256"]) == job.snapshotDigest,
               let allowedPathsDigest = strictDigest(payload["allowed_paths_sha256"]),
-              allowedPathsDigest == localCodingFixtureAllowedPathsDigest(),
+              allowedPathsDigest == job.allowedPathsDigest,
               strictDigest(payload["changed_paths_sha256"]) == allowedPathsDigest,
               let patchDigest = strictDigest(payload["patch_sha256"]),
               patchDigest != [UInt8](repeating: 0, count: 32),
               strictUUID(payload["artifact_id"]) != nil,
               strictDigest(payload["artifact_sha256"]) == patchDigest,
               strictInteger(payload["artifact_size_bytes"])
-                .map({ (1 ... 64 * 1_024).contains($0) }) == true,
-              strictInteger(payload["changed_file_count"]) == 1,
+                .map({ (1 ... 256 * 1_024).contains($0) }) == true,
+              strictInteger(payload["changed_file_count"]) == job.changedFileCount,
               payload["test_status"] as? String == "not_run",
               payload["mutation_performed"] as? Bool == true,
-              payload["workspace_retained"] as? Bool == false,
+              payload["workspace_retained"] as? Bool == true,
+              strictInteger(payload["workspace_expires_at_ms"]).map({ $0 > 0 }) == true,
               payload["ambiguous"] as? Bool == false,
               let payloadData = try? protocolDigestJSON(payload),
               Array(SHA256.hash(data: payloadData)) == payloadDigest else {
@@ -1730,7 +1807,7 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
         for job: ValidatedLocalCodingJob
     ) throws -> ValidatedLocalCodingCompletion {
         guard !body.isEmpty,
-              body.count <= 160 * 1_024,
+              body.count <= 640 * 1_024,
               let object = strictJSONObject(body),
               Set(object.keys) == Set(["result", "artifact"]),
               let result = object["result"] as? [String: Any],
@@ -1743,13 +1820,13 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
               let artifactID = strictUUID(artifact["artifact_id"]),
               let artifactDigest = strictDigest(artifact["artifact_sha256"]),
               let artifactSize = strictInteger(artifact["artifact_size_bytes"]),
-              (1 ... 64 * 1_024).contains(artifactSize),
+              (1 ... 256 * 1_024).contains(artifactSize),
               let artifactHex = artifact["artifact_hex"] as? String,
               artifactHex.utf8.count == Int(artifactSize) * 2,
               let artifactBytes = decodeLowerHex(artifactHex),
               UInt64(artifactBytes.count) == artifactSize,
               Array(SHA256.hash(data: artifactBytes)) == artifactDigest,
-              validateCanonicalLocalCodingArtifact(artifactBytes),
+              validateCanonicalLocalCodingArtifact(artifactBytes, for: job),
               let resultPayload = result["payload"] as? [String: Any],
               strictUUID(resultPayload["artifact_id"]) == artifactID,
               strictDigest(resultPayload["patch_sha256"]) == artifactDigest,
@@ -1759,6 +1836,9 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
         }
         let resultBody = try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys])
         let resultPayloadDigest = try validateLocalCodingResult(resultBody, for: job)
+        guard let workspaceExpiresAt = strictInteger(resultPayload["workspace_expires_at_ms"]) else {
+            throw AssemblywrightMacDeveloperEventRelayError.localCodingSnapshotRejected
+        }
         let admission: [String: Any] = [
             "protocol_version": Int(AssemblywrightMacMTLSBridgeTransport.protocolVersion),
             "connection_epoch": NSNumber(value: job.connectionEpoch),
@@ -1774,6 +1854,8 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
             "snapshot_id": job.snapshotID.uuidString.lowercased(),
             "snapshot_sha256": job.snapshotDigest,
             "work_packet_sha256": job.workPacketDigest,
+            "workspace_retained": true,
+            "workspace_expires_at_ms": NSNumber(value: workspaceExpiresAt),
             "artifact": artifact
         ]
         return ValidatedLocalCodingCompletion(
@@ -1789,29 +1871,24 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
         )
     }
 
-    private static func validateCanonicalLocalCodingArtifact(_ bytes: Data) -> Bool {
-        let fixture = Data("assemblywright contained coding fixture\n".utf8)
-        let replacementDigest = Array(SHA256.hash(data: fixture))
+    private static func validateCanonicalLocalCodingArtifact(
+        _ bytes: Data,
+        for job: ValidatedLocalCodingJob
+    ) -> Bool {
         guard let object = strictJSONObject(bytes),
               Set(object.keys) == Set([
-                  "format", "path", "expected_before_sha256",
-                  "replacement_sha256", "replacement_hex"
+                  "format", "work_packet_sha256", "changes"
               ]),
-              object["format"] as? String == "assemblywright.readme-replacement.v1",
-              object["path"] as? String == "README.md",
-              let beforeDigest = strictDigest(object["expected_before_sha256"]),
-              beforeDigest != [UInt8](repeating: 0, count: 32),
-              strictDigest(object["replacement_sha256"]) == replacementDigest,
-              object["replacement_hex"] as? String == encodeLowerHex(fixture) else {
+              object["format"] as? String == "assemblywright.multi-file-patch.v1",
+              strictDigest(object["work_packet_sha256"]) == job.workPacketDigest,
+              let changes = object["changes"] as? [[String: Any]],
+              JSONSerialization.isValidJSONObject(changes),
+              let changesJSON = try? JSONSerialization.data(withJSONObject: changes, options: [.sortedKeys, .withoutEscapingSlashes]),
+              changesJSON == job.operationsCanonicalJSON,
+              let canonical = try? protocolDigestJSON(object), canonical == bytes else {
             return false
         }
-        let before = beforeDigest.map(String.init).joined(separator: ",")
-        let replacement = replacementDigest.map(String.init).joined(separator: ",")
-        let expected = "{\"format\":\"assemblywright.readme-replacement.v1\","
-            + "\"path\":\"README.md\",\"expected_before_sha256\":[\(before)],"
-            + "\"replacement_sha256\":[\(replacement)],"
-            + "\"replacement_hex\":\"\(encodeLowerHex(fixture))\"}"
-        return bytes == Data(expected.utf8)
+        return true
     }
 
     private static func validateLocalCodingArtifactReceipt(
@@ -1825,6 +1902,7 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
                   "protocol_version", "connection_epoch", "sequence", "task_id",
                   "step_id", "attempt_id", "lease_id", "cancellation_id",
                   "artifact_id", "artifact_sha256", "artifact_size_bytes", "status"
+                  ,"workspace_retained", "workspace_expires_at_ms"
               ]),
               strictInteger(object["protocol_version"])
                 == UInt64(AssemblywrightMacMTLSBridgeTransport.protocolVersion),
@@ -1838,6 +1916,8 @@ public actor AssemblywrightMacDeveloperEventRelay: AssemblywrightMacBridgeEventR
               strictUUID(object["artifact_id"]) == completion.artifactID,
               strictDigest(object["artifact_sha256"]) == completion.artifactDigest,
               strictInteger(object["artifact_size_bytes"]) == completion.artifactSize,
+              object["workspace_retained"] as? Bool == true,
+              strictInteger(object["workspace_expires_at_ms"]).map({ $0 > 0 }) == true,
               object["status"] as? String == "result_artifact_admitted" else {
             throw AssemblywrightMacDeveloperEventRelayError.invalidMasterResponse
         }

@@ -48,13 +48,14 @@ pub use identity::{
     SERVER_CERTIFICATE_LIFETIME_MS,
 };
 
-pub const MASTER_SCHEMA_VERSION: i64 = 12;
+pub const MASTER_SCHEMA_VERSION: i64 = 13;
 pub const MAX_QUEUED_OR_LEASED_STEPS: u64 = 256;
 pub const MAX_CONCURRENT_JOBS: u64 = 4;
 pub const MAX_CONVEYOR_NONTERMINAL_FEATURES: u64 = 100;
 pub const MAX_CONVEYOR_STATUS_FEATURES: usize = 100;
 pub const MAX_APPROVED_FEATURE_SPECIFICATION_BYTES: usize = 256 * 1024;
 pub const FEATURE_CONVEYOR_STATUS_SCHEMA_VERSION: i64 = 8;
+pub const MAX_RETAINED_CODING_WORKSPACE_MS: u64 = 60 * 60 * 1000;
 
 const REASON_UNKNOWN_DEVICE: &str = "unknown_device";
 const REASON_REVOKED_DEVICE: &str = "revoked_device";
@@ -3098,7 +3099,8 @@ impl MasterKernel {
                AND attempt_id = ?10 AND lease_id = ?11 AND cancellation_id = ?12
                AND context_sha256 = ?13 AND feature_id = ?14
                AND feature_lease_id = ?15 AND snapshot_id = ?16
-               AND snapshot_sha256 = ?17 AND work_packet_sha256 = ?18",
+               AND snapshot_sha256 = ?17 AND work_packet_sha256 = ?18
+               AND workspace_retained = 1 AND workspace_expires_at_ms = ?19",
             params![
                 admission.artifact.artifact_id.to_string(),
                 admission.artifact.artifact_sha256.as_slice(),
@@ -3118,6 +3120,7 @@ impl MasterKernel {
                 admission.snapshot_id.to_string(),
                 admission.snapshot_sha256.as_slice(),
                 admission.work_packet_sha256.as_slice(),
+                u64_to_i64(admission.workspace_expires_at_ms)?,
             ],
             |row| row.get(0),
         )?;
@@ -3140,10 +3143,11 @@ impl MasterKernel {
                    device_registry_revision, connection_epoch, sequence, task_id,
                    step_id, attempt_id, lease_id, cancellation_id, context_sha256,
                    feature_id, feature_lease_id, snapshot_id, snapshot_sha256,
-                   work_packet_sha256, admitted_at_ms
+                   work_packet_sha256, admitted_at_ms, workspace_retained,
+                   workspace_expires_at_ms
                  ) VALUES (
                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
-                   ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19
+                   ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, 1, ?20
                  )",
                 params![
                     admission.artifact.artifact_id.to_string(),
@@ -3165,6 +3169,7 @@ impl MasterKernel {
                     admission.snapshot_sha256.as_slice(),
                     admission.work_packet_sha256.as_slice(),
                     u64_to_i64(now_ms)?,
+                    u64_to_i64(admission.workspace_expires_at_ms)?,
                 ],
             )?;
             append_feature_audit_tx(
@@ -3178,6 +3183,8 @@ impl MasterKernel {
                     "artifact_size_bytes": admission.artifact.artifact_size_bytes,
                     "attempt_id": admission.attempt_id,
                     "step_id": admission.step_id
+                    ,"workspace_retained": true,
+                    "workspace_expiry_present": true
                 }),
             )?;
         }
@@ -3194,6 +3201,8 @@ impl MasterKernel {
             artifact_id: admission.artifact.artifact_id,
             artifact_sha256: admission.artifact.artifact_sha256,
             artifact_size_bytes: admission.artifact.artifact_size_bytes,
+            workspace_retained: admission.workspace_retained,
+            workspace_expires_at_ms: admission.workspace_expires_at_ms,
             status: assemblywright_protocol::LOCAL_CODING_RESULT_ARTIFACT_STATUS.to_string(),
         })
     }
@@ -3284,6 +3293,11 @@ impl MasterKernel {
             .ok_or(MasterError::IntegerOutOfRange)?;
         let context: Value = serde_json::from_str(&step.context_json)?;
         let sensitivity: Sensitivity = serde_json::from_str(&step.sensitivity_json)?;
+        let context_handling = if capability.id == LOCAL_CODING_CAPABILITY_ID {
+            ContextHandlingPolicy::SealedUntilResolvedOrExpired
+        } else {
+            ContextHandlingPolicy::EphemeralNoRetention
+        };
         let job = JobEnvelope {
             protocol_version: PROTOCOL_VERSION,
             connection_epoch,
@@ -3296,7 +3310,7 @@ impl MasterKernel {
             capability_id: capability.id,
             selected_model: capability.model,
             sensitivity,
-            context_handling: ContextHandlingPolicy::EphemeralNoRetention,
+            context_handling,
             lease_duration_ms: step.lease_duration_ms,
             deadline_after_ms: step.deadline_after_ms,
             context_sha256: step.context_sha256,
@@ -3485,6 +3499,7 @@ impl MasterKernel {
                      AND context_sha256 = ?12 AND feature_id = ?13
                      AND feature_lease_id = ?14 AND snapshot_id = ?15
                      AND snapshot_sha256 = ?16 AND work_packet_sha256 = ?17
+                     AND workspace_retained = ?18 AND workspace_expires_at_ms = ?19
                  )",
                 params![
                     payload.artifact_id.to_string(),
@@ -3504,6 +3519,8 @@ impl MasterKernel {
                     context.snapshot_id.to_string(),
                     context.snapshot_sha256.as_slice(),
                     context.work_packet_sha256.as_slice(),
+                    payload.workspace_retained,
+                    u64_to_i64(payload.workspace_expires_at_ms)?,
                 ],
                 |row| row.get(0),
             )?;
@@ -4675,6 +4692,20 @@ impl MasterKernel {
             )?;
         }
         let version = self.schema_version()?;
+        if version == 12 {
+            self.connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 ALTER TABLE feature_result_artifacts
+                   ADD COLUMN workspace_retained INTEGER NOT NULL DEFAULT 0
+                     CHECK (workspace_retained IN (0, 1));
+                 ALTER TABLE feature_result_artifacts
+                   ADD COLUMN workspace_expires_at_ms INTEGER
+                     CHECK (workspace_expires_at_ms IS NULL OR workspace_expires_at_ms > 0);
+                 PRAGMA user_version = 13;
+                 COMMIT;",
+            )?;
+        }
+        let version = self.schema_version()?;
         if version != MASTER_SCHEMA_VERSION {
             return Err(MasterError::UnsupportedSchemaVersion {
                 expected: MASTER_SCHEMA_VERSION,
@@ -5734,6 +5765,12 @@ fn validate_result_artifact_admission_tx(
     admission: &LocalCodingResultArtifactAdmission,
     now_ms: u64,
 ) -> Result<JobEnvelope, MasterError> {
+    if admission.workspace_expires_at_ms <= now_ms
+        || admission.workspace_expires_at_ms
+            > now_ms.saturating_add(MAX_RETAINED_CODING_WORKSPACE_MS)
+    {
+        return Err(MasterError::ResultArtifactUnavailable);
+    }
     require_emergency_unpaused_tx(tx)?;
     let attempt =
         load_attempt(tx, admission.attempt_id)?.ok_or(MasterError::ResultArtifactUnavailable)?;
@@ -5783,7 +5820,8 @@ fn validate_result_artifact_admission_tx(
                AND attempt_id = ?10 AND lease_id = ?11 AND cancellation_id = ?12
                AND context_sha256 = ?13 AND feature_id = ?14
                AND feature_lease_id = ?15 AND snapshot_id = ?16
-               AND snapshot_sha256 = ?17 AND work_packet_sha256 = ?18",
+               AND snapshot_sha256 = ?17 AND work_packet_sha256 = ?18
+               AND workspace_retained = 1 AND workspace_expires_at_ms = ?19",
             params![
                 admission.artifact.artifact_id.to_string(),
                 admission.artifact.artifact_sha256.as_slice(),
@@ -5803,6 +5841,7 @@ fn validate_result_artifact_admission_tx(
                 admission.snapshot_id.to_string(),
                 admission.snapshot_sha256.as_slice(),
                 admission.work_packet_sha256.as_slice(),
+                u64_to_i64(admission.workspace_expires_at_ms)?,
             ],
             |row| row.get(0),
         )?;

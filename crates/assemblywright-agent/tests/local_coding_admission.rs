@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 fn job() -> JobEnvelope {
+    let work_packet = FeatureConveyorCodingWorkPacketMetadata::fixture(Uuid::new_v4(), [9; 32]);
     let context = serde_json::to_value(LocalCodingJobRequest {
         feature_id: Uuid::new_v4(),
         specification_revision: 1,
@@ -17,12 +18,8 @@ fn job() -> JobEnvelope {
         feature_lease_id: Uuid::new_v4(),
         snapshot_id: Uuid::new_v4(),
         snapshot_sha256: [1; 32],
-        work_packet_sha256: [2; 32],
-        work_packet: FeatureConveyorCodingWorkPacketMetadata {
-            packet_id: Uuid::new_v4(),
-            ordinal: 1,
-            acceptance_criteria_count: 1,
-        },
+        work_packet_sha256: work_packet.canonical_sha256().unwrap(),
+        work_packet,
         device_id: DeviceId::new(Uuid::new_v4()),
         device_registry_revision: 1,
         queue_revision: 2,
@@ -41,7 +38,7 @@ fn job() -> JobEnvelope {
         capability_id: LOCAL_CODING_CAPABILITY_ID.to_string(),
         selected_model: LOCAL_CODING_MODEL.to_string(),
         sensitivity: Sensitivity::Workspace,
-        context_handling: ContextHandlingPolicy::EphemeralNoRetention,
+        context_handling: ContextHandlingPolicy::SealedUntilResolvedOrExpired,
         lease_duration_ms: 60_000,
         deadline_after_ms: 60_000,
         context_sha256: Sha256::digest(serde_json::to_vec(&context).unwrap()).into(),
@@ -54,7 +51,10 @@ fn native_agent_admits_only_path_free_snapshot_bound_metadata_without_executing_
     let valid = job();
     let admitted = validate_local_coding_dispatch(&valid).unwrap();
     assert_eq!(admitted.snapshot_sha256, [1; 32]);
-    assert_eq!(admitted.work_packet_sha256, [2; 32]);
+    assert_eq!(
+        admitted.work_packet_sha256,
+        admitted.work_packet.canonical_sha256().unwrap()
+    );
 
     let mut injected = valid;
     injected.context["repository_path"] = json!("/private/canonical-repository");

@@ -1,11 +1,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::net::SocketAddr;
 use uuid::Uuid;
 
-pub const PROTOCOL_VERSION: u16 = 4;
+pub const PROTOCOL_VERSION: u16 = 5;
 pub const MAX_DEVICE_NAME_BYTES: usize = 128;
 pub const MAX_CAPABILITIES_PER_DEVICE: usize = 64;
 pub const MAX_CAPABILITY_ID_BYTES: usize = 64;
@@ -46,26 +46,33 @@ pub const MAX_FEATURE_CONVEYOR_DEPENDENCIES: usize = 100;
 pub const MAX_FEATURE_CONVEYOR_IDENTIFIER_BYTES: usize = 128;
 pub const MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES: usize = 8 * 1024;
 pub const MAX_FEATURE_CONVEYOR_SNAPSHOT_CLAIM_REQUEST_BYTES: usize = 12 * 1024;
-pub const MAX_FEATURE_CONVEYOR_CODING_DISPATCH_REQUEST_BYTES: usize = 8 * 1024;
+pub const MAX_FEATURE_CONVEYOR_CODING_DISPATCH_REQUEST_BYTES: usize = 256 * 1024;
 pub const MAX_FEATURE_CONVEYOR_OWNER_RESOLUTION_REQUEST_BYTES: usize = 4 * 1024;
 pub const MAX_FEATURE_CONVEYOR_REPOSITORY_PATH_BYTES: usize = 4 * 1024;
 pub const MAX_FEATURE_CONVEYOR_BASE_BRANCH_BYTES: usize = 255;
 pub const LOCAL_CODING_CAPABILITY_ID: &str = "local.coding.v1";
 pub const LOCAL_CODING_PROVIDER: &str = "assemblywright-agent";
 pub const LOCAL_CODING_MODEL: &str = "assemblywright-local-coding-v1";
-/// The contained-coding phase is intentionally one deterministic fixture. No
-/// caller may select a command, executable, or broader writable path set.
+/// Compatibility fixture used by tests and live proof. General coding packets
+/// may select other protocol-validated relative paths.
 pub const LOCAL_CODING_FIXTURE_ALLOWED_PATH: &str = "README.md";
 pub const LOCAL_CODING_COMPLETED_STATUS: &str = "contained_coding_completed";
 pub const LOCAL_CODING_FIXTURE_TEST_STATUS: &str = "not_run";
-pub const MAX_LOCAL_CODING_CONTEXT_BYTES: usize = 8 * 1024;
+pub const MAX_LOCAL_CODING_JOB_FRAME_BYTES: usize = 16 * 1024;
+pub const MAX_LOCAL_CODING_CONTEXT_BYTES: usize = 12 * 1024;
 pub const MAX_LOCAL_CODING_RESULT_BYTES: usize = 32 * 1024;
 pub const MAX_LOCAL_CODING_SNAPSHOT_CHUNK_BYTES: usize = 128 * 1024;
 pub const MAX_LOCAL_CODING_SNAPSHOT_BUNDLE_BYTES: u64 = 320 * 1024 * 1024;
 pub const MAX_LOCAL_CODING_SNAPSHOT_CHUNK_FRAME_BYTES: usize = 384 * 1024;
-pub const MAX_LOCAL_CODING_RESULT_ARTIFACT_BYTES: usize = 64 * 1024;
-pub const MAX_LOCAL_CODING_RESULT_ARTIFACT_FRAME_BYTES: usize = 160 * 1024;
-pub const LOCAL_CODING_RESULT_ARTIFACT_FORMAT: &str = "assemblywright.readme-replacement.v1";
+pub const MAX_LOCAL_CODING_RESULT_ARTIFACT_BYTES: usize = 256 * 1024;
+pub const MAX_LOCAL_CODING_RESULT_ARTIFACT_FRAME_BYTES: usize = 640 * 1024;
+pub const MAX_LOCAL_CODING_EDIT_PATHS: usize = 64;
+pub const MAX_LOCAL_CODING_EDIT_OPERATIONS: usize = 64;
+pub const MAX_LOCAL_CODING_EDIT_PATH_BYTES: usize = 1024;
+pub const MAX_LOCAL_CODING_EDIT_CONTENT_BYTES: usize = 4 * 1024;
+pub const LOCAL_CODING_WRITE_FILE_TOOL_ID: &str = "file.write.v1";
+pub const LOCAL_CODING_DELETE_FILE_TOOL_ID: &str = "file.delete.v1";
+pub const LOCAL_CODING_RESULT_ARTIFACT_FORMAT: &str = "assemblywright.multi-file-patch.v1";
 pub const LOCAL_CODING_RESULT_ARTIFACT_STATUS: &str = "result_artifact_admitted";
 pub const LOCAL_CODING_FIXTURE_CONTENT: &[u8] = b"assemblywright contained coding fixture\n";
 
@@ -206,6 +213,7 @@ pub enum Sensitivity {
 #[serde(rename_all = "snake_case")]
 pub enum ContextHandlingPolicy {
     EphemeralNoRetention,
+    SealedUntilResolvedOrExpired,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -958,22 +966,173 @@ impl FeatureConveyorRepositorySnapshotClaimReceipt {
     }
 }
 
-/// Bounded, path-free metadata for one owner-approved coding work packet.
+/// Exact protocol-owned file operation. This is deliberately not a command or
+/// general tool invocation: the only accepted argument schemas are encoded by
+/// this enum and contain no environment, credential, network, or executable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "tool_id", content = "arguments")]
+pub enum LocalCodingEditOperation {
+    #[serde(rename = "file.write.v1")]
+    Write(LocalCodingWriteFileArguments),
+    #[serde(rename = "file.delete.v1")]
+    Delete(LocalCodingDeleteFileArguments),
+}
+
+impl LocalCodingEditOperation {
+    pub fn path(&self) -> &str {
+        match self {
+            Self::Write(arguments) => &arguments.path,
+            Self::Delete(arguments) => &arguments.path,
+        }
+    }
+
+    fn validate(&self) -> Result<(), ProtocolError> {
+        match self {
+            Self::Write(arguments) => arguments.validate(),
+            Self::Delete(arguments) => arguments.validate(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalCodingWriteFileArguments {
+    pub path: String,
+    /// `None` authorizes creation only; `Some` authorizes replacement only
+    /// after the exact current bytes match.
+    pub expected_before_sha256: Option<[u8; 32]>,
+    pub replacement_sha256: [u8; 32],
+    pub replacement_hex: String,
+    pub executable: bool,
+}
+
+impl LocalCodingWriteFileArguments {
+    fn validate(&self) -> Result<(), ProtocolError> {
+        validate_local_coding_relative_path(&self.path)?;
+        if self.expected_before_sha256 == Some([0; 32]) {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        let replacement = decode_lower_hex(&self.replacement_hex)
+            .ok_or(ProtocolError::InvalidFeatureConveyorOwnerControl)?;
+        if replacement.len() > MAX_LOCAL_CODING_EDIT_CONTENT_BYTES
+            || self.replacement_sha256 != <[u8; 32]>::from(Sha256::digest(&replacement))
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalCodingDeleteFileArguments {
+    pub path: String,
+    pub expected_before_sha256: [u8; 32],
+}
+
+impl LocalCodingDeleteFileArguments {
+    fn validate(&self) -> Result<(), ProtocolError> {
+        validate_local_coding_relative_path(&self.path)?;
+        if self.expected_before_sha256 == [0; 32] {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        Ok(())
+    }
+}
+
+/// Bounded immutable implementation packet for one owner-approved dispatch.
+/// Canonical JSON of this complete value is the work-packet digest binding.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FeatureConveyorCodingWorkPacketMetadata {
     pub packet_id: Uuid,
     pub ordinal: u16,
     pub acceptance_criteria_count: u16,
+    pub allowed_paths: Vec<String>,
+    pub operations: Vec<LocalCodingEditOperation>,
 }
 
 impl FeatureConveyorCodingWorkPacketMetadata {
+    pub fn fixture(packet_id: Uuid, expected_before_sha256: [u8; 32]) -> Self {
+        let replacement_sha256 = Sha256::digest(LOCAL_CODING_FIXTURE_CONTENT).into();
+        Self {
+            packet_id,
+            ordinal: 1,
+            acceptance_criteria_count: 1,
+            allowed_paths: vec![LOCAL_CODING_FIXTURE_ALLOWED_PATH.to_string()],
+            operations: vec![LocalCodingEditOperation::Write(
+                LocalCodingWriteFileArguments {
+                    path: LOCAL_CODING_FIXTURE_ALLOWED_PATH.to_string(),
+                    expected_before_sha256: Some(expected_before_sha256),
+                    replacement_sha256,
+                    replacement_hex: hex_lower(LOCAL_CODING_FIXTURE_CONTENT),
+                    executable: false,
+                },
+            )],
+        }
+    }
+
     pub fn validate(&self) -> Result<(), ProtocolError> {
         validate_uuid("packet_id", self.packet_id)?;
-        if self.ordinal == 0 || self.acceptance_criteria_count == 0 {
+        if self.ordinal == 0
+            || self.acceptance_criteria_count == 0
+            || self.allowed_paths.is_empty()
+            || self.allowed_paths.len() > MAX_LOCAL_CODING_EDIT_PATHS
+            || self.operations.is_empty()
+            || self.operations.len() > MAX_LOCAL_CODING_EDIT_OPERATIONS
+        {
             return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
         }
+        let mut prior_path: Option<&str> = None;
+        let mut allowed = BTreeSet::new();
+        for path in &self.allowed_paths {
+            validate_local_coding_relative_path(path)?;
+            if prior_path.is_some_and(|prior| prior >= path.as_str())
+                || !allowed.insert(path.as_str())
+            {
+                return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+            }
+            prior_path = Some(path);
+        }
+        let mut operated = BTreeSet::new();
+        let mut replacement_bytes = 0_usize;
+        for operation in &self.operations {
+            operation.validate()?;
+            if !allowed.contains(operation.path()) || !operated.insert(operation.path()) {
+                return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+            }
+            if let LocalCodingEditOperation::Write(arguments) = operation {
+                replacement_bytes = replacement_bytes
+                    .checked_add(arguments.replacement_hex.len() / 2)
+                    .ok_or(ProtocolError::InvalidFeatureConveyorOwnerControl)?;
+            }
+        }
+        if operated.len() != allowed.len()
+            || replacement_bytes > MAX_LOCAL_CODING_EDIT_CONTENT_BYTES
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        validate_serialized_limit(
+            "feature_conveyor_coding_work_packet",
+            self,
+            MAX_LOCAL_CODING_CONTEXT_BYTES,
+        )?;
         Ok(())
+    }
+
+    pub fn canonical_sha256(&self) -> Result<[u8; 32], ProtocolError> {
+        self.validate()?;
+        let value = serde_json::to_value(self).map_err(|error| ProtocolError::Serialization {
+            field: "feature_conveyor_coding_work_packet",
+            message: error.to_string(),
+        })?;
+        let bytes = canonical_json_bytes(&value)?;
+        Ok(Sha256::digest(bytes).into())
+    }
+
+    pub fn allowed_paths_sha256(&self) -> Result<[u8; 32], ProtocolError> {
+        self.validate()?;
+        Ok(local_coding_paths_sha256(&self.allowed_paths))
     }
 }
 
@@ -1032,7 +1191,10 @@ impl FeatureConveyorCodingDispatchRequest {
             u64::MAX,
         )?;
         self.work_packet.validate()?;
-        if self.snapshot_sha256 == [0; 32] || self.work_packet_sha256 == [0; 32] {
+        if self.snapshot_sha256 == [0; 32]
+            || self.work_packet_sha256 == [0; 32]
+            || self.work_packet.canonical_sha256()? != self.work_packet_sha256
+        {
             return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
         }
         validate_serialized_limit(
@@ -1081,26 +1243,30 @@ impl FeatureConveyorCodingDispatchReceipt {
     }
 
     pub fn validate(&self) -> Result<(), ProtocolError> {
-        let request = FeatureConveyorCodingDispatchRequest {
-            schema_version: self.schema_version,
-            feature_id: self.feature_id,
-            specification_revision: self.specification_revision,
-            expected_lifecycle_revision: self.lifecycle_revision,
-            feature_lease_id: self.feature_lease_id,
-            snapshot_id: self.snapshot_id,
-            snapshot_sha256: self.snapshot_sha256,
-            work_packet_sha256: self.work_packet_sha256,
-            work_packet: FeatureConveyorCodingWorkPacketMetadata {
-                packet_id: self.packet_id,
-                ordinal: 1,
-                acceptance_criteria_count: 1,
-            },
-            device_id: self.device_id,
-            device_registry_revision: self.device_registry_revision,
-            expected_queue_revision: self.queue_revision,
-            expected_emergency_pause_revision: self.emergency_pause_revision,
-        };
-        request.validate()?;
+        validate_fixed_value(
+            "schema_version",
+            self.schema_version.to_string(),
+            FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION.to_string(),
+        )?;
+        validate_uuid("feature_id", self.feature_id)?;
+        validate_uuid("feature_lease_id", self.feature_lease_id)?;
+        validate_uuid("snapshot_id", self.snapshot_id)?;
+        validate_uuid("packet_id", self.packet_id)?;
+        validate_uuid("device_id", self.device_id.0)?;
+        validate_positive_limit(
+            "specification_revision",
+            self.specification_revision,
+            u64::MAX,
+        )?;
+        validate_positive_limit("lifecycle_revision", self.lifecycle_revision, u64::MAX)?;
+        validate_positive_limit(
+            "device_registry_revision",
+            self.device_registry_revision,
+            u64::MAX,
+        )?;
+        if self.snapshot_sha256 == [0; 32] || self.work_packet_sha256 == [0; 32] {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
         validate_uuid("task_id", self.task_id.0)?;
         validate_uuid("step_id", self.step_id.0)
     }
@@ -2023,7 +2189,7 @@ impl JobEnvelope {
         if self.capability_id != LOCAL_CODING_CAPABILITY_ID
             || self.selected_model != LOCAL_CODING_MODEL
             || self.sensitivity != Sensitivity::Workspace
-            || self.context_handling != ContextHandlingPolicy::EphemeralNoRetention
+            || self.context_handling != ContextHandlingPolicy::SealedUntilResolvedOrExpired
             || serde_json::to_vec(&self.context)
                 .map_err(|error| ProtocolError::Serialization {
                     field: "local_coding_context",
@@ -2031,6 +2197,13 @@ impl JobEnvelope {
                 })?
                 .len()
                 > MAX_LOCAL_CODING_CONTEXT_BYTES
+            || serde_json::to_vec(self)
+                .map_err(|error| ProtocolError::Serialization {
+                    field: "local_coding_job",
+                    message: error.to_string(),
+                })?
+                .len()
+                > MAX_LOCAL_CODING_JOB_FRAME_BYTES
         {
             return Err(ProtocolError::InvalidLocalCodingJob);
         }
@@ -2132,66 +2305,109 @@ pub struct LocalCodingJobResult {
     pub test_status: String,
     pub mutation_performed: bool,
     pub workspace_retained: bool,
+    pub workspace_expires_at_ms: u64,
     pub ambiguous: bool,
 }
 
-/// Protocol-owned canonical replacement artifact for the sole contained-coding
-/// fixture. It carries no arbitrary path or command. The expected-before digest
-/// makes later application (which is outside this slice) compare-and-set only.
+/// Protocol-owned canonical multi-file patch. It repeats only the exact
+/// deterministic operations admitted by the digest-bound implementation packet.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LocalCodingCanonicalPatchArtifact {
     format: String,
-    path: String,
-    expected_before_sha256: [u8; 32],
-    replacement_sha256: [u8; 32],
-    replacement_hex: String,
+    work_packet_sha256: [u8; 32],
+    changes: Vec<LocalCodingEditOperation>,
 }
 
-pub fn build_local_coding_fixture_patch_artifact(
-    expected_before_sha256: [u8; 32],
+pub fn build_local_coding_patch_artifact(
+    packet: &FeatureConveyorCodingWorkPacketMetadata,
 ) -> Result<Vec<u8>, ProtocolError> {
-    if expected_before_sha256 == [0; 32] {
-        return Err(ProtocolError::InvalidLocalCodingResultArtifact);
-    }
+    let work_packet_sha256 = packet.canonical_sha256()?;
     let document = LocalCodingCanonicalPatchArtifact {
         format: LOCAL_CODING_RESULT_ARTIFACT_FORMAT.to_string(),
-        path: LOCAL_CODING_FIXTURE_ALLOWED_PATH.to_string(),
-        expected_before_sha256,
-        replacement_sha256: Sha256::digest(LOCAL_CODING_FIXTURE_CONTENT).into(),
-        replacement_hex: hex_lower(LOCAL_CODING_FIXTURE_CONTENT),
+        work_packet_sha256,
+        changes: packet.operations.clone(),
     };
-    let bytes = serde_json::to_vec(&document).map_err(|error| ProtocolError::Serialization {
+    let value = serde_json::to_value(&document).map_err(|error| ProtocolError::Serialization {
         field: "local_coding_result_artifact",
         message: error.to_string(),
     })?;
-    validate_local_coding_fixture_patch_artifact(&bytes)?;
+    let bytes = canonical_json_bytes(&value)?;
+    validate_local_coding_patch_artifact(&bytes)?;
     Ok(bytes)
 }
 
-pub fn validate_local_coding_fixture_patch_artifact(
-    bytes: &[u8],
-) -> Result<[u8; 32], ProtocolError> {
+pub fn validate_local_coding_patch_artifact(bytes: &[u8]) -> Result<[u8; 32], ProtocolError> {
     if bytes.is_empty() || bytes.len() > MAX_LOCAL_CODING_RESULT_ARTIFACT_BYTES {
         return Err(ProtocolError::InvalidLocalCodingResultArtifact);
     }
     let document: LocalCodingCanonicalPatchArtifact =
         decode_strict_json("local_coding_result_artifact", bytes)?;
-    let replacement = decode_lower_hex(&document.replacement_hex)
-        .ok_or(ProtocolError::InvalidLocalCodingResultArtifact)?;
     if document.format != LOCAL_CODING_RESULT_ARTIFACT_FORMAT
-        || document.path != LOCAL_CODING_FIXTURE_ALLOWED_PATH
-        || document.expected_before_sha256 == [0; 32]
-        || replacement != LOCAL_CODING_FIXTURE_CONTENT
-        || document.replacement_sha256 != <[u8; 32]>::from(Sha256::digest(&replacement))
-        || serde_json::to_vec(&document).map_err(|error| ProtocolError::Serialization {
-            field: "local_coding_result_artifact",
-            message: error.to_string(),
-        })? != bytes
+        || document.work_packet_sha256 == [0; 32]
+        || document.changes.is_empty()
+        || document.changes.len() > MAX_LOCAL_CODING_EDIT_OPERATIONS
+        || canonical_json_bytes(&serde_json::to_value(&document).map_err(|error| {
+            ProtocolError::Serialization {
+                field: "local_coding_result_artifact",
+                message: error.to_string(),
+            }
+        })?)?
+            != bytes
     {
         return Err(ProtocolError::InvalidLocalCodingResultArtifact);
     }
+    let mut paths = BTreeSet::new();
+    let mut replacement_bytes = 0_usize;
+    for change in &document.changes {
+        change
+            .validate()
+            .map_err(|_| ProtocolError::InvalidLocalCodingResultArtifact)?;
+        if !paths.insert(change.path()) {
+            return Err(ProtocolError::InvalidLocalCodingResultArtifact);
+        }
+        if let LocalCodingEditOperation::Write(arguments) = change {
+            replacement_bytes = replacement_bytes
+                .checked_add(arguments.replacement_hex.len() / 2)
+                .ok_or(ProtocolError::InvalidLocalCodingResultArtifact)?;
+        }
+    }
+    if replacement_bytes > MAX_LOCAL_CODING_EDIT_CONTENT_BYTES {
+        return Err(ProtocolError::InvalidLocalCodingResultArtifact);
+    }
     Ok(Sha256::digest(bytes).into())
+}
+
+pub fn validate_local_coding_patch_artifact_for_packet(
+    bytes: &[u8],
+    packet: &FeatureConveyorCodingWorkPacketMetadata,
+) -> Result<[u8; 32], ProtocolError> {
+    let digest = validate_local_coding_patch_artifact(bytes)?;
+    let document: LocalCodingCanonicalPatchArtifact =
+        decode_strict_json("local_coding_result_artifact", bytes)?;
+    if document.work_packet_sha256 != packet.canonical_sha256()?
+        || document.changes != packet.operations
+    {
+        return Err(ProtocolError::InvalidLocalCodingResultArtifact);
+    }
+    Ok(digest)
+}
+
+/// Compatibility helper for the deterministic README live fixture. The
+/// resulting bytes use the general v5 multi-file artifact contract.
+pub fn build_local_coding_fixture_patch_artifact(
+    expected_before_sha256: [u8; 32],
+) -> Result<Vec<u8>, ProtocolError> {
+    build_local_coding_patch_artifact(&FeatureConveyorCodingWorkPacketMetadata::fixture(
+        Uuid::from_u128(1),
+        expected_before_sha256,
+    ))
+}
+
+pub fn validate_local_coding_fixture_patch_artifact(
+    bytes: &[u8],
+) -> Result<[u8; 32], ProtocolError> {
+    validate_local_coding_patch_artifact(bytes)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2204,13 +2420,18 @@ pub struct LocalCodingAgentCompletion {
 impl LocalCodingAgentCompletion {
     pub fn validate_for_job(&self, job: &JobEnvelope) -> Result<(), ProtocolError> {
         self.result.validate_local_coding_result(job)?;
-        self.artifact.validate()?;
+        let artifact_bytes = self.artifact.validate()?;
         let result: LocalCodingJobResult = serde_json::from_value(self.result.payload.clone())
             .map_err(|_| ProtocolError::InvalidLocalCodingResult)?;
+        let request = job.validate_local_coding()?;
         if result.artifact_id != self.artifact.artifact_id
             || result.patch_sha256 != self.artifact.artifact_sha256
             || result.artifact_sha256 != self.artifact.artifact_sha256
             || result.artifact_size_bytes != self.artifact.artifact_size_bytes
+            || validate_local_coding_patch_artifact_for_packet(
+                &artifact_bytes,
+                &request.work_packet,
+            )? != self.artifact.artifact_sha256
         {
             return Err(ProtocolError::InvalidLocalCodingResultArtifact);
         }
@@ -2229,7 +2450,7 @@ pub struct LocalCodingResultArtifact {
 
 impl LocalCodingResultArtifact {
     pub fn from_bytes(artifact_id: Uuid, bytes: &[u8]) -> Result<Self, ProtocolError> {
-        let artifact_sha256 = validate_local_coding_fixture_patch_artifact(bytes)?;
+        let artifact_sha256 = validate_local_coding_patch_artifact(bytes)?;
         Ok(Self {
             artifact_id,
             artifact_sha256,
@@ -2245,7 +2466,7 @@ impl LocalCodingResultArtifact {
         if self.artifact_size_bytes == 0
             || self.artifact_size_bytes > MAX_LOCAL_CODING_RESULT_ARTIFACT_BYTES as u64
             || bytes.len() as u64 != self.artifact_size_bytes
-            || validate_local_coding_fixture_patch_artifact(&bytes)? != self.artifact_sha256
+            || validate_local_coding_patch_artifact(&bytes)? != self.artifact_sha256
         {
             return Err(ProtocolError::InvalidLocalCodingResultArtifact);
         }
@@ -2270,6 +2491,8 @@ pub struct LocalCodingResultArtifactAdmission {
     pub snapshot_id: Uuid,
     pub snapshot_sha256: [u8; 32],
     pub work_packet_sha256: [u8; 32],
+    pub workspace_retained: bool,
+    pub workspace_expires_at_ms: u64,
     pub artifact: LocalCodingResultArtifact,
 }
 
@@ -2298,6 +2521,8 @@ impl LocalCodingResultArtifactAdmission {
         if self.context_sha256 == [0; 32]
             || self.snapshot_sha256 == [0; 32]
             || self.work_packet_sha256 == [0; 32]
+            || !self.workspace_retained
+            || self.workspace_expires_at_ms == 0
         {
             return Err(ProtocolError::InvalidLocalCodingResultArtifact);
         }
@@ -2329,7 +2554,13 @@ impl LocalCodingResultArtifactAdmission {
         {
             return Err(ProtocolError::InvalidLocalCodingResultArtifact);
         }
-        self.artifact.validate()
+        let bytes = self.artifact.validate()?;
+        if validate_local_coding_patch_artifact_for_packet(&bytes, &context.work_packet)?
+            != self.artifact.artifact_sha256
+        {
+            return Err(ProtocolError::InvalidLocalCodingResultArtifact);
+        }
+        Ok(bytes)
     }
 }
 
@@ -2347,6 +2578,8 @@ pub struct LocalCodingResultArtifactReceipt {
     pub artifact_id: Uuid,
     pub artifact_sha256: [u8; 32],
     pub artifact_size_bytes: u64,
+    pub workspace_retained: bool,
+    pub workspace_expires_at_ms: u64,
     pub status: String,
 }
 
@@ -2367,6 +2600,8 @@ impl LocalCodingResultArtifactReceipt {
             || self.artifact_id != admission.artifact.artifact_id
             || self.artifact_sha256 != admission.artifact.artifact_sha256
             || self.artifact_size_bytes != admission.artifact.artifact_size_bytes
+            || self.workspace_retained != admission.workspace_retained
+            || self.workspace_expires_at_ms != admission.workspace_expires_at_ms
             || self.status != LOCAL_CODING_RESULT_ARTIFACT_STATUS
         {
             return Err(ProtocolError::InvalidLocalCodingResultArtifact);
@@ -2376,11 +2611,17 @@ impl LocalCodingResultArtifactReceipt {
 }
 
 pub fn local_coding_fixture_allowed_paths_sha256() -> [u8; 32] {
+    local_coding_paths_sha256(&[LOCAL_CODING_FIXTURE_ALLOWED_PATH.to_string()])
+}
+
+pub fn local_coding_paths_sha256(paths: &[String]) -> [u8; 32] {
     let mut digest = Sha256::new();
-    digest.update(b"assemblywright.local-coding-allowed-paths.v1\0");
-    digest.update(1_u16.to_be_bytes());
-    digest.update((LOCAL_CODING_FIXTURE_ALLOWED_PATH.len() as u64).to_be_bytes());
-    digest.update(LOCAL_CODING_FIXTURE_ALLOWED_PATH.as_bytes());
+    digest.update(b"assemblywright.local-coding-allowed-paths.v2\0");
+    digest.update((paths.len() as u16).to_be_bytes());
+    for path in paths {
+        digest.update((path.len() as u64).to_be_bytes());
+        digest.update(path.as_bytes());
+    }
     digest.finalize().into()
 }
 
@@ -2629,17 +2870,18 @@ impl JobResultEnvelope {
             || result.work_packet_sha256 != request.work_packet_sha256
             || result.admission_sha256 != local_coding_admission_sha256(job)
             || result.snapshot_sha256 != request.snapshot_sha256
-            || result.allowed_paths_sha256 != local_coding_fixture_allowed_paths_sha256()
+            || result.allowed_paths_sha256 != request.work_packet.allowed_paths_sha256()?
             || result.changed_paths_sha256 != result.allowed_paths_sha256
             || result.patch_sha256 == [0; 32]
             || result.artifact_id.is_nil()
             || result.artifact_sha256 != result.patch_sha256
             || result.artifact_size_bytes == 0
             || result.artifact_size_bytes > MAX_LOCAL_CODING_RESULT_ARTIFACT_BYTES as u64
-            || result.changed_file_count != 1
+            || result.changed_file_count as usize != request.work_packet.allowed_paths.len()
             || result.test_status != LOCAL_CODING_FIXTURE_TEST_STATUS
             || !result.mutation_performed
-            || result.workspace_retained
+            || !result.workspace_retained
+            || result.workspace_expires_at_ms == 0
             || result.ambiguous
         {
             return Err(ProtocolError::InvalidLocalCodingResult);
@@ -2671,6 +2913,50 @@ fn validate_fixed_value(
         });
     }
     Ok(())
+}
+
+pub fn validate_local_coding_relative_path(path: &str) -> Result<(), ProtocolError> {
+    if path.is_empty()
+        || path.len() > MAX_LOCAL_CODING_EDIT_PATH_BYTES
+        || path.starts_with('/')
+        || path.ends_with('/')
+        || path.contains('\\')
+        || path.contains(':')
+        || path.contains('\0')
+    {
+        return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+    }
+    let mut component_count = 0_usize;
+    for component in path.split('/') {
+        component_count += 1;
+        if component.is_empty()
+            || component == "."
+            || component == ".."
+            || component.eq_ignore_ascii_case(".git")
+            || component.ends_with('.')
+            || component.ends_with(' ')
+            || component.chars().any(char::is_control)
+            || is_windows_reserved_component(component)
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+    }
+    if component_count == 0 {
+        return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+    }
+    Ok(())
+}
+
+fn is_windows_reserved_component(component: &str) -> bool {
+    let stem = component
+        .split('.')
+        .next()
+        .unwrap_or(component)
+        .to_ascii_uppercase();
+    matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (stem.len() == 4
+            && (stem.starts_with("COM") || stem.starts_with("LPT"))
+            && matches!(stem.as_bytes()[3], b'1'..=b'9'))
 }
 
 fn validate_capabilities(capabilities: &[CapabilityDescriptor]) -> Result<(), ProtocolError> {

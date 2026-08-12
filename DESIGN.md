@@ -59,7 +59,7 @@ accepted designs and take precedence within their scope:
 
 ### Windows master
 
-`assemblywright-master` owns durable state and every authority decision. Its schema-v12
+`assemblywright-master` owns durable state and every authority decision. Its schema-v13
 SQLite database holds two kernels:
 
 - The distributed device lifecycle: registered devices, connection epochs,
@@ -144,7 +144,7 @@ append the immutable specification and queued lifecycle; it adds no claim,
 dispatch, worker, repository, provider, review, Git, publication, or activation
 authority.
 
-Schema v10 adds one separate owner-token-authenticated loopback-only coding-
+Schema v10 originally added one separate owner-token-authenticated loopback-only coding-
 dispatch transition. It accepts only bounded path-free metadata and binds one
 work packet digest to the exact active feature, specification and lifecycle
 revision, feature lease, snapshot ID and digest, queue and Emergency Pause
@@ -163,9 +163,9 @@ both before and after each filesystem read. The Mac bridge strictly validates
 every response and forwards it over the authenticated local socket to the
 native agent, which reconstructs the exact raw-object graph and safe regular or
 executable files in a fresh private per-attempt directory, verifies object,
-chunk, bundle, path, and aggregate digests, charges every manifest entry
-against an aggregate materialized-output byte budget before writing it, and
-forks exactly one deterministic
+chunk, bundle, path, and aggregate digests, and charges every manifest entry
+against an aggregate materialized-output byte budget before writing it. For the
+historical protocol-v4/schema-v12 fixture, it forked exactly one deterministic
 child from the already-running agent with no `exec` and no remote input. The
 Swift parent launches the agent with an empty environment, and the agent refuses
 local-coding startup if that parent environment is nonempty. Before `fork`, the
@@ -203,7 +203,8 @@ sandbox or host-level egress enforcement and adds no retained workspace,
 canonical-repository mutation, commit, integration, review, publication, queue
 advancement, or autonomous activation.
 
-Schema v12 adds result-artifact admission without adding integration authority.
+Historically, schema v12 added result-artifact admission without adding
+integration authority.
 The agent constructs one protocol-owned canonical `README.md` replacement
 artifact in memory and hashes its exact bytes, then removes workspace and
 transfer state before returning the strict result/artifact pair. During the
@@ -254,6 +255,40 @@ increments the queue revision. Both return fixed path-free receipts and remain
 absent from the enrolled-device mTLS router. Neither operation resumes work,
 creates a lease, integrates output, approves a result, or grants repository,
 review, Git, publication, or autonomous authority.
+
+Schema v13 adds bounded general-worker packet semantics. Protocol v5/schema v13
+extends the retained schema-v10 through schema-v12
+contracts without weakening them. The immutable packet now contains at most 64
+sorted normalized relative paths and exact deterministic `file.write.v1` or
+`file.delete.v1` operations, with a 16 KiB complete job frame, 12 KiB canonical
+context, and 4 KiB aggregate replacement bytes enforced identically by Rust and
+the production Swift decoder. The Mac agent has no shell, `exec`, environment,
+credential, network, Git, test, or arbitrary-tool authority. It traverses every
+workspace component through held owner-private `O_DIRECTORY|O_NOFOLLOW`
+descriptors. Creates use same-parent exclusive atomic installation; replacements
+use same-parent atomic swap and verify the displaced inode against the opened
+compare-and-set evidence; deletes use held-parent `fstatat` identity verification
+and `unlinkat`. No mutation re-resolves a validated parent pathname.
+Deletes first atomically swap the leaf into a private same-parent capture, then
+verify the displaced inode and content; mismatch rolls the swap back and never
+deletes the unverified replacement. Windows independently decodes every admitted
+artifact and requires its canonical operations and packet digest to equal the
+immutable job packet. Terminal acceptance also requires stored artifact identity,
+retention, and expiry to equal the validated result payload; Swift is not trusted
+as the sole semantic validator.
+
+After exact changed-path and canonical artifact evidence is complete, the agent
+renames the workspace into a sealed directory and writes a separate bounded
+owner-private recovery record outside the attested tree. That record binds the
+exact job/attempt, sealed name, post-edit tree digest, expiry, and its own domain-
+separated digest. Restart accepts exactly one matching pair, re-hashes the tree,
+reconstructs exact cancellation authority, and blocks new admission while it is
+unresolved. Tamper, orphaned or multiple state, bad permissions, binding drift,
+or ambiguous cleanup makes runtime open fail closed. Exact expiry or an exact
+post-restart cancellation removes both pair members. The record is never logged,
+audited, uploaded, or stored in SQLite. This grants no canonical checkout,
+integration, test-gate, review, publication, lifecycle advancement, or autonomous
+authority, and it does not claim a portable host sandbox or egress enforcement.
 
 The local-coding lane uses a separate `local-coding` Secure Enclave/Keychain
 identity namespace. Its enrollment profile accepts only the
@@ -374,7 +409,8 @@ and digests, never raw payloads or credentials.
   over loopback, the event cursor, the Windows SCM service, and the Mac
   agent relay. The local-coding lane additionally runs the production Swift
   relay and launcher against the real supervised Rust agent process, including
-  the fixed contained-coding child and cleanup-before-result contract.
+  bounded multi-file mutation, retained-workspace recovery, and
+  cleanup-before-cancellation-acknowledgement contracts.
 - Owner-controlled live closeouts for the Mac/Windows bridge, kept explicitly
   separate from repository validation.
 - Repository validation stays distinct from signing, notarization, live-device

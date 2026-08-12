@@ -197,6 +197,7 @@ fn coding_dispatch_request(
     queue_revision: u64,
     pause_revision: u64,
 ) -> FeatureConveyorCodingDispatchRequest {
+    let work_packet = FeatureConveyorCodingWorkPacketMetadata::fixture(Uuid::new_v4(), [0x42; 32]);
     FeatureConveyorCodingDispatchRequest {
         schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
         feature_id: claim.feature_id,
@@ -205,12 +206,8 @@ fn coding_dispatch_request(
         feature_lease_id: claim.lease_id,
         snapshot_id: claim.snapshot_id,
         snapshot_sha256: claim.snapshot_sha256,
-        work_packet_sha256: digest("bounded-work-packet"),
-        work_packet: FeatureConveyorCodingWorkPacketMetadata {
-            packet_id: Uuid::new_v4(),
-            ordinal: 1,
-            acceptance_criteria_count: 2,
-        },
+        work_packet_sha256: work_packet.canonical_sha256().unwrap(),
+        work_packet,
         device_id: device.device_id,
         device_registry_revision: device.registry_revision,
         expected_queue_revision: queue_revision,
@@ -221,7 +218,8 @@ fn coding_dispatch_request(
 fn coding_ack(job: &JobEnvelope, sequence: u64) -> JobResultEnvelope {
     let context = job.validate_local_coding().unwrap();
     let allowed_paths_sha256 = assemblywright_protocol::local_coding_fixture_allowed_paths_sha256();
-    let artifact_bytes = build_local_coding_fixture_patch_artifact([0x42; 32]).unwrap();
+    let artifact_bytes =
+        assemblywright_protocol::build_local_coding_patch_artifact(&context.work_packet).unwrap();
     let artifact = LocalCodingResultArtifact::from_bytes(Uuid::new_v4(), &artifact_bytes).unwrap();
     let payload = serde_json::to_value(LocalCodingJobResult {
         status: LOCAL_CODING_COMPLETED_STATUS.to_string(),
@@ -237,7 +235,8 @@ fn coding_ack(job: &JobEnvelope, sequence: u64) -> JobResultEnvelope {
         changed_file_count: 1,
         test_status: LOCAL_CODING_FIXTURE_TEST_STATUS.to_string(),
         mutation_performed: true,
-        workspace_retained: false,
+        workspace_retained: true,
+        workspace_expires_at_ms: 3_000_000,
         ambiguous: false,
     })
     .unwrap();
@@ -263,7 +262,8 @@ fn coding_artifact_admission(
 ) -> LocalCodingResultArtifactAdmission {
     let context = job.validate_local_coding().unwrap();
     let payload: LocalCodingJobResult = serde_json::from_value(result.payload.clone()).unwrap();
-    let artifact_bytes = build_local_coding_fixture_patch_artifact([0x42; 32]).unwrap();
+    let artifact_bytes =
+        assemblywright_protocol::build_local_coding_patch_artifact(&context.work_packet).unwrap();
     LocalCodingResultArtifactAdmission {
         protocol_version: job.protocol_version,
         connection_epoch: job.connection_epoch,
@@ -279,6 +279,8 @@ fn coding_artifact_admission(
         snapshot_id: context.snapshot_id,
         snapshot_sha256: context.snapshot_sha256,
         work_packet_sha256: context.work_packet_sha256,
+        workspace_retained: payload.workspace_retained,
+        workspace_expires_at_ms: payload.workspace_expires_at_ms,
         artifact: LocalCodingResultArtifact::from_bytes(payload.artifact_id, &artifact_bytes)
             .unwrap(),
     }
@@ -2171,6 +2173,17 @@ fn result_artifact_admission_is_exact_idempotent_and_required_before_result() {
     ));
 
     let admission = coding_artifact_admission(&job, &result);
+    let context = job.validate_local_coding().unwrap();
+    let mut different_packet = context.work_packet.clone();
+    different_packet.acceptance_criteria_count += 1;
+    let different_bytes =
+        assemblywright_protocol::build_local_coding_patch_artifact(&different_packet).unwrap();
+    let mut different_artifact = admission.clone();
+    different_artifact.artifact =
+        LocalCodingResultArtifact::from_bytes(Uuid::new_v4(), &different_bytes).unwrap();
+    assert!(kernel
+        .authorize_local_coding_result_artifact(device.device_id, &different_artifact, 15)
+        .is_err());
     assert!(!kernel
         .authorize_local_coding_result_artifact(device.device_id, &admission, 15)
         .unwrap());
@@ -2214,6 +2227,8 @@ fn result_artifact_admission_is_exact_idempotent_and_required_before_result() {
             "artifact_size_bytes".to_string(),
             "attempt_id".to_string(),
             "step_id".to_string(),
+            "workspace_retained".to_string(),
+            "workspace_expiry_present".to_string(),
         ])
     );
     assert!(!audits[0].contains("artifact_hex"));
@@ -2229,7 +2244,7 @@ fn result_artifact_admission_is_exact_idempotent_and_required_before_result() {
     let artifact_directory = tempdir().unwrap();
     let store =
         assemblywright_master::ResultArtifactStore::open(artifact_directory.path()).unwrap();
-    let artifact_bytes = build_local_coding_fixture_patch_artifact([0x42; 32]).unwrap();
+    let artifact_bytes = admission.artifact.validate().unwrap();
     let mut prepared = store
         .prepare(
             admission.artifact.artifact_id,
@@ -2257,6 +2272,36 @@ fn result_artifact_admission_is_exact_idempotent_and_required_before_result() {
         ),
         Err(MasterError::ResultArtifactUnavailable)
     ));
+
+    let mut expiry_drift = result.clone();
+    expiry_drift.payload["workspace_expires_at_ms"] = serde_json::json!(3_000_001_u64);
+    expiry_drift.payload_sha256 =
+        Sha256::digest(serde_json::to_vec(&expiry_drift.payload).unwrap()).into();
+    assert!(matches!(
+        kernel.accept_remote_result_from_with_artifact(
+            device.device_id,
+            &expiry_drift,
+            16,
+            &contract,
+            &store,
+            prepared.verified_mut()
+        ),
+        Err(MasterError::ResultArtifactUnavailable)
+    ));
+    let mut retained_drift = result.clone();
+    retained_drift.payload["workspace_retained"] = serde_json::json!(false);
+    retained_drift.payload_sha256 =
+        Sha256::digest(serde_json::to_vec(&retained_drift.payload).unwrap()).into();
+    assert!(kernel
+        .accept_remote_result_from_with_artifact(
+            device.device_id,
+            &retained_drift,
+            16,
+            &contract,
+            &store,
+            prepared.verified_mut()
+        )
+        .is_err());
 
     // Artifact admission and its SQLite transaction are complete before the
     // later result request. Release the admission request's stable handles so
@@ -3363,7 +3408,7 @@ fn master_process_v10_backfills_resolution_receipts_from_exact_immutable_audit()
             .file_name()
             .unwrap()
             .to_string_lossy()
-            .starts_with("master.pre-v12."));
+            .starts_with("master.pre-v13."));
         assert_eq!(
             Connection::open(backup)
                 .unwrap()
@@ -3487,7 +3532,7 @@ fn master_process_v10_ambiguous_resolution_audit_fails_closed_and_restores_backu
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v12.")));
+            .starts_with("master.pre-v13.")));
 }
 
 #[test]
@@ -3655,7 +3700,80 @@ fn master_process_v4_backup_migration_reopen_and_restore_on_failure() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v12.")));
+            .starts_with("master.pre-v13.")));
+}
+
+#[test]
+fn master_process_v12_backup_first_migration_adds_retained_workspace_binding() {
+    let directory = tempdir().unwrap();
+    let database = directory.path().join("master.sqlite3");
+    drop(MasterKernel::open(&database).unwrap());
+    let connection = Connection::open(&database).unwrap();
+    connection
+        .execute_batch(
+            "ALTER TABLE feature_result_artifacts DROP COLUMN workspace_expires_at_ms;
+             ALTER TABLE feature_result_artifacts DROP COLUMN workspace_retained;
+             PRAGMA user_version = 12;",
+        )
+        .unwrap();
+    drop(connection);
+
+    let process = MasterProcess::acquire(directory.path()).unwrap();
+    assert_eq!(process.kernel().schema_version().unwrap(), 13);
+    let backup = process.migration_backup_path().unwrap();
+    assert!(backup
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .starts_with("master.pre-v13."));
+    assert_eq!(
+        Connection::open(backup)
+            .unwrap()
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        12
+    );
+    let columns: HashSet<String> = Connection::open(&database)
+        .unwrap()
+        .prepare("PRAGMA table_info(feature_result_artifacts)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(columns.contains("workspace_retained"));
+    assert!(columns.contains("workspace_expires_at_ms"));
+}
+
+#[test]
+fn master_process_v12_failed_migration_restores_verified_backup() {
+    let directory = tempdir().unwrap();
+    let database = directory.path().join("master.sqlite3");
+    drop(MasterKernel::open(&database).unwrap());
+    Connection::open(&database)
+        .unwrap()
+        .execute_batch("PRAGMA user_version = 12;")
+        .unwrap();
+    assert!(matches!(
+        MasterProcess::acquire(directory.path()),
+        Err(MasterError::Storage(_))
+    ));
+    assert_eq!(
+        Connection::open(&database)
+            .unwrap()
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        12
+    );
+    assert!(directory
+        .path()
+        .read_dir()
+        .unwrap()
+        .filter_map(Result::ok)
+        .any(|entry| entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with("master.pre-v13.")));
 }
 
 #[test]
@@ -3712,7 +3830,7 @@ fn master_process_v6_backup_migration_binds_pause_and_default_inert_owner_contro
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v12."));
+        .starts_with("master.pre-v13."));
     let backup = Connection::open(backup).unwrap();
     assert_eq!(
         backup
@@ -3787,21 +3905,22 @@ fn forward_schema_version_fails_closed_without_backup() {
     let directory = tempdir().unwrap();
     let database = directory.path().join("master.sqlite3");
     drop(MasterKernel::open(&database).unwrap());
+    let forward_schema = MASTER_SCHEMA_VERSION + 1;
     Connection::open(&database)
         .unwrap()
-        .execute_batch("PRAGMA user_version = 13;")
+        .pragma_update(None, "user_version", forward_schema)
         .unwrap();
     let forward_error = match MasterProcess::acquire(directory.path()) {
         Ok(_) => panic!("forward schema unexpectedly opened"),
         Err(error) => error,
     };
-    assert!(matches!(
-        forward_error,
-        MasterError::UnsupportedSchemaVersion {
-            expected: MASTER_SCHEMA_VERSION,
-            found: 13
+    match forward_error {
+        MasterError::UnsupportedSchemaVersion { expected, found } => {
+            assert_eq!(expected, MASTER_SCHEMA_VERSION);
+            assert_eq!(found, forward_schema);
         }
-    ));
+        error => panic!("unexpected forward-schema error: {error}"),
+    }
     assert!(!directory
         .path()
         .read_dir()
@@ -3810,5 +3929,5 @@ fn forward_schema_version_fails_closed_without_backup() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v12.")));
+            .starts_with("master.pre-v13.")));
 }

@@ -136,7 +136,7 @@ fn fixture_result_revalidates_the_stored_job_and_exact_output_contract() {
 // version and capability identity so the two can never drift apart again.
 #[test]
 fn fixture_capability_identity_is_bound_to_current_protocol_version() {
-    assert_eq!(PROTOCOL_VERSION, 4);
+    assert_eq!(PROTOCOL_VERSION, 5);
     assert_eq!(FIXTURE_REASONING_CAPABILITY_ID, "fixture.reasoning");
     assert_eq!(FIXTURE_REASONING_PROVIDER, "assemblywright-fixture");
     assert_eq!(FIXTURE_REASONING_MODEL, "assemblywright-fixture-v1");

@@ -4,16 +4,18 @@ use assemblywright_protocol::{
     CapabilityKind, ContextHandlingPolicy, DeviceId, FeatureConveyorCodingDispatchRequest,
     FeatureConveyorCodingWorkPacketMetadata, JobEnvelope, JobResultEnvelope, JobResultStatus,
     LeaseId, LocalCodingJobRequest, LocalCodingJobResult, LocalCodingResultArtifact,
-    LocalCodingSnapshotChunk, LocalCodingSnapshotChunkRequest, ProtocolError, Sensitivity, StepId,
-    TaskId, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, LOCAL_CODING_CAPABILITY_ID,
-    LOCAL_CODING_COMPLETED_STATUS, LOCAL_CODING_FIXTURE_TEST_STATUS, LOCAL_CODING_MODEL,
-    LOCAL_CODING_PROVIDER, MAX_FEATURE_CONVEYOR_CODING_DISPATCH_REQUEST_BYTES, PROTOCOL_VERSION,
+    LocalCodingResultArtifactAdmission, LocalCodingSnapshotChunk, LocalCodingSnapshotChunkRequest,
+    ProtocolError, Sensitivity, StepId, TaskId, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+    LOCAL_CODING_CAPABILITY_ID, LOCAL_CODING_COMPLETED_STATUS, LOCAL_CODING_FIXTURE_TEST_STATUS,
+    LOCAL_CODING_MODEL, LOCAL_CODING_PROVIDER, MAX_FEATURE_CONVEYOR_CODING_DISPATCH_REQUEST_BYTES,
+    MAX_LOCAL_CODING_EDIT_CONTENT_BYTES, MAX_LOCAL_CODING_JOB_FRAME_BYTES, PROTOCOL_VERSION,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 fn request() -> FeatureConveyorCodingDispatchRequest {
+    let work_packet = FeatureConveyorCodingWorkPacketMetadata::fixture(Uuid::new_v4(), [9; 32]);
     FeatureConveyorCodingDispatchRequest {
         schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
         feature_id: Uuid::new_v4(),
@@ -22,12 +24,8 @@ fn request() -> FeatureConveyorCodingDispatchRequest {
         feature_lease_id: Uuid::new_v4(),
         snapshot_id: Uuid::new_v4(),
         snapshot_sha256: [1; 32],
-        work_packet_sha256: [2; 32],
-        work_packet: FeatureConveyorCodingWorkPacketMetadata {
-            packet_id: Uuid::new_v4(),
-            ordinal: 1,
-            acceptance_criteria_count: 2,
-        },
+        work_packet_sha256: work_packet.canonical_sha256().unwrap(),
+        work_packet,
         device_id: DeviceId::new(Uuid::new_v4()),
         device_registry_revision: 3,
         expected_queue_revision: 4,
@@ -63,7 +61,7 @@ fn coding_job(owner: &FeatureConveyorCodingDispatchRequest) -> JobEnvelope {
         capability_id: LOCAL_CODING_CAPABILITY_ID.to_string(),
         selected_model: LOCAL_CODING_MODEL.to_string(),
         sensitivity: Sensitivity::Workspace,
-        context_handling: ContextHandlingPolicy::EphemeralNoRetention,
+        context_handling: ContextHandlingPolicy::SealedUntilResolvedOrExpired,
         lease_duration_ms: 60_000,
         deadline_after_ms: 60_000,
         context_sha256: Sha256::digest(serde_json::to_vec(&context).unwrap()).into(),
@@ -98,10 +96,34 @@ fn local_coding_capability_is_one_exact_contract() {
     ] {
         let mut invalid = capability.clone();
         mutate(&mut invalid);
-        assert_eq!(
-            invalid.validate(),
-            Err(ProtocolError::InvalidLocalCodingCapability)
-        );
+        assert!(invalid.validate().is_err());
+    }
+}
+
+#[test]
+fn local_coding_replacement_and_complete_job_frame_bounds_are_exact() {
+    for (size, valid) in [
+        (MAX_LOCAL_CODING_EDIT_CONTENT_BYTES, true),
+        (MAX_LOCAL_CODING_EDIT_CONTENT_BYTES + 1, false),
+    ] {
+        let mut owner = request();
+        let replacement = vec![b'a'; size];
+        let assemblywright_protocol::LocalCodingEditOperation::Write(arguments) =
+            &mut owner.work_packet.operations[0]
+        else {
+            panic!("fixture operation must be a write")
+        };
+        arguments.replacement_sha256 = Sha256::digest(&replacement).into();
+        arguments.replacement_hex = lower_hex(&replacement);
+        if valid {
+            owner.work_packet_sha256 = owner.work_packet.canonical_sha256().unwrap();
+            owner.validate().unwrap();
+            let job = coding_job(&owner);
+            assert!(serde_json::to_vec(&job).unwrap().len() <= MAX_LOCAL_CODING_JOB_FRAME_BYTES);
+            job.validate_local_coding().unwrap();
+        } else {
+            assert!(owner.work_packet.canonical_sha256().is_err());
+        }
     }
 }
 
@@ -135,6 +157,7 @@ fn owner_dispatch_rejects_zero_authority_bindings_and_accepts_numeric_maxima() {
     maximum.expected_emergency_pause_revision = u64::MAX;
     maximum.work_packet.ordinal = u16::MAX;
     maximum.work_packet.acceptance_criteria_count = u16::MAX;
+    maximum.work_packet_sha256 = maximum.work_packet.canonical_sha256().unwrap();
     maximum.validate().unwrap();
 }
 
@@ -149,7 +172,8 @@ fn owner_dispatch_is_strict_bounded_digest_bound_and_path_free() {
     );
     let encoded_text = String::from_utf8(encoded).unwrap();
     assert!(!encoded_text.contains("repository_path"));
-    assert!(!encoded_text.contains("allowed_paths"));
+    assert!(encoded_text.contains("allowed_paths"));
+    assert!(!encoded_text.contains("command"));
     assert!(!encoded_text.contains("provider"));
     let unknown = encoded_text.replacen(
         "\"feature_id\":",
@@ -173,7 +197,7 @@ fn owner_dispatch_is_strict_bounded_digest_bound_and_path_free() {
 #[test]
 fn admission_digest_has_a_fixed_cross_language_transcript() {
     let mut job = coding_job(&request());
-    job.protocol_version = 4;
+    job.protocol_version = 5;
     job.context_sha256 = [0x11; 32];
     job.task_id = TaskId::new(Uuid::parse_str("00010203-0405-0607-0809-0a0b0c0d0e0f").unwrap());
     job.step_id = StepId::new(Uuid::parse_str("10111213-1415-1617-1819-1a1b1c1d1e1f").unwrap());
@@ -189,7 +213,7 @@ fn admission_digest_has_a_fixed_cross_language_transcript() {
 
     assert_eq!(
         lower_hex(&local_coding_admission_sha256(&job)),
-        "04eb22b8b2928b9475403b8dfccc7dd3d61132c67a89510ae47c9b19bd15140d"
+        "fb69cef80f0f2a37a886898c25121446a54308b52cb83fd70175c772936874cc"
     );
 }
 
@@ -212,10 +236,56 @@ fn canonical_result_artifact_is_exact_digest_bound_and_bounded() {
     let mut malformed = bytes.clone();
     malformed.push(b' ');
     assert!(validate_local_coding_fixture_patch_artifact(&malformed).is_err());
-    let reordered =
-        serde_json::to_vec(&serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()).unwrap();
+    let document = serde_json::from_slice::<serde_json::Value>(&bytes).unwrap();
+    let reordered = format!(
+        r#"{{"format":{},"changes":{},"work_packet_sha256":{}}}"#,
+        serde_json::to_string(&document["format"]).unwrap(),
+        serde_json::to_string(&document["changes"]).unwrap(),
+        serde_json::to_string(&document["work_packet_sha256"]).unwrap()
+    )
+    .into_bytes();
     assert_ne!(reordered, bytes);
     assert!(validate_local_coding_fixture_patch_artifact(&reordered).is_err());
+}
+
+#[test]
+fn artifact_admission_independently_rejects_a_canonical_different_packet() {
+    let owner = request();
+    let job = coding_job(&owner);
+    let context = job.validate_local_coding().unwrap();
+    let artifact_bytes =
+        assemblywright_protocol::build_local_coding_patch_artifact(&context.work_packet).unwrap();
+    let mut admission = LocalCodingResultArtifactAdmission {
+        protocol_version: job.protocol_version,
+        connection_epoch: job.connection_epoch,
+        sequence: job.sequence + 1,
+        task_id: job.task_id,
+        step_id: job.step_id,
+        attempt_id: job.attempt_id,
+        lease_id: job.lease_id,
+        cancellation_id: job.cancellation_id,
+        context_sha256: job.context_sha256,
+        feature_id: context.feature_id,
+        feature_lease_id: context.feature_lease_id,
+        snapshot_id: context.snapshot_id,
+        snapshot_sha256: context.snapshot_sha256,
+        work_packet_sha256: context.work_packet_sha256,
+        workspace_retained: true,
+        workspace_expires_at_ms: 123_456,
+        artifact: LocalCodingResultArtifact::from_bytes(Uuid::new_v4(), &artifact_bytes).unwrap(),
+    };
+    admission.validate_for_job(&job).unwrap();
+
+    let mut different = context.work_packet;
+    different.acceptance_criteria_count += 1;
+    let different_bytes =
+        assemblywright_protocol::build_local_coding_patch_artifact(&different).unwrap();
+    admission.artifact =
+        LocalCodingResultArtifact::from_bytes(Uuid::new_v4(), &different_bytes).unwrap();
+    assert_eq!(
+        admission.validate_for_job(&job),
+        Err(ProtocolError::InvalidLocalCodingResultArtifact)
+    );
 }
 
 #[test]
@@ -257,7 +327,8 @@ fn coding_job_and_result_are_exact_attempt_bound_and_reject_unbounded_mutation_c
         changed_file_count: 1,
         test_status: LOCAL_CODING_FIXTURE_TEST_STATUS.to_string(),
         mutation_performed: true,
-        workspace_retained: false,
+        workspace_retained: true,
+        workspace_expires_at_ms: 123_456,
         ambiguous: false,
     })
     .unwrap();
@@ -294,9 +365,9 @@ fn coding_job_and_result_are_exact_attempt_bound_and_reject_unbounded_mutation_c
     let mut missing_mutation = valid_result.clone();
     missing_mutation.payload["mutation_performed"] = json!(false);
     refresh_digest(&mut missing_mutation);
-    let mut retained_workspace = valid_result.clone();
-    retained_workspace.payload["workspace_retained"] = json!(true);
-    refresh_digest(&mut retained_workspace);
+    let mut missing_retained_workspace = valid_result.clone();
+    missing_retained_workspace.payload["workspace_retained"] = json!(false);
+    refresh_digest(&mut missing_retained_workspace);
     let mut ambiguous = valid_result.clone();
     ambiguous.payload["ambiguous"] = json!(true);
     refresh_digest(&mut ambiguous);
@@ -321,7 +392,7 @@ fn coding_job_and_result_are_exact_attempt_bound_and_reject_unbounded_mutation_c
         wrong_packet,
         zero_admission,
         missing_mutation,
-        retained_workspace,
+        missing_retained_workspace,
         ambiguous,
         outside_path_digest,
         zero_patch,

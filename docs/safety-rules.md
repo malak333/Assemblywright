@@ -156,7 +156,7 @@ release requirements, not optional UX guidance.
   a simultaneous or late result is suppressed. This lane grants no tool, file,
   repository, credential, network, Codex, Git, publication, or unattended
   authority.
-- The Windows `assemblywright-master` schema-v12 database retains the schema-v5
+- The Windows `assemblywright-master` schema-v13 database retains the schema-v5
   Durable Feature Conveyor kernel and is
   default-inert. The owner-token-authenticated loopback
   `GET /v1/feature-conveyor/status` and the dedicated enrolled-device
@@ -291,7 +291,7 @@ release requirements, not optional UX guidance.
   links, traversal, reserved/case-colliding paths, hardlinks, and object
   identity drift fail closed. Every manifest entry must be charged against an
   aggregate materialized-output byte budget before writing. The only permitted
-  process is one fixed child
+  process was one fixed child in the historical protocol-v4/schema-v12 fixture
   forked from the already-running agent, with no `exec`, argument parsing, or
   remote input. Before `fork`, the parent pre-opens the workspace, blocks
   signals, and captures the descriptor-table bound and effective UID. Swift
@@ -324,7 +324,7 @@ release requirements, not optional UX guidance.
   every state-directory component and the single-link bundle leaf through the
   read. Durable audit/event surfaces remain metadata-only; result acceptance
   retains the bounded payload digest, not repository content or paths. The
-  protocol-v4 result must name one exact canonical bounded patch artifact whose
+  historical protocol-v4 result must name one exact canonical bounded patch artifact whose
   SHA-256 covers its exact bytes. The agent constructs it in memory and cleans
   workspace/transfer state before returning a strict result/artifact pair.
   Swift uploads it during the existing FIFO cancellation race, validates the
@@ -347,6 +347,35 @@ release requirements, not optional UX guidance.
   provider, credential or network access, canonical-repository mutation,
   integration, review, publication, queue advancement, or autonomous
   activation. It does not claim a host sandbox or host-level egress control.
+- Protocol v5/schema v13 retains every schema-v10 through schema-v12 dispatch,
+  snapshot, cancellation, artifact, audit, and authority rule above. The complete
+  job frame is at most 16 KiB, its canonical context at most 12 KiB, and aggregate
+  replacement bytes at most 4 KiB in both Rust and the production Swift decoder.
+  Only exact deterministic `file.write.v1` and `file.delete.v1` are admitted for
+  at most 64 sorted normalized relative paths. Every parent directory is opened
+  and retained through owner-private no-follow directory descriptors; create is
+  exclusive atomic install, replacement is atomic swap plus displaced-inode
+  verification, and delete is held-parent identity verification plus `unlinkat`.
+  Delete must atomically displace the leaf into a private same-parent capture,
+  verify that displaced inode and content, remove only verified entries, and
+  atomically roll back mismatch without deleting a same-UID replacement.
+  A same-UID pathname/symlink substitution must never redirect a mutation.
+  Successful workspaces are sealed without adding metadata inside the attested
+  tree. A separate bounded `0600` recovery record binds the exact job, attempt,
+  sealed name, post-edit tree digest, expiry, and domain-separated record digest.
+  Restart must find exactly one matching pair, re-hash it, reconstruct exact
+  cancellation authority, and refuse new admission until exact resolution or
+  expiry. Tamper, orphaned/multiple state, bad permissions, or binding drift makes
+  startup fail closed. Recovery records remain local private state and never enter
+  logs, audit, remote payloads, or SQLite. This adds no integration, test-gate,
+  review, publication, lifecycle advancement, canonical-repository, host-sandbox,
+  egress, or autonomous authority.
+  Windows must not trust Swift for artifact semantics: protocol-owned validation
+  decodes admitted bytes and requires exact canonical operations and packet digest
+  correspondence to the immutable job. Terminal result acceptance independently
+  matches stored artifact ID/digest/size and retained/expiry fields to the validated
+  result payload and exact attempt authority. Exact replay is idempotent; any drift
+  fails closed.
 - Owner resolution is available only through the owner-token-authenticated
   loopback `cancel-active-feature` and `abandon-and-advance` actions. Both must
   compare-and-set the exact feature, lifecycle, queue, and Emergency Pause

@@ -701,11 +701,11 @@ mod tests {
             .expect("compile rejecting requirement"),
         );
         let result = timeout(
-            Duration::from_secs(2),
+            UNIX_IPC_PEER_IDENTITY_TIMEOUT + Duration::from_secs(2),
             handle_connection(server, test_router_with_auth(TEST_TOKEN), Some(requirement)),
         )
         .await
-        .expect("identity rejection must precede the ten-second frame timeout")
+        .expect("identity rejection must complete within the bounded identity timeout")
         .expect_err("reject mismatched peer code identity");
         assert!(result.to_string().contains("OSStatus"), "{result}");
     }

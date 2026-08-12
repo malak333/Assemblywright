@@ -69,7 +69,7 @@ swift build --disable-sandbox --package-path apps/mac
 ## Windows Distributed Gate
 
 The schema-v9 snapshot-claim, schema-v10 coding-dispatch, schema-v11 owner-resolution,
-schema-v12 result-artifact admission, and ephemeral snapshot-transfer/materialization slices have focused portable
+schema-v13 result-artifact admission, and ephemeral snapshot-transfer/materialization slices have focused portable
 coverage:
 
 ```sh
@@ -236,8 +236,8 @@ The `--run-local-coding` lane uses the separately enrolled local-coding
 identity, production signed Swift relay, real Rust agent, and Windows-local
 owner controller. It binds a disposable repository snapshot to the exact
 feature, worker registration, queue/lifecycle/pause revisions, task, step,
-attempt, and work packet. A terminal success proves the protocol-v4 result was
-accepted only after its exact schema-v12 artifact admission. The lane then
+attempt, and work packet. A terminal success proves the protocol-v5 result was
+accepted only after its exact schema-v13 artifact admission. The lane then
 proves owner cancellation, safe abandonment, empty queue/lease/attempt and
 transfer state, empty Mac workspace state, revocation of all temporary grants,
 and removal of the marker-bound disposable checkout. It is functional native
@@ -372,3 +372,15 @@ cancellation recognizes the installed replacement generation and cannot delete
 its selected key or certificate. Repository tests
 do not prove the Xcode-provisioned Secure Enclave path, live Windows DPAPI CLI,
 cross-device promotion, reconnect under the higher revision, or MLX execution.
+
+## Protocol v5 general-worker validation
+
+```bash
+cargo test -p assemblywright-protocol --test local_coding_contract
+cargo test -p assemblywright-master --test feature_conveyor_kernel master_process_v12 -- --nocapture
+cargo test -p assemblywright-agent --test local_relay_e2e authenticated_uds_local_coding_snapshot_admission_cancellation_and_restart_cleanup -- --nocapture
+swift test --disable-sandbox --package-path apps/mac --filter DeveloperBridgeTests
+./scripts/mac-local-coding-snapshot-e2e.sh
+```
+
+These are repository and native-boundary checks, not Windows deployment, signing, notarization, live-device, or release proof.

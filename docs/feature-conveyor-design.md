@@ -182,6 +182,31 @@ sandbox or host-egress enforcement, retained worker state, canonical-repository
 mutation, integration, review, publication, queue advancement, or autonomous
 activation.
 
+Protocol v5/schema v13 adds the bounded general-worker packet while retaining
+all schema-v10 through schema-v12 contracts above. Rust and production Swift
+enforce one 16 KiB complete job frame, 12 KiB canonical context, 4 KiB aggregate
+replacement data, 64 sorted normalized relative paths, and only exact
+`file.write.v1`/`file.delete.v1` schemas. The agent traverses all parents through
+held owner-private no-follow directory descriptors. Create uses exclusive atomic
+installation, replacement uses atomic swap with displaced-inode compare-and-set
+verification, and delete verifies the held leaf identity before `unlinkat`.
+Delete atomically swaps the leaf into a private same-parent capture before
+verification; mismatch restores it atomically and no unverified replacement is
+removed. Windows independently decodes canonical artifact bytes against the
+immutable job packet, and terminal acceptance requires stored artifact and
+retention/expiry metadata to match the validated result. This authority does not
+depend on Swift validation, while exact replay remains idempotent.
+
+Completion seals the workspace unchanged after evidence collection. A separate
+bounded owner-private recovery record outside that tree binds the exact job,
+attempt, sealed name, post-edit tree digest, expiry, and record digest. Startup
+re-hashes exactly one paired workspace, reconstructs exact cancellation authority,
+blocks new admission while unresolved, removes an exact expired pair, and rejects
+tamper, orphaned/multiple state, permissions drift, or ambiguity. The private
+record is not audit, SQLite, or remote content. This adds no arbitrary tool,
+canonical checkout, integration, test-gate, review, publication, lifecycle
+advancement, sandbox, egress enforcement, or autonomous authority.
+
 Schema v11 also exposes two separate owner-token loopback-only resolution
 actions: `POST /v1/feature-conveyor/cancel-active-feature` and
 `POST /v1/feature-conveyor/abandon-and-advance`. Both accept only strict,
@@ -331,36 +356,29 @@ canonical repository, master database, canonical memory, credentials, or
 unrelated files. General network access is disabled; only a narrowly controlled
 local-model connection is allowed.
 
-The implemented schema-v12 kernel reaches one fixed contained-coding fixture:
-one explicit owner action may queue a path-free snapshot-bound packet for one
-exact registered worker; after the exact lease, a separate default-off route
-streams a bounded authenticated snapshot bundle to the Mac bridge and native
-agent. The agent reconstructs an independent no-remote Git repository, verifies
-its object graph, paths, modes, sizes, and aggregate digest, enforces an
-aggregate materialized-output byte budget, and forks one fixed child from the
-running agent with no `exec` or remote input. The parent blocks signals and
-captures the open workspace, descriptor-table bound, and effective UID before
-`fork`. The child scans descriptor slots, retains only the workspace and group
-gate, waits for the parent-established process group, and follows the fixed
-validated README mutation path without consulting environment APIs or
-post-fork identity, descriptor-table, or process-group discovery. The parent
-verifies that exact mutation, returns digest-only bounded
-evidence while truthfully reporting that tests were not run, and removes the
-workspace before returning. It also constructs one canonical protocol-owned
-replacement artifact in memory. The Swift relay admits those exact bytes over
-the existing authenticated FIFO cancellation race before posting a
-metadata-only result. Windows keeps bytes outside SQLite and records only
-immutable ID/digest/size plus exact attempt, registration, feature, snapshot,
-work-packet, pause, and lifecycle bindings with redacted audit. Result
-acceptance requires the admitted artifact; exact retry is idempotent and drift
-fails closed. Startup deletes unreferenced artifact directories but preserves
-referenced ambiguity under the existing active-feature quarantine. Manifest paths are rejected from their raw UTF-8
-form before filesystem path normalization so empty, repeated, leading, or
-trailing separators cannot acquire a different meaning on the Mac or Windows
-boundary. Arbitrary worker commands and paths, real implementation packets,
-test execution, retained workspaces, patch application/result integration, review, and
-publication remain unimplemented. This child boundary does not establish
-an OS sandbox or host-level egress control.
+The implemented protocol-v5/schema-v13 kernel accepts one immutable
+snapshot-bound general coding packet for one exact registered worker. After the
+exact lease, a separate default-off route streams a bounded authenticated
+snapshot bundle to the Mac bridge and native agent. The agent reconstructs an
+independent no-remote Git repository, verifies its object graph, paths, modes,
+sizes, and aggregate digest, and enforces an aggregate materialized-output byte
+budget. It then applies only exact deterministic `file.write.v1` and
+`file.delete.v1` operations within the packet's sorted normalized allowlist,
+without a child, shell, `exec`, environment, provider, test, network, credential,
+or arbitrary-tool authority. Raw manifest and packet paths are rejected before
+filesystem normalization.
+
+The agent verifies the exact changed-path set and canonical multi-file artifact,
+then seals the successful workspace with a separate owner-private bounded
+recovery record until exact resolution or expiry. The Swift relay admits the
+artifact bytes over the existing authenticated FIFO cancellation race before
+posting a metadata-only result. Windows independently decodes those bytes
+against the immutable packet and records only immutable artifact and retention
+bindings with redacted audit. Exact retry is idempotent; drift fails closed;
+startup preserves referenced ambiguity under active-feature quarantine. Test
+execution, patch application/result integration, review, and publication remain
+unimplemented. This boundary does not establish an OS sandbox or host-level
+egress control.
 
 #### Evidence Gate
 

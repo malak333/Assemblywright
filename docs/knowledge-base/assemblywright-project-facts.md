@@ -27,7 +27,7 @@ These notes capture durable facts for future agents working on this repository.
   a pre-rename Windows master state directory. The gate pins it by name and caps
   how many lines of that file may mention the old namespace, so the exception
   cannot grow.
-- `PROTOCOL_VERSION` is 4. It moved from 1 to 2 because the rename changed wire
+- `PROTOCOL_VERSION` is 5. It moved from 1 to 2 because the rename changed wire
   values: the TLS exporter label, the fixture capability provider and model, and
   the certificate subject and SAN URI. Two builds both claiming version 1 while
   disagreeing on those would be mutually incompatible, which is exactly what the
@@ -38,7 +38,11 @@ These notes capture durable facts for future agents working on this repository.
   truthful test status, mutation, workspace-retention, and ambiguity fields.
   It moved from 3 to 4 because the local-coding terminal response is now a
   strict result/artifact pair and the result carries immutable artifact ID,
-  exact-byte SHA-256, and size. Version-3 peers must reject this shape.
+  exact-byte SHA-256, and size. Version-3 peers must reject this shape. It moved
+  from 4 to 5 because the immutable coding packet now carries bounded
+  deterministic multi-file write/delete operations, successful workspaces are
+  retained with exact expiry evidence, and the canonical artifact/result wire
+  contract changed. Version-4 peers must reject this shape.
 - The current identity surface: code-signing identifier
   `com.nobiletechnology.assemblywright` and its `.core` suffix for the bundled
   CLI; bundle executable `AssemblywrightMacApp`; bundled CLI
@@ -663,8 +667,9 @@ an old one.
   `local.coding.v1` descriptor. Standard/fixture identities remain
   `mac_bridge`-only, local-coding rebind is forbidden, and the process launcher
   selects this identity only for the local-coding snapshot opt-in.
-- The Mac bridge strictly validates every chunk and forwards it over the
-  authenticated owner-only Unix socket. The Rust agent writes through one
+- Historical protocol-v4/schema-v12 fixture behavior (superseded for new v5
+  jobs by the general-worker rules below): the Mac bridge strictly validates
+  every chunk and forwards it over the authenticated owner-only Unix socket. The Rust agent writes through one
   retained no-follow file descriptor, verifies the deterministic bundle and
   raw Git object IDs, rejects links, traversal, reserved/case-colliding or
   duplicate paths, reconstructs only safe regular/executable files with
@@ -683,8 +688,9 @@ an old one.
   or mutable global state, use environment APIs, or call `geteuid`,
   `getdtablesize`, or `setpgid` post-fork. The parent rejects every other
   changed path or unexpected output.
-- `contained_coding_completed` is a bounded path-free result: it binds work
-  packet, admission, snapshot, fixed allowed/changed path set, and patch
+- In that historical fixture, `contained_coding_completed` was a bounded
+  path-free result: it binds work packet, admission, snapshot, fixed
+  allowed/changed path set, and patch
   digests; reports exactly one changed file, `test_status:not_run`, mutation
   performed, workspace not retained, and ambiguity false. Both the materialized
   repository and transfer staging directory are removed before this result is
@@ -870,3 +876,28 @@ an old one.
 - Result acceptance is bound to the exact leased attempt.
 - Automatic retry is allowed only when evidence proves repetition cannot
   duplicate an effect.
+
+- Protocol v5/schema v13 replaces the fixed README fixture while retaining the
+  accepted schema-v10 through schema-v12 contracts. It replaces only that fixed
+  execution boundary with immutable
+  digest-bound general coding packets: at most 64 sorted normalized relative
+  paths and exact deterministic `file.write.v1` or `file.delete.v1` operations.
+  Rust and production Swift share 16 KiB complete-job, 12 KiB context, and 4 KiB
+  replacement limits. The agent holds owner-private no-follow descriptors for all
+  parents and uses exclusive atomic create, atomic-swap replacement plus displaced-
+  inode verification, or identity-checked `unlinkat`; same-UID pathname substitution
+  cannot redirect mutation. It executes no child or shell, emits a canonical multi-
+  file artifact, and seals the attempt workspace for at most one hour without
+  adding recovery metadata inside that attested tree.
+  A separate bounded private recovery record binds the exact job/attempt, sealed
+  name, post-edit tree digest, and expiry. Restart re-hashes one exact pair,
+  reconstructs cancellation, blocks new admission while unresolved, removes an
+  expired pair, and rejects tamper/orphans/ambiguity. The record never enters
+  logs, audit, remote payloads, or SQLite. This is not canonical-repository
+  application, test, integration, review, publication, lifecycle advancement, a
+  host sandbox, or host egress proof.
+  Delete capture uses a same-parent atomic swap: only a verified displaced inode
+  is removed, while mismatch atomically restores the substituted leaf. Windows
+  independently validates canonical artifact operations and packet digest against
+  the immutable job and matches stored artifact/retention/expiry metadata to the
+  terminal result. Swift is defense in depth, not the Windows authority source.

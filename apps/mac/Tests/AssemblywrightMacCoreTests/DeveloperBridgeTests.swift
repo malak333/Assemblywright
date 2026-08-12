@@ -445,6 +445,8 @@ private actor FakeLocalCodingBridgeSession: AssemblywrightMacBridgeSession {
                         "artifact_id": artifact["artifact_id"]!,
                         "artifact_sha256": artifact["artifact_sha256"]!,
                         "artifact_size_bytes": artifact["artifact_size_bytes"]!,
+                        "workspace_retained": admission["workspace_retained"]!,
+                        "workspace_expires_at_ms": admission["workspace_expires_at_ms"]!,
                         "status": "result_artifact_admitted"
                     ],
                     options: [.sortedKeys]
@@ -1458,7 +1460,7 @@ struct DeveloperBridgeTests {
     func handshakeIsExporterBound() async throws {
         let profile = sampleProfile()
         let responseData = Data(
-            #"{"protocol_version":4,"status":"accepted","connection_epoch":7,"accepted_registry_revision":3,"reason_code":null}"#.utf8
+            #"{"protocol_version":5,"status":"accepted","connection_epoch":7,"accepted_registry_revision":3,"reason_code":null}"#.utf8
         )
         let channel = FakeBridgeChannel(
             exporter: Data(repeating: 0x42, count: 32),
@@ -1478,7 +1480,7 @@ struct DeveloperBridgeTests {
         let handshake = try #require(object["handshake"] as? [String: Any])
         #expect(handshake["device_id"] as? String == profile.deviceID)
         #expect(handshake["registry_revision"] as? Int == 3)
-        #expect(handshake["protocol_version"] as? Int == 4)
+        #expect(handshake["protocol_version"] as? Int == 5)
     }
 
     @Test("Missing exporter and mismatched acceptance cancel the TLS channel")
@@ -1514,7 +1516,7 @@ struct DeveloperBridgeTests {
             exporter: Data(repeating: 1, count: 32),
             response: AssemblywrightMacBridgeHTTPResponse(
                 status: 200,
-                body: Data(#"{"protocol_version":4,"status":"accepted","connection_epoch":7,"accepted_registry_revision":4,"reason_code":null}"#.utf8)
+                body: Data(#"{"protocol_version":5,"status":"accepted","connection_epoch":7,"accepted_registry_revision":4,"reason_code":null}"#.utf8)
             )
         )
         let mismatchedTransport = AssemblywrightMacMTLSBridgeTransport(
@@ -2155,7 +2157,7 @@ struct DeveloperBridgeTests {
         )
         let batch = Data(
             """
-            {"after_sequence":0,"events":[{"connection_epoch":null,"cursor":{"sequence":1,"stream_id":"\(streamID.uuidString.lowercased())"},"device_id":null,"kind":"step_queued","occurred_at_ms":1000,"protocol_version":4,"step_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","task_id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc"}],"has_more":false,"next_sequence":1,"protocol_version":4,"stream_id":"\(streamID.uuidString.lowercased())"}
+            {"after_sequence":0,"events":[{"connection_epoch":null,"cursor":{"sequence":1,"stream_id":"\(streamID.uuidString.lowercased())"},"device_id":null,"kind":"step_queued","occurred_at_ms":1000,"protocol_version":5,"step_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","task_id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc"}],"has_more":false,"next_sequence":1,"protocol_version":5,"stream_id":"\(streamID.uuidString.lowercased())"}
             """.utf8
         )
         let master = FakeSupervisorSession(
@@ -2198,7 +2200,7 @@ struct DeveloperBridgeTests {
             launcher: FakeDeveloperAgentLauncher(session: agent)
         )
         let malformed = Data(
-            #"{"after_sequence":0,"events":[],"has_more":false,"next_sequence":2,"protocol_version":4,"stream_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}"#.utf8
+            #"{"after_sequence":0,"events":[],"has_more":false,"next_sequence":2,"protocol_version":5,"stream_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}"#.utf8
         )
         let master = FakeSupervisorSession(
             connectionEpoch: 52,
@@ -2979,10 +2981,46 @@ struct DeveloperBridgeTests {
         try await relay.stop()
     }
 
+    @Test("Production local-coding decoder accepts 4 KiB replacement and rejects one byte over")
+    func localCodingReplacementBoundaryMatchesRustProtocol() async throws {
+        for (count, accepted) in [(4 * 1_024, true), (4 * 1_024 + 1, false)] {
+            let documents = try localCodingSnapshotDocuments(
+                connectionEpoch: UInt64(6_000 + count),
+                replacement: Data(repeating: 0x61, count: count)
+            )
+            #expect(documents.job.count <= 16 * 1_024)
+            let agent = FakeDeveloperAgentSession(
+                localCodingChunkResults: [nil, documents.result]
+            )
+            let relay = AssemblywrightMacDeveloperEventRelay(
+                configuration: localCodingRelayConfiguration(),
+                deviceID: documents.deviceID,
+                launcher: FakeDeveloperAgentLauncher(session: agent)
+            )
+            let master = FakeLocalCodingBridgeSession(
+                connectionEpoch: UInt64(6_000 + count),
+                eventBatch: emptyEventBatch(),
+                job: documents.job,
+                chunks: documents.chunks,
+                acceptedResult: documents.acceptedResult
+            )
+            if accepted {
+                _ = try await relay.relayEvents(using: master)
+                #expect(await agent.admittedLocalCodingJobs == [documents.job])
+            } else {
+                await #expect(throws: AssemblywrightMacDeveloperEventRelayError.self) {
+                    _ = try await relay.relayEvents(using: master)
+                }
+                #expect(await agent.admittedLocalCodingJobs.isEmpty)
+            }
+            try await relay.stop()
+        }
+    }
+
     @Test("Local-coding admission digest matches the protocol golden transcript")
     func localCodingAdmissionDigestMatchesProtocolGoldenTranscript() {
         let digest = localCodingAdmissionDigest(
-            protocolVersion: 4,
+            protocolVersion: 5,
             contextDigest: [UInt8](repeating: 0x11, count: 32),
             taskID: UUID(uuidString: "00010203-0405-0607-0809-0a0b0c0d0e0f")!,
             stepID: UUID(uuidString: "10111213-1415-1617-1819-1a1b1c1d1e1f")!,
@@ -2997,7 +3035,7 @@ struct DeveloperBridgeTests {
 
         #expect(
             digest.map { String(format: "%02x", $0) }.joined()
-                == "04eb22b8b2928b9475403b8dfccc7dd3d61132c67a89510ae47c9b19bd15140d"
+                == "fb69cef80f0f2a37a886898c25121446a54308b52cb83fd70175c772936874cc"
         )
     }
 
@@ -3025,15 +3063,15 @@ struct DeveloperBridgeTests {
         wrongCount["changed_file_count"] = 2
         var wrongStatus = basePayload
         wrongStatus["test_status"] = "passed"
-        var retained = basePayload
-        retained["workspace_retained"] = true
+        var notRetained = basePayload
+        notRetained["workspace_retained"] = false
         var ambiguous = basePayload
         ambiguous["ambiguous"] = true
         var unknown = basePayload
         unknown["repository_path"] = "/private/forbidden"
 
         for payload in [
-            oldShape, wrongDigest, wrongAdmission, wrongCount, wrongStatus, retained, ambiguous,
+            oldShape, wrongDigest, wrongAdmission, wrongCount, wrongStatus, notRetained, ambiguous,
             unknown
         ] {
             let payloadData = try JSONSerialization.data(
@@ -3172,13 +3210,14 @@ struct DeveloperBridgeTests {
             leaseDurationMilliseconds: 120_000,
             deadlineAfterMilliseconds: 120_000
         )
+        let dataDirectoryURL = URL(
+            fileURLWithPath: dataDirectoryPath,
+            isDirectory: true
+        )
         let relay = AssemblywrightMacDeveloperEventRelay(
             configuration: AssemblywrightMacDeveloperEventRelayConfiguration(
                 agentExecutableURL: URL(fileURLWithPath: executablePath),
-                agentDataDirectoryURL: URL(
-                    fileURLWithPath: dataDirectoryPath,
-                    isDirectory: true
-                ),
+                agentDataDirectoryURL: dataDirectoryURL,
                 localCodingSnapshotsEnabled: true
             ),
             deviceID: documents.deviceID
@@ -3201,12 +3240,17 @@ struct DeveloperBridgeTests {
             throw error
         }
 
-        let attemptRoot = URL(
-            fileURLWithPath: dataDirectoryPath,
+        let attemptRoot = dataDirectoryURL.appendingPathComponent(
+            "local-coding-snapshots",
             isDirectory: true
-        ).appendingPathComponent("local-coding-snapshots", isDirectory: true)
+        )
+        let retainedAttemptID = "33333333-3333-4333-8333-333333333333"
         #expect(
-            try FileManager.default.contentsOfDirectory(atPath: attemptRoot.path).isEmpty
+            try FileManager.default.contentsOfDirectory(atPath: attemptRoot.path).sorted()
+                == [
+                    "\(retainedAttemptID).retention.json",
+                    "\(retainedAttemptID).sealed",
+                ]
         )
         let requests = await master.requests
         #expect(
@@ -3226,13 +3270,23 @@ struct DeveloperBridgeTests {
             leaseDurationMilliseconds: 120_000,
             deadlineAfterMilliseconds: 120_000
         )
+        let cancellationDataDirectoryURL = dataDirectoryURL.appendingPathComponent(
+            "cancellation-agent",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: cancellationDataDirectoryURL,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700]
+        )
+        let cancellationAttemptRoot = cancellationDataDirectoryURL.appendingPathComponent(
+            "local-coding-snapshots",
+            isDirectory: true
+        )
         let cancellationRelay = AssemblywrightMacDeveloperEventRelay(
             configuration: AssemblywrightMacDeveloperEventRelayConfiguration(
                 agentExecutableURL: URL(fileURLWithPath: executablePath),
-                agentDataDirectoryURL: URL(
-                    fileURLWithPath: dataDirectoryPath,
-                    isDirectory: true
-                ),
+                agentDataDirectoryURL: cancellationDataDirectoryURL,
                 localCodingSnapshotsEnabled: true
             ),
             deviceID: cancellationDocuments.deviceID
@@ -3246,7 +3300,7 @@ struct DeveloperBridgeTests {
             acceptedResult: nil,
             cancellationRequiresFinalChunk: true,
             cancellationDelayAfterFinalChunkMilliseconds: 25,
-            cleanupDirectoryURL: attemptRoot
+            cleanupDirectoryURL: cancellationAttemptRoot
         )
 
         do {
@@ -3274,7 +3328,8 @@ struct DeveloperBridgeTests {
         )
         #expect(await cancellationMaster.cleanupWasCompleteAtAcknowledgement == true)
         #expect(
-            try FileManager.default.contentsOfDirectory(atPath: attemptRoot.path).isEmpty
+            try FileManager.default.contentsOfDirectory(atPath: cancellationAttemptRoot.path)
+                .isEmpty
         )
         let cancellationRequests = await cancellationMaster.requests
         #expect(
@@ -4365,7 +4420,7 @@ private func fixtureJobDocuments(
     )
     let contextDigest = Array(SHA256.hash(data: contextData))
     let jobObject: [String: Any] = [
-        "protocol_version": 4,
+        "protocol_version": 5,
         "connection_epoch": NSNumber(value: connectionEpoch),
         "sequence": 10,
         "task_id": taskID,
@@ -4393,7 +4448,7 @@ private func fixtureJobDocuments(
     )
     let payloadDigest = Array(SHA256.hash(data: payloadData))
     let resultObject: [String: Any] = [
-        "protocol_version": 4,
+        "protocol_version": 5,
         "connection_epoch": NSNumber(value: connectionEpoch),
         "sequence": 11,
         "task_id": taskID,
@@ -4407,7 +4462,7 @@ private func fixtureJobDocuments(
         "payload": payload
     ]
     let cancellationObject: [String: Any] = [
-        "protocol_version": 4,
+        "protocol_version": 5,
         "connection_epoch": NSNumber(value: connectionEpoch),
         "sequence": 11,
         "task_id": taskID,
@@ -4418,7 +4473,7 @@ private func fixtureJobDocuments(
         "deadline_after_ms": 2_000
     ]
     let acknowledgementObject: [String: Any] = [
-        "protocol_version": 4,
+        "protocol_version": 5,
         "connection_epoch": NSNumber(value: connectionEpoch),
         "sequence": 12,
         "task_id": taskID,
@@ -4491,7 +4546,8 @@ private func localCodingSnapshotDocuments(
     connectionEpoch: UInt64,
     snapshotBundle: (data: Data, digest: [UInt8])? = nil,
     leaseDurationMilliseconds: UInt64 = 10_000,
-    deadlineAfterMilliseconds: UInt64 = 10_000
+    deadlineAfterMilliseconds: UInt64 = 10_000,
+    replacement: Data = Data("assemblywright contained coding fixture\n".utf8)
 ) throws -> LocalCodingSnapshotDocuments {
     let taskID = "11111111-1111-4111-8111-111111111111"
     let stepID = "22222222-2222-4222-8222-222222222222"
@@ -4501,20 +4557,32 @@ private func localCodingSnapshotDocuments(
     let deviceIDText = "66666666-6666-4666-8666-666666666666"
     let snapshotID = "77777777-7777-4777-8777-777777777777"
     let snapshotDigest = snapshotBundle?.digest ?? [UInt8](repeating: 0x22, count: 32)
-    let workPacketDigest = [UInt8](repeating: 0x33, count: 32)
     let artifactID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
-    let beforeDigest = [UInt8](repeating: 0x42, count: 32)
-    let replacement = Data("assemblywright contained coding fixture\n".utf8)
+    let beforeDigest = snapshotBundle == nil
+        ? [UInt8](repeating: 0x42, count: 32)
+        : Array(SHA256.hash(data: Data("before contained coding fixture\n".utf8)))
     let replacementDigest = Array(SHA256.hash(data: replacement))
     let replacementHex = replacement.map { String(format: "%02x", $0) }.joined()
-    let canonicalArtifact = Data(
-        ("{\"format\":\"assemblywright.readme-replacement.v1\","
-            + "\"path\":\"README.md\",\"expected_before_sha256\":["
-            + beforeDigest.map(String.init).joined(separator: ",") + "],"
-            + "\"replacement_sha256\":["
-            + replacementDigest.map(String.init).joined(separator: ",") + "],"
-            + "\"replacement_hex\":\"\(replacementHex)\"}").utf8
-    )
+    let operations: [[String: Any]] = [[
+        "tool_id": "file.write.v1",
+        "arguments": [
+            "path": "README.md", "expected_before_sha256": beforeDigest,
+            "replacement_sha256": replacementDigest, "replacement_hex": replacementHex,
+            "executable": false
+        ]
+    ]]
+    let workPacket: [String: Any] = [
+        "packet_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "ordinal": 1, "acceptance_criteria_count": 2,
+        "allowed_paths": ["README.md"], "operations": operations
+    ]
+    let workPacketData = try JSONSerialization.data(withJSONObject: workPacket, options: [.sortedKeys, .withoutEscapingSlashes])
+    let workPacketDigest = Array(SHA256.hash(data: workPacketData))
+    let canonicalArtifact = try JSONSerialization.data(withJSONObject: [
+        "format": "assemblywright.multi-file-patch.v1",
+        "work_packet_sha256": workPacketDigest,
+        "changes": operations
+    ], options: [.sortedKeys, .withoutEscapingSlashes])
     let artifactDigest = Array(SHA256.hash(data: canonicalArtifact))
     let artifact: [String: Any] = [
         "artifact_id": artifactID,
@@ -4530,11 +4598,7 @@ private func localCodingSnapshotDocuments(
         "snapshot_id": snapshotID,
         "snapshot_sha256": snapshotDigest,
         "work_packet_sha256": workPacketDigest,
-        "work_packet": [
-            "packet_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-            "ordinal": 1,
-            "acceptance_criteria_count": 2
-        ],
+        "work_packet": workPacket,
         "device_id": deviceIDText,
         "device_registry_revision": 3,
         "queue_revision": 4,
@@ -4546,7 +4610,7 @@ private func localCodingSnapshotDocuments(
     )
     let contextDigest = Array(SHA256.hash(data: contextData))
     let jobObject: [String: Any] = [
-        "protocol_version": 4,
+        "protocol_version": 5,
         "connection_epoch": connectionEpoch,
         "sequence": 10,
         "task_id": taskID,
@@ -4557,7 +4621,7 @@ private func localCodingSnapshotDocuments(
         "capability_id": "local.coding.v1",
         "selected_model": "assemblywright-local-coding-v1",
         "sensitivity": "workspace",
-        "context_handling": "ephemeral_no_retention",
+        "context_handling": "sealed_until_resolved_or_expired",
         "lease_duration_ms": leaseDurationMilliseconds,
         "deadline_after_ms": deadlineAfterMilliseconds,
         "context_sha256": contextDigest,
@@ -4569,7 +4633,7 @@ private func localCodingSnapshotDocuments(
     func chunk(offset: UInt64, content: Data, complete: Bool) throws -> Data {
         try JSONSerialization.data(
             withJSONObject: [
-                "protocol_version": 4,
+                "protocol_version": 5,
                 "connection_epoch": connectionEpoch,
                 "task_id": taskID,
                 "step_id": stepID,
@@ -4615,7 +4679,7 @@ private func localCodingSnapshotDocuments(
         "status": "contained_coding_completed",
         "work_packet_sha256": workPacketDigest,
         "admission_sha256": localCodingAdmissionDigest(
-            protocolVersion: 4,
+            protocolVersion: 5,
             contextDigest: contextDigest,
             taskID: UUID(uuidString: taskID)!,
             stepID: UUID(uuidString: stepID)!,
@@ -4637,7 +4701,8 @@ private func localCodingSnapshotDocuments(
         "changed_file_count": 1,
         "test_status": "not_run",
         "mutation_performed": true,
-        "workspace_retained": false,
+        "workspace_retained": true,
+        "workspace_expires_at_ms": 4_102_444_800_000,
         "ambiguous": false
     ]
     let payloadData = try JSONSerialization.data(
@@ -4646,7 +4711,7 @@ private func localCodingSnapshotDocuments(
     )
     let payloadDigest = Array(SHA256.hash(data: payloadData))
     let resultObject: [String: Any] = [
-            "protocol_version": 4,
+            "protocol_version": 5,
             "connection_epoch": connectionEpoch,
             "sequence": 11,
             "task_id": taskID,
@@ -4674,7 +4739,7 @@ private func localCodingSnapshotDocuments(
     )
     let cancellation = try JSONSerialization.data(
         withJSONObject: [
-            "protocol_version": 4,
+            "protocol_version": 5,
             "connection_epoch": connectionEpoch,
             "sequence": 11,
             "task_id": taskID,
@@ -4688,7 +4753,7 @@ private func localCodingSnapshotDocuments(
     )
     let cancellationAcknowledgement = try JSONSerialization.data(
         withJSONObject: [
-            "protocol_version": 4,
+            "protocol_version": 5,
             "connection_epoch": connectionEpoch,
             "sequence": 12,
             "task_id": taskID,
@@ -4799,7 +4864,7 @@ private func nativeLocalCodingSnapshotBundle(
 
 private func localCodingAllowedPathsDigest() -> [UInt8] {
     let path = Data("README.md".utf8)
-    var input = Data("assemblywright.local-coding-allowed-paths.v1\0".utf8)
+    var input = Data("assemblywright.local-coding-allowed-paths.v2\0".utf8)
     input.appendBigEndian(UInt16(1))
     input.appendBigEndian(UInt64(path.count))
     input.append(path)
@@ -4858,7 +4923,7 @@ private func mlxJobDocuments(connectionEpoch: UInt64) throws -> FixtureJobDocume
     )
     let contextDigest = Array(SHA256.hash(data: contextData))
     let jobObject: [String: Any] = [
-        "protocol_version": 4,
+        "protocol_version": 5,
         "connection_epoch": NSNumber(value: connectionEpoch),
         "sequence": 10,
         "task_id": taskID,
@@ -4886,7 +4951,7 @@ private func mlxJobDocuments(connectionEpoch: UInt64) throws -> FixtureJobDocume
     )
     let payloadDigest = Array(SHA256.hash(data: payloadData))
     let resultObject: [String: Any] = [
-        "protocol_version": 4,
+        "protocol_version": 5,
         "connection_epoch": NSNumber(value: connectionEpoch),
         "sequence": 11,
         "task_id": taskID,
@@ -4900,7 +4965,7 @@ private func mlxJobDocuments(connectionEpoch: UInt64) throws -> FixtureJobDocume
         "payload": payload
     ]
     let cancellationObject: [String: Any] = [
-        "protocol_version": 4,
+        "protocol_version": 5,
         "connection_epoch": NSNumber(value: connectionEpoch),
         "sequence": 11,
         "task_id": taskID,
@@ -4911,7 +4976,7 @@ private func mlxJobDocuments(connectionEpoch: UInt64) throws -> FixtureJobDocume
         "deadline_after_ms": 2_000
     ]
     let acknowledgementObject: [String: Any] = [
-        "protocol_version": 4,
+        "protocol_version": 5,
         "connection_epoch": NSNumber(value: connectionEpoch),
         "sequence": 12,
         "task_id": taskID,
@@ -4950,7 +5015,7 @@ private func mlxJobDocuments(connectionEpoch: UInt64) throws -> FixtureJobDocume
 
 private func emptyEventBatch() -> Data {
     Data(
-        #"{"after_sequence":0,"events":[],"has_more":false,"next_sequence":0,"protocol_version":4,"stream_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}"#.utf8
+        #"{"after_sequence":0,"events":[],"has_more":false,"next_sequence":0,"protocol_version":5,"stream_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}"#.utf8
     )
 }
 
@@ -5095,13 +5160,13 @@ private func localCodingProfile() -> AssemblywrightMacBridgeProfile {
 
 private func validRemoteHealthData(schemaVersion: UInt64 = 8) -> Data {
     Data(
-        #"{"status":"ok","mode":"developer_remote_master","host_mode":"windows_service","service_identity":"MIKE-PC\\mike","maintenance_active":false,"maintenance_reason":null,"emergency_paused":false,"protocol_version":4,"schema_version":\#(schemaVersion),"process_id":43752,"started_at_ms":1784749559000,"startup_reconciliation":{"disconnected_connections":0,"abandoned_attempts":0,"requeued_steps":0},"state":{"registered_devices":1,"active_device_certificates":1,"unconsumed_enrollment_grants":2,"active_connections":1,"queued_steps":0,"leased_steps":0,"terminal_steps":0,"active_attempts":0},"boundary":"TLS 1.3 mutual authentication with enrolled-device certificate and durable revocation checks"}"#.utf8
+        #"{"status":"ok","mode":"developer_remote_master","host_mode":"windows_service","service_identity":"MIKE-PC\\mike","maintenance_active":false,"maintenance_reason":null,"emergency_paused":false,"protocol_version":5,"schema_version":\#(schemaVersion),"process_id":43752,"started_at_ms":1784749559000,"startup_reconciliation":{"disconnected_connections":0,"abandoned_attempts":0,"requeued_steps":0},"state":{"registered_devices":1,"active_device_certificates":1,"unconsumed_enrollment_grants":2,"active_connections":1,"queued_steps":0,"leased_steps":0,"terminal_steps":0,"active_attempts":0},"boundary":"TLS 1.3 mutual authentication with enrolled-device certificate and durable revocation checks"}"#.utf8
     )
 }
 
 private func pausedRemoteHealthData() -> Data {
     Data(
-        #"{"status":"paused","mode":"developer_remote_master","host_mode":"windows_service","service_identity":"MIKE-PC\\mike","maintenance_active":false,"maintenance_reason":null,"emergency_paused":true,"protocol_version":4,"schema_version":8,"process_id":43752,"started_at_ms":1784749559000,"startup_reconciliation":{"disconnected_connections":0,"abandoned_attempts":0,"requeued_steps":0},"state":{"registered_devices":1,"active_device_certificates":1,"unconsumed_enrollment_grants":2,"active_connections":1,"queued_steps":0,"leased_steps":1,"terminal_steps":0,"active_attempts":1},"boundary":"TLS 1.3 mutual authentication with enrolled-device certificate and durable revocation checks"}"#.utf8
+        #"{"status":"paused","mode":"developer_remote_master","host_mode":"windows_service","service_identity":"MIKE-PC\\mike","maintenance_active":false,"maintenance_reason":null,"emergency_paused":true,"protocol_version":5,"schema_version":8,"process_id":43752,"started_at_ms":1784749559000,"startup_reconciliation":{"disconnected_connections":0,"abandoned_attempts":0,"requeued_steps":0},"state":{"registered_devices":1,"active_device_certificates":1,"unconsumed_enrollment_grants":2,"active_connections":1,"queued_steps":0,"leased_steps":1,"terminal_steps":0,"active_attempts":1},"boundary":"TLS 1.3 mutual authentication with enrolled-device certificate and durable revocation checks"}"#.utf8
     )
 }
 
@@ -5257,7 +5322,7 @@ private func authenticatedSnapshotData(
             ?? (maintenanceActive ? "maintenance" : emergencyPaused ? "paused" : "ok"),
         "maintenance_active": maintenanceActive,
         "emergency_paused": emergencyPaused,
-        "protocol_version": 4,
+        "protocol_version": 5,
         "schema_version": 8,
         "feature_conveyor": featureObject
     ]

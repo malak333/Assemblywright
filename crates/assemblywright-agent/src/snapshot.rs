@@ -1,26 +1,28 @@
 use assemblywright_protocol::{
-    build_local_coding_fixture_patch_artifact, local_coding_admission_sha256,
-    local_coding_fixture_allowed_paths_sha256, CancellationAcknowledgement,
-    CancellationAcknowledgementStatus, CancellationInstruction, JobEnvelope, JobResultEnvelope,
-    JobResultStatus, LocalCodingAgentCompletion, LocalCodingJobResult, LocalCodingResultArtifact,
+    build_local_coding_patch_artifact, local_coding_admission_sha256, local_coding_paths_sha256,
+    CancellationAcknowledgement, CancellationAcknowledgementStatus, CancellationInstruction,
+    JobEnvelope, JobResultEnvelope, JobResultStatus, LocalCodingAgentCompletion,
+    LocalCodingEditOperation, LocalCodingJobResult, LocalCodingResultArtifact,
     LocalCodingSnapshotChunk, LocalCodingSnapshotChunkRequest, ProtocolError,
-    LOCAL_CODING_COMPLETED_STATUS, LOCAL_CODING_FIXTURE_ALLOWED_PATH, LOCAL_CODING_FIXTURE_CONTENT,
-    LOCAL_CODING_FIXTURE_TEST_STATUS, MAX_LOCAL_CODING_SNAPSHOT_BUNDLE_BYTES, PROTOCOL_VERSION,
+    LOCAL_CODING_COMPLETED_STATUS, LOCAL_CODING_FIXTURE_TEST_STATUS,
+    MAX_LOCAL_CODING_SNAPSHOT_BUNDLE_BYTES, PROTOCOL_VERSION,
 };
 use git2::{ObjectType, Oid, Repository, TreeWalkMode, TreeWalkResult};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
-use std::ffi::OsStr;
+use std::ffi::{CString, OsStr};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-#[cfg(not(test))]
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 #[cfg(test)]
 use std::os::unix::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
+#[cfg(test)]
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
@@ -31,10 +33,9 @@ const MAX_OBJECTS: usize = 50_000;
 const MAX_OBJECT_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
 const MAX_PATH_BYTES: usize = 1024;
-#[cfg(not(test))]
-const MAX_CHILD_FD_CLOSE_LIMIT: i32 = 1_048_576;
-#[cfg(not(test))]
-const CONTAINED_FIXTURE_TIMEOUT: Duration = Duration::from_secs(5);
+const RETAINED_WORKSPACE_TTL_MS: u64 = 60 * 60 * 1000;
+const MAX_RETENTION_RECORD_BYTES: usize = 32 * 1024;
+const RETENTION_RECORD_VERSION: u16 = 1;
 #[cfg(not(test))]
 const PARENT_VERIFICATION_WAIT_TIMEOUT: Duration = Duration::from_secs(7);
 #[cfg(test)]
@@ -87,6 +88,7 @@ struct ActiveMaterialization {
 #[derive(Debug)]
 struct ContainedCodingEvidence {
     changed_paths_sha256: [u8; 32],
+    workspace_tree_sha256: [u8; 32],
     artifact_bytes: Vec<u8>,
 }
 
@@ -95,6 +97,17 @@ struct FileEvidence {
     mode: u32,
     size: u64,
     sha256: [u8; 32],
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RetainedWorkspaceRecord {
+    record_version: u16,
+    job: JobEnvelope,
+    sealed_workspace_name: String,
+    workspace_tree_sha256: [u8; 32],
+    expires_at_ms: u64,
+    binding_sha256: [u8; 32],
 }
 
 #[derive(Debug)]
@@ -110,12 +123,12 @@ impl LocalCodingSnapshotRuntime {
     pub fn open(data_dir: &Path, enabled: bool) -> Result<Self, LocalCodingSnapshotError> {
         let root = data_dir.join("local-coding-snapshots");
         ensure_private_directory(&root)?;
-        cleanup_children(&root)?;
+        let completed = recover_retained_workspace(&root)?;
         Ok(Self {
             enabled,
             root,
             active: Mutex::new(None),
-            completed: Mutex::new(None),
+            completed: Mutex::new(completed),
             state_changed: Condvar::new(),
         })
     }
@@ -132,10 +145,14 @@ impl LocalCodingSnapshotRuntime {
         if active.is_some() {
             return Err(LocalCodingSnapshotError::AlreadyActive);
         }
-        *self
+        if self
             .completed
             .lock()
-            .map_err(|_| LocalCodingSnapshotError::Unavailable)? = None;
+            .map_err(|_| LocalCodingSnapshotError::Unavailable)?
+            .is_some()
+        {
+            return Err(LocalCodingSnapshotError::AlreadyActive);
+        }
         let staging_directory = self.root.join(job.attempt_id.0.to_string());
         fs::create_dir(&staging_directory)?;
         fs::set_permissions(&staging_directory, fs::Permissions::from_mode(0o700))?;
@@ -288,7 +305,6 @@ impl LocalCodingSnapshotRuntime {
             self.state_changed.notify_all();
             return Err(LocalCodingSnapshotError::EffectPossible);
         }
-        let cleanup_result = cleanup_attempt_state(&self.root, &verification);
         let mut guard = self
             .active
             .lock()
@@ -297,14 +313,8 @@ impl LocalCodingSnapshotRuntime {
         if active.job.attempt_id != verification.job.attempt_id || !active.verifying {
             return Err(LocalCodingSnapshotError::Rejected);
         }
-        if let Err(error) = cleanup_result {
-            if let Some(active) = guard.as_mut() {
-                active.verifying = false;
-            }
-            self.state_changed.notify_all();
-            return Err(error);
-        }
         if active.cancellation_requested.load(Ordering::Acquire) {
+            cleanup_attempt_state(&self.root, &verification)?;
             guard.take();
             self.state_changed.notify_all();
             return Err(LocalCodingSnapshotError::Rejected);
@@ -312,12 +322,23 @@ impl LocalCodingSnapshotRuntime {
         let evidence = match verification_result {
             Ok(evidence) => evidence,
             Err(error) => {
+                if let Err(cleanup_error) = cleanup_attempt_state(&self.root, &verification) {
+                    if let Some(active) = guard.as_mut() {
+                        active.verifying = false;
+                        active.terminal_failure = true;
+                    }
+                    self.state_changed.notify_all();
+                    return Err(cleanup_error);
+                }
                 guard.take();
                 self.state_changed.notify_all();
                 return Err(error);
             }
         };
-        let result = match build_result(&verification.job, &evidence) {
+        let workspace_expires_at_ms = current_time_ms()?
+            .checked_add(RETAINED_WORKSPACE_TTL_MS)
+            .ok_or(LocalCodingSnapshotError::Rejected)?;
+        let result = match build_result(&verification.job, &evidence, workspace_expires_at_ms) {
             Ok(result) => result,
             Err(error) => {
                 guard.take();
@@ -325,6 +346,33 @@ impl LocalCodingSnapshotRuntime {
                 return Err(error);
             }
         };
+        let retention_result = (|| -> Result<(), LocalCodingSnapshotError> {
+            let sealed_workspace_name = sealed_workspace_name(&verification.job);
+            let retained = self.root.join(&sealed_workspace_name);
+            fs::rename(
+                self.root
+                    .join(format!("{}.materialized", verification.job.attempt_id.0)),
+                &retained,
+            )?;
+            write_retention_record(
+                &self.root,
+                RetainedWorkspaceRecord::new(
+                    verification.job.clone(),
+                    sealed_workspace_name,
+                    evidence.workspace_tree_sha256,
+                    workspace_expires_at_ms,
+                )?,
+            )?;
+            cleanup_tree_if_exists(&verification.staging_directory)
+        })();
+        if let Err(error) = retention_result {
+            if let Some(active) = guard.as_mut() {
+                active.verifying = false;
+                active.terminal_failure = true;
+            }
+            self.state_changed.notify_all();
+            return Err(error);
+        }
         *self
             .completed
             .lock()
@@ -344,8 +392,13 @@ impl LocalCodingSnapshotRuntime {
             .map_err(|_| LocalCodingSnapshotError::Unavailable)?;
         if let Some(active) = guard.as_mut() {
             instruction.validate_for_job(&active.job)?;
-            if active.effect_possible || active.terminal_failure {
+            if active.effect_possible {
                 return Err(LocalCodingSnapshotError::EffectPossible);
+            }
+            if active.terminal_failure {
+                cleanup_attempt_state(&self.root, active)?;
+                guard.take();
+                return cancellation_acknowledgement(instruction);
             }
             if active.verifying {
                 let attempt_id = active.job.attempt_id;
@@ -400,6 +453,7 @@ impl LocalCodingSnapshotRuntime {
             .as_ref()
             .ok_or(LocalCodingSnapshotError::NotActive)?;
         instruction.validate_for_job(job)?;
+        cleanup_retained_workspace(&self.root, job)?;
         completed.take();
         cancellation_acknowledgement(instruction)
     }
@@ -409,10 +463,7 @@ impl LocalCodingSnapshotRuntime {
             .active
             .lock()
             .map_err(|_| LocalCodingSnapshotError::Unavailable)?;
-        if guard
-            .as_ref()
-            .is_some_and(|active| active.effect_possible || active.terminal_failure)
-        {
+        if guard.as_ref().is_some_and(|active| active.effect_possible) {
             return Err(LocalCodingSnapshotError::EffectPossible);
         }
         if guard.as_ref().is_some_and(|active| active.verifying) {
@@ -434,10 +485,7 @@ impl LocalCodingSnapshotRuntime {
                     return Err(LocalCodingSnapshotError::VerificationTimeout);
                 }
             }
-            if guard
-                .as_ref()
-                .is_some_and(|active| active.effect_possible || active.terminal_failure)
-            {
+            if guard.as_ref().is_some_and(|active| active.effect_possible) {
                 return Err(LocalCodingSnapshotError::EffectPossible);
             }
         }
@@ -445,12 +493,18 @@ impl LocalCodingSnapshotRuntime {
             cleanup_attempt_state(&self.root, active)?;
             guard.take();
         }
-        *self
-            .completed
-            .lock()
-            .map_err(|_| LocalCodingSnapshotError::Unavailable)? = None;
         Ok(())
     }
+}
+
+fn current_time_ms() -> Result<u64, LocalCodingSnapshotError> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| LocalCodingSnapshotError::Rejected)?
+        .as_millis()
+        .try_into()
+        .map_err(|_| LocalCodingSnapshotError::Rejected)
 }
 
 fn cancellation_acknowledgement(
@@ -494,6 +548,7 @@ fn request_for_job(
 fn build_result(
     job: &JobEnvelope,
     evidence: &ContainedCodingEvidence,
+    workspace_expires_at_ms: u64,
 ) -> Result<LocalCodingAgentCompletion, LocalCodingSnapshotError> {
     let context = job.validate_local_coding()?;
     let artifact =
@@ -503,16 +558,18 @@ fn build_result(
         work_packet_sha256: context.work_packet_sha256,
         admission_sha256: local_coding_admission_sha256(job),
         snapshot_sha256: context.snapshot_sha256,
-        allowed_paths_sha256: local_coding_fixture_allowed_paths_sha256(),
+        allowed_paths_sha256: context.work_packet.allowed_paths_sha256()?,
         changed_paths_sha256: evidence.changed_paths_sha256,
         patch_sha256: artifact.artifact_sha256,
         artifact_id: artifact.artifact_id,
         artifact_sha256: artifact.artifact_sha256,
         artifact_size_bytes: artifact.artifact_size_bytes,
-        changed_file_count: 1,
+        changed_file_count: u16::try_from(context.work_packet.allowed_paths.len())
+            .map_err(|_| LocalCodingSnapshotError::Rejected)?,
         test_status: LOCAL_CODING_FIXTURE_TEST_STATUS.to_string(),
         mutation_performed: true,
-        workspace_retained: false,
+        workspace_retained: true,
+        workspace_expires_at_ms,
         ambiguous: false,
     })
     .map_err(|_| LocalCodingSnapshotError::Rejected)?;
@@ -557,98 +614,485 @@ fn materialize_verify_and_execute(
         &active.cancellation_requested,
         active.attempt_deadline,
     )?;
-    run_contained_coding_fixture(
+    run_deterministic_edit_packet(
         &materialized,
+        &context.work_packet,
         &active.cancellation_requested,
         active.attempt_deadline,
     )
 }
 
-fn run_contained_coding_fixture(
+fn run_deterministic_edit_packet(
     workspace: &Path,
+    packet: &assemblywright_protocol::FeatureConveyorCodingWorkPacketMetadata,
     cancellation_requested: &AtomicBool,
     attempt_deadline: Instant,
 ) -> Result<ContainedCodingEvidence, LocalCodingSnapshotError> {
     reject_if_stopped(cancellation_requested, attempt_deadline)?;
+    packet.validate()?;
     let before = collect_file_evidence(workspace, cancellation_requested, attempt_deadline)?;
-    let allowed_before = before
-        .get(LOCAL_CODING_FIXTURE_ALLOWED_PATH)
-        .ok_or(LocalCodingSnapshotError::Rejected)?
-        .clone();
-
-    #[cfg(test)]
-    run_contained_coding_fixture_child_in(workspace)?;
-
-    #[cfg(not(test))]
-    {
-        let child_pid = spawn_fixed_contained_child(workspace)?;
-        let started = Instant::now();
-        loop {
-            if cancellation_requested.load(Ordering::Acquire)
-                || Instant::now() >= attempt_deadline
-                || started.elapsed() >= CONTAINED_FIXTURE_TIMEOUT
-            {
-                terminate_and_reap_forked_process_group(child_pid)?;
-                return Err(LocalCodingSnapshotError::Rejected);
-            }
-            if let Some(status) = wait_forked_child(child_pid, true)? {
-                if process_group_exists(child_pid)? {
-                    signal_process_group(child_pid, libc::SIGKILL)?;
-                    confirm_process_group_absent(child_pid, Duration::from_secs(1))?;
+    let workspace_handle = open_private_directory(workspace)?;
+    for operation in &packet.operations {
+        reject_if_stopped(cancellation_requested, attempt_deadline)?;
+        match operation {
+            LocalCodingEditOperation::Write(arguments) => {
+                let (parent_handles, leaf) =
+                    open_verified_parent_chain(&workspace_handle, &arguments.path)?;
+                let parent = parent_handles
+                    .last()
+                    .ok_or(LocalCodingSnapshotError::Rejected)?;
+                match arguments.expected_before_sha256 {
+                    Some(expected) => {
+                        let evidence = before
+                            .get(&arguments.path)
+                            .ok_or(LocalCodingSnapshotError::Rejected)?;
+                        if evidence.sha256 != expected {
+                            return Err(LocalCodingSnapshotError::Rejected);
+                        }
+                        let file = open_file_at(parent, &leaf, libc::O_RDONLY, 0)?;
+                        let metadata = file.metadata()?;
+                        if !metadata.is_file()
+                            || metadata.nlink() != 1
+                            || metadata.uid() != unsafe { libc::geteuid() }
+                            || metadata.len() != evidence.size
+                            || hash_open_file(
+                                &file,
+                                MAX_FILE_BYTES,
+                                cancellation_requested,
+                                attempt_deadline,
+                            )? != expected
+                        {
+                            return Err(LocalCodingSnapshotError::Rejected);
+                        }
+                        verify_named_file_identity(parent, &leaf, &metadata)?;
+                        atomic_write_at(
+                            parent,
+                            &leaf,
+                            &decode_lower_hex_bytes(&arguments.replacement_hex)?,
+                            if arguments.executable { 0o755 } else { 0o644 },
+                            Some(&metadata),
+                        )?;
+                    }
+                    None => {
+                        if before.contains_key(&arguments.path) {
+                            return Err(LocalCodingSnapshotError::Rejected);
+                        }
+                        ensure_leaf_absent(parent, &leaf)?;
+                        atomic_write_at(
+                            parent,
+                            &leaf,
+                            &decode_lower_hex_bytes(&arguments.replacement_hex)?,
+                            if arguments.executable { 0o755 } else { 0o644 },
+                            None,
+                        )?;
+                    }
                 }
-                if !status {
+            }
+            LocalCodingEditOperation::Delete(arguments) => {
+                let evidence = before
+                    .get(&arguments.path)
+                    .ok_or(LocalCodingSnapshotError::Rejected)?;
+                if evidence.sha256 != arguments.expected_before_sha256 {
                     return Err(LocalCodingSnapshotError::Rejected);
                 }
-                break;
+                let (parent_handles, leaf) =
+                    open_verified_parent_chain(&workspace_handle, &arguments.path)?;
+                let parent = parent_handles
+                    .last()
+                    .ok_or(LocalCodingSnapshotError::Rejected)?;
+                let file = open_file_at(parent, &leaf, libc::O_RDONLY, 0)?;
+                let metadata = file.metadata()?;
+                if !metadata.is_file()
+                    || metadata.nlink() != 1
+                    || metadata.uid() != unsafe { libc::geteuid() }
+                    || hash_open_file(
+                        &file,
+                        MAX_FILE_BYTES,
+                        cancellation_requested,
+                        attempt_deadline,
+                    )? != arguments.expected_before_sha256
+                {
+                    return Err(LocalCodingSnapshotError::Rejected);
+                }
+                verify_named_file_identity(parent, &leaf, &metadata)?;
+                atomic_delete_at(
+                    parent,
+                    &leaf,
+                    &metadata,
+                    arguments.expected_before_sha256,
+                    cancellation_requested,
+                    attempt_deadline,
+                )?;
             }
-            thread::sleep(Duration::from_millis(5));
         }
     }
-
     let after = collect_file_evidence(workspace, cancellation_requested, attempt_deadline)?;
     let changed = changed_paths(&before, &after);
-    if changed.as_slice() != [LOCAL_CODING_FIXTURE_ALLOWED_PATH] {
+    if changed != packet.allowed_paths {
         return Err(LocalCodingSnapshotError::Rejected);
     }
-    let allowed_after = after
-        .get(LOCAL_CODING_FIXTURE_ALLOWED_PATH)
-        .ok_or(LocalCodingSnapshotError::Rejected)?;
-    let expected_output_sha256: [u8; 32] = Sha256::digest(LOCAL_CODING_FIXTURE_CONTENT).into();
-    if allowed_before == *allowed_after
-        || allowed_before.mode != allowed_after.mode
-        || allowed_after.size != LOCAL_CODING_FIXTURE_CONTENT.len() as u64
-        || allowed_after.sha256 != expected_output_sha256
-    {
-        return Err(LocalCodingSnapshotError::Rejected);
-    }
-    let changed_paths_sha256 = local_coding_fixture_allowed_paths_sha256();
     Ok(ContainedCodingEvidence {
-        changed_paths_sha256,
-        artifact_bytes: build_local_coding_fixture_patch_artifact(allowed_before.sha256)?,
+        changed_paths_sha256: local_coding_paths_sha256(&changed),
+        workspace_tree_sha256: workspace_tree_sha256(&after),
+        artifact_bytes: build_local_coding_patch_artifact(packet)?,
     })
 }
 
-#[cfg(test)]
-fn run_contained_coding_fixture_child_in(workspace: &Path) -> Result<(), LocalCodingSnapshotError> {
-    let target = workspace.join(LOCAL_CODING_FIXTURE_ALLOWED_PATH);
+fn open_private_directory(path: &Path) -> Result<File, LocalCodingSnapshotError> {
     let mut options = OpenOptions::new();
     options
-        .write(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
-    let mut file = options.open(target)?;
-    let metadata = file.metadata()?;
-    if !metadata.is_file()
-        || metadata.nlink() != 1
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let directory = options.open(path)?;
+    validate_private_directory(&directory)?;
+    Ok(directory)
+}
+
+fn validate_private_directory(directory: &File) -> Result<(), LocalCodingSnapshotError> {
+    let metadata = directory.metadata()?;
+    if !metadata.is_dir()
         || metadata.uid() != unsafe { libc::geteuid() }
-        || metadata.len() > MAX_FILE_BYTES
+        || metadata.permissions().mode() & 0o077 != 0
     {
         return Err(LocalCodingSnapshotError::Rejected);
     }
-    file.set_len(0)?;
-    file.seek(SeekFrom::Start(0))?;
-    file.write_all(LOCAL_CODING_FIXTURE_CONTENT)?;
-    file.sync_all()?;
     Ok(())
+}
+
+fn open_verified_parent_chain(
+    workspace: &File,
+    relative: &str,
+) -> Result<(Vec<File>, CString), LocalCodingSnapshotError> {
+    let path = Path::new(relative);
+    let mut components = path.components().collect::<Vec<_>>();
+    let leaf = match components.pop() {
+        Some(Component::Normal(leaf)) => {
+            CString::new(leaf.as_bytes()).map_err(|_| LocalCodingSnapshotError::Rejected)?
+        }
+        _ => return Err(LocalCodingSnapshotError::Rejected),
+    };
+    let mut handles = vec![workspace.try_clone()?];
+    for component in components {
+        let Component::Normal(name) = component else {
+            return Err(LocalCodingSnapshotError::Rejected);
+        };
+        let name = CString::new(name.as_bytes()).map_err(|_| LocalCodingSnapshotError::Rejected)?;
+        let parent = handles.last().ok_or(LocalCodingSnapshotError::Rejected)?;
+        let descriptor = unsafe {
+            libc::openat(
+                parent.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if descriptor < 0 {
+            return Err(LocalCodingSnapshotError::Io(std::io::Error::last_os_error()));
+        }
+        let handle = unsafe { File::from_raw_fd(descriptor) };
+        validate_private_directory(&handle)?;
+        handles.push(handle);
+    }
+    Ok((handles, leaf))
+}
+
+fn open_file_at(
+    parent: &File,
+    leaf: &CString,
+    flags: i32,
+    mode: libc::mode_t,
+) -> Result<File, LocalCodingSnapshotError> {
+    let descriptor = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            leaf.as_ptr(),
+            flags | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            libc::c_uint::from(mode),
+        )
+    };
+    if descriptor < 0 {
+        return Err(LocalCodingSnapshotError::Io(std::io::Error::last_os_error()));
+    }
+    Ok(unsafe { File::from_raw_fd(descriptor) })
+}
+
+fn fchmod_file(file: &File, mode: libc::mode_t) -> Result<(), LocalCodingSnapshotError> {
+    if unsafe { libc::fchmod(file.as_raw_fd(), mode) } != 0 {
+        return Err(LocalCodingSnapshotError::Io(std::io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
+fn ensure_leaf_absent(parent: &File, leaf: &CString) -> Result<(), LocalCodingSnapshotError> {
+    let mut current = std::mem::MaybeUninit::<libc::stat>::uninit();
+    if unsafe {
+        libc::fstatat(
+            parent.as_raw_fd(),
+            leaf.as_ptr(),
+            current.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } == 0
+    {
+        return Err(LocalCodingSnapshotError::Rejected);
+    }
+    if std::io::Error::last_os_error().raw_os_error() != Some(libc::ENOENT) {
+        return Err(LocalCodingSnapshotError::Io(std::io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
+fn atomic_write_at(
+    parent: &File,
+    leaf: &CString,
+    replacement: &[u8],
+    mode: libc::mode_t,
+    expected_before: Option<&fs::Metadata>,
+) -> Result<(), LocalCodingSnapshotError> {
+    let temp_name = CString::new(format!(
+        ".assemblywright-edit-{}-{}",
+        unsafe { libc::getpid() },
+        current_time_ms()?
+    ))
+    .map_err(|_| LocalCodingSnapshotError::Rejected)?;
+    let mut temp = open_file_at(
+        parent,
+        &temp_name,
+        libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL,
+        0o600,
+    )?;
+    let result = (|| -> Result<(), LocalCodingSnapshotError> {
+        temp.write_all(replacement)?;
+        fchmod_file(&temp, mode)?;
+        temp.sync_all()?;
+        atomic_install_at(parent, &temp_name, leaf, expected_before)?;
+        if unsafe { libc::fsync(parent.as_raw_fd()) } != 0 {
+            return Err(LocalCodingSnapshotError::Io(std::io::Error::last_os_error()));
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = unsafe { libc::unlinkat(parent.as_raw_fd(), temp_name.as_ptr(), 0) };
+    }
+    result
+}
+
+#[cfg(target_os = "macos")]
+fn atomic_delete_at(
+    parent: &File,
+    leaf: &CString,
+    expected_identity: &fs::Metadata,
+    expected_sha256: [u8; 32],
+    cancellation_requested: &AtomicBool,
+    attempt_deadline: Instant,
+) -> Result<(), LocalCodingSnapshotError> {
+    let capture_name = CString::new(format!(
+        ".assemblywright-delete-{}-{}",
+        unsafe { libc::getpid() },
+        current_time_ms()?
+    ))
+    .map_err(|_| LocalCodingSnapshotError::Rejected)?;
+    let capture = open_file_at(
+        parent,
+        &capture_name,
+        libc::O_RDWR | libc::O_CREAT | libc::O_EXCL,
+        0o600,
+    )?;
+    let placeholder = capture.metadata()?;
+    if unsafe {
+        libc::renameatx_np(
+            parent.as_raw_fd(),
+            capture_name.as_ptr(),
+            parent.as_raw_fd(),
+            leaf.as_ptr(),
+            libc::RENAME_SWAP,
+        )
+    } != 0
+    {
+        let error = LocalCodingSnapshotError::Io(std::io::Error::last_os_error());
+        let _ = unlink_file_at(parent, &capture_name);
+        return Err(error);
+    }
+    let verification = (|| -> Result<(bool, fs::Metadata), LocalCodingSnapshotError> {
+        let displaced = open_file_at(parent, &capture_name, libc::O_RDONLY, 0)?;
+        let displaced_metadata = displaced.metadata()?;
+        let matches = displaced_metadata.dev() == expected_identity.dev()
+            && displaced_metadata.ino() == expected_identity.ino()
+            && displaced_metadata.uid() == expected_identity.uid()
+            && displaced_metadata.is_file()
+            && displaced_metadata.nlink() == 1
+            && hash_open_file(
+                &displaced,
+                MAX_FILE_BYTES,
+                cancellation_requested,
+                attempt_deadline,
+            )? == expected_sha256;
+        Ok((matches, displaced_metadata))
+    })();
+    let (matches, displaced_metadata) = match verification {
+        Ok(verified) => verified,
+        Err(error) => {
+            rollback_delete_swap(parent, leaf, &capture_name, &placeholder)?;
+            return Err(error);
+        }
+    };
+    if !matches {
+        rollback_delete_swap(parent, leaf, &capture_name, &placeholder)?;
+        return Err(LocalCodingSnapshotError::Rejected);
+    }
+    verify_named_file_identity(parent, leaf, &placeholder)
+        .map_err(|_| LocalCodingSnapshotError::EffectPossible)?;
+    unlink_file_at(parent, leaf)?;
+    verify_named_file_identity(parent, &capture_name, &displaced_metadata)
+        .map_err(|_| LocalCodingSnapshotError::EffectPossible)?;
+    unlink_file_at(parent, &capture_name)?;
+    if unsafe { libc::fsync(parent.as_raw_fd()) } != 0 {
+        return Err(LocalCodingSnapshotError::Io(std::io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn rollback_delete_swap(
+    parent: &File,
+    leaf: &CString,
+    capture_name: &CString,
+    placeholder: &fs::Metadata,
+) -> Result<(), LocalCodingSnapshotError> {
+    verify_named_file_identity(parent, leaf, placeholder)
+        .map_err(|_| LocalCodingSnapshotError::EffectPossible)?;
+    if unsafe {
+        libc::renameatx_np(
+            parent.as_raw_fd(),
+            capture_name.as_ptr(),
+            parent.as_raw_fd(),
+            leaf.as_ptr(),
+            libc::RENAME_SWAP,
+        )
+    } != 0
+    {
+        return Err(LocalCodingSnapshotError::EffectPossible);
+    }
+    unlink_file_at(parent, capture_name)?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn atomic_delete_at(
+    _parent: &File,
+    _leaf: &CString,
+    _expected_identity: &fs::Metadata,
+    _expected_sha256: [u8; 32],
+    _cancellation_requested: &AtomicBool,
+    _attempt_deadline: Instant,
+) -> Result<(), LocalCodingSnapshotError> {
+    Err(LocalCodingSnapshotError::Rejected)
+}
+
+#[cfg(target_os = "macos")]
+fn atomic_install_at(
+    parent: &File,
+    temp_name: &CString,
+    leaf: &CString,
+    expected_before: Option<&fs::Metadata>,
+) -> Result<(), LocalCodingSnapshotError> {
+    let flags = if expected_before.is_some() {
+        libc::RENAME_SWAP
+    } else {
+        libc::RENAME_EXCL
+    };
+    if unsafe {
+        libc::renameatx_np(
+            parent.as_raw_fd(),
+            temp_name.as_ptr(),
+            parent.as_raw_fd(),
+            leaf.as_ptr(),
+            flags,
+        )
+    } != 0
+    {
+        return Err(LocalCodingSnapshotError::Io(std::io::Error::last_os_error()));
+    }
+    if let Some(expected) = expected_before {
+        if let Err(error) = verify_named_file_identity(parent, temp_name, expected) {
+            let rollback = unsafe {
+                libc::renameatx_np(
+                    parent.as_raw_fd(),
+                    temp_name.as_ptr(),
+                    parent.as_raw_fd(),
+                    leaf.as_ptr(),
+                    libc::RENAME_SWAP,
+                )
+            };
+            if rollback != 0 {
+                return Err(LocalCodingSnapshotError::EffectPossible);
+            }
+            return Err(error);
+        }
+        unlink_file_at(parent, temp_name)?;
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn atomic_install_at(
+    _parent: &File,
+    _temp_name: &CString,
+    _leaf: &CString,
+    _expected_before: Option<&fs::Metadata>,
+) -> Result<(), LocalCodingSnapshotError> {
+    Err(LocalCodingSnapshotError::Rejected)
+}
+
+fn verify_named_file_identity(
+    parent: &File,
+    leaf: &CString,
+    opened: &fs::Metadata,
+) -> Result<(), LocalCodingSnapshotError> {
+    let mut current = std::mem::MaybeUninit::<libc::stat>::uninit();
+    if unsafe {
+        libc::fstatat(
+            parent.as_raw_fd(),
+            leaf.as_ptr(),
+            current.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } != 0
+    {
+        return Err(LocalCodingSnapshotError::Io(std::io::Error::last_os_error()));
+    }
+    let current = unsafe { current.assume_init() };
+    if u64::try_from(current.st_dev).ok() != Some(opened.dev())
+        || current.st_ino != opened.ino()
+        || current.st_uid != opened.uid()
+        || (current.st_mode & libc::S_IFMT) != libc::S_IFREG
+    {
+        return Err(LocalCodingSnapshotError::Rejected);
+    }
+    Ok(())
+}
+
+fn unlink_file_at(parent: &File, leaf: &CString) -> Result<(), LocalCodingSnapshotError> {
+    if unsafe { libc::unlinkat(parent.as_raw_fd(), leaf.as_ptr(), 0) } != 0 {
+        return Err(LocalCodingSnapshotError::Io(std::io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
+fn decode_lower_hex_bytes(value: &str) -> Result<Vec<u8>, LocalCodingSnapshotError> {
+    if value.len() % 2 != 0
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(LocalCodingSnapshotError::Rejected);
+    }
+    (0..value.len())
+        .step_by(2)
+        .map(|index| {
+            u8::from_str_radix(&value[index..index + 2], 16)
+                .map_err(|_| LocalCodingSnapshotError::Rejected)
+        })
+        .collect()
 }
 
 fn hash_open_file(
@@ -692,237 +1136,7 @@ fn hash_open_file(
     Ok(digest.finalize().into())
 }
 
-#[cfg(not(test))]
-fn spawn_fixed_contained_child(workspace: &Path) -> Result<i32, LocalCodingSnapshotError> {
-    let mut options = OpenOptions::new();
-    options
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC);
-    let workspace = options.open(workspace)?;
-    let metadata = workspace.metadata()?;
-    if !metadata.is_dir()
-        || metadata.uid() != unsafe { libc::geteuid() }
-        || metadata.permissions().mode() & 0o077 != 0
-    {
-        return Err(LocalCodingSnapshotError::Rejected);
-    }
-    let workspace_fd = workspace.as_raw_fd();
-    let fd_close_limit = unsafe { libc::getdtablesize() };
-    if fd_close_limit <= 0 || fd_close_limit > MAX_CHILD_FD_CLOSE_LIMIT {
-        return Err(LocalCodingSnapshotError::Rejected);
-    }
-    let expected_euid = unsafe { libc::geteuid() };
-    let (gate_read, gate_write) = create_fork_gate()?;
-    let gate_read_fd = gate_read.as_raw_fd();
-    let previous_signal_mask = block_signals_for_fork()?;
-    let pid = unsafe { libc::fork() };
-    let fork_error = (pid < 0).then(std::io::Error::last_os_error);
-    if pid == 0 {
-        unsafe {
-            run_fixed_child_syscalls(workspace_fd, gate_read_fd, fd_close_limit, expected_euid)
-        }
-    }
-    let group_result = if pid > 0 {
-        unsafe { libc::setpgid(pid, pid) }
-    } else {
-        -1
-    };
-    let restore_result = unsafe {
-        libc::pthread_sigmask(
-            libc::SIG_SETMASK,
-            &previous_signal_mask,
-            std::ptr::null_mut(),
-        )
-    };
-    if pid < 0 {
-        return Err(fork_error
-            .unwrap_or_else(std::io::Error::last_os_error)
-            .into());
-    }
-    drop(gate_read);
-    if group_result != 0 {
-        drop(gate_write);
-        return match kill_and_reap_gated_child(pid) {
-            Ok(()) => Err(LocalCodingSnapshotError::Rejected),
-            Err(error) => Err(error),
-        };
-    }
-    if restore_result != 0 {
-        drop(gate_write);
-        return match terminate_and_reap_forked_process_group(pid) {
-            Ok(()) => Err(LocalCodingSnapshotError::EffectPossible),
-            Err(error) => Err(error),
-        };
-    }
-    let release = [1_u8];
-    let released = unsafe {
-        libc::send(
-            gate_write.as_raw_fd(),
-            release.as_ptr().cast(),
-            release.len(),
-            libc::MSG_NOSIGNAL,
-        )
-    };
-    drop(gate_write);
-    if released != 1 {
-        return match terminate_and_reap_forked_process_group(pid) {
-            Ok(()) => Err(LocalCodingSnapshotError::Rejected),
-            Err(error) => Err(error),
-        };
-    }
-    Ok(pid)
-}
-
-#[cfg(not(test))]
-fn create_fork_gate() -> Result<(OwnedFd, OwnedFd), LocalCodingSnapshotError> {
-    let mut descriptors = [-1_i32; 2];
-    if unsafe {
-        libc::socketpair(
-            libc::AF_UNIX,
-            libc::SOCK_STREAM,
-            0,
-            descriptors.as_mut_ptr(),
-        )
-    } != 0
-    {
-        return Err(std::io::Error::last_os_error().into());
-    }
-    let read = unsafe { OwnedFd::from_raw_fd(descriptors[0]) };
-    let write = unsafe { OwnedFd::from_raw_fd(descriptors[1]) };
-    for descriptor in [read.as_raw_fd(), write.as_raw_fd()] {
-        if unsafe { libc::fcntl(descriptor, libc::F_SETFD, libc::FD_CLOEXEC) } != 0 {
-            return Err(std::io::Error::last_os_error().into());
-        }
-    }
-    Ok((read, write))
-}
-
-#[cfg(not(test))]
-fn block_signals_for_fork() -> Result<libc::sigset_t, LocalCodingSnapshotError> {
-    let mut all_signals = std::mem::MaybeUninit::<libc::sigset_t>::zeroed();
-    if unsafe { libc::sigfillset(all_signals.as_mut_ptr()) } != 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
-    let all_signals = unsafe { all_signals.assume_init() };
-    let mut previous = std::mem::MaybeUninit::<libc::sigset_t>::zeroed();
-    let result =
-        unsafe { libc::pthread_sigmask(libc::SIG_SETMASK, &all_signals, previous.as_mut_ptr()) };
-    if result != 0 {
-        return Err(std::io::Error::from_raw_os_error(result).into());
-    }
-    Ok(unsafe { previous.assume_init() })
-}
-
-#[cfg(not(test))]
-fn kill_and_reap_gated_child(pid: i32) -> Result<(), LocalCodingSnapshotError> {
-    let _ = unsafe { libc::kill(pid, libc::SIGKILL) };
-    let deadline = Instant::now() + Duration::from_secs(1);
-    loop {
-        if wait_forked_child(pid, true)?.is_some() {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            return Err(LocalCodingSnapshotError::EffectPossible);
-        }
-        thread::sleep(Duration::from_millis(5));
-    }
-}
-
-#[cfg(not(test))]
-unsafe fn run_fixed_child_syscalls(
-    workspace_fd: i32,
-    gate_read_fd: i32,
-    fd_close_limit: i32,
-    expected_euid: libc::uid_t,
-) -> ! {
-    for descriptor in 0..fd_close_limit {
-        if descriptor != workspace_fd
-            && descriptor != gate_read_fd
-            && unsafe { libc::fcntl(descriptor, libc::F_GETFD) } >= 0
-            && unsafe { libc::close(descriptor) } != 0
-        {
-            unsafe { libc::_exit(40) }
-        }
-    }
-    let mut release = 0_u8;
-    if unsafe { libc::read(gate_read_fd, (&mut release as *mut u8).cast(), 1) } != 1
-        || release != 1
-        || unsafe { libc::close(gate_read_fd) } != 0
-    {
-        unsafe { libc::_exit(40) }
-    }
-    let target = b"README.md\0";
-    let file = unsafe {
-        libc::openat(
-            workspace_fd,
-            target.as_ptr().cast(),
-            libc::O_WRONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-        )
-    };
-    if file < 0 {
-        unsafe { libc::_exit(41) }
-    }
-    let mut stat = std::mem::MaybeUninit::<libc::stat>::zeroed();
-    if unsafe { libc::fstat(file, stat.as_mut_ptr()) } != 0 {
-        unsafe { libc::_exit(42) }
-    }
-    let stat = unsafe { stat.assume_init() };
-    if stat.st_mode & libc::S_IFMT != libc::S_IFREG
-        || stat.st_nlink != 1
-        || stat.st_uid != expected_euid
-        || stat.st_size < 0
-        || stat.st_size as u64 > MAX_FILE_BYTES
-    {
-        unsafe { libc::_exit(43) }
-    }
-    if unsafe { libc::ftruncate(file, 0) } != 0
-        || unsafe { libc::lseek(file, 0, libc::SEEK_SET) } < 0
-    {
-        unsafe { libc::_exit(44) }
-    }
-    let mut written = 0_usize;
-    while written < LOCAL_CODING_FIXTURE_CONTENT.len() {
-        let count = unsafe {
-            libc::write(
-                file,
-                LOCAL_CODING_FIXTURE_CONTENT[written..].as_ptr().cast(),
-                LOCAL_CODING_FIXTURE_CONTENT.len() - written,
-            )
-        };
-        if count < 0 {
-            unsafe { libc::_exit(45) }
-        }
-        if count == 0 {
-            unsafe { libc::_exit(46) }
-        }
-        written += count as usize;
-    }
-    if unsafe { libc::fsync(file) } != 0 || unsafe { libc::close(file) } != 0 {
-        unsafe { libc::_exit(47) }
-    }
-    unsafe { libc::_exit(0) }
-}
-
-#[cfg(not(test))]
-fn wait_forked_child(pid: i32, no_hang: bool) -> Result<Option<bool>, LocalCodingSnapshotError> {
-    loop {
-        let mut status = 0_i32;
-        let result =
-            unsafe { libc::waitpid(pid, &mut status, if no_hang { libc::WNOHANG } else { 0 }) };
-        if result == 0 {
-            return Ok(None);
-        }
-        if result == pid {
-            return Ok(Some(
-                libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0,
-            ));
-        }
-        if std::io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
-            return Err(LocalCodingSnapshotError::EffectPossible);
-        }
-    }
-}
-
+#[cfg(test)]
 fn signal_process_group(process_group: i32, signal: i32) -> Result<(), LocalCodingSnapshotError> {
     let result = unsafe { libc::kill(-process_group, signal) };
     let error = std::io::Error::last_os_error().raw_os_error();
@@ -933,6 +1147,7 @@ fn signal_process_group(process_group: i32, signal: i32) -> Result<(), LocalCodi
     }
 }
 
+#[cfg(test)]
 fn process_group_exists(process_group: i32) -> Result<bool, LocalCodingSnapshotError> {
     let result = unsafe { libc::kill(-process_group, 0) };
     if result == 0 {
@@ -942,52 +1157,6 @@ fn process_group_exists(process_group: i32) -> Result<bool, LocalCodingSnapshotE
     } else {
         Err(LocalCodingSnapshotError::EffectPossible)
     }
-}
-
-#[cfg(not(test))]
-fn confirm_process_group_absent(
-    process_group: i32,
-    grace: Duration,
-) -> Result<(), LocalCodingSnapshotError> {
-    let deadline = Instant::now() + grace;
-    while process_group_exists(process_group)? {
-        if Instant::now() >= deadline {
-            return Err(LocalCodingSnapshotError::EffectPossible);
-        }
-        thread::sleep(Duration::from_millis(5));
-    }
-    Ok(())
-}
-
-#[cfg(not(test))]
-fn terminate_and_reap_forked_process_group(pid: i32) -> Result<(), LocalCodingSnapshotError> {
-    const TERM_GRACE: Duration = Duration::from_millis(150);
-    const KILL_GRACE: Duration = Duration::from_secs(1);
-    signal_process_group(pid, libc::SIGTERM)?;
-    let term_deadline = Instant::now() + TERM_GRACE;
-    let reaped_during_term = loop {
-        if wait_forked_child(pid, true)?.is_some() {
-            break true;
-        }
-        if Instant::now() >= term_deadline {
-            break false;
-        }
-        thread::sleep(Duration::from_millis(5));
-    };
-    signal_process_group(pid, libc::SIGKILL)?;
-    let kill_deadline = Instant::now() + KILL_GRACE;
-    if !reaped_during_term {
-        loop {
-            if wait_forked_child(pid, true)?.is_some() {
-                break;
-            }
-            if Instant::now() >= kill_deadline {
-                return Err(LocalCodingSnapshotError::EffectPossible);
-            }
-            thread::sleep(Duration::from_millis(5));
-        }
-    }
-    confirm_process_group_absent(pid, KILL_GRACE)
 }
 
 #[cfg(test)]
@@ -1182,7 +1351,8 @@ fn cleanup_attempt_state(
 ) -> Result<(), LocalCodingSnapshotError> {
     let materialized = root.join(format!("{}.materialized", active.job.attempt_id.0));
     cleanup_tree_if_exists(&materialized)?;
-    cleanup_tree_if_exists(&active.staging_directory)
+    cleanup_tree_if_exists(&active.staging_directory)?;
+    cleanup_retained_workspace(root, &active.job)
 }
 
 fn parse_bundle(
@@ -1554,6 +1724,7 @@ fn ensure_private_directory(path: &Path) -> Result<(), LocalCodingSnapshotError>
         Ok(metadata) => {
             if metadata.file_type().is_symlink()
                 || !metadata.is_dir()
+                || metadata.uid() != unsafe { libc::geteuid() }
                 || metadata.permissions().mode() & 0o077 != 0
             {
                 return Err(LocalCodingSnapshotError::Rejected);
@@ -1568,11 +1739,194 @@ fn ensure_private_directory(path: &Path) -> Result<(), LocalCodingSnapshotError>
     Ok(())
 }
 
-fn cleanup_children(path: &Path) -> Result<(), LocalCodingSnapshotError> {
-    for entry in fs::read_dir(path)? {
-        cleanup_tree(&entry?.path())?;
+impl RetainedWorkspaceRecord {
+    fn new(
+        job: JobEnvelope,
+        sealed_workspace_name: String,
+        workspace_tree_sha256: [u8; 32],
+        expires_at_ms: u64,
+    ) -> Result<Self, LocalCodingSnapshotError> {
+        let mut record = Self {
+            record_version: RETENTION_RECORD_VERSION,
+            job,
+            sealed_workspace_name,
+            workspace_tree_sha256,
+            expires_at_ms,
+            binding_sha256: [0; 32],
+        };
+        record.binding_sha256 = record.expected_binding()?;
+        Ok(record)
     }
+
+    fn expected_binding(&self) -> Result<[u8; 32], LocalCodingSnapshotError> {
+        let mut digest = Sha256::new();
+        digest.update(b"assemblywright-retained-workspace-v1\0");
+        digest.update(RETENTION_RECORD_VERSION.to_be_bytes());
+        digest
+            .update(serde_json::to_vec(&self.job).map_err(|_| LocalCodingSnapshotError::Rejected)?);
+        digest.update(self.sealed_workspace_name.as_bytes());
+        digest.update(self.workspace_tree_sha256);
+        digest.update(self.expires_at_ms.to_be_bytes());
+        Ok(digest.finalize().into())
+    }
+
+    fn validate(&self) -> Result<(), LocalCodingSnapshotError> {
+        self.job.validate_local_coding()?;
+        if self.record_version != RETENTION_RECORD_VERSION
+            || self.sealed_workspace_name != sealed_workspace_name(&self.job)
+            || self.workspace_tree_sha256 == [0; 32]
+            || self.binding_sha256 != self.expected_binding()?
+        {
+            return Err(LocalCodingSnapshotError::Rejected);
+        }
+        Ok(())
+    }
+}
+
+fn sealed_workspace_name(job: &JobEnvelope) -> String {
+    format!("{}.sealed", job.attempt_id.0)
+}
+
+fn retention_record_name(job: &JobEnvelope) -> String {
+    format!("{}.retention.json", job.attempt_id.0)
+}
+
+fn workspace_tree_sha256(evidence: &HashMap<String, FileEvidence>) -> [u8; 32] {
+    let mut paths = evidence.keys().collect::<Vec<_>>();
+    paths.sort_unstable();
+    let mut digest = Sha256::new();
+    digest.update(b"assemblywright-workspace-tree-v1\0");
+    for path in paths {
+        let item = &evidence[path];
+        digest.update((path.len() as u64).to_be_bytes());
+        digest.update(path.as_bytes());
+        digest.update(item.mode.to_be_bytes());
+        digest.update(item.size.to_be_bytes());
+        digest.update(item.sha256);
+    }
+    digest.finalize().into()
+}
+
+fn write_retention_record(
+    root: &Path,
+    record: RetainedWorkspaceRecord,
+) -> Result<(), LocalCodingSnapshotError> {
+    record.validate()?;
+    let encoded = serde_json::to_vec(&record).map_err(|_| LocalCodingSnapshotError::Rejected)?;
+    if encoded.is_empty() || encoded.len() > MAX_RETENTION_RECORD_BYTES {
+        return Err(LocalCodingSnapshotError::Rejected);
+    }
+    let mut options = OpenOptions::new();
+    options
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let mut file = options.open(root.join(retention_record_name(&record.job)))?;
+    file.write_all(&encoded)?;
+    fchmod_file(&file, 0o600)?;
+    file.sync_all()?;
     Ok(())
+}
+
+fn read_retention_record(path: &Path) -> Result<RetainedWorkspaceRecord, LocalCodingSnapshotError> {
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let mut file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file()
+        || metadata.nlink() != 1
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.permissions().mode() & 0o077 != 0
+        || metadata.len() == 0
+        || metadata.len() > MAX_RETENTION_RECORD_BYTES as u64
+    {
+        return Err(LocalCodingSnapshotError::Rejected);
+    }
+    let mut encoded = Vec::with_capacity(metadata.len() as usize);
+    file.read_to_end(&mut encoded)?;
+    let record: RetainedWorkspaceRecord =
+        serde_json::from_slice(&encoded).map_err(|_| LocalCodingSnapshotError::Rejected)?;
+    record.validate()?;
+    Ok(record)
+}
+
+fn recover_retained_workspace(
+    root: &Path,
+) -> Result<Option<JobEnvelope>, LocalCodingSnapshotError> {
+    let mut sealed = Vec::new();
+    let mut records = Vec::new();
+    let mut stale = Vec::new();
+    for entry in fs::read_dir(root)? {
+        let path = entry?.path();
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or(LocalCodingSnapshotError::Rejected)?;
+        if name.ends_with(".sealed") {
+            sealed.push(path);
+        } else if name.ends_with(".retention.json") {
+            records.push(path);
+        } else {
+            stale.push(path);
+        }
+    }
+    for path in stale {
+        cleanup_tree(&path)?;
+    }
+    if sealed.is_empty() && records.is_empty() {
+        return Ok(None);
+    }
+    if sealed.len() != 1 || records.len() != 1 {
+        return Err(LocalCodingSnapshotError::Rejected);
+    }
+    let record = read_retention_record(&records[0])?;
+    if sealed[0].file_name().and_then(|name| name.to_str())
+        != Some(record.sealed_workspace_name.as_str())
+        || records[0].file_name().and_then(|name| name.to_str())
+            != Some(retention_record_name(&record.job).as_str())
+    {
+        return Err(LocalCodingSnapshotError::Rejected);
+    }
+    let workspace = open_private_directory(&sealed[0])?;
+    drop(workspace);
+    let evidence = collect_file_evidence(
+        &sealed[0],
+        &AtomicBool::new(false),
+        Instant::now() + Duration::from_secs(60),
+    )?;
+    if workspace_tree_sha256(&evidence) != record.workspace_tree_sha256 {
+        return Err(LocalCodingSnapshotError::Rejected);
+    }
+    if record.expires_at_ms <= current_time_ms()? {
+        cleanup_tree(&sealed[0])?;
+        fs::remove_file(&records[0])?;
+        return Ok(None);
+    }
+    Ok(Some(record.job))
+}
+
+fn cleanup_retained_workspace(
+    root: &Path,
+    job: &JobEnvelope,
+) -> Result<(), LocalCodingSnapshotError> {
+    cleanup_tree_if_exists(&root.join(sealed_workspace_name(job)))?;
+    let record = root.join(retention_record_name(job));
+    match fs::symlink_metadata(&record) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            Err(LocalCodingSnapshotError::Rejected)
+        }
+        Ok(_) => {
+            let root_handle = open_private_directory(root)?;
+            let name = CString::new(retention_record_name(job))
+                .map_err(|_| LocalCodingSnapshotError::Rejected)?;
+            unlink_file_at(&root_handle, &name)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn cleanup_tree_if_exists(path: &Path) -> Result<(), LocalCodingSnapshotError> {
@@ -1664,6 +2018,11 @@ mod tests {
     }
 
     fn job_with_snapshot(snapshot_sha256: [u8; 32]) -> JobEnvelope {
+        let work_packet = FeatureConveyorCodingWorkPacketMetadata::fixture(
+            Uuid::new_v4(),
+            Sha256::digest(b"bounded materialization\n").into(),
+        );
+        let work_packet_sha256 = work_packet.canonical_sha256().unwrap();
         let context = to_value(LocalCodingJobRequest {
             feature_id: Uuid::new_v4(),
             specification_revision: 1,
@@ -1671,12 +2030,8 @@ mod tests {
             feature_lease_id: Uuid::new_v4(),
             snapshot_id: Uuid::new_v4(),
             snapshot_sha256,
-            work_packet_sha256: [4; 32],
-            work_packet: FeatureConveyorCodingWorkPacketMetadata {
-                packet_id: Uuid::new_v4(),
-                ordinal: 1,
-                acceptance_criteria_count: 1,
-            },
+            work_packet_sha256,
+            work_packet,
             device_id: DeviceId::new(Uuid::new_v4()),
             device_registry_revision: 1,
             queue_revision: 1,
@@ -1695,7 +2050,7 @@ mod tests {
             capability_id: LOCAL_CODING_CAPABILITY_ID.to_string(),
             selected_model: LOCAL_CODING_MODEL.to_string(),
             sensitivity: Sensitivity::Workspace,
-            context_handling: ContextHandlingPolicy::EphemeralNoRetention,
+            context_handling: ContextHandlingPolicy::SealedUntilResolvedOrExpired,
             lease_duration_ms: 60_000,
             deadline_after_ms: 60_000,
             context_sha256: json_sha256(&context).unwrap(),
@@ -1841,16 +2196,6 @@ mod tests {
         }
     }
 
-    fn collect_test_evidence(
-        path: &Path,
-    ) -> Result<HashMap<String, FileEvidence>, LocalCodingSnapshotError> {
-        collect_file_evidence(
-            path,
-            &AtomicBool::new(false),
-            Instant::now() + Duration::from_secs(60),
-        )
-    }
-
     #[test]
     fn disabled_duplicate_and_startup_cleanup_fail_closed() {
         let directory = tempdir().unwrap();
@@ -1911,6 +2256,174 @@ mod tests {
         );
         let root = directory.path().join("local-coding-snapshots");
         assert_eq!(fs::read_dir(root).unwrap().count(), 0);
+    }
+
+    fn complete_fixture(
+        directory: &Path,
+    ) -> (LocalCodingSnapshotRuntime, JobEnvelope, PathBuf, PathBuf) {
+        let runtime = LocalCodingSnapshotRuntime::open(directory, true).unwrap();
+        let (bundle, snapshot_sha256) = fixture_bundle();
+        let job = job_with_snapshot(snapshot_sha256);
+        runtime.admit(job.clone()).unwrap();
+        assert!(matches!(
+            runtime
+                .accept_chunk(chunk(&job, 0, bundle.len() as u64, &bundle))
+                .unwrap(),
+            LocalCodingSnapshotAcceptance::Complete(_)
+        ));
+        let sealed = runtime.root.join(sealed_workspace_name(&job));
+        let record = runtime.root.join(retention_record_name(&job));
+        (runtime, job, sealed, record)
+    }
+
+    #[test]
+    fn retained_completion_recovers_exact_cancel_after_restart_and_blocks_admission() {
+        let directory = tempdir().unwrap();
+        let (runtime, job, sealed, record) = complete_fixture(directory.path());
+        drop(runtime);
+        let restarted = LocalCodingSnapshotRuntime::open(directory.path(), true).unwrap();
+        assert!(matches!(
+            restarted.admit(job.clone()),
+            Err(LocalCodingSnapshotError::AlreadyActive)
+        ));
+        restarted.cancel(&cancellation(&job)).unwrap();
+        assert!(!sealed.exists());
+        assert!(!record.exists());
+    }
+
+    #[test]
+    fn retained_completion_tamper_or_orphan_fails_closed_and_exact_expiry_cleans_pair() {
+        let tampered = tempdir().unwrap();
+        let (runtime, _job, sealed, record) = complete_fixture(tampered.path());
+        drop(runtime);
+        fs::write(sealed.join("README.md"), b"tampered").unwrap();
+        assert!(matches!(
+            LocalCodingSnapshotRuntime::open(tampered.path(), true),
+            Err(LocalCodingSnapshotError::Rejected)
+        ));
+        assert!(record.exists());
+
+        let orphaned = tempdir().unwrap();
+        let (runtime, _job, _sealed, record) = complete_fixture(orphaned.path());
+        drop(runtime);
+        fs::remove_file(record).unwrap();
+        assert!(matches!(
+            LocalCodingSnapshotRuntime::open(orphaned.path(), true),
+            Err(LocalCodingSnapshotError::Rejected)
+        ));
+
+        let expired = tempdir().unwrap();
+        let (runtime, _job, sealed, record_path) = complete_fixture(expired.path());
+        drop(runtime);
+        let mut record = read_retention_record(&record_path).unwrap();
+        record.expires_at_ms = current_time_ms().unwrap();
+        record.binding_sha256 = record.expected_binding().unwrap();
+        fs::remove_file(&record_path).unwrap();
+        write_retention_record(&expired.path().join("local-coding-snapshots"), record).unwrap();
+        let restarted = LocalCodingSnapshotRuntime::open(expired.path(), true).unwrap();
+        assert!(restarted.completed.lock().unwrap().is_none());
+        assert!(!sealed.exists());
+        assert!(!record_path.exists());
+    }
+
+    #[test]
+    fn held_parent_descriptor_prevents_same_uid_symlink_substitution_escape() {
+        let directory = tempdir().unwrap();
+        let workspace = directory.path().join("workspace");
+        let parent = workspace.join("nested");
+        let moved_parent = workspace.join("nested-held");
+        let outside = directory.path().join("outside");
+        fs::create_dir_all(&parent).unwrap();
+        fs::create_dir(&outside).unwrap();
+        fs::set_permissions(&workspace, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o700)).unwrap();
+        let workspace_handle = open_private_directory(&workspace).unwrap();
+        let (parents, leaf) =
+            open_verified_parent_chain(&workspace_handle, "nested/new.rs").unwrap();
+        fs::rename(&parent, &moved_parent).unwrap();
+        std::os::unix::fs::symlink(&outside, &parent).unwrap();
+        atomic_write_at(parents.last().unwrap(), &leaf, b"safe", 0o644, None).unwrap();
+        assert_eq!(fs::read(moved_parent.join("new.rs")).unwrap(), b"safe");
+        assert!(!outside.join("new.rs").exists());
+
+        fs::write(moved_parent.join("replace.rs"), b"before").unwrap();
+        fs::write(outside.join("replace.rs"), b"outside").unwrap();
+        let (parents, leaf) =
+            open_verified_parent_chain(&workspace_handle, "nested-held/replace.rs").unwrap();
+        let opened = open_file_at(parents.last().unwrap(), &leaf, libc::O_RDONLY, 0).unwrap();
+        let expected = opened.metadata().unwrap();
+        let wrong_expected = fs::metadata(outside.join("replace.rs")).unwrap();
+        assert!(matches!(
+            atomic_write_at(
+                parents.last().unwrap(),
+                &leaf,
+                b"rejected",
+                0o644,
+                Some(&wrong_expected),
+            ),
+            Err(LocalCodingSnapshotError::Rejected)
+        ));
+        assert_eq!(
+            fs::read(moved_parent.join("replace.rs")).unwrap(),
+            b"before"
+        );
+        fs::rename(&moved_parent, workspace.join("nested-held-again")).unwrap();
+        std::os::unix::fs::symlink(&outside, &moved_parent).unwrap();
+        atomic_write_at(
+            parents.last().unwrap(),
+            &leaf,
+            b"replacement",
+            0o644,
+            Some(&expected),
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read(workspace.join("nested-held-again/replace.rs")).unwrap(),
+            b"replacement"
+        );
+        assert_eq!(fs::read(outside.join("replace.rs")).unwrap(), b"outside");
+    }
+
+    #[test]
+    fn atomic_delete_rolls_back_same_uid_leaf_substitution_without_deleting_replacement() {
+        let directory = tempdir().unwrap();
+        let workspace = directory.path().join("workspace");
+        fs::create_dir(&workspace).unwrap();
+        fs::set_permissions(&workspace, fs::Permissions::from_mode(0o700)).unwrap();
+        let victim = workspace.join("victim.rs");
+        let original = b"approved original";
+        let replacement = b"same uid replacement";
+        fs::write(&victim, original).unwrap();
+        let workspace_handle = open_private_directory(&workspace).unwrap();
+        let (parents, leaf) = open_verified_parent_chain(&workspace_handle, "victim.rs").unwrap();
+        let opened = open_file_at(parents.last().unwrap(), &leaf, libc::O_RDONLY, 0).unwrap();
+        let expected_identity = opened.metadata().unwrap();
+        let expected_sha256 = Sha256::digest(original).into();
+        let moved_original = workspace.join("original-moved.rs");
+        fs::rename(&victim, &moved_original).unwrap();
+        fs::write(&victim, replacement).unwrap();
+
+        assert!(matches!(
+            atomic_delete_at(
+                parents.last().unwrap(),
+                &leaf,
+                &expected_identity,
+                expected_sha256,
+                &AtomicBool::new(false),
+                Instant::now() + Duration::from_secs(5),
+            ),
+            Err(LocalCodingSnapshotError::Rejected)
+        ));
+        assert_eq!(fs::read(&victim).unwrap(), replacement);
+        assert_eq!(fs::read(&moved_original).unwrap(), original);
+        assert!(fs::read_dir(&workspace).unwrap().all(|entry| {
+            !entry
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".assemblywright-delete-")
+        }));
     }
 
     #[test]
@@ -2017,30 +2530,6 @@ mod tests {
     }
 
     #[test]
-    fn contained_fixture_changes_only_the_fixed_allowed_path_and_detects_outside_drift() {
-        let directory = tempdir().unwrap();
-        fs::write(directory.path().join("README.md"), b"before\n").unwrap();
-        fs::write(directory.path().join("outside.txt"), b"unchanged\n").unwrap();
-        let before = collect_test_evidence(directory.path()).unwrap();
-
-        run_contained_coding_fixture_child_in(directory.path()).unwrap();
-        let after = collect_test_evidence(directory.path()).unwrap();
-        assert_eq!(
-            changed_paths(&before, &after),
-            vec![LOCAL_CODING_FIXTURE_ALLOWED_PATH.to_string()]
-        );
-
-        fs::write(directory.path().join("outside.txt"), b"outside mutation\n").unwrap();
-        assert_eq!(
-            changed_paths(&before, &collect_test_evidence(directory.path()).unwrap()),
-            vec![
-                LOCAL_CODING_FIXTURE_ALLOWED_PATH.to_string(),
-                "outside.txt".to_string()
-            ]
-        );
-    }
-
-    #[test]
     fn evidence_walk_fails_closed_on_cancellation_entry_and_aggregate_bounds() {
         let directory = tempdir().unwrap();
         fs::write(directory.path().join("README.md"), b"1234").unwrap();
@@ -2097,22 +2586,6 @@ mod tests {
             ),
             Err(LocalCodingSnapshotError::Rejected)
         ));
-    }
-
-    #[test]
-    fn contained_fixture_opens_allowed_file_before_validation_and_rejects_symlink() {
-        use std::os::unix::fs::symlink;
-
-        let directory = tempdir().unwrap();
-        let outside = directory.path().join("outside.txt");
-        fs::write(&outside, b"must remain unchanged\n").unwrap();
-        symlink(
-            &outside,
-            directory.path().join(LOCAL_CODING_FIXTURE_ALLOWED_PATH),
-        )
-        .unwrap();
-        assert!(run_contained_coding_fixture_child_in(directory.path()).is_err());
-        assert_eq!(fs::read(&outside).unwrap(), b"must remain unchanged\n");
     }
 
     #[test]

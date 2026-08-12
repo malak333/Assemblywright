@@ -14,6 +14,7 @@ use assemblywright_protocol::{
     FeatureConveyorRepositorySnapshotClaimRequest, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
     MAX_FEATURE_CONVEYOR_OWNER_RESOLUTION_REQUEST_BYTES,
     MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES, MAX_WIRE_FRAME_BYTES,
+    PROTOCOL_VERSION,
 };
 use rusqlite::Connection;
 use serde_json::Value;
@@ -1005,6 +1006,7 @@ fn owner_resolution_routes_are_authenticated_strict_cas_bound_and_redacted() {
     let lifecycle_revision = claim.lifecycle_revision;
     let queue_revision = claim.queue_revision;
     let emergency_pause_revision = claim.emergency_pause_revision;
+    let work_packet = FeatureConveyorCodingWorkPacketMetadata::fixture(Uuid::new_v4(), [0x42; 32]);
     let dispatch = FeatureConveyorCodingDispatchRequest {
         schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
         feature_id,
@@ -1013,12 +1015,8 @@ fn owner_resolution_routes_are_authenticated_strict_cas_bound_and_redacted() {
         feature_lease_id: claim.lease_id,
         snapshot_id: claim.snapshot_id,
         snapshot_sha256: claim.snapshot_sha256,
-        work_packet_sha256: Sha256::digest("owner-resolution-work-packet").into(),
-        work_packet: FeatureConveyorCodingWorkPacketMetadata {
-            packet_id: Uuid::new_v4(),
-            ordinal: 1,
-            acceptance_criteria_count: 1,
-        },
+        work_packet_sha256: work_packet.canonical_sha256().unwrap(),
+        work_packet,
         device_id: coding_device.device_id,
         device_registry_revision: coding_device.registry_revision,
         expected_queue_revision: queue_revision,
@@ -1410,8 +1408,8 @@ fn windows_master_process_owns_state_and_completes_cross_process_fixture() {
     assert_success(&setup, "setup");
     let setup_receipt: Value = serde_json::from_slice(&setup.stdout).expect("setup JSON receipt");
     assert_eq!(setup_receipt["status"], "setup_complete");
-    assert_eq!(setup_receipt["protocol_version"], 4);
-    assert_eq!(setup_receipt["schema_version"], 12);
+    assert_eq!(setup_receipt["protocol_version"], PROTOCOL_VERSION);
+    assert_eq!(setup_receipt["schema_version"], 13);
     assert!(directory.path().join("master.sqlite3").is_file());
     assert!(directory.path().join("development.token").is_file());
     let development_token = std::fs::read_to_string(directory.path().join("development.token"))
@@ -1433,7 +1431,7 @@ fn windows_master_process_owns_state_and_completes_cross_process_fixture() {
         endpoint,
         "/v1/development/events/next",
         None,
-        r#"{"protocol_version":4,"connection_epoch":1,"after":null,"limit":64}"#,
+        r#"{"protocol_version":5,"connection_epoch":1,"after":null,"limit":64}"#,
     );
     assert!(
         unauthorized_events.starts_with("HTTP/1.1 401 Unauthorized"),
@@ -1571,7 +1569,7 @@ fn windows_master_process_owns_state_and_completes_cross_process_fixture() {
         endpoint,
         "/v1/development/events/next",
         Some(development_token),
-        r#"{"protocol_version":4,"connection_epoch":1,"after":null,"limit":64}"#,
+        r#"{"protocol_version":5,"connection_epoch":1,"after":null,"limit":64}"#,
     );
     assert!(
         event_response.starts_with("HTTP/1.1 200 OK"),

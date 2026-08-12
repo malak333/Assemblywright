@@ -25,7 +25,7 @@ flowchart LR
   Process --> Service["Windows SCM host: automatic start, bounded recovery, status, maintenance, uninstall"]
   Service --> Maintenance["Durable fail-closed marker blocks new enqueue and lease admission"]
   Master --> Durable["Registered devices, epochs, queue, attempts, cancellation, expiry, restart reconciliation, exact results"]
-  Master --> Conveyor["Default-inert Feature Conveyor repository kernel retained through schema v12"]
+  Master --> Conveyor["Default-inert Feature Conveyor repository kernel retained through schema v13"]
   Conveyor --> ConveyorSafety["Immutable approved specs and grants, strict CAS queue, one active lease, atomic redacted audit, and startup quarantine"]
   Conveyor --> Observer["Exact bounded status projection: local owner route plus accepted-session MacBridge-only remote GET"]
   Observer --> Helper
@@ -38,10 +38,11 @@ flowchart LR
   CodingDispatch --> SnapshotChunks["Exact leased-attempt bounded snapshot bundle chunks with before-and-after authorization"]
   SnapshotChunks --> Helper
   Helper --> Agent
-  Agent --> Materialization["Private Git materialization plus fixed forked-child README fixture through a pre-opened directory; bounded evidence, then cleanup before result"]
-  Materialization --> Artifact["Protocol-v4 canonical bounded patch artifact constructed in memory"]
+  Agent --> Materialization["Private Git materialization plus deterministic bounded write/delete operations through held no-follow directory descriptors"]
+  Materialization --> Retention["Exact changed-path evidence, sealed workspace, and owner-private bounded recovery record"]
+  Retention --> Artifact["Protocol-v5 canonical bounded multi-file artifact constructed in memory"]
   Artifact --> ArtifactAdmission["FIFO mTLS admission during cancellation race; exact binding recheck"]
-  ArtifactAdmission --> ArtifactStore["Private bytes outside SQLite; immutable schema-v12 metadata and redacted audit; owner-private fixed shape and guarded crash/concurrent retry"]
+  ArtifactAdmission --> ArtifactStore["Private bytes outside SQLite; immutable schema-v13 metadata and redacted audit; owner-private fixed shape and guarded crash/concurrent retry"]
   ArtifactStore --> ResultGate["Startup and immediate pre-transaction stable-handle verification; metadata-only result accepted only for exact evidence"]
   OwnerDesignation --> OwnerAction["Exact designated non-fixture MacBridge-only approved-feature POST; queue insertion only"]
   OwnerAction --> Helper
@@ -68,7 +69,7 @@ a headless master executable. The contract seam provides the current protocol
 version, typed device/task/step/attempt/lease/cancellation identifiers, bounded
 capability advertisements, handshake messages, job and result envelopes, strict
 bound-before-decode JSON entry points, nil-identity rejection, and a golden
-compatibility fixture. `assemblywright-master` schema version 12 preserves the
+compatibility fixture. `assemblywright-master` schema version 13 preserves the
 schema-v4 distributed-device lifecycle, the schema-v5 Feature Conveyor, and
 schema-v6 dedicated pending capability-rebind evidence, then adds the durable
 Emergency Pause revision, then adds one nullable compare-and-set owner-control
@@ -89,8 +90,9 @@ Success path releases the lease only with verified
 healthy-main evidence; cancellation retains it until explicit safe
 abandonment, and restart ambiguity is quarantined without automatic retry.
 Schema v12 adds immutable result-artifact bindings and a private filesystem
-store; it grants no apply or integration authority. Master-process upgrades
-from supported legacy schemas v1-v11 to v12 are
+store; schema v13 adds immutable retained-workspace/expiry bindings for the
+bounded general worker. Neither grants apply or integration authority.
+Master-process upgrades from supported legacy schemas v1-v12 to v13 are
 backup-first under the owner lock, verify the versioned backup before migration,
 and restore through a fsynced sibling plus atomic replacement when
 migration-open fails. Direct file-backed legacy migration through
@@ -150,30 +152,36 @@ cancellation, and snapshot identity. The Mac bridge strictly relays those
 chunks over the authenticated local socket. For this exact `InferenceWorker`
 profile the Swift supervisor validates the singleton capability and required
 relay before connecting, performs authenticated health, and relays without
-requesting or emitting the MacBridge-only Feature Conveyor projection. Standard
-and fixture MacBridge observation is unchanged. The native agent reconstructs and
-  verifies an independent shallow no-remote Git repository in private
-  per-attempt state while enforcing an aggregate materialized-output byte
-  budget. It then forks only one fixed contained-coding child from the running
-  agent, with no `exec` or remote input. Before `fork`, the parent pre-opens the
-  workspace, blocks signals, and captures the descriptor-table bound and
-  effective UID. The child scans every descriptor slot with `F_GETFD`, closes
-  every open descriptor except the workspace and group gate, and waits for the
-  parent-established process group. Its fixed file-mutation path covers the
-  validated `README.md` open, truncate, seek, write, sync, close, and `_exit`.
-  It does not inspect errno or mutable global state, use environment APIs, or
-  call `geteuid`, `getdtablesize`, or `setpgid` post-fork.
-  The parent verifies the singleton
-  changed-path set and fixed
-  output, emits bounded work-packet/admission/snapshot/allowed-path/patch
-  digests with truthful `test_status:not_run`, and deletes all attempt state
-  before returning the path-free result. Cancellation, pause-driven durable
-  cancellation, lease/deadline loss, shutdown, and failure dominate completion
-  and cleanup. No caller-selected command, tool, path, provider, test, network,
-  or credential authority exists; no host sandbox or host-egress enforcement is
-  claimed. No retained worker checkout, canonical-repository mutation,
-  integration, review, publication, queue advance, or autonomous activation is
-  implemented.
+requesting or emitting the MacBridge-only Feature Conveyor projection.
+
+Protocol v5/schema v13 keeps the historical schema-v10 through schema-v12 lanes
+below and adds only deterministic bounded multi-file edits. Rust and Swift share
+16 KiB complete-job, 12 KiB context, and 4 KiB replacement limits. The agent
+mutates through held owner-private no-follow parent descriptors using exclusive
+atomic create, atomic-swap replacement with displaced-inode verification, or
+identity-checked `unlinkat`. A successful workspace is sealed; a separate
+owner-private recovery record binds its exact job, attempt, post-edit tree digest,
+and expiry. Restart reconstructs exact cancellation only from one verified pair
+and refuses ambiguous or unresolved new work. No record enters SQLite, audit, or
+the remote protocol, and no integration/review/publication authority is added.
+Delete first atomically captures the leaf in the held parent and rolls mismatch
+back without deleting the replacement. Windows decodes canonical artifact bytes
+against the immutable packet and independently matches stored retention/expiry
+metadata to the terminal result; Swift remains defense in depth.
+
+Standard and fixture MacBridge observation is unchanged. The native agent
+reconstructs and verifies an independent shallow no-remote Git repository in
+private per-attempt state while enforcing an aggregate materialized-output byte
+budget. Protocol v5 replaces the historical v4 fixed-child `README.md` fixture:
+the agent executes only the packet's exact bounded deterministic write/delete
+schemas and executes no child, shell, provider, test, network, or credential
+operation. It verifies the exact changed-path set and canonical multi-file
+artifact, then seals successful state until exact cancellation/resolution or
+bounded expiry. Cancellation, pause-driven durable cancellation,
+lease/deadline loss, shutdown, and failure dominate completion and cleanup. No
+host sandbox or host-egress enforcement is claimed. No canonical-repository
+mutation, integration, review, publication, queue advance, or autonomous
+activation is implemented.
 Two additional owner-token loopback-only resolution routes compare-and-set the
 exact feature, lifecycle, queue, and Emergency Pause revisions inside the
 authoritative transaction. Cancellation cancels bound coding work, retains the

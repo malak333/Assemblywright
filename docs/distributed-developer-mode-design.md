@@ -864,3 +864,28 @@ reliability. Those require separately recorded evidence.
 - Integrator / Arbiter: approved every recorded resolution; no objection was
   rejected and no design issue remains unresolved.
 - Final disposition: APPROVED for implementation planning, not implementation.
+
+## Protocol v5 bounded general coding worker
+
+The local-coding capability accepts only immutable digest-bound implementation
+packets with sorted normalized relative-path allowlists and exact deterministic
+`file.write.v1` or `file.delete.v1` argument schemas. Rust and production Swift
+share a 16 KiB complete-job, 12 KiB context, and 4 KiB aggregate replacement
+limit. The agent holds owner-private no-follow descriptors for every parent;
+create is exclusive atomic install, replacement is atomic swap plus displaced-
+inode verification, and delete is identity-checked `unlinkat`. No command,
+general shell, credential, network, Git, canonical checkout, integration, test
+gate, review, publication, or lifecycle-advancement authority is present. The
+canonical multi-file artifact binds the exact packet. A successful attempt is
+sealed for at most one hour until exact cancellation/resolution or expiry.
+Schema v13 records immutable retention metadata after a verified backup-first
+v12 migration. Separately, the agent keeps one bounded owner-private recovery
+record outside the attested workspace; it binds the exact job, attempt, sealed
+name, post-edit tree digest, and expiry and never enters SQLite, audit, logs, or
+the remote protocol. Restart re-hashes exactly one pair, restores cancellation,
+blocks new admission while unresolved, and rejects tamper or ambiguity.
+Delete first atomically captures the leaf in the held parent and removes only the
+verified displaced inode; mismatch atomically restores the replacement. Windows
+independently applies the protocol-owned canonical artifact-to-packet comparison
+and matches stored artifact/retention/expiry metadata to the terminal result,
+without trusting Swift as the authority source.

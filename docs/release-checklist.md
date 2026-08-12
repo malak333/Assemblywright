@@ -105,16 +105,18 @@ Before starting a release pass, confirm the claim you intend to make.
   worker checkout, arbitrary coding/test execution, canonical-repository
   mutation, result integration, review provider, publication coordinator, Mac
   control UI, queue advancement, or autonomous activation.
-- Confirm protocol-v4/schema-v12 result-artifact admission uses only the fixed
-  canonical README replacement bytes; the SHA-256 covers exact artifact bytes;
-  the agent cleans workspace/transfer state before returning result plus
-  artifact; Swift strictly validates and uploads it through the existing FIFO
+- Confirm protocol-v5/schema-v13 result-artifact admission uses only an exact
+  immutable packet with sorted normalized relative paths and deterministic
+  write/delete schemas; SHA-256 covers the complete packet and exact canonical
+  multi-file artifact; the agent seals the workspace until exact resolution or
+  bounded expiry; Swift strictly validates and uploads it through the existing FIFO
   cancellation race; the remote route is mTLS-only and exact-attempt bound;
   SQLite/audit retain no bytes or paths; immutable metadata and redacted audit
   commit together; exact retry is idempotent; missing/mismatched/stale/paused/
   cancelled/expired admission rejects result acceptance; startup removes
   unreferenced artifact directories but retains referenced ambiguity under
-  active-feature quarantine. Record Windows remote-mTLS and live-device proof
+  active-feature quarantine, and schema v12 migration creates a verified
+  `master.pre-v13.*` backup before adding retention evidence. Record Windows remote-mTLS and live-device proof
   separately from repository tests. Do not claim apply or integration.
 - Confirm crash-prepared/concurrent exact retries recover; cleanup is guarded;
   referenced missing, corrupt, reparse/symlink, hardlinked, wrong-permission,

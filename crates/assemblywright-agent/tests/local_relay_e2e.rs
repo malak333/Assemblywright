@@ -366,18 +366,28 @@ fn authenticated_uds_local_coding_snapshot_admission_cancellation_and_restart_cl
     assert_eq!(completion.result.payload["changed_file_count"], 1);
     assert_eq!(completion.result.payload["test_status"], "not_run");
     assert_eq!(completion.result.payload["mutation_performed"], true);
-    assert_eq!(completion.result.payload["workspace_retained"], false);
+    assert_eq!(completion.result.payload["workspace_retained"], true);
+    assert!(
+        completion.result.payload["workspace_expires_at_ms"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
     assert_eq!(completion.result.payload["ambiguous"], false);
     completion.artifact.validate().unwrap();
     assert_eq!(
         fs::read_dir(data_dir.join("local-coding-snapshots"))
             .unwrap()
             .count(),
-        0,
-        "the contained workspace must be gone before the receipt is returned"
+        2,
+        "the exact completed workspace and external recovery record must remain until resolution"
     );
+    child.kill().expect("stop with retained completed snapshot");
+    child.wait().expect("reap completed snapshot agent");
+    let restart_socket = runtime_dir.join("local-coding-restart.sock");
+    let mut restarted = start_local_coding_agent(&data_dir, &restart_socket);
     let cancelled = send(
-        &socket_path,
+        &restart_socket,
         request(
             "POST",
             "/v1/local-coding/snapshots/cancel",
@@ -387,23 +397,29 @@ fn authenticated_uds_local_coding_snapshot_admission_cancellation_and_restart_cl
     );
     assert_eq!(cancelled["status"], 200);
     assert_eq!(response_body(&cancelled)["status"], "cancelled");
+    assert_eq!(
+        fs::read_dir(data_dir.join("local-coding-snapshots"))
+            .unwrap()
+            .count(),
+        0
+    );
 
     let second_job = local_coding_job([3; 32]);
     let admitted = send(
-        &socket_path,
+        &restart_socket,
         request(
             "POST",
             "/v1/local-coding/snapshots/admit",
-            bearer,
+            bearer.clone(),
             Some(serde_json::to_value(&second_job).unwrap()),
         ),
     );
     assert_eq!(admitted["status"], 200);
-    child.kill().expect("stop with partial snapshot");
-    child.wait().expect("reap partial snapshot agent");
+    restarted.kill().expect("stop with partial snapshot");
+    restarted.wait().expect("reap partial snapshot agent");
 
-    let restart_socket = runtime_dir.join("local-coding-restart.sock");
-    let restarted = start_local_coding_agent(&data_dir, &restart_socket);
+    let second_restart_socket = runtime_dir.join("local-coding-second-restart.sock");
+    let restarted = start_local_coding_agent(&data_dir, &second_restart_socket);
     assert_eq!(
         fs::read_dir(data_dir.join("local-coding-snapshots"))
             .unwrap()
@@ -863,6 +879,10 @@ fn mlx_job(prompt: &str) -> JobEnvelope {
 }
 
 fn local_coding_job(snapshot_sha256: [u8; 32]) -> JobEnvelope {
+    let work_packet = FeatureConveyorCodingWorkPacketMetadata::fixture(
+        Uuid::new_v4(),
+        Sha256::digest(b"native process materialization\n").into(),
+    );
     let context = serde_json::to_value(LocalCodingJobRequest {
         feature_id: Uuid::new_v4(),
         specification_revision: 1,
@@ -870,12 +890,8 @@ fn local_coding_job(snapshot_sha256: [u8; 32]) -> JobEnvelope {
         feature_lease_id: Uuid::new_v4(),
         snapshot_id: Uuid::new_v4(),
         snapshot_sha256,
-        work_packet_sha256: [4; 32],
-        work_packet: FeatureConveyorCodingWorkPacketMetadata {
-            packet_id: Uuid::new_v4(),
-            ordinal: 1,
-            acceptance_criteria_count: 1,
-        },
+        work_packet_sha256: work_packet.canonical_sha256().unwrap(),
+        work_packet,
         device_id: assemblywright_protocol::DeviceId::new(Uuid::new_v4()),
         device_registry_revision: 1,
         queue_revision: 1,
@@ -894,7 +910,7 @@ fn local_coding_job(snapshot_sha256: [u8; 32]) -> JobEnvelope {
         capability_id: LOCAL_CODING_CAPABILITY_ID.to_string(),
         selected_model: LOCAL_CODING_MODEL.to_string(),
         sensitivity: Sensitivity::Workspace,
-        context_handling: ContextHandlingPolicy::EphemeralNoRetention,
+        context_handling: ContextHandlingPolicy::SealedUntilResolvedOrExpired,
         lease_duration_ms: 60_000,
         deadline_after_ms: 60_000,
         context_sha256: Sha256::digest(serde_json::to_vec(&context).unwrap()).into(),

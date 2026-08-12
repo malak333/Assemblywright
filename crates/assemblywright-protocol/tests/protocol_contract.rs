@@ -189,7 +189,7 @@ fn approved_feature_request() -> FeatureConveyorApprovedFeatureRequest {
 
 #[test]
 fn feature_conveyor_owner_control_dtos_are_strict_bounded_and_independently_versioned() {
-    assert_eq!(PROTOCOL_VERSION, 4);
+    assert_eq!(PROTOCOL_VERSION, 5);
     let designation = FeatureConveyorOwnerBridgeDesignationRequest {
         schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
         device_id: DeviceId::new(fixed_uuid("99999999-9999-4999-8999-999999999999")),
@@ -673,8 +673,8 @@ fn enrollment_pairing_documents_fail_closed_on_expiry_identity_and_bounds() {
 }
 
 #[test]
-fn mac_bridge_handshake_matches_v4_golden_fixture() {
-    let fixture = include_str!("fixtures/mac_bridge_hello_v4.json");
+fn mac_bridge_handshake_matches_v5_golden_fixture() {
+    let fixture = include_str!("fixtures/mac_bridge_hello_v5.json");
     let request =
         HandshakeRequest::decode_frame(fixture.as_bytes()).expect("decode golden request");
 
@@ -692,7 +692,7 @@ fn mac_bridge_handshake_matches_v4_golden_fixture() {
             include_str!("fixtures/mac_bridge_hello_v2.json").as_bytes()
         ),
         Err(ProtocolError::UnsupportedVersion {
-            expected: 4,
+            expected: 5,
             received: 2
         })
     ));
@@ -701,7 +701,7 @@ fn mac_bridge_handshake_matches_v4_golden_fixture() {
 #[test]
 fn authenticated_handshake_requires_a_bounded_nonzero_tls_exporter_digest() {
     let handshake = HandshakeRequest::decode_frame(
-        include_str!("fixtures/mac_bridge_hello_v4.json").as_bytes(),
+        include_str!("fixtures/mac_bridge_hello_v5.json").as_bytes(),
     )
     .expect("decode handshake fixture");
     let request = AuthenticatedHandshakeRequest {
@@ -727,7 +727,7 @@ fn authenticated_handshake_requires_a_bounded_nonzero_tls_exporter_digest() {
 #[test]
 fn handshake_rejects_unknown_fields_and_duplicate_capabilities() {
     let unknown = json!({
-        "protocol_version": 4,
+        "protocol_version": 5,
         "device_id": "11111111-1111-4111-8111-111111111111",
         "device_name": "worker",
         "role": "inference_worker",

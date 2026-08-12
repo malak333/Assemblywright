@@ -165,9 +165,9 @@ require_text "README non-claims" "$README" "Autonomous dispatch"
 require_text "DESIGN conveyor pointer" "$DESIGN" "docs/feature-conveyor-design.md"
 require_text "DESIGN distributed pointer" "$DESIGN" "docs/distributed-developer-mode-design.md"
 require_text "DESIGN assistant non-goal" "$DESIGN" "No general-purpose assistant surface."
-require_text "DESIGN current master schema" "$DESIGN" "schema-v12"
+require_text "DESIGN current master schema" "$DESIGN" "schema-v13"
 require_text "DESIGN result artifact boundary" "$DESIGN" \
-  "Schema v12 adds result-artifact admission"
+  "Schema v13 adds bounded general-worker packet"
 
 require_text "conveyor design status" "$FEATURE_CONVEYOR_DESIGN" "default-inert"
 require_text "conveyor design approval" "$FEATURE_CONVEYOR_DESIGN" "Approve and Enqueue"
@@ -261,8 +261,8 @@ require_text "conveyor protocol fixed contained result" "$PROTOCOL_CRATE" \
   'LOCAL_CODING_COMPLETED_STATUS: &str = "contained_coding_completed"'
 require_text "conveyor protocol truthful tests-not-run result" "$PROTOCOL_CRATE" \
   'LOCAL_CODING_FIXTURE_TEST_STATUS: &str = "not_run"'
-require_text "conveyor fixed README allowlist" "$PROTOCOL_CRATE" \
-  'LOCAL_CODING_FIXTURE_ALLOWED_PATH: &str = "README.md"'
+require_text "conveyor bounded general allowlist" "$PROTOCOL_CRATE" \
+  'MAX_LOCAL_CODING_EDIT_PATHS: usize = 64'
 require_text "conveyor protocol exact admission digest helper" "$PROTOCOL_CRATE" \
   'local_coding_admission_sha256'
 require_text "conveyor protocol admission golden transcript" "$PROTOCOL_LOCAL_CODING_E2E" \
@@ -278,33 +278,39 @@ require_text "conveyor Swift admission binds lease duration" "$MAC_EVENT_RELAY" 
 require_text "conveyor Swift admission binds deadline" "$MAC_EVENT_RELAY" \
   'deadlineAfterMilliseconds: deadline'
 require_text "conveyor Swift admission golden matches Rust" "$MAC_BRIDGE_TESTS" \
-  '04eb22b8b2928b9475403b8dfccc7dd3d61132c67a89510ae47c9b19bd15140d'
+  'fb69cef80f0f2a37a886898c25121446a54308b52cb83fd70175c772936874cc'
 forbid_text "conveyor Swift result excludes obsolete runner digest" "$MAC_EVENT_RELAY" \
   'runner_sha256'
-require_text "conveyor fixed forked child" "$AGENT_SNAPSHOT" \
-  'spawn_fixed_contained_child'
-require_text "conveyor child uses pre-opened workspace" "$AGENT_SNAPSHOT" \
-  'libc::openat'
+require_text "conveyor descriptor-relative parent traversal" "$AGENT_SNAPSHOT" \
+  'open_verified_parent_chain'
+require_text "conveyor atomic replacement" "$AGENT_SNAPSHOT" \
+  'libc::RENAME_SWAP'
+require_text "conveyor descriptor-relative delete" "$AGENT_SNAPSHOT" \
+  'libc::unlinkat'
+require_text "conveyor atomic delete capture" "$AGENT_SNAPSHOT" \
+  'atomic_delete_at'
+require_text "conveyor atomic delete rollback" "$AGENT_SNAPSHOT" \
+  'rollback_delete_swap'
+require_text "conveyor protocol artifact-to-packet validation" "$PROTOCOL_CRATE" \
+  'validate_local_coding_patch_artifact_for_packet'
+require_text "conveyor master retained result binding" "$MASTER_CRATE" \
+  'workspace_retained = ?18 AND workspace_expires_at_ms = ?19'
 require_text "conveyor Swift launches agent with empty environment" "$MAC_EVENT_RELAY" \
   'process.environment = [:]'
 require_text "conveyor agent rejects nonempty local-coding parent environment" "$AGENT_PROCESS" \
   'validate_local_coding_parent_environment'
-require_text "conveyor parent captures inherited descriptor close bound" "$AGENT_SNAPSHOT" \
-  'fd_close_limit'
-require_text "conveyor parent blocks signals before fork" "$AGENT_SNAPSHOT" \
-  'block_signals_for_fork'
-require_text "conveyor child scans descriptor slots" "$AGENT_SNAPSHOT" \
-  'libc::F_GETFD'
-require_text "conveyor child waits for parent process-group gate" "$AGENT_SNAPSHOT" \
-  'gate_read_fd'
-require_text "conveyor child fixed seek" "$AGENT_SNAPSHOT" \
-  'libc::lseek'
+require_text "conveyor external restart recovery record" "$AGENT_SNAPSHOT" \
+  'RetainedWorkspaceRecord'
+require_text "conveyor restart verifies workspace tree" "$AGENT_SNAPSHOT" \
+  'workspace_tree_sha256'
+require_text "conveyor unresolved completion blocks admission" "$AGENT_SNAPSHOT" \
+  'return Err(LocalCodingSnapshotError::AlreadyActive)'
 require_text "conveyor aggregate materialized-output budget" "$AGENT_SNAPSHOT" \
   'max_materialized_bytes'
 forbid_text "conveyor fork child does not inspect environment APIs" "$AGENT_SNAPSHOT" \
   'static mut environ'
-require_text "conveyor cleanup before result" "$AGENT_SNAPSHOT" \
-  'let cleanup_result = cleanup_attempt_state'
+require_text "conveyor sealed workspace before result" "$AGENT_SNAPSHOT" \
+  'format!("{}.sealed"'
 require_text "conveyor native Swift-to-Rust snapshot E2E" \
   "$MAC_LOCAL_CODING_SNAPSHOT_E2E" \
   "localCodingSnapshotRelayUsesRealSupervisedAgent"
@@ -407,14 +413,28 @@ require_text "release checklist owner resolution" "$CHECKLIST" \
   "abandon-and-advance"
 require_text "release checklist schema-v11 migration invariant" "$CHECKLIST" \
   "schema-v11 backup-first"
-require_text "release checklist schema-v12 artifact invariant" "$CHECKLIST" \
-  "protocol-v4/schema-v12 result-artifact admission"
-require_text "architecture schema-v12 artifact store" "$ARCHITECTURE" \
-  "Private bytes outside SQLite; immutable schema-v12 metadata and redacted audit"
-require_text "knowledge base schema-v12 artifact boundary" "$KB" \
-  "Schema v12 admits only one protocol-owned canonical"
-require_text "knowledge base schema-v12 live closeout" "$KB" \
-  "protocol-v4/schema-v12 result-artifact closeout"
+require_text "release checklist schema-v13 artifact invariant" "$CHECKLIST" \
+  "protocol-v5/schema-v13 result-artifact admission"
+require_text "architecture schema-v13 artifact store" "$ARCHITECTURE" \
+  "Private bytes outside SQLite; immutable schema-v13 metadata and redacted audit"
+require_text "architecture current master schema" "$ARCHITECTURE" \
+  '`assemblywright-master` schema version 13'
+require_text "architecture current general worker" "$ARCHITECTURE" \
+  "Protocol v5 replaces the historical v4 fixed-child"
+require_text "feature design current general worker" "$FEATURE_CONVEYOR_DESIGN" \
+  "implemented protocol-v5/schema-v13 kernel"
+require_text "readme current general worker" "$README" \
+  "packet-bound deterministic writes/deletes"
+require_text "knowledge base current protocol" "$KB" \
+  '`PROTOCOL_VERSION` is 5'
+forbid_text "architecture stale current schema" "$ARCHITECTURE" \
+  "schema version 12 preserves"
+forbid_text "feature design stale current fixture" "$FEATURE_CONVEYOR_DESIGN" \
+  "The implemented schema-v12 kernel reaches one fixed contained-coding fixture"
+require_text "knowledge base schema-v13 artifact boundary" "$KB" \
+  "Protocol v5/schema v13 replaces the fixed README fixture"
+require_text "knowledge base schema-v13 live closeout" "$KB" \
+  "seals the attempt workspace for at most one hour"
 require_text "knowledge base live receipt integrity" "$KB" \
   "one unchanged JSON line on stdin"
 require_text "design stable artifact evidence" "$DESIGN" \
@@ -447,7 +467,7 @@ require_text "build docs local gate" "$BUILD_DOCS" "./scripts/release-local.sh"
 require_text "build docs local-coding live closeout" "$BUILD_DOCS" \
   "./scripts/mac-windows-bridge-live-e2e.sh --run-local-coding"
 require_text "build docs result-artifact live boundary" "$BUILD_DOCS" \
-  "terminal success proves the protocol-v4 result"
+  "terminal success proves the protocol-v5 result"
 require_text "build docs evidence boundary" "$BUILD_DOCS" "## Release Evidence Boundary"
 require_text "build docs windows gate" "$BUILD_DOCS" "windows-protocol.yml"
 require_text "build docs Windows coding dispatch E2E command" "$BUILD_DOCS" \
