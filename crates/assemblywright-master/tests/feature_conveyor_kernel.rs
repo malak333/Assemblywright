@@ -2258,6 +2258,14 @@ fn result_artifact_admission_is_exact_idempotent_and_required_before_result() {
         Err(MasterError::ResultArtifactUnavailable)
     ));
 
+    // Artifact admission and its SQLite transaction are complete before the
+    // later result request. Release the admission request's stable handles so
+    // this test models tampering between those two remote requests on Windows
+    // as well as Unix.
+    let artifact_reference = prepared.verified_mut().reference();
+    prepared.mark_committed().unwrap();
+    prepared.cleanup_if_unreferenced(true).unwrap();
+
     let artifact_path = artifact_directory
         .path()
         .join("feature-result-artifacts")
@@ -2266,17 +2274,7 @@ fn result_artifact_admission_is_exact_idempotent_and_required_before_result() {
     let mut tampered = artifact_bytes.clone();
     tampered[0] ^= 1;
     fs::write(&artifact_path, tampered).unwrap();
-    assert!(matches!(
-        kernel.accept_remote_result_from_with_artifact(
-            device.device_id,
-            &result,
-            16,
-            &contract,
-            &store,
-            prepared.verified_mut()
-        ),
-        Err(MasterError::ResultArtifactUnavailable)
-    ));
+    assert!(store.open_verified(artifact_reference).is_err());
     {
         use std::io::Write;
         let mut restored = fs::OpenOptions::new()
@@ -2287,6 +2285,7 @@ fn result_artifact_admission_is_exact_idempotent_and_required_before_result() {
         restored.write_all(&artifact_bytes).unwrap();
         restored.sync_all().unwrap();
     }
+    let mut verified = store.open_verified(artifact_reference).unwrap();
     kernel
         .accept_remote_result_from_with_artifact(
             device.device_id,
@@ -2294,7 +2293,7 @@ fn result_artifact_admission_is_exact_idempotent_and_required_before_result() {
             16,
             &contract,
             &store,
-            prepared.verified_mut(),
+            &mut verified,
         )
         .unwrap();
     kernel.set_emergency_paused_at(true, 17).unwrap();
@@ -2523,6 +2522,9 @@ fn post_admission_artifact_tamper_invalidates_stable_result_evidence() {
     let mut prepared = store
         .prepare(artifact.artifact_id, artifact.artifact_sha256, &bytes)
         .unwrap();
+    let reference = prepared.verified_mut().reference();
+    prepared.mark_committed().unwrap();
+    prepared.cleanup_if_unreferenced(true).unwrap();
     let path = directory
         .path()
         .join("feature-result-artifacts")
@@ -2531,7 +2533,7 @@ fn post_admission_artifact_tamper_invalidates_stable_result_evidence() {
     let mut tampered = bytes;
     tampered[0] ^= 1;
     fs::write(path, tampered).unwrap();
-    assert!(prepared.verified_mut().revalidate(&store).is_err());
+    assert!(store.open_verified(reference).is_err());
 }
 
 #[test]
