@@ -341,7 +341,9 @@ impl ArtifactIntegrationStore {
             config.set_bool("core.logallrefupdates", false)?;
             config.set_str("core.hooksPath", "disabled-hooks")?;
         }
+        drop(destination);
         normalize_candidate_git_metadata(&staging_path.join(".git"))?;
+        let destination = Repository::open(&staging_path)?;
         fs::write(
             staging_path.join(".git").join("shallow"),
             format!("{base_commit}\n"),
