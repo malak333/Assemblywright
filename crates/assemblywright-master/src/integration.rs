@@ -314,8 +314,6 @@ impl ArtifactIntegrationStore {
             .join("snapshots")
             .join(snapshot_id.to_string());
         let source_handles = open_stable_tree(&source_path)?;
-        #[cfg(all(test, windows))]
-        eprintln!("windows candidate stage: source-opened");
         #[cfg(test)]
         if let Some(hook) = self
             .source_capture_hook
@@ -327,11 +325,7 @@ impl ArtifactIntegrationStore {
         }
         validate_stable_git_shape(&source_handles, GitRepositoryShape::Snapshot)?;
         validate_snapshot_binding_stable(&source_handles, base_commit)?;
-        #[cfg(all(test, windows))]
-        eprintln!("windows candidate stage: source-validated");
         let stable_source = StableOdb::from_entries(&self.root.join("staging"), &source_handles)?;
-        #[cfg(all(test, windows))]
-        eprintln!("windows candidate stage: source-odb-copied");
         let source = stable_source.odb();
         let base_oid = Oid::from_str(base_commit)?;
         let base_object = source.read(base_oid)?;
@@ -340,8 +334,6 @@ impl ArtifactIntegrationStore {
         }
         let base_tree_oid = commit_tree_oid(base_object.data())?;
         let destination = Repository::init(&staging_path)?;
-        #[cfg(all(test, windows))]
-        eprintln!("windows candidate stage: initialized");
         {
             let mut config = git2::Config::open(&staging_path.join(".git").join("config"))?;
             config.set_bool("core.autocrlf", false)?;
@@ -351,16 +343,12 @@ impl ArtifactIntegrationStore {
         }
         drop(destination);
         normalize_candidate_git_metadata(&staging_path.join(".git"))?;
-        #[cfg(all(test, windows))]
-        eprintln!("windows candidate stage: metadata-normalized");
         let destination = Repository::open(&staging_path)?;
         fs::write(
             staging_path.join(".git").join("shallow"),
             format!("{base_commit}\n"),
         )?;
         copy_commit_tree(source, &destination, base_oid)?;
-        #[cfg(all(test, windows))]
-        eprintln!("windows candidate stage: base-copied");
 
         let mut index = destination.index()?;
         index.read_tree(&destination.find_tree(base_tree_oid)?)?;
@@ -384,8 +372,6 @@ impl ArtifactIntegrationStore {
             }
             cleanup.artifacts.push(verified);
         }
-        #[cfg(all(test, windows))]
-        eprintln!("windows candidate stage: artifacts-applied");
         let tree_oid = index.write_tree_to(&destination)?;
         let tree = destination.find_tree(tree_oid)?;
         let parent = destination.find_commit(base_oid)?;
@@ -406,8 +392,6 @@ impl ArtifactIntegrationStore {
         index.write()?;
         materialize_tree(&destination, &staging_path, tree_oid)?;
         verify_materialized_tree(&destination, &staging_path, tree_oid)?;
-        #[cfg(all(test, windows))]
-        eprintln!("windows candidate stage: materialized");
         #[cfg(test)]
         if let Some(hook) = self
             .source_revalidation_hook
@@ -429,8 +413,6 @@ impl ArtifactIntegrationStore {
         drop(tree);
         drop(base_object);
         drop(destination);
-        #[cfg(all(test, windows))]
-        eprintln!("windows candidate stage: git-handles-dropped");
         secure_tree_permissions(&staging_path)?;
         secure_materialized_permissions(
             &Repository::open(&staging_path)?,
@@ -438,11 +420,7 @@ impl ArtifactIntegrationStore {
             tree_oid,
         )?;
         sync_plain_tree(&staging_path)?;
-        #[cfg(all(test, windows))]
-        eprintln!("windows candidate stage: synced");
         fs::rename(&staging_path, &final_path)?;
-        #[cfg(all(test, windows))]
-        eprintln!("windows candidate stage: frozen");
         sync_directory_portable(
             final_path
                 .parent()
@@ -452,8 +430,6 @@ impl ArtifactIntegrationStore {
         cleanup.evidence.candidate_commit = commit_oid.to_string();
         cleanup.evidence.candidate_tree = tree_oid.to_string();
         cleanup.verified = self.open_verified_candidate(&cleanup.evidence)?;
-        #[cfg(all(test, windows))]
-        eprintln!("windows candidate stage: verified");
         Ok(cleanup)
     }
 }
@@ -1342,6 +1318,8 @@ fn configure_no_follow_read(options: &mut OpenOptions) {
             .share_mode(FILE_SHARE_READ)
             .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
+    #[cfg(not(any(unix, windows)))]
+    options.read(true);
 }
 
 fn configure_no_follow_directory(options: &mut OpenOptions) {
@@ -1690,15 +1668,117 @@ fn sync_plain_tree(path: &Path) -> Result<(), ArtifactIntegrationError> {
         if metadata.is_dir() {
             sync_plain_tree(&entry.path())?;
         } else if metadata.is_file() {
-            OpenOptions::new()
-                .read(true)
-                .open(entry.path())?
-                .sync_all()?;
+            sync_plain_file(&entry.path())?;
         } else {
             return Err(ArtifactIntegrationError::Rejected);
         }
     }
     sync_directory_portable(path)
+}
+
+fn sync_plain_file(path: &Path) -> Result<(), ArtifactIntegrationError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut options = OpenOptions::new();
+        options.read(true);
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+        let file = options.open(path)?;
+        validate_open_plain_file(&file)?;
+        file.sync_all()?;
+        Ok(())
+    }
+    #[cfg(windows)]
+    {
+        use std::mem::size_of;
+        use std::os::windows::fs::OpenOptionsExt;
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FileBasicInfo, GetFileInformationByHandleEx, FILE_ATTRIBUTE_READONLY, FILE_BASIC_INFO,
+            FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+            FILE_SHARE_WRITE, FILE_WRITE_ATTRIBUTES,
+        };
+
+        let mut attribute_options = OpenOptions::new();
+        attribute_options
+            .access_mode(FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        let attribute_handle = attribute_options.open(path)?;
+        validate_open_plain_file(&attribute_handle)?;
+        let identity = platform_identity(&attribute_handle)?;
+        let mut original = FILE_BASIC_INFO::default();
+        if unsafe {
+            GetFileInformationByHandleEx(
+                attribute_handle.as_raw_handle() as _,
+                FileBasicInfo,
+                &mut original as *mut _ as _,
+                size_of::<FILE_BASIC_INFO>() as u32,
+            )
+        } == 0
+        {
+            return Err(ArtifactIntegrationError::Io(std::io::Error::last_os_error()));
+        }
+        let was_readonly = original.FileAttributes & FILE_ATTRIBUTE_READONLY != 0;
+        if was_readonly {
+            let mut writable = original;
+            writable.FileAttributes &= !FILE_ATTRIBUTE_READONLY;
+            set_windows_basic_info(&attribute_handle, &writable)?;
+        }
+
+        let sync_result = (|| {
+            let mut sync_options = OpenOptions::new();
+            sync_options
+                .write(true)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+            let sync_handle = sync_options.open(path)?;
+            validate_open_plain_file(&sync_handle)?;
+            if platform_identity(&sync_handle)? != identity {
+                return Err(ArtifactIntegrationError::Rejected);
+            }
+            sync_handle.sync_all()?;
+            Ok(())
+        })();
+        let restore_result = if was_readonly {
+            set_windows_basic_info(&attribute_handle, &original)
+        } else {
+            Ok(())
+        };
+        restore_result?;
+        sync_result
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let file = File::open(path)?;
+        validate_open_plain_file(&file)?;
+        file.sync_all()?;
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+fn set_windows_basic_info(
+    file: &File,
+    information: &windows_sys::Win32::Storage::FileSystem::FILE_BASIC_INFO,
+) -> Result<(), ArtifactIntegrationError> {
+    use std::mem::size_of;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileBasicInfo, SetFileInformationByHandle, FILE_BASIC_INFO,
+    };
+    if unsafe {
+        SetFileInformationByHandle(
+            file.as_raw_handle() as _,
+            FileBasicInfo,
+            information as *const _ as _,
+            size_of::<FILE_BASIC_INFO>() as u32,
+        )
+    } == 0
+    {
+        return Err(ArtifactIntegrationError::Io(std::io::Error::last_os_error()));
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -2544,6 +2624,39 @@ mod tests {
             Err(ArtifactIntegrationError::ContentCasMismatch)
         ));
         snapshot.retain();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_sync_plain_tree_flushes_and_restores_readonly_loose_objects() {
+        use std::os::windows::fs::MetadataExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_READONLY;
+
+        let directory = tempdir().unwrap();
+        let repository_path = directory.path().join("repository");
+        let (repository, _, _) = source_repository(&repository_path);
+        drop(repository);
+        let objects = repository_path.join(".git").join("objects");
+        let loose = fs::read_dir(&objects)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().len() == 2)
+            .flat_map(|entry| {
+                fs::read_dir(entry.path())
+                    .unwrap()
+                    .filter_map(Result::ok)
+                    .map(|entry| entry.path())
+                    .collect::<Vec<_>>()
+            })
+            .next()
+            .unwrap();
+        let before = fs::metadata(&loose).unwrap().file_attributes();
+        assert_ne!(before & FILE_ATTRIBUTE_READONLY, 0);
+
+        sync_plain_tree(&repository_path).unwrap();
+
+        let after = fs::metadata(&loose).unwrap().file_attributes();
+        assert_ne!(after & FILE_ATTRIBUTE_READONLY, 0);
     }
 
     #[cfg(unix)]
