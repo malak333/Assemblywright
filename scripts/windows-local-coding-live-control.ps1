@@ -31,7 +31,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $protocolVersion = 4
-$masterSchemaVersion = 11
+$masterSchemaVersion = 12
 $featureConveyorProjectionSchemaVersion = 8
 $ownerControlSchemaVersion = 1
 $uuidPattern = "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
@@ -401,7 +401,7 @@ if ($Action -eq "Check") {
     if (
         $testDigest.Length -ne 64 -or
         $protocolVersion -ne 4 -or
-        $masterSchemaVersion -ne 11 -or
+        $masterSchemaVersion -ne 12 -or
         $featureConveyorProjectionSchemaVersion -ne 8 -or
         $ownerControlSchemaVersion -ne 1
     ) {

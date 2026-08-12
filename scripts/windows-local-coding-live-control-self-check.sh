@@ -13,7 +13,7 @@ fail() {
 
 for required in \
   '"Check", "Prepare", "ClaimAndDispatch", "Cancel", "Abandon", "Cleanup"' \
-  '$masterSchemaVersion = 11' \
+  '$masterSchemaVersion = 12' \
   '$featureConveyorProjectionSchemaVersion = 8' \
   '$ownerControlSchemaVersion = 1' \
   '[UInt64]$status.schema_version -ne $featureConveyorProjectionSchemaVersion' \
