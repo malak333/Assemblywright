@@ -12,11 +12,12 @@ observation surface.
 This repository is foundation work. The durable contracts, the master kernel,
 the enrollment and mTLS identity path, the Windows service lifecycle, the Mac
 bridge and worker agent, and the release gate are implemented. Autonomous
-dispatch, general-purpose repository execution, review-provider invocation,
-GitHub publication, and the queue control UI are still design. The Windows
-master now implements the first repository-mutation boundary: admitted
-artifacts can be integrated only into an isolated master-owned candidate
-repository, never the registered source checkout.
+orchestration, registered-source-checkout mutation, production review-provider
+provisioning and reviewer-quality proof, GitHub publication coordination, and
+the queue control UI are still design. The Windows master implements bounded
+general coding, isolated artifact integration, deterministic validation, and a
+default-unavailable independent-review gateway as explicit owner actions; none
+of them mutates the registered source checkout or activates publication.
 
 ## What Is Implemented
 
@@ -232,8 +233,9 @@ Not yet implemented, and not claimed:
   to a master-owned isolated integration repository and freeze an exact
   candidate commit; it cannot execute tests, mutate the registered source
   checkout, invoke a provider, review, publish, or activate the feature.
-- Worker execution against real repositories, review-provider invocation, or
-  GitHub branch/PR/merge authority.
+- Worker execution against the registered source checkout, live selected-
+  provider deployment or reviewer-quality proof, or GitHub branch/PR/merge
+  authority.
 - Mac Feature Conveyor UI controls or hosted brainstorming. The app remains
   observation only. The implemented one-shot signed-helper action can enqueue
   only an already-approved specification after separate Windows owner-bridge

@@ -1040,3 +1040,19 @@ an old one.
   manifest's required top-level `acceptance` array and evidence references drawn
   only from the packet. Interrupted calls, including post-response authority
   drift, terminalize immutably and quarantine without automatic retry.
+- A Rust integration test's `current_exe()` is the test harness, not Cargo's
+  product binary. The Windows review-provider Job/launcher E2E must inject
+  `CARGO_BIN_EXE_assemblywright-master` through the Windows debug-only test
+  constructor. Production loading must continue to capture only its own
+  `current_exe()` and must expose no runtime launcher override; otherwise the
+  test seam would become a production executable-selection authority.
+- The 2026-08-13 Independent Review Gateway closeout reached exact published
+  commit `b7e8fc76efe9076aca3ba3dcd26221231b9ac6a8`. Native Windows proof covered
+  the strict protocol, nine review-kernel cases, the configured adapter's
+  verified-image/gated-Job boundary, owner-loopback routing, and remote mTLS
+  exclusion. The deployed `AssemblywrightMaster` then migrated backup-first
+  from schema 15 to schema 16; both the retained backup and live database
+  passed `PRAGMA integrity_check`, source parity matched `origin/main`, and the
+  empty queue remained unpaused. The production adapter directory remained
+  absent, which is the intended default-unavailable state rather than live
+  selected-provider or reviewer-quality evidence.

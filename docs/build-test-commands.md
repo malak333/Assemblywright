@@ -127,6 +127,9 @@ extraction; exact master-derived requirement coverage; packet-only evidence
 references; default-unavailable production configuration; one fresh
 cleared-environment bounded provider process per call; Unix native descendant
 termination and executable-replacement rejection; legacy sensitive-context revalidation;
+exact-minimum capability admission and rejection of every provider/model,
+input/output, structured-output, response-only, fresh-session, tokenization,
+and token-ceiling drift; pre-call and post-response cancellation suppression;
 malformed/outage/incomplete failure without a
 repair charge; fixed backoff; three-calls-per-candidate and twelve-per-feature
 ceilings; interruption and post-response-drift terminalization/quarantine; rejection retention;

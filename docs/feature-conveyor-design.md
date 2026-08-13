@@ -8,12 +8,14 @@ Scope: Approved target design plus the bounded repository-kernel implementation
 status below. This document does not claim autonomous activation, live-device
 proof, or production readiness.
 
-Implementation status: the first default-inert Windows `assemblywright-master`
-repository kernel is implemented as master schema v5. It covers immutable
-approved specification revisions, the bounded owner-ordered queue, dependency
-blocking, compare-and-set revisions, one active lease, exact lifecycle
-advancement, cancellation without advancement, explicit safe abandonment,
-startup quarantine, and same-transaction redacted audits. It exposes the exact
+Implementation status: the default-inert protocol-v5/schema-v16 Windows
+`assemblywright-master` kernel is implemented through the independent-review
+gateway. The detailed implemented boundary is summarized under
+`Implementation Boundary` below. It retains immutable approved specification
+revisions, the bounded owner-ordered queue, dependency blocking, compare-and-
+set revisions, one active lease, exact lifecycle advancement, cancellation
+without advancement, explicit safe abandonment, startup quarantine, and same-
+transaction redacted audits. It exposes the exact
 same read-only projection through the owner-token-authenticated loopback
 `GET /v1/feature-conveyor/status` and the accepted-session, MacBridge-only
 remote route described below. The pure-SELECT projection returns the
@@ -41,10 +43,13 @@ strictly decodes the bounded schema-v8 allowlist, cancels on drift, and includes
 the projection only in authenticated snapshots. The app renders a compact
 read-only queue/guidance section and never presents `next_owner_action` as a
 button. Neither observation route grants enqueue, execution, review,
-repository, Git, publication, audit-event, or activation authority. No worker
-dispatcher, repository execution, review provider, publication coordinator,
-Mac control UI, or autonomous activation is implemented. The remainder of this
-document is still target design.
+repository, Git, publication, audit-event, or activation authority. The
+separate schema-v16 independent-review gateway is implemented and defaults
+unavailable until one fixed adapter is provisioned; it grants no publication
+authority. No automatic dispatcher, publication coordinator, registered-
+source mutation, Mac control UI, or autonomous activation is implemented. The
+remainder of this document beyond the explicit implementation boundary is
+still target design.
 
 Master schema v8 adds the first bounded owner-control transport without
 activating the conveyor. An owner-token-authenticated Windows loopback action

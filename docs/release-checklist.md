@@ -11,8 +11,11 @@ production-readiness claim.
 Before starting a release pass, confirm the claim you intend to make.
 
 - Name the exact surface being released and the exact evidence that supports
-  it. Do not describe autonomous dispatch, repository mutation, review-provider
-  invocation, or GitHub publication as implemented.
+  it. Do not describe autonomous orchestration, registered-source mutation,
+  live selected-provider quality, or GitHub publication coordination as
+  implemented. Schema v16 implements bounded review-provider invocation only
+  through the default-unavailable owner-loopback gateway; repository proof does
+  not establish production provider provisioning or reviewer competence.
 - Confirm `docs/feature-conveyor-design.md` still marks the implemented slice
   accurately. The repository kernel is default-inert and exposes the
   owner-token-authenticated loopback read-only

@@ -83,6 +83,7 @@ fn packet_and_request() -> (
 struct FakeProvider {
     calls: AtomicUsize,
     malformed: bool,
+    cancel_during_response: bool,
 }
 
 impl ReviewProvider for FakeProvider {
@@ -114,6 +115,9 @@ impl ReviewProvider for FakeProvider {
     ) -> Result<Vec<u8>, ReviewProviderTransportError> {
         assert!(!cancelled.load(Ordering::Acquire));
         self.calls.fetch_add(1, Ordering::AcqRel);
+        if self.cancel_during_response {
+            cancelled.store(true, Ordering::Release);
+        }
         if self.malformed {
             return Ok(br#"{"decision":"approved","transcript":"forbidden"}"#.to_vec());
         }
@@ -146,6 +150,7 @@ fn fake_native_provider_receives_one_fresh_response_only_packet() {
     let provider = FakeProvider {
         calls: AtomicUsize::new(0),
         malformed: false,
+        cancel_during_response: false,
     };
     let prepared = prepare_review_provider_call(&provider, &request, &packet).unwrap();
     assert_eq!(provider.calls.load(Ordering::Acquire), 0);
@@ -171,6 +176,7 @@ fn malformed_output_and_precall_cancellation_fail_closed() {
     let provider = FakeProvider {
         calls: AtomicUsize::new(0),
         malformed: true,
+        cancel_during_response: false,
     };
     let prepared = prepare_review_provider_call(&provider, &request, &packet).unwrap();
     assert_eq!(
@@ -184,6 +190,140 @@ fn malformed_output_and_precall_cancellation_fail_closed() {
         ReviewProviderInvocationError::Cancelled
     );
     assert_eq!(provider.calls.load(Ordering::Acquire), 1);
+}
+
+#[test]
+fn post_response_cancellation_suppresses_an_otherwise_valid_output() {
+    let (packet, request) = packet_and_request();
+    let provider = FakeProvider {
+        calls: AtomicUsize::new(0),
+        malformed: false,
+        cancel_during_response: true,
+    };
+    let prepared = prepare_review_provider_call(&provider, &request, &packet).unwrap();
+    let cancelled = AtomicBool::new(false);
+
+    assert_eq!(
+        invoke_review_provider(&provider, &request, &prepared, &cancelled).unwrap_err(),
+        ReviewProviderInvocationError::Cancelled
+    );
+    assert!(cancelled.load(Ordering::Acquire));
+    assert_eq!(provider.calls.load(Ordering::Acquire), 1);
+}
+
+struct AdmissionProvider {
+    capabilities: Option<ReviewProviderCapabilities>,
+    token_count: Result<u64, ReviewProviderTokenCountError>,
+}
+
+impl ReviewProvider for AdmissionProvider {
+    fn capabilities(&self) -> Option<ReviewProviderCapabilities> {
+        self.capabilities.clone()
+    }
+
+    fn count_input_tokens(
+        &self,
+        _canonical_packet: &[u8],
+    ) -> Result<u64, ReviewProviderTokenCountError> {
+        self.token_count
+    }
+
+    fn review_response_only(
+        &self,
+        _request: &FeatureConveyorReviewGatewayRequest,
+        _canonical_packet: &[u8],
+        _cancelled: &AtomicBool,
+    ) -> Result<Vec<u8>, ReviewProviderTransportError> {
+        panic!("mechanical admission must not invoke the provider")
+    }
+}
+
+#[test]
+fn mechanical_admission_enforces_every_capability_and_token_boundary() {
+    let (packet, request) = packet_and_request();
+    let minimum = ReviewProviderCapabilities {
+        provider_id: request.provider_id.clone(),
+        model_id: request.model_id.clone(),
+        max_input_bytes: MAX_FEATURE_CONVEYOR_REVIEW_PACKET_BYTES,
+        max_input_tokens: MAX_FEATURE_CONVEYOR_REVIEW_INPUT_TOKENS,
+        max_output_bytes: MAX_FEATURE_CONVEYOR_REVIEW_OUTPUT_BYTES,
+        strict_structured_output: true,
+        response_only: true,
+        fresh_session_per_call: true,
+    };
+    let admit = |capabilities, token_count| AdmissionProvider {
+        capabilities,
+        token_count,
+    };
+
+    prepare_review_provider_call(
+        &admit(
+            Some(minimum.clone()),
+            Ok(MAX_FEATURE_CONVEYOR_REVIEW_INPUT_TOKENS),
+        ),
+        &request,
+        &packet,
+    )
+    .unwrap();
+
+    let mut invalid_capabilities = Vec::new();
+    let mut provider_drift = minimum.clone();
+    provider_drift.provider_id = "different.provider".to_string();
+    invalid_capabilities.push(provider_drift);
+    let mut model_drift = minimum.clone();
+    model_drift.model_id = "different-model".to_string();
+    invalid_capabilities.push(model_drift);
+    let mut input_bytes = minimum.clone();
+    input_bytes.max_input_bytes -= 1;
+    invalid_capabilities.push(input_bytes);
+    let mut input_tokens = minimum.clone();
+    input_tokens.max_input_tokens -= 1;
+    invalid_capabilities.push(input_tokens);
+    let mut output_bytes = minimum.clone();
+    output_bytes.max_output_bytes -= 1;
+    invalid_capabilities.push(output_bytes);
+    let mut unstructured = minimum.clone();
+    unstructured.strict_structured_output = false;
+    invalid_capabilities.push(unstructured);
+    let mut conversational = minimum.clone();
+    conversational.response_only = false;
+    invalid_capabilities.push(conversational);
+    let mut retained_session = minimum.clone();
+    retained_session.fresh_session_per_call = false;
+    invalid_capabilities.push(retained_session);
+
+    for capabilities in invalid_capabilities {
+        assert_eq!(
+            prepare_review_provider_call(&admit(Some(capabilities), Ok(1)), &request, &packet,)
+                .unwrap_err(),
+            ReviewProviderInvocationError::Unavailable
+        );
+    }
+    assert_eq!(
+        prepare_review_provider_call(&admit(None, Ok(1)), &request, &packet,).unwrap_err(),
+        ReviewProviderInvocationError::Unavailable
+    );
+    assert_eq!(
+        prepare_review_provider_call(
+            &admit(Some(minimum.clone()), Err(ReviewProviderTokenCountError)),
+            &request,
+            &packet,
+        )
+        .unwrap_err(),
+        ReviewProviderInvocationError::Unavailable
+    );
+    assert_eq!(
+        prepare_review_provider_call(
+            &admit(
+                Some(minimum),
+                Ok(MAX_FEATURE_CONVEYOR_REVIEW_INPUT_TOKENS + 1),
+            ),
+            &request,
+            &packet,
+        )
+        .unwrap_err(),
+        ReviewProviderInvocationError::Unavailable
+    );
 }
 
 #[cfg(unix)]

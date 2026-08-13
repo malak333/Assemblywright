@@ -38,6 +38,7 @@ PROTOCOL_MLX_E2E="crates/assemblywright-protocol/tests/mlx_job_contract.rs"
 PROTOCOL_LOCAL_CODING_E2E="crates/assemblywright-protocol/tests/local_coding_contract.rs"
 PROTOCOL_ARTIFACT_INTEGRATION_E2E="crates/assemblywright-protocol/tests/artifact_integration_contract.rs"
 PROTOCOL_VALIDATION_GATE_E2E="crates/assemblywright-protocol/tests/validation_gate_contract.rs"
+PROTOCOL_REVIEW_GATEWAY_E2E="crates/assemblywright-protocol/tests/review_gateway_contract.rs"
 PROTOCOL_OWNER_RESOLUTION_E2E="crates/assemblywright-protocol/tests/owner_resolution_contract.rs"
 MASTER_E2E="crates/assemblywright-master/tests/master_lifecycle_e2e.rs"
 MASTER_PROCESS_E2E="crates/assemblywright-master/tests/master_process_e2e.rs"
@@ -49,6 +50,8 @@ MASTER_ARTIFACT_INTEGRATION="crates/assemblywright-master/src/integration.rs"
 MASTER_ARTIFACT_INTEGRATION_E2E="crates/assemblywright-master/tests/artifact_integration_e2e.rs"
 MASTER_VALIDATION_CONTAINMENT="crates/assemblywright-master/src/validation_containment.rs"
 MASTER_VALIDATION_CONTAINMENT_E2E="crates/assemblywright-master/tests/windows_validation_containment_e2e.rs"
+MASTER_REVIEW_PROVIDER="crates/assemblywright-master/src/review_provider.rs"
+MASTER_REVIEW_PROVIDER_E2E="crates/assemblywright-master/tests/review_provider_e2e.rs"
 MASTER_SERVICE_E2E="crates/assemblywright-master/tests/windows_service_lifecycle_e2e.rs"
 AGENT_E2E="crates/assemblywright-agent/tests/local_relay_e2e.rs"
 AGENT_LOCAL_CODING_E2E="crates/assemblywright-agent/tests/local_coding_admission.rs"
@@ -119,11 +122,13 @@ for file in \
   "$AGENT_CRATE" "$AGENT_PROCESS" "$CLI_MAIN" \
   "$PROTOCOL_E2E" "$PROTOCOL_EVENT_E2E" "$PROTOCOL_MLX_E2E" \
   "$PROTOCOL_LOCAL_CODING_E2E" "$PROTOCOL_ARTIFACT_INTEGRATION_E2E" "$PROTOCOL_VALIDATION_GATE_E2E" \
+  "$PROTOCOL_REVIEW_GATEWAY_E2E" \
   "$PROTOCOL_OWNER_RESOLUTION_E2E" \
   "$MASTER_E2E" "$MASTER_PROCESS_E2E" "$MASTER_IDENTITY_E2E" \
   "$MASTER_REMOTE_MTLS_E2E" "$MASTER_EVENT_E2E" "$MASTER_CONVEYOR_E2E" \
   "$MASTER_ARTIFACT_INTEGRATION" "$MASTER_ARTIFACT_INTEGRATION_E2E" \
   "$MASTER_VALIDATION_CONTAINMENT" "$MASTER_VALIDATION_CONTAINMENT_E2E" \
+  "$MASTER_REVIEW_PROVIDER" "$MASTER_REVIEW_PROVIDER_E2E" \
   "$MASTER_SERVICE_E2E" "$AGENT_E2E" "$AGENT_LOCAL_CODING_E2E" "$CLI_NAMING_E2E" \
   "$CLI_READINESS_E2E" \
   "$MAC_BRIDGE" "$MAC_BRIDGE_CLI" "$MAC_BRIDGE_KEYCHAIN" "$MAC_BRIDGE_NETWORK" \
@@ -471,6 +476,22 @@ require_text "knowledge base review boundary" "$KB" \
   "Independent Review Gateway"
 require_text "readme review default" "$README" \
   "default-unavailable owner-loopback independent-review gateway"
+require_text "readme current review boundary" "$README" \
+  "default-unavailable independent-review gateway"
+forbid_text "readme stale review non-claim" "$README" \
+  "review-provider invocation,"
+forbid_text "release checklist stale review non-claim" "$CHECKLIST" \
+  "Do not describe autonomous dispatch"
+forbid_text "feature design stale schema-v5 opening" "$FEATURE_CONVEYOR_DESIGN" \
+  "repository kernel is implemented as master schema v5"
+require_text "review protocol contract present" "$PROTOCOL_REVIEW_GATEWAY_E2E" \
+  "provider_output_is_strict_and_cannot_waive_blocking_or_uncovered_requirements"
+require_text "review provider default unavailable" "$MASTER_REVIEW_PROVIDER" \
+  "missing structured-output support, an undersized context, and tokenization"
+require_text "review provider capability boundary coverage" "$MASTER_REVIEW_PROVIDER_E2E" \
+  "mechanical_admission_enforces_every_capability_and_token_boundary"
+require_text "review provider post-response cancellation coverage" "$MASTER_REVIEW_PROVIDER_E2E" \
+  "post_response_cancellation_suppresses_an_otherwise_valid_output"
 require_text "readme current general worker" "$README" \
   "packet-bound deterministic writes/deletes"
 require_text "knowledge base current protocol" "$KB" \
