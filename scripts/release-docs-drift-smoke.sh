@@ -514,6 +514,10 @@ require_text "build docs result-artifact live boundary" "$BUILD_DOCS" \
   "terminal success proves the protocol-v5 result"
 require_text "build docs retained-attempt live boundary" "$BUILD_DOCS" \
   "private retained-state shape"
+require_text "build docs live artifact-integration boundary" "$BUILD_DOCS" \
+  "functional native two-device artifact-integration"
+require_text "build docs live frozen-candidate proof" "$BUILD_DOCS" \
+  "candidate commit and tree are detached, clean, fsck-valid, and remote-free"
 require_text "build docs evidence boundary" "$BUILD_DOCS" "## Release Evidence Boundary"
 require_text "build docs windows gate" "$BUILD_DOCS" "windows-protocol.yml"
 require_text "build docs Windows coding dispatch E2E command" "$BUILD_DOCS" \
@@ -566,6 +570,10 @@ require_text "knowledge base local-coding projection boundary" "$KB" \
   "must not request the MacBridge-only Feature"
 require_text "knowledge base contained-coding result" "$KB" \
   'contained_coding_completed'
+require_text "knowledge base live artifact-integration proof" "$KB" \
+  'The schema-v14 `--run-local-coding` live lane is now an integration proof'
+require_text "knowledge base live receipt FIFO rule" "$KB" \
+  "A pipe or FIFO is acceptable operator coordination"
 require_text "safety contained-coding host boundary" "$SAFETY_RULES" \
   "does not claim a host sandbox or host-level egress control"
 require_text "release checklist truthful tests-not-run evidence" "$CHECKLIST" \

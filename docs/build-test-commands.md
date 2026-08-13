@@ -246,7 +246,11 @@ owner controller. It binds a disposable repository snapshot to the exact
 feature, worker registration, queue/lifecycle/pause revisions, task, step,
 attempt, and work packet. A terminal success proves the protocol-v5 result was
 accepted only after its exact schema-v13 artifact admission. The lane then
-proves the private retained-state shape: one `.sealed` workspace plus a
+invokes the owner-loopback schema-v14 integration action, verifies the frozen
+candidate commit and tree are detached, clean, fsck-valid, and remote-free,
+proves an exact integration retry is idempotent, and confirms the registered
+source checkout remains clean. It also proves the private retained-state shape:
+one `.sealed` workspace plus a
 filename-matched `.retention.json` recovery record after success. The live lane
 does not parse that private record or claim its semantic bindings. The
 disposable harness then removes only that validated shape from its harness-owned temporary root; native relay
@@ -254,9 +258,9 @@ tests separately prove product restart recovery, exact cancellation, expiry,
 tamper/orphan rejection, and cleanup. The lane finally proves owner
 cancellation, safe abandonment, empty queue/lease/attempt and Windows transfer
 state, revocation of all temporary grants, and removal of the marker-bound
-disposable checkout. It is functional native two-device evidence, not artifact
-application, integration, Developer ID distribution, notarization, or
-clean-profile release evidence.
+disposable checkout. It is functional native two-device artifact-integration
+evidence, not test-gate, review, publication, registered-source mutation,
+Developer ID distribution, notarization, or clean-profile release evidence.
 
 ## Release Evidence Boundary
 

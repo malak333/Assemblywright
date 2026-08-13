@@ -954,3 +954,9 @@ an old one.
   SQLite commit, rejects alternate object stores and component-wise
   file/directory collisions, and keeps its singleton reservation alive when an
   HTTP client disconnects.
+- The schema-v14 `--run-local-coding` live lane is now an integration proof, not
+  merely an artifact-admission proof. Before owner cancellation and safe
+  abandonment, the Windows-local controller freezes the exact candidate,
+  verifies its detached/clean/no-remote/fsck shape and exact-retry idempotence,
+  and confirms the registered source checkout is unchanged. Test execution,
+  review, publication, and registered-source mutation remain later boundaries.
