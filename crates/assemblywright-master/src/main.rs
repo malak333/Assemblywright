@@ -415,9 +415,9 @@ impl ValidationRuntime {
             if !toolchain.exists() || !cache.exists() {
                 bail!("validation runner provisioning is incomplete");
             }
-            return ValidationToolchainConfig::resolve(&toolchain, &cache)
+            ValidationToolchainConfig::resolve(&toolchain, &cache)
                 .map(Self::Ready)
-                .map_err(|_| anyhow::anyhow!("validation runner provisioning is invalid"));
+                .map_err(|_| anyhow::anyhow!("validation runner provisioning is invalid"))
         }
         #[cfg(not(windows))]
         {

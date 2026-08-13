@@ -291,9 +291,11 @@ fn fixture_timeout_spawns_child_tree_that_must_be_killed() {
         },
     )
     .expect("record descendant spawn result");
-    let child = child.expect("spawn descendant");
+    let mut child = child.expect("spawn descendant");
     std::fs::write("descendant.pid", child.id().to_string()).expect("record descendant pid");
     std::thread::sleep(Duration::from_secs(60));
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 #[test]

@@ -982,7 +982,7 @@ mod platform {
         command: FeatureConveyorValidationCommandId,
     ) -> Result<Vec<u16>, ValidationContainmentError> {
         let arguments = validation_command_arguments(command)?;
-        Ok(wide(&format!("\"{}\" {arguments}", executable.display())))
+        Ok(wide(format!("\"{}\" {arguments}", executable.display())))
     }
 
     fn validation_environment(
@@ -1441,7 +1441,7 @@ mod platform {
                 "fixture_zero_capability_appcontainer_has_no_network"
             }
         };
-        wide(&format!(
+        wide(format!(
             "\"{}\" --exact {test} --ignored --nocapture",
             executable.display()
         ))
@@ -1517,14 +1517,14 @@ mod platform {
     }
 
     fn pipe() -> Result<(OwnedHandle, OwnedHandle), ValidationContainmentError> {
-        let mut attributes = SECURITY_ATTRIBUTES {
+        let attributes = SECURITY_ATTRIBUTES {
             nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
             lpSecurityDescriptor: null_mut(),
             bInheritHandle: 1,
         };
         let mut read: HANDLE = null_mut();
         let mut write: HANDLE = null_mut();
-        if unsafe { CreatePipe(&mut read, &mut write, &mut attributes, 0) } == 0 {
+        if unsafe { CreatePipe(&mut read, &mut write, &attributes, 0) } == 0 {
             return Err(ValidationContainmentError::Failed);
         }
         let read = OwnedHandle::new(read)?;
@@ -1719,7 +1719,7 @@ mod platform {
                 }
             }
             if !self.sid.is_null() {
-                if unsafe { FreeSid(self.sid.cast()) } != null_mut() {
+                if !unsafe { FreeSid(self.sid.cast()) }.is_null() {
                     failed = true;
                 }
                 self.sid = null_mut();

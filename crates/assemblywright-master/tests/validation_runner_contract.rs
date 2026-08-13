@@ -375,7 +375,7 @@ fn active_cancellation_terminates_and_reaps_the_contained_job_tree() {
 #[test]
 #[ignore = "contained child fixture"]
 fn fixture_timeout_spawns_child_tree_that_must_be_killed() {
-    let child = std::process::Command::new(std::env::current_exe().unwrap())
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
             "fixture_timeout_descendant_never_finishes",
@@ -386,6 +386,8 @@ fn fixture_timeout_spawns_child_tree_that_must_be_killed() {
         .unwrap();
     fs::write("descendant-pid.txt", child.id().to_string()).unwrap();
     std::thread::sleep(Duration::from_secs(60));
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 #[cfg(windows)]
