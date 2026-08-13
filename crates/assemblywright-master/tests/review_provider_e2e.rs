@@ -265,7 +265,9 @@ fn configured_adapter_uses_a_fresh_cleared_environment_process_per_call() {
 fn configured_windows_adapter_gates_spawn_inside_job_and_locks_verified_image() {
     use std::process::Command;
     use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
-    use windows_sys::Win32::System::Threading::{OpenProcess, WaitForSingleObject, SYNCHRONIZE};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+    };
 
     let (packet, request) = packet_and_request();
     let output = FeatureConveyorReviewProviderOutput {
@@ -353,7 +355,7 @@ fn main() {{
         .unwrap()
         .parse()
         .unwrap();
-    let process = unsafe { OpenProcess(SYNCHRONIZE, 0, descendant) };
+    let process = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, descendant) };
     if !process.is_null() {
         assert_eq!(unsafe { WaitForSingleObject(process, 0) }, WAIT_OBJECT_0);
         unsafe { CloseHandle(process) };
