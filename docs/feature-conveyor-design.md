@@ -8,7 +8,7 @@ Scope: Approved target design plus the bounded repository-kernel implementation
 status below. This document does not claim autonomous activation, live-device
 proof, or production readiness.
 
-Implementation status: the default-inert protocol-v5/schema-v16 Windows
+Implementation status: the default-inert protocol-v5/schema-v17 Windows
 `assemblywright-master` kernel is implemented through the independent-review
 gateway. The detailed implemented boundary is summarized under
 `Implementation Boundary` below. It retains immutable approved specification
@@ -45,8 +45,9 @@ read-only queue/guidance section and never presents `next_owner_action` as a
 button. Neither observation route grants enqueue, execution, review,
 repository, Git, publication, audit-event, or activation authority. The
 separate schema-v16 independent-review gateway is implemented and defaults
-unavailable until one fixed adapter is provisioned; it grants no publication
-authority. No automatic dispatcher, publication coordinator, registered-
+unavailable until one fixed adapter is provisioned. Schema v17 implements the
+durable owner-loopback Publication Coordinator and controlled bare-Git proof,
+while its credential-owning GitHub adapter remains default-unavailable. No automatic dispatcher, registered-
 source mutation, Mac control UI, or autonomous activation is implemented. The
 remainder of this document beyond the explicit implementation boundary is
 still target design.
@@ -450,7 +451,7 @@ canonical repository, master database, canonical memory, credentials, or
 unrelated files. General network access is disabled; only a narrowly controlled
 local-model connection is allowed.
 
-The implemented protocol-v5/schema-v16 kernel retains the schema-v14 worker and
+The implemented protocol-v5/schema-v17 kernel retains the schema-v14 worker and
 integration boundary and accepts one immutable
 snapshot-bound general coding packet for one exact registered worker. After the
 exact lease, a separate default-off route streams a bounded authenticated
@@ -549,9 +550,22 @@ quarantines the feature without automatic retry.
 
 #### Publication Coordinator
 
-The coordinator alone owns GitHub credentials and external publication. It
-creates durable exact-action intents for branch push, pull-request mutation,
-merge, and remote reconciliation. Workers and reviewers cannot publish.
+The coordinator is the sole boundary that may later own GitHub credentials and
+external publication. Schema v17 creates immutable exact-action intents before
+branch push, pull-request create/update, required-check observation, reviewed-
+head verification, merge, remote-main reconciliation, and the fixed post-merge
+gate. Its request carries only path-free authority bindings; adapter evidence is
+internal and never caller supplied. Every stage binds exact remote base,
+reviewed head, PR identity, complete named-check digest/pass state, branch-
+protection/no-bypass state, merge strategy/resulting main, and fixed post-merge
+gate identity/result. Adapter execution has a bounded deadline and must poll
+current authority/cancellation around external work. The production adapter is unavailable by
+default. Ambiguity, cancellation, pause, drift, or restart after intent
+creation quarantines without automatic retry. Workers and reviewers cannot
+publish, and branch-protection bypass is never authorized.
+A durable merge intent means merge is possible for later abandonment, including
+quarantine directly from `publishing`; verified healthy-main reconciliation is
+then mandatory and `merged:false` is rejected.
 
 ### Mac App
 

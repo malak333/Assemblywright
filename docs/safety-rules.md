@@ -156,7 +156,7 @@ release requirements, not optional UX guidance.
   a simultaneous or late result is suppressed. This lane grants no tool, file,
   repository, credential, network, Codex, Git, publication, or unattended
   authority.
-- The Windows `assemblywright-master` schema-v16 database retains the schema-v5
+- The Windows `assemblywright-master` schema-v17 database retains the schema-v5
   Durable Feature Conveyor kernel and is
   default-inert. The owner-token-authenticated loopback
   `GET /v1/feature-conveyor/status` and the dedicated enrolled-device
@@ -492,6 +492,24 @@ release requirements, not optional UX guidance.
   the active lease; only exact approval may atomically record the immutable
   decision and advance `reviewing -> publishing`. No review call grants worker,
   repository-write, GitHub, credential, publication, or queue-advance authority.
+- Schema v17 publication is owner-token loopback-only and absent from enrolled-
+  device mTLS. Its path-free request binds the exact approved decision,
+  candidate, specification, evidence, provider/model, grants, queue, Emergency
+  Pause, remote base, and branch policy; callers supply no command, path,
+  credential, or adapter output. Persist an immutable intent before every
+  possible external action. Stage evidence must exactly bind remote base,
+  reviewed candidate/head, PR identity, complete required checks, enforced
+  branch protection with no bypass, merge strategy/resulting main, and the
+  fixed post-merge gate. The adapter must poll a bounded deadline plus current-
+  authority/cancellation control before, during, and after effectful work.
+  Missing or ambiguous evidence, cancellation,
+  pause, drift, or restart after intent creation must quarantine without retry.
+  Never bypass branch protection. Only exact merge, remote-main reconciliation,
+  and the fixed post-merge gate may atomically release the lease and advance the
+  queue. Default-unavailable transport is not live GitHub proof.
+- A durable merge intent is effect-possible evidence for abandonment even when
+  quarantine originated in `publishing`. Owner resolution must require exact
+  healthy-main reconciliation; `merged:false` cannot release that lease.
 - Owner resolution is available only through the owner-token-authenticated
   loopback `cancel-active-feature` and `abandon-and-advance` actions. Both must
   compare-and-set the exact feature, lifecycle, queue, and Emergency Pause

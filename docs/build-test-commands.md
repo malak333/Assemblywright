@@ -97,10 +97,12 @@ cargo test -p assemblywright-master --test artifact_integration_e2e -- --nocaptu
 cargo test -p assemblywright-master --test master_process_e2e artifact_integration -- --nocapture
 cargo test -p assemblywright-protocol --test validation_gate_contract -- --nocapture
 cargo test -p assemblywright-protocol --test review_gateway_contract -- --nocapture
+cargo test -p assemblywright-protocol --test publication_coordinator_contract -- --nocapture
 cargo test -p assemblywright-master --test feature_conveyor_kernel artifact_integration_and_validation_gate_freeze_candidate_advance_and_reject_drift -- --nocapture
 cargo test -p assemblywright-master --test feature_conveyor_kernel validation_gate -- --nocapture
 cargo test -p assemblywright-master --test feature_conveyor_kernel review_ -- --nocapture
 cargo test -p assemblywright-master --test review_provider_e2e -- --nocapture
+cargo test -p assemblywright-master --test feature_conveyor_kernel publication_ -- --nocapture
 cargo test -p assemblywright-master --test master_process_e2e artifact_integration_routes_are_owner_loopback_only_strict_and_redacted -- --nocapture
 cargo test -p assemblywright-agent --test local_coding_admission
 cargo test -p assemblywright-agent snapshot::tests
@@ -138,6 +140,19 @@ idempotency; and owner-loopback/remote-route separation. They do not prove a
 live selected provider, provider competence, Windows service deployment, or
 publication. Windows native proof must additionally cover the verified image-
 handle lock, gate-before-provider-spawn Job assignment, and descendant reaping.
+
+The schema-v17 publication tests prove strict path-free admission, exact
+approval/candidate/spec/evidence/provider/grant/queue/pause/remote-base/branch-
+policy binding, immutable seven-action intent ordering, completed idempotence,
+stage-specific self-bound remote/PR/check/protection/merge/gate evidence,
+in-flight cancellation and concurrent Emergency Pause dominance, pause and
+restart quarantine, merge-intent abandonment protection, exact remote-main
+equality, fixed post-merge gate,
+and atomic success/lease/queue advancement. A native controlled bare-Git remote
+proves process and Git-ref sequencing only. Production remains unavailable
+before intent without a fixed credential-owning adapter; no live GitHub API,
+credential custody, required hosted checks, branch protection, or merge policy
+is claimed.
 
 On the owner-controlled Windows validation host, the connected containment
 runner and its hostile fixture boundary have native coverage:

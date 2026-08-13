@@ -13,11 +13,12 @@ This repository is foundation work. The durable contracts, the master kernel,
 the enrollment and mTLS identity path, the Windows service lifecycle, the Mac
 bridge and worker agent, and the release gate are implemented. Autonomous
 orchestration, registered-source-checkout mutation, production review-provider
-provisioning and reviewer-quality proof, GitHub publication coordination, and
+provisioning and reviewer-quality proof, live GitHub publication-adapter activation, and
 the queue control UI are still design. The Windows master implements bounded
-general coding, isolated artifact integration, deterministic validation, and a
-default-unavailable independent-review gateway as explicit owner actions; none
-of them mutates the registered source checkout or activates publication.
+general coding, isolated artifact integration, deterministic validation, a
+default-unavailable independent-review gateway, and schema-v17 durable
+publication coordination as explicit owner actions. Publication transport is
+default-unavailable and no live GitHub authority is activated.
 
 ## What Is Implemented
 
@@ -27,7 +28,7 @@ advertisements; handshake, job, and result envelopes; strict bound-before-decode
 JSON entry points; nil-identity rejection; fixed-schema Feature Conveyor owner-
 control request/receipt contracts; and a golden compatibility fixture.
 
-**`assemblywright-master`** — a portable schema-v16 SQLite database retaining
+**`assemblywright-master`** — a portable schema-v17 SQLite database retaining
 the schema-v4 device lifecycle, schema-v5 Feature Conveyor, schema-v6
 capability rebind evidence, schema-v7 Emergency Pause revision, and schema-v8
 single owner-control bridge designation, schema-v9 immutable repository
@@ -35,7 +36,8 @@ snapshot-claim evidence, schema-v10 metadata-only coding-dispatch evidence, and
 schema-v11 immutable owner-resolution origin evidence, schema-v13 immutable
 result-artifact metadata, schema-v14 immutable artifact-integration and
 candidate-commit evidence, schema-v15 immutable validation-gate evidence, and
-schema-v16 immutable independent-review calls, outcomes, and decisions
+schema-v16 immutable independent-review calls, outcomes, and decisions, plus
+schema-v17 immutable publication intents, observations, and healthy-main completion
 with backup-first fail-closed legacy migration,
 plus a headless single-owner
 executable.

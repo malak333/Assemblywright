@@ -1035,11 +1035,30 @@ an old one.
   5-, or 15-minute backoff, consume no repair cycle, and are capped at three
   calls per candidate and twelve per feature. Rejection keeps the feature and
   lease in `reviewing`; only exact approval atomically advances
-  `reviewing -> publishing`. Publication orchestration remains unimplemented.
+  `reviewing -> publishing`.
   The master requires exact ordered coverage of identifiers from the approved
   manifest's required top-level `acceptance` array and evidence references drawn
   only from the packet. Interrupted calls, including post-response authority
   drift, terminalize immutably and quarantine without automatic retry.
+- The schema-v17 Publication Coordinator is an owner-token loopback-only,
+  path-free durable authority boundary absent from mTLS. It binds the approved
+  review decision, candidate/spec/evidence/provider/grants/queue/pause, remote
+  base, and branch policy; persists an intent before each of seven external
+  action classes; and accepts evidence only from a fixed internal adapter.
+  Stage evidence self-binds remote base/head, PR identity, complete named checks,
+  branch-protection/no-bypass state, merge strategy/resulting main, and fixed
+  post-merge gate. Adapter calls receive a deadline and pollable current-
+  authority/cancellation control; late results are suppressed and ambiguity
+  quarantines.
+  Merge advances only to `verifying_main`; exact remote-main equality plus the
+  fixed `release-local` post-merge gate atomically marks success, releases the
+  lease, and advances the queue. Ambiguity or restart quarantines. The
+  production GitHub adapter is default-unavailable, so native bare-Git E2E is
+  not live credential, hosted-check, merge-API, or branch-protection evidence.
+- A durable schema-v17 merge intent is sufficient to make merge possible for
+  owner resolution. Even if quarantine origin is `publishing`, abandonment
+  requires merged healthy-main evidence and rejects `merged:false`. Pre-v17
+  resolution remains governed by its historical immutable transition origin.
 - A Rust integration test's `current_exe()` is the test harness, not Cargo's
   product binary. The Windows review-provider Job/launcher E2E must inject
   `CARGO_BIN_EXE_assemblywright-master` through the Windows debug-only test

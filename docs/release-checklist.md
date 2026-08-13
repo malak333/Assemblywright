@@ -191,6 +191,20 @@ Before starting a release pass, confirm the claim you intend to make.
   idempotent decisions, rejection retention, and
   approval-only `reviewing -> publishing`. Keep live selected-provider quality,
   service deployment, GitHub publication, and owner-recorded proof separate.
+- Confirm schema-v17 publication remains owner-token loopback-only and absent
+  from enrolled-device mTLS. Prove strict path-free bindings, master-derived
+  branch policy, immutable pre-effect intents, exact action order, idempotent
+  completed retry, strict stage evidence for remote base/head, PR, complete
+  checks, branch protection/no-bypass, merge strategy/result, and post-merge
+  gate, plus bounded in-flight cancellation/deadline polling,
+  pause/cancellation/drift/restart quarantine, remote-main
+  equality, fixed post-merge gate, and atomic lease release plus queue advance.
+  Prove default-unavailable production transport creates no intent. Keep live
+  GitHub credentials, PR/check/merge APIs, branch protection, and reconciliation
+  as separate owner-recorded evidence; a controlled bare remote is not proof of
+  those hosted boundaries.
+  Prove a durable merge intent prevents `merged:false` abandonment from a
+  `publishing`-origin quarantine until healthy-main reconciliation is recorded.
 - Confirm the owner-token loopback-only `cancel-active-feature` and
   `abandon-and-advance` routes are absent from enrolled-device mTLS. Prove
   strict duplicate/unknown/oversized-frame denial; exact feature, lifecycle,

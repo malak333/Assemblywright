@@ -1,28 +1,31 @@
 use assemblywright_master::{
-    ApprovedFeatureSpecification, ArtifactIntegrationAuthorization, ArtifactIntegrationStore,
-    DeviceRegistration, FeatureAbandonmentEvidence, FeatureConveyorGuidanceReason,
-    FeatureConveyorGuidanceState, FeatureConveyorNextOwnerAction, FeatureGrantRevisions,
-    FeatureLifecycleStatus, FeatureSnapshotClaimPlan, FeatureTransitionEvidence, MasterError,
-    MasterKernel, MasterProcess, RemoteWorkContract, RepositoryGrantKind, RepositoryGrantRevision,
-    RepositorySnapshotEvidence, ReviewGatewayAuthorization, ReviewTransportFailure,
-    ValidationCommandEvidence, ValidationGateAuthorization, ValidationGateEvidence,
-    VerifiedFeatureSuccess, MASTER_SCHEMA_VERSION, MAX_CONVEYOR_NONTERMINAL_FEATURES,
-    MAX_CONVEYOR_STATUS_FEATURES,
+    publication_branch_policy_sha256, ApprovedFeatureSpecification,
+    ArtifactIntegrationAuthorization, ArtifactIntegrationStore, DeviceRegistration,
+    FeatureAbandonmentEvidence, FeatureConveyorGuidanceReason, FeatureConveyorGuidanceState,
+    FeatureConveyorNextOwnerAction, FeatureGrantRevisions, FeatureLifecycleStatus,
+    FeatureSnapshotClaimPlan, FeatureTransitionEvidence, MasterError, MasterKernel, MasterProcess,
+    PublicationActionEvidence, PublicationActionKind, PublicationAuthorization, RemoteWorkContract,
+    RepositoryGrantKind, RepositoryGrantRevision, RepositorySnapshotEvidence,
+    ReviewGatewayAuthorization, ReviewTransportFailure, ValidationCommandEvidence,
+    ValidationGateAuthorization, ValidationGateEvidence, VerifiedFeatureSuccess,
+    MASTER_SCHEMA_VERSION, MAX_CONVEYOR_NONTERMINAL_FEATURES, MAX_CONVEYOR_STATUS_FEATURES,
 };
 use assemblywright_protocol::{
     build_local_coding_fixture_patch_artifact, local_coding_admission_sha256, CapabilityDescriptor,
     DeviceId, DeviceRole, FeatureConveyorArtifactIntegrationRequest,
     FeatureConveyorCodingDispatchRequest, FeatureConveyorCodingWorkPacketMetadata,
     FeatureConveyorGrantRevisions, FeatureConveyorKnowledgeBaseDetermination,
-    FeatureConveyorReviewCoverageStatus, FeatureConveyorReviewDecision,
-    FeatureConveyorReviewFinding, FeatureConveyorReviewGatewayRequest, FeatureConveyorReviewPacket,
+    FeatureConveyorPublicationRequest, FeatureConveyorReviewCoverageStatus,
+    FeatureConveyorReviewDecision, FeatureConveyorReviewFinding,
+    FeatureConveyorReviewGatewayRequest, FeatureConveyorReviewPacket,
     FeatureConveyorReviewProviderOutput, FeatureConveyorReviewRequirementCoverage,
     FeatureConveyorValidationCommandId, FeatureConveyorValidationGateRequest, HandshakeRequest,
     JobEnvelope, JobResultEnvelope, JobResultStatus, LocalCodingJobResult,
     LocalCodingResultArtifact, LocalCodingResultArtifactAdmission, LocalCodingSnapshotChunkRequest,
-    FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, FEATURE_CONVEYOR_REVIEW_GATEWAY_SCHEMA_VERSION,
-    LOCAL_CODING_COMPLETED_STATUS, LOCAL_CODING_FIXTURE_CONTENT, LOCAL_CODING_FIXTURE_TEST_STATUS,
-    PROTOCOL_VERSION,
+    FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+    FEATURE_CONVEYOR_PUBLICATION_COORDINATOR_SCHEMA_VERSION,
+    FEATURE_CONVEYOR_REVIEW_GATEWAY_SCHEMA_VERSION, LOCAL_CODING_COMPLETED_STATUS,
+    LOCAL_CODING_FIXTURE_CONTENT, LOCAL_CODING_FIXTURE_TEST_STATUS, PROTOCOL_VERSION,
 };
 use rusqlite::{params, Connection};
 use serde::Serialize;
@@ -30,6 +33,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs;
+use std::process::Command;
 use tempfile::tempdir;
 use uuid::Uuid;
 
@@ -735,6 +739,719 @@ fn review_output(
     }
 }
 
+fn publishing_fixture() -> (
+    tempfile::TempDir,
+    MasterKernel,
+    FeatureConveyorPublicationRequest,
+) {
+    let (directory, mut kernel, review_request, packet) = reviewing_fixture();
+    let plan = match kernel
+        .begin_review_gateway(&review_request, &packet, 23)
+        .unwrap()
+    {
+        ReviewGatewayAuthorization::Planned(plan) => *plan,
+        other => panic!("unexpected review authorization: {other:?}"),
+    };
+    let receipt = kernel
+        .finalize_review_decision(
+            &plan,
+            &packet,
+            &review_output(&packet, FeatureConveyorReviewDecision::Approved),
+            24,
+        )
+        .unwrap();
+    let repository_id = {
+        let connection = Connection::open(directory.path().join("master.sqlite3")).unwrap();
+        let value: String = connection
+            .query_row(
+                "SELECT repository_id FROM feature_specification_revisions WHERE feature_id=?1 AND revision=1",
+                [receipt.feature_id.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        Uuid::parse_str(&value).unwrap()
+    };
+    let publication = FeatureConveyorPublicationRequest {
+        schema_version: FEATURE_CONVEYOR_PUBLICATION_COORDINATOR_SCHEMA_VERSION,
+        publication_id: Uuid::new_v4(),
+        feature_id: receipt.feature_id,
+        specification_revision: receipt.specification_revision,
+        expected_lifecycle_revision: receipt.lifecycle_revision,
+        feature_lease_id: receipt.feature_lease_id,
+        integration_id: receipt.integration_id,
+        validation_id: receipt.validation_id,
+        review_call_id: receipt.review_call_id,
+        candidate_commit: receipt.candidate_commit,
+        candidate_tree: review_request.candidate_tree,
+        candidate_diff_sha256: receipt.candidate_diff_sha256,
+        evidence_manifest_sha256: receipt.evidence_manifest_sha256,
+        review_decision_sha256: receipt.decision_sha256,
+        provider_id: receipt.provider_id,
+        model_id: receipt.model_id,
+        remote_base_commit: review_request.base_commit,
+        branch_policy_sha256: publication_branch_policy_sha256(
+            repository_id,
+            receipt.feature_id,
+            "main",
+            &["release-local".to_string()],
+            "merge",
+            "release-local",
+        )
+        .unwrap(),
+        expected_queue_revision: receipt.queue_revision,
+        expected_emergency_pause_revision: receipt.emergency_pause_revision,
+        grants: receipt.grants,
+    };
+    (directory, kernel, publication)
+}
+
+fn publication_evidence(
+    action: PublicationActionKind,
+    plan: &assemblywright_master::PublicationExecutionPlan,
+    merge: &str,
+) -> PublicationActionEvidence {
+    let checks = !matches!(
+        action,
+        PublicationActionKind::PushBranch | PublicationActionKind::UpsertPullRequest
+    );
+    let merged = matches!(
+        action,
+        PublicationActionKind::MergePullRequest
+            | PublicationActionKind::ReconcileRemoteMain
+            | PublicationActionKind::RunPostMergeGate
+    );
+    let pull_request_number =
+        match action {
+            PublicationActionKind::PushBranch | PublicationActionKind::VerifyPullRequestHead => {
+                (action == PublicationActionKind::VerifyPullRequestHead).then_some(41)
+            }
+            PublicationActionKind::UpsertPullRequest
+            | PublicationActionKind::ObserveRequiredChecks => Some(41),
+            PublicationActionKind::MergePullRequest => Some(41),
+            PublicationActionKind::ReconcileRemoteMain
+            | PublicationActionKind::RunPostMergeGate => None,
+        };
+    PublicationActionEvidence {
+        schema_version: FEATURE_CONVEYOR_PUBLICATION_COORDINATOR_SCHEMA_VERSION,
+        publication_id: plan.request.publication_id,
+        action,
+        remote_base_commit: plan.request.remote_base_commit.clone(),
+        candidate_commit: plan.request.candidate_commit.clone(),
+        feature_branch: plan.feature_branch.clone(),
+        base_branch: plan.base_branch.clone(),
+        pull_request_number,
+        observed_head_commit: if matches!(
+            action,
+            PublicationActionKind::ReconcileRemoteMain | PublicationActionKind::RunPostMergeGate
+        ) {
+            merge.to_string()
+        } else {
+            plan.request.candidate_commit.clone()
+        },
+        required_checks_sha256: checks.then(|| {
+            assemblywright_protocol::feature_conveyor_publication_required_checks_sha256(
+                &plan.required_checks,
+            )
+            .unwrap()
+        }),
+        required_check_count: if checks {
+            u16::try_from(plan.required_checks.len()).unwrap()
+        } else {
+            0
+        },
+        required_checks_passed: checks,
+        branch_protection_enforced: true,
+        bypass_used: false,
+        merge_strategy: merged.then(|| plan.merge_strategy.clone()),
+        resulting_main_commit: merged.then(|| merge.to_string()),
+        post_merge_gate_id: (action == PublicationActionKind::RunPostMergeGate)
+            .then(|| plan.post_merge_gate.clone()),
+        post_merge_gate_passed: action == PublicationActionKind::RunPostMergeGate,
+        evidence_sha256: [0; 32],
+    }
+    .seal()
+    .unwrap()
+}
+
+#[test]
+fn publication_coordinator_is_exact_idempotent_and_advances_only_after_healthy_main() {
+    let (_directory, mut kernel, request) = publishing_fixture();
+    let plan = match kernel.prepare_publication(&request, 25).unwrap() {
+        PublicationAuthorization::Planned(plan) => *plan,
+        other => panic!("unexpected publication authorization: {other:?}"),
+    };
+    let mut drift = request.clone();
+    drift.branch_policy_sha256 = digest("drifted-policy");
+    assert!(matches!(
+        kernel.prepare_publication(&drift, 25),
+        Err(MasterError::PublicationCoordinatorUnavailable)
+    ));
+    kernel.begin_publication(&plan, 26).unwrap();
+    assert!(matches!(
+        kernel.prepare_publication(&request, 27),
+        Err(MasterError::PublicationEffectAmbiguous)
+    ));
+
+    let merge = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let mut final_receipt = None;
+    for (index, action) in PublicationActionKind::ORDERED.iter().enumerate() {
+        assert!(kernel
+            .publication_execution_is_current(&request, *action, 27 + index as u64)
+            .unwrap());
+        let result = kernel
+            .complete_publication_action(
+                &plan,
+                &publication_evidence(*action, &plan, merge),
+                27 + index as u64,
+            )
+            .unwrap();
+        if *action != PublicationActionKind::RunPostMergeGate {
+            assert!(result.is_none());
+        } else {
+            final_receipt = result;
+        }
+    }
+    let receipt = final_receipt.unwrap();
+    receipt.validate().unwrap();
+    assert_eq!(receipt.merge_commit, merge);
+    assert_eq!(receipt.remote_main_commit, merge);
+    assert_eq!(
+        kernel.feature_snapshot(request.feature_id).unwrap().status,
+        FeatureLifecycleStatus::Succeeded
+    );
+    assert!(matches!(
+        kernel.prepare_publication(&request, 40).unwrap(),
+        PublicationAuthorization::Existing(existing) if *existing == receipt
+    ));
+}
+
+#[test]
+fn publication_pause_cancellation_and_ambiguous_remote_evidence_fail_closed() {
+    let (_directory, mut kernel, request) = publishing_fixture();
+    let plan = match kernel.prepare_publication(&request, 25).unwrap() {
+        PublicationAuthorization::Planned(plan) => *plan,
+        _ => panic!(),
+    };
+    kernel.begin_publication(&plan, 26).unwrap();
+    let mut malformed = publication_evidence(
+        PublicationActionKind::PushBranch,
+        &plan,
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    );
+    malformed.observed_head_commit = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string();
+    assert!(kernel
+        .complete_publication_action(&plan, &malformed, 27)
+        .is_err());
+    kernel.set_emergency_paused_at(true, 28).unwrap();
+    assert!(!kernel
+        .publication_execution_is_current(&request, PublicationActionKind::PushBranch, 28)
+        .unwrap());
+    kernel
+        .quarantine_ambiguous_publication(&plan, PublicationActionKind::PushBranch, 29)
+        .unwrap();
+    let snapshot = kernel.feature_snapshot(request.feature_id).unwrap();
+    assert_eq!(snapshot.status, FeatureLifecycleStatus::Quarantined);
+    assert!(snapshot.effect_possible);
+    assert!(snapshot.active_lease_id.is_some());
+}
+
+#[test]
+fn publication_stage_evidence_rejects_remote_pr_checks_and_strategy_drift() {
+    let (_directory, mut kernel, request) = publishing_fixture();
+    let plan = match kernel.prepare_publication(&request, 25).unwrap() {
+        PublicationAuthorization::Planned(plan) => *plan,
+        _ => panic!(),
+    };
+    kernel.begin_publication(&plan, 26).unwrap();
+    let merge = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+    let mut remote_drift = publication_evidence(PublicationActionKind::PushBranch, &plan, merge);
+    remote_drift.remote_base_commit = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string();
+    remote_drift.evidence_sha256 = [0; 32];
+    let remote_drift = remote_drift.seal().unwrap();
+    assert!(matches!(
+        kernel.complete_publication_action(&plan, &remote_drift, 27),
+        Err(MasterError::PublicationCoordinatorUnavailable)
+    ));
+    kernel
+        .complete_publication_action(
+            &plan,
+            &publication_evidence(PublicationActionKind::PushBranch, &plan, merge),
+            28,
+        )
+        .unwrap();
+    kernel
+        .complete_publication_action(
+            &plan,
+            &publication_evidence(PublicationActionKind::UpsertPullRequest, &plan, merge),
+            29,
+        )
+        .unwrap();
+
+    let mut pr_drift =
+        publication_evidence(PublicationActionKind::ObserveRequiredChecks, &plan, merge);
+    pr_drift.pull_request_number = Some(99);
+    pr_drift.evidence_sha256 = [0; 32];
+    let pr_drift = pr_drift.seal().unwrap();
+    assert!(matches!(
+        kernel.complete_publication_action(&plan, &pr_drift, 30),
+        Err(MasterError::PublicationCoordinatorUnavailable)
+    ));
+    let mut checks_drift =
+        publication_evidence(PublicationActionKind::ObserveRequiredChecks, &plan, merge);
+    checks_drift.required_checks_sha256 = Some(digest("wrong-required-checks"));
+    checks_drift.evidence_sha256 = [0; 32];
+    let checks_drift = checks_drift.seal().unwrap();
+    assert!(matches!(
+        kernel.complete_publication_action(&plan, &checks_drift, 30),
+        Err(MasterError::PublicationCoordinatorUnavailable)
+    ));
+    kernel
+        .complete_publication_action(
+            &plan,
+            &publication_evidence(PublicationActionKind::ObserveRequiredChecks, &plan, merge),
+            31,
+        )
+        .unwrap();
+    kernel
+        .complete_publication_action(
+            &plan,
+            &publication_evidence(PublicationActionKind::VerifyPullRequestHead, &plan, merge),
+            32,
+        )
+        .unwrap();
+    let mut strategy_drift =
+        publication_evidence(PublicationActionKind::MergePullRequest, &plan, merge);
+    strategy_drift.merge_strategy = Some("squash".to_string());
+    strategy_drift.evidence_sha256 = [0; 32];
+    let strategy_drift = strategy_drift.seal().unwrap();
+    assert!(matches!(
+        kernel.complete_publication_action(&plan, &strategy_drift, 33),
+        Err(MasterError::PublicationCoordinatorUnavailable)
+    ));
+}
+
+#[test]
+fn publication_restart_with_unresolved_external_intent_quarantines_without_retry() {
+    let (directory, mut kernel, request) = publishing_fixture();
+    let plan = match kernel.prepare_publication(&request, 25).unwrap() {
+        PublicationAuthorization::Planned(plan) => *plan,
+        _ => panic!(),
+    };
+    kernel.begin_publication(&plan, 26).unwrap();
+    drop(kernel);
+
+    let restarted = MasterKernel::open(directory.path().join("master.sqlite3")).unwrap();
+    assert_eq!(restarted.feature_startup_quarantines(), 1);
+    let snapshot = restarted.feature_snapshot(request.feature_id).unwrap();
+    assert_eq!(snapshot.status, FeatureLifecycleStatus::Quarantined);
+    assert!(snapshot.effect_possible);
+    assert!(snapshot.active_lease_id.is_some());
+}
+
+#[test]
+fn publication_ambiguous_merge_intent_blocks_unhealthy_abandonment_from_publishing_origin() {
+    let (_directory, mut kernel, request) = publishing_fixture();
+    let plan = match kernel.prepare_publication(&request, 25).unwrap() {
+        PublicationAuthorization::Planned(plan) => *plan,
+        _ => panic!(),
+    };
+    kernel.begin_publication(&plan, 26).unwrap();
+    let merge = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    for (offset, action) in PublicationActionKind::ORDERED[..4].iter().enumerate() {
+        assert!(kernel
+            .complete_publication_action(
+                &plan,
+                &publication_evidence(*action, &plan, merge),
+                27 + offset as u64,
+            )
+            .unwrap()
+            .is_none());
+    }
+    assert!(kernel
+        .publication_execution_is_current(&request, PublicationActionKind::MergePullRequest, 31,)
+        .unwrap());
+    kernel
+        .quarantine_ambiguous_publication(&plan, PublicationActionKind::MergePullRequest, 32)
+        .unwrap();
+    let quarantined = kernel.feature_snapshot(request.feature_id).unwrap();
+    assert_eq!(quarantined.status, FeatureLifecycleStatus::Quarantined);
+    assert!(matches!(
+        kernel.abandon_and_advance(
+            request.feature_id,
+            quarantined.lifecycle_revision,
+            request.expected_queue_revision,
+            request.expected_emergency_pause_revision,
+            FeatureAbandonmentEvidence {
+                safe_reconciliation_sha256: digest("merge-ambiguity-safe"),
+                merged: false,
+                verified_healthy_main_sha256: None,
+            },
+            33,
+        ),
+        Err(MasterError::VerifiedHealthyMainRequired)
+    ));
+    let retained = kernel.feature_snapshot(request.feature_id).unwrap();
+    assert_eq!(retained.status, FeatureLifecycleStatus::Quarantined);
+    assert!(retained.active_lease_id.is_some());
+}
+
+struct MissingEvidenceAdapter;
+
+impl assemblywright_master::publication::PublicationAdapter for MissingEvidenceAdapter {
+    fn is_available(&self) -> bool {
+        true
+    }
+
+    fn execute(
+        &mut self,
+        _plan: &assemblywright_master::PublicationExecutionPlan,
+        _action: PublicationActionKind,
+        _control: &assemblywright_master::publication::PublicationExecutionControl,
+    ) -> Result<
+        PublicationActionEvidence,
+        assemblywright_master::publication::PublicationAdapterError,
+    > {
+        Err(assemblywright_master::publication::PublicationAdapterError::MissingEvidence)
+    }
+}
+
+struct UnavailablePublicationAdapter;
+
+impl assemblywright_master::publication::PublicationAdapter for UnavailablePublicationAdapter {
+    fn is_available(&self) -> bool {
+        false
+    }
+
+    fn execute(
+        &mut self,
+        _plan: &assemblywright_master::PublicationExecutionPlan,
+        _action: PublicationActionKind,
+        _control: &assemblywright_master::publication::PublicationExecutionControl,
+    ) -> Result<
+        PublicationActionEvidence,
+        assemblywright_master::publication::PublicationAdapterError,
+    > {
+        Err(assemblywright_master::publication::PublicationAdapterError::Unavailable)
+    }
+}
+
+fn publication_test_control() -> assemblywright_master::publication::PublicationExecutionControl {
+    assemblywright_master::publication::PublicationExecutionControl::new(
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        std::time::Instant::now() + assemblywright_master::publication::PUBLICATION_ACTION_DEADLINE,
+        std::sync::Arc::new(|| true),
+    )
+}
+
+struct SlowPollingPublicationAdapter {
+    started: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl assemblywright_master::publication::PublicationAdapter for SlowPollingPublicationAdapter {
+    fn is_available(&self) -> bool {
+        true
+    }
+
+    fn execute(
+        &mut self,
+        _plan: &assemblywright_master::PublicationExecutionPlan,
+        _action: PublicationActionKind,
+        control: &assemblywright_master::publication::PublicationExecutionControl,
+    ) -> Result<
+        PublicationActionEvidence,
+        assemblywright_master::publication::PublicationAdapterError,
+    > {
+        self.started
+            .store(true, std::sync::atomic::Ordering::Release);
+        loop {
+            control.poll()?;
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+}
+
+#[test]
+fn publication_missing_adapter_evidence_quarantines_after_durable_intent() {
+    let (_directory, mut kernel, request) = publishing_fixture();
+    assert!(matches!(
+        assemblywright_master::publication::run_publication(
+            &mut kernel,
+            &request,
+            &mut MissingEvidenceAdapter,
+            publication_test_control(),
+        ),
+        Err(MasterError::PublicationEffectAmbiguous)
+    ));
+    let snapshot = kernel.feature_snapshot(request.feature_id).unwrap();
+    assert_eq!(snapshot.status, FeatureLifecycleStatus::Quarantined);
+    assert!(snapshot.effect_possible);
+}
+
+#[test]
+fn publication_unavailable_adapter_creates_no_intent_or_effect_possible_state() {
+    let (_directory, mut kernel, request) = publishing_fixture();
+    assert!(matches!(
+        assemblywright_master::publication::run_publication(
+            &mut kernel,
+            &request,
+            &mut UnavailablePublicationAdapter,
+            publication_test_control(),
+        ),
+        Err(MasterError::PublicationCoordinatorUnavailable)
+    ));
+    let snapshot = kernel.feature_snapshot(request.feature_id).unwrap();
+    assert_eq!(snapshot.status, FeatureLifecycleStatus::Publishing);
+    assert!(!snapshot.effect_possible);
+    assert!(matches!(
+        kernel.prepare_publication(&request, 25).unwrap(),
+        PublicationAuthorization::Planned(_)
+    ));
+}
+
+#[test]
+fn publication_in_flight_cancellation_probe_suppresses_late_adapter_result() {
+    let (_directory, mut kernel, request) = publishing_fixture();
+    let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let started = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let signal_cancelled = cancelled.clone();
+    let signal_started = started.clone();
+    let signal = std::thread::spawn(move || {
+        while !signal_started.load(std::sync::atomic::Ordering::Acquire) {
+            std::thread::yield_now();
+        }
+        signal_cancelled.store(true, std::sync::atomic::Ordering::Release);
+    });
+    let control = assemblywright_master::publication::PublicationExecutionControl::new(
+        cancelled,
+        std::time::Instant::now() + std::time::Duration::from_secs(2),
+        std::sync::Arc::new(|| true),
+    );
+    assert!(matches!(
+        assemblywright_master::publication::run_publication(
+            &mut kernel,
+            &request,
+            &mut SlowPollingPublicationAdapter { started },
+            control,
+        ),
+        Err(MasterError::PublicationEffectAmbiguous)
+    ));
+    signal.join().unwrap();
+    let snapshot = kernel.feature_snapshot(request.feature_id).unwrap();
+    assert_eq!(snapshot.status, FeatureLifecycleStatus::Quarantined);
+    assert!(snapshot.effect_possible);
+}
+
+#[test]
+fn publication_concurrent_emergency_pause_probe_dominates_in_flight_adapter() {
+    let (directory, mut kernel, request) = publishing_fixture();
+    let database = directory.path().join("master.sqlite3");
+    let started = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let signal_started = started.clone();
+    let signal_database = database.clone();
+    let signal = std::thread::spawn(move || {
+        while !signal_started.load(std::sync::atomic::Ordering::Acquire) {
+            std::thread::yield_now();
+        }
+        Connection::open(signal_database)
+            .unwrap()
+            .execute_batch(
+                "BEGIN IMMEDIATE;
+                 UPDATE master_metadata SET integer_value=1 WHERE key='emergency_paused';
+                 UPDATE master_metadata SET integer_value=integer_value+1
+                   WHERE key='emergency_pause_revision';
+                 COMMIT;",
+            )
+            .unwrap();
+    });
+    let authority_database = database.clone();
+    let authority_current = std::sync::Arc::new(move || {
+        Connection::open(&authority_database)
+            .and_then(|connection| {
+                connection.query_row(
+                    "SELECT integer_value FROM master_metadata WHERE key='emergency_paused'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+            })
+            .is_ok_and(|paused| paused == 0)
+    });
+    let control = assemblywright_master::publication::PublicationExecutionControl::new(
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        std::time::Instant::now() + std::time::Duration::from_secs(2),
+        authority_current,
+    );
+    assert!(matches!(
+        assemblywright_master::publication::run_publication(
+            &mut kernel,
+            &request,
+            &mut SlowPollingPublicationAdapter { started },
+            control,
+        ),
+        Err(MasterError::PublicationEffectAmbiguous)
+    ));
+    signal.join().unwrap();
+    let snapshot = kernel.feature_snapshot(request.feature_id).unwrap();
+    assert_eq!(snapshot.status, FeatureLifecycleStatus::Quarantined);
+    assert!(snapshot.effect_possible);
+}
+
+struct ControlledBareGitAdapter {
+    candidate_path: std::path::PathBuf,
+    remote_path: std::path::PathBuf,
+}
+
+impl assemblywright_master::publication::PublicationAdapter for ControlledBareGitAdapter {
+    fn is_available(&self) -> bool {
+        true
+    }
+
+    fn execute(
+        &mut self,
+        plan: &assemblywright_master::PublicationExecutionPlan,
+        action: PublicationActionKind,
+        control: &assemblywright_master::publication::PublicationExecutionControl,
+    ) -> Result<
+        PublicationActionEvidence,
+        assemblywright_master::publication::PublicationAdapterError,
+    > {
+        control.poll()?;
+        let candidate = &plan.request.candidate_commit;
+        let run = |arguments: &[&str]| {
+            Command::new("git")
+                .args(arguments)
+                .status()
+                .ok()
+                .is_some_and(|status| status.success())
+        };
+        let remote = self.remote_path.to_string_lossy().to_string();
+        let candidate_path = self.candidate_path.to_string_lossy().to_string();
+        match action {
+            PublicationActionKind::PushBranch => {
+                let refspec = format!("{candidate}:refs/heads/{}", plan.feature_branch);
+                if !run(&["-C", &candidate_path, "push", &remote, &refspec]) {
+                    return Err(
+                        assemblywright_master::publication::PublicationAdapterError::AmbiguousEffect,
+                    );
+                }
+            }
+            PublicationActionKind::UpsertPullRequest
+            | PublicationActionKind::ObserveRequiredChecks
+            | PublicationActionKind::VerifyPullRequestHead => {}
+            PublicationActionKind::MergePullRequest => {
+                if !run(&[
+                    "--git-dir",
+                    &remote,
+                    "update-ref",
+                    "refs/heads/main",
+                    candidate,
+                    &plan.request.remote_base_commit,
+                ]) {
+                    return Err(
+                        assemblywright_master::publication::PublicationAdapterError::AmbiguousEffect,
+                    );
+                }
+            }
+            PublicationActionKind::ReconcileRemoteMain
+            | PublicationActionKind::RunPostMergeGate => {}
+        }
+        let observed = if action == PublicationActionKind::PushBranch
+            || action == PublicationActionKind::UpsertPullRequest
+            || action == PublicationActionKind::ObserveRequiredChecks
+            || action == PublicationActionKind::VerifyPullRequestHead
+            || action == PublicationActionKind::MergePullRequest
+        {
+            candidate.clone()
+        } else {
+            let output = Command::new("git")
+                .args(["--git-dir", &remote, "rev-parse", "refs/heads/main"])
+                .output()
+                .map_err(|_| {
+                    assemblywright_master::publication::PublicationAdapterError::MissingEvidence
+                })?;
+            String::from_utf8(output.stdout)
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| output.status.success() && value.len() == 40)
+                .ok_or(
+                    assemblywright_master::publication::PublicationAdapterError::MissingEvidence,
+                )?
+        };
+        control.poll()?;
+        let mut evidence = publication_evidence(action, plan, candidate);
+        evidence.observed_head_commit = observed;
+        evidence.pull_request_number = matches!(
+            action,
+            PublicationActionKind::UpsertPullRequest
+                | PublicationActionKind::ObserveRequiredChecks
+                | PublicationActionKind::VerifyPullRequestHead
+                | PublicationActionKind::MergePullRequest
+        )
+        .then_some(1);
+        evidence.evidence_sha256 = [0; 32];
+        evidence.seal().map_err(|_| {
+            assemblywright_master::publication::PublicationAdapterError::MissingEvidence
+        })
+    }
+}
+
+#[test]
+fn publication_controlled_bare_git_remote_native_e2e() {
+    let (directory, mut kernel, request) = publishing_fixture();
+    let remote_path = directory.path().join("controlled-remote.git");
+    assert!(Command::new("git")
+        .args(["init", "--bare", remote_path.to_str().unwrap()])
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("git")
+        .args([
+            "--git-dir",
+            remote_path.to_str().unwrap(),
+            "config",
+            "receive.shallowUpdate",
+            "true",
+        ])
+        .status()
+        .unwrap()
+        .success());
+    let candidate_path = directory
+        .path()
+        .join("feature-conveyor-candidates")
+        .join("candidates")
+        .join(request.integration_id.to_string());
+    let remote = remote_path.to_string_lossy().to_string();
+    let base_refspec = format!("{}:refs/heads/main", request.remote_base_commit);
+    assert!(Command::new("git")
+        .args([
+            "-C",
+            candidate_path.to_str().unwrap(),
+            "push",
+            &remote,
+            &base_refspec,
+        ])
+        .status()
+        .unwrap()
+        .success());
+    let mut adapter = ControlledBareGitAdapter {
+        candidate_path,
+        remote_path,
+    };
+    let receipt = assemblywright_master::publication::run_publication(
+        &mut kernel,
+        &request,
+        &mut adapter,
+        publication_test_control(),
+    )
+    .unwrap();
+    assert_eq!(receipt.merge_commit, request.candidate_commit);
+    assert_eq!(receipt.remote_main_commit, request.candidate_commit);
+    assert_eq!(
+        kernel.feature_snapshot(request.feature_id).unwrap().status,
+        FeatureLifecycleStatus::Succeeded
+    );
+}
+
 #[test]
 fn review_approval_is_exact_idempotent_and_only_transition_to_publishing() {
     let (_directory, mut kernel, request, packet) = reviewing_fixture();
@@ -1104,13 +1821,13 @@ fn review_gateway_schema_v15_migrates_backup_first_to_immutable_v16_tables() {
     drop_review_gateway_schema_for_legacy_fixture(&connection);
     connection.pragma_update(None, "user_version", 15).unwrap();
     let process = MasterProcess::acquire(directory.path()).unwrap();
-    assert_eq!(process.kernel().schema_version().unwrap(), 16);
+    assert_eq!(process.kernel().schema_version().unwrap(), 17);
     let backup = process.migration_backup_path().unwrap();
     assert!(backup
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v16."));
+        .starts_with("master.pre-v17."));
     assert_eq!(
         Connection::open(backup)
             .unwrap()
@@ -1135,6 +1852,49 @@ fn review_gateway_schema_v15_migrates_backup_first_to_immutable_v16_tables() {
 }
 
 #[test]
+fn publication_schema_v16_migrates_backup_first_to_immutable_v17_tables() {
+    let directory = tempdir().unwrap();
+    let database = directory.path().join("master.sqlite3");
+    drop(MasterKernel::open(&database).unwrap());
+    let connection = Connection::open(&database).unwrap();
+    drop_publication_schema_for_legacy_fixture(&connection);
+    connection.pragma_update(None, "user_version", 16).unwrap();
+    drop(connection);
+
+    let process = MasterProcess::acquire(directory.path()).unwrap();
+    assert_eq!(process.kernel().schema_version().unwrap(), 17);
+    let backup = process.migration_backup_path().unwrap();
+    assert!(backup
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .starts_with("master.pre-v17."));
+    assert_eq!(
+        Connection::open(backup)
+            .unwrap()
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        16
+    );
+    let connection = Connection::open(&database).unwrap();
+    for table in [
+        "feature_publications",
+        "feature_publication_action_intents",
+        "feature_publication_action_outcomes",
+        "feature_publication_completions",
+    ] {
+        let present: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+                [table],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(present, "missing migrated table {table}");
+    }
+}
+
+#[test]
 fn validation_gate_schema_v14_migrates_backup_first_to_immutable_v15_tables() {
     let directory = tempdir().unwrap();
     let database = directory.path().join("master.sqlite3");
@@ -1152,7 +1912,7 @@ fn validation_gate_schema_v14_migrates_backup_first_to_immutable_v15_tables() {
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v16."));
+        .starts_with("master.pre-v17."));
     assert_eq!(
         Connection::open(backup)
             .unwrap()
@@ -1278,7 +2038,11 @@ fn specification(
                 "documentation", "knowledge_base", "formatting", "lint", "build", "safety",
                 "changed_paths", "secret_scan", "repository_validation"
             ]
-        }
+        },
+        "publication_checks": ["release-local"],
+        "base_branch": "main",
+        "merge_strategy": "merge",
+        "post_merge_gate": "release-local"
     });
     let canonical = canonical_manifest(&manifest);
     ApprovedFeatureSpecification {
@@ -4430,6 +5194,7 @@ fn drop_validation_gate_schema_for_legacy_fixture(connection: &Connection) {
 }
 
 fn drop_review_gateway_schema_for_legacy_fixture(connection: &Connection) {
+    drop_publication_schema_for_legacy_fixture(connection);
     connection
         .execute_batch(
             "DROP TRIGGER feature_review_decisions_no_update;
@@ -4442,6 +5207,25 @@ fn drop_review_gateway_schema_for_legacy_fixture(connection: &Connection) {
              DROP TRIGGER feature_review_calls_no_delete;
              DROP INDEX feature_review_calls_candidate_idx;
              DROP TABLE feature_review_calls;",
+        )
+        .unwrap();
+}
+
+fn drop_publication_schema_for_legacy_fixture(connection: &Connection) {
+    connection
+        .execute_batch(
+            "DROP TRIGGER feature_publication_completions_no_update;
+             DROP TRIGGER feature_publication_completions_no_delete;
+             DROP TABLE feature_publication_completions;
+             DROP TRIGGER feature_publication_action_outcomes_no_update;
+             DROP TRIGGER feature_publication_action_outcomes_no_delete;
+             DROP TABLE feature_publication_action_outcomes;
+             DROP TRIGGER feature_publication_action_intents_no_update;
+             DROP TRIGGER feature_publication_action_intents_no_delete;
+             DROP TABLE feature_publication_action_intents;
+             DROP TRIGGER feature_publications_no_update;
+             DROP TRIGGER feature_publications_no_delete;
+             DROP TABLE feature_publications;",
         )
         .unwrap();
 }
@@ -4638,7 +5422,7 @@ fn master_process_v10_backfills_resolution_receipts_from_exact_immutable_audit()
             .file_name()
             .unwrap()
             .to_string_lossy()
-            .starts_with("master.pre-v16."));
+            .starts_with("master.pre-v17."));
         assert_eq!(
             Connection::open(backup)
                 .unwrap()
@@ -4762,7 +5546,7 @@ fn master_process_v10_ambiguous_resolution_audit_fails_closed_and_restores_backu
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v16.")));
+            .starts_with("master.pre-v17.")));
 }
 
 #[test]
@@ -4930,7 +5714,7 @@ fn master_process_v4_backup_migration_reopen_and_restore_on_failure() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v16.")));
+            .starts_with("master.pre-v17.")));
 }
 
 #[test]
@@ -4996,7 +5780,7 @@ fn master_process_v12_backup_first_migration_adds_retained_workspace_binding() {
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v16."));
+        .starts_with("master.pre-v17."));
     assert_eq!(
         Connection::open(backup)
             .unwrap()
@@ -5057,7 +5841,7 @@ fn master_process_v12_failed_migration_restores_verified_backup() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v16.")));
+            .starts_with("master.pre-v17.")));
 }
 
 #[test]
@@ -5124,7 +5908,7 @@ fn master_process_v6_backup_migration_binds_pause_and_default_inert_owner_contro
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v16."));
+        .starts_with("master.pre-v17."));
     let backup = Connection::open(backup).unwrap();
     assert_eq!(
         backup
@@ -5233,5 +6017,5 @@ fn forward_schema_version_fails_closed_without_backup() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v16.")));
+            .starts_with("master.pre-v17.")));
 }

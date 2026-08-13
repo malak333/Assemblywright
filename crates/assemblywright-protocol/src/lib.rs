@@ -1035,6 +1035,8 @@ pub const MAX_FEATURE_CONVEYOR_INTEGRATION_ARTIFACTS: usize = 3;
 
 pub const FEATURE_CONVEYOR_VALIDATION_GATE_SCHEMA_VERSION: u16 = 1;
 pub const FEATURE_CONVEYOR_REVIEW_GATEWAY_SCHEMA_VERSION: u16 = 1;
+pub const FEATURE_CONVEYOR_PUBLICATION_COORDINATOR_SCHEMA_VERSION: u16 = 1;
+pub const MAX_FEATURE_CONVEYOR_PUBLICATION_CHECKS: usize = 64;
 pub const MAX_FEATURE_CONVEYOR_REVIEW_PACKET_BYTES: usize = 256 * 1024;
 pub const MAX_FEATURE_CONVEYOR_REVIEW_OUTPUT_BYTES: usize = 64 * 1024;
 pub const MAX_FEATURE_CONVEYOR_REVIEW_FINDINGS: usize = 128;
@@ -1626,6 +1628,346 @@ pub struct FeatureConveyorReviewGatewayReceipt {
     pub emergency_pause_revision: u64,
     pub grants: FeatureConveyorGrantRevisions,
     pub status: FeatureConveyorReviewGatewayStatus,
+}
+
+/// Owner-loopback publication admission. It contains only exact, path-free
+/// authority bindings. Repository locations, credentials, commands, provider
+/// output, and adapter output are deliberately not part of the wire contract.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorPublicationRequest {
+    pub schema_version: u16,
+    pub publication_id: Uuid,
+    pub feature_id: Uuid,
+    pub specification_revision: u64,
+    pub expected_lifecycle_revision: u64,
+    pub feature_lease_id: Uuid,
+    pub integration_id: Uuid,
+    pub validation_id: Uuid,
+    pub review_call_id: Uuid,
+    pub candidate_commit: String,
+    pub candidate_tree: String,
+    pub candidate_diff_sha256: [u8; 32],
+    pub evidence_manifest_sha256: [u8; 32],
+    pub review_decision_sha256: [u8; 32],
+    pub provider_id: String,
+    pub model_id: String,
+    pub remote_base_commit: String,
+    pub branch_policy_sha256: [u8; 32],
+    pub expected_queue_revision: u64,
+    pub expected_emergency_pause_revision: u64,
+    pub grants: FeatureConveyorGrantRevisions,
+}
+
+impl FeatureConveyorPublicationRequest {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "feature_conveyor_publication_request",
+            frame,
+            MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.schema_version != FEATURE_CONVEYOR_PUBLICATION_COORDINATOR_SCHEMA_VERSION
+            || self.publication_id.is_nil()
+            || self.feature_id.is_nil()
+            || self.feature_lease_id.is_nil()
+            || self.integration_id.is_nil()
+            || self.validation_id.is_nil()
+            || self.review_call_id.is_nil()
+            || self.specification_revision == 0
+            || self.expected_lifecycle_revision == 0
+            || self.candidate_diff_sha256 == [0; 32]
+            || self.evidence_manifest_sha256 == [0; 32]
+            || self.review_decision_sha256 == [0; 32]
+            || self.branch_policy_sha256 == [0; 32]
+            || self.grants.registration == 0
+            || self.grants.cloud_disclosure == 0
+            || self.grants.autonomous_publication == 0
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        validate_git_commit(&self.candidate_commit)?;
+        validate_git_commit(&self.candidate_tree)?;
+        validate_git_commit(&self.remote_base_commit)?;
+        validate_identifier(
+            "provider_id",
+            &self.provider_id,
+            MAX_FEATURE_CONVEYOR_IDENTIFIER_BYTES,
+        )?;
+        validate_identifier(
+            "model_id",
+            &self.model_id,
+            MAX_FEATURE_CONVEYOR_IDENTIFIER_BYTES,
+        )?;
+        validate_serialized_limit(
+            "feature_conveyor_publication_request",
+            self,
+            MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES,
+        )
+    }
+}
+
+pub fn feature_conveyor_publication_request_binding_sha256(
+    request: &FeatureConveyorPublicationRequest,
+) -> Result<[u8; 32], ProtocolError> {
+    request.validate()?;
+    let value = serde_json::to_value(request).map_err(|error| ProtocolError::Serialization {
+        field: "feature_conveyor_publication_request",
+        message: error.to_string(),
+    })?;
+    let canonical = canonical_json_bytes(&value)?;
+    let mut digest = Sha256::new();
+    digest.update(b"assemblywright.publication-request-binding.v1\0");
+    digest.update((canonical.len() as u64).to_be_bytes());
+    digest.update(canonical);
+    Ok(digest.finalize().into())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureConveyorPublicationStatus {
+    Succeeded,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorPublicationReceipt {
+    pub schema_version: u16,
+    pub publication_id: Uuid,
+    pub feature_id: Uuid,
+    pub specification_revision: u64,
+    pub lifecycle_revision: u64,
+    pub candidate_commit: String,
+    pub merge_commit: String,
+    pub remote_main_commit: String,
+    pub post_merge_evidence_sha256: [u8; 32],
+    pub branch_policy_sha256: [u8; 32],
+    pub queue_revision: u64,
+    pub emergency_pause_revision: u64,
+    pub grants: FeatureConveyorGrantRevisions,
+    pub status: FeatureConveyorPublicationStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureConveyorPublicationAction {
+    PushBranch,
+    UpsertPullRequest,
+    ObserveRequiredChecks,
+    VerifyPullRequestHead,
+    MergePullRequest,
+    ReconcileRemoteMain,
+    RunPostMergeGate,
+}
+
+impl FeatureConveyorPublicationAction {
+    pub const ORDERED: [Self; 7] = [
+        Self::PushBranch,
+        Self::UpsertPullRequest,
+        Self::ObserveRequiredChecks,
+        Self::VerifyPullRequestHead,
+        Self::MergePullRequest,
+        Self::ReconcileRemoteMain,
+        Self::RunPostMergeGate,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PushBranch => "push_branch",
+            Self::UpsertPullRequest => "upsert_pull_request",
+            Self::ObserveRequiredChecks => "observe_required_checks",
+            Self::VerifyPullRequestHead => "verify_pull_request_head",
+            Self::MergePullRequest => "merge_pull_request",
+            Self::ReconcileRemoteMain => "reconcile_remote_main",
+            Self::RunPostMergeGate => "run_post_merge_gate",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorPublicationActionEvidence {
+    pub schema_version: u16,
+    pub publication_id: Uuid,
+    pub action: FeatureConveyorPublicationAction,
+    pub remote_base_commit: String,
+    pub candidate_commit: String,
+    pub feature_branch: String,
+    pub base_branch: String,
+    pub pull_request_number: Option<u64>,
+    pub observed_head_commit: String,
+    pub required_checks_sha256: Option<[u8; 32]>,
+    pub required_check_count: u16,
+    pub required_checks_passed: bool,
+    pub branch_protection_enforced: bool,
+    pub bypass_used: bool,
+    pub merge_strategy: Option<String>,
+    pub resulting_main_commit: Option<String>,
+    pub post_merge_gate_id: Option<String>,
+    pub post_merge_gate_passed: bool,
+    pub evidence_sha256: [u8; 32],
+}
+
+impl FeatureConveyorPublicationActionEvidence {
+    pub fn expected_evidence_sha256(&self) -> Result<[u8; 32], ProtocolError> {
+        let mut value =
+            serde_json::to_value(self).map_err(|error| ProtocolError::Serialization {
+                field: "feature_conveyor_publication_action_evidence",
+                message: error.to_string(),
+            })?;
+        value
+            .as_object_mut()
+            .ok_or(ProtocolError::InvalidFeatureConveyorOwnerControl)?
+            .remove("evidence_sha256");
+        let canonical = canonical_json_bytes(&value)?;
+        let mut digest = Sha256::new();
+        digest.update(b"assemblywright.publication-action-evidence.v1\0");
+        digest.update((canonical.len() as u64).to_be_bytes());
+        digest.update(canonical);
+        Ok(digest.finalize().into())
+    }
+
+    pub fn seal(mut self) -> Result<Self, ProtocolError> {
+        self.evidence_sha256 = self.expected_evidence_sha256()?;
+        self.validate()?;
+        Ok(self)
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.schema_version != FEATURE_CONVEYOR_PUBLICATION_COORDINATOR_SCHEMA_VERSION
+            || self.publication_id.is_nil()
+            || self.evidence_sha256 == [0; 32]
+            || self.evidence_sha256 != self.expected_evidence_sha256()?
+            || !self.branch_protection_enforced
+            || self.bypass_used
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        validate_git_commit(&self.remote_base_commit)?;
+        validate_git_commit(&self.candidate_commit)?;
+        validate_git_commit(&self.observed_head_commit)?;
+        validate_publication_branch("feature_branch", &self.feature_branch)?;
+        validate_publication_branch("base_branch", &self.base_branch)?;
+        if self
+            .resulting_main_commit
+            .as_deref()
+            .is_some_and(|commit| validate_git_commit(commit).is_err())
+            || self
+                .required_checks_sha256
+                .is_some_and(|digest| digest == [0; 32])
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        let pr = self.pull_request_number.is_some_and(|number| number > 0);
+        let checks = self.required_checks_sha256.is_some()
+            && self.required_check_count > 0
+            && self.required_checks_passed;
+        let merge = self.merge_strategy.is_some() && self.resulting_main_commit.is_some();
+        let gate = self.post_merge_gate_id.is_some() && self.post_merge_gate_passed;
+        let exact_shape = match self.action {
+            FeatureConveyorPublicationAction::PushBranch => {
+                !pr && !checks && !merge && !gate && self.required_check_count == 0
+            }
+            FeatureConveyorPublicationAction::UpsertPullRequest => {
+                pr && !checks && !merge && !gate && self.required_check_count == 0
+            }
+            FeatureConveyorPublicationAction::ObserveRequiredChecks
+            | FeatureConveyorPublicationAction::VerifyPullRequestHead => {
+                pr && checks && !merge && !gate
+            }
+            FeatureConveyorPublicationAction::MergePullRequest => pr && checks && merge && !gate,
+            FeatureConveyorPublicationAction::ReconcileRemoteMain => {
+                !pr && checks && merge && !gate
+            }
+            FeatureConveyorPublicationAction::RunPostMergeGate => !pr && checks && merge && gate,
+        };
+        if !exact_shape {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        if let Some(strategy) = &self.merge_strategy {
+            if !matches!(strategy.as_str(), "merge" | "squash" | "rebase") {
+                return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+            }
+        }
+        if let Some(gate) = &self.post_merge_gate_id {
+            if gate != "release-local" {
+                return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+            }
+        }
+        validate_serialized_limit(
+            "feature_conveyor_publication_action_evidence",
+            self,
+            MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES,
+        )
+    }
+}
+
+pub fn feature_conveyor_publication_required_checks_sha256(
+    checks: &[String],
+) -> Result<[u8; 32], ProtocolError> {
+    if checks.is_empty()
+        || checks.len() > MAX_FEATURE_CONVEYOR_PUBLICATION_CHECKS
+        || checks.iter().any(|check| {
+            check.is_empty()
+                || check.len() > MAX_FEATURE_CONVEYOR_IDENTIFIER_BYTES
+                || check.trim() != check
+                || !check.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'/')
+                })
+        })
+    {
+        return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+    }
+    let mut sorted = checks.to_vec();
+    sorted.sort();
+    let before = sorted.len();
+    sorted.dedup();
+    if sorted.len() != before {
+        return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+    }
+    let canonical = canonical_json_bytes(&serde_json::to_value(sorted).map_err(|error| {
+        ProtocolError::Serialization {
+            field: "feature_conveyor_publication_required_checks",
+            message: error.to_string(),
+        }
+    })?)?;
+    let mut digest = Sha256::new();
+    digest.update(b"assemblywright.publication-required-checks.v1\0");
+    digest.update((canonical.len() as u64).to_be_bytes());
+    digest.update(canonical);
+    Ok(digest.finalize().into())
+}
+
+impl FeatureConveyorPublicationReceipt {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.schema_version != FEATURE_CONVEYOR_PUBLICATION_COORDINATOR_SCHEMA_VERSION
+            || self.publication_id.is_nil()
+            || self.feature_id.is_nil()
+            || self.specification_revision == 0
+            || self.lifecycle_revision == 0
+            || self.post_merge_evidence_sha256 == [0; 32]
+            || self.branch_policy_sha256 == [0; 32]
+            || self.grants.registration == 0
+            || self.grants.cloud_disclosure == 0
+            || self.grants.autonomous_publication == 0
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        validate_git_commit(&self.candidate_commit)?;
+        validate_git_commit(&self.merge_commit)?;
+        validate_git_commit(&self.remote_main_commit)?;
+        if self.merge_commit != self.remote_main_commit {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        validate_serialized_limit(
+            "feature_conveyor_publication_receipt",
+            self,
+            MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES,
+        )
+    }
 }
 
 impl FeatureConveyorReviewGatewayReceipt {
@@ -3909,6 +4251,25 @@ fn validate_git_branch(value: &str) -> Result<(), ProtocolError> {
         || value.ends_with('.')
         || value.ends_with('/')
         || value.contains('/')
+        || value.ends_with(".lock")
+        || value.contains("..")
+        || value.contains("//")
+        || value.contains("@{")
+        || value
+            .bytes()
+            .any(|byte| matches!(byte, b' ' | b'~' | b'^' | b':' | b'?' | b'*' | b'[' | b'\\'))
+    {
+        return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+    }
+    Ok(())
+}
+
+fn validate_publication_branch(field: &'static str, value: &str) -> Result<(), ProtocolError> {
+    validate_identifier(field, value, MAX_FEATURE_CONVEYOR_BASE_BRANCH_BYTES)?;
+    if value.starts_with('.')
+        || value.starts_with('/')
+        || value.ends_with('.')
+        || value.ends_with('/')
         || value.ends_with(".lock")
         || value.contains("..")
         || value.contains("//")

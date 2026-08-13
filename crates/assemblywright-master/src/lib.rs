@@ -1,4 +1,6 @@
 use assemblywright_protocol::{
+    feature_conveyor_publication_request_binding_sha256,
+    feature_conveyor_publication_required_checks_sha256,
     feature_conveyor_review_request_binding_sha256,
     feature_conveyor_validation_request_binding_sha256, AttemptId, CancellationAcknowledgement,
     CancellationId, CancellationInstruction, CapabilityDescriptor, ContextHandlingPolicy, DeviceId,
@@ -8,18 +10,20 @@ use assemblywright_protocol::{
     FeatureConveyorArtifactIntegrationRequest, FeatureConveyorArtifactIntegrationStatus,
     FeatureConveyorCodingDispatchReceipt, FeatureConveyorCodingDispatchRequest,
     FeatureConveyorCodingDispatchStatus, FeatureConveyorCodingWorkPacketMetadata,
-    FeatureConveyorGrantRevisions, FeatureConveyorRepositoryGrantSet,
-    FeatureConveyorRepositoryGrantView, FeatureConveyorReviewDecision,
-    FeatureConveyorReviewGatewayReceipt, FeatureConveyorReviewGatewayRequest,
-    FeatureConveyorReviewGatewayStatus, FeatureConveyorReviewPacket,
-    FeatureConveyorReviewProviderOutput, FeatureConveyorValidationCommandId,
-    FeatureConveyorValidationGateReceipt, FeatureConveyorValidationGateRequest,
-    FeatureConveyorValidationGateStatus, HandshakeRequest, HandshakeResponse, HandshakeStatus,
-    JobEnvelope, JobResultEnvelope, JobResultStatus, LeaseId, LocalCodingJobRequest,
-    LocalCodingJobResult, LocalCodingResultArtifactAdmission, LocalCodingResultArtifactReceipt,
-    LocalCodingSnapshotChunkRequest, ProtocolError, Sensitivity, StepId, TaskId,
-    CANCELLATION_ACK_DEADLINE_MS, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
-    FEATURE_CONVEYOR_REVIEW_BACKOFF_MS, FEATURE_CONVEYOR_REVIEW_GATEWAY_SCHEMA_VERSION,
+    FeatureConveyorGrantRevisions, FeatureConveyorPublicationReceipt,
+    FeatureConveyorPublicationRequest, FeatureConveyorPublicationStatus,
+    FeatureConveyorRepositoryGrantSet, FeatureConveyorRepositoryGrantView,
+    FeatureConveyorReviewDecision, FeatureConveyorReviewGatewayReceipt,
+    FeatureConveyorReviewGatewayRequest, FeatureConveyorReviewGatewayStatus,
+    FeatureConveyorReviewPacket, FeatureConveyorReviewProviderOutput,
+    FeatureConveyorValidationCommandId, FeatureConveyorValidationGateReceipt,
+    FeatureConveyorValidationGateRequest, FeatureConveyorValidationGateStatus, HandshakeRequest,
+    HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope, JobResultStatus, LeaseId,
+    LocalCodingJobRequest, LocalCodingJobResult, LocalCodingResultArtifactAdmission,
+    LocalCodingResultArtifactReceipt, LocalCodingSnapshotChunkRequest, ProtocolError, Sensitivity,
+    StepId, TaskId, CANCELLATION_ACK_DEADLINE_MS, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+    FEATURE_CONVEYOR_PUBLICATION_COORDINATOR_SCHEMA_VERSION, FEATURE_CONVEYOR_REVIEW_BACKOFF_MS,
+    FEATURE_CONVEYOR_REVIEW_GATEWAY_SCHEMA_VERSION,
     FEATURE_CONVEYOR_VALIDATION_GATE_SCHEMA_VERSION, FIXTURE_REASONING_CAPABILITY_ID,
     LOCAL_CODING_CAPABILITY_ID, MAX_CAPABILITY_ID_BYTES,
     MAX_FEATURE_CONVEYOR_REVIEW_CALLS_PER_FEATURE,
@@ -44,6 +48,7 @@ use fs2::FileExt;
 
 mod identity;
 mod integration;
+pub mod publication;
 mod result_artifact;
 mod review_provider;
 mod snapshot;
@@ -67,6 +72,10 @@ pub use review_provider::{
 };
 pub use snapshot::{PreparedRepositorySnapshot, RepositorySnapshotError, RepositorySnapshotStore};
 
+pub use assemblywright_protocol::{
+    FeatureConveyorPublicationAction as PublicationActionKind,
+    FeatureConveyorPublicationActionEvidence as PublicationActionEvidence,
+};
 pub use identity::{
     CapabilityRebindAcknowledgement, CapabilityRebindActivation, EnrollmentGrantReceipt,
     EnrollmentGrantSpec, EnrollmentOperation, EnrollmentRequest, EphemeralServerIdentity,
@@ -76,7 +85,7 @@ pub use identity::{
     SERVER_CERTIFICATE_LIFETIME_MS,
 };
 
-pub const MASTER_SCHEMA_VERSION: i64 = 16;
+pub const MASTER_SCHEMA_VERSION: i64 = 17;
 pub const MAX_QUEUED_OR_LEASED_STEPS: u64 = 256;
 pub const MAX_CONCURRENT_JOBS: u64 = 4;
 pub const MAX_CONVEYOR_NONTERMINAL_FEATURES: u64 = 100;
@@ -289,6 +298,10 @@ pub enum MasterError {
     ReviewRetryNotReady { next_retry_at_ms: u64 },
     #[error("the independent-review call budget is exhausted")]
     ReviewBudgetExhausted,
+    #[error("the exact publication coordinator binding is stale or unavailable")]
+    PublicationCoordinatorUnavailable,
+    #[error("a publication effect is ambiguous and requires reconciliation")]
+    PublicationEffectAmbiguous,
     #[error("feature coding work must be terminal before lifecycle advancement")]
     FeatureCodingWorkOutstanding,
     #[error(
@@ -882,6 +895,69 @@ pub enum ReviewTransportFailure {
     ProviderOutage,
     MalformedOutput,
     IncompleteTransport,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicationExecutionPlan {
+    pub request: FeatureConveyorPublicationRequest,
+    pub repository_id: Uuid,
+    pub feature_branch: String,
+    pub base_branch: String,
+    pub required_checks: Vec<String>,
+    pub merge_strategy: String,
+    pub post_merge_gate: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PublicationAuthorization {
+    Existing(Box<FeatureConveyorPublicationReceipt>),
+    Planned(Box<PublicationExecutionPlan>),
+}
+
+pub fn publication_branch_policy_sha256(
+    repository_id: Uuid,
+    feature_id: Uuid,
+    base_branch: &str,
+    required_checks: &[String],
+    merge_strategy: &str,
+    post_merge_gate: &str,
+) -> Result<[u8; 32], MasterError> {
+    if repository_id.is_nil()
+        || feature_id.is_nil()
+        || !valid_publication_token(base_branch, 255)
+        || required_checks.is_empty()
+        || required_checks.len() > assemblywright_protocol::MAX_FEATURE_CONVEYOR_PUBLICATION_CHECKS
+        || required_checks
+            .iter()
+            .any(|check| !valid_publication_token(check, 128))
+        || !matches!(merge_strategy, "merge" | "squash" | "rebase")
+        || post_merge_gate != "release-local"
+    {
+        return Err(MasterError::PublicationCoordinatorUnavailable);
+    }
+    let mut checks = required_checks.to_vec();
+    let original_len = checks.len();
+    checks.sort();
+    checks.dedup();
+    if checks.len() != original_len {
+        return Err(MasterError::PublicationCoordinatorUnavailable);
+    }
+    let policy = serde_json::json!({
+        "repository_id": repository_id,
+        "feature_branch": format!("assemblywright-{feature_id}"),
+        "base_branch": base_branch,
+        "required_checks": checks,
+        "merge_strategy": merge_strategy,
+        "post_merge_gate": post_merge_gate,
+        "branch_protection_required": true,
+        "bypass_allowed": false
+    });
+    let canonical = canonical_json(&policy)?;
+    let mut digest = Sha256::new();
+    digest.update(b"assemblywright.publication-branch-policy.v1\0");
+    digest.update((canonical.len() as u64).to_be_bytes());
+    digest.update(canonical.as_bytes());
+    Ok(digest.finalize().into())
 }
 
 impl ReviewTransportFailure {
@@ -2306,6 +2382,384 @@ impl MasterKernel {
         let receipt = review_gateway_receipt(plan, lifecycle_revision, decision_sha256, approved);
         tx.commit()?;
         Ok(receipt)
+    }
+
+    pub fn prepare_publication(
+        &mut self,
+        request: &FeatureConveyorPublicationRequest,
+        now_ms: u64,
+    ) -> Result<PublicationAuthorization, MasterError> {
+        request.validate()?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let binding = feature_conveyor_publication_request_binding_sha256(request)?;
+        if let Some(stored) = tx
+            .query_row(
+                "SELECT request_binding_sha256 FROM feature_publications WHERE publication_id=?1",
+                [request.publication_id.to_string()],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .optional()?
+        {
+            if digest_array(&stored)? != binding {
+                return Err(MasterError::PublicationCoordinatorUnavailable);
+            }
+            let receipt = load_publication_receipt_tx(&tx, request)?;
+            return match receipt {
+                Some(receipt) => Ok(PublicationAuthorization::Existing(Box::new(receipt))),
+                None => Err(MasterError::PublicationEffectAmbiguous),
+            };
+        }
+        Ok(PublicationAuthorization::Planned(Box::new(
+            publication_plan_tx(&tx, request, now_ms)?,
+        )))
+    }
+
+    pub fn begin_publication(
+        &mut self,
+        plan: &PublicationExecutionPlan,
+        now_ms: u64,
+    ) -> Result<(), MasterError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if publication_plan_tx(&tx, &plan.request, now_ms)? != *plan {
+            return Err(MasterError::PublicationCoordinatorUnavailable);
+        }
+        tx.execute(
+            "INSERT INTO feature_publications (
+               publication_id,feature_id,specification_revision,lifecycle_revision,
+               feature_lease_id,integration_id,validation_id,review_call_id,
+               candidate_commit,candidate_tree,candidate_diff_sha256,
+               evidence_manifest_sha256,review_decision_sha256,provider_id,model_id,
+               repository_id,feature_branch,base_branch,remote_base_commit,
+               branch_policy_sha256,required_checks_json,merge_strategy,post_merge_gate,
+               queue_revision,emergency_pause_revision,registration_grant_revision,
+               cloud_disclosure_grant_revision,publication_grant_revision,
+               request_binding_sha256,started_at_ms
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,
+                       ?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30)",
+            params![
+                plan.request.publication_id.to_string(),
+                plan.request.feature_id.to_string(),
+                u64_to_i64(plan.request.specification_revision)?,
+                u64_to_i64(plan.request.expected_lifecycle_revision)?,
+                plan.request.feature_lease_id.to_string(),
+                plan.request.integration_id.to_string(),
+                plan.request.validation_id.to_string(),
+                plan.request.review_call_id.to_string(),
+                plan.request.candidate_commit,
+                plan.request.candidate_tree,
+                plan.request.candidate_diff_sha256.as_slice(),
+                plan.request.evidence_manifest_sha256.as_slice(),
+                plan.request.review_decision_sha256.as_slice(),
+                plan.request.provider_id,
+                plan.request.model_id,
+                plan.repository_id.to_string(),
+                plan.feature_branch,
+                plan.base_branch,
+                plan.request.remote_base_commit,
+                plan.request.branch_policy_sha256.as_slice(),
+                serde_json::to_string(&plan.required_checks)?,
+                plan.merge_strategy,
+                plan.post_merge_gate,
+                u64_to_i64(plan.request.expected_queue_revision)?,
+                u64_to_i64(plan.request.expected_emergency_pause_revision)?,
+                u64_to_i64(plan.request.grants.registration)?,
+                u64_to_i64(plan.request.grants.cloud_disclosure)?,
+                u64_to_i64(plan.request.grants.autonomous_publication)?,
+                feature_conveyor_publication_request_binding_sha256(&plan.request)?.as_slice(),
+                u64_to_i64(now_ms)?,
+            ],
+        )?;
+        insert_publication_action_intent_tx(
+            &tx,
+            plan.request.publication_id,
+            PublicationActionKind::PushBranch,
+            1,
+            now_ms,
+        )?;
+        append_feature_audit_tx(
+            &tx,
+            "feature_publication_started",
+            Some(plan.request.feature_id),
+            now_ms,
+            serde_json::json!({
+                "publication_id": plan.request.publication_id,
+                "candidate_digest_present": true,
+                "branch_policy_digest_present": true,
+                "remote_base_digest_present": true,
+                "action": "push_branch",
+                "intent_durable": true,
+                "branch_protection_bypass_authorized": false,
+                "credential_present": false,
+                "path_present": false,
+                "command_present": false
+            }),
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn publication_execution_is_current(
+        &self,
+        request: &FeatureConveyorPublicationRequest,
+        action: PublicationActionKind,
+        now_ms: u64,
+    ) -> Result<bool, MasterError> {
+        if request.validate().is_err() {
+            return Ok(false);
+        }
+        let tx = self.connection.unchecked_transaction()?;
+        if publication_plan_tx(&tx, request, now_ms).is_err() {
+            return Ok(false);
+        }
+        let expected = next_publication_action_tx(&tx, request.publication_id)?;
+        Ok(expected == Some(action))
+    }
+
+    pub fn complete_publication_action(
+        &mut self,
+        plan: &PublicationExecutionPlan,
+        evidence: &PublicationActionEvidence,
+        now_ms: u64,
+    ) -> Result<Option<FeatureConveyorPublicationReceipt>, MasterError> {
+        validate_publication_action_evidence(plan, evidence)?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if publication_plan_tx(&tx, &plan.request, now_ms)? != *plan
+            || next_publication_action_tx(&tx, plan.request.publication_id)?
+                != Some(evidence.action)
+        {
+            return Err(MasterError::PublicationCoordinatorUnavailable);
+        }
+        validate_publication_action_evidence_tx(&tx, plan, evidence)?;
+        let ordinal = PublicationActionKind::ORDERED
+            .iter()
+            .position(|action| *action == evidence.action)
+            .and_then(|index| u64::try_from(index + 1).ok())
+            .ok_or(MasterError::PublicationCoordinatorUnavailable)?;
+        tx.execute(
+            "INSERT INTO feature_publication_action_outcomes (
+               publication_id,ordinal,action_kind,evidence_sha256,pull_request_number,
+               observed_commit,merge_commit,passed,structured_evidence_json,completed_at_ms
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,1,?8,?9)",
+            params![
+                plan.request.publication_id.to_string(),
+                u64_to_i64(ordinal)?,
+                evidence.action.as_str(),
+                evidence.evidence_sha256.as_slice(),
+                evidence.pull_request_number.map(u64_to_i64).transpose()?,
+                evidence.observed_head_commit,
+                evidence.resulting_main_commit,
+                serde_json::to_string(evidence)?,
+                u64_to_i64(now_ms)?,
+            ],
+        )?;
+        let next =
+            PublicationActionKind::ORDERED.get(usize::try_from(ordinal).unwrap_or(usize::MAX));
+        if evidence.action == PublicationActionKind::MergePullRequest {
+            let next_revision = plan
+                .request
+                .expected_lifecycle_revision
+                .checked_add(1)
+                .ok_or(MasterError::PublicationCoordinatorUnavailable)?;
+            if tx.execute(
+                "UPDATE feature_conveyor_features SET status='verifying_main',
+                   lifecycle_revision=?1,updated_at_ms=?2
+                 WHERE feature_id=?3 AND status='publishing' AND lifecycle_revision=?4",
+                params![
+                    u64_to_i64(next_revision)?,
+                    u64_to_i64(now_ms)?,
+                    plan.request.feature_id.to_string(),
+                    u64_to_i64(plan.request.expected_lifecycle_revision)?,
+                ],
+            )? != 1
+            {
+                return Err(MasterError::PublicationCoordinatorUnavailable);
+            }
+            tx.execute(
+                "INSERT INTO feature_transition_evidence (
+                   feature_id,lifecycle_revision,from_status,to_status,
+                   accepted_evidence_sha256,recorded_at_ms
+                 ) VALUES (?1,?2,'publishing','verifying_main',?3,?4)",
+                params![
+                    plan.request.feature_id.to_string(),
+                    u64_to_i64(next_revision)?,
+                    evidence.evidence_sha256.as_slice(),
+                    u64_to_i64(now_ms)?,
+                ],
+            )?;
+        }
+        if let Some(next) = next {
+            insert_publication_action_intent_tx(
+                &tx,
+                plan.request.publication_id,
+                *next,
+                ordinal + 1,
+                now_ms,
+            )?;
+            append_feature_audit_tx(
+                &tx,
+                "feature_publication_action_completed",
+                Some(plan.request.feature_id),
+                now_ms,
+                serde_json::json!({
+                    "publication_id": plan.request.publication_id,
+                    "action": evidence.action.as_str(),
+                    "action_evidence_digest_present": true,
+                    "next_action": next.as_str(),
+                    "next_intent_durable": true,
+                    "external_output_present": false,
+                    "branch_protection_bypass_authorized": false
+                }),
+            )?;
+            tx.commit()?;
+            return Ok(None);
+        }
+
+        let merge_commit = publication_merge_commit_tx(&tx, plan.request.publication_id)?;
+        let final_revision = plan
+            .request
+            .expected_lifecycle_revision
+            .checked_add(2)
+            .ok_or(MasterError::PublicationCoordinatorUnavailable)?;
+        if tx.execute(
+            "UPDATE feature_conveyor_features SET status='succeeded',
+               lifecycle_revision=?1,effect_possible=0,updated_at_ms=?2
+             WHERE feature_id=?3 AND status='verifying_main' AND lifecycle_revision=?4",
+            params![
+                u64_to_i64(final_revision)?,
+                u64_to_i64(now_ms)?,
+                plan.request.feature_id.to_string(),
+                u64_to_i64(final_revision - 1)?,
+            ],
+        )? != 1
+        {
+            return Err(MasterError::PublicationCoordinatorUnavailable);
+        }
+        tx.execute(
+            "INSERT INTO feature_transition_evidence (
+               feature_id,lifecycle_revision,from_status,to_status,
+               verified_main_commit_sha256,post_merge_evidence_sha256,recorded_at_ms
+             ) VALUES (?1,?2,'verifying_main','succeeded',?3,?4,?5)",
+            params![
+                plan.request.feature_id.to_string(),
+                u64_to_i64(final_revision)?,
+                Sha256::digest(merge_commit.as_bytes()).as_slice(),
+                evidence.evidence_sha256.as_slice(),
+                u64_to_i64(now_ms)?,
+            ],
+        )?;
+        tx.execute(
+            "DELETE FROM feature_conveyor_queue WHERE feature_id=?1",
+            [plan.request.feature_id.to_string()],
+        )?;
+        tx.execute(
+            "DELETE FROM feature_active_lease WHERE singleton=1 AND feature_id=?1",
+            [plan.request.feature_id.to_string()],
+        )?;
+        let queue_revision =
+            increment_queue_revision_tx(&tx, plan.request.expected_queue_revision)?;
+        tx.execute(
+            "INSERT INTO feature_publication_completions (
+               publication_id,merge_commit,remote_main_commit,post_merge_evidence_sha256,
+               lifecycle_revision,queue_revision,completed_at_ms
+             ) VALUES (?1,?2,?2,?3,?4,?5,?6)",
+            params![
+                plan.request.publication_id.to_string(),
+                merge_commit,
+                evidence.evidence_sha256.as_slice(),
+                u64_to_i64(final_revision)?,
+                u64_to_i64(queue_revision)?,
+                u64_to_i64(now_ms)?,
+            ],
+        )?;
+        append_feature_audit_tx(
+            &tx,
+            "feature_publication_succeeded",
+            Some(plan.request.feature_id),
+            now_ms,
+            serde_json::json!({
+                "publication_id": plan.request.publication_id,
+                "from_status": "verifying_main",
+                "to_status": "succeeded",
+                "merge_commit_digest_present": true,
+                "remote_main_exact": true,
+                "post_merge_evidence_digest_present": true,
+                "lease_released": true,
+                "queue_revision": queue_revision,
+                "branch_protection_bypass_authorized": false,
+                "credential_present": false,
+                "external_output_present": false
+            }),
+        )?;
+        let receipt = publication_receipt(
+            plan,
+            final_revision,
+            queue_revision,
+            &merge_commit,
+            evidence.evidence_sha256,
+        );
+        tx.commit()?;
+        Ok(Some(receipt))
+    }
+
+    pub fn quarantine_ambiguous_publication(
+        &mut self,
+        plan: &PublicationExecutionPlan,
+        action: PublicationActionKind,
+        now_ms: u64,
+    ) -> Result<(), MasterError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let (status, revision) = feature_status_and_revision_tx(&tx, plan.request.feature_id)?;
+        if !matches!(
+            status,
+            FeatureLifecycleStatus::Publishing | FeatureLifecycleStatus::VerifyingMain
+        ) {
+            return Err(MasterError::PublicationCoordinatorUnavailable);
+        }
+        tx.execute(
+            "UPDATE feature_conveyor_features SET status='quarantined',
+               lifecycle_revision=lifecycle_revision+1,effect_possible=1,updated_at_ms=?1
+             WHERE feature_id=?2 AND lifecycle_revision=?3",
+            params![
+                u64_to_i64(now_ms)?,
+                plan.request.feature_id.to_string(),
+                u64_to_i64(revision)?
+            ],
+        )?;
+        tx.execute(
+            "INSERT INTO feature_transition_evidence (
+               feature_id,lifecycle_revision,from_status,to_status,recorded_at_ms
+             ) VALUES (?1,?2,?3,'quarantined',?4)",
+            params![
+                plan.request.feature_id.to_string(),
+                u64_to_i64(revision + 1)?,
+                status.as_str(),
+                u64_to_i64(now_ms)?
+            ],
+        )?;
+        append_feature_audit_tx(
+            &tx,
+            "feature_publication_ambiguous",
+            Some(plan.request.feature_id),
+            now_ms,
+            serde_json::json!({
+                "publication_id": plan.request.publication_id,
+                "action": action.as_str(),
+                "effect_possible": true,
+                "automatic_retry_authorized": false,
+                "reconciliation_required": true,
+                "raw_error_present": false
+            }),
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// Read-only cancellation probe for the contained validator. Any authority
@@ -3771,7 +4225,11 @@ impl MasterKernel {
             return Err(MasterError::InvalidFeatureTransition);
         }
         let resolution_origin = feature_resolution_origin_tx(&tx, feature_id, status, revision)?;
-        if resolution_origin == FeatureLifecycleStatus::VerifyingMain
+        let publication_merge_possible = publication_merge_effect_possible_tx(&tx, feature_id)?;
+        let merged_main_reconciliation_required = resolution_origin
+            == FeatureLifecycleStatus::VerifyingMain
+            || publication_merge_possible;
+        if merged_main_reconciliation_required
             && (!evidence.merged
                 || evidence
                     .verified_healthy_main_sha256
@@ -3828,6 +4286,7 @@ impl MasterKernel {
                 "merged": evidence.merged,
                 "merged_required_by_durable_transition":
                     resolution_origin == FeatureLifecycleStatus::VerifyingMain,
+                "merged_required_by_publication_intent": publication_merge_possible,
                 "verified_healthy_main_digest_present":
                     evidence.verified_healthy_main_sha256.is_some(),
                 "lease_released": true,
@@ -6200,6 +6659,103 @@ impl MasterKernel {
                  CREATE TRIGGER feature_review_decisions_no_delete BEFORE DELETE ON feature_review_decisions
                    BEGIN SELECT RAISE(ABORT,'durable review decision evidence'); END;
                  PRAGMA user_version=16;
+                 COMMIT;"
+            )?;
+        }
+        let version = self.schema_version()?;
+        if version == 16 {
+            self.connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 CREATE TABLE feature_publications (
+                   publication_id TEXT PRIMARY KEY NOT NULL,
+                   feature_id TEXT NOT NULL REFERENCES feature_conveyor_features(feature_id),
+                   specification_revision INTEGER NOT NULL CHECK(specification_revision>0),
+                   lifecycle_revision INTEGER NOT NULL CHECK(lifecycle_revision>0),
+                   feature_lease_id TEXT NOT NULL,
+                   integration_id TEXT NOT NULL REFERENCES feature_artifact_integrations(integration_id),
+                   validation_id TEXT NOT NULL REFERENCES feature_validation_attempts(validation_id),
+                   review_call_id TEXT NOT NULL REFERENCES feature_review_calls(review_call_id),
+                   candidate_commit TEXT NOT NULL CHECK(length(candidate_commit)=40),
+                   candidate_tree TEXT NOT NULL CHECK(length(candidate_tree)=40),
+                   candidate_diff_sha256 BLOB NOT NULL CHECK(length(candidate_diff_sha256)=32),
+                   evidence_manifest_sha256 BLOB NOT NULL CHECK(length(evidence_manifest_sha256)=32),
+                   review_decision_sha256 BLOB NOT NULL CHECK(length(review_decision_sha256)=32),
+                   provider_id TEXT NOT NULL CHECK(length(provider_id) BETWEEN 1 AND 128),
+                   model_id TEXT NOT NULL CHECK(length(model_id) BETWEEN 1 AND 128),
+                   repository_id TEXT NOT NULL,
+                   feature_branch TEXT NOT NULL CHECK(length(feature_branch) BETWEEN 1 AND 255),
+                   base_branch TEXT NOT NULL CHECK(length(base_branch) BETWEEN 1 AND 255),
+                   remote_base_commit TEXT NOT NULL CHECK(length(remote_base_commit)=40),
+                   branch_policy_sha256 BLOB NOT NULL CHECK(length(branch_policy_sha256)=32),
+                   required_checks_json TEXT NOT NULL CHECK(length(required_checks_json) BETWEEN 2 AND 8192),
+                   merge_strategy TEXT NOT NULL CHECK(merge_strategy IN('merge','squash','rebase')),
+                   post_merge_gate TEXT NOT NULL CHECK(post_merge_gate='release-local'),
+                   queue_revision INTEGER NOT NULL CHECK(queue_revision>=0),
+                   emergency_pause_revision INTEGER NOT NULL CHECK(emergency_pause_revision>=0),
+                   registration_grant_revision INTEGER NOT NULL CHECK(registration_grant_revision>0),
+                   cloud_disclosure_grant_revision INTEGER NOT NULL CHECK(cloud_disclosure_grant_revision>0),
+                   publication_grant_revision INTEGER NOT NULL CHECK(publication_grant_revision>0),
+                   request_binding_sha256 BLOB NOT NULL CHECK(length(request_binding_sha256)=32),
+                   started_at_ms INTEGER NOT NULL CHECK(started_at_ms>0),
+                   UNIQUE(feature_id,candidate_commit)
+                 );
+                 CREATE TRIGGER feature_publications_no_update BEFORE UPDATE ON feature_publications
+                   BEGIN SELECT RAISE(ABORT,'immutable publication'); END;
+                 CREATE TRIGGER feature_publications_no_delete BEFORE DELETE ON feature_publications
+                   BEGIN SELECT RAISE(ABORT,'durable publication'); END;
+                 CREATE TABLE feature_publication_action_intents (
+                   publication_id TEXT NOT NULL REFERENCES feature_publications(publication_id),
+                   ordinal INTEGER NOT NULL CHECK(ordinal BETWEEN 1 AND 7),
+                   action_kind TEXT NOT NULL CHECK(action_kind IN(
+                     'push_branch','upsert_pull_request','observe_required_checks',
+                     'verify_pull_request_head','merge_pull_request','reconcile_remote_main',
+                     'run_post_merge_gate'
+                   )),
+                   intent_sha256 BLOB NOT NULL CHECK(length(intent_sha256)=32),
+                   created_at_ms INTEGER NOT NULL CHECK(created_at_ms>0),
+                   PRIMARY KEY(publication_id,ordinal),
+                   UNIQUE(publication_id,action_kind)
+                 );
+                 CREATE TRIGGER feature_publication_action_intents_no_update BEFORE UPDATE ON feature_publication_action_intents
+                   BEGIN SELECT RAISE(ABORT,'immutable publication action intent'); END;
+                 CREATE TRIGGER feature_publication_action_intents_no_delete BEFORE DELETE ON feature_publication_action_intents
+                   BEGIN SELECT RAISE(ABORT,'durable publication action intent'); END;
+                 CREATE TABLE feature_publication_action_outcomes (
+                   publication_id TEXT NOT NULL,
+                   ordinal INTEGER NOT NULL,
+                   action_kind TEXT NOT NULL,
+                   evidence_sha256 BLOB NOT NULL CHECK(length(evidence_sha256)=32),
+                   pull_request_number INTEGER CHECK(pull_request_number IS NULL OR pull_request_number>0),
+                   observed_commit TEXT CHECK(observed_commit IS NULL OR length(observed_commit)=40),
+                   merge_commit TEXT CHECK(merge_commit IS NULL OR length(merge_commit)=40),
+                   passed INTEGER NOT NULL CHECK(passed IN(0,1)),
+                   structured_evidence_json TEXT NOT NULL CHECK(
+                     length(CAST(structured_evidence_json AS BLOB)) BETWEEN 2 AND 32768
+                   ),
+                   completed_at_ms INTEGER NOT NULL CHECK(completed_at_ms>0),
+                   PRIMARY KEY(publication_id,ordinal),
+                   FOREIGN KEY(publication_id,ordinal)
+                     REFERENCES feature_publication_action_intents(publication_id,ordinal)
+                 );
+                 CREATE TRIGGER feature_publication_action_outcomes_no_update BEFORE UPDATE ON feature_publication_action_outcomes
+                   BEGIN SELECT RAISE(ABORT,'immutable publication action outcome'); END;
+                 CREATE TRIGGER feature_publication_action_outcomes_no_delete BEFORE DELETE ON feature_publication_action_outcomes
+                   BEGIN SELECT RAISE(ABORT,'durable publication action outcome'); END;
+                 CREATE TABLE feature_publication_completions (
+                   publication_id TEXT PRIMARY KEY NOT NULL REFERENCES feature_publications(publication_id),
+                   merge_commit TEXT NOT NULL CHECK(length(merge_commit)=40),
+                   remote_main_commit TEXT NOT NULL CHECK(length(remote_main_commit)=40),
+                   post_merge_evidence_sha256 BLOB NOT NULL CHECK(length(post_merge_evidence_sha256)=32),
+                   lifecycle_revision INTEGER NOT NULL CHECK(lifecycle_revision>0),
+                   queue_revision INTEGER NOT NULL CHECK(queue_revision>0),
+                   completed_at_ms INTEGER NOT NULL CHECK(completed_at_ms>0),
+                   CHECK(merge_commit=remote_main_commit)
+                 );
+                 CREATE TRIGGER feature_publication_completions_no_update BEFORE UPDATE ON feature_publication_completions
+                   BEGIN SELECT RAISE(ABORT,'immutable publication completion'); END;
+                 CREATE TRIGGER feature_publication_completions_no_delete BEFORE DELETE ON feature_publication_completions
+                   BEGIN SELECT RAISE(ABORT,'durable publication completion'); END;
+                 PRAGMA user_version=17;
                  COMMIT;"
             )?;
         }
@@ -8737,6 +9293,23 @@ fn feature_resolution_origin_tx(
     Ok(from_status)
 }
 
+fn publication_merge_effect_possible_tx(
+    tx: &Transaction<'_>,
+    feature_id: Uuid,
+) -> Result<bool, MasterError> {
+    tx.query_row(
+        "SELECT EXISTS(
+           SELECT 1 FROM feature_publications p
+           JOIN feature_publication_action_intents i
+             ON i.publication_id=p.publication_id
+           WHERE p.feature_id=?1 AND i.action_kind='merge_pull_request'
+         )",
+        [feature_id.to_string()],
+        |row| row.get(0),
+    )
+    .map_err(MasterError::from)
+}
+
 fn require_active_lease_tx(tx: &Transaction<'_>, feature_id: Uuid) -> Result<(), MasterError> {
     let matches: bool = tx.query_row(
         "SELECT EXISTS(
@@ -9625,6 +10198,422 @@ fn review_gateway_plan_tx(
         candidate_attempt,
         feature_call,
     })
+}
+
+fn publication_plan_tx(
+    tx: &Transaction<'_>,
+    request: &FeatureConveyorPublicationRequest,
+    now_ms: u64,
+) -> Result<PublicationExecutionPlan, MasterError> {
+    request.validate()?;
+    require_emergency_unpaused_tx(tx)?;
+    require_emergency_pause_revision_tx(tx, request.expected_emergency_pause_revision)?;
+    require_queue_revision_tx(tx, request.expected_queue_revision)?;
+    require_active_lease_tx(tx, request.feature_id)?;
+    require_current_feature_grants_tx(tx, request.feature_id, now_ms)?;
+    let (status, revision) = feature_status_and_revision_tx(tx, request.feature_id)?;
+    let lifecycle_matches = (status == FeatureLifecycleStatus::Publishing
+        && revision == request.expected_lifecycle_revision)
+        || (status == FeatureLifecycleStatus::VerifyingMain
+            && request.expected_lifecycle_revision.checked_add(1) == Some(revision));
+    if !lifecycle_matches {
+        return Err(MasterError::PublicationCoordinatorUnavailable);
+    }
+    let lease_id: String = tx.query_row(
+        "SELECT lease_id FROM feature_active_lease WHERE singleton=1 AND feature_id=?1",
+        [request.feature_id.to_string()],
+        |row| row.get(0),
+    )?;
+    if parse_uuid(&lease_id)? != request.feature_lease_id {
+        return Err(MasterError::PublicationCoordinatorUnavailable);
+    }
+    let row = tx
+        .query_row(
+            "SELECT s.repository_id,s.canonical_manifest_json,s.provider_id,s.model_id,
+                    s.registration_grant_revision,s.cloud_disclosure_grant_revision,
+                    s.publication_grant_revision,i.feature_lease_id,i.candidate_commit,
+                    i.candidate_tree,i.base_commit,v.evidence_manifest_sha256,
+                    c.candidate_diff_sha256,c.review_packet_sha256,d.decision,
+                    d.decision_sha256,d.lifecycle_revision
+             FROM feature_specification_revisions s
+             JOIN feature_artifact_integrations i ON i.integration_id=?3
+             JOIN feature_validation_completions v ON v.validation_id=?4
+             JOIN feature_review_calls c ON c.review_call_id=?5
+             JOIN feature_review_decisions d ON d.review_call_id=c.review_call_id
+             WHERE s.feature_id=?1 AND s.revision=?2
+               AND i.feature_id=s.feature_id AND i.specification_revision=s.revision
+               AND v.validation_id=c.validation_id AND c.integration_id=i.integration_id
+               AND c.feature_id=s.feature_id",
+            params![
+                request.feature_id.to_string(),
+                u64_to_i64(request.specification_revision)?,
+                request.integration_id.to_string(),
+                request.validation_id.to_string(),
+                request.review_call_id.to_string(),
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, String>(9)?,
+                    row.get::<_, String>(10)?,
+                    row.get::<_, Vec<u8>>(11)?,
+                    row.get::<_, Vec<u8>>(12)?,
+                    row.get::<_, Vec<u8>>(13)?,
+                    row.get::<_, String>(14)?,
+                    row.get::<_, Vec<u8>>(15)?,
+                    row.get::<_, i64>(16)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or(MasterError::PublicationCoordinatorUnavailable)?;
+    if row.2 != request.provider_id
+        || row.3 != request.model_id
+        || i64_to_u64(row.4)? != request.grants.registration
+        || i64_to_u64(row.5)? != request.grants.cloud_disclosure
+        || i64_to_u64(row.6)? != request.grants.autonomous_publication
+        || parse_uuid(&row.7)? != request.feature_lease_id
+        || row.8 != request.candidate_commit
+        || row.9 != request.candidate_tree
+        || row.10 != request.remote_base_commit
+        || digest_array(&row.11)? != request.evidence_manifest_sha256
+        || digest_array(&row.12)? != request.candidate_diff_sha256
+        || row.14 != "approved"
+        || digest_array(&row.15)? != request.review_decision_sha256
+        || i64_to_u64(row.16)? != request.expected_lifecycle_revision
+    {
+        return Err(MasterError::PublicationCoordinatorUnavailable);
+    }
+    let manifest_value: Value = serde_json::from_str(&row.1)?;
+    validate_review_safe_manifest_schema(&manifest_value)
+        .map_err(|_| MasterError::PublicationCoordinatorUnavailable)?;
+    validate_review_disclosure_value(&manifest_value)?;
+    let manifest: ReviewSafeApprovedManifest = serde_json::from_value(manifest_value)
+        .map_err(|_| MasterError::PublicationCoordinatorUnavailable)?;
+    let base_branch = manifest
+        .base_branch
+        .filter(|value| valid_publication_token(value, 255))
+        .ok_or(MasterError::PublicationCoordinatorUnavailable)?;
+    let merge_strategy = manifest
+        .merge_strategy
+        .filter(|value| matches!(value.as_str(), "merge" | "squash" | "rebase"))
+        .ok_or(MasterError::PublicationCoordinatorUnavailable)?;
+    let post_merge_gate = manifest
+        .post_merge_gate
+        .filter(|value| value == "release-local")
+        .ok_or(MasterError::PublicationCoordinatorUnavailable)?;
+    if manifest.publication_checks.is_empty()
+        || manifest.publication_checks.len()
+            > assemblywright_protocol::MAX_FEATURE_CONVEYOR_PUBLICATION_CHECKS
+        || manifest
+            .publication_checks
+            .iter()
+            .any(|check| !valid_publication_token(check, 128))
+    {
+        return Err(MasterError::PublicationCoordinatorUnavailable);
+    }
+    let mut required_checks = manifest.publication_checks;
+    let original_len = required_checks.len();
+    required_checks.sort();
+    required_checks.dedup();
+    if required_checks.len() != original_len {
+        return Err(MasterError::PublicationCoordinatorUnavailable);
+    }
+    let repository_id = parse_uuid(&row.0)?;
+    let feature_branch = format!("assemblywright-{}", request.feature_id);
+    if publication_branch_policy_sha256(
+        repository_id,
+        request.feature_id,
+        &base_branch,
+        &required_checks,
+        &merge_strategy,
+        &post_merge_gate,
+    )? != request.branch_policy_sha256
+    {
+        return Err(MasterError::PublicationCoordinatorUnavailable);
+    }
+    Ok(PublicationExecutionPlan {
+        request: request.clone(),
+        repository_id,
+        feature_branch,
+        base_branch,
+        required_checks,
+        merge_strategy,
+        post_merge_gate,
+    })
+}
+
+fn valid_publication_token(value: &str, maximum: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= maximum
+        && value.trim() == value
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'/'))
+        && !value.contains("..")
+        && !value.starts_with('/')
+        && !value.ends_with('/')
+}
+
+fn insert_publication_action_intent_tx(
+    tx: &Transaction<'_>,
+    publication_id: Uuid,
+    action: PublicationActionKind,
+    ordinal: u64,
+    now_ms: u64,
+) -> Result<(), MasterError> {
+    let mut digest = Sha256::new();
+    digest.update(b"assemblywright.publication-action-intent.v1\0");
+    digest.update(publication_id.as_bytes());
+    digest.update(ordinal.to_be_bytes());
+    digest.update(action.as_str().as_bytes());
+    let intent_sha256: [u8; 32] = digest.finalize().into();
+    tx.execute(
+        "INSERT INTO feature_publication_action_intents (
+           publication_id,ordinal,action_kind,intent_sha256,created_at_ms
+         ) VALUES (?1,?2,?3,?4,?5)",
+        params![
+            publication_id.to_string(),
+            u64_to_i64(ordinal)?,
+            action.as_str(),
+            intent_sha256.as_slice(),
+            u64_to_i64(now_ms)?,
+        ],
+    )?;
+    Ok(())
+}
+
+fn next_publication_action_tx(
+    tx: &Transaction<'_>,
+    publication_id: Uuid,
+) -> Result<Option<PublicationActionKind>, MasterError> {
+    let value = tx
+        .query_row(
+            "SELECT i.action_kind FROM feature_publication_action_intents i
+             LEFT JOIN feature_publication_action_outcomes o
+               ON o.publication_id=i.publication_id AND o.ordinal=i.ordinal
+             WHERE i.publication_id=?1 AND o.publication_id IS NULL
+             ORDER BY i.ordinal LIMIT 1",
+            [publication_id.to_string()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    value
+        .map(|value| match value.as_str() {
+            "push_branch" => Ok(PublicationActionKind::PushBranch),
+            "upsert_pull_request" => Ok(PublicationActionKind::UpsertPullRequest),
+            "observe_required_checks" => Ok(PublicationActionKind::ObserveRequiredChecks),
+            "verify_pull_request_head" => Ok(PublicationActionKind::VerifyPullRequestHead),
+            "merge_pull_request" => Ok(PublicationActionKind::MergePullRequest),
+            "reconcile_remote_main" => Ok(PublicationActionKind::ReconcileRemoteMain),
+            "run_post_merge_gate" => Ok(PublicationActionKind::RunPostMergeGate),
+            _ => Err(MasterError::InvalidStoredState(
+                "unknown publication action kind".to_string(),
+            )),
+        })
+        .transpose()
+}
+
+fn validate_publication_action_evidence(
+    plan: &PublicationExecutionPlan,
+    evidence: &PublicationActionEvidence,
+) -> Result<(), MasterError> {
+    evidence.validate()?;
+    let expected_checks =
+        feature_conveyor_publication_required_checks_sha256(&plan.required_checks)?;
+    let checks_expected = !matches!(
+        evidence.action,
+        PublicationActionKind::PushBranch | PublicationActionKind::UpsertPullRequest
+    );
+    let merge_expected = matches!(
+        evidence.action,
+        PublicationActionKind::MergePullRequest
+            | PublicationActionKind::ReconcileRemoteMain
+            | PublicationActionKind::RunPostMergeGate
+    );
+    if evidence.publication_id != plan.request.publication_id
+        || evidence.remote_base_commit != plan.request.remote_base_commit
+        || evidence.candidate_commit != plan.request.candidate_commit
+        || evidence.feature_branch != plan.feature_branch
+        || evidence.base_branch != plan.base_branch
+        || (checks_expected
+            && (evidence.required_checks_sha256 != Some(expected_checks)
+                || usize::from(evidence.required_check_count) != plan.required_checks.len()
+                || !evidence.required_checks_passed))
+        || (!checks_expected
+            && (evidence.required_checks_sha256.is_some()
+                || evidence.required_check_count != 0
+                || evidence.required_checks_passed))
+        || (merge_expected
+            && evidence.merge_strategy.as_deref() != Some(plan.merge_strategy.as_str()))
+        || (!merge_expected && evidence.merge_strategy.is_some())
+        || (evidence.action == PublicationActionKind::RunPostMergeGate
+            && (evidence.post_merge_gate_id.as_deref() != Some(plan.post_merge_gate.as_str())
+                || !evidence.post_merge_gate_passed))
+        || (evidence.action != PublicationActionKind::RunPostMergeGate
+            && (evidence.post_merge_gate_id.is_some() || evidence.post_merge_gate_passed))
+    {
+        return Err(MasterError::PublicationCoordinatorUnavailable);
+    }
+    let candidate_head = matches!(
+        evidence.action,
+        PublicationActionKind::PushBranch
+            | PublicationActionKind::UpsertPullRequest
+            | PublicationActionKind::ObserveRequiredChecks
+            | PublicationActionKind::VerifyPullRequestHead
+            | PublicationActionKind::MergePullRequest
+    );
+    if candidate_head && evidence.observed_head_commit != plan.request.candidate_commit {
+        return Err(MasterError::PublicationCoordinatorUnavailable);
+    }
+    Ok(())
+}
+
+fn validate_publication_action_evidence_tx(
+    tx: &Transaction<'_>,
+    plan: &PublicationExecutionPlan,
+    evidence: &PublicationActionEvidence,
+) -> Result<(), MasterError> {
+    if matches!(
+        evidence.action,
+        PublicationActionKind::ObserveRequiredChecks
+            | PublicationActionKind::VerifyPullRequestHead
+            | PublicationActionKind::MergePullRequest
+    ) {
+        let pull_request: i64 = tx.query_row(
+            "SELECT pull_request_number FROM feature_publication_action_outcomes
+             WHERE publication_id=?1 AND action_kind='upsert_pull_request'",
+            [plan.request.publication_id.to_string()],
+            |row| row.get(0),
+        )?;
+        if evidence.pull_request_number.map(u64_to_i64).transpose()? != Some(pull_request) {
+            return Err(MasterError::PublicationCoordinatorUnavailable);
+        }
+    }
+    if matches!(
+        evidence.action,
+        PublicationActionKind::ReconcileRemoteMain | PublicationActionKind::RunPostMergeGate
+    ) {
+        let merge_commit: String = tx.query_row(
+            "SELECT merge_commit FROM feature_publication_action_outcomes
+             WHERE publication_id=?1 AND action_kind='merge_pull_request' AND passed=1",
+            [plan.request.publication_id.to_string()],
+            |row| row.get(0),
+        )?;
+        if evidence.observed_head_commit != merge_commit
+            || evidence.resulting_main_commit.as_deref() != Some(merge_commit.as_str())
+        {
+            return Err(MasterError::PublicationCoordinatorUnavailable);
+        }
+    }
+    Ok(())
+}
+
+fn publication_merge_commit_tx(
+    tx: &Transaction<'_>,
+    publication_id: Uuid,
+) -> Result<String, MasterError> {
+    let merge_commit: String = tx.query_row(
+        "SELECT merge_commit FROM feature_publication_action_outcomes
+         WHERE publication_id=?1 AND action_kind='merge_pull_request' AND passed=1",
+        [publication_id.to_string()],
+        |row| row.get(0),
+    )?;
+    let remote_main: String = tx.query_row(
+        "SELECT observed_commit FROM feature_publication_action_outcomes
+         WHERE publication_id=?1 AND action_kind='reconcile_remote_main' AND passed=1",
+        [publication_id.to_string()],
+        |row| row.get(0),
+    )?;
+    let post_merge: String = tx.query_row(
+        "SELECT observed_commit FROM feature_publication_action_outcomes
+         WHERE publication_id=?1 AND action_kind='run_post_merge_gate' AND passed=1",
+        [publication_id.to_string()],
+        |row| row.get(0),
+    )?;
+    if merge_commit != remote_main || merge_commit != post_merge {
+        return Err(MasterError::PublicationCoordinatorUnavailable);
+    }
+    Ok(merge_commit)
+}
+
+fn publication_receipt(
+    plan: &PublicationExecutionPlan,
+    lifecycle_revision: u64,
+    queue_revision: u64,
+    merge_commit: &str,
+    post_merge_evidence_sha256: [u8; 32],
+) -> FeatureConveyorPublicationReceipt {
+    FeatureConveyorPublicationReceipt {
+        schema_version: FEATURE_CONVEYOR_PUBLICATION_COORDINATOR_SCHEMA_VERSION,
+        publication_id: plan.request.publication_id,
+        feature_id: plan.request.feature_id,
+        specification_revision: plan.request.specification_revision,
+        lifecycle_revision,
+        candidate_commit: plan.request.candidate_commit.clone(),
+        merge_commit: merge_commit.to_string(),
+        remote_main_commit: merge_commit.to_string(),
+        post_merge_evidence_sha256,
+        branch_policy_sha256: plan.request.branch_policy_sha256,
+        queue_revision,
+        emergency_pause_revision: plan.request.expected_emergency_pause_revision,
+        grants: plan.request.grants,
+        status: FeatureConveyorPublicationStatus::Succeeded,
+    }
+}
+
+fn load_publication_receipt_tx(
+    tx: &Transaction<'_>,
+    request: &FeatureConveyorPublicationRequest,
+) -> Result<Option<FeatureConveyorPublicationReceipt>, MasterError> {
+    tx.query_row(
+        "SELECT merge_commit,remote_main_commit,post_merge_evidence_sha256,
+                lifecycle_revision,queue_revision
+         FROM feature_publication_completions WHERE publication_id=?1",
+        [request.publication_id.to_string()],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+            ))
+        },
+    )
+    .optional()?
+    .map(|row| {
+        if row.0 != row.1 {
+            return Err(MasterError::InvalidStoredState(
+                "publication main reconciliation is inconsistent".to_string(),
+            ));
+        }
+        Ok(FeatureConveyorPublicationReceipt {
+            schema_version: FEATURE_CONVEYOR_PUBLICATION_COORDINATOR_SCHEMA_VERSION,
+            publication_id: request.publication_id,
+            feature_id: request.feature_id,
+            specification_revision: request.specification_revision,
+            lifecycle_revision: i64_to_u64(row.3)?,
+            candidate_commit: request.candidate_commit.clone(),
+            merge_commit: row.0.clone(),
+            remote_main_commit: row.1,
+            post_merge_evidence_sha256: digest_array(&row.2)?,
+            branch_policy_sha256: request.branch_policy_sha256,
+            queue_revision: i64_to_u64(row.4)?,
+            emergency_pause_revision: request.expected_emergency_pause_revision,
+            grants: request.grants,
+            status: FeatureConveyorPublicationStatus::Succeeded,
+        })
+    })
+    .transpose()
 }
 
 fn validate_review_packet_plan(

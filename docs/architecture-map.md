@@ -25,7 +25,7 @@ flowchart LR
   Process --> Service["Windows SCM host: automatic start, bounded recovery, status, maintenance, uninstall"]
   Service --> Maintenance["Durable fail-closed marker blocks new enqueue and lease admission"]
   Master --> Durable["Registered devices, epochs, queue, attempts, cancellation, expiry, restart reconciliation, exact results"]
-  Master --> Conveyor["Default-inert Feature Conveyor repository kernel retained through schema v16"]
+  Master --> Conveyor["Default-inert Feature Conveyor repository kernel retained through schema v17"]
   Conveyor --> ConveyorSafety["Immutable approved specs and grants, strict CAS queue, one active lease, atomic redacted audit, and startup quarantine"]
   Conveyor --> Observer["Exact bounded status projection: local owner route plus accepted-session MacBridge-only remote GET"]
   Observer --> Helper
@@ -77,7 +77,7 @@ a headless master executable. The contract seam provides the current protocol
 version, typed device/task/step/attempt/lease/cancellation identifiers, bounded
 capability advertisements, handshake messages, job and result envelopes, strict
 bound-before-decode JSON entry points, nil-identity rejection, and a golden
-compatibility fixture. `assemblywright-master` schema version 16 preserves the
+compatibility fixture. `assemblywright-master` schema version 17 preserves the
 schema-v4 distributed-device lifecycle, the schema-v5 Feature Conveyor, and
 schema-v6 dedicated pending capability-rebind evidence, then adds the durable
 Emergency Pause revision, then adds one nullable compare-and-set owner-control
@@ -182,7 +182,7 @@ profile the Swift supervisor validates the singleton capability and required
 relay before connecting, performs authenticated health, and relays without
 requesting or emitting the MacBridge-only Feature Conveyor projection.
 
-Protocol v5/schema v16 keeps the historical schema-v10 through schema-v15 lanes
+Protocol v5/schema v17 keeps the historical schema-v10 through schema-v16 lanes
 below and adds only deterministic bounded multi-file edits. Rust and Swift share
 16 KiB complete-job, 12 KiB context, and 4 KiB replacement limits. The agent
 mutates through held owner-private no-follow parent descriptors using exclusive
@@ -206,8 +206,11 @@ toolchain/cache provisioning; otherwise it returns
 `validation_runner_unavailable` before recording an attempt. AppContainer/Job
 Object tests prove the process boundary, but not installed-service identity,
 signed Mac E2E, a real populated offline cache, or OS-wide egress enforcement.
-Schema v16 adds review-decision authority only. It adds no provider fallback,
-implementation, GitHub action, publication coordinator, or queue advancement.
+Schema v16 adds review-decision authority only. Schema v17 adds durable
+publication intent/evidence coordination, exact remote-main verification, and
+atomic success/queue advancement. Its owner-loopback route is absent from mTLS,
+and the credential-owning GitHub adapter remains default-unavailable;
+controlled bare-Git proof is not hosted branch-protection proof.
 Delete first atomically captures the leaf in the held parent and rolls mismatch
 back without deleting the replacement. Windows decodes canonical artifact bytes
 against the immutable packet and independently matches stored retention/expiry
@@ -226,12 +229,13 @@ operation. It verifies the exact changed-path set and canonical multi-file
 artifact, then seals successful state until exact cancellation/resolution or
 bounded expiry. Cancellation, pause-driven durable cancellation,
 lease/deadline loss, shutdown, and failure dominate completion and cleanup. No
-host sandbox or host-egress enforcement is claimed. The schema-v16 master may
+host sandbox or host-egress enforcement is claimed. The schema-v17 master may
 integrate and, only with validated private Windows runner provisioning, execute
 the fixed validation plan against a verified disposable candidate. Registered-
-source mutation, publication, queue advance beyond review approval, and
-autonomous activation are not implemented. Schema v16 implements only the
-separate owner-loopback independent-review gateway described above.
+source mutation and autonomous activation are not implemented. Schema v16
+implements the separate owner-loopback independent-review gateway; schema v17
+implements durable publication coordination while leaving live GitHub
+transport and credentials unprovisioned.
 Two additional owner-token loopback-only resolution routes compare-and-set the
 exact feature, lifecycle, queue, and Emergency Pause revisions inside the
 authoritative transaction. Cancellation cancels bound coding work, retains the

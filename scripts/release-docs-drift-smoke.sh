@@ -39,6 +39,7 @@ PROTOCOL_LOCAL_CODING_E2E="crates/assemblywright-protocol/tests/local_coding_con
 PROTOCOL_ARTIFACT_INTEGRATION_E2E="crates/assemblywright-protocol/tests/artifact_integration_contract.rs"
 PROTOCOL_VALIDATION_GATE_E2E="crates/assemblywright-protocol/tests/validation_gate_contract.rs"
 PROTOCOL_REVIEW_GATEWAY_E2E="crates/assemblywright-protocol/tests/review_gateway_contract.rs"
+PROTOCOL_PUBLICATION_E2E="crates/assemblywright-protocol/tests/publication_coordinator_contract.rs"
 PROTOCOL_OWNER_RESOLUTION_E2E="crates/assemblywright-protocol/tests/owner_resolution_contract.rs"
 MASTER_E2E="crates/assemblywright-master/tests/master_lifecycle_e2e.rs"
 MASTER_PROCESS_E2E="crates/assemblywright-master/tests/master_process_e2e.rs"
@@ -52,6 +53,7 @@ MASTER_VALIDATION_CONTAINMENT="crates/assemblywright-master/src/validation_conta
 MASTER_VALIDATION_CONTAINMENT_E2E="crates/assemblywright-master/tests/windows_validation_containment_e2e.rs"
 MASTER_REVIEW_PROVIDER="crates/assemblywright-master/src/review_provider.rs"
 MASTER_REVIEW_PROVIDER_E2E="crates/assemblywright-master/tests/review_provider_e2e.rs"
+MASTER_PUBLICATION="crates/assemblywright-master/src/publication.rs"
 MASTER_SERVICE_E2E="crates/assemblywright-master/tests/windows_service_lifecycle_e2e.rs"
 AGENT_E2E="crates/assemblywright-agent/tests/local_relay_e2e.rs"
 AGENT_LOCAL_CODING_E2E="crates/assemblywright-agent/tests/local_coding_admission.rs"
@@ -180,7 +182,7 @@ require_text "README non-claims" "$README" "Autonomous dispatch"
 require_text "DESIGN conveyor pointer" "$DESIGN" "docs/feature-conveyor-design.md"
 require_text "DESIGN distributed pointer" "$DESIGN" "docs/distributed-developer-mode-design.md"
 require_text "DESIGN assistant non-goal" "$DESIGN" "No general-purpose assistant surface."
-require_text "DESIGN current master schema" "$DESIGN" "schema-v16"
+require_text "DESIGN current master schema" "$DESIGN" "schema-v17"
 require_text "DESIGN result artifact boundary" "$DESIGN" \
   "Schema v13 adds bounded general-worker packet"
 
@@ -463,11 +465,11 @@ require_text "release checklist schema-v14 integration invariant" "$CHECKLIST" \
 require_text "architecture schema-v13 artifact store" "$ARCHITECTURE" \
   "Private bytes outside SQLite; immutable schema-v13 metadata and redacted audit"
 require_text "architecture current master schema" "$ARCHITECTURE" \
-  '`assemblywright-master` schema version 16'
+  '`assemblywright-master` schema version 17'
 require_text "architecture current general worker" "$ARCHITECTURE" \
   "Protocol v5 replaces the historical v4 fixed-child"
 require_text "feature design current general worker" "$FEATURE_CONVEYOR_DESIGN" \
-  "implemented protocol-v5/schema-v16 kernel"
+  "implemented protocol-v5/schema-v17 kernel"
 require_text "feature design review gateway" "$FEATURE_CONVEYOR_DESIGN" \
   "independent-review gateway"
 require_text "release checklist review boundary" "$CHECKLIST" \
@@ -478,6 +480,14 @@ require_text "readme review default" "$README" \
   "default-unavailable owner-loopback independent-review gateway"
 require_text "readme current review boundary" "$README" \
   "default-unavailable independent-review gateway"
+require_text "publication protocol contract present" "$PROTOCOL_PUBLICATION_E2E" \
+  "publication_request_is_strict_path_free_and_every_binding_changes_identity"
+require_text "publication adapter default boundary" "$MASTER_PUBLICATION" \
+  "fn is_available(&self) -> bool"
+require_text "feature design publication boundary" "$FEATURE_CONVEYOR_DESIGN" \
+  "credential-owning GitHub adapter remains default-unavailable"
+require_text "release checklist publication boundary" "$CHECKLIST" \
+  "schema-v17 publication"
 forbid_text "readme stale review non-claim" "$README" \
   "review-provider invocation,"
 forbid_text "release checklist stale review non-claim" "$CHECKLIST" \

@@ -144,6 +144,30 @@ fn artifact_integration_routes_are_owner_loopback_only_strict_and_redacted() {
         "{}",
     )
     .starts_with("HTTP/1.1 404 Not Found"));
+
+    let publication_unauthorized =
+        post_request(endpoint, "/v1/feature-conveyor/publications", None, "{}");
+    assert!(publication_unauthorized.starts_with("HTTP/1.1 401 Unauthorized"));
+    let publication_malformed = post_request(
+        endpoint,
+        "/v1/feature-conveyor/publications",
+        Some(token.trim()),
+        r#"{"schema_version":1,"credential":"must-not-leak","command":"must-not-run"}"#,
+    );
+    assert!(publication_malformed.starts_with("HTTP/1.1 422 Unprocessable Entity"));
+    assert_eq!(
+        response_json(&publication_malformed),
+        serde_json::json!({"error":"publication_request_rejected"})
+    );
+    assert!(!publication_malformed.contains("must-not-leak"));
+    assert!(!publication_malformed.contains("must-not-run"));
+    assert!(post_request(
+        endpoint,
+        "/v1/distributed/feature-conveyor/publications",
+        Some(token.trim()),
+        "{}",
+    )
+    .starts_with("HTTP/1.1 404 Not Found"));
 }
 
 impl Drop for ChildGuard {

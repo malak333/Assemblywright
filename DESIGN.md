@@ -59,7 +59,7 @@ accepted designs and take precedence within their scope:
 
 ### Windows master
 
-`assemblywright-master` owns durable state and every authority decision. Its schema-v16
+`assemblywright-master` owns durable state and every authority decision. Its schema-v17
 SQLite database holds two kernels:
 
 - The distributed device lifecycle: registered devices, connection epochs,
@@ -427,6 +427,28 @@ credential, or publication-coordinator authority. Startup never retries an
 ambiguous in-flight provider call; the existing active-feature quarantine
 dominates, while observed in-process interruption records an immutable terminal
 outcome and quarantines immediately.
+
+Schema v17 adds the owner-token loopback-only Publication Coordinator. Its
+path-free request binds the approved review decision, specification, frozen
+candidate, validation evidence, provider/model, three grant revisions, queue,
+Emergency Pause, exact remote base, and master-derived branch policy. Before
+each possible external effect the master commits one immutable action intent;
+adapter evidence is never caller supplied. Each stage evidence document binds
+the exact remote base, reviewed head, pull-request identity, complete required-
+checks digest and pass state, branch-protection/no-bypass assertion, configured
+merge strategy/resulting main, and fixed post-merge gate identity/result.
+Adapter execution receives a bounded deadline plus a current-authority and
+cancellation probe that must be polled around effectful work. Missing production adapter
+configuration rejects before an intent. Once an intent exists, missing or
+ambiguous evidence, cancellation, pause, drift, or restart quarantines without
+retry. Merge advances only to `verifying_main`; exact remote-main equality plus
+the fixed `release-local` post-merge gate atomically succeeds, releases the
+lease, and advances the queue. Branch protection bypass is never authorized.
+The GitHub adapter remains unprovisioned by default, and the route is absent
+from enrolled-device mTLS.
+Any durable merge intent makes a merge possible for owner resolution, even if
+the feature was quarantined from `publishing`; abandonment then requires
+merged/healthy-main reconciliation and cannot use `merged:false` to bypass it.
 
 The two-device proof controller creates its disposable repository with a
 non-local clone so Git does not copy source-maintenance caches into the snapshot

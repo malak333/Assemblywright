@@ -32,19 +32,20 @@ use assemblywright_protocol::{
     FeatureConveyorCancelActiveFeatureStatus, FeatureConveyorCodingDispatchReceipt,
     FeatureConveyorCodingDispatchRequest, FeatureConveyorOwnerBridgeDesignationReceipt,
     FeatureConveyorOwnerBridgeDesignationRequest, FeatureConveyorOwnerBridgeDesignationStatus,
-    FeatureConveyorRepositoryGrantKind, FeatureConveyorRepositoryGrantReceipt,
-    FeatureConveyorRepositoryGrantRequest, FeatureConveyorRepositoryGrantSet,
-    FeatureConveyorRepositoryGrantStatus, FeatureConveyorRepositoryPreflightReceipt,
-    FeatureConveyorRepositoryPreflightRequest, FeatureConveyorRepositoryPreflightStatus,
-    FeatureConveyorRepositorySnapshotClaimReceipt, FeatureConveyorRepositorySnapshotClaimRequest,
-    FeatureConveyorRepositorySnapshotClaimStatus, FeatureConveyorReviewGatewayRequest,
-    FeatureConveyorReviewPacket, FeatureConveyorValidationGateRequest, FixtureJobResult,
-    HandshakeRequest, HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope,
-    JobResultStatus, LocalCodingJobResult, LocalCodingResultArtifactAdmission,
-    LocalCodingResultArtifactReceipt, LocalCodingSnapshotChunk, LocalCodingSnapshotChunkRequest,
-    Sensitivity, StepId, TaskId, ENROLLMENT_INVITATION_READY_STATUS,
-    ENROLLMENT_PAIRING_SCHEMA_VERSION, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
-    MAX_ENROLLMENT_PAIRING_FRAME_BYTES, MAX_FEATURE_CONVEYOR_CODING_DISPATCH_REQUEST_BYTES,
+    FeatureConveyorPublicationRequest, FeatureConveyorRepositoryGrantKind,
+    FeatureConveyorRepositoryGrantReceipt, FeatureConveyorRepositoryGrantRequest,
+    FeatureConveyorRepositoryGrantSet, FeatureConveyorRepositoryGrantStatus,
+    FeatureConveyorRepositoryPreflightReceipt, FeatureConveyorRepositoryPreflightRequest,
+    FeatureConveyorRepositoryPreflightStatus, FeatureConveyorRepositorySnapshotClaimReceipt,
+    FeatureConveyorRepositorySnapshotClaimRequest, FeatureConveyorRepositorySnapshotClaimStatus,
+    FeatureConveyorReviewGatewayRequest, FeatureConveyorReviewPacket,
+    FeatureConveyorValidationGateRequest, FixtureJobResult, HandshakeRequest, HandshakeResponse,
+    HandshakeStatus, JobEnvelope, JobResultEnvelope, JobResultStatus, LocalCodingJobResult,
+    LocalCodingResultArtifactAdmission, LocalCodingResultArtifactReceipt, LocalCodingSnapshotChunk,
+    LocalCodingSnapshotChunkRequest, Sensitivity, StepId, TaskId,
+    ENROLLMENT_INVITATION_READY_STATUS, ENROLLMENT_PAIRING_SCHEMA_VERSION,
+    FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, MAX_ENROLLMENT_PAIRING_FRAME_BYTES,
+    MAX_FEATURE_CONVEYOR_CODING_DISPATCH_REQUEST_BYTES,
     MAX_FEATURE_CONVEYOR_OWNER_RESOLUTION_REQUEST_BYTES,
     MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES,
     MAX_FEATURE_CONVEYOR_SNAPSHOT_CLAIM_REQUEST_BYTES, MAX_LOCAL_CODING_SNAPSHOT_CHUNK_BYTES,
@@ -1573,6 +1574,10 @@ async fn serve_runtime(
         .route(
             "/v1/feature-conveyor/review-gateway",
             post(feature_review_gateway),
+        )
+        .route(
+            "/v1/feature-conveyor/publications",
+            post(feature_publication),
         )
         .route(
             "/v1/feature-conveyor/features/:feature_id/integration-plan",
@@ -3167,6 +3172,47 @@ async fn feature_review_gateway(
     })
     .await
     .map_err(|_| fixed_error(StatusCode::CONFLICT, "review_gateway_rejected"))?
+}
+
+async fn feature_publication(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<Response, ApiError> {
+    authorize(&headers, &state)?;
+    require_work_admission(&state)?;
+    let body = body.map_err(|_| {
+        fixed_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "publication_request_rejected",
+        )
+    })?;
+    let request = FeatureConveyorPublicationRequest::decode_frame(&body).map_err(|_| {
+        fixed_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "publication_request_rejected",
+        )
+    })?;
+    // A credential-owning GitHub adapter has deliberately not been provisioned.
+    // Validate the complete durable binding, but create no external-effect
+    // intent until a fixed adapter can actually execute it.
+    let authorization = lock_process(&state)?
+        .kernel_mut()
+        .prepare_publication(
+            &request,
+            current_time_ms()
+                .map_err(|_| fixed_error(StatusCode::CONFLICT, "publication_rejected"))?,
+        )
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "publication_rejected"))?;
+    match authorization {
+        assemblywright_master::PublicationAuthorization::Existing(receipt) => {
+            Ok(Json(*receipt).into_response())
+        }
+        assemblywright_master::PublicationAuthorization::Planned(_) => Err(fixed_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "publication_adapter_unavailable",
+        )),
+    }
 }
 
 fn perform_feature_review_gateway(
