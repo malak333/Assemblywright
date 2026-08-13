@@ -4516,6 +4516,7 @@ fn master_process_v12_failed_migration_restores_verified_backup() {
              PRAGMA user_version = 12;",
         )
         .unwrap();
+    drop(connection);
     assert!(matches!(
         MasterProcess::acquire(directory.path()),
         Err(MasterError::Storage(_))
