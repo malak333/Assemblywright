@@ -338,9 +338,12 @@ fn main() {{
         .unwrap()
         .success());
 
-    let provider = ProcessReviewProvider::load(directory.path())
-        .unwrap()
-        .unwrap();
+    let provider = ProcessReviewProvider::load_with_launcher_for_test(
+        directory.path(),
+        std::path::Path::new(env!("CARGO_BIN_EXE_assemblywright-master")),
+    )
+    .unwrap()
+    .unwrap();
     let prepared = prepare_review_provider_call(&provider, &request, &packet).unwrap();
     let started = Instant::now();
     for _ in 0..2 {

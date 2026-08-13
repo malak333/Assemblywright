@@ -331,6 +331,8 @@ struct ProcessReviewProviderConfig {
 #[derive(Debug)]
 pub struct ProcessReviewProvider {
     executable: PathBuf,
+    #[cfg(windows)]
+    launcher_executable: PathBuf,
     working_directory: PathBuf,
     executable_identity: ReviewExecutableIdentity,
     capabilities: ReviewProviderCapabilities,
@@ -349,6 +351,25 @@ struct ReviewExecutableIdentity {
 
 impl ProcessReviewProvider {
     pub fn load(data_dir: &Path) -> Result<Option<Self>, ReviewProviderConfigError> {
+        let launcher_executable = std::env::current_exe()?;
+        Self::load_with_launcher(data_dir, launcher_executable)
+    }
+
+    #[cfg(all(windows, debug_assertions))]
+    #[doc(hidden)]
+    pub fn load_with_launcher_for_test(
+        data_dir: &Path,
+        launcher_executable: &Path,
+    ) -> Result<Option<Self>, ReviewProviderConfigError> {
+        Self::load_with_launcher(data_dir, launcher_executable.to_path_buf())
+    }
+
+    fn load_with_launcher(
+        data_dir: &Path,
+        launcher_executable: PathBuf,
+    ) -> Result<Option<Self>, ReviewProviderConfigError> {
+        #[cfg(not(windows))]
+        let _ = launcher_executable;
         let root = data_dir.join("review-provider");
         let config_path = root.join(REVIEW_PROVIDER_CONFIG_FILE);
         let executable_path = root.join(if cfg!(windows) {
@@ -432,6 +453,8 @@ impl ProcessReviewProvider {
         };
         Ok(Some(Self {
             executable,
+            #[cfg(windows)]
+            launcher_executable,
             working_directory: root,
             executable_identity,
             capabilities: ReviewProviderCapabilities {
@@ -533,9 +556,7 @@ impl ProcessReviewProvider {
         let mut command = Command::new(&self.executable);
         #[cfg(windows)]
         let mut command = {
-            let current_executable =
-                std::env::current_exe().map_err(|_| ReviewProviderTransportError::Outage)?;
-            let mut command = Command::new(current_executable);
+            let mut command = Command::new(&self.launcher_executable);
             command
                 .arg(REVIEW_PROVIDER_LAUNCHER_MARKER)
                 .arg(&self.executable);
