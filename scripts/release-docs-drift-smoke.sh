@@ -175,7 +175,7 @@ require_text "README non-claims" "$README" "Autonomous dispatch"
 require_text "DESIGN conveyor pointer" "$DESIGN" "docs/feature-conveyor-design.md"
 require_text "DESIGN distributed pointer" "$DESIGN" "docs/distributed-developer-mode-design.md"
 require_text "DESIGN assistant non-goal" "$DESIGN" "No general-purpose assistant surface."
-require_text "DESIGN current master schema" "$DESIGN" "schema-v15"
+require_text "DESIGN current master schema" "$DESIGN" "schema-v16"
 require_text "DESIGN result artifact boundary" "$DESIGN" \
   "Schema v13 adds bounded general-worker packet"
 
@@ -458,11 +458,19 @@ require_text "release checklist schema-v14 integration invariant" "$CHECKLIST" \
 require_text "architecture schema-v13 artifact store" "$ARCHITECTURE" \
   "Private bytes outside SQLite; immutable schema-v13 metadata and redacted audit"
 require_text "architecture current master schema" "$ARCHITECTURE" \
-  '`assemblywright-master` schema version 15'
+  '`assemblywright-master` schema version 16'
 require_text "architecture current general worker" "$ARCHITECTURE" \
   "Protocol v5 replaces the historical v4 fixed-child"
 require_text "feature design current general worker" "$FEATURE_CONVEYOR_DESIGN" \
-  "implemented protocol-v5/schema-v15 kernel"
+  "implemented protocol-v5/schema-v16 kernel"
+require_text "feature design review gateway" "$FEATURE_CONVEYOR_DESIGN" \
+  "independent-review gateway"
+require_text "release checklist review boundary" "$CHECKLIST" \
+  "schema-v16 independent review"
+require_text "knowledge base review boundary" "$KB" \
+  "Independent Review Gateway"
+require_text "readme review default" "$README" \
+  "default-unavailable owner-loopback independent-review gateway"
 require_text "readme current general worker" "$README" \
   "packet-bound deterministic writes/deletes"
 require_text "knowledge base current protocol" "$KB" \

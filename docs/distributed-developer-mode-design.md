@@ -482,7 +482,7 @@ autonomous publication in this release.
 
 ### Current Schema-v15 Validation Boundary
 
-The implemented schema-v15 seam is deliberately narrower than the accepted
+The implemented schema-v16 seam is deliberately narrower than the accepted
 runner above. It adds one owner-token-authenticated loopback-only
 `POST /v1/feature-conveyor/test-evidence-gates` route and no enrolled-device
 mutation. Its strict request must reproduce the immutable approved manifest's

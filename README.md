@@ -26,14 +26,15 @@ advertisements; handshake, job, and result envelopes; strict bound-before-decode
 JSON entry points; nil-identity rejection; fixed-schema Feature Conveyor owner-
 control request/receipt contracts; and a golden compatibility fixture.
 
-**`assemblywright-master`** — a portable schema-v15 SQLite database retaining
+**`assemblywright-master`** — a portable schema-v16 SQLite database retaining
 the schema-v4 device lifecycle, schema-v5 Feature Conveyor, schema-v6
 capability rebind evidence, schema-v7 Emergency Pause revision, and schema-v8
 single owner-control bridge designation, schema-v9 immutable repository
 snapshot-claim evidence, schema-v10 metadata-only coding-dispatch evidence, and
 schema-v11 immutable owner-resolution origin evidence, schema-v13 immutable
 result-artifact metadata, schema-v14 immutable artifact-integration and
-candidate-commit evidence, and schema-v15 immutable validation-gate evidence
+candidate-commit evidence, schema-v15 immutable validation-gate evidence, and
+schema-v16 immutable independent-review calls, outcomes, and decisions
 with backup-first fail-closed legacy migration,
 plus a headless single-owner
 executable.
@@ -94,8 +95,22 @@ executable.
   70%-minimum line coverage, unit, native-E2E, format, lint, build, and
   repository commands, and stores only immutable result digests and bounded
   metadata. All required passes advance only `validating -> reviewing`.
-  Missing runner provisioning rejects before creating an attempt; no review,
-  publication, or registered-source mutation authority is implied.
+  Missing runner provisioning rejects before creating an attempt. Schema v16
+  adds a distinct default-unavailable owner-loopback independent-review gateway:
+  one fresh cleared-environment provider process receives only a sensitive-
+  context-screened approved specification admitted through a strict deny-
+  unknown-fields review-safe manifest DTO (including revalidation of migrated
+  pre-v16 rows),
+  exact candidate commit/diff, and bounded digest-only evidence packet. Strict
+  output must cover the exact ordered identifiers in the approved manifest's
+  required top-level `acceptance` array and reference only admitted evidence.
+  On Windows, the master holds a verified no-write/no-delete image handle while
+  a trusted gate-blocked launcher enters the kill-on-close Job Object before it
+  may spawn the provider; the complete job tree is terminated before pipe
+  joins. Approval advances only
+  `reviewing -> publishing`; strict rejection retains
+  the active lease. Publication and registered-source mutation remain
+  unimplemented.
   Two additional owner-token loopback-only resolution actions cancel one exact
   active feature and explicitly abandon-and-advance one already cancelled or
   quarantined feature. Both bind the feature, lifecycle, queue, and Emergency

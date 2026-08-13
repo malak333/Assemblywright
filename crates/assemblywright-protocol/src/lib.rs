@@ -1034,6 +1034,15 @@ pub const FEATURE_CONVEYOR_ARTIFACT_INTEGRATION_SCHEMA_VERSION: u16 = 1;
 pub const MAX_FEATURE_CONVEYOR_INTEGRATION_ARTIFACTS: usize = 3;
 
 pub const FEATURE_CONVEYOR_VALIDATION_GATE_SCHEMA_VERSION: u16 = 1;
+pub const FEATURE_CONVEYOR_REVIEW_GATEWAY_SCHEMA_VERSION: u16 = 1;
+pub const MAX_FEATURE_CONVEYOR_REVIEW_PACKET_BYTES: usize = 256 * 1024;
+pub const MAX_FEATURE_CONVEYOR_REVIEW_OUTPUT_BYTES: usize = 64 * 1024;
+pub const MAX_FEATURE_CONVEYOR_REVIEW_FINDINGS: usize = 128;
+pub const MAX_FEATURE_CONVEYOR_REVIEW_REQUIREMENT_COVERAGE: usize = 256;
+pub const MAX_FEATURE_CONVEYOR_REVIEW_EVIDENCE_DIGESTS: usize = 32;
+pub const MAX_FEATURE_CONVEYOR_REVIEW_TRANSPORT_ATTEMPTS_PER_CANDIDATE: u8 = 3;
+pub const MAX_FEATURE_CONVEYOR_REVIEW_CALLS_PER_FEATURE: u8 = 12;
+pub const FEATURE_CONVEYOR_REVIEW_BACKOFF_MS: [u64; 3] = [60_000, 300_000, 900_000];
 pub const MAX_FEATURE_CONVEYOR_VALIDATION_COMMANDS: usize = 13;
 pub const FEATURE_CONVEYOR_MINIMUM_LINE_COVERAGE_PERCENT: u8 = 70;
 
@@ -1230,6 +1239,431 @@ impl FeatureConveyorValidationGateReceipt {
         validate_git_commit(&self.candidate_tree)?;
         validate_serialized_limit(
             "feature_conveyor_validation_gate_receipt",
+            self,
+            MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES,
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorReviewGatewayRequest {
+    pub schema_version: u16,
+    pub review_call_id: Uuid,
+    pub feature_id: Uuid,
+    pub specification_revision: u64,
+    pub expected_lifecycle_revision: u64,
+    pub feature_lease_id: Uuid,
+    pub integration_id: Uuid,
+    pub validation_id: Uuid,
+    pub candidate_commit: String,
+    pub candidate_tree: String,
+    pub base_commit: String,
+    pub candidate_diff_sha256: [u8; 32],
+    pub evidence_manifest_sha256: [u8; 32],
+    pub review_packet_sha256: [u8; 32],
+    pub provider_id: String,
+    pub model_id: String,
+    pub expected_queue_revision: u64,
+    pub expected_emergency_pause_revision: u64,
+    pub grants: FeatureConveyorGrantRevisions,
+}
+
+impl FeatureConveyorReviewGatewayRequest {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "feature_conveyor_review_gateway_request",
+            frame,
+            MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.schema_version != FEATURE_CONVEYOR_REVIEW_GATEWAY_SCHEMA_VERSION
+            || self.review_call_id.is_nil()
+            || self.feature_id.is_nil()
+            || self.feature_lease_id.is_nil()
+            || self.integration_id.is_nil()
+            || self.validation_id.is_nil()
+            || self.specification_revision == 0
+            || self.expected_lifecycle_revision == 0
+            || self.candidate_diff_sha256 == [0; 32]
+            || self.evidence_manifest_sha256 == [0; 32]
+            || self.review_packet_sha256 == [0; 32]
+            || self.grants.registration == 0
+            || self.grants.cloud_disclosure == 0
+            || self.grants.autonomous_publication == 0
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        validate_git_commit(&self.candidate_commit)?;
+        validate_git_commit(&self.candidate_tree)?;
+        validate_git_commit(&self.base_commit)?;
+        validate_identifier(
+            "provider_id",
+            &self.provider_id,
+            MAX_FEATURE_CONVEYOR_IDENTIFIER_BYTES,
+        )?;
+        validate_identifier(
+            "model_id",
+            &self.model_id,
+            MAX_FEATURE_CONVEYOR_IDENTIFIER_BYTES,
+        )?;
+        validate_serialized_limit(
+            "feature_conveyor_review_gateway_request",
+            self,
+            MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES,
+        )
+    }
+}
+
+pub fn feature_conveyor_review_request_binding_sha256(
+    request: &FeatureConveyorReviewGatewayRequest,
+) -> Result<[u8; 32], ProtocolError> {
+    request.validate()?;
+    let value = serde_json::to_value(request).map_err(|error| ProtocolError::Serialization {
+        field: "feature_conveyor_review_gateway_request",
+        message: error.to_string(),
+    })?;
+    let canonical = canonical_json_bytes(&value)?;
+    let mut digest = Sha256::new();
+    digest.update(b"assemblywright.review-request-binding.v1\0");
+    digest.update((canonical.len() as u64).to_be_bytes());
+    digest.update(canonical);
+    Ok(digest.finalize().into())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureConveyorReviewDecision {
+    Approved,
+    Rejected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureConveyorReviewCoverageStatus {
+    Covered,
+    Uncovered,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureConveyorKnowledgeBaseDetermination {
+    Updated,
+    NoNewKnowledge,
+    UpdateRequired,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorReviewFinding {
+    pub finding_id: String,
+    pub requirement_id: String,
+    pub evidence_sha256: [u8; 32],
+}
+
+impl FeatureConveyorReviewFinding {
+    fn validate(&self) -> Result<(), ProtocolError> {
+        validate_identifier("finding_id", &self.finding_id, 128)?;
+        validate_identifier("requirement_id", &self.requirement_id, 128)?;
+        if self.evidence_sha256 == [0; 32] {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorReviewRequirementCoverage {
+    pub requirement_id: String,
+    pub status: FeatureConveyorReviewCoverageStatus,
+    pub evidence_sha256: [u8; 32],
+}
+
+impl FeatureConveyorReviewRequirementCoverage {
+    fn validate(&self) -> Result<(), ProtocolError> {
+        validate_identifier("requirement_id", &self.requirement_id, 128)?;
+        if self.evidence_sha256 == [0; 32] {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorReviewProviderOutput {
+    pub schema_version: u16,
+    pub review_packet_sha256: [u8; 32],
+    pub provider_id: String,
+    pub model_id: String,
+    pub decision: FeatureConveyorReviewDecision,
+    pub blocking_findings: Vec<FeatureConveyorReviewFinding>,
+    pub non_blocking_findings: Vec<FeatureConveyorReviewFinding>,
+    pub requirement_coverage: Vec<FeatureConveyorReviewRequirementCoverage>,
+    pub evidence_digests: Vec<[u8; 32]>,
+    pub knowledge_base_determination: FeatureConveyorKnowledgeBaseDetermination,
+    pub knowledge_base_evidence_sha256: [u8; 32],
+}
+
+impl FeatureConveyorReviewProviderOutput {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "feature_conveyor_review_provider_output",
+            frame,
+            MAX_FEATURE_CONVEYOR_REVIEW_OUTPUT_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.schema_version != FEATURE_CONVEYOR_REVIEW_GATEWAY_SCHEMA_VERSION
+            || self.review_packet_sha256 == [0; 32]
+            || self.knowledge_base_evidence_sha256 == [0; 32]
+            || self.blocking_findings.len() > MAX_FEATURE_CONVEYOR_REVIEW_FINDINGS
+            || self.non_blocking_findings.len() > MAX_FEATURE_CONVEYOR_REVIEW_FINDINGS
+            || self.requirement_coverage.is_empty()
+            || self.requirement_coverage.len() > MAX_FEATURE_CONVEYOR_REVIEW_REQUIREMENT_COVERAGE
+            || self.evidence_digests.is_empty()
+            || self.evidence_digests.len() > MAX_FEATURE_CONVEYOR_REVIEW_EVIDENCE_DIGESTS
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        validate_identifier(
+            "provider_id",
+            &self.provider_id,
+            MAX_FEATURE_CONVEYOR_IDENTIFIER_BYTES,
+        )?;
+        validate_identifier(
+            "model_id",
+            &self.model_id,
+            MAX_FEATURE_CONVEYOR_IDENTIFIER_BYTES,
+        )?;
+        let mut finding_ids = HashSet::new();
+        for finding in self
+            .blocking_findings
+            .iter()
+            .chain(self.non_blocking_findings.iter())
+        {
+            finding.validate()?;
+            if !finding_ids.insert(&finding.finding_id) {
+                return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+            }
+        }
+        let mut requirements = HashSet::new();
+        for coverage in &self.requirement_coverage {
+            coverage.validate()?;
+            if !requirements.insert(&coverage.requirement_id) {
+                return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+            }
+        }
+        let mut evidence = HashSet::new();
+        if self
+            .evidence_digests
+            .iter()
+            .any(|digest| *digest == [0; 32] || !evidence.insert(*digest))
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        let uncovered = self
+            .requirement_coverage
+            .iter()
+            .any(|coverage| coverage.status == FeatureConveyorReviewCoverageStatus::Uncovered);
+        match self.decision {
+            FeatureConveyorReviewDecision::Approved
+                if !self.blocking_findings.is_empty()
+                    || uncovered
+                    || self.knowledge_base_determination
+                        == FeatureConveyorKnowledgeBaseDetermination::UpdateRequired =>
+            {
+                return Err(ProtocolError::InvalidFeatureConveyorOwnerControl)
+            }
+            FeatureConveyorReviewDecision::Rejected
+                if self.blocking_findings.is_empty() && !uncovered =>
+            {
+                return Err(ProtocolError::InvalidFeatureConveyorOwnerControl)
+            }
+            _ => {}
+        }
+        validate_serialized_limit(
+            "feature_conveyor_review_provider_output",
+            self,
+            MAX_FEATURE_CONVEYOR_REVIEW_OUTPUT_BYTES,
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorReviewPacket {
+    pub schema_version: u16,
+    pub feature_id: Uuid,
+    pub specification_revision: u64,
+    pub approved_specification: Value,
+    pub approved_specification_sha256: [u8; 32],
+    pub candidate_commit: String,
+    pub candidate_tree: String,
+    pub base_commit: String,
+    pub candidate_diff: String,
+    pub candidate_diff_sha256: [u8; 32],
+    pub evidence_manifest_sha256: [u8; 32],
+    pub evidence_digests: Vec<[u8; 32]>,
+    pub requirements_sha256: [u8; 32],
+    pub requirement_ids: Vec<String>,
+    pub provider_id: String,
+    pub model_id: String,
+    pub grants: FeatureConveyorGrantRevisions,
+}
+
+impl FeatureConveyorReviewPacket {
+    pub fn canonical_bytes(&self) -> Result<Vec<u8>, ProtocolError> {
+        self.validate()?;
+        let value = serde_json::to_value(self).map_err(|error| ProtocolError::Serialization {
+            field: "feature_conveyor_review_packet",
+            message: error.to_string(),
+        })?;
+        canonical_json_bytes(&value)
+    }
+
+    pub fn sha256(&self) -> Result<[u8; 32], ProtocolError> {
+        Ok(Sha256::digest(self.canonical_bytes()?).into())
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.schema_version != FEATURE_CONVEYOR_REVIEW_GATEWAY_SCHEMA_VERSION
+            || self.feature_id.is_nil()
+            || self.specification_revision == 0
+            || self.approved_specification_sha256 == [0; 32]
+            || self.candidate_diff_sha256 == [0; 32]
+            || self.evidence_manifest_sha256 == [0; 32]
+            || self.requirements_sha256 == [0; 32]
+            || self.requirement_ids.is_empty()
+            || self.requirement_ids.len() > MAX_FEATURE_CONVEYOR_REVIEW_REQUIREMENT_COVERAGE
+            || self.evidence_digests.is_empty()
+            || self.evidence_digests.len() > MAX_FEATURE_CONVEYOR_REVIEW_EVIDENCE_DIGESTS
+            || self.grants.registration == 0
+            || self.grants.cloud_disclosure == 0
+            || self.grants.autonomous_publication == 0
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        validate_object("approved_specification", &self.approved_specification)?;
+        let canonical_specification = canonical_json_bytes(&self.approved_specification)?;
+        if <[u8; 32]>::from(Sha256::digest(&canonical_specification))
+            != self.approved_specification_sha256
+            || <[u8; 32]>::from(Sha256::digest(self.candidate_diff.as_bytes()))
+                != self.candidate_diff_sha256
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        validate_git_commit(&self.candidate_commit)?;
+        validate_git_commit(&self.candidate_tree)?;
+        validate_git_commit(&self.base_commit)?;
+        validate_identifier(
+            "provider_id",
+            &self.provider_id,
+            MAX_FEATURE_CONVEYOR_IDENTIFIER_BYTES,
+        )?;
+        validate_identifier(
+            "model_id",
+            &self.model_id,
+            MAX_FEATURE_CONVEYOR_IDENTIFIER_BYTES,
+        )?;
+        let mut evidence = HashSet::new();
+        if self
+            .evidence_digests
+            .iter()
+            .any(|digest| *digest == [0; 32] || !evidence.insert(*digest))
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        let mut requirements = HashSet::new();
+        for requirement_id in &self.requirement_ids {
+            validate_identifier("requirement_id", requirement_id, 128)?;
+            if !requirements.insert(requirement_id) {
+                return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+            }
+        }
+        validate_serialized_limit(
+            "feature_conveyor_review_packet",
+            self,
+            MAX_FEATURE_CONVEYOR_REVIEW_PACKET_BYTES,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureConveyorReviewGatewayStatus {
+    Approved,
+    Rejected,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorReviewGatewayReceipt {
+    pub schema_version: u16,
+    pub review_call_id: Uuid,
+    pub feature_id: Uuid,
+    pub specification_revision: u64,
+    pub lifecycle_revision: u64,
+    pub feature_lease_id: Uuid,
+    pub integration_id: Uuid,
+    pub validation_id: Uuid,
+    pub candidate_commit: String,
+    pub candidate_diff_sha256: [u8; 32],
+    pub evidence_manifest_sha256: [u8; 32],
+    pub review_packet_sha256: [u8; 32],
+    pub provider_id: String,
+    pub model_id: String,
+    pub candidate_attempt: u8,
+    pub feature_call: u8,
+    pub decision_sha256: [u8; 32],
+    pub queue_revision: u64,
+    pub emergency_pause_revision: u64,
+    pub grants: FeatureConveyorGrantRevisions,
+    pub status: FeatureConveyorReviewGatewayStatus,
+}
+
+impl FeatureConveyorReviewGatewayReceipt {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.schema_version != FEATURE_CONVEYOR_REVIEW_GATEWAY_SCHEMA_VERSION
+            || self.review_call_id.is_nil()
+            || self.feature_id.is_nil()
+            || self.feature_lease_id.is_nil()
+            || self.integration_id.is_nil()
+            || self.validation_id.is_nil()
+            || self.specification_revision == 0
+            || self.lifecycle_revision == 0
+            || self.candidate_diff_sha256 == [0; 32]
+            || self.evidence_manifest_sha256 == [0; 32]
+            || self.review_packet_sha256 == [0; 32]
+            || self.decision_sha256 == [0; 32]
+            || self.grants.registration == 0
+            || self.grants.cloud_disclosure == 0
+            || self.grants.autonomous_publication == 0
+            || !(1..=MAX_FEATURE_CONVEYOR_REVIEW_TRANSPORT_ATTEMPTS_PER_CANDIDATE)
+                .contains(&self.candidate_attempt)
+            || !(1..=MAX_FEATURE_CONVEYOR_REVIEW_CALLS_PER_FEATURE).contains(&self.feature_call)
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        validate_git_commit(&self.candidate_commit)?;
+        validate_identifier(
+            "provider_id",
+            &self.provider_id,
+            MAX_FEATURE_CONVEYOR_IDENTIFIER_BYTES,
+        )?;
+        validate_identifier(
+            "model_id",
+            &self.model_id,
+            MAX_FEATURE_CONVEYOR_IDENTIFIER_BYTES,
+        )?;
+        validate_serialized_limit(
+            "feature_conveyor_review_gateway_receipt",
             self,
             MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES,
         )

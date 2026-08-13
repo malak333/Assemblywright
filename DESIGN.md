@@ -59,7 +59,7 @@ accepted designs and take precedence within their scope:
 
 ### Windows master
 
-`assemblywright-master` owns durable state and every authority decision. Its schema-v15
+`assemblywright-master` owns durable state and every authority decision. Its schema-v16
 SQLite database holds two kernels:
 
 - The distributed device lifecycle: registered devices, connection epochs,
@@ -396,6 +396,37 @@ does not establish the installed Windows service identity, a real populated
 private toolchain/cache, credential-store denial, actual above/below-threshold
 llvm-cov behavior, signed Mac E2E, or OS-wide outbound-egress enforcement; keep
 live activation unprovisioned until those deployment proofs are complete.
+
+Schema v16 adds the independent-review gateway as a separate owner-token,
+loopback-only boundary. Its strict request contains only exact IDs, revisions,
+candidate/specification/evidence/provider bindings, never review content. The
+master reopens the frozen candidate, reconstructs the canonical approved
+specification, exact candidate patch, and ordered digest-only validation packet,
+after approval admission has rejected transcript-, memory-, credential-, and
+secret-shaped specification content using a strict deny-unknown-fields review-
+safe manifest DTO; that admission is repeated at review for migrated
+specifications. It derives the complete ordered identifiers from the
+required top-level approved-manifest `acceptance` array and requires every finding, coverage item, and
+knowledge determination to reference an admitted evidence digest. A configured
+adapter is a fixed canonical executable launched once per call (plus its fixed
+`--count-tokens` preflight) with a cleared environment, bounded pipes, timeout,
+and complete process-tree termination before pipe joins. On Windows the master
+holds a verified no-write/no-delete image handle while a trusted gate-blocked
+launcher is assigned to the kill-on-close Job Object before provider spawn; missing
+configuration rejects before durable mutation. Once a call is durably opened,
+cancellation, Emergency Pause, or any
+binding drift suppresses acceptance and terminalizes/quarantines an observed
+post-response interruption. Outage, malformed output, and incomplete
+transport record immutable bounded failure evidence and 1-, 5-, or 15-minute
+backoff without consuming repair; at most three calls are allowed per candidate
+and twelve per feature. A strict rejection remains active in `reviewing` for a
+later bounded repair. Only strict approval atomically records the immutable
+decision and advances `reviewing -> publishing`. The route is absent from
+enrolled-device mTLS and adds no provider fallback, implementation, GitHub,
+credential, or publication-coordinator authority. Startup never retries an
+ambiguous in-flight provider call; the existing active-feature quarantine
+dominates, while observed in-process interruption records an immutable terminal
+outcome and quarantines immediately.
 
 The two-device proof controller creates its disposable repository with a
 non-local clone so Git does not copy source-maintenance caches into the snapshot

@@ -2,7 +2,7 @@ use assemblywright_protocol::{
     validate_local_coding_patch_artifact_for_packet, FeatureConveyorCodingWorkPacketMetadata,
     LocalCodingEditOperation,
 };
-use git2::{Index, IndexEntry, ObjectType, Odb, Oid, Repository, Signature, Time};
+use git2::{DiffFormat, Index, IndexEntry, ObjectType, Odb, Oid, Repository, Signature, Time};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
@@ -337,6 +337,64 @@ impl ArtifactIntegrationStore {
             evidence: evidence.clone(),
             entries,
         })
+    }
+
+    /// Produces the exact patch for the already-frozen candidate without
+    /// consulting repository configuration, remotes, history beyond the
+    /// bound base, or any implementation transcript. Both candidate sides are
+    /// revalidated around extraction so callers never send bytes from a
+    /// drifted disposable repository.
+    pub fn review_diff(
+        &self,
+        evidence: &CandidateEvidence,
+    ) -> Result<String, ArtifactIntegrationError> {
+        let mut candidate = self.open_verified_candidate(evidence)?;
+        let path = self
+            .root
+            .join("candidates")
+            .join(evidence.integration_id.to_string());
+        let repository = Repository::open(&path)?;
+        let base_oid = Oid::from_str(&evidence.base_commit)?;
+        let candidate_oid = Oid::from_str(&evidence.candidate_commit)?;
+        let base = repository.find_commit(base_oid)?;
+        let current = repository.find_commit(candidate_oid)?;
+        if current.parent_count() != 1 || current.parent_id(0).ok() != Some(base_oid) {
+            return Err(ArtifactIntegrationError::Rejected);
+        }
+        let base_tree = base.tree()?;
+        let current_tree = current.tree()?;
+        if current_tree.id().to_string() != evidence.candidate_tree {
+            return Err(ArtifactIntegrationError::Rejected);
+        }
+        let diff = repository.diff_tree_to_tree(Some(&base_tree), Some(&current_tree), None)?;
+        let mut bytes = Vec::new();
+        let mut bounded = true;
+        diff.print(DiffFormat::Patch, |_delta, _hunk, line| {
+            let prefix = match line.origin() {
+                '+' | '-' | ' ' => Some(line.origin() as u8),
+                _ => None,
+            };
+            let appended_len = line
+                .content()
+                .len()
+                .saturating_add(prefix.is_some() as usize);
+            if bytes.len().saturating_add(appended_len)
+                > assemblywright_protocol::MAX_FEATURE_CONVEYOR_REVIEW_PACKET_BYTES
+            {
+                bounded = false;
+                return false;
+            }
+            if let Some(prefix) = prefix {
+                bytes.push(prefix);
+            }
+            bytes.extend_from_slice(line.content());
+            true
+        })?;
+        if !bounded || bytes.is_empty() {
+            return Err(ArtifactIntegrationError::Rejected);
+        }
+        candidate.revalidate(self)?;
+        String::from_utf8(bytes).map_err(|_| ArtifactIntegrationError::Rejected)
     }
 
     /// Creates a private disposable validation tree from retained handles to

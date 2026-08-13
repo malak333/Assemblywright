@@ -81,7 +81,8 @@ fn install_grants(kernel: &mut MasterKernel, repository_id: Uuid) {
 
 fn specification(feature_id: Uuid, repository_id: Uuid) -> ApprovedFeatureSpecification {
     let manifest = json!({
-        "feature":"integration-e2e",
+        "acceptance": ["artifact-integration-e2e"],
+        "outcome":"integration e2e",
         "validation_gate": {
             "schema_version": 1,
             "command_ids": [

@@ -169,6 +169,25 @@ Before starting a release pass, confirm the claim you intend to make.
   and complete tree reaping, bounded evidence extraction, actual
   above/below-threshold llvm-cov behavior, and OS-wide outbound-egress denial.
   Loopback TCP/UDP nondelivery is not OS-wide egress proof.
+- Confirm schema-v16 independent review remains owner-token loopback-only and
+  absent from enrolled-device mTLS. Prove the caller cannot supply packet,
+  transcript, memory, paths, raw evidence, or provider output; the master
+  reconstructs and binds the exact approved specification, frozen candidate
+  commit/diff, ordered evidence digests, provider/model, grants, lifecycle,
+  queue, and Emergency Pause state. Prove strict deny-unknown-fields review-safe
+  DTO and sensitive-context admission, patch polarity, legacy-row sensitive-
+  context revalidation, exact ordered requirement
+  coverage from the approved manifest's required top-level `acceptance` array, packet-only evidence
+  references, default-unavailable production configuration before intent, one
+  fresh cleared-environment bounded provider process; on Windows prove the fixed
+  verified image-handle lock, gate-before-provider-spawn Job assignment, and
+  complete descendant termination; prove strict approval and
+  rejection; malformed/outage/incomplete transport without repair charge;
+  fixed backoff, three candidate calls, twelve feature calls, cancellation and
+  drift suppression, interruption and post-response-drift terminalization/quarantine, immutable
+  idempotent decisions, rejection retention, and
+  approval-only `reviewing -> publishing`. Keep live selected-provider quality,
+  service deployment, GitHub publication, and owner-recorded proof separate.
 - Confirm the owner-token loopback-only `cancel-active-feature` and
   `abandon-and-advance` routes are absent from enrolled-device mTLS. Prove
   strict duplicate/unknown/oversized-frame denial; exact feature, lifecycle,

@@ -1,4 +1,5 @@
 use assemblywright_protocol::{
+    feature_conveyor_review_request_binding_sha256,
     feature_conveyor_validation_request_binding_sha256, AttemptId, CancellationAcknowledgement,
     CancellationId, CancellationInstruction, CapabilityDescriptor, ContextHandlingPolicy, DeviceId,
     DeviceRole, DistributedEvent, DistributedEventBatch, DistributedEventBatchRequest,
@@ -8,15 +9,22 @@ use assemblywright_protocol::{
     FeatureConveyorCodingDispatchReceipt, FeatureConveyorCodingDispatchRequest,
     FeatureConveyorCodingDispatchStatus, FeatureConveyorCodingWorkPacketMetadata,
     FeatureConveyorGrantRevisions, FeatureConveyorRepositoryGrantSet,
-    FeatureConveyorRepositoryGrantView, FeatureConveyorValidationCommandId,
+    FeatureConveyorRepositoryGrantView, FeatureConveyorReviewDecision,
+    FeatureConveyorReviewGatewayReceipt, FeatureConveyorReviewGatewayRequest,
+    FeatureConveyorReviewGatewayStatus, FeatureConveyorReviewPacket,
+    FeatureConveyorReviewProviderOutput, FeatureConveyorValidationCommandId,
     FeatureConveyorValidationGateReceipt, FeatureConveyorValidationGateRequest,
     FeatureConveyorValidationGateStatus, HandshakeRequest, HandshakeResponse, HandshakeStatus,
     JobEnvelope, JobResultEnvelope, JobResultStatus, LeaseId, LocalCodingJobRequest,
     LocalCodingJobResult, LocalCodingResultArtifactAdmission, LocalCodingResultArtifactReceipt,
     LocalCodingSnapshotChunkRequest, ProtocolError, Sensitivity, StepId, TaskId,
     CANCELLATION_ACK_DEADLINE_MS, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+    FEATURE_CONVEYOR_REVIEW_BACKOFF_MS, FEATURE_CONVEYOR_REVIEW_GATEWAY_SCHEMA_VERSION,
     FEATURE_CONVEYOR_VALIDATION_GATE_SCHEMA_VERSION, FIXTURE_REASONING_CAPABILITY_ID,
-    LOCAL_CODING_CAPABILITY_ID, MAX_CAPABILITY_ID_BYTES, MAX_JOB_CONTEXT_BYTES,
+    LOCAL_CODING_CAPABILITY_ID, MAX_CAPABILITY_ID_BYTES,
+    MAX_FEATURE_CONVEYOR_REVIEW_CALLS_PER_FEATURE,
+    MAX_FEATURE_CONVEYOR_REVIEW_REQUIREMENT_COVERAGE,
+    MAX_FEATURE_CONVEYOR_REVIEW_TRANSPORT_ATTEMPTS_PER_CANDIDATE, MAX_JOB_CONTEXT_BYTES,
     MAX_LEASE_DURATION_MS, MAX_STEP_DEADLINE_MS, MLX_REASONING_CAPABILITY_ID, PROTOCOL_VERSION,
 };
 use rusqlite::{
@@ -37,6 +45,7 @@ use fs2::FileExt;
 mod identity;
 mod integration;
 mod result_artifact;
+mod review_provider;
 mod snapshot;
 pub mod validation_containment;
 
@@ -47,6 +56,14 @@ pub use integration::{
 pub use result_artifact::{
     PreparedResultArtifact, ResultArtifactReference, ResultArtifactStore, ResultArtifactStoreError,
     VerifiedResultArtifact,
+};
+#[cfg(windows)]
+pub use review_provider::review_provider_launcher_exit_code;
+pub use review_provider::{
+    invoke_review_provider, prepare_review_provider_call, PreparedReviewProviderCall,
+    ProcessReviewProvider, ReviewProvider, ReviewProviderCapabilities, ReviewProviderConfigError,
+    ReviewProviderInvocationError, ReviewProviderTokenCountError, ReviewProviderTransportError,
+    UnavailableReviewProvider, MAX_FEATURE_CONVEYOR_REVIEW_INPUT_TOKENS,
 };
 pub use snapshot::{PreparedRepositorySnapshot, RepositorySnapshotError, RepositorySnapshotStore};
 
@@ -59,7 +76,7 @@ pub use identity::{
     SERVER_CERTIFICATE_LIFETIME_MS,
 };
 
-pub const MASTER_SCHEMA_VERSION: i64 = 15;
+pub const MASTER_SCHEMA_VERSION: i64 = 16;
 pub const MAX_QUEUED_OR_LEASED_STEPS: u64 = 256;
 pub const MAX_CONCURRENT_JOBS: u64 = 4;
 pub const MAX_CONVEYOR_NONTERMINAL_FEATURES: u64 = 100;
@@ -266,6 +283,12 @@ pub enum MasterError {
     ValidationGateUnavailable,
     #[error("required validation evidence did not pass")]
     ValidationGateFailed,
+    #[error("the exact independent-review gateway binding is stale or unavailable")]
+    ReviewGatewayUnavailable,
+    #[error("the independent-review transport retry is not permitted before {next_retry_at_ms}")]
+    ReviewRetryNotReady { next_retry_at_ms: u64 },
+    #[error("the independent-review call budget is exhausted")]
+    ReviewBudgetExhausted,
     #[error("feature coding work must be terminal before lifecycle advancement")]
     FeatureCodingWorkOutstanding,
     #[error(
@@ -832,6 +855,43 @@ pub enum ValidationGateAuthorization {
     },
     ExistingFailed,
     Planned(ValidationGateExecutionPlan),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReviewGatewayExecutionPlan {
+    pub request: FeatureConveyorReviewGatewayRequest,
+    pub candidate: CandidateEvidence,
+    pub approved_specification: Value,
+    pub approved_specification_sha256: [u8; 32],
+    pub requirements_sha256: [u8; 32],
+    pub requirement_ids: Vec<String>,
+    pub evidence_digests: Vec<[u8; 32]>,
+    pub candidate_attempt: u8,
+    pub feature_call: u8,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReviewGatewayAuthorization {
+    ExistingDecision(Box<FeatureConveyorReviewGatewayReceipt>),
+    ExistingTransportFailure { next_retry_at_ms: u64 },
+    Planned(Box<ReviewGatewayExecutionPlan>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewTransportFailure {
+    ProviderOutage,
+    MalformedOutput,
+    IncompleteTransport,
+}
+
+impl ReviewTransportFailure {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ProviderOutage => "provider_outage",
+            Self::MalformedOutput => "malformed_output",
+            Self::IncompleteTransport => "incomplete_transport",
+        }
+    }
 }
 
 pub struct MasterKernel {
@@ -1843,6 +1903,411 @@ impl MasterKernel {
         }
     }
 
+    /// Read-only authority and budget check. The process layer calls this only
+    /// after a provider has advertised the fixed response-only envelope; it
+    /// deliberately creates no call intent.
+    pub fn prepare_review_gateway(
+        &mut self,
+        request: &FeatureConveyorReviewGatewayRequest,
+        now_ms: u64,
+    ) -> Result<ReviewGatewayAuthorization, MasterError> {
+        self.authorize_review_gateway(request, None, now_ms)
+    }
+
+    /// Rechecks the exact locally assembled packet and durably opens one
+    /// provider-call intent immediately before crossing the provider boundary.
+    pub fn begin_review_gateway(
+        &mut self,
+        request: &FeatureConveyorReviewGatewayRequest,
+        packet: &FeatureConveyorReviewPacket,
+        now_ms: u64,
+    ) -> Result<ReviewGatewayAuthorization, MasterError> {
+        self.authorize_review_gateway(request, Some(packet), now_ms)
+    }
+
+    fn authorize_review_gateway(
+        &mut self,
+        request: &FeatureConveyorReviewGatewayRequest,
+        packet: Option<&FeatureConveyorReviewPacket>,
+        now_ms: u64,
+    ) -> Result<ReviewGatewayAuthorization, MasterError> {
+        request.validate()?;
+        let request_binding = feature_conveyor_review_request_binding_sha256(request)?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(stored_binding) = tx
+            .query_row(
+                "SELECT request_binding_sha256 FROM feature_review_calls WHERE review_call_id=?1",
+                [request.review_call_id.to_string()],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .optional()?
+        {
+            if digest_array(&stored_binding)? != request_binding {
+                return Err(MasterError::ReviewGatewayUnavailable);
+            }
+            let outcome = tx
+                .query_row(
+                    "SELECT outcome_kind,next_retry_at_ms FROM feature_review_call_outcomes
+                     WHERE review_call_id=?1",
+                    [request.review_call_id.to_string()],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?)),
+                )
+                .optional()?;
+            return match outcome {
+                Some((kind, _)) if kind == "decision" => {
+                    Ok(ReviewGatewayAuthorization::ExistingDecision(Box::new(
+                        load_review_gateway_receipt_tx(&tx, request)?,
+                    )))
+                }
+                Some((_, Some(next_retry))) => {
+                    Ok(ReviewGatewayAuthorization::ExistingTransportFailure {
+                        next_retry_at_ms: i64_to_u64(next_retry)?,
+                    })
+                }
+                _ => Err(MasterError::ReviewGatewayUnavailable),
+            };
+        }
+        let plan = review_gateway_plan_tx(&tx, request, now_ms)?;
+        if packet.is_none() {
+            return Ok(ReviewGatewayAuthorization::Planned(Box::new(plan)));
+        }
+        let packet = packet.ok_or(MasterError::ReviewGatewayUnavailable)?;
+        validate_review_packet_plan(&plan, packet)?;
+        tx.execute(
+            "INSERT INTO feature_review_calls (
+               review_call_id,feature_id,specification_revision,lifecycle_revision,
+               feature_lease_id,integration_id,validation_id,candidate_commit,candidate_tree,
+               base_commit,candidate_diff_sha256,evidence_manifest_sha256,review_packet_sha256,
+               provider_id,model_id,candidate_attempt,feature_call,queue_revision,
+               emergency_pause_revision,registration_grant_revision,
+               cloud_disclosure_grant_revision,publication_grant_revision,
+               request_binding_sha256,started_at_ms
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,
+                       ?17,?18,?19,?20,?21,?22,?23,?24)",
+            params![
+                request.review_call_id.to_string(),
+                request.feature_id.to_string(),
+                u64_to_i64(request.specification_revision)?,
+                u64_to_i64(request.expected_lifecycle_revision)?,
+                request.feature_lease_id.to_string(),
+                request.integration_id.to_string(),
+                request.validation_id.to_string(),
+                request.candidate_commit,
+                request.candidate_tree,
+                request.base_commit,
+                request.candidate_diff_sha256.as_slice(),
+                request.evidence_manifest_sha256.as_slice(),
+                request.review_packet_sha256.as_slice(),
+                request.provider_id,
+                request.model_id,
+                i64::from(plan.candidate_attempt),
+                i64::from(plan.feature_call),
+                u64_to_i64(request.expected_queue_revision)?,
+                u64_to_i64(request.expected_emergency_pause_revision)?,
+                u64_to_i64(request.grants.registration)?,
+                u64_to_i64(request.grants.cloud_disclosure)?,
+                u64_to_i64(request.grants.autonomous_publication)?,
+                request_binding.as_slice(),
+                u64_to_i64(now_ms)?,
+            ],
+        )?;
+        append_feature_audit_tx(
+            &tx,
+            "feature_review_call_started",
+            Some(request.feature_id),
+            now_ms,
+            serde_json::json!({
+                "review_call_id": request.review_call_id,
+                "candidate_attempt": plan.candidate_attempt,
+                "feature_call": plan.feature_call,
+                "response_only": true,
+                "fresh_session": true,
+                "review_packet_digest_present": true,
+                "raw_packet_present": false,
+                "transcript_present": false,
+                "memory_present": false,
+                "publication_authorized": false
+            }),
+        )?;
+        tx.commit()?;
+        Ok(ReviewGatewayAuthorization::Planned(Box::new(plan)))
+    }
+
+    pub fn finalize_review_transport_failure(
+        &mut self,
+        plan: &ReviewGatewayExecutionPlan,
+        failure: ReviewTransportFailure,
+        now_ms: u64,
+    ) -> Result<u64, MasterError> {
+        let backoff = FEATURE_CONVEYOR_REVIEW_BACKOFF_MS
+            .get(usize::from(plan.candidate_attempt.saturating_sub(1)))
+            .copied()
+            .ok_or(MasterError::ReviewGatewayUnavailable)?;
+        let next_retry_at_ms = now_ms
+            .checked_add(backoff)
+            .ok_or(MasterError::ReviewGatewayUnavailable)?;
+        let mut digest = Sha256::new();
+        digest.update(b"assemblywright.review-transport-failure.v1\0");
+        digest.update(failure.as_str().as_bytes());
+        digest.update(plan.request.review_call_id.as_bytes());
+        let outcome_sha256: [u8; 32] = digest.finalize().into();
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        validate_started_review_call_tx(&tx, plan)?;
+        tx.execute(
+            "INSERT INTO feature_review_call_outcomes (
+               review_call_id,outcome_kind,outcome_sha256,next_retry_at_ms,completed_at_ms
+             ) VALUES (?1,?2,?3,?4,?5)",
+            params![
+                plan.request.review_call_id.to_string(),
+                failure.as_str(),
+                outcome_sha256.as_slice(),
+                u64_to_i64(next_retry_at_ms)?,
+                u64_to_i64(now_ms)?,
+            ],
+        )?;
+        append_feature_audit_tx(
+            &tx,
+            "feature_review_transport_failed",
+            Some(plan.request.feature_id),
+            now_ms,
+            serde_json::json!({
+                "review_call_id": plan.request.review_call_id,
+                "failure_code": failure.as_str(),
+                "candidate_attempt": plan.candidate_attempt,
+                "feature_call": plan.feature_call,
+                "backoff_ms": backoff,
+                "repair_consumed": false,
+                "decision_recorded": false,
+                "raw_error_present": false
+            }),
+        )?;
+        tx.commit()?;
+        Ok(next_retry_at_ms)
+    }
+
+    pub fn finalize_interrupted_review_call(
+        &mut self,
+        plan: &ReviewGatewayExecutionPlan,
+        now_ms: u64,
+    ) -> Result<(), MasterError> {
+        let mut digest = Sha256::new();
+        digest.update(b"assemblywright.review-interrupted.v1\0");
+        digest.update(plan.request.review_call_id.as_bytes());
+        let outcome_sha256: [u8; 32] = digest.finalize().into();
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        validate_started_review_call_tx(&tx, plan)?;
+        tx.execute(
+            "INSERT INTO feature_review_call_outcomes (
+               review_call_id,outcome_kind,outcome_sha256,next_retry_at_ms,completed_at_ms
+             ) VALUES (?1,'interrupted',?2,NULL,?3)",
+            params![
+                plan.request.review_call_id.to_string(),
+                outcome_sha256.as_slice(),
+                u64_to_i64(now_ms)?,
+            ],
+        )?;
+        let next_lifecycle_revision = plan
+            .request
+            .expected_lifecycle_revision
+            .checked_add(1)
+            .ok_or(MasterError::ReviewGatewayUnavailable)?;
+        let quarantined = tx.execute(
+            "UPDATE feature_conveyor_features SET status='quarantined',
+               lifecycle_revision=?1,effect_possible=1,updated_at_ms=?2
+             WHERE feature_id=?3 AND status='reviewing' AND lifecycle_revision=?4",
+            params![
+                u64_to_i64(next_lifecycle_revision)?,
+                u64_to_i64(now_ms)?,
+                plan.request.feature_id.to_string(),
+                u64_to_i64(plan.request.expected_lifecycle_revision)?,
+            ],
+        )? == 1;
+        if quarantined {
+            tx.execute(
+                "INSERT INTO feature_transition_evidence (
+                   feature_id,lifecycle_revision,from_status,to_status,recorded_at_ms
+                 ) VALUES (?1,?2,'reviewing','quarantined',?3)",
+                params![
+                    plan.request.feature_id.to_string(),
+                    u64_to_i64(next_lifecycle_revision)?,
+                    u64_to_i64(now_ms)?,
+                ],
+            )?;
+        }
+        append_feature_audit_tx(
+            &tx,
+            "feature_review_interrupted",
+            Some(plan.request.feature_id),
+            now_ms,
+            serde_json::json!({
+                "review_call_id": plan.request.review_call_id,
+                "candidate_attempt": plan.candidate_attempt,
+                "feature_call": plan.feature_call,
+                "outcome_recorded": true,
+                "quarantined": quarantined,
+                "effect_possible": true,
+                "automatic_retry_authorized": false,
+                "raw_error_present": false
+            }),
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn finalize_review_decision(
+        &mut self,
+        plan: &ReviewGatewayExecutionPlan,
+        packet: &FeatureConveyorReviewPacket,
+        output: &FeatureConveyorReviewProviderOutput,
+        now_ms: u64,
+    ) -> Result<FeatureConveyorReviewGatewayReceipt, MasterError> {
+        validate_review_packet_plan(plan, packet)?;
+        output.validate()?;
+        if output.review_packet_sha256 != plan.request.review_packet_sha256
+            || output.provider_id != plan.request.provider_id
+            || output.model_id != plan.request.model_id
+            || output.evidence_digests != plan.evidence_digests
+            || output
+                .requirement_coverage
+                .iter()
+                .map(|coverage| coverage.requirement_id.as_str())
+                .ne(plan.requirement_ids.iter().map(String::as_str))
+            || output
+                .blocking_findings
+                .iter()
+                .chain(&output.non_blocking_findings)
+                .any(|finding| {
+                    !plan.requirement_ids.contains(&finding.requirement_id)
+                        || !plan.evidence_digests.contains(&finding.evidence_sha256)
+                })
+            || output
+                .requirement_coverage
+                .iter()
+                .any(|coverage| !plan.evidence_digests.contains(&coverage.evidence_sha256))
+            || !plan
+                .evidence_digests
+                .contains(&output.knowledge_base_evidence_sha256)
+        {
+            return Err(MasterError::ReviewGatewayUnavailable);
+        }
+        let structured_value = serde_json::to_value(output)?;
+        let structured_result_json = canonical_json(&structured_value)?;
+        let decision_sha256: [u8; 32] = Sha256::digest(structured_result_json.as_bytes()).into();
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        validate_started_review_call_tx(&tx, plan)?;
+        let current = review_gateway_plan_tx(&tx, &plan.request, now_ms)?;
+        if current.request != plan.request
+            || current.candidate != plan.candidate
+            || current.approved_specification_sha256 != plan.approved_specification_sha256
+            || current.requirements_sha256 != plan.requirements_sha256
+            || current.evidence_digests != plan.evidence_digests
+        {
+            return Err(MasterError::ReviewGatewayUnavailable);
+        }
+        let approved = output.decision == FeatureConveyorReviewDecision::Approved;
+        let lifecycle_revision = if approved {
+            plan.request
+                .expected_lifecycle_revision
+                .checked_add(1)
+                .ok_or(MasterError::ReviewGatewayUnavailable)?
+        } else {
+            plan.request.expected_lifecycle_revision
+        };
+        tx.execute(
+            "INSERT INTO feature_review_call_outcomes (
+               review_call_id,outcome_kind,outcome_sha256,next_retry_at_ms,completed_at_ms
+             ) VALUES (?1,'decision',?2,NULL,?3)",
+            params![
+                plan.request.review_call_id.to_string(),
+                decision_sha256.as_slice(),
+                u64_to_i64(now_ms)?,
+            ],
+        )?;
+        tx.execute(
+            "INSERT INTO feature_review_decisions (
+               review_call_id,feature_id,candidate_commit,decision,decision_sha256,
+               structured_result_json,lifecycle_revision,decided_at_ms
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![
+                plan.request.review_call_id.to_string(),
+                plan.request.feature_id.to_string(),
+                plan.request.candidate_commit,
+                if approved { "approved" } else { "rejected" },
+                decision_sha256.as_slice(),
+                structured_result_json,
+                u64_to_i64(lifecycle_revision)?,
+                u64_to_i64(now_ms)?,
+            ],
+        )?;
+        if approved {
+            if tx.execute(
+                "UPDATE feature_conveyor_features SET status='publishing',
+                   lifecycle_revision=?1,updated_at_ms=?2
+                 WHERE feature_id=?3 AND status='reviewing' AND lifecycle_revision=?4",
+                params![
+                    u64_to_i64(lifecycle_revision)?,
+                    u64_to_i64(now_ms)?,
+                    plan.request.feature_id.to_string(),
+                    u64_to_i64(plan.request.expected_lifecycle_revision)?,
+                ],
+            )? != 1
+            {
+                return Err(MasterError::ReviewGatewayUnavailable);
+            }
+            tx.execute(
+                "INSERT INTO feature_transition_evidence (
+                   feature_id,lifecycle_revision,from_status,to_status,
+                   repository_snapshot_sha256,accepted_evidence_sha256,recorded_at_ms
+                 ) VALUES (?1,?2,'reviewing','publishing',?3,?4,?5)",
+                params![
+                    plan.request.feature_id.to_string(),
+                    u64_to_i64(lifecycle_revision)?,
+                    plan.request.candidate_diff_sha256.as_slice(),
+                    decision_sha256.as_slice(),
+                    u64_to_i64(now_ms)?,
+                ],
+            )?;
+        }
+        append_feature_audit_tx(
+            &tx,
+            if approved {
+                "feature_review_approved"
+            } else {
+                "feature_review_rejected"
+            },
+            Some(plan.request.feature_id),
+            now_ms,
+            serde_json::json!({
+                "review_call_id": plan.request.review_call_id,
+                "candidate_attempt": plan.candidate_attempt,
+                "feature_call": plan.feature_call,
+                "decision_digest_present": true,
+                "blocking_finding_count": output.blocking_findings.len(),
+                "non_blocking_finding_count": output.non_blocking_findings.len(),
+                "requirement_coverage_count": output.requirement_coverage.len(),
+                "knowledge_base_determination_present": true,
+                "from_status": "reviewing",
+                "to_status": if approved { "publishing" } else { "reviewing" },
+                "lifecycle_advanced": approved,
+                "repair_consumed": false,
+                "raw_provider_output_present": false,
+                "transcript_present": false,
+                "memory_present": false
+            }),
+        )?;
+        let receipt = review_gateway_receipt(plan, lifecycle_revision, decision_sha256, approved);
+        tx.commit()?;
+        Ok(receipt)
+    }
+
     /// Read-only cancellation probe for the contained validator. Any authority
     /// drift is reported as not current; storage corruption remains an error.
     pub fn validation_gate_execution_is_current(
@@ -1874,6 +2339,45 @@ impl MasterKernel {
             return Ok(false);
         }
         match validate_validation_gate_binding_tx(&tx, request, now_ms) {
+            Ok(_) => Ok(true),
+            Err(MasterError::Storage(error)) => Err(MasterError::Storage(error)),
+            Err(MasterError::Json(error)) => Err(MasterError::Json(error)),
+            Err(MasterError::InvalidStoredState(error)) => {
+                Err(MasterError::InvalidStoredState(error))
+            }
+            Err(_) => Ok(false),
+        }
+    }
+
+    /// Read-only cancellation probe for an in-flight response-only review.
+    /// Pause, cancellation, lifecycle, queue, grant, provider, candidate, or
+    /// evidence drift becomes `false`; corrupt storage remains an error.
+    pub fn review_gateway_execution_is_current(
+        &self,
+        request: &FeatureConveyorReviewGatewayRequest,
+        now_ms: u64,
+    ) -> Result<bool, MasterError> {
+        if request.validate().is_err() {
+            return Ok(false);
+        }
+        let tx = self.connection.unchecked_transaction()?;
+        let pending: bool = tx.query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM feature_review_calls c
+               WHERE c.review_call_id=?1 AND c.request_binding_sha256=?2
+                 AND NOT EXISTS(SELECT 1 FROM feature_review_call_outcomes o
+                                WHERE o.review_call_id=c.review_call_id)
+             )",
+            params![
+                request.review_call_id.to_string(),
+                feature_conveyor_review_request_binding_sha256(request)?.as_slice(),
+            ],
+            |row| row.get(0),
+        )?;
+        if !pending {
+            return Ok(false);
+        }
+        match review_gateway_plan_tx(&tx, request, now_ms) {
             Ok(_) => Ok(true),
             Err(MasterError::Storage(error)) => Err(MasterError::Storage(error)),
             Err(MasterError::Json(error)) => Err(MasterError::Json(error)),
@@ -5626,6 +6130,80 @@ impl MasterKernel {
             )?;
         }
         let version = self.schema_version()?;
+        if version == 15 {
+            self.connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 CREATE TABLE feature_review_calls (
+                   review_call_id TEXT PRIMARY KEY NOT NULL,
+                   feature_id TEXT NOT NULL REFERENCES feature_conveyor_features(feature_id),
+                   specification_revision INTEGER NOT NULL CHECK(specification_revision>0),
+                   lifecycle_revision INTEGER NOT NULL CHECK(lifecycle_revision>0),
+                   feature_lease_id TEXT NOT NULL,
+                   integration_id TEXT NOT NULL REFERENCES feature_artifact_integrations(integration_id),
+                   validation_id TEXT NOT NULL REFERENCES feature_validation_attempts(validation_id),
+                   candidate_commit TEXT NOT NULL CHECK(length(candidate_commit)=40),
+                   candidate_tree TEXT NOT NULL CHECK(length(candidate_tree)=40),
+                   base_commit TEXT NOT NULL CHECK(length(base_commit)=40),
+                   candidate_diff_sha256 BLOB NOT NULL CHECK(length(candidate_diff_sha256)=32),
+                   evidence_manifest_sha256 BLOB NOT NULL CHECK(length(evidence_manifest_sha256)=32),
+                   review_packet_sha256 BLOB NOT NULL CHECK(length(review_packet_sha256)=32),
+                   provider_id TEXT NOT NULL CHECK(length(provider_id) BETWEEN 1 AND 128),
+                   model_id TEXT NOT NULL CHECK(length(model_id) BETWEEN 1 AND 128),
+                   candidate_attempt INTEGER NOT NULL CHECK(candidate_attempt BETWEEN 1 AND 3),
+                   feature_call INTEGER NOT NULL CHECK(feature_call BETWEEN 1 AND 12),
+                   queue_revision INTEGER NOT NULL CHECK(queue_revision>=0),
+                   emergency_pause_revision INTEGER NOT NULL CHECK(emergency_pause_revision>=0),
+                   registration_grant_revision INTEGER NOT NULL CHECK(registration_grant_revision>0),
+                   cloud_disclosure_grant_revision INTEGER NOT NULL CHECK(cloud_disclosure_grant_revision>0),
+                   publication_grant_revision INTEGER NOT NULL CHECK(publication_grant_revision>0),
+                   request_binding_sha256 BLOB NOT NULL CHECK(length(request_binding_sha256)=32),
+                   started_at_ms INTEGER NOT NULL CHECK(started_at_ms>0)
+                 );
+                 CREATE INDEX feature_review_calls_candidate_idx
+                   ON feature_review_calls(feature_id,candidate_commit,candidate_attempt);
+                 CREATE TRIGGER feature_review_calls_no_update BEFORE UPDATE ON feature_review_calls
+                   BEGIN SELECT RAISE(ABORT,'immutable review call'); END;
+                 CREATE TRIGGER feature_review_calls_no_delete BEFORE DELETE ON feature_review_calls
+                   BEGIN SELECT RAISE(ABORT,'durable review call evidence'); END;
+                 CREATE TABLE feature_review_call_outcomes (
+                   review_call_id TEXT PRIMARY KEY NOT NULL REFERENCES feature_review_calls(review_call_id),
+                   outcome_kind TEXT NOT NULL CHECK(outcome_kind IN(
+                     'provider_outage','malformed_output','incomplete_transport','interrupted','decision'
+                   )),
+                   outcome_sha256 BLOB NOT NULL CHECK(length(outcome_sha256)=32),
+                   next_retry_at_ms INTEGER CHECK(next_retry_at_ms IS NULL OR next_retry_at_ms>0),
+                   completed_at_ms INTEGER NOT NULL CHECK(completed_at_ms>0),
+                   CHECK(
+                     (outcome_kind IN('decision','interrupted') AND next_retry_at_ms IS NULL)
+                     OR (outcome_kind NOT IN('decision','interrupted') AND next_retry_at_ms IS NOT NULL)
+                   )
+                 );
+                 CREATE TRIGGER feature_review_call_outcomes_no_update BEFORE UPDATE ON feature_review_call_outcomes
+                   BEGIN SELECT RAISE(ABORT,'immutable review call outcome'); END;
+                 CREATE TRIGGER feature_review_call_outcomes_no_delete BEFORE DELETE ON feature_review_call_outcomes
+                   BEGIN SELECT RAISE(ABORT,'durable review call outcome evidence'); END;
+                 CREATE TABLE feature_review_decisions (
+                   review_call_id TEXT PRIMARY KEY NOT NULL REFERENCES feature_review_calls(review_call_id),
+                   feature_id TEXT NOT NULL,
+                   candidate_commit TEXT NOT NULL CHECK(length(candidate_commit)=40),
+                   decision TEXT NOT NULL CHECK(decision IN('approved','rejected')),
+                   decision_sha256 BLOB NOT NULL CHECK(length(decision_sha256)=32),
+                   structured_result_json TEXT NOT NULL CHECK(
+                     length(CAST(structured_result_json AS BLOB)) BETWEEN 2 AND 65536
+                   ),
+                   lifecycle_revision INTEGER NOT NULL CHECK(lifecycle_revision>0),
+                   decided_at_ms INTEGER NOT NULL CHECK(decided_at_ms>0),
+                   UNIQUE(feature_id,candidate_commit)
+                 );
+                 CREATE TRIGGER feature_review_decisions_no_update BEFORE UPDATE ON feature_review_decisions
+                   BEGIN SELECT RAISE(ABORT,'immutable review decision'); END;
+                 CREATE TRIGGER feature_review_decisions_no_delete BEFORE DELETE ON feature_review_decisions
+                   BEGIN SELECT RAISE(ABORT,'durable review decision evidence'); END;
+                 PRAGMA user_version=16;
+                 COMMIT;"
+            )?;
+        }
+        let version = self.schema_version()?;
         if version != MASTER_SCHEMA_VERSION {
             return Err(MasterError::UnsupportedSchemaVersion {
                 expected: MASTER_SCHEMA_VERSION,
@@ -7054,6 +7632,9 @@ fn validate_approved_specification(
         ));
     }
     let canonical = canonical_json(&specification.manifest)?;
+    validate_review_safe_manifest_schema(&specification.manifest)?;
+    validate_review_disclosure_value(&specification.manifest)?;
+    approved_requirement_ids(&specification.manifest)?;
     if canonical.len() > MAX_APPROVED_FEATURE_SPECIFICATION_BYTES {
         return Err(MasterError::InvalidFeatureConveyorInput(
             "approved specification exceeds the fixed review envelope".to_string(),
@@ -7066,6 +7647,268 @@ fn validate_approved_specification(
         ));
     }
     Ok(canonical)
+}
+
+fn validate_review_disclosure_value(value: &Value) -> Result<(), MasterError> {
+    const FORBIDDEN_KEY_COMPONENTS: &[&str] = &[
+        "authorization",
+        "auth",
+        "authentication",
+        "bearer",
+        "chat",
+        "conversation",
+        "cookie",
+        "credential",
+        "credentials",
+        "dialogue",
+        "history",
+        "memory",
+        "message",
+        "messages",
+        "oauth",
+        "passwd",
+        "password",
+        "prompt",
+        "prompts",
+        "raw",
+        "secret",
+        "secrets",
+        "transcript",
+        "token",
+        "turn",
+        "turns",
+    ];
+    const FORBIDDEN_COMPOUND_KEYS: &[&str] = &[
+        "access_token",
+        "api_key",
+        "apikey",
+        "auth_token",
+        "bearer_token",
+        "id_token",
+        "private_key",
+        "refresh_token",
+        "session_token",
+    ];
+    match value {
+        Value::Object(object) => {
+            for (key, nested) in object {
+                let mut normalized = String::with_capacity(key.len());
+                let mut separator = false;
+                for character in key.chars().flat_map(char::to_lowercase) {
+                    if character.is_ascii_alphanumeric() {
+                        normalized.push(character);
+                        separator = false;
+                    } else if !separator && !normalized.is_empty() {
+                        normalized.push('_');
+                        separator = true;
+                    }
+                }
+                let normalized = normalized.trim_matches('_');
+                let compact = normalized.replace('_', "");
+                let forbidden_component = normalized
+                    .split('_')
+                    .any(|component| FORBIDDEN_KEY_COMPONENTS.contains(&component))
+                    || FORBIDDEN_KEY_COMPONENTS
+                        .iter()
+                        .any(|component| compact.contains(component));
+                let forbidden_compound = FORBIDDEN_COMPOUND_KEYS.iter().any(|forbidden| {
+                    normalized == *forbidden
+                        || normalized.starts_with(&format!("{forbidden}_"))
+                        || normalized.ends_with(&format!("_{forbidden}"))
+                        || compact == forbidden.replace('_', "")
+                });
+                if forbidden_component || forbidden_compound {
+                    return Err(MasterError::InvalidFeatureConveyorInput(
+                        "approved specification contains review-forbidden sensitive context"
+                            .to_string(),
+                    ));
+                }
+                validate_review_disclosure_value(nested)?;
+            }
+        }
+        Value::Array(values) => {
+            for nested in values {
+                validate_review_disclosure_value(nested)?;
+            }
+        }
+        Value::String(string) => {
+            let trimmed = string.trim();
+            let secret_shaped = trimmed.contains("-----BEGIN ")
+                || trimmed.to_ascii_lowercase().starts_with("bearer ")
+                || trimmed.to_ascii_lowercase().starts_with("basic ")
+                || trimmed.starts_with("ghp_")
+                || trimmed.starts_with("github_pat_")
+                || (trimmed.starts_with("sk-") && trimmed.len() >= 20)
+                || (trimmed.starts_with("AKIA") && trimmed.len() == 20)
+                || (trimmed.starts_with("eyJ")
+                    && trimmed.split('.').count() == 3
+                    && trimmed.len() >= 32)
+                || trimmed.split_once("://").is_some_and(|(_, authority)| {
+                    authority
+                        .split('/')
+                        .next()
+                        .is_some_and(|part| part.contains('@'))
+                });
+            if secret_shaped {
+                return Err(MasterError::InvalidFeatureConveyorInput(
+                    "approved specification contains review-forbidden secret-shaped content"
+                        .to_string(),
+                ));
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReviewSafeApprovedManifest {
+    acceptance: Vec<String>,
+    outcome: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    scope: Option<String>,
+    #[serde(default)]
+    allowed_paths: Vec<String>,
+    #[serde(default)]
+    validation_gate: Option<StoredValidationGateManifest>,
+    #[serde(default)]
+    assumptions: Vec<String>,
+    #[serde(default)]
+    risks: Vec<String>,
+    #[serde(default)]
+    non_goals: Vec<String>,
+    #[serde(default)]
+    decisions: Vec<String>,
+    #[serde(default)]
+    required_capabilities: Vec<String>,
+    #[serde(default)]
+    unit_test_obligations: Vec<String>,
+    #[serde(default)]
+    e2e_scenarios: Vec<String>,
+    #[serde(default)]
+    documentation_obligations: Vec<String>,
+    #[serde(default)]
+    knowledge_base_obligations: Vec<String>,
+    #[serde(default)]
+    prohibited_data: Vec<String>,
+    #[serde(default)]
+    publication_checks: Vec<String>,
+    #[serde(default)]
+    base_branch: Option<String>,
+    #[serde(default)]
+    security_classification: Option<String>,
+    #[serde(default)]
+    merge_strategy: Option<String>,
+    #[serde(default)]
+    post_merge_gate: Option<String>,
+}
+
+fn validate_review_safe_manifest_schema(value: &Value) -> Result<(), MasterError> {
+    let manifest: ReviewSafeApprovedManifest =
+        serde_json::from_value(value.clone()).map_err(|_| {
+            MasterError::InvalidFeatureConveyorInput(
+                "approved specification is not the strict review-safe manifest schema".to_string(),
+            )
+        })?;
+    let mut strings = Vec::new();
+    strings.push(manifest.outcome.as_str());
+    strings.extend(manifest.title.as_deref());
+    strings.extend(manifest.scope.as_deref());
+    strings.extend(manifest.acceptance.iter().map(String::as_str));
+    strings.extend(manifest.allowed_paths.iter().map(String::as_str));
+    strings.extend(manifest.assumptions.iter().map(String::as_str));
+    strings.extend(manifest.risks.iter().map(String::as_str));
+    strings.extend(manifest.non_goals.iter().map(String::as_str));
+    strings.extend(manifest.decisions.iter().map(String::as_str));
+    strings.extend(manifest.required_capabilities.iter().map(String::as_str));
+    strings.extend(manifest.unit_test_obligations.iter().map(String::as_str));
+    strings.extend(manifest.e2e_scenarios.iter().map(String::as_str));
+    strings.extend(
+        manifest
+            .documentation_obligations
+            .iter()
+            .map(String::as_str),
+    );
+    strings.extend(
+        manifest
+            .knowledge_base_obligations
+            .iter()
+            .map(String::as_str),
+    );
+    strings.extend(manifest.prohibited_data.iter().map(String::as_str));
+    strings.extend(manifest.publication_checks.iter().map(String::as_str));
+    strings.extend(manifest.base_branch.as_deref());
+    strings.extend(manifest.security_classification.as_deref());
+    strings.extend(manifest.merge_strategy.as_deref());
+    strings.extend(manifest.post_merge_gate.as_deref());
+    if strings
+        .iter()
+        .any(|value| value.is_empty() || value.len() > 4096)
+        || manifest.allowed_paths.len() > 256
+        || manifest.assumptions.len() > 128
+        || manifest.risks.len() > 128
+        || manifest.non_goals.len() > 128
+        || manifest.decisions.len() > 128
+        || manifest.required_capabilities.len() > 128
+        || manifest.unit_test_obligations.len() > 128
+        || manifest.e2e_scenarios.len() > 128
+        || manifest.documentation_obligations.len() > 128
+        || manifest.knowledge_base_obligations.len() > 128
+        || manifest.prohibited_data.len() > 128
+        || manifest.publication_checks.len() > 128
+    {
+        return Err(MasterError::InvalidFeatureConveyorInput(
+            "approved specification review-safe fields exceed fixed bounds".to_string(),
+        ));
+    }
+    if let Some(gate) = manifest.validation_gate {
+        if gate.schema_version != FEATURE_CONVEYOR_VALIDATION_GATE_SCHEMA_VERSION
+            || gate.command_ids != FeatureConveyorValidationCommandId::REQUIRED
+        {
+            return Err(MasterError::InvalidFeatureConveyorInput(
+                "approved specification validation gate is not exact".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn approved_requirement_ids(manifest: &Value) -> Result<Vec<String>, MasterError> {
+    let acceptance = manifest
+        .as_object()
+        .and_then(|object| object.get("acceptance"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            MasterError::InvalidFeatureConveyorInput(
+                "approved specification requires an ordered acceptance array".to_string(),
+            )
+        })?;
+    if acceptance.is_empty() || acceptance.len() > MAX_FEATURE_CONVEYOR_REVIEW_REQUIREMENT_COVERAGE
+    {
+        return Err(MasterError::InvalidFeatureConveyorInput(
+            "approved specification acceptance count is outside the review envelope".to_string(),
+        ));
+    }
+    let mut ids = Vec::with_capacity(acceptance.len());
+    let mut unique = HashSet::new();
+    for value in acceptance {
+        let id = value.as_str().ok_or_else(|| {
+            MasterError::InvalidFeatureConveyorInput(
+                "approved specification acceptance IDs must be strings".to_string(),
+            )
+        })?;
+        validate_bounded_feature_identifier(id, "acceptance criterion")?;
+        if !unique.insert(id) {
+            return Err(MasterError::InvalidFeatureConveyorInput(
+                "approved specification acceptance IDs must be unique".to_string(),
+            ));
+        }
+        ids.push(id.to_string());
+    }
+    Ok(ids)
 }
 
 fn validate_bounded_feature_identifier(value: &str, label: &str) -> Result<(), MasterError> {
@@ -8488,6 +9331,455 @@ fn validate_validation_gate_evidence(
     Ok(())
 }
 
+fn review_gateway_plan_tx(
+    tx: &Transaction<'_>,
+    request: &FeatureConveyorReviewGatewayRequest,
+    now_ms: u64,
+) -> Result<ReviewGatewayExecutionPlan, MasterError> {
+    if emergency_paused_tx(tx)? {
+        return Err(MasterError::EmergencyPaused);
+    }
+    let pause_revision = emergency_pause_revision_tx(tx)?;
+    if pause_revision != request.expected_emergency_pause_revision {
+        return Err(MasterError::StaleEmergencyPauseRevision {
+            expected: request.expected_emergency_pause_revision,
+            found: pause_revision,
+        });
+    }
+    let queue_revision = i64_to_u64(tx.query_row(
+        "SELECT queue_revision FROM feature_conveyor_state WHERE singleton=1",
+        [],
+        |row| row.get::<_, i64>(0),
+    )?)?;
+    if queue_revision != request.expected_queue_revision {
+        return Err(MasterError::StaleFeatureQueueRevision {
+            expected: request.expected_queue_revision,
+            found: queue_revision,
+        });
+    }
+    require_active_lease_tx(tx, request.feature_id)?;
+    require_current_feature_grants_tx(tx, request.feature_id, now_ms)?;
+    let feature = tx
+        .query_row(
+            "SELECT current_specification_revision,lifecycle_revision,status
+             FROM feature_conveyor_features WHERE feature_id=?1",
+            [request.feature_id.to_string()],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or(MasterError::ReviewGatewayUnavailable)?;
+    if i64_to_u64(feature.0)? != request.specification_revision
+        || i64_to_u64(feature.1)? != request.expected_lifecycle_revision
+        || feature.2 != "reviewing"
+    {
+        return Err(MasterError::ReviewGatewayUnavailable);
+    }
+    let lease_id = tx.query_row(
+        "SELECT lease_id FROM feature_active_lease WHERE singleton=1 AND feature_id=?1",
+        [request.feature_id.to_string()],
+        |row| row.get::<_, String>(0),
+    )?;
+    if parse_uuid(&lease_id)? != request.feature_lease_id {
+        return Err(MasterError::ReviewGatewayUnavailable);
+    }
+    let specification = tx.query_row(
+        "SELECT canonical_manifest_json,manifest_sha256,design_sha256,provider_id,model_id,
+                registration_grant_revision,cloud_disclosure_grant_revision,
+                publication_grant_revision
+         FROM feature_specification_revisions WHERE feature_id=?1 AND revision=?2",
+        params![
+            request.feature_id.to_string(),
+            u64_to_i64(request.specification_revision)?
+        ],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, i64>(7)?,
+            ))
+        },
+    )?;
+    if specification.3 != request.provider_id
+        || specification.4 != request.model_id
+        || i64_to_u64(specification.5)? != request.grants.registration
+        || i64_to_u64(specification.6)? != request.grants.cloud_disclosure
+        || i64_to_u64(specification.7)? != request.grants.autonomous_publication
+    {
+        return Err(MasterError::ReviewGatewayUnavailable);
+    }
+    let integration = tx
+        .query_row(
+            "SELECT feature_id,specification_revision,lifecycle_revision,feature_lease_id,
+                    artifact_set_sha256,candidate_commit,candidate_tree,base_commit,
+                    queue_revision,emergency_pause_revision,registration_grant_revision,
+                    cloud_disclosure_grant_revision,publication_grant_revision
+             FROM feature_artifact_integrations WHERE integration_id=?1",
+            [request.integration_id.to_string()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, i64>(8)?,
+                    row.get::<_, i64>(9)?,
+                    row.get::<_, i64>(10)?,
+                    row.get::<_, i64>(11)?,
+                    row.get::<_, i64>(12)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or(MasterError::ReviewGatewayUnavailable)?;
+    if parse_uuid(&integration.0)? != request.feature_id
+        || i64_to_u64(integration.1)? != request.specification_revision
+        || i64_to_u64(integration.2)?.checked_add(2) != Some(request.expected_lifecycle_revision)
+        || parse_uuid(&integration.3)? != request.feature_lease_id
+        || integration.5 != request.candidate_commit
+        || integration.6 != request.candidate_tree
+        || integration.7 != request.base_commit
+        || i64_to_u64(integration.8)? != request.expected_queue_revision
+        || i64_to_u64(integration.9)? != request.expected_emergency_pause_revision
+        || i64_to_u64(integration.10)? != request.grants.registration
+        || i64_to_u64(integration.11)? != request.grants.cloud_disclosure
+        || i64_to_u64(integration.12)? != request.grants.autonomous_publication
+    {
+        return Err(MasterError::ReviewGatewayUnavailable);
+    }
+    let validation = tx
+        .query_row(
+            "SELECT a.feature_id,a.specification_revision,a.lifecycle_revision,
+                    a.feature_lease_id,a.integration_id,a.candidate_commit,a.candidate_tree,
+                    a.base_commit,a.queue_revision,a.emergency_pause_revision,
+                    a.registration_grant_revision,a.cloud_disclosure_grant_revision,
+                    a.publication_grant_revision,a.command_ids_json,c.passed,
+                    c.evidence_manifest_sha256,c.lifecycle_revision
+             FROM feature_validation_attempts a
+             JOIN feature_validation_completions c ON c.validation_id=a.validation_id
+             WHERE a.validation_id=?1",
+            [request.validation_id.to_string()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, i64>(8)?,
+                    row.get::<_, i64>(9)?,
+                    row.get::<_, i64>(10)?,
+                    row.get::<_, i64>(11)?,
+                    row.get::<_, i64>(12)?,
+                    row.get::<_, String>(13)?,
+                    row.get::<_, i64>(14)?,
+                    row.get::<_, Vec<u8>>(15)?,
+                    row.get::<_, i64>(16)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or(MasterError::ReviewGatewayUnavailable)?;
+    if parse_uuid(&validation.0)? != request.feature_id
+        || i64_to_u64(validation.1)? != request.specification_revision
+        || i64_to_u64(validation.2)?.checked_add(1) != Some(request.expected_lifecycle_revision)
+        || parse_uuid(&validation.3)? != request.feature_lease_id
+        || parse_uuid(&validation.4)? != request.integration_id
+        || validation.5 != request.candidate_commit
+        || validation.6 != request.candidate_tree
+        || validation.7 != request.base_commit
+        || i64_to_u64(validation.8)? != request.expected_queue_revision
+        || i64_to_u64(validation.9)? != request.expected_emergency_pause_revision
+        || i64_to_u64(validation.10)? != request.grants.registration
+        || i64_to_u64(validation.11)? != request.grants.cloud_disclosure
+        || i64_to_u64(validation.12)? != request.grants.autonomous_publication
+        || !parse_stored_boolean(validation.14, "review validation pass")?
+        || digest_array(&validation.15)? != request.evidence_manifest_sha256
+        || i64_to_u64(validation.16)? != request.expected_lifecycle_revision
+    {
+        return Err(MasterError::ReviewGatewayUnavailable);
+    }
+    let command_ids: Vec<FeatureConveyorValidationCommandId> =
+        serde_json::from_str(&validation.13)?;
+    if command_ids != FeatureConveyorValidationCommandId::REQUIRED {
+        return Err(MasterError::ReviewGatewayUnavailable);
+    }
+    let mut evidence_digests = Vec::with_capacity(command_ids.len() + 1);
+    evidence_digests.push(request.evidence_manifest_sha256);
+    for command_id in command_ids {
+        let digest: Vec<u8> = tx.query_row(
+            "SELECT result_sha256 FROM feature_validation_command_evidence
+             WHERE validation_id=?1 AND command_id=?2 AND passed=1",
+            params![
+                request.validation_id.to_string(),
+                serde_json::to_string(&command_id)?
+            ],
+            |row| row.get(0),
+        )?;
+        evidence_digests.push(digest_array(&digest)?);
+    }
+    let approved_specification: Value = serde_json::from_str(&specification.0)?;
+    validate_review_safe_manifest_schema(&approved_specification)
+        .map_err(|_| MasterError::ReviewGatewayUnavailable)?;
+    validate_review_disclosure_value(&approved_specification)?;
+    let requirement_ids = approved_requirement_ids(&approved_specification)
+        .map_err(|_| MasterError::ReviewGatewayUnavailable)?;
+    let (_, work_packet_acceptance_count) =
+        validation_work_packet_scope_tx(tx, request.integration_id)?;
+    if usize::try_from(work_packet_acceptance_count).ok() != Some(requirement_ids.len()) {
+        return Err(MasterError::ReviewGatewayUnavailable);
+    }
+    let existing_call = tx
+        .query_row(
+            "SELECT candidate_attempt,feature_call FROM feature_review_calls
+             WHERE review_call_id=?1",
+            [request.review_call_id.to_string()],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()?;
+    let (candidate_attempt, feature_call) = if let Some((candidate_attempt, feature_call)) =
+        existing_call
+    {
+        (
+            u8::try_from(candidate_attempt).map_err(|_| MasterError::ReviewGatewayUnavailable)?,
+            u8::try_from(feature_call).map_err(|_| MasterError::ReviewGatewayUnavailable)?,
+        )
+    } else {
+        let decided: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM feature_review_decisions
+             WHERE feature_id=?1 AND candidate_commit=?2)",
+            params![request.feature_id.to_string(), request.candidate_commit],
+            |row| row.get(0),
+        )?;
+        if decided {
+            return Err(MasterError::ReviewGatewayUnavailable);
+        }
+        let candidate_calls = i64_to_u64(tx.query_row(
+            "SELECT COUNT(*) FROM feature_review_calls
+             WHERE feature_id=?1 AND candidate_commit=?2",
+            params![request.feature_id.to_string(), request.candidate_commit],
+            |row| row.get::<_, i64>(0),
+        )?)?;
+        let feature_calls = i64_to_u64(tx.query_row(
+            "SELECT COUNT(*) FROM feature_review_calls WHERE feature_id=?1",
+            [request.feature_id.to_string()],
+            |row| row.get::<_, i64>(0),
+        )?)?;
+        if candidate_calls
+            >= u64::from(MAX_FEATURE_CONVEYOR_REVIEW_TRANSPORT_ATTEMPTS_PER_CANDIDATE)
+            || feature_calls >= u64::from(MAX_FEATURE_CONVEYOR_REVIEW_CALLS_PER_FEATURE)
+        {
+            return Err(MasterError::ReviewBudgetExhausted);
+        }
+        let next_retry = tx.query_row(
+            "SELECT MAX(o.next_retry_at_ms) FROM feature_review_call_outcomes o
+             JOIN feature_review_calls c ON c.review_call_id=o.review_call_id
+             WHERE c.feature_id=?1 AND c.candidate_commit=?2 AND o.outcome_kind<>'decision'",
+            params![request.feature_id.to_string(), request.candidate_commit],
+            |row| row.get::<_, Option<i64>>(0),
+        )?;
+        if let Some(next_retry) = next_retry {
+            let next_retry_at_ms = i64_to_u64(next_retry)?;
+            if now_ms < next_retry_at_ms {
+                return Err(MasterError::ReviewRetryNotReady { next_retry_at_ms });
+            }
+        }
+        (
+            u8::try_from(candidate_calls + 1).map_err(|_| MasterError::ReviewGatewayUnavailable)?,
+            u8::try_from(feature_calls + 1).map_err(|_| MasterError::ReviewGatewayUnavailable)?,
+        )
+    };
+    let candidate = CandidateEvidence {
+        integration_id: request.integration_id,
+        artifact_set_sha256: digest_array(&integration.4)?,
+        candidate_commit: request.candidate_commit.clone(),
+        candidate_tree: request.candidate_tree.clone(),
+        base_commit: request.base_commit.clone(),
+        artifact_ids: integration_artifact_ids_tx(tx, request.integration_id)?,
+    };
+    Ok(ReviewGatewayExecutionPlan {
+        request: request.clone(),
+        candidate,
+        approved_specification,
+        approved_specification_sha256: digest_array(&specification.1)?,
+        requirements_sha256: digest_array(&specification.2)?,
+        requirement_ids,
+        evidence_digests,
+        candidate_attempt,
+        feature_call,
+    })
+}
+
+fn validate_review_packet_plan(
+    plan: &ReviewGatewayExecutionPlan,
+    packet: &FeatureConveyorReviewPacket,
+) -> Result<(), MasterError> {
+    packet.validate()?;
+    if packet.feature_id != plan.request.feature_id
+        || packet.specification_revision != plan.request.specification_revision
+        || packet.approved_specification != plan.approved_specification
+        || packet.approved_specification_sha256 != plan.approved_specification_sha256
+        || packet.candidate_commit != plan.request.candidate_commit
+        || packet.candidate_tree != plan.request.candidate_tree
+        || packet.base_commit != plan.request.base_commit
+        || packet.candidate_diff_sha256 != plan.request.candidate_diff_sha256
+        || packet.evidence_manifest_sha256 != plan.request.evidence_manifest_sha256
+        || packet.evidence_digests != plan.evidence_digests
+        || packet.requirements_sha256 != plan.requirements_sha256
+        || packet.requirement_ids != plan.requirement_ids
+        || packet.provider_id != plan.request.provider_id
+        || packet.model_id != plan.request.model_id
+        || packet.grants != plan.request.grants
+        || packet.sha256()? != plan.request.review_packet_sha256
+    {
+        return Err(MasterError::ReviewGatewayUnavailable);
+    }
+    Ok(())
+}
+
+fn validate_started_review_call_tx(
+    tx: &Transaction<'_>,
+    plan: &ReviewGatewayExecutionPlan,
+) -> Result<(), MasterError> {
+    let row = tx
+        .query_row(
+            "SELECT request_binding_sha256,candidate_attempt,feature_call,
+                    EXISTS(SELECT 1 FROM feature_review_call_outcomes o
+                           WHERE o.review_call_id=c.review_call_id)
+             FROM feature_review_calls c WHERE review_call_id=?1",
+            [plan.request.review_call_id.to_string()],
+            |row| {
+                Ok((
+                    row.get::<_, Vec<u8>>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, bool>(3)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or(MasterError::ReviewGatewayUnavailable)?;
+    if digest_array(&row.0)? != feature_conveyor_review_request_binding_sha256(&plan.request)?
+        || row.1 != i64::from(plan.candidate_attempt)
+        || row.2 != i64::from(plan.feature_call)
+        || row.3
+    {
+        return Err(MasterError::ReviewGatewayUnavailable);
+    }
+    Ok(())
+}
+
+fn review_gateway_receipt(
+    plan: &ReviewGatewayExecutionPlan,
+    lifecycle_revision: u64,
+    decision_sha256: [u8; 32],
+    approved: bool,
+) -> FeatureConveyorReviewGatewayReceipt {
+    FeatureConveyorReviewGatewayReceipt {
+        schema_version: FEATURE_CONVEYOR_REVIEW_GATEWAY_SCHEMA_VERSION,
+        review_call_id: plan.request.review_call_id,
+        feature_id: plan.request.feature_id,
+        specification_revision: plan.request.specification_revision,
+        lifecycle_revision,
+        feature_lease_id: plan.request.feature_lease_id,
+        integration_id: plan.request.integration_id,
+        validation_id: plan.request.validation_id,
+        candidate_commit: plan.request.candidate_commit.clone(),
+        candidate_diff_sha256: plan.request.candidate_diff_sha256,
+        evidence_manifest_sha256: plan.request.evidence_manifest_sha256,
+        review_packet_sha256: plan.request.review_packet_sha256,
+        provider_id: plan.request.provider_id.clone(),
+        model_id: plan.request.model_id.clone(),
+        candidate_attempt: plan.candidate_attempt,
+        feature_call: plan.feature_call,
+        decision_sha256,
+        queue_revision: plan.request.expected_queue_revision,
+        emergency_pause_revision: plan.request.expected_emergency_pause_revision,
+        grants: plan.request.grants,
+        status: if approved {
+            FeatureConveyorReviewGatewayStatus::Approved
+        } else {
+            FeatureConveyorReviewGatewayStatus::Rejected
+        },
+    }
+}
+
+fn load_review_gateway_receipt_tx(
+    tx: &Transaction<'_>,
+    request: &FeatureConveyorReviewGatewayRequest,
+) -> Result<FeatureConveyorReviewGatewayReceipt, MasterError> {
+    let row = tx
+        .query_row(
+            "SELECT c.candidate_attempt,c.feature_call,d.decision,d.decision_sha256,
+                    d.lifecycle_revision
+             FROM feature_review_calls c JOIN feature_review_decisions d
+               ON d.review_call_id=c.review_call_id WHERE c.review_call_id=?1",
+            [request.review_call_id.to_string()],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or(MasterError::ReviewGatewayUnavailable)?;
+    let plan = ReviewGatewayExecutionPlan {
+        request: request.clone(),
+        candidate: CandidateEvidence {
+            integration_id: request.integration_id,
+            artifact_set_sha256: [0; 32],
+            candidate_commit: request.candidate_commit.clone(),
+            candidate_tree: request.candidate_tree.clone(),
+            base_commit: request.base_commit.clone(),
+            artifact_ids: Vec::new(),
+        },
+        approved_specification: Value::Null,
+        approved_specification_sha256: [0; 32],
+        requirements_sha256: [0; 32],
+        requirement_ids: Vec::new(),
+        evidence_digests: Vec::new(),
+        candidate_attempt: u8::try_from(row.0)
+            .map_err(|_| MasterError::ReviewGatewayUnavailable)?,
+        feature_call: u8::try_from(row.1).map_err(|_| MasterError::ReviewGatewayUnavailable)?,
+    };
+    match row.2.as_str() {
+        "approved" => Ok(review_gateway_receipt(
+            &plan,
+            i64_to_u64(row.4)?,
+            digest_array(&row.3)?,
+            true,
+        )),
+        "rejected" => Ok(review_gateway_receipt(
+            &plan,
+            i64_to_u64(row.4)?,
+            digest_array(&row.3)?,
+            false,
+        )),
+        _ => Err(MasterError::ReviewGatewayUnavailable),
+    }
+}
+
 fn load_validation_completion_tx(
     tx: &Transaction<'_>,
     validation_id: Uuid,
@@ -8699,8 +9991,9 @@ mod feature_conveyor_unit_tests {
 
     fn valid_specification() -> ApprovedFeatureSpecification {
         let manifest = json!({
-            "z_last": [true, null, 7],
-            "a_first": {"quoted": "value"}
+            "acceptance": ["canonical-json-remains-bound"],
+            "outcome": "canonical JSON remains bound",
+            "assumptions": ["quoted value"]
         });
         let canonical = canonical_json(&manifest).unwrap();
         ApprovedFeatureSpecification {
@@ -8804,6 +10097,28 @@ mod feature_conveyor_unit_tests {
         let mut invalid = valid.clone();
         invalid.provider_id = "contains space".to_string();
         assert_invalid_specification(&invalid);
+
+        for sensitive_manifest in [
+            json!({"acceptance": ["a"], "transcript": "owner brainstorming"}),
+            json!({"acceptance": ["a"], "nested": {"api-key": "not-for-review"}}),
+            json!({"acceptance": ["a"], "chat_history": ["private discussion"]}),
+            json!({"acceptance": ["a"], "chatHistory": ["private discussion"]}),
+            json!({"acceptance": ["a"], "messages": [{"role": "owner"}]}),
+            json!({"acceptance": ["a"], "access_token": "opaque"}),
+            json!({"acceptance": ["a"], "accessToken": "opaque"}),
+            json!({"acceptance": ["a"], "token": "opaque"}),
+            json!({"acceptance": ["a"], "api_token": "opaque"}),
+            json!({"acceptance": ["a"], "client_token": "opaque"}),
+            json!({"acceptance": ["a"], "outcome": "safe", "meeting_notes": [{"speaker": "owner", "text": "private discussion"}]}),
+            json!({"acceptance": ["a"], "notes": "-----BEGIN PRIVATE KEY-----"}),
+            json!({"acceptance": ["a"], "endpoint": "https://owner:password@example.invalid/path"}),
+        ] {
+            let mut invalid = valid.clone();
+            invalid.manifest = sensitive_manifest;
+            invalid.manifest_sha256 =
+                Sha256::digest(canonical_json(&invalid.manifest).unwrap().as_bytes()).into();
+            assert_invalid_specification(&invalid);
+        }
 
         let mut invalid = valid.clone();
         invalid.model_id = r#"invalid\model"#.to_string();

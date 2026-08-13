@@ -156,7 +156,7 @@ release requirements, not optional UX guidance.
   a simultaneous or late result is suppressed. This lane grants no tool, file,
   repository, credential, network, Codex, Git, publication, or unattended
   authority.
-- The Windows `assemblywright-master` schema-v15 database retains the schema-v5
+- The Windows `assemblywright-master` schema-v16 database retains the schema-v5
   Durable Feature Conveyor kernel and is
   default-inert. The owner-token-authenticated loopback
   `GET /v1/feature-conveyor/status` and the dedicated enrolled-device
@@ -458,6 +458,40 @@ release requirements, not optional UX guidance.
   Mac E2E, or OS-wide outbound-egress denial. No live validation activation,
   review, publication, or autonomous authority may be inferred without those
   deployment proofs.
+- Schema v16 independent review is a separate owner-token-authenticated,
+  loopback-only action and must be absent from enrolled-device mTLS. The caller
+  supplies no specification, diff, evidence, prompt, transcript, memory, or
+  provider output. The master must reconstruct the approved specification,
+  exact frozen-candidate patch, and bounded ordered evidence digests, revalidate
+  the candidate before and after the provider call, and bind all content to the
+  exact feature/specification/lifecycle/lease, validation/integration,
+  candidate/base, provider/model, grant, queue, and Emergency Pause revisions.
+  Approved specifications with transcript-, memory-, credential-, or secret-
+  shaped content or any field outside the fixed review-safe manifest DTO must
+  reject before provider transport, including an explicit review-time recheck
+  for supported legacy rows. The exact patch must
+  retain add/delete/context polarity. The master must derive the complete
+  ordered identifiers from the required top-level approved-manifest
+  `acceptance` array; every finding, coverage item, and
+  knowledge determination must reference an admitted evidence digest. A
+  configured provider must be one fixed canonical executable launched as a new
+  cleared-environment process per call, plus the fixed `--count-tokens`
+  preflight, with bounded I/O, timeout, and forced complete process-tree
+  termination before pipe joins. Windows must hold a verified no-write/no-delete
+  executable handle while a trusted gate-blocked launcher enters the kill-on-
+  close Job Object before it may spawn the provider; missing or incompatible configuration is unavailable before
+  durable mutation. No automatic provider fallback is permitted. Outage, malformed
+  output, and incomplete transport must never create a decision or consume a
+  repair cycle; they record only bounded immutable failure evidence and the
+  fixed 1-, 5-, or 15-minute backoff. Limit calls to three per candidate and
+  twelve per feature. Cancellation, pause, lifecycle or authority drift must
+  suppress late acceptance; observed interruption, including post-response
+  authority drift, must durably terminalize the
+  call and quarantine without automatic retry. A structured approval with any blocking finding or
+  uncovered requirement fails closed. Rejection must remain `reviewing` with
+  the active lease; only exact approval may atomically record the immutable
+  decision and advance `reviewing -> publishing`. No review call grants worker,
+  repository-write, GitHub, credential, publication, or queue-advance authority.
 - Owner resolution is available only through the owner-token-authenticated
   loopback `cancel-active-feature` and `abandon-and-advance` actions. Both must
   compare-and-set the exact feature, lifecycle, queue, and Emergency Pause

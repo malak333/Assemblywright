@@ -445,7 +445,7 @@ canonical repository, master database, canonical memory, credentials, or
 unrelated files. General network access is disabled; only a narrowly controlled
 local-model connection is allowed.
 
-The implemented protocol-v5/schema-v15 kernel retains the schema-v14 worker and
+The implemented protocol-v5/schema-v16 kernel retains the schema-v14 worker and
 integration boundary and accepts one immutable
 snapshot-bound general coding packet for one exact registered worker. After the
 exact lease, a separate default-off route streams a bounded authenticated
@@ -470,8 +470,9 @@ separate owner-local integration action validates the complete accepted
 artifact set again, applies it only to an isolated no-remote master repository,
 and freezes one exact candidate commit before entering `validating`. Schema
 v15 adds the strict digest-only evidence-gate persistence and a provisioned
-Windows execution path over a disposable candidate. Review, publication, and
-registered-source-checkout mutation remain unimplemented. This boundary does
+Windows execution path over a disposable candidate. Schema v16 adds the
+independent-review gateway described below. Publication and registered-source-
+checkout mutation remain unimplemented. This boundary does
 not establish installed-service execution, signed Mac E2E, or OS-wide egress
 control.
 
@@ -500,6 +501,46 @@ The gateway opens a fresh response-only session using the active feature's
 bound provider. It sends the approved final specification, exact candidate
 commit and diff, and bounded evidence manifest. It sends no implementation
 transcript, raw brainstorming transcript, or canonical Assemblywright memory.
+Approval admission rejects sensitive transcript-, memory-, credential-, and
+secret-shaped manifest content and any unknown field through a fixed review-safe
+manifest DTO before it can become reviewable; the gateway repeats that check for
+migrated pre-v16 specification rows.
+
+The review-safe DTO permits only `acceptance`, `outcome`, `title`, `scope`,
+`allowed_paths`, exact `validation_gate`, assumptions, risks, non-goals,
+decisions, required capabilities, unit/E2E/documentation/knowledge obligations,
+prohibited-data declarations, publication checks, base branch, security
+classification, merge strategy, and post-merge gate. Each is bounded and typed;
+unknown or structurally free-form fields reject.
+
+The implemented schema-v16 owner-token loopback action accepts only strict
+path-free identifiers, revisions, digests, provider/model, grant, lifecycle,
+queue, and Emergency Pause bindings. The master reconstructs the packet from
+immutable SQLite rows and the verified frozen candidate. A missing production
+adapter is unavailable by default. A configured adapter is one canonical fixed
+executable launched once per call with a cleared environment, bounded pipes,
+timeout, and complete process-tree termination before pipe joins. On Windows,
+the master holds a verified no-write/no-delete executable handle while a trusted
+gate-blocked launcher enters the kill-on-close Job Object before provider spawn;
+the provider's only argument is the separate fixed
+`--count-tokens` preflight. Mechanical capacity, adapter token-count, and strict-
+output checks complete before the call intent is stored. Calls and outcomes are
+append-only. Provider outage, malformed output,
+or incomplete transport records a fixed outcome and 1-, 5-, or 15-minute
+backoff without consuming repair. Three candidate attempts and twelve feature
+calls are hard ceilings. The structured result must bind the exact packet,
+provider/model, ordered evidence digests, blocking and non-blocking findings,
+the complete ordered identifiers from the required top-level approved-manifest
+`acceptance` array, and
+knowledge-base determination. Every finding and determination must reference
+an admitted packet evidence digest. Approval cannot carry
+a blocker or uncovered requirement. Rejection remains `reviewing` with the
+active lease; repair orchestration is not part of this slice. Approval alone
+atomically records immutable decision/transition evidence and advances
+`reviewing -> publishing`. The route is absent from enrolled-device mTLS and
+grants no publication action.
+An interrupted in-flight call, including post-response authority drift, records a terminal immutable outcome and
+quarantines the feature without automatic retry.
 
 #### Publication Coordinator
 

@@ -120,6 +120,30 @@ fn artifact_integration_routes_are_owner_loopback_only_strict_and_redacted() {
         "{}",
     )
     .starts_with("HTTP/1.1 404 Not Found"));
+
+    let review_unauthorized =
+        post_request(endpoint, "/v1/feature-conveyor/review-gateway", None, "{}");
+    assert!(review_unauthorized.starts_with("HTTP/1.1 401 Unauthorized"));
+    let review_malformed = post_request(
+        endpoint,
+        "/v1/feature-conveyor/review-gateway",
+        Some(token.trim()),
+        r#"{"schema_version":1,"transcript":"must-not-leak","memory":"must-not-leak"}"#,
+    );
+    assert!(review_malformed.starts_with("HTTP/1.1 422 Unprocessable Entity"));
+    assert_eq!(
+        response_json(&review_malformed),
+        serde_json::json!({"error":"review_gateway_request_rejected"})
+    );
+    assert!(!review_malformed.contains("transcript"));
+    assert!(!review_malformed.contains("memory"));
+    assert!(post_request(
+        endpoint,
+        "/v1/distributed/feature-conveyor/review-gateway",
+        Some(token.trim()),
+        "{}",
+    )
+    .starts_with("HTTP/1.1 404 Not Found"));
 }
 
 impl Drop for ChildGuard {
@@ -833,11 +857,10 @@ fn repository_snapshot_claim_is_authenticated_path_free_and_durable() {
                 .unwrap();
         }
         let manifest = serde_json::json!({
-            "feature_id": feature_id,
+            "acceptance": ["bounded-process-snapshot"],
             "outcome": "bounded process snapshot"
         });
-        let canonical_manifest =
-            format!(r#"{{"feature_id":"{feature_id}","outcome":"bounded process snapshot"}}"#);
+        let canonical_manifest = serde_json::to_vec(&manifest).unwrap();
         process
             .kernel_mut()
             .enqueue_approved_feature(
@@ -846,7 +869,7 @@ fn repository_snapshot_claim_is_authenticated_path_free_and_durable() {
                     revision: 1,
                     repository_id,
                     manifest,
-                    manifest_sha256: Sha256::digest(canonical_manifest).into(),
+                    manifest_sha256: Sha256::digest(&canonical_manifest).into(),
                     design_sha256: Sha256::digest("snapshot-design").into(),
                     brainstorming_sha256: Sha256::digest("snapshot-brainstorming").into(),
                     owner_approval_sha256: Sha256::digest("snapshot-feature-approval").into(),
@@ -2095,14 +2118,15 @@ fn seed_owner_resolution_feature(
             .unwrap();
     }
     let feature_id = Uuid::new_v4();
-    let manifest = serde_json::json!({"feature_id": feature_id, "outcome": "owner resolution"});
-    let canonical = format!(r#"{{"feature_id":"{feature_id}","outcome":"owner resolution"}}"#);
+    let manifest =
+        serde_json::json!({"acceptance": ["owner-resolution"], "outcome": "owner resolution"});
+    let canonical = serde_json::to_vec(&manifest).unwrap();
     let feature = ApprovedFeatureSpecification {
         feature_id,
         revision: 1,
         repository_id,
         manifest,
-        manifest_sha256: Sha256::digest(canonical).into(),
+        manifest_sha256: Sha256::digest(&canonical).into(),
         design_sha256: Sha256::digest("resolution-design").into(),
         brainstorming_sha256: Sha256::digest("resolution-brainstorming").into(),
         owner_approval_sha256: Sha256::digest("resolution-owner-approval").into(),
@@ -2165,14 +2189,14 @@ fn seed_bounded_feature_status(data_dir: &Path) {
     let features = (0..=MAX_CONVEYOR_NONTERMINAL_FEATURES)
         .map(|index| {
             let feature_id = Uuid::new_v4();
-            let manifest = serde_json::json!({"feature_id": feature_id, "index": index});
-            let canonical = format!(r#"{{"feature_id":"{feature_id}","index":{index}}}"#);
+            let manifest = serde_json::json!({"acceptance": ["status-capacity"], "outcome": format!("status capacity {index}")});
+            let canonical = serde_json::to_vec(&manifest).unwrap();
             ApprovedFeatureSpecification {
                 feature_id,
                 revision: 1,
                 repository_id,
                 manifest,
-                manifest_sha256: Sha256::digest(canonical).into(),
+                manifest_sha256: Sha256::digest(&canonical).into(),
                 design_sha256: Sha256::digest(format!("design-{index}")).into(),
                 brainstorming_sha256: Sha256::digest(format!("brainstorming-{index}")).into(),
                 owner_approval_sha256: Sha256::digest(format!("owner-{index}")).into(),

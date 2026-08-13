@@ -4,22 +4,27 @@ use assemblywright_master::{
     FeatureConveyorGuidanceState, FeatureConveyorNextOwnerAction, FeatureGrantRevisions,
     FeatureLifecycleStatus, FeatureSnapshotClaimPlan, FeatureTransitionEvidence, MasterError,
     MasterKernel, MasterProcess, RemoteWorkContract, RepositoryGrantKind, RepositoryGrantRevision,
-    RepositorySnapshotEvidence, ValidationCommandEvidence, ValidationGateAuthorization,
-    ValidationGateEvidence, VerifiedFeatureSuccess, MASTER_SCHEMA_VERSION,
-    MAX_CONVEYOR_NONTERMINAL_FEATURES, MAX_CONVEYOR_STATUS_FEATURES,
+    RepositorySnapshotEvidence, ReviewGatewayAuthorization, ReviewTransportFailure,
+    ValidationCommandEvidence, ValidationGateAuthorization, ValidationGateEvidence,
+    VerifiedFeatureSuccess, MASTER_SCHEMA_VERSION, MAX_CONVEYOR_NONTERMINAL_FEATURES,
+    MAX_CONVEYOR_STATUS_FEATURES,
 };
 use assemblywright_protocol::{
     build_local_coding_fixture_patch_artifact, local_coding_admission_sha256, CapabilityDescriptor,
     DeviceId, DeviceRole, FeatureConveyorArtifactIntegrationRequest,
     FeatureConveyorCodingDispatchRequest, FeatureConveyorCodingWorkPacketMetadata,
-    FeatureConveyorGrantRevisions, FeatureConveyorValidationCommandId,
-    FeatureConveyorValidationGateRequest, HandshakeRequest, JobEnvelope, JobResultEnvelope,
-    JobResultStatus, LocalCodingJobResult, LocalCodingResultArtifact,
-    LocalCodingResultArtifactAdmission, LocalCodingSnapshotChunkRequest,
-    FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, LOCAL_CODING_COMPLETED_STATUS,
-    LOCAL_CODING_FIXTURE_CONTENT, LOCAL_CODING_FIXTURE_TEST_STATUS, PROTOCOL_VERSION,
+    FeatureConveyorGrantRevisions, FeatureConveyorKnowledgeBaseDetermination,
+    FeatureConveyorReviewCoverageStatus, FeatureConveyorReviewDecision,
+    FeatureConveyorReviewFinding, FeatureConveyorReviewGatewayRequest, FeatureConveyorReviewPacket,
+    FeatureConveyorReviewProviderOutput, FeatureConveyorReviewRequirementCoverage,
+    FeatureConveyorValidationCommandId, FeatureConveyorValidationGateRequest, HandshakeRequest,
+    JobEnvelope, JobResultEnvelope, JobResultStatus, LocalCodingJobResult,
+    LocalCodingResultArtifact, LocalCodingResultArtifactAdmission, LocalCodingSnapshotChunkRequest,
+    FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, FEATURE_CONVEYOR_REVIEW_GATEWAY_SCHEMA_VERSION,
+    LOCAL_CODING_COMPLETED_STATUS, LOCAL_CODING_FIXTURE_CONTENT, LOCAL_CODING_FIXTURE_TEST_STATUS,
+    PROTOCOL_VERSION,
 };
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 use serde::Serialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -608,18 +613,525 @@ fn validation_gate_requires_strict_immutable_manifest_plan() {
         absent_kernel.plan_validation_gate(&absent_request, 20),
         Err(MasterError::ValidationGateUnavailable)
     ));
+}
 
-    let malformed = serde_json::json!({
+fn reviewing_fixture() -> (
+    tempfile::TempDir,
+    MasterKernel,
+    FeatureConveyorReviewGatewayRequest,
+    FeatureConveyorReviewPacket,
+) {
+    let gate = serde_json::json!({
         "schema_version": 1,
-        "command_ids": ["requirements_binding"],
-        "shell": "cargo test"
+        "command_ids": [
+            "requirements_binding", "coverage", "focused_unit_tests", "native_e2e",
+            "documentation", "knowledge_base", "formatting", "lint", "build", "safety",
+            "changed_paths", "secret_scan", "repository_validation"
+        ]
     });
-    let (_directory, mut malformed_kernel, malformed_request, _) =
-        integrated_validation_fixture(Some(malformed));
+    let (directory, mut kernel, validation_request, evidence) =
+        integrated_validation_fixture(Some(gate));
+    let validation_plan = match kernel
+        .plan_validation_gate(&validation_request, 20)
+        .unwrap()
+    {
+        ValidationGateAuthorization::Planned(plan) => plan,
+        other => panic!("unexpected validation authorization: {other:?}"),
+    };
+    let validation = kernel
+        .finalize_validation_gate(&validation_plan, &evidence, 21)
+        .unwrap();
+    let store = ArtifactIntegrationStore::open(directory.path()).unwrap();
+    let candidate = kernel
+        .candidate_references()
+        .unwrap()
+        .into_iter()
+        .find(|candidate| candidate.integration_id == validation.integration_id)
+        .unwrap();
+    let candidate_diff = store.review_diff(&candidate).unwrap();
+    assert!(candidate_diff.contains("-before\n"));
+    assert!(candidate_diff.contains("+assemblywright contained coding fixture\n"));
+    let mut request = FeatureConveyorReviewGatewayRequest {
+        schema_version: FEATURE_CONVEYOR_REVIEW_GATEWAY_SCHEMA_VERSION,
+        review_call_id: Uuid::new_v4(),
+        feature_id: validation.feature_id,
+        specification_revision: validation.specification_revision,
+        expected_lifecycle_revision: validation.lifecycle_revision,
+        feature_lease_id: validation.feature_lease_id,
+        integration_id: validation.integration_id,
+        validation_id: validation.validation_id,
+        candidate_commit: validation.candidate_commit.clone(),
+        candidate_tree: validation.candidate_tree.clone(),
+        base_commit: validation_request.base_commit.clone(),
+        candidate_diff_sha256: Sha256::digest(candidate_diff.as_bytes()).into(),
+        evidence_manifest_sha256: validation.evidence_manifest_sha256,
+        review_packet_sha256: [1; 32],
+        provider_id: "local.review".to_string(),
+        model_id: "review-v1".to_string(),
+        expected_queue_revision: validation.queue_revision,
+        expected_emergency_pause_revision: validation.emergency_pause_revision,
+        grants: validation.grants,
+    };
+    let plan = match kernel.prepare_review_gateway(&request, 22).unwrap() {
+        ReviewGatewayAuthorization::Planned(plan) => plan,
+        other => panic!("unexpected review authorization: {other:?}"),
+    };
+    let packet = FeatureConveyorReviewPacket {
+        schema_version: FEATURE_CONVEYOR_REVIEW_GATEWAY_SCHEMA_VERSION,
+        feature_id: request.feature_id,
+        specification_revision: request.specification_revision,
+        approved_specification: plan.approved_specification,
+        approved_specification_sha256: plan.approved_specification_sha256,
+        candidate_commit: request.candidate_commit.clone(),
+        candidate_tree: request.candidate_tree.clone(),
+        base_commit: request.base_commit.clone(),
+        candidate_diff,
+        candidate_diff_sha256: request.candidate_diff_sha256,
+        evidence_manifest_sha256: request.evidence_manifest_sha256,
+        evidence_digests: plan.evidence_digests,
+        requirements_sha256: plan.requirements_sha256,
+        requirement_ids: plan.requirement_ids,
+        provider_id: request.provider_id.clone(),
+        model_id: request.model_id.clone(),
+        grants: request.grants,
+    };
+    request.review_packet_sha256 = packet.sha256().unwrap();
+    (directory, kernel, request, packet)
+}
+
+fn review_output(
+    packet: &FeatureConveyorReviewPacket,
+    decision: FeatureConveyorReviewDecision,
+) -> FeatureConveyorReviewProviderOutput {
+    let rejected = decision == FeatureConveyorReviewDecision::Rejected;
+    FeatureConveyorReviewProviderOutput {
+        schema_version: FEATURE_CONVEYOR_REVIEW_GATEWAY_SCHEMA_VERSION,
+        review_packet_sha256: packet.sha256().unwrap(),
+        provider_id: packet.provider_id.clone(),
+        model_id: packet.model_id.clone(),
+        decision,
+        blocking_findings: if rejected {
+            vec![FeatureConveyorReviewFinding {
+                finding_id: "blocking-review-finding".to_string(),
+                requirement_id: packet.requirement_ids[0].clone(),
+                evidence_sha256: packet.evidence_digests[0],
+            }]
+        } else {
+            vec![]
+        },
+        non_blocking_findings: vec![],
+        requirement_coverage: vec![FeatureConveyorReviewRequirementCoverage {
+            requirement_id: packet.requirement_ids[0].clone(),
+            status: if rejected {
+                FeatureConveyorReviewCoverageStatus::Uncovered
+            } else {
+                FeatureConveyorReviewCoverageStatus::Covered
+            },
+            evidence_sha256: packet.evidence_digests[0],
+        }],
+        evidence_digests: packet.evidence_digests.clone(),
+        knowledge_base_determination: FeatureConveyorKnowledgeBaseDetermination::NoNewKnowledge,
+        knowledge_base_evidence_sha256: packet.evidence_digests[0],
+    }
+}
+
+#[test]
+fn review_approval_is_exact_idempotent_and_only_transition_to_publishing() {
+    let (_directory, mut kernel, request, packet) = reviewing_fixture();
     assert!(matches!(
-        malformed_kernel.plan_validation_gate(&malformed_request, 20),
-        Err(MasterError::ValidationGateUnavailable)
+        kernel.prepare_review_gateway(&request, 22).unwrap(),
+        ReviewGatewayAuthorization::Planned(_)
     ));
+    let plan = match kernel.begin_review_gateway(&request, &packet, 23).unwrap() {
+        ReviewGatewayAuthorization::Planned(plan) => plan,
+        other => panic!("unexpected review authorization: {other:?}"),
+    };
+    assert!(kernel
+        .review_gateway_execution_is_current(&request, 23)
+        .unwrap());
+    let mut invented_coverage = review_output(&packet, FeatureConveyorReviewDecision::Approved);
+    invented_coverage.requirement_coverage[0].requirement_id = "invented".to_string();
+    assert!(matches!(
+        kernel.finalize_review_decision(&plan, &packet, &invented_coverage, 24),
+        Err(MasterError::ReviewGatewayUnavailable)
+    ));
+    let mut invented_finding = review_output(&packet, FeatureConveyorReviewDecision::Approved);
+    invented_finding.non_blocking_findings = vec![FeatureConveyorReviewFinding {
+        finding_id: "invented-requirement-finding".to_string(),
+        requirement_id: "invented".to_string(),
+        evidence_sha256: packet.evidence_digests[0],
+    }];
+    assert!(matches!(
+        kernel.finalize_review_decision(&plan, &packet, &invented_finding, 24),
+        Err(MasterError::ReviewGatewayUnavailable)
+    ));
+    let mut unbound_evidence = review_output(&packet, FeatureConveyorReviewDecision::Approved);
+    unbound_evidence.requirement_coverage[0].evidence_sha256 = digest("invented-evidence");
+    assert!(matches!(
+        kernel.finalize_review_decision(&plan, &packet, &unbound_evidence, 24),
+        Err(MasterError::ReviewGatewayUnavailable)
+    ));
+    let receipt = kernel
+        .finalize_review_decision(
+            &plan,
+            &packet,
+            &review_output(&packet, FeatureConveyorReviewDecision::Approved),
+            24,
+        )
+        .unwrap();
+    assert_eq!(
+        receipt.lifecycle_revision,
+        request.expected_lifecycle_revision + 1
+    );
+    assert_eq!(
+        kernel.feature_conveyor_status().unwrap().features[0].status,
+        FeatureLifecycleStatus::Publishing
+    );
+    assert!(!kernel
+        .review_gateway_execution_is_current(&request, 24)
+        .unwrap());
+    assert!(matches!(
+        kernel.prepare_review_gateway(&request, 25).unwrap(),
+        ReviewGatewayAuthorization::ExistingDecision(existing) if *existing == receipt
+    ));
+}
+
+#[test]
+fn review_rejection_is_immutable_and_keeps_active_lease_for_later_repair() {
+    let (_directory, mut kernel, request, packet) = reviewing_fixture();
+    let plan = match kernel.begin_review_gateway(&request, &packet, 23).unwrap() {
+        ReviewGatewayAuthorization::Planned(plan) => plan,
+        other => panic!("unexpected review authorization: {other:?}"),
+    };
+    let receipt = kernel
+        .finalize_review_decision(
+            &plan,
+            &packet,
+            &review_output(&packet, FeatureConveyorReviewDecision::Rejected),
+            24,
+        )
+        .unwrap();
+    assert_eq!(
+        receipt.lifecycle_revision,
+        request.expected_lifecycle_revision
+    );
+    let status = kernel.feature_conveyor_status().unwrap();
+    assert_eq!(status.features[0].status, FeatureLifecycleStatus::Reviewing);
+    assert!(status.features[0].lease_present);
+    let mut new_call = request.clone();
+    new_call.review_call_id = Uuid::new_v4();
+    assert!(matches!(
+        kernel.prepare_review_gateway(&new_call, 25),
+        Err(MasterError::ReviewGatewayUnavailable)
+    ));
+}
+
+#[test]
+fn review_transport_failures_backoff_without_repair_and_enforce_three_attempts() {
+    let (_directory, mut kernel, mut request, packet) = reviewing_fixture();
+    let first = match kernel.begin_review_gateway(&request, &packet, 23).unwrap() {
+        ReviewGatewayAuthorization::Planned(plan) => plan,
+        other => panic!("unexpected review authorization: {other:?}"),
+    };
+    let next = kernel
+        .finalize_review_transport_failure(&first, ReviewTransportFailure::ProviderOutage, 24)
+        .unwrap();
+    assert_eq!(next, 60_024);
+    request.review_call_id = Uuid::new_v4();
+    assert!(matches!(
+        kernel.prepare_review_gateway(&request, 60_023),
+        Err(MasterError::ReviewRetryNotReady { .. })
+    ));
+    let second = match kernel
+        .begin_review_gateway(&request, &packet, 60_024)
+        .unwrap()
+    {
+        ReviewGatewayAuthorization::Planned(plan) => plan,
+        other => panic!("unexpected review authorization: {other:?}"),
+    };
+    assert_eq!(second.candidate_attempt, 2);
+    let next = kernel
+        .finalize_review_transport_failure(&second, ReviewTransportFailure::MalformedOutput, 60_025)
+        .unwrap();
+    assert_eq!(next, 360_025);
+    request.review_call_id = Uuid::new_v4();
+    let third = match kernel
+        .begin_review_gateway(&request, &packet, 360_025)
+        .unwrap()
+    {
+        ReviewGatewayAuthorization::Planned(plan) => plan,
+        other => panic!("unexpected review authorization: {other:?}"),
+    };
+    assert_eq!(third.candidate_attempt, 3);
+    kernel
+        .finalize_review_transport_failure(
+            &third,
+            ReviewTransportFailure::IncompleteTransport,
+            360_026,
+        )
+        .unwrap();
+    request.review_call_id = Uuid::new_v4();
+    assert!(matches!(
+        kernel.prepare_review_gateway(&request, 1_260_026),
+        Err(MasterError::ReviewBudgetExhausted)
+    ));
+    assert_eq!(
+        kernel.feature_conveyor_status().unwrap().features[0].status,
+        FeatureLifecycleStatus::Reviewing
+    );
+}
+
+#[test]
+fn review_gateway_enforces_twelve_feature_calls_across_candidate_commits() {
+    let (directory, mut kernel, mut request, _packet) = reviewing_fixture();
+    let connection = Connection::open(directory.path().join("master.sqlite3")).unwrap();
+    for feature_call in 1..=12_i64 {
+        connection
+            .execute(
+                "INSERT INTO feature_review_calls (
+                   review_call_id,feature_id,specification_revision,lifecycle_revision,
+                   feature_lease_id,integration_id,validation_id,candidate_commit,candidate_tree,
+                   base_commit,candidate_diff_sha256,evidence_manifest_sha256,review_packet_sha256,
+                   provider_id,model_id,candidate_attempt,feature_call,queue_revision,
+                   emergency_pause_revision,registration_grant_revision,
+                   cloud_disclosure_grant_revision,publication_grant_revision,
+                   request_binding_sha256,started_at_ms
+                 ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,1,
+                           ?16,?17,?18,?19,?20,?21,?22,?23)",
+                rusqlite::params![
+                    Uuid::new_v4().to_string(),
+                    request.feature_id.to_string(),
+                    request.specification_revision as i64,
+                    request.expected_lifecycle_revision as i64,
+                    request.feature_lease_id.to_string(),
+                    request.integration_id.to_string(),
+                    request.validation_id.to_string(),
+                    format!("{feature_call:040x}"),
+                    request.candidate_tree,
+                    request.base_commit,
+                    request.candidate_diff_sha256.as_slice(),
+                    request.evidence_manifest_sha256.as_slice(),
+                    digest(&format!("packet-{feature_call}")).as_slice(),
+                    request.provider_id,
+                    request.model_id,
+                    feature_call,
+                    request.expected_queue_revision as i64,
+                    request.expected_emergency_pause_revision as i64,
+                    request.grants.registration as i64,
+                    request.grants.cloud_disclosure as i64,
+                    request.grants.autonomous_publication as i64,
+                    digest(&format!("binding-{feature_call}")).as_slice(),
+                    feature_call,
+                ],
+            )
+            .unwrap();
+    }
+    request.review_call_id = Uuid::new_v4();
+    assert!(matches!(
+        kernel.prepare_review_gateway(&request, 100),
+        Err(MasterError::ReviewBudgetExhausted)
+    ));
+}
+
+#[test]
+fn restart_quarantines_an_indeterminate_review_call_without_retry() {
+    let (directory, mut kernel, request, packet) = reviewing_fixture();
+    assert!(matches!(
+        kernel.begin_review_gateway(&request, &packet, 23).unwrap(),
+        ReviewGatewayAuthorization::Planned(_)
+    ));
+    drop(kernel);
+    let restarted = MasterKernel::open(directory.path().join("master.sqlite3")).unwrap();
+    assert_eq!(restarted.feature_startup_quarantines(), 1);
+    let status = restarted.feature_conveyor_status().unwrap();
+    assert_eq!(
+        status.features[0].status,
+        FeatureLifecycleStatus::Quarantined
+    );
+    assert!(status.features[0].effect_possible);
+    assert!(!restarted
+        .review_gateway_execution_is_current(&request, 24)
+        .unwrap());
+}
+
+#[test]
+fn review_decision_and_lifecycle_roll_back_when_redacted_audit_fails() {
+    let (directory, mut kernel, request, packet) = reviewing_fixture();
+    let plan = match kernel.begin_review_gateway(&request, &packet, 23).unwrap() {
+        ReviewGatewayAuthorization::Planned(plan) => plan,
+        other => panic!("unexpected review authorization: {other:?}"),
+    };
+    let database = directory.path().join("master.sqlite3");
+    install_audit_failure(&database, "feature_review_approved");
+    assert!(matches!(
+        kernel.finalize_review_decision(
+            &plan,
+            &packet,
+            &review_output(&packet, FeatureConveyorReviewDecision::Approved),
+            24
+        ),
+        Err(MasterError::Storage(_))
+    ));
+    assert_eq!(
+        kernel.feature_conveyor_status().unwrap().features[0].status,
+        FeatureLifecycleStatus::Reviewing
+    );
+    let connection = Connection::open(&database).unwrap();
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM feature_review_decisions", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM feature_review_call_outcomes",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn review_binding_drift_and_pause_cancel_inflight_authority() {
+    let (_directory, mut kernel, request, packet) = reviewing_fixture();
+    macro_rules! rejected {
+        ($mutation:expr) => {{
+            let mut drift = request.clone();
+            drift.review_call_id = Uuid::new_v4();
+            $mutation(&mut drift);
+            assert!(kernel.prepare_review_gateway(&drift, 22).is_err());
+        }};
+    }
+    rejected!(
+        |r: &mut FeatureConveyorReviewGatewayRequest| r.candidate_commit =
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()
+    );
+    let mut diff_drift = request.clone();
+    diff_drift.review_call_id = Uuid::new_v4();
+    diff_drift.candidate_diff_sha256[0] ^= 1;
+    assert!(kernel
+        .begin_review_gateway(&diff_drift, &packet, 22)
+        .is_err());
+    rejected!(|r: &mut FeatureConveyorReviewGatewayRequest| r.evidence_manifest_sha256[0] ^= 1);
+    rejected!(
+        |r: &mut FeatureConveyorReviewGatewayRequest| r.provider_id = "other.review".to_string()
+    );
+    rejected!(|r: &mut FeatureConveyorReviewGatewayRequest| r.grants.cloud_disclosure += 1);
+    rejected!(|r: &mut FeatureConveyorReviewGatewayRequest| r.expected_queue_revision += 1);
+
+    let plan = match kernel.begin_review_gateway(&request, &packet, 23).unwrap() {
+        ReviewGatewayAuthorization::Planned(plan) => plan,
+        other => panic!("unexpected review authorization: {other:?}"),
+    };
+    kernel.set_emergency_paused_at(true, 24).unwrap();
+    assert!(!kernel
+        .review_gateway_execution_is_current(&request, 24)
+        .unwrap());
+    assert!(matches!(
+        kernel.finalize_review_decision(
+            &plan,
+            &packet,
+            &review_output(&packet, FeatureConveyorReviewDecision::Approved),
+            25
+        ),
+        Err(MasterError::EmergencyPaused)
+    ));
+    kernel.finalize_interrupted_review_call(&plan, 26).unwrap();
+    let status = kernel.feature_conveyor_status().unwrap();
+    assert_eq!(
+        status.features[0].status,
+        FeatureLifecycleStatus::Quarantined
+    );
+    let connection = Connection::open(_directory.path().join("master.sqlite3")).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT outcome_kind FROM feature_review_call_outcomes WHERE review_call_id=?1",
+                [request.review_call_id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "interrupted"
+    );
+}
+
+#[test]
+fn review_revalidates_legacy_manifest_disclosure_before_provider_admission() {
+    let (directory, mut kernel, mut request, _packet) = reviewing_fixture();
+    let legacy_manifest = serde_json::to_vec(&json!({
+        "acceptance": ["bounded-kernel-test"],
+        "outcome": "legacy fixture",
+        "transcript": "legacy raw conversation must never reach review"
+    }))
+    .unwrap();
+    let connection = Connection::open(directory.path().join("master.sqlite3")).unwrap();
+    connection
+        .execute_batch("DROP TRIGGER feature_specification_revisions_no_update;")
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE feature_specification_revisions
+             SET canonical_manifest_json=?1,manifest_sha256=?2
+             WHERE feature_id=?3 AND revision=?4",
+            params![
+                String::from_utf8(legacy_manifest.clone()).unwrap(),
+                Sha256::digest(&legacy_manifest).to_vec(),
+                request.feature_id.to_string(),
+                i64::try_from(request.specification_revision).unwrap()
+            ],
+        )
+        .unwrap();
+    request.review_call_id = Uuid::new_v4();
+    assert!(matches!(
+        kernel.prepare_review_gateway(&request, 22),
+        Err(MasterError::InvalidFeatureConveyorInput(_))
+            | Err(MasterError::ReviewGatewayUnavailable)
+    ));
+}
+
+#[test]
+fn review_gateway_schema_v15_migrates_backup_first_to_immutable_v16_tables() {
+    let directory = tempdir().unwrap();
+    let database = directory.path().join("master.sqlite3");
+    drop(MasterKernel::open(&database).unwrap());
+    let connection = Connection::open(&database).unwrap();
+    drop_review_gateway_schema_for_legacy_fixture(&connection);
+    connection.pragma_update(None, "user_version", 15).unwrap();
+    let process = MasterProcess::acquire(directory.path()).unwrap();
+    assert_eq!(process.kernel().schema_version().unwrap(), 16);
+    let backup = process.migration_backup_path().unwrap();
+    assert!(backup
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .starts_with("master.pre-v16."));
+    assert_eq!(
+        Connection::open(backup)
+            .unwrap()
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        15
+    );
+    let connection = Connection::open(&database).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger'
+                 AND name IN('feature_review_calls_no_update','feature_review_calls_no_delete',
+                             'feature_review_call_outcomes_no_update',
+                             'feature_review_decisions_no_update')",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        4
+    );
 }
 
 #[test]
@@ -627,29 +1139,20 @@ fn validation_gate_schema_v14_migrates_backup_first_to_immutable_v15_tables() {
     let directory = tempdir().unwrap();
     let database = directory.path().join("master.sqlite3");
     drop(MasterKernel::open(&database).unwrap());
-    Connection::open(&database)
-        .unwrap()
-        .execute_batch(
-            "DROP TRIGGER feature_validation_completions_no_update;
-             DROP TRIGGER feature_validation_completions_no_delete;
-             DROP TABLE feature_validation_completions;
-             DROP TRIGGER feature_validation_command_evidence_no_update;
-             DROP TRIGGER feature_validation_command_evidence_no_delete;
-             DROP TABLE feature_validation_command_evidence;
-             DROP TRIGGER feature_validation_attempts_no_update;
-             DROP TRIGGER feature_validation_attempts_no_delete;
-             DROP TABLE feature_validation_attempts;
-             PRAGMA user_version=14;",
-        )
-        .unwrap();
+    let connection = Connection::open(&database).unwrap();
+    drop_validation_gate_schema_for_legacy_fixture(&connection);
+    connection.pragma_update(None, "user_version", 14).unwrap();
     let process = MasterProcess::acquire(directory.path()).unwrap();
-    assert_eq!(process.kernel().schema_version().unwrap(), 15);
+    assert_eq!(
+        process.kernel().schema_version().unwrap(),
+        MASTER_SCHEMA_VERSION
+    );
     let backup = process.migration_backup_path().unwrap();
     assert!(backup
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v15."));
+        .starts_with("master.pre-v16."));
     assert_eq!(
         Connection::open(backup)
             .unwrap()
@@ -765,7 +1268,7 @@ fn specification(
     dependencies: Vec<Uuid>,
 ) -> ApprovedFeatureSpecification {
     let manifest = json!({
-        "feature_id": feature_id,
+        "acceptance": ["bounded-kernel-test"],
         "outcome": "bounded kernel test",
         "allowed_paths": ["crates/assemblywright-master/src/lib.rs"],
         "validation_gate": {
@@ -3910,6 +4413,7 @@ fn startup_quarantine_audit_failure_rolls_back_and_blocks_open() {
 }
 
 fn drop_validation_gate_schema_for_legacy_fixture(connection: &Connection) {
+    drop_review_gateway_schema_for_legacy_fixture(connection);
     connection
         .execute_batch(
             "DROP TRIGGER feature_validation_completions_no_update;
@@ -3921,6 +4425,23 @@ fn drop_validation_gate_schema_for_legacy_fixture(connection: &Connection) {
              DROP TRIGGER feature_validation_attempts_no_update;
              DROP TRIGGER feature_validation_attempts_no_delete;
              DROP TABLE feature_validation_attempts;",
+        )
+        .unwrap();
+}
+
+fn drop_review_gateway_schema_for_legacy_fixture(connection: &Connection) {
+    connection
+        .execute_batch(
+            "DROP TRIGGER feature_review_decisions_no_update;
+             DROP TRIGGER feature_review_decisions_no_delete;
+             DROP TABLE feature_review_decisions;
+             DROP TRIGGER feature_review_call_outcomes_no_update;
+             DROP TRIGGER feature_review_call_outcomes_no_delete;
+             DROP TABLE feature_review_call_outcomes;
+             DROP TRIGGER feature_review_calls_no_update;
+             DROP TRIGGER feature_review_calls_no_delete;
+             DROP INDEX feature_review_calls_candidate_idx;
+             DROP TABLE feature_review_calls;",
         )
         .unwrap();
 }
@@ -4117,7 +4638,7 @@ fn master_process_v10_backfills_resolution_receipts_from_exact_immutable_audit()
             .file_name()
             .unwrap()
             .to_string_lossy()
-            .starts_with("master.pre-v15."));
+            .starts_with("master.pre-v16."));
         assert_eq!(
             Connection::open(backup)
                 .unwrap()
@@ -4241,7 +4762,7 @@ fn master_process_v10_ambiguous_resolution_audit_fails_closed_and_restores_backu
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v15.")));
+            .starts_with("master.pre-v16.")));
 }
 
 #[test]
@@ -4409,7 +4930,7 @@ fn master_process_v4_backup_migration_reopen_and_restore_on_failure() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v15.")));
+            .starts_with("master.pre-v16.")));
 }
 
 #[test]
@@ -4475,7 +4996,7 @@ fn master_process_v12_backup_first_migration_adds_retained_workspace_binding() {
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v15."));
+        .starts_with("master.pre-v16."));
     assert_eq!(
         Connection::open(backup)
             .unwrap()
@@ -4536,7 +5057,7 @@ fn master_process_v12_failed_migration_restores_verified_backup() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v15.")));
+            .starts_with("master.pre-v16.")));
 }
 
 #[test]
@@ -4603,7 +5124,7 @@ fn master_process_v6_backup_migration_binds_pause_and_default_inert_owner_contro
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v15."));
+        .starts_with("master.pre-v16."));
     let backup = Connection::open(backup).unwrap();
     assert_eq!(
         backup
@@ -4712,5 +5233,5 @@ fn forward_schema_version_fails_closed_without_backup() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v15.")));
+            .starts_with("master.pre-v16.")));
 }

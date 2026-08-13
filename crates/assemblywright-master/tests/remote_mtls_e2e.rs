@@ -373,6 +373,19 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
         local_dispatch_over_remote.starts_with("HTTP/1.1 404 Not Found"),
         "owner-token coding dispatch leaked onto the remote router: {local_dispatch_over_remote}"
     );
+    let (local_review_handshake, local_review_over_remote) = authenticated_application_request(
+        remote_endpoint,
+        &valid,
+        "POST",
+        "/v1/feature-conveyor/review-gateway",
+        &serde_json::json!({}),
+    )
+    .await;
+    assert_eq!(local_review_handshake.status, HandshakeStatus::Accepted);
+    assert!(
+        local_review_over_remote.starts_with("HTTP/1.1 404 Not Found"),
+        "owner-token independent-review route leaked onto the remote router: {local_review_over_remote}"
+    );
     for path in [
         "/v1/feature-conveyor/cancel-active-feature",
         "/v1/feature-conveyor/abandon-and-advance",
@@ -1530,13 +1543,11 @@ async fn remote_mlx_contract_accepts_exact_singleton_and_rejects_mixed_capabilit
 fn approved_feature_request(repository_id: Uuid) -> FeatureConveyorApprovedFeatureRequest {
     let feature_id = Uuid::new_v4();
     let manifest = serde_json::json!({
+        "acceptance": ["bounded-remote-owner-control-enqueue"],
         "allowed_paths": ["crates/assemblywright-master/src/lib.rs"],
-        "feature_id": feature_id,
         "outcome": "bounded remote owner-control enqueue"
     });
-    let canonical = format!(
-        r#"{{"allowed_paths":["crates/assemblywright-master/src/lib.rs"],"feature_id":"{feature_id}","outcome":"bounded remote owner-control enqueue"}}"#
-    );
+    let canonical = serde_json::to_vec(&manifest).unwrap();
     FeatureConveyorApprovedFeatureRequest {
         schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
         expected_queue_revision: 0,
@@ -1547,7 +1558,7 @@ fn approved_feature_request(repository_id: Uuid) -> FeatureConveyorApprovedFeatu
             revision: 1,
             repository_id,
             manifest,
-            manifest_sha256: Sha256::digest(canonical.as_bytes()).into(),
+            manifest_sha256: Sha256::digest(&canonical).into(),
             design_sha256: Sha256::digest(b"remote-design").into(),
             brainstorming_sha256: Sha256::digest(b"remote-brainstorming").into(),
             owner_approval_sha256: Sha256::digest(b"remote-owner-approval").into(),

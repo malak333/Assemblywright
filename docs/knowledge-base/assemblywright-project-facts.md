@@ -1009,3 +1009,34 @@ an old one.
   design digest, acceptance-count presence, and exact approved changed paths;
   it is `requirements_binding`, not a claim that each criterion has been
   semantically mapped to an individual test.
+- Schema v16 adds the owner-token loopback-only Independent Review Gateway.
+  The request is path-free and cannot carry review content; Windows rebuilds a
+  canonical packet from the immutable approved specification, exact verified
+  candidate patch, and ordered validation-result digests. Raw brainstorming,
+  implementation transcripts, canonical memory, paths, raw command output, and
+  secrets are excluded by approval-time sensitive-context admission and a
+  strict deny-unknown-fields review-safe manifest DTO, plus a review-time recheck
+  for migrated legacy rows. Patch
+  extraction retains add/delete/context polarity rather than hashing unlabeled
+  line content.
+- Review-provider admission is mechanical and occurs before durable mutation:
+  exact bound provider/model, at least 256 KiB and 64,000 input tokens, at least
+  64 KiB structured output, strict decoding, and no fallback. A configured
+  adapter is a canonical executable launched as a new cleared-environment
+  process for every call with bounded pipes, timeout, and complete process-tree
+  termination before pipe joins. On Windows the master holds a verified no-
+  write/no-delete image handle while a trusted gate-blocked launcher enters the
+  kill-on-close Job Object before provider spawn; its only
+  argument is the fixed `--count-tokens` adapter preflight. Missing config
+  is unavailable. Native process coverage is repository proof only, not live
+  selected-provider or reviewer-quality proof.
+- Review calls, transport outcomes, and decisions are immutable. Outage,
+  malformed output, and incomplete transport record fixed evidence plus 1-,
+  5-, or 15-minute backoff, consume no repair cycle, and are capped at three
+  calls per candidate and twelve per feature. Rejection keeps the feature and
+  lease in `reviewing`; only exact approval atomically advances
+  `reviewing -> publishing`. Publication orchestration remains unimplemented.
+  The master requires exact ordered coverage of identifiers from the approved
+  manifest's required top-level `acceptance` array and evidence references drawn
+  only from the packet. Interrupted calls, including post-response authority
+  drift, terminalize immutably and quarantine without automatic retry.

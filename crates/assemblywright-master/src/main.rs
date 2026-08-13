@@ -5,14 +5,16 @@ use assemblywright_master::validation_containment::{
     VerifiedValidationCopy,
 };
 use assemblywright_master::{
-    current_time_ms, AcceptedCancellation, AcceptedResult, ApprovedFeatureSpecification,
-    ArtifactIntegrationAuthorization, ArtifactIntegrationError, CapabilityRebindAcknowledgement,
-    DeviceRegistration, EnrollmentGrantSpec, EnrollmentRequest, EphemeralServerIdentity,
-    FeatureAbandonmentEvidence, FeatureConveyorStatus, FeatureGrantRevisions,
-    FeatureSnapshotClaimPlan, IdentityAuthority, MasterHealthSnapshot, MasterProcess, NewStep,
-    PlatformSecretProtector, RemoteWorkContract, RepositoryGrantKind, RepositoryGrantRevision,
-    RepositorySnapshotEvidence, RepositorySnapshotStore, ResultArtifactReference,
-    StartupReconciliation, ValidationCommandEvidence, ValidationGateAuthorization,
+    current_time_ms, invoke_review_provider, prepare_review_provider_call, AcceptedCancellation,
+    AcceptedResult, ApprovedFeatureSpecification, ArtifactIntegrationAuthorization,
+    ArtifactIntegrationError, CapabilityRebindAcknowledgement, DeviceRegistration,
+    EnrollmentGrantSpec, EnrollmentRequest, EphemeralServerIdentity, FeatureAbandonmentEvidence,
+    FeatureConveyorStatus, FeatureGrantRevisions, FeatureSnapshotClaimPlan, IdentityAuthority,
+    MasterHealthSnapshot, MasterProcess, NewStep, PlatformSecretProtector, ProcessReviewProvider,
+    RemoteWorkContract, RepositoryGrantKind, RepositoryGrantRevision, RepositorySnapshotEvidence,
+    RepositorySnapshotStore, ResultArtifactReference, ReviewGatewayAuthorization, ReviewProvider,
+    ReviewProviderInvocationError, ReviewTransportFailure, StartupReconciliation,
+    UnavailableReviewProvider, ValidationCommandEvidence, ValidationGateAuthorization,
     ValidationGateEvidence, ValidationGateExecutionPlan,
 };
 #[cfg(test)]
@@ -35,9 +37,10 @@ use assemblywright_protocol::{
     FeatureConveyorRepositoryGrantStatus, FeatureConveyorRepositoryPreflightReceipt,
     FeatureConveyorRepositoryPreflightRequest, FeatureConveyorRepositoryPreflightStatus,
     FeatureConveyorRepositorySnapshotClaimReceipt, FeatureConveyorRepositorySnapshotClaimRequest,
-    FeatureConveyorRepositorySnapshotClaimStatus, FeatureConveyorValidationGateRequest,
-    FixtureJobResult, HandshakeRequest, HandshakeResponse, HandshakeStatus, JobEnvelope,
-    JobResultEnvelope, JobResultStatus, LocalCodingJobResult, LocalCodingResultArtifactAdmission,
+    FeatureConveyorRepositorySnapshotClaimStatus, FeatureConveyorReviewGatewayRequest,
+    FeatureConveyorReviewPacket, FeatureConveyorValidationGateRequest, FixtureJobResult,
+    HandshakeRequest, HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope,
+    JobResultStatus, LocalCodingJobResult, LocalCodingResultArtifactAdmission,
     LocalCodingResultArtifactReceipt, LocalCodingSnapshotChunk, LocalCodingSnapshotChunkRequest,
     Sensitivity, StepId, TaskId, ENROLLMENT_INVITATION_READY_STATUS,
     ENROLLMENT_PAIRING_SCHEMA_VERSION, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
@@ -392,6 +395,8 @@ struct AppState {
     repository_snapshot_claim_reservation: Arc<tokio::sync::Mutex<()>>,
     artifact_integration_reservation: Arc<tokio::sync::Mutex<()>>,
     validation_gate_reservation: Arc<tokio::sync::Mutex<()>>,
+    review_gateway_reservation: Arc<tokio::sync::Mutex<()>>,
+    review_provider: Arc<dyn ReviewProvider>,
     validation_runtime: ValidationRuntime,
 }
 
@@ -525,6 +530,10 @@ type ApiResult<T> = Result<Json<T>, ApiError>;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    #[cfg(windows)]
+    if let Some(exit_code) = assemblywright_master::review_provider_launcher_exit_code() {
+        std::process::exit(exit_code);
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
@@ -1503,6 +1512,11 @@ async fn serve_runtime(
         None
     };
     let validation_runtime = ValidationRuntime::load(process.data_dir())?;
+    let review_provider: Arc<dyn ReviewProvider> =
+        match ProcessReviewProvider::load(process.data_dir())? {
+            Some(provider) => Arc::new(provider),
+            None => Arc::new(UnavailableReviewProvider),
+        };
     let state = AppState {
         process: Arc::new(Mutex::new(process)),
         token_sha256: Sha256::digest(token.as_bytes()).into(),
@@ -1511,6 +1525,8 @@ async fn serve_runtime(
         repository_snapshot_claim_reservation: Arc::new(tokio::sync::Mutex::new(())),
         artifact_integration_reservation: Arc::new(tokio::sync::Mutex::new(())),
         validation_gate_reservation: Arc::new(tokio::sync::Mutex::new(())),
+        review_gateway_reservation: Arc::new(tokio::sync::Mutex::new(())),
+        review_provider,
         validation_runtime,
     };
 
@@ -1553,6 +1569,10 @@ async fn serve_runtime(
         .route(
             "/v1/feature-conveyor/test-evidence-gates",
             post(feature_validation_gate),
+        )
+        .route(
+            "/v1/feature-conveyor/review-gateway",
+            post(feature_review_gateway),
         )
         .route(
             "/v1/feature-conveyor/features/:feature_id/integration-plan",
@@ -3115,6 +3135,282 @@ fn execute_validation_plan(
         ));
     }
     execution
+}
+
+async fn feature_review_gateway(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<Response, ApiError> {
+    authorize(&headers, &state)?;
+    require_work_admission(&state)?;
+    let body = body.map_err(|_| {
+        fixed_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "review_gateway_request_rejected",
+        )
+    })?;
+    let request = FeatureConveyorReviewGatewayRequest::decode_frame(&body).map_err(|_| {
+        fixed_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "review_gateway_request_rejected",
+        )
+    })?;
+    let reservation = state
+        .review_gateway_reservation
+        .clone()
+        .try_lock_owned()
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "review_gateway_in_progress"))?;
+    let state_for_work = state.clone();
+    spawn_reserved_blocking(reservation, move || {
+        perform_feature_review_gateway(&state_for_work, request)
+    })
+    .await
+    .map_err(|_| fixed_error(StatusCode::CONFLICT, "review_gateway_rejected"))?
+}
+
+fn perform_feature_review_gateway(
+    state: &AppState,
+    request: FeatureConveyorReviewGatewayRequest,
+) -> Result<Response, ApiError> {
+    let authorization = lock_process(state)?
+        .kernel_mut()
+        .prepare_review_gateway(
+            &request,
+            current_time_ms()
+                .map_err(|_| fixed_error(StatusCode::CONFLICT, "review_gateway_rejected"))?,
+        )
+        .map_err(review_gateway_api_error)?;
+    let plan = match authorization {
+        ReviewGatewayAuthorization::ExistingDecision(receipt) => {
+            let receipt = *receipt;
+            let process = lock_process(state)?;
+            let store = process.artifact_integration_store();
+            let candidate = process
+                .kernel()
+                .candidate_references()
+                .map_err(|_| fixed_error(StatusCode::CONFLICT, "review_gateway_rejected"))?
+                .into_iter()
+                .find(|candidate| candidate.integration_id == receipt.integration_id)
+                .ok_or_else(|| fixed_error(StatusCode::CONFLICT, "review_gateway_rejected"))?;
+            store
+                .open_verified_candidate(&candidate)
+                .map_err(|_| fixed_error(StatusCode::CONFLICT, "review_gateway_rejected"))?;
+            receipt
+                .validate()
+                .map_err(|_| fixed_error(StatusCode::INTERNAL_SERVER_ERROR, "internal_error"))?;
+            return Ok(Json(receipt).into_response());
+        }
+        ReviewGatewayAuthorization::ExistingTransportFailure { .. } => {
+            return Err(fixed_error(
+                StatusCode::CONFLICT,
+                "review_transport_attempt_failed",
+            ));
+        }
+        ReviewGatewayAuthorization::Planned(plan) => *plan,
+    };
+    let store = lock_process(state)?.artifact_integration_store();
+    let mut candidate = store
+        .open_verified_candidate(&plan.candidate)
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "review_gateway_rejected"))?;
+    let candidate_diff = store
+        .review_diff(&plan.candidate)
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "review_gateway_rejected"))?;
+    let packet = FeatureConveyorReviewPacket {
+        schema_version: assemblywright_protocol::FEATURE_CONVEYOR_REVIEW_GATEWAY_SCHEMA_VERSION,
+        feature_id: request.feature_id,
+        specification_revision: request.specification_revision,
+        approved_specification: plan.approved_specification.clone(),
+        approved_specification_sha256: plan.approved_specification_sha256,
+        candidate_commit: request.candidate_commit.clone(),
+        candidate_tree: request.candidate_tree.clone(),
+        base_commit: request.base_commit.clone(),
+        candidate_diff_sha256: Sha256::digest(candidate_diff.as_bytes()).into(),
+        candidate_diff,
+        evidence_manifest_sha256: request.evidence_manifest_sha256,
+        evidence_digests: plan.evidence_digests.clone(),
+        requirements_sha256: plan.requirements_sha256,
+        requirement_ids: plan.requirement_ids.clone(),
+        provider_id: request.provider_id.clone(),
+        model_id: request.model_id.clone(),
+        grants: request.grants,
+    };
+    let prepared = prepare_review_provider_call(state.review_provider.as_ref(), &request, &packet)
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "review_provider_unavailable"))?;
+    candidate
+        .revalidate(&store)
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "review_gateway_rejected"))?;
+    let persisted = lock_process(state)?
+        .kernel_mut()
+        .begin_review_gateway(
+            &request,
+            &packet,
+            current_time_ms()
+                .map_err(|_| fixed_error(StatusCode::CONFLICT, "review_gateway_rejected"))?,
+        )
+        .map_err(review_gateway_api_error)?;
+    let persisted = match persisted {
+        ReviewGatewayAuthorization::Planned(persisted) => {
+            let persisted = *persisted;
+            if persisted != plan {
+                terminalize_interrupted_review(state, &persisted)?;
+                return Err(fixed_error(StatusCode::CONFLICT, "review_gateway_rejected"));
+            }
+            persisted
+        }
+        ReviewGatewayAuthorization::ExistingDecision(receipt) => {
+            return Ok(Json(*receipt).into_response())
+        }
+        _ => return Err(fixed_error(StatusCode::CONFLICT, "review_gateway_rejected")),
+    };
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let monitor_done = Arc::new(AtomicBool::new(false));
+    let monitor_state = state.clone();
+    let monitor_request = request.clone();
+    let monitor_cancelled = cancelled.clone();
+    let monitor_finished = monitor_done.clone();
+    let monitor = std::thread::spawn(move || {
+        while !monitor_finished.load(Ordering::Acquire) {
+            std::thread::sleep(Duration::from_millis(25));
+            if monitor_finished.load(Ordering::Acquire) {
+                break;
+            }
+            let current = current_time_ms()
+                .ok()
+                .and_then(|now_ms| {
+                    monitor_state.process.lock().ok().and_then(|process| {
+                        process
+                            .kernel()
+                            .review_gateway_execution_is_current(&monitor_request, now_ms)
+                            .ok()
+                    })
+                })
+                .unwrap_or(false);
+            if !current {
+                monitor_cancelled.store(true, Ordering::Release);
+                break;
+            }
+        }
+    });
+    let provider_result = invoke_review_provider(
+        state.review_provider.as_ref(),
+        &request,
+        &prepared,
+        &cancelled,
+    );
+    monitor_done.store(true, Ordering::Release);
+    if monitor.join().is_err() {
+        terminalize_interrupted_review(state, &persisted)?;
+        return Err(fixed_error(StatusCode::CONFLICT, "review_gateway_rejected"));
+    }
+    let output = match provider_result {
+        Ok(output) => output,
+        Err(ReviewProviderInvocationError::Outage) => {
+            lock_process(state)?
+                .kernel_mut()
+                .finalize_review_transport_failure(
+                    &persisted,
+                    ReviewTransportFailure::ProviderOutage,
+                    current_time_ms().map_err(|_| {
+                        fixed_error(StatusCode::CONFLICT, "review_gateway_rejected")
+                    })?,
+                )
+                .map_err(review_gateway_api_error)?;
+            return Err(fixed_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "review_provider_outage",
+            ));
+        }
+        Err(ReviewProviderInvocationError::IncompleteTransport) => {
+            lock_process(state)?
+                .kernel_mut()
+                .finalize_review_transport_failure(
+                    &persisted,
+                    ReviewTransportFailure::IncompleteTransport,
+                    current_time_ms().map_err(|_| {
+                        fixed_error(StatusCode::CONFLICT, "review_gateway_rejected")
+                    })?,
+                )
+                .map_err(review_gateway_api_error)?;
+            return Err(fixed_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "review_transport_incomplete",
+            ));
+        }
+        Err(ReviewProviderInvocationError::MalformedOutput) => {
+            lock_process(state)?
+                .kernel_mut()
+                .finalize_review_transport_failure(
+                    &persisted,
+                    ReviewTransportFailure::MalformedOutput,
+                    current_time_ms().map_err(|_| {
+                        fixed_error(StatusCode::CONFLICT, "review_gateway_rejected")
+                    })?,
+                )
+                .map_err(review_gateway_api_error)?;
+            return Err(fixed_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "review_output_malformed",
+            ));
+        }
+        Err(ReviewProviderInvocationError::Cancelled) => {
+            terminalize_interrupted_review(state, &persisted)?;
+            return Err(fixed_error(
+                StatusCode::CONFLICT,
+                "review_gateway_cancelled",
+            ));
+        }
+        Err(ReviewProviderInvocationError::Unavailable) => {
+            return Err(fixed_error(StatusCode::CONFLICT, "review_gateway_rejected"))
+        }
+    };
+    if candidate.revalidate(&store).is_err() {
+        terminalize_interrupted_review(state, &persisted)?;
+        return Err(fixed_error(StatusCode::CONFLICT, "review_gateway_rejected"));
+    }
+    let receipt = match lock_process(state)?.kernel_mut().finalize_review_decision(
+        &persisted,
+        &packet,
+        &output,
+        current_time_ms()
+            .map_err(|_| fixed_error(StatusCode::CONFLICT, "review_gateway_rejected"))?,
+    ) {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            terminalize_interrupted_review(state, &persisted)?;
+            return Err(review_gateway_api_error(error));
+        }
+    };
+    receipt
+        .validate()
+        .map_err(|_| fixed_error(StatusCode::INTERNAL_SERVER_ERROR, "internal_error"))?;
+    Ok(Json(receipt).into_response())
+}
+
+fn terminalize_interrupted_review(
+    state: &AppState,
+    plan: &assemblywright_master::ReviewGatewayExecutionPlan,
+) -> Result<(), ApiError> {
+    lock_process(state)?
+        .kernel_mut()
+        .finalize_interrupted_review_call(
+            plan,
+            current_time_ms()
+                .map_err(|_| fixed_error(StatusCode::CONFLICT, "review_gateway_rejected"))?,
+        )
+        .map_err(review_gateway_api_error)
+}
+
+fn review_gateway_api_error(error: assemblywright_master::MasterError) -> ApiError {
+    match error {
+        assemblywright_master::MasterError::ReviewRetryNotReady { .. } => {
+            fixed_error(StatusCode::TOO_MANY_REQUESTS, "review_backoff_active")
+        }
+        assemblywright_master::MasterError::ReviewBudgetExhausted => {
+            fixed_error(StatusCode::CONFLICT, "review_budget_exhausted")
+        }
+        _ => fixed_error(StatusCode::CONFLICT, "review_gateway_rejected"),
+    }
 }
 
 fn spawn_reserved_blocking<T, F>(
@@ -4723,6 +5019,8 @@ mod tests {
             repository_snapshot_claim_reservation: Arc::new(tokio::sync::Mutex::new(())),
             artifact_integration_reservation: Arc::new(tokio::sync::Mutex::new(())),
             validation_gate_reservation: Arc::new(tokio::sync::Mutex::new(())),
+            review_gateway_reservation: Arc::new(tokio::sync::Mutex::new(())),
+            review_provider: Arc::new(UnavailableReviewProvider),
             validation_runtime: ValidationRuntime::Disabled,
         };
         let rejection = require_work_admission(&state).expect_err("pause must dominate work");
