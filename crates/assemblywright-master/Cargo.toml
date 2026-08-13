@@ -44,7 +44,14 @@ x509-parser.workspace = true
 zeroize.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-windows-sys.workspace = true
+windows-sys = { workspace = true, features = [
+  "Win32_Security_Authorization",
+  "Win32_Security_Isolation",
+  "Win32_System_JobObjects",
+  "Win32_System_Pipes",
+  "Win32_System_SystemInformation",
+  "Win32_System_Threading",
+] }
 windows-service.workspace = true
 
 [dev-dependencies]

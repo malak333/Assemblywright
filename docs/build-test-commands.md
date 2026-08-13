@@ -70,8 +70,8 @@ swift build --disable-sandbox --package-path apps/mac
 
 The schema-v9 snapshot-claim, schema-v10 coding-dispatch, schema-v11 owner-resolution,
 schema-v13 result-artifact admission, schema-v14 artifact integration/candidate
-freezing, and ephemeral snapshot-transfer/materialization slices have focused portable
-coverage:
+freezing, schema-v15 validation-gate persistence/contracts, and ephemeral
+snapshot-transfer/materialization slices have focused portable coverage:
 
 ```sh
 cargo test -p assemblywright-protocol --test protocol_contract repository_snapshot_claim_contract_is_strict_exact_and_path_free_on_receipt
@@ -95,6 +95,10 @@ cargo test -p assemblywright-master --test feature_conveyor_kernel artifact_stor
 cargo test -p assemblywright-master --test feature_conveyor_kernel artifact_integration -- --nocapture
 cargo test -p assemblywright-master --test artifact_integration_e2e -- --nocapture
 cargo test -p assemblywright-master --test master_process_e2e artifact_integration -- --nocapture
+cargo test -p assemblywright-protocol --test validation_gate_contract -- --nocapture
+cargo test -p assemblywright-master --test feature_conveyor_kernel artifact_integration_and_validation_gate_freeze_candidate_advance_and_reject_drift -- --nocapture
+cargo test -p assemblywright-master --test feature_conveyor_kernel validation_gate -- --nocapture
+cargo test -p assemblywright-master --test master_process_e2e artifact_integration_routes_are_owner_loopback_only_strict_and_redacted -- --nocapture
 cargo test -p assemblywright-agent --test local_coding_admission
 cargo test -p assemblywright-agent snapshot::tests
 cargo test -p assemblywright-agent --test local_relay_e2e authenticated_uds_local_coding_snapshot_admission_cancellation_and_restart_cleanup -- --nocapture
@@ -103,6 +107,37 @@ swift test --disable-sandbox --package-path apps/mac --filter DeveloperBridgeTes
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows-local-coding-live-control.ps1 -Action Check
 ./scripts/mac-windows-bridge-live-e2e.sh --run-local-coding
 ```
+
+The schema-v15 tests above prove strict ordered-plan decoding, canonical
+request binding, immutable digest-only attempt/evidence rows, exact candidate
+binding, owner-only route admission, remote-route absence, and the all-pass
+`validating -> reviewing` kernel transition. The portable runner contract also
+proves deterministic requirements/path/documentation/knowledge/safety/secret
+checks. An unprovisioned runner returns `validation_runner_unavailable` before
+creating an attempt.
+
+On the owner-controlled Windows validation host, the connected containment
+runner and its hostile fixture boundary have native coverage:
+
+```powershell
+cargo test -p assemblywright-master --test windows_validation_containment_e2e -- --nocapture
+cargo test -p assemblywright-master --test validation_runner_contract -- --nocapture
+cargo test -p assemblywright-master --test windows_validation_containment_e2e appcontainer_sid_cannot_read_or_write_outside_the_granted_execution_root -- --ignored --nocapture
+cargo test -p assemblywright-master --test windows_validation_containment_e2e zero_capability_appcontainer_cannot_open_a_loopback_network_connection -- --ignored --nocapture
+```
+
+This proves fixed command selection, design-digest/changed-path requirements
+binding, an exact llvm-cov argv contract that emits a summary and requests the
+protocol-owned 70% minimum line threshold, scratch verification and cleanup, the
+restricted token/AppContainer, minimal environment, bounded output, active
+cancellation with Job Object tree reaping, one outside-root denial, and
+loopback TCP/UDP nondelivery. Live activation additionally requires a private
+runner bundle at `<data-dir>/validation-runner/toolchain` containing Cargo,
+rustc/rustfmt, clippy/fmt, and `cargo-llvm-cov`, plus a credential-free
+`dependency-cache-seed`. Current proof does not establish installed-service
+identity, a real populated bundle/cache, signed Mac E2E, credential-store
+denial, actual above/below-threshold llvm-cov behavior, or OS-wide egress
+enforcement.
 
 The portable real-process route test proves authentication, path-free response,
 failure-without-lease, durable snapshot/lease binding, and source path/content

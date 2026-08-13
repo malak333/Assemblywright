@@ -26,15 +26,15 @@ advertisements; handshake, job, and result envelopes; strict bound-before-decode
 JSON entry points; nil-identity rejection; fixed-schema Feature Conveyor owner-
 control request/receipt contracts; and a golden compatibility fixture.
 
-**`assemblywright-master`** — a portable schema-v14 SQLite database retaining
+**`assemblywright-master`** — a portable schema-v15 SQLite database retaining
 the schema-v4 device lifecycle, schema-v5 Feature Conveyor, schema-v6
 capability rebind evidence, schema-v7 Emergency Pause revision, and schema-v8
 single owner-control bridge designation, schema-v9 immutable repository
 snapshot-claim evidence, schema-v10 metadata-only coding-dispatch evidence, and
 schema-v11 immutable owner-resolution origin evidence, schema-v13 immutable
-result-artifact metadata, and schema-v14 immutable artifact-integration and
-candidate-commit evidence with a backup-first
-fail-closed v10 compatibility migration,
+result-artifact metadata, schema-v14 immutable artifact-integration and
+candidate-commit evidence, and schema-v15 immutable validation-gate evidence
+with backup-first fail-closed legacy migration,
 plus a headless single-owner
 executable.
 
@@ -86,6 +86,16 @@ executable.
   `implementing -> validating`, and makes exact retries idempotent. It never
   mutates the registered source checkout and grants no test, review,
   publication, credential, network, or autonomous authority.
+  Schema v15 adds a separate owner-loopback test/evidence gate. When a fixed
+  private Windows toolchain and credential-free offline dependency cache are
+  provisioned, the master validates a disposable copy of the exact frozen
+  candidate, binds the approved design digest to exact admitted requirements
+  paths, and runs deterministic docs/knowledge/safety/secret checks plus fixed
+  70%-minimum line coverage, unit, native-E2E, format, lint, build, and
+  repository commands, and stores only immutable result digests and bounded
+  metadata. All required passes advance only `validating -> reviewing`.
+  Missing runner provisioning rejects before creating an attempt; no review,
+  publication, or registered-source mutation authority is implied.
   Two additional owner-token loopback-only resolution actions cancel one exact
   active feature and explicitly abandon-and-advance one already cancelled or
   quarantined feature. Both bind the feature, lifecycle, queue, and Emergency

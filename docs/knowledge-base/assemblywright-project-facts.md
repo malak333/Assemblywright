@@ -960,3 +960,52 @@ an old one.
   verifies its detached/clean/no-remote/fsck shape and exact-retry idempotence,
   and confirms the registered source checkout is unchanged. Test execution,
   review, publication, and registered-source mutation remain later boundaries.
+- Schema v15 adds the strict, owner-token-authenticated loopback-only
+  test/evidence-gate contract and immutable persistence; it does not add an
+  enrolled-device mutation. The approved manifest must contain the exact
+  ordered 13-command protocol plan: requirements binding, coverage, focused
+  unit tests, native E2E, documentation, knowledge base, formatting, lint,
+  build, safety, changed paths, secret scan, and repository validation.
+- A validation request is bound to its canonical plan/request digests and the
+  exact feature, specification and `validating` lifecycle revision, retained
+  lease, snapshot, integration and artifact set, candidate commit/tree/base
+  commit, queue and Emergency Pause revisions, and all three grant revisions.
+  It cannot supply executable names, argv, shell text, paths, raw output, or
+  caller-asserted evidence.
+- Schema-v15 validation persistence is immutable and digest-only: each command
+  records only its identifier, pass bit, nonzero result digest, duration, and
+  truncation bit, plus one aggregate evidence-manifest digest. Only all 13
+  ordered, passing, non-truncated results atomically advance
+  `validating -> reviewing` with redacted audit and transition evidence. A
+  recorded failure stays `validating`; incomplete or malformed evidence does
+  not complete.
+- Exact retry is outcome-preserving. A passed retry reopens and revalidates the
+  frozen candidate before returning the original receipt; a failed retry
+  returns the same fixed failure; a different validation ID or request binding
+  rejects. Startup quarantines active `validating` state as effect-possible and
+  never retries it automatically.
+- The production validation runner is connected only when fixed Windows
+  toolchain and credential-free dependency-cache inputs validate at startup.
+  Missing provisioning returns `validation_runner_unavailable` before an
+  attempt or audit row is created.
+- The Windows validation-containment module derives exact path/acceptance scope
+  from immutable work packets, binds it to the approved design digest, verifies
+  toolchain/cache plus authoritative and disposable candidates before recording
+  a start, runs deterministic master checks and fixed offline Cargo commands
+  including a protocol-owned 70% minimum line-coverage threshold, and
+  owns executable/argv/environment selection. Its native fixture
+  harness uses a restricted token, standard zero-capability AppContainer, exact
+  minimal environment and inherited-handle list, bounded output, Job Object
+  memory/process/tree limits, temporary root ACL, and profile cleanup. Hostile
+  fixtures prove active cancellation/tree reaping, denial of one outside-root
+  file, and nondelivery to loopback TCP/UDP probes. They do not prove installed-
+  service identity, a real populated production toolchain/cache, credential-
+  store isolation, actual above/below-threshold llvm-cov behavior, signed Mac
+  E2E, or OS-wide outbound-egress enforcement.
+- `cargo llvm-cov --no-report` returns before report-threshold evaluation, so
+  the fixed coverage command must emit `--summary-only` and
+  `--fail-under-lines 70`; the portable runner contract must reject any return
+  of `--no-report`. The deterministic requirements check binds the approved
+  design digest, acceptance-count presence, and exact approved changed paths;
+  it is `requirements_binding`, not a claim that each criterion has been
+  semantically mapped to an individual test.

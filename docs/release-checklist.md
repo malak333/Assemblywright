@@ -144,6 +144,31 @@ Before starting a release pass, confirm the claim you intend to make.
   validates referenced candidates, and quarantines ambiguity. Do not claim test,
   review, publication, credential/network, registered-source, or autonomous
   authority.
+- Confirm schema-v15 test/evidence gating remains owner-token loopback-only and
+  absent from enrolled-device mTLS. Prove the request accepts only the immutable
+  approved manifest's exact ordered 13-command plan and canonical digest, with
+  exact feature/specification/`validating` lifecycle/lease, snapshot,
+  integration/artifact set, candidate commit/tree/base commit, queue/pause, and
+  all three current grant bindings. Prove executable, argument, shell, path,
+  result, raw output, unknown, missing, reordered, and caller-evidence fields
+  reject. Prove immutable SQLite rows retain only bounded command identifiers,
+  pass/duration/truncation metadata and nonzero result/manifest digests; all 13
+  passes atomically append redacted audit and transition evidence and advance
+  only `validating -> reviewing`; failure stays `validating`; malformed or
+  incomplete evidence does not complete. Prove exact passed retry revalidates
+  the frozen candidate and returns the original receipt, exact failed retry is
+  the same failure, drift rejects, and interrupted active validation is startup-
+  quarantined without automatic retry.
+- Keep live validation provisioning blocked until the fixed Windows private
+  toolchain and credential-free cache bundle is installed and verified. An
+  unprovisioned runner must return `validation_runner_unavailable` before
+  durable attempt/audit mutation. Before activation, separately prove the real
+  Windows service identity, production executable/argv allowlist,
+  worktree/toolchain/cache/scratch ACLs,
+  no inherited credentials or handles, credential-store denial, cancellation
+  and complete tree reaping, bounded evidence extraction, actual
+  above/below-threshold llvm-cov behavior, and OS-wide outbound-egress denial.
+  Loopback TCP/UDP nondelivery is not OS-wide egress proof.
 - Confirm the owner-token loopback-only `cancel-active-feature` and
   `abandon-and-advance` routes are absent from enrolled-device mTLS. Prove
   strict duplicate/unknown/oversized-frame denial; exact feature, lifecycle,

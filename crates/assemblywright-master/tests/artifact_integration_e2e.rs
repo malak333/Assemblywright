@@ -11,6 +11,10 @@ use assemblywright_protocol::{
     LocalCodingResultArtifact, LocalCodingResultArtifactAdmission, LOCAL_CODING_COMPLETED_STATUS,
     LOCAL_CODING_FIXTURE_TEST_STATUS, PROTOCOL_VERSION,
 };
+#[cfg(windows)]
+use assemblywright_protocol::{
+    FeatureConveyorValidationCommandId, FeatureConveyorValidationGateRequest,
+};
 use git2::{Repository, Signature, Time};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -76,7 +80,17 @@ fn install_grants(kernel: &mut MasterKernel, repository_id: Uuid) {
 }
 
 fn specification(feature_id: Uuid, repository_id: Uuid) -> ApprovedFeatureSpecification {
-    let manifest = json!({"feature":"integration-e2e"});
+    let manifest = json!({
+        "feature":"integration-e2e",
+        "validation_gate": {
+            "schema_version": 1,
+            "command_ids": [
+                "requirements_binding", "coverage", "focused_unit_tests", "native_e2e",
+                "documentation", "knowledge_base", "formatting", "lint", "build", "safety",
+                "changed_paths", "secret_scan", "repository_validation"
+            ]
+        }
+    });
     ApprovedFeatureSpecification {
         feature_id,
         revision: 1,
@@ -169,6 +183,23 @@ fn native_master_process_freezes_and_recovers_exact_candidate_without_source_mut
         .status()
         .unwrap()
         .success());
+    #[cfg(windows)]
+    {
+        let bin = master_dir.join("validation-runner/toolchain/bin");
+        fs::create_dir_all(&bin).unwrap();
+        let executable = std::env::current_exe().unwrap();
+        for name in [
+            "cargo.exe",
+            "cargo-llvm-cov.exe",
+            "cargo-clippy.exe",
+            "cargo-fmt.exe",
+            "rustc.exe",
+            "rustfmt.exe",
+        ] {
+            fs::copy(&executable, bin.join(name)).unwrap();
+        }
+        fs::create_dir_all(master_dir.join("validation-runner/dependency-cache-seed")).unwrap();
+    }
     let child = Command::new(binary)
         .arg("--data-dir")
         .arg(&master_dir)
@@ -381,6 +412,77 @@ fn native_master_process_freezes_and_recovers_exact_candidate_without_source_mut
         &serde_json::to_string(&request).unwrap(),
     );
     assert_eq!(body(&retry), serde_json::to_value(&receipt).unwrap());
+    #[cfg(windows)]
+    {
+        let command_ids = FeatureConveyorValidationCommandId::REQUIRED.to_vec();
+        let validation = FeatureConveyorValidationGateRequest {
+            schema_version: 1,
+            validation_id: Uuid::new_v4(),
+            feature_id: receipt.feature_id,
+            specification_revision: receipt.specification_revision,
+            expected_lifecycle_revision: receipt.lifecycle_revision,
+            feature_lease_id: receipt.feature_lease_id,
+            snapshot_id: receipt.snapshot_id,
+            snapshot_sha256: receipt.snapshot_sha256,
+            integration_id: receipt.integration_id,
+            artifact_set_sha256: receipt.artifact_set_sha256,
+            candidate_commit: receipt.candidate_commit.clone(),
+            candidate_tree: receipt.candidate_tree.clone(),
+            base_commit: receipt.base_commit.clone(),
+            plan_sha256: assemblywright_protocol::feature_conveyor_validation_plan_sha256(
+                &command_ids,
+            )
+            .unwrap(),
+            command_ids,
+            expected_queue_revision: receipt.queue_revision,
+            expected_emergency_pause_revision: receipt.emergency_pause_revision,
+            grants: receipt.grants,
+        };
+        let validation_http = http(
+            endpoint,
+            "POST",
+            "/v1/feature-conveyor/test-evidence-gates",
+            token.trim(),
+            &serde_json::to_string(&validation).unwrap(),
+        );
+        assert!(
+            validation_http.starts_with("HTTP/1.1 409 Conflict"),
+            "{validation_http}"
+        );
+        assert_eq!(
+            body(&validation_http),
+            json!({"error":"validation_gate_failed"})
+        );
+        let connection = rusqlite::Connection::open(master_dir.join("master.sqlite3")).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM feature_validation_command_evidence
+                     WHERE validation_id=?1",
+                    [validation.validation_id.to_string()],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            13
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT passed FROM feature_validation_completions
+                     WHERE validation_id=?1",
+                    [validation.validation_id.to_string()],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            fs::read_dir(master_dir.join("feature-conveyor-validation-scratch"))
+                .unwrap()
+                .count(),
+            0
+        );
+    }
     let artifact_path = master_dir
         .join("feature-result-artifacts")
         .join(request.artifact_ids[0].to_string())

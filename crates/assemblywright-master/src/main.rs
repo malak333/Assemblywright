@@ -1,4 +1,9 @@
 use anyhow::{bail, Context};
+use assemblywright_master::validation_containment::{
+    run_internal_validation_check, run_validation_command, validation_command_execution,
+    ValidationCancellation, ValidationCommandExecution, ValidationToolchainConfig,
+    VerifiedValidationCopy,
+};
 use assemblywright_master::{
     current_time_ms, AcceptedCancellation, AcceptedResult, ApprovedFeatureSpecification,
     ArtifactIntegrationAuthorization, ArtifactIntegrationError, CapabilityRebindAcknowledgement,
@@ -7,7 +12,8 @@ use assemblywright_master::{
     FeatureSnapshotClaimPlan, IdentityAuthority, MasterHealthSnapshot, MasterProcess, NewStep,
     PlatformSecretProtector, RemoteWorkContract, RepositoryGrantKind, RepositoryGrantRevision,
     RepositorySnapshotEvidence, RepositorySnapshotStore, ResultArtifactReference,
-    StartupReconciliation,
+    StartupReconciliation, ValidationCommandEvidence, ValidationGateAuthorization,
+    ValidationGateEvidence, ValidationGateExecutionPlan,
 };
 #[cfg(test)]
 use assemblywright_protocol::CapabilityKind;
@@ -29,13 +35,13 @@ use assemblywright_protocol::{
     FeatureConveyorRepositoryGrantStatus, FeatureConveyorRepositoryPreflightReceipt,
     FeatureConveyorRepositoryPreflightRequest, FeatureConveyorRepositoryPreflightStatus,
     FeatureConveyorRepositorySnapshotClaimReceipt, FeatureConveyorRepositorySnapshotClaimRequest,
-    FeatureConveyorRepositorySnapshotClaimStatus, FixtureJobResult, HandshakeRequest,
-    HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope, JobResultStatus,
-    LocalCodingJobResult, LocalCodingResultArtifactAdmission, LocalCodingResultArtifactReceipt,
-    LocalCodingSnapshotChunk, LocalCodingSnapshotChunkRequest, Sensitivity, StepId, TaskId,
-    ENROLLMENT_INVITATION_READY_STATUS, ENROLLMENT_PAIRING_SCHEMA_VERSION,
-    FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, MAX_ENROLLMENT_PAIRING_FRAME_BYTES,
-    MAX_FEATURE_CONVEYOR_CODING_DISPATCH_REQUEST_BYTES,
+    FeatureConveyorRepositorySnapshotClaimStatus, FeatureConveyorValidationGateRequest,
+    FixtureJobResult, HandshakeRequest, HandshakeResponse, HandshakeStatus, JobEnvelope,
+    JobResultEnvelope, JobResultStatus, LocalCodingJobResult, LocalCodingResultArtifactAdmission,
+    LocalCodingResultArtifactReceipt, LocalCodingSnapshotChunk, LocalCodingSnapshotChunkRequest,
+    Sensitivity, StepId, TaskId, ENROLLMENT_INVITATION_READY_STATUS,
+    ENROLLMENT_PAIRING_SCHEMA_VERSION, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+    MAX_ENROLLMENT_PAIRING_FRAME_BYTES, MAX_FEATURE_CONVEYOR_CODING_DISPATCH_REQUEST_BYTES,
     MAX_FEATURE_CONVEYOR_OWNER_RESOLUTION_REQUEST_BYTES,
     MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES,
     MAX_FEATURE_CONVEYOR_SNAPSHOT_CLAIM_REQUEST_BYTES, MAX_LOCAL_CODING_SNAPSHOT_CHUNK_BYTES,
@@ -68,6 +74,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use std::time::Instant;
 use tokio_rustls::TlsAcceptor;
 use tracing::info;
 use uuid::Uuid;
@@ -384,6 +391,47 @@ struct AppState {
     lifecycle: RuntimeLifecycle,
     repository_snapshot_claim_reservation: Arc<tokio::sync::Mutex<()>>,
     artifact_integration_reservation: Arc<tokio::sync::Mutex<()>>,
+    validation_gate_reservation: Arc<tokio::sync::Mutex<()>>,
+    validation_runtime: ValidationRuntime,
+}
+
+#[derive(Clone)]
+#[cfg_attr(not(windows), allow(dead_code))]
+enum ValidationRuntime {
+    Disabled,
+    Ready(ValidationToolchainConfig),
+}
+
+impl ValidationRuntime {
+    fn load(data_dir: &Path) -> anyhow::Result<Self> {
+        #[cfg(windows)]
+        {
+            let root = data_dir.join("validation-runner");
+            let toolchain = root.join("toolchain");
+            let cache = root.join("dependency-cache-seed");
+            if !toolchain.exists() && !cache.exists() {
+                return Ok(Self::Disabled);
+            }
+            if !toolchain.exists() || !cache.exists() {
+                bail!("validation runner provisioning is incomplete");
+            }
+            return ValidationToolchainConfig::resolve(&toolchain, &cache)
+                .map(Self::Ready)
+                .map_err(|_| anyhow::anyhow!("validation runner provisioning is invalid"));
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = data_dir;
+            Ok(Self::Disabled)
+        }
+    }
+
+    fn toolchain(&self) -> Option<&ValidationToolchainConfig> {
+        match self {
+            Self::Disabled => None,
+            Self::Ready(toolchain) => Some(toolchain),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -1454,6 +1502,7 @@ async fn serve_runtime(
     } else {
         None
     };
+    let validation_runtime = ValidationRuntime::load(process.data_dir())?;
     let state = AppState {
         process: Arc::new(Mutex::new(process)),
         token_sha256: Sha256::digest(token.as_bytes()).into(),
@@ -1461,6 +1510,8 @@ async fn serve_runtime(
         lifecycle,
         repository_snapshot_claim_reservation: Arc::new(tokio::sync::Mutex::new(())),
         artifact_integration_reservation: Arc::new(tokio::sync::Mutex::new(())),
+        validation_gate_reservation: Arc::new(tokio::sync::Mutex::new(())),
+        validation_runtime,
     };
 
     let app = Router::new()
@@ -1498,6 +1549,10 @@ async fn serve_runtime(
         .route(
             "/v1/feature-conveyor/artifact-integrations",
             post(feature_artifact_integration),
+        )
+        .route(
+            "/v1/feature-conveyor/test-evidence-gates",
+            post(feature_validation_gate),
         )
         .route(
             "/v1/feature-conveyor/features/:feature_id/integration-plan",
@@ -2767,6 +2822,7 @@ async fn feature_artifact_integration(
     body: Result<Bytes, BytesRejection>,
 ) -> Result<Response, ApiError> {
     authorize(&headers, &state)?;
+    require_work_admission(&state)?;
     let body = body.map_err(|_| {
         fixed_error(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -2790,6 +2846,275 @@ async fn feature_artifact_integration(
     });
     work.await
         .map_err(|_| fixed_error(StatusCode::CONFLICT, "artifact_integration_rejected"))?
+}
+
+async fn feature_validation_gate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<Response, ApiError> {
+    authorize(&headers, &state)?;
+    require_work_admission(&state)?;
+    let body = body.map_err(|_| {
+        fixed_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "validation_gate_request_rejected",
+        )
+    })?;
+    let request = FeatureConveyorValidationGateRequest::decode_frame(&body).map_err(|_| {
+        fixed_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "validation_gate_request_rejected",
+        )
+    })?;
+    let reservation = state
+        .validation_gate_reservation
+        .clone()
+        .try_lock_owned()
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "validation_gate_in_progress"))?;
+    let state_for_work = state.clone();
+    spawn_reserved_blocking(reservation, move || {
+        perform_feature_validation_gate(&state_for_work, request)
+    })
+    .await
+    .map_err(|_| fixed_error(StatusCode::CONFLICT, "validation_gate_rejected"))?
+}
+
+fn perform_feature_validation_gate(
+    state: &AppState,
+    request: FeatureConveyorValidationGateRequest,
+) -> Result<Response, ApiError> {
+    let authorization = lock_process(state)?
+        .kernel_mut()
+        .prepare_validation_gate(
+            &request,
+            current_time_ms()
+                .map_err(|_| fixed_error(StatusCode::CONFLICT, "validation_gate_rejected"))?,
+        )
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "validation_gate_rejected"))?;
+    let plan = match authorization {
+        ValidationGateAuthorization::ExistingPassed { receipt, candidate } => {
+            let store = lock_process(state)?.artifact_integration_store();
+            store
+                .open_verified_candidate(&candidate)
+                .map_err(|_| fixed_error(StatusCode::CONFLICT, "validation_gate_rejected"))?;
+            receipt
+                .validate()
+                .map_err(|_| fixed_error(StatusCode::INTERNAL_SERVER_ERROR, "internal_error"))?;
+            return Ok(Json(receipt).into_response());
+        }
+        ValidationGateAuthorization::ExistingFailed => {
+            return Err(fixed_error(StatusCode::CONFLICT, "validation_gate_failed"));
+        }
+        ValidationGateAuthorization::Planned(plan) => plan,
+    };
+    let toolchain = state
+        .validation_runtime
+        .toolchain()
+        .ok_or_else(|| fixed_error(StatusCode::CONFLICT, "validation_runner_unavailable"))?;
+    toolchain
+        .revalidate()
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "validation_runner_unavailable"))?;
+    let store = lock_process(state)?.artifact_integration_store();
+    let mut candidate = store
+        .open_verified_candidate(&plan.candidate)
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "validation_gate_rejected"))?;
+    let mut scratch = store
+        .prepare_validation_copy(&plan.candidate)
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "validation_gate_rejected"))?;
+    VerifiedValidationCopy::verify(
+        scratch.root(),
+        &plan.candidate.candidate_commit,
+        &plan.candidate.candidate_tree,
+    )
+    .map_err(|_| fixed_error(StatusCode::CONFLICT, "validation_gate_rejected"))?;
+    scratch
+        .verify_after(&store)
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "validation_gate_rejected"))?;
+    let persisted = lock_process(state)?
+        .kernel_mut()
+        .plan_validation_gate(
+            &request,
+            current_time_ms()
+                .map_err(|_| fixed_error(StatusCode::CONFLICT, "validation_gate_rejected"))?,
+        )
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "validation_gate_rejected"))?;
+    let persisted = match persisted {
+        ValidationGateAuthorization::Planned(persisted) if persisted == plan => persisted,
+        _ => {
+            return Err(fixed_error(
+                StatusCode::CONFLICT,
+                "validation_gate_rejected",
+            ))
+        }
+    };
+    let evidence = execute_validation_plan(state, &persisted, scratch)?;
+    candidate
+        .revalidate(&store)
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "validation_gate_rejected"))?;
+    let receipt = lock_process(state)?
+        .kernel_mut()
+        .finalize_validation_gate(
+            &plan,
+            &evidence,
+            current_time_ms()
+                .map_err(|_| fixed_error(StatusCode::CONFLICT, "validation_gate_rejected"))?,
+        )
+        .map_err(|error| match error {
+            assemblywright_master::MasterError::ValidationGateFailed => {
+                fixed_error(StatusCode::CONFLICT, "validation_gate_failed")
+            }
+            _ => fixed_error(StatusCode::CONFLICT, "validation_gate_rejected"),
+        })?;
+    receipt
+        .validate()
+        .map_err(|_| fixed_error(StatusCode::INTERNAL_SERVER_ERROR, "internal_error"))?;
+    Ok(Json(receipt).into_response())
+}
+
+fn execute_validation_plan(
+    state: &AppState,
+    plan: &ValidationGateExecutionPlan,
+    mut scratch: assemblywright_master::ValidationCandidateScratch,
+) -> Result<ValidationGateEvidence, ApiError> {
+    let toolchain = state
+        .validation_runtime
+        .toolchain()
+        .ok_or_else(|| fixed_error(StatusCode::CONFLICT, "validation_runner_unavailable"))?;
+    let store = lock_process(state)?.artifact_integration_store();
+    let candidate = VerifiedValidationCopy::verify(
+        scratch.root(),
+        &plan.candidate.candidate_commit,
+        &plan.candidate.candidate_tree,
+    )
+    .map_err(|_| fixed_error(StatusCode::CONFLICT, "validation_gate_rejected"))?;
+
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let monitor_done = Arc::new(AtomicBool::new(false));
+    let monitor_state = state.clone();
+    let monitor_request = plan.request.clone();
+    let monitor_cancelled = cancelled.clone();
+    let monitor_finished = monitor_done.clone();
+    let monitor = std::thread::spawn(move || {
+        while !monitor_finished.load(Ordering::Acquire) {
+            std::thread::sleep(Duration::from_millis(25));
+            if monitor_finished.load(Ordering::Acquire) {
+                break;
+            }
+            let current = current_time_ms()
+                .ok()
+                .and_then(|now_ms| {
+                    monitor_state.process.lock().ok().and_then(|process| {
+                        process
+                            .kernel()
+                            .validation_gate_execution_is_current(&monitor_request, now_ms)
+                            .ok()
+                    })
+                })
+                .unwrap_or(false);
+            if !current {
+                monitor_cancelled.store(true, Ordering::Release);
+                break;
+            }
+        }
+    });
+    let cancellation = ValidationCancellation::new(cancelled.clone());
+    let execution = (|| {
+        let mut commands = Vec::with_capacity(plan.request.command_ids.len());
+        for command_id in &plan.request.command_ids {
+            let still_current = lock_process(state)?
+                .kernel()
+                .validation_gate_execution_is_current(
+                    &plan.request,
+                    current_time_ms().map_err(|_| {
+                        fixed_error(StatusCode::CONFLICT, "validation_gate_rejected")
+                    })?,
+                )
+                .map_err(|_| fixed_error(StatusCode::CONFLICT, "validation_gate_rejected"))?;
+            if !still_current || cancelled.load(Ordering::Acquire) {
+                return Err(fixed_error(
+                    StatusCode::CONFLICT,
+                    "validation_gate_cancelled",
+                ));
+            }
+            let started = Instant::now();
+            let evidence = match validation_command_execution(*command_id) {
+                ValidationCommandExecution::InternalDeterministicCheck => {
+                    let result = run_internal_validation_check(
+                        *command_id,
+                        &candidate,
+                        &plan.candidate.base_commit,
+                        &plan.approved_paths,
+                        plan.acceptance_criteria_count,
+                        plan.requirements_sha256,
+                    )
+                    .map_err(|_| fixed_error(StatusCode::CONFLICT, "validation_gate_rejected"))?;
+                    ValidationCommandEvidence {
+                        command_id: result.command_id,
+                        passed: result.passed,
+                        result_sha256: result.result_sha256,
+                        duration_ms: u64::try_from(started.elapsed().as_millis())
+                            .unwrap_or(u64::MAX),
+                        output_truncated: false,
+                    }
+                }
+                ValidationCommandExecution::ContainedProcess => {
+                    let result = run_validation_command(
+                        *command_id,
+                        &candidate,
+                        toolchain,
+                        Duration::from_secs(30 * 60),
+                        &cancellation,
+                    )
+                    .map_err(|_| fixed_error(StatusCode::CONFLICT, "validation_gate_rejected"))?;
+                    let mut digest = Sha256::new();
+                    digest.update(b"assemblywright.contained-validation-result.v1\0");
+                    digest.update([
+                        assemblywright_protocol::FEATURE_CONVEYOR_MINIMUM_LINE_COVERAGE_PERCENT,
+                    ]);
+                    digest.update(serde_json::to_vec(command_id).map_err(|_| {
+                        fixed_error(StatusCode::INTERNAL_SERVER_ERROR, "internal_error")
+                    })?);
+                    digest.update(result.exit_code.to_be_bytes());
+                    digest.update((result.stdout_len as u64).to_be_bytes());
+                    digest.update(result.stdout_sha256);
+                    digest.update((result.stderr_len as u64).to_be_bytes());
+                    digest.update(result.stderr_sha256);
+                    digest.update([u8::from(result.timed_out)]);
+                    ValidationCommandEvidence {
+                        command_id: *command_id,
+                        passed: result.exit_code == 0 && !result.timed_out,
+                        result_sha256: digest.finalize().into(),
+                        duration_ms: u64::try_from(started.elapsed().as_millis())
+                            .unwrap_or(u64::MAX),
+                        output_truncated: false,
+                    }
+                }
+                ValidationCommandExecution::ExternalPlatformEvidence => {
+                    return Err(fixed_error(
+                        StatusCode::CONFLICT,
+                        "validation_runner_unavailable",
+                    ));
+                }
+            };
+            scratch
+                .verify_after(&store)
+                .map_err(|_| fixed_error(StatusCode::CONFLICT, "validation_gate_rejected"))?;
+            commands.push(evidence);
+        }
+        scratch
+            .finish(&store)
+            .map_err(|_| fixed_error(StatusCode::CONFLICT, "validation_gate_rejected"))?;
+        Ok(ValidationGateEvidence { commands })
+    })();
+    monitor_done.store(true, Ordering::Release);
+    if monitor.join().is_err() {
+        return Err(fixed_error(
+            StatusCode::CONFLICT,
+            "validation_gate_rejected",
+        ));
+    }
+    execution
 }
 
 fn spawn_reserved_blocking<T, F>(
@@ -4397,6 +4722,8 @@ mod tests {
             lifecycle,
             repository_snapshot_claim_reservation: Arc::new(tokio::sync::Mutex::new(())),
             artifact_integration_reservation: Arc::new(tokio::sync::Mutex::new(())),
+            validation_gate_reservation: Arc::new(tokio::sync::Mutex::new(())),
+            validation_runtime: ValidationRuntime::Disabled,
         };
         let rejection = require_work_admission(&state).expect_err("pause must dominate work");
         assert_eq!(rejection.0, StatusCode::SERVICE_UNAVAILABLE);

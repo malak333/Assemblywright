@@ -480,6 +480,49 @@ the worktree, toolchain, dependency cache, and scratch directory. Repositories
 that require live network access during validation are ineligible for
 autonomous publication in this release.
 
+### Current Schema-v15 Validation Boundary
+
+The implemented schema-v15 seam is deliberately narrower than the accepted
+runner above. It adds one owner-token-authenticated loopback-only
+`POST /v1/feature-conveyor/test-evidence-gates` route and no enrolled-device
+mutation. Its strict request must reproduce the immutable approved manifest's
+exact ordered 13-command plan and binds its plan/request digests to the exact
+feature, specification, `validating` lifecycle revision, retained lease,
+snapshot, integration, artifact set, candidate commit/tree/base commit, queue
+and Emergency Pause revisions, and all three repository-grant revisions. It
+accepts no executable, arguments, shell text, path, raw output, or caller-
+asserted evidence.
+
+SQLite stores immutable attempt and per-command pass/digest/duration/truncation
+metadata plus an immutable aggregate evidence-manifest digest. Only all 13
+required passing, non-truncated results may atomically record redacted
+transition evidence and advance `validating -> reviewing`. A recorded failure
+stays `validating`; incomplete or malformed evidence is not completed. Exact
+passed retry revalidates the frozen candidate and returns the original receipt;
+exact failed retry returns the same failure; validation-ID or binding drift
+rejects. Active `validating` state is startup-quarantined as effect-possible
+without automatic retry.
+
+The production execution hook is connected only when the Windows master starts
+with complete fixed private toolchain and credential-free dependency-cache
+inputs. Otherwise it returns `validation_runner_unavailable` before creating an
+attempt. Before recording a start it revalidates toolchain/cache, authoritative
+candidate, and scratch resources. The runner binds the approved design digest
+to approved paths and acceptance counts from immutable work packets, verifies a
+clean no-remote disposable copy of the exact candidate, runs deterministic
+master checks and fixed offline Cargo commands including a protocol-owned 70%
+minimum line-coverage threshold, and owns
+executable/argv/environment selection. Its launcher establishes
+restricted-token, standard zero-capability AppContainer, exact minimal
+environment and inherited-handle, bounded-output, Job Object limit/tree-kill,
+temporary execution-root ACL, and profile-cleanup mechanics. Native hostile
+fixtures establish active cancellation with descendant reaping, denial of one
+outside-root file, and nondelivery to loopback TCP/UDP probes. They are not
+installed-service-identity, real populated production toolchain/cache,
+credential-store, actual above/below-threshold llvm-cov behavior, signed Mac
+E2E, or OS-wide egress proof. Live provisioning remains disabled until those
+deployment boundaries are proven.
+
 The dedicated Codex runner identity owns exactly one reusable external secret:
 the owner's Codex CLI authentication material in that identity's platform
 credential store. The master never copies it into SQLite, job payloads,

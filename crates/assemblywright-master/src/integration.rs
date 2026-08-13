@@ -14,6 +14,11 @@ use crate::{ResultArtifactReference, ResultArtifactStore, VerifiedResultArtifact
 
 const SNAPSHOT_ROOT: &str = "feature-conveyor-repository-snapshots";
 const CANDIDATE_ROOT: &str = "feature-conveyor-candidates";
+const VALIDATION_SCRATCH_ROOT: &str = "feature-conveyor-validation-scratch";
+const MAX_VALIDATION_SCRATCH_ENTRIES: usize = 100_000;
+const MAX_VALIDATION_SCRATCH_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_VALIDATION_SCRATCH_FILE_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_VALIDATION_SCRATCH_PATH_BYTES: usize = 1024;
 
 #[cfg(test)]
 type SourceRevalidationHook = Option<Box<dyn FnOnce(&Path) + Send + 'static>>;
@@ -102,6 +107,17 @@ pub struct VerifiedCandidate {
     entries: Vec<StableTreeEntry>,
 }
 
+/// A master-internal, disposable copy of one exact frozen candidate.
+///
+/// The authoritative candidate remains open through stable handles for the
+/// lifetime of this guard. Callers may expose only `root()` to the contained
+/// validator and must call `finish()` to obtain verified cleanup evidence.
+pub struct ValidationCandidateScratch {
+    path: Option<PathBuf>,
+    cleanup_identity: PlatformIdentity,
+    candidate: VerifiedCandidate,
+}
+
 struct StableTreeEntry {
     relative: PathBuf,
     identity: PlatformIdentity,
@@ -163,6 +179,63 @@ impl VerifiedCandidate {
     }
 }
 
+impl ValidationCandidateScratch {
+    pub fn root(&self) -> &Path {
+        self.path
+            .as_deref()
+            .expect("validation scratch remains live until finish")
+    }
+
+    /// Revalidates both sides of the validation boundary. The authoritative
+    /// candidate must still be the exact commit/tree evidence, and every byte
+    /// copied from it must remain unchanged in scratch. New validator output is
+    /// permitted only outside `.git` and remains subject to the same bounded,
+    /// no-link stable-tree inventory.
+    pub fn verify_after(
+        &mut self,
+        store: &ArtifactIntegrationStore,
+    ) -> Result<(), ArtifactIntegrationError> {
+        self.candidate.revalidate(store)?;
+        let scratch = open_stable_tree(self.root())?;
+        validate_validation_scratch_budget(&scratch)?;
+        validate_scratch_source_bytes(&self.candidate.entries, &scratch, true)
+    }
+
+    /// Completes the before/after check and verifies recursive cleanup. Cleanup
+    /// is attempted even when validation evidence is rejected.
+    pub fn finish(
+        mut self,
+        store: &ArtifactIntegrationStore,
+    ) -> Result<(), ArtifactIntegrationError> {
+        let verification = self.verify_after(store);
+        let cleanup = self.remove_and_verify();
+        verification.and(cleanup)
+    }
+
+    fn remove_and_verify(&mut self) -> Result<(), ArtifactIntegrationError> {
+        let path = self
+            .path
+            .as_ref()
+            .ok_or(ArtifactIntegrationError::Rejected)?;
+        remove_validation_tree_matching(path, Some(self.cleanup_identity))?;
+        match fs::symlink_metadata(path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                self.path = None;
+                Ok(())
+            }
+            _ => Err(ArtifactIntegrationError::Rejected),
+        }
+    }
+}
+
+impl Drop for ValidationCandidateScratch {
+    fn drop(&mut self) {
+        if self.path.is_some() {
+            let _ = self.remove_and_verify();
+        }
+    }
+}
+
 impl Drop for PreparedCandidate {
     fn drop(&mut self) {
         self.verified.entries.clear();
@@ -189,6 +262,12 @@ impl ArtifactIntegrationStore {
         ensure_directory(&root)?;
         ensure_directory(&root.join("staging"))?;
         ensure_directory(&root.join("candidates"))?;
+        let validation_scratch = data_dir.join(VALIDATION_SCRATCH_ROOT);
+        ensure_directory(&validation_scratch)?;
+        // Validation never resumes across process death. The kernel separately
+        // quarantines an active lifecycle; only unreferenced scratch bytes are
+        // removed here, with the same no-link cleanup used by candidate staging.
+        cleanup_children(&validation_scratch, &HashSet::new())?;
         Ok(Self {
             data_dir: data_dir.to_path_buf(),
             root,
@@ -258,6 +337,36 @@ impl ArtifactIntegrationStore {
             evidence: evidence.clone(),
             entries,
         })
+    }
+
+    /// Creates a private disposable validation tree from retained handles to
+    /// the exact frozen candidate. This grants no command, lifecycle, review,
+    /// publication, or remote authority.
+    pub fn prepare_validation_copy(
+        &self,
+        evidence: &CandidateEvidence,
+    ) -> Result<ValidationCandidateScratch, ArtifactIntegrationError> {
+        let candidate = self.open_verified_candidate(evidence)?;
+        validate_validation_scratch_budget(&candidate.entries)?;
+
+        let scratch_root = self.data_dir.join(VALIDATION_SCRATCH_ROOT);
+        ensure_directory(&scratch_root)?;
+        let path = scratch_root.join(Uuid::new_v4().to_string());
+        fs::create_dir(&path)?;
+        ensure_directory(&path)?;
+        let cleanup_identity = path_identity(&path)?;
+        let mut scratch = ValidationCandidateScratch {
+            path: Some(path),
+            cleanup_identity,
+            candidate,
+        };
+
+        copy_validation_tree_from_handles(&scratch.candidate.entries, scratch.root())?;
+        let copied = open_stable_tree(scratch.root())?;
+        validate_validation_scratch_budget(&copied)?;
+        validate_scratch_source_bytes(&scratch.candidate.entries, &copied, false)?;
+        scratch.candidate.revalidate(self)?;
+        Ok(scratch)
     }
 
     pub fn prepare(
@@ -431,6 +540,132 @@ impl ArtifactIntegrationStore {
         cleanup.evidence.candidate_tree = tree_oid.to_string();
         cleanup.verified = self.open_verified_candidate(&cleanup.evidence)?;
         Ok(cleanup)
+    }
+}
+
+fn validate_validation_scratch_budget(
+    entries: &[StableTreeEntry],
+) -> Result<(), ArtifactIntegrationError> {
+    if entries.is_empty() || entries.len() > MAX_VALIDATION_SCRATCH_ENTRIES {
+        return Err(ArtifactIntegrationError::Rejected);
+    }
+    let mut total = 0_u64;
+    for entry in entries {
+        let relative = entry
+            .relative
+            .to_str()
+            .ok_or(ArtifactIntegrationError::Rejected)?;
+        if relative.len() > MAX_VALIDATION_SCRATCH_PATH_BYTES
+            || (!entry.directory && entry.length > MAX_VALIDATION_SCRATCH_FILE_BYTES)
+        {
+            return Err(ArtifactIntegrationError::Rejected);
+        }
+        if !entry.directory {
+            total = total
+                .checked_add(entry.length)
+                .ok_or(ArtifactIntegrationError::Rejected)?;
+            if total > MAX_VALIDATION_SCRATCH_BYTES {
+                return Err(ArtifactIntegrationError::Rejected);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn copy_validation_tree_from_handles(
+    entries: &[StableTreeEntry],
+    destination: &Path,
+) -> Result<(), ArtifactIntegrationError> {
+    use std::io::{Seek, SeekFrom};
+
+    for entry in entries {
+        if entry.relative.as_os_str().is_empty() {
+            if !entry.directory {
+                return Err(ArtifactIntegrationError::Rejected);
+            }
+            continue;
+        }
+        let output_path = destination.join(&entry.relative);
+        if entry.directory {
+            fs::create_dir(&output_path)?;
+            ensure_directory(&output_path)?;
+            continue;
+        }
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options
+                .mode(0o600)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            options.custom_flags(
+                windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT,
+            );
+        }
+        let mut output = options.open(&output_path)?;
+        let mut input = entry._handle.try_clone()?;
+        input.seek(SeekFrom::Start(0))?;
+        let copied = std::io::copy(&mut input, &mut output)?;
+        if copied != entry.length {
+            return Err(ArtifactIntegrationError::Rejected);
+        }
+        output.sync_all()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+            let source_mode = entry._handle.metadata()?.mode() & 0o111;
+            fs::set_permissions(
+                &output_path,
+                fs::Permissions::from_mode(if source_mode == 0 { 0o600 } else { 0o700 }),
+            )?;
+        }
+    }
+    sync_plain_tree(destination)
+}
+
+fn validate_scratch_source_bytes(
+    source: &[StableTreeEntry],
+    scratch: &[StableTreeEntry],
+    allow_generated: bool,
+) -> Result<(), ArtifactIntegrationError> {
+    for expected in source {
+        let actual = stable_entry(scratch, &expected.relative)?;
+        if expected.directory != actual.directory
+            || (!expected.directory
+                && (expected.length != actual.length || expected.sha256 != actual.sha256))
+        {
+            return Err(ArtifactIntegrationError::Rejected);
+        }
+    }
+    for actual in scratch {
+        let known = source
+            .iter()
+            .any(|expected| expected.relative == actual.relative);
+        if !known
+            && (!allow_generated
+                || actual.relative == Path::new(".git")
+                || actual.relative.starts_with(".git"))
+        {
+            return Err(ArtifactIntegrationError::Rejected);
+        }
+    }
+    Ok(())
+}
+
+/// Removes one known validation-private directory without following links or
+/// accepting identity replacement. A hostile validator may write this tree,
+/// so generic recursive deletion is not an acceptable cleanup primitive.
+#[cfg(windows)]
+pub(crate) fn remove_validation_private_tree(path: &Path) -> Result<(), ArtifactIntegrationError> {
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(_) => remove_validation_tree_matching(path, Some(path_identity(path)?)),
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -1274,33 +1509,6 @@ fn ensure_directory(path: &Path) -> Result<(), ArtifactIntegrationError> {
     Ok(())
 }
 
-fn validate_plain_file(
-    _path: &Path,
-    metadata: &fs::Metadata,
-) -> Result<(), ArtifactIntegrationError> {
-    if !metadata.is_file() || metadata.file_type().is_symlink() {
-        return Err(ArtifactIntegrationError::Rejected);
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if metadata.nlink() != 1 {
-            return Err(ArtifactIntegrationError::Rejected);
-        }
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        if metadata.file_attributes()
-            & windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT
-            != 0
-        {
-            return Err(ArtifactIntegrationError::Rejected);
-        }
-    }
-    Ok(())
-}
-
 #[cfg(not(unix))]
 fn configure_no_follow_read(options: &mut OpenOptions) {
     #[cfg(unix)]
@@ -1341,8 +1549,24 @@ fn configure_no_follow_directory(options: &mut OpenOptions) {
 }
 
 fn validate_open_plain_file(file: &File) -> Result<(), ArtifactIntegrationError> {
+    validate_open_cleanup_file(file, false)
+}
+
+fn validate_open_cleanup_file(
+    file: &File,
+    allow_hardlinks: bool,
+) -> Result<(), ArtifactIntegrationError> {
     let metadata = file.metadata()?;
-    validate_plain_file(Path::new(""), &metadata)?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(ArtifactIntegrationError::Rejected);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if !allow_hardlinks && metadata.nlink() != 1 {
+            return Err(ArtifactIntegrationError::Rejected);
+        }
+    }
     #[cfg(windows)]
     {
         use windows_sys::Win32::Storage::FileSystem::{
@@ -1351,7 +1575,7 @@ fn validate_open_plain_file(file: &File) -> Result<(), ArtifactIntegrationError>
         let information = windows_file_information(file)?;
         if information.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)
             != 0
-            || information.nNumberOfLinks != 1
+            || (!allow_hardlinks && information.nNumberOfLinks != 1)
         {
             return Err(ArtifactIntegrationError::Rejected);
         }
@@ -1869,6 +2093,23 @@ fn remove_plain_tree_matching(
     path: &Path,
     expected: Option<PlatformIdentity>,
 ) -> Result<(), ArtifactIntegrationError> {
+    remove_tree_matching_unix(path, expected, false)
+}
+
+#[cfg(unix)]
+fn remove_validation_tree_matching(
+    path: &Path,
+    expected: Option<PlatformIdentity>,
+) -> Result<(), ArtifactIntegrationError> {
+    remove_tree_matching_unix(path, expected, true)
+}
+
+#[cfg(unix)]
+fn remove_tree_matching_unix(
+    path: &Path,
+    expected: Option<PlatformIdentity>,
+    allow_hardlinks: bool,
+) -> Result<(), ArtifactIntegrationError> {
     use std::ffi::CString;
     use std::os::fd::AsRawFd;
     use std::os::unix::ffi::OsStrExt;
@@ -1884,7 +2125,7 @@ fn remove_plain_tree_matching(
     configure_no_follow_directory(&mut options);
     let parent_handle = options.open(parent)?;
     validate_open_plain_directory(&parent_handle)?;
-    remove_tree_at(parent_handle.as_raw_fd(), &name, expected)
+    remove_tree_at_with_policy(parent_handle.as_raw_fd(), &name, expected, allow_hardlinks)
 }
 
 #[cfg(unix)]
@@ -1911,6 +2152,16 @@ fn remove_tree_at(
     parent_fd: std::os::fd::RawFd,
     name: &std::ffi::CStr,
     expected: Option<PlatformIdentity>,
+) -> Result<(), ArtifactIntegrationError> {
+    remove_tree_at_with_policy(parent_fd, name, expected, false)
+}
+
+#[cfg(unix)]
+fn remove_tree_at_with_policy(
+    parent_fd: std::os::fd::RawFd,
+    name: &std::ffi::CStr,
+    expected: Option<PlatformIdentity>,
+    allow_hardlinks: bool,
 ) -> Result<(), ArtifactIntegrationError> {
     use std::ffi::CString;
     use std::os::fd::{AsRawFd, FromRawFd};
@@ -1955,8 +2206,8 @@ fn remove_tree_at(
         return Err(ArtifactIntegrationError::Rejected);
     }
     for child in directory_entry_names(&directory)? {
-        if remove_tree_at(directory.as_raw_fd(), &child, None).is_err()
-            && remove_file_at(directory.as_raw_fd(), &child).is_err()
+        if remove_tree_at_with_policy(directory.as_raw_fd(), &child, None, allow_hardlinks).is_err()
+            && remove_file_at_with_policy(directory.as_raw_fd(), &child, allow_hardlinks).is_err()
         {
             let _ = rename_noreplace_at(parent_fd, &captured, name);
             return Err(ArtifactIntegrationError::Rejected);
@@ -1992,6 +2243,15 @@ fn remove_file_at(
     parent_fd: std::os::fd::RawFd,
     name: &std::ffi::CStr,
 ) -> Result<(), ArtifactIntegrationError> {
+    remove_file_at_with_policy(parent_fd, name, false)
+}
+
+#[cfg(unix)]
+fn remove_file_at_with_policy(
+    parent_fd: std::os::fd::RawFd,
+    name: &std::ffi::CStr,
+    allow_hardlinks: bool,
+) -> Result<(), ArtifactIntegrationError> {
     use std::ffi::CString;
     use std::os::fd::FromRawFd;
     let original_descriptor = unsafe {
@@ -2005,7 +2265,7 @@ fn remove_file_at(
         return Err(ArtifactIntegrationError::Rejected);
     }
     let original = unsafe { File::from_raw_fd(original_descriptor) };
-    validate_open_plain_file(&original)?;
+    validate_open_cleanup_file(&original, allow_hardlinks)?;
     let original_identity = platform_identity(&original)?;
     run_cleanup_test_hook(CleanupHookPhase::BeforeCapture);
     let captured = CString::new(format!(".assemblywright-delete-{}", Uuid::new_v4()))
@@ -2026,7 +2286,7 @@ fn remove_file_at(
         return Err(ArtifactIntegrationError::Rejected);
     }
     let file = unsafe { File::from_raw_fd(descriptor) };
-    if validate_open_plain_file(&file).is_err()
+    if validate_open_cleanup_file(&file, allow_hardlinks).is_err()
         || platform_identity(&file).ok() != Some(original_identity)
     {
         let _ = rename_noreplace_at(parent_fd, &captured, name);
@@ -2096,6 +2356,14 @@ fn remove_plain_tree_matching(
 }
 
 #[cfg(windows)]
+fn remove_validation_tree_matching(
+    path: &Path,
+    expected: Option<PlatformIdentity>,
+) -> Result<(), ArtifactIntegrationError> {
+    remove_windows_entry_with_policy(path, expected, true, true)
+}
+
+#[cfg(windows)]
 fn path_identity(path: &Path) -> Result<PlatformIdentity, ArtifactIntegrationError> {
     let handle = open_identity_handle(path, true)?;
     validate_open_plain_directory(&handle)?;
@@ -2113,11 +2381,21 @@ fn remove_windows_entry(
     expected: Option<PlatformIdentity>,
     directory: bool,
 ) -> Result<(), ArtifactIntegrationError> {
+    remove_windows_entry_with_policy(path, expected, directory, false)
+}
+
+#[cfg(windows)]
+fn remove_windows_entry_with_policy(
+    path: &Path,
+    expected: Option<PlatformIdentity>,
+    directory: bool,
+    allow_hardlinks: bool,
+) -> Result<(), ArtifactIntegrationError> {
     let original = open_identity_handle(path, directory)?;
     if directory {
         validate_open_plain_directory(&original)?;
     } else {
-        validate_open_plain_file(&original)?;
+        validate_open_cleanup_file(&original, allow_hardlinks)?;
     }
     let identity = platform_identity(&original)?;
     if expected.is_some_and(|expected| expected != identity) {
@@ -2131,9 +2409,10 @@ fn remove_windows_entry(
     fs::rename(path, &captured)?;
     run_cleanup_test_hook(CleanupHookPhase::AfterCapture);
     let captured_entries = if directory {
-        collect_windows_cleanup_entries(&captured)
+        collect_windows_cleanup_entries(&captured, allow_hardlinks)
     } else {
-        open_windows_cleanup_entry(&captured, PathBuf::new(), false).map(|entry| vec![entry])
+        open_windows_cleanup_entry(&captured, PathBuf::new(), false, allow_hardlinks)
+            .map(|entry| vec![entry])
     };
     let mut captured_entries = match captured_entries {
         Ok(entries)
@@ -2170,7 +2449,12 @@ fn remove_windows_entry(
         } else {
             captured.join(&entry.relative)
         };
-        remove_windows_captured_entry(&entry_path, entry.identity, entry.directory)?;
+        remove_windows_captured_entry(
+            &entry_path,
+            entry.identity,
+            entry.directory,
+            allow_hardlinks,
+        )?;
     }
     Ok(())
 }
@@ -2186,29 +2470,36 @@ struct WindowsCleanupEntry {
 #[cfg(windows)]
 fn collect_windows_cleanup_entries(
     root: &Path,
+    allow_hardlinks: bool,
 ) -> Result<Vec<WindowsCleanupEntry>, ArtifactIntegrationError> {
     fn collect(
         root: &Path,
         path: &Path,
         entries: &mut Vec<WindowsCleanupEntry>,
+        allow_hardlinks: bool,
     ) -> Result<(), ArtifactIntegrationError> {
         let relative = path
             .strip_prefix(root)
             .map_err(|_| ArtifactIntegrationError::Rejected)?
             .to_path_buf();
-        let directory = open_windows_cleanup_entry(path, relative, true)?;
+        let directory = open_windows_cleanup_entry(path, relative, true, allow_hardlinks)?;
         for child in fs::read_dir(path)? {
             let child = child?;
             let child_path = child.path();
             let metadata = fs::symlink_metadata(&child_path)?;
             if metadata.is_dir() && !metadata.file_type().is_symlink() {
-                collect(root, &child_path, entries)?;
+                collect(root, &child_path, entries, allow_hardlinks)?;
             } else {
                 let relative = child_path
                     .strip_prefix(root)
                     .map_err(|_| ArtifactIntegrationError::Rejected)?
                     .to_path_buf();
-                entries.push(open_windows_cleanup_entry(&child_path, relative, false)?);
+                entries.push(open_windows_cleanup_entry(
+                    &child_path,
+                    relative,
+                    false,
+                    allow_hardlinks,
+                )?);
             }
         }
         entries.push(directory);
@@ -2216,7 +2507,7 @@ fn collect_windows_cleanup_entries(
     }
 
     let mut entries = Vec::new();
-    collect(root, root, &mut entries)?;
+    collect(root, root, &mut entries, allow_hardlinks)?;
     Ok(entries)
 }
 
@@ -2225,12 +2516,13 @@ fn open_windows_cleanup_entry(
     path: &Path,
     relative: PathBuf,
     directory: bool,
+    allow_hardlinks: bool,
 ) -> Result<WindowsCleanupEntry, ArtifactIntegrationError> {
     let handle = open_identity_handle(path, directory)?;
     if directory {
         validate_open_plain_directory(&handle)?;
     } else {
-        validate_open_plain_file(&handle)?;
+        validate_open_cleanup_file(&handle, allow_hardlinks)?;
     }
     Ok(WindowsCleanupEntry {
         relative,
@@ -2245,12 +2537,13 @@ fn remove_windows_captured_entry(
     path: &Path,
     expected: PlatformIdentity,
     directory: bool,
+    allow_hardlinks: bool,
 ) -> Result<(), ArtifactIntegrationError> {
     let identity_handle = open_identity_handle(path, directory)?;
     if directory {
         validate_open_plain_directory(&identity_handle)?;
     } else {
-        validate_open_plain_file(&identity_handle)?;
+        validate_open_cleanup_file(&identity_handle, allow_hardlinks)?;
     }
     if platform_identity(&identity_handle)? != expected {
         return Err(ArtifactIntegrationError::Rejected);
@@ -2264,7 +2557,7 @@ fn remove_windows_captured_entry(
     if directory {
         validate_open_plain_directory(&containment_handle)?;
     } else {
-        validate_open_plain_file(&containment_handle)?;
+        validate_open_cleanup_file(&containment_handle, allow_hardlinks)?;
     }
     if platform_identity(&containment_handle)? != expected {
         return Err(ArtifactIntegrationError::Rejected);
@@ -2361,6 +2654,14 @@ fn mark_delete_by_handle(file: &File) -> Result<(), ArtifactIntegrationError> {
 
 #[cfg(not(any(unix, windows)))]
 fn remove_plain_tree(_path: &Path) -> Result<(), ArtifactIntegrationError> {
+    Err(ArtifactIntegrationError::Rejected)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn remove_validation_tree_matching(
+    _path: &Path,
+    _expected: Option<PlatformIdentity>,
+) -> Result<(), ArtifactIntegrationError> {
     Err(ArtifactIntegrationError::Rejected)
 }
 
@@ -2481,6 +2782,202 @@ mod tests {
             .unwrap();
         drop(tree);
         (repository, commit.to_string(), before)
+    }
+
+    fn validation_candidate_fixture(
+        root: &Path,
+    ) -> (ArtifactIntegrationStore, PreparedCandidate, PathBuf) {
+        let source_dir = root.join("validation-source");
+        let (_source, base, before) = source_repository(&source_dir);
+        let snapshot = RepositorySnapshotStore::open(root)
+            .unwrap()
+            .prepare(&source_dir, &base)
+            .unwrap();
+        let packet = FeatureConveyorCodingWorkPacketMetadata::fixture(Uuid::new_v4(), before);
+        let bytes = build_local_coding_patch_artifact(&packet).unwrap();
+        let reference = ResultArtifactReference {
+            artifact_id: Uuid::new_v4(),
+            artifact_sha256: Sha256::digest(&bytes).into(),
+            artifact_size_bytes: bytes.len() as u64,
+        };
+        ResultArtifactStore::open(root)
+            .unwrap()
+            .prepare(reference.artifact_id, reference.artifact_sha256, &bytes)
+            .unwrap()
+            .mark_committed()
+            .unwrap();
+        let store = ArtifactIntegrationStore::open(root).unwrap();
+        let prepared = store
+            .prepare(
+                Uuid::new_v4(),
+                snapshot.snapshot_id,
+                &base,
+                &[IntegrationArtifact { reference, packet }],
+            )
+            .unwrap();
+        snapshot.retain();
+        let candidate_path = root
+            .join(CANDIDATE_ROOT)
+            .join("candidates")
+            .join(prepared.evidence.integration_id.to_string());
+        (store, prepared, candidate_path)
+    }
+
+    #[test]
+    fn validation_copy_allows_bounded_generated_output_and_verifies_cleanup() {
+        let directory = tempdir().unwrap();
+        let (store, prepared, candidate_path) = validation_candidate_fixture(directory.path());
+        let candidate_before = fs::read(candidate_path.join("README.md")).unwrap();
+        let mut scratch = store.prepare_validation_copy(&prepared.evidence).unwrap();
+        let scratch_path = scratch.root().to_path_buf();
+        assert_eq!(
+            fs::read(scratch.root().join("README.md")).unwrap(),
+            candidate_before
+        );
+        fs::create_dir(scratch.root().join("target")).unwrap();
+        fs::write(scratch.root().join("target/result.txt"), b"generated\n").unwrap();
+        scratch.verify_after(&store).unwrap();
+        scratch.finish(&store).unwrap();
+        assert!(!scratch_path.exists());
+        assert_eq!(
+            fs::read(candidate_path.join("README.md")).unwrap(),
+            candidate_before
+        );
+        drop(prepared);
+    }
+
+    #[test]
+    fn validation_copy_rejects_tracked_drift_and_generated_git_metadata() {
+        let directory = tempdir().unwrap();
+        let (store, prepared, _candidate_path) = validation_candidate_fixture(directory.path());
+        let mut scratch = store.prepare_validation_copy(&prepared.evidence).unwrap();
+        let readme = scratch.root().join("README.md");
+        let original = fs::read(&readme).unwrap();
+        fs::write(&readme, b"validator changed source\n").unwrap();
+        assert!(matches!(
+            scratch.verify_after(&store),
+            Err(ArtifactIntegrationError::Rejected)
+        ));
+        fs::write(&readme, original).unwrap();
+        let generated_git = scratch.root().join(".git/validator-output");
+        fs::write(&generated_git, b"not allowed\n").unwrap();
+        assert!(matches!(
+            scratch.verify_after(&store),
+            Err(ArtifactIntegrationError::Rejected)
+        ));
+        fs::remove_file(generated_git).unwrap();
+        scratch.finish(&store).unwrap();
+        drop(prepared);
+    }
+
+    #[test]
+    fn validation_copy_rejects_generated_hardlinks() {
+        let directory = tempdir().unwrap();
+        let (store, prepared, _candidate_path) = validation_candidate_fixture(directory.path());
+        let mut scratch = store.prepare_validation_copy(&prepared.evidence).unwrap();
+        let generated = scratch.root().join("generated");
+        fs::create_dir(&generated).unwrap();
+        fs::write(generated.join("one"), b"linked\n").unwrap();
+        fs::hard_link(generated.join("one"), generated.join("two")).unwrap();
+        assert!(matches!(
+            scratch.verify_after(&store),
+            Err(ArtifactIntegrationError::Rejected)
+        ));
+        let scratch_path = scratch.root().to_path_buf();
+        drop(scratch);
+        assert!(!scratch_path.exists());
+        drop(prepared);
+    }
+
+    #[test]
+    fn validation_copy_drop_cleans_cancelled_attempt() {
+        let directory = tempdir().unwrap();
+        let (store, prepared, _candidate_path) = validation_candidate_fixture(directory.path());
+        let scratch_path = {
+            let scratch = store.prepare_validation_copy(&prepared.evidence).unwrap();
+            let path = scratch.root().to_path_buf();
+            fs::write(scratch.root().join("partial.log"), b"cancelled\n").unwrap();
+            path
+        };
+        assert!(!scratch_path.exists());
+        drop(prepared);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validation_copy_rejects_generated_symlink_without_following() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempdir().unwrap();
+        let outside = directory.path().join("outside-validation-data");
+        fs::write(&outside, b"must remain\n").unwrap();
+        let (store, prepared, _candidate_path) = validation_candidate_fixture(directory.path());
+        let mut scratch = store.prepare_validation_copy(&prepared.evidence).unwrap();
+        let escape = scratch.root().join("generated-link");
+        symlink(&outside, &escape).unwrap();
+        assert!(matches!(
+            scratch.verify_after(&store),
+            Err(ArtifactIntegrationError::Rejected)
+        ));
+        assert_eq!(fs::read(&outside).unwrap(), b"must remain\n");
+        fs::remove_file(escape).unwrap();
+        scratch.finish(&store).unwrap();
+        drop(prepared);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validation_copy_rejects_authoritative_candidate_drift() {
+        let directory = tempdir().unwrap();
+        let (store, prepared, candidate_path) = validation_candidate_fixture(directory.path());
+        let mut scratch = store.prepare_validation_copy(&prepared.evidence).unwrap();
+        let readme = candidate_path.join("README.md");
+        let original = fs::read(&readme).unwrap();
+        fs::write(&readme, b"authoritative drift\n").unwrap();
+        assert!(matches!(
+            scratch.verify_after(&store),
+            Err(ArtifactIntegrationError::Rejected)
+        ));
+        fs::write(readme, original).unwrap();
+        scratch.finish(&store).unwrap();
+        drop(prepared);
+    }
+
+    #[test]
+    fn integration_store_open_removes_orphan_validation_scratch() {
+        let directory = tempdir().unwrap();
+        let scratch_root = directory.path().join(VALIDATION_SCRATCH_ROOT);
+        ensure_directory(&scratch_root).unwrap();
+        let orphan = scratch_root.join(Uuid::new_v4().to_string());
+        ensure_directory(&orphan).unwrap();
+        fs::write(orphan.join("result.log"), b"abandoned validation\n").unwrap();
+
+        ArtifactIntegrationStore::open(directory.path()).unwrap();
+
+        assert!(!orphan.exists());
+        assert!(scratch_root.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn integration_store_open_refuses_orphan_validation_symlink_without_following() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempdir().unwrap();
+        let outside = directory.path().join("outside");
+        ensure_directory(&outside).unwrap();
+        fs::write(outside.join("must-remain"), b"safe\n").unwrap();
+        let scratch_root = directory.path().join(VALIDATION_SCRATCH_ROOT);
+        ensure_directory(&scratch_root).unwrap();
+        let orphan = scratch_root.join(Uuid::new_v4().to_string());
+        ensure_directory(&orphan).unwrap();
+        symlink(&outside, orphan.join("escape")).unwrap();
+
+        assert!(matches!(
+            ArtifactIntegrationStore::open(directory.path()),
+            Err(ArtifactIntegrationError::Rejected)
+        ));
+        assert_eq!(fs::read(outside.join("must-remain")).unwrap(), b"safe\n");
     }
 
     #[test]

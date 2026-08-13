@@ -4,14 +4,16 @@ use assemblywright_master::{
     FeatureConveyorGuidanceState, FeatureConveyorNextOwnerAction, FeatureGrantRevisions,
     FeatureLifecycleStatus, FeatureSnapshotClaimPlan, FeatureTransitionEvidence, MasterError,
     MasterKernel, MasterProcess, RemoteWorkContract, RepositoryGrantKind, RepositoryGrantRevision,
-    RepositorySnapshotEvidence, VerifiedFeatureSuccess, MASTER_SCHEMA_VERSION,
+    RepositorySnapshotEvidence, ValidationCommandEvidence, ValidationGateAuthorization,
+    ValidationGateEvidence, VerifiedFeatureSuccess, MASTER_SCHEMA_VERSION,
     MAX_CONVEYOR_NONTERMINAL_FEATURES, MAX_CONVEYOR_STATUS_FEATURES,
 };
 use assemblywright_protocol::{
     build_local_coding_fixture_patch_artifact, local_coding_admission_sha256, CapabilityDescriptor,
     DeviceId, DeviceRole, FeatureConveyorArtifactIntegrationRequest,
     FeatureConveyorCodingDispatchRequest, FeatureConveyorCodingWorkPacketMetadata,
-    FeatureConveyorGrantRevisions, HandshakeRequest, JobEnvelope, JobResultEnvelope,
+    FeatureConveyorGrantRevisions, FeatureConveyorValidationCommandId,
+    FeatureConveyorValidationGateRequest, HandshakeRequest, JobEnvelope, JobResultEnvelope,
     JobResultStatus, LocalCodingJobResult, LocalCodingResultArtifact,
     LocalCodingResultArtifactAdmission, LocalCodingSnapshotChunkRequest,
     FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, LOCAL_CODING_COMPLETED_STATUS,
@@ -27,7 +29,7 @@ use tempfile::tempdir;
 use uuid::Uuid;
 
 #[test]
-fn artifact_integration_freezes_candidate_idempotently_and_rejects_drift() {
+fn artifact_integration_and_validation_gate_freeze_candidate_advance_and_reject_drift() {
     let directory = tempdir().unwrap();
     let source_path = directory.path().join("source");
     let source = git2::Repository::init(&source_path).unwrap();
@@ -171,10 +173,501 @@ fn artifact_integration_freezes_candidate_idempotently_and_rejects_drift() {
         kernel.prepare_artifact_integration(&drift, 19),
         Err(MasterError::ArtifactIntegrationUnavailable)
     ));
+
+    let command_ids = FeatureConveyorValidationCommandId::REQUIRED.to_vec();
+    let validation_request = FeatureConveyorValidationGateRequest {
+        schema_version: 1,
+        validation_id: Uuid::new_v4(),
+        feature_id: feature.feature_id,
+        specification_revision: feature.revision,
+        expected_lifecycle_revision: receipt.lifecycle_revision,
+        feature_lease_id: receipt.feature_lease_id,
+        snapshot_id: receipt.snapshot_id,
+        snapshot_sha256: receipt.snapshot_sha256,
+        integration_id: receipt.integration_id,
+        artifact_set_sha256: receipt.artifact_set_sha256,
+        candidate_commit: receipt.candidate_commit.clone(),
+        candidate_tree: receipt.candidate_tree.clone(),
+        base_commit: receipt.base_commit.clone(),
+        plan_sha256: assemblywright_protocol::feature_conveyor_validation_plan_sha256(&command_ids)
+            .unwrap(),
+        command_ids: command_ids.clone(),
+        expected_queue_revision: receipt.queue_revision,
+        expected_emergency_pause_revision: receipt.emergency_pause_revision,
+        grants: receipt.grants,
+    };
+    let validation_plan = match kernel
+        .plan_validation_gate(&validation_request, 20)
+        .unwrap()
+    {
+        ValidationGateAuthorization::Planned(plan) => plan,
+        other => panic!("unexpected validation authorization: {other:?}"),
+    };
+    let evidence = ValidationGateEvidence {
+        commands: command_ids
+            .iter()
+            .enumerate()
+            .map(|(index, command_id)| ValidationCommandEvidence {
+                command_id: *command_id,
+                passed: true,
+                result_sha256: digest(&format!("validation-command-{index}")),
+                duration_ms: index as u64,
+                output_truncated: false,
+            })
+            .collect(),
+    };
+    let incomplete = ValidationGateEvidence {
+        commands: evidence.commands[..evidence.commands.len() - 1].to_vec(),
+    };
+    assert!(matches!(
+        kernel.finalize_validation_gate(&validation_plan, &incomplete, 21),
+        Err(MasterError::ValidationGateUnavailable)
+    ));
+    assert!(kernel
+        .validation_gate_execution_is_current(&validation_request, 21)
+        .unwrap());
+    let validation_receipt = kernel
+        .finalize_validation_gate(&validation_plan, &evidence, 21)
+        .unwrap();
+    assert_eq!(
+        validation_receipt.lifecycle_revision,
+        receipt.lifecycle_revision + 1
+    );
+    assert!(matches!(
+        kernel
+            .plan_validation_gate(&validation_request, 22)
+            .unwrap(),
+        ValidationGateAuthorization::ExistingPassed { .. }
+    ));
+    let mut validation_drift = validation_request;
+    validation_drift.expected_queue_revision += 1;
+    assert!(matches!(
+        kernel.plan_validation_gate(&validation_drift, 22),
+        Err(MasterError::ValidationGateUnavailable)
+    ));
+    assert!(!kernel
+        .validation_gate_execution_is_current(&validation_drift, 22)
+        .unwrap());
+
+    drop(kernel);
+    let connection = Connection::open(&database).unwrap();
+    assert!(connection
+        .execute(
+            "UPDATE feature_validation_attempts SET plan_sha256=?1 WHERE validation_id=?2",
+            rusqlite::params![
+                [0x55_u8; 32].as_slice(),
+                validation_receipt.validation_id.to_string()
+            ]
+        )
+        .is_err());
+    assert!(connection
+        .execute(
+            "DELETE FROM feature_validation_command_evidence WHERE validation_id=?1",
+            [validation_receipt.validation_id.to_string()]
+        )
+        .is_err());
 }
 
 fn digest(label: &str) -> [u8; 32] {
     Sha256::digest(label.as_bytes()).into()
+}
+
+fn integrated_validation_fixture(
+    validation_gate: Option<Value>,
+) -> (
+    tempfile::TempDir,
+    MasterKernel,
+    FeatureConveyorValidationGateRequest,
+    ValidationGateEvidence,
+) {
+    let directory = tempdir().unwrap();
+    let source_path = directory.path().join("source");
+    let source = git2::Repository::init(&source_path).unwrap();
+    fs::write(source_path.join("README.md"), b"before\n").unwrap();
+    let mut index = source.index().unwrap();
+    index.add_path(std::path::Path::new("README.md")).unwrap();
+    let tree_id = index.write_tree().unwrap();
+    let tree = source.find_tree(tree_id).unwrap();
+    let sig =
+        git2::Signature::new("fixture", "fixture@example.invalid", &git2::Time::new(1, 0)).unwrap();
+    let base = source
+        .commit(Some("HEAD"), &sig, &sig, "base", &tree, &[])
+        .unwrap()
+        .to_string();
+    drop(tree);
+    drop(source);
+    let snapshot = assemblywright_master::RepositorySnapshotStore::open(directory.path())
+        .unwrap()
+        .prepare(&source_path, &base)
+        .unwrap();
+    let mut kernel = MasterKernel::open(directory.path().join("master.sqlite3")).unwrap();
+    let repository_id = Uuid::new_v4();
+    install_grants(&mut kernel, repository_id);
+    let mut feature = specification(Uuid::new_v4(), repository_id, vec![]);
+    match validation_gate {
+        Some(gate) => {
+            feature
+                .manifest
+                .as_object_mut()
+                .unwrap()
+                .insert("validation_gate".to_string(), gate);
+        }
+        None => {
+            feature
+                .manifest
+                .as_object_mut()
+                .unwrap()
+                .remove("validation_gate");
+        }
+    }
+    feature.manifest_sha256 =
+        Sha256::digest(canonical_manifest(&feature.manifest).as_bytes()).into();
+    kernel.enqueue_approved_feature(&feature, 0, 10).unwrap();
+    let mut snapshot_plan = snapshot_plan(&feature, 1, 0);
+    snapshot_plan.base_commit = base.clone();
+    let snapshot_plan = kernel
+        .prepare_repository_snapshot_claim(&snapshot_plan, 11)
+        .unwrap();
+    let claim = kernel
+        .finalize_repository_snapshot_claim(
+            &snapshot_plan,
+            &RepositorySnapshotEvidence {
+                snapshot_id: snapshot.snapshot_id,
+                snapshot_sha256: snapshot.snapshot_sha256,
+                base_commit: base.clone(),
+            },
+            11,
+        )
+        .unwrap();
+    let device = coding_registration("validation-worker");
+    kernel.register_device(&device).unwrap();
+    let mut dispatch = coding_dispatch_request(&claim, &device, 2, 0);
+    dispatch.work_packet = FeatureConveyorCodingWorkPacketMetadata::fixture(
+        dispatch.work_packet.packet_id,
+        Sha256::digest(b"before\n").into(),
+    );
+    dispatch.work_packet_sha256 = dispatch.work_packet.canonical_sha256().unwrap();
+    kernel.dispatch_feature_coding(&dispatch, 12).unwrap();
+    let epoch = kernel
+        .accept_handshake(
+            &HandshakeRequest {
+                protocol_version: PROTOCOL_VERSION,
+                device_id: device.device_id,
+                device_name: device.device_name.clone(),
+                role: device.role,
+                registry_revision: 1,
+                capabilities: device.capabilities.clone(),
+            },
+            13,
+        )
+        .unwrap()
+        .connection_epoch;
+    let contract = RemoteWorkContract::from_registration(&device).unwrap();
+    let job = kernel
+        .lease_next_remote_step(device.device_id, epoch, 14, &contract)
+        .unwrap();
+    let result = coding_ack(&job, job.sequence + 1);
+    let admission = coding_artifact_admission(&job, &result);
+    kernel
+        .finalize_local_coding_result_artifact(device.device_id, &admission, 15)
+        .unwrap();
+    let artifact_store =
+        assemblywright_master::ResultArtifactStore::open(directory.path()).unwrap();
+    let bytes = admission.artifact.validate().unwrap();
+    let mut artifact = artifact_store
+        .prepare(
+            admission.artifact.artifact_id,
+            admission.artifact.artifact_sha256,
+            &bytes,
+        )
+        .unwrap();
+    artifact.mark_committed().unwrap();
+    kernel
+        .accept_remote_result_from_with_artifact(
+            device.device_id,
+            &result,
+            16,
+            &contract,
+            &artifact_store,
+            artifact.verified_mut(),
+        )
+        .unwrap();
+    let integration_request = FeatureConveyorArtifactIntegrationRequest {
+        schema_version: 1,
+        integration_id: Uuid::new_v4(),
+        feature_id: feature.feature_id,
+        specification_revision: feature.revision,
+        expected_lifecycle_revision: claim.lifecycle_revision,
+        feature_lease_id: claim.lease_id,
+        snapshot_id: claim.snapshot_id,
+        snapshot_sha256: claim.snapshot_sha256,
+        artifact_ids: vec![admission.artifact.artifact_id],
+        expected_queue_revision: 2,
+        expected_emergency_pause_revision: 0,
+        grants: FeatureConveyorGrantRevisions {
+            registration: 1,
+            cloud_disclosure: 1,
+            autonomous_publication: 1,
+        },
+        base_commit: base,
+    };
+    let integration_plan = match kernel
+        .prepare_artifact_integration(&integration_request, 17)
+        .unwrap()
+    {
+        ArtifactIntegrationAuthorization::Planned(plan) => plan,
+        other => panic!("unexpected integration authorization: {other:?}"),
+    };
+    let store = ArtifactIntegrationStore::open(directory.path()).unwrap();
+    let mut candidate = store
+        .prepare(
+            integration_request.integration_id,
+            integration_request.snapshot_id,
+            &integration_request.base_commit,
+            &integration_plan.artifacts,
+        )
+        .unwrap();
+    candidate.revalidate_artifacts(&artifact_store).unwrap();
+    candidate.revalidate_candidate(&store).unwrap();
+    let receipt = kernel
+        .finalize_artifact_integration(&integration_plan, &candidate.evidence, 18)
+        .unwrap();
+    candidate.retain();
+    snapshot.retain();
+    let command_ids = FeatureConveyorValidationCommandId::REQUIRED.to_vec();
+    let request = FeatureConveyorValidationGateRequest {
+        schema_version: 1,
+        validation_id: Uuid::new_v4(),
+        feature_id: feature.feature_id,
+        specification_revision: feature.revision,
+        expected_lifecycle_revision: receipt.lifecycle_revision,
+        feature_lease_id: receipt.feature_lease_id,
+        snapshot_id: receipt.snapshot_id,
+        snapshot_sha256: receipt.snapshot_sha256,
+        integration_id: receipt.integration_id,
+        artifact_set_sha256: receipt.artifact_set_sha256,
+        candidate_commit: receipt.candidate_commit,
+        candidate_tree: receipt.candidate_tree,
+        base_commit: receipt.base_commit,
+        plan_sha256: assemblywright_protocol::feature_conveyor_validation_plan_sha256(&command_ids)
+            .unwrap(),
+        command_ids: command_ids.clone(),
+        expected_queue_revision: receipt.queue_revision,
+        expected_emergency_pause_revision: receipt.emergency_pause_revision,
+        grants: receipt.grants,
+    };
+    let evidence = ValidationGateEvidence {
+        commands: command_ids
+            .iter()
+            .enumerate()
+            .map(|(index, command_id)| ValidationCommandEvidence {
+                command_id: *command_id,
+                passed: true,
+                result_sha256: digest(&format!("fixture-validation-{index}")),
+                duration_ms: index as u64,
+                output_truncated: false,
+            })
+            .collect(),
+    };
+    (directory, kernel, request, evidence)
+}
+
+#[test]
+fn validation_gate_preparation_is_read_only_until_resources_are_preflighted() {
+    let (directory, mut kernel, request, _) = integrated_validation_fixture(Some(
+        specification(Uuid::new_v4(), Uuid::new_v4(), vec![]).manifest["validation_gate"].clone(),
+    ));
+    assert!(matches!(
+        kernel.prepare_validation_gate(&request, 19).unwrap(),
+        ValidationGateAuthorization::Planned(_)
+    ));
+    drop(kernel);
+    let connection = Connection::open(directory.path().join("master.sqlite3")).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM feature_validation_attempts",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM feature_conveyor_audit
+                 WHERE event_kind='feature_validation_started'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn validation_gate_failure_is_durable_idempotent_and_does_not_advance() {
+    let gate = serde_json::json!({
+        "schema_version": 1,
+        "command_ids": [
+            "requirements_binding", "coverage", "focused_unit_tests", "native_e2e",
+            "documentation", "knowledge_base", "formatting", "lint", "build", "safety",
+            "changed_paths", "secret_scan", "repository_validation"
+        ]
+    });
+    let (_directory, mut kernel, request, mut evidence) = integrated_validation_fixture(Some(gate));
+    let plan = match kernel.plan_validation_gate(&request, 20).unwrap() {
+        ValidationGateAuthorization::Planned(plan) => plan,
+        other => panic!("unexpected validation authorization: {other:?}"),
+    };
+    evidence.commands[3].passed = false;
+    assert!(matches!(
+        kernel.finalize_validation_gate(&plan, &evidence, 21),
+        Err(MasterError::ValidationGateFailed)
+    ));
+    let status = kernel.feature_conveyor_status().unwrap();
+    assert_eq!(
+        status.features[0].status,
+        FeatureLifecycleStatus::Validating
+    );
+    assert!(matches!(
+        kernel.plan_validation_gate(&request, 22).unwrap(),
+        ValidationGateAuthorization::ExistingFailed
+    ));
+    let mut drift = request;
+    drift.candidate_tree = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
+    assert!(matches!(
+        kernel.plan_validation_gate(&drift, 22),
+        Err(MasterError::ValidationGateUnavailable)
+    ));
+}
+
+#[test]
+fn validation_gate_rejects_every_stale_candidate_and_authority_binding() {
+    let gate = serde_json::json!({
+        "schema_version": 1,
+        "command_ids": [
+            "requirements_binding", "coverage", "focused_unit_tests", "native_e2e",
+            "documentation", "knowledge_base", "formatting", "lint", "build", "safety",
+            "changed_paths", "secret_scan", "repository_validation"
+        ]
+    });
+    let (_directory, mut kernel, request, _) = integrated_validation_fixture(Some(gate));
+    macro_rules! rejected {
+        ($mutation:expr) => {{
+            let mut drift = request.clone();
+            $mutation(&mut drift);
+            assert!(kernel.plan_validation_gate(&drift, 20).is_err());
+        }};
+    }
+    rejected!(|r: &mut FeatureConveyorValidationGateRequest| r.specification_revision += 1);
+    rejected!(|r: &mut FeatureConveyorValidationGateRequest| r.expected_lifecycle_revision += 1);
+    rejected!(|r: &mut FeatureConveyorValidationGateRequest| r.feature_lease_id = Uuid::new_v4());
+    rejected!(|r: &mut FeatureConveyorValidationGateRequest| r.snapshot_id = Uuid::new_v4());
+    rejected!(|r: &mut FeatureConveyorValidationGateRequest| r.snapshot_sha256[0] ^= 1);
+    rejected!(|r: &mut FeatureConveyorValidationGateRequest| r.integration_id = Uuid::new_v4());
+    rejected!(|r: &mut FeatureConveyorValidationGateRequest| r.artifact_set_sha256[0] ^= 1);
+    rejected!(
+        |r: &mut FeatureConveyorValidationGateRequest| r.candidate_commit =
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()
+    );
+    rejected!(
+        |r: &mut FeatureConveyorValidationGateRequest| r.candidate_tree =
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string()
+    );
+    rejected!(
+        |r: &mut FeatureConveyorValidationGateRequest| r.base_commit =
+            "cccccccccccccccccccccccccccccccccccccccc".to_string()
+    );
+    rejected!(|r: &mut FeatureConveyorValidationGateRequest| r.expected_queue_revision += 1);
+    rejected!(|r: &mut FeatureConveyorValidationGateRequest| r
+        .expected_emergency_pause_revision +=
+        1);
+    rejected!(|r: &mut FeatureConveyorValidationGateRequest| r.grants.registration += 1);
+    rejected!(|r: &mut FeatureConveyorValidationGateRequest| r.grants.cloud_disclosure += 1);
+    rejected!(|r: &mut FeatureConveyorValidationGateRequest| r.grants.autonomous_publication += 1);
+
+    assert!(matches!(
+        kernel.plan_validation_gate(&request, 20).unwrap(),
+        ValidationGateAuthorization::Planned(_)
+    ));
+    assert!(kernel
+        .validation_gate_execution_is_current(&request, 20)
+        .unwrap());
+    kernel.set_emergency_paused_at(true, 21).unwrap();
+    assert!(!kernel
+        .validation_gate_execution_is_current(&request, 21)
+        .unwrap());
+}
+
+#[test]
+fn validation_gate_requires_strict_immutable_manifest_plan() {
+    let (_directory, mut absent_kernel, absent_request, _) = integrated_validation_fixture(None);
+    assert!(matches!(
+        absent_kernel.plan_validation_gate(&absent_request, 20),
+        Err(MasterError::ValidationGateUnavailable)
+    ));
+
+    let malformed = serde_json::json!({
+        "schema_version": 1,
+        "command_ids": ["requirements_binding"],
+        "shell": "cargo test"
+    });
+    let (_directory, mut malformed_kernel, malformed_request, _) =
+        integrated_validation_fixture(Some(malformed));
+    assert!(matches!(
+        malformed_kernel.plan_validation_gate(&malformed_request, 20),
+        Err(MasterError::ValidationGateUnavailable)
+    ));
+}
+
+#[test]
+fn validation_gate_schema_v14_migrates_backup_first_to_immutable_v15_tables() {
+    let directory = tempdir().unwrap();
+    let database = directory.path().join("master.sqlite3");
+    drop(MasterKernel::open(&database).unwrap());
+    Connection::open(&database)
+        .unwrap()
+        .execute_batch(
+            "DROP TRIGGER feature_validation_completions_no_update;
+             DROP TRIGGER feature_validation_completions_no_delete;
+             DROP TABLE feature_validation_completions;
+             DROP TRIGGER feature_validation_command_evidence_no_update;
+             DROP TRIGGER feature_validation_command_evidence_no_delete;
+             DROP TABLE feature_validation_command_evidence;
+             DROP TRIGGER feature_validation_attempts_no_update;
+             DROP TRIGGER feature_validation_attempts_no_delete;
+             DROP TABLE feature_validation_attempts;
+             PRAGMA user_version=14;",
+        )
+        .unwrap();
+    let process = MasterProcess::acquire(directory.path()).unwrap();
+    assert_eq!(process.kernel().schema_version().unwrap(), 15);
+    let backup = process.migration_backup_path().unwrap();
+    assert!(backup
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .starts_with("master.pre-v15."));
+    assert_eq!(
+        Connection::open(backup)
+            .unwrap()
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        14
+    );
+    let connection = Connection::open(&database).unwrap();
+    let tables: HashSet<String> = connection
+        .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(tables.contains("feature_validation_attempts"));
+    assert!(tables.contains("feature_validation_command_evidence"));
+    assert!(tables.contains("feature_validation_completions"));
 }
 
 #[derive(Serialize)]
@@ -274,7 +767,15 @@ fn specification(
     let manifest = json!({
         "feature_id": feature_id,
         "outcome": "bounded kernel test",
-        "allowed_paths": ["crates/assemblywright-master/src/lib.rs"]
+        "allowed_paths": ["crates/assemblywright-master/src/lib.rs"],
+        "validation_gate": {
+            "schema_version": 1,
+            "command_ids": [
+                "requirements_binding", "coverage", "focused_unit_tests", "native_e2e",
+                "documentation", "knowledge_base", "formatting", "lint", "build", "safety",
+                "changed_paths", "secret_scan", "repository_validation"
+            ]
+        }
     });
     let canonical = canonical_manifest(&manifest);
     ApprovedFeatureSpecification {
@@ -3408,9 +3909,26 @@ fn startup_quarantine_audit_failure_rolls_back_and_blocks_open() {
     assert_eq!(snapshot.active_lease_id, Some(claim.lease_id));
 }
 
+fn drop_validation_gate_schema_for_legacy_fixture(connection: &Connection) {
+    connection
+        .execute_batch(
+            "DROP TRIGGER feature_validation_completions_no_update;
+             DROP TRIGGER feature_validation_completions_no_delete;
+             DROP TABLE feature_validation_completions;
+             DROP TRIGGER feature_validation_command_evidence_no_update;
+             DROP TRIGGER feature_validation_command_evidence_no_delete;
+             DROP TABLE feature_validation_command_evidence;
+             DROP TRIGGER feature_validation_attempts_no_update;
+             DROP TRIGGER feature_validation_attempts_no_delete;
+             DROP TABLE feature_validation_attempts;",
+        )
+        .unwrap();
+}
+
 fn downgrade_v5_database_to_v4(path: &std::path::Path, sabotage: bool) {
     drop(MasterKernel::open(path).unwrap());
     let connection = Connection::open(path).unwrap();
+    drop_validation_gate_schema_for_legacy_fixture(&connection);
     connection
         .execute_batch(
             "DROP TRIGGER feature_artifact_integration_conflicts_no_update;
@@ -3476,6 +3994,7 @@ fn remove_resolution_receipt_for_v10_fixture(
     legacy_cancellation_audit: bool,
 ) {
     let connection = Connection::open(database).unwrap();
+    drop_validation_gate_schema_for_legacy_fixture(&connection);
     connection
         .execute_batch("DROP TRIGGER feature_transition_evidence_no_delete;")
         .unwrap();
@@ -3598,7 +4117,7 @@ fn master_process_v10_backfills_resolution_receipts_from_exact_immutable_audit()
             .file_name()
             .unwrap()
             .to_string_lossy()
-            .starts_with("master.pre-v14."));
+            .starts_with("master.pre-v15."));
         assert_eq!(
             Connection::open(backup)
                 .unwrap()
@@ -3722,7 +4241,7 @@ fn master_process_v10_ambiguous_resolution_audit_fails_closed_and_restores_backu
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v14.")));
+            .starts_with("master.pre-v15.")));
 }
 
 #[test]
@@ -3890,7 +4409,7 @@ fn master_process_v4_backup_migration_reopen_and_restore_on_failure() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v14.")));
+            .starts_with("master.pre-v15.")));
 }
 
 #[test]
@@ -3909,6 +4428,7 @@ fn master_process_v12_backup_first_migration_adds_retained_workspace_binding() {
     )
     .unwrap();
     let connection = Connection::open(&database).unwrap();
+    drop_validation_gate_schema_for_legacy_fixture(&connection);
     connection
         .execute_batch("DROP TRIGGER feature_result_artifacts_no_update;")
         .unwrap();
@@ -3955,7 +4475,7 @@ fn master_process_v12_backup_first_migration_adds_retained_workspace_binding() {
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v14."));
+        .starts_with("master.pre-v15."));
     assert_eq!(
         Connection::open(backup)
             .unwrap()
@@ -3980,8 +4500,9 @@ fn master_process_v12_failed_migration_restores_verified_backup() {
     let directory = tempdir().unwrap();
     let database = directory.path().join("master.sqlite3");
     drop(MasterKernel::open(&database).unwrap());
-    Connection::open(&database)
-        .unwrap()
+    let connection = Connection::open(&database).unwrap();
+    drop_validation_gate_schema_for_legacy_fixture(&connection);
+    connection
         .execute_batch(
             "DROP TRIGGER feature_artifact_integration_conflicts_no_update;
              DROP TRIGGER feature_artifact_integration_conflicts_no_delete;
@@ -4014,7 +4535,7 @@ fn master_process_v12_failed_migration_restores_verified_backup() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v14.")));
+            .starts_with("master.pre-v15.")));
 }
 
 #[test]
@@ -4022,8 +4543,9 @@ fn master_process_v6_backup_migration_binds_pause_and_default_inert_owner_contro
     let directory = tempdir().unwrap();
     let database = directory.path().join("master.sqlite3");
     drop(MasterKernel::open(&database).unwrap());
-    Connection::open(&database)
-        .unwrap()
+    let connection = Connection::open(&database).unwrap();
+    drop_validation_gate_schema_for_legacy_fixture(&connection);
+    connection
         .execute_batch(
             "DROP TRIGGER feature_result_artifacts_no_update;
              DROP TRIGGER feature_result_artifacts_no_delete;
@@ -4080,7 +4602,7 @@ fn master_process_v6_backup_migration_binds_pause_and_default_inert_owner_contro
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v14."));
+        .starts_with("master.pre-v15."));
     let backup = Connection::open(backup).unwrap();
     assert_eq!(
         backup
@@ -4106,8 +4628,9 @@ fn master_process_v9_backup_first_migration_adds_immutable_coding_dispatch_evide
     let directory = tempdir().unwrap();
     let database = directory.path().join("master.sqlite3");
     drop(MasterKernel::open(&database).unwrap());
-    Connection::open(&database)
-        .unwrap()
+    let connection = Connection::open(&database).unwrap();
+    drop_validation_gate_schema_for_legacy_fixture(&connection);
+    connection
         .execute_batch(
             "DROP TRIGGER feature_artifact_integration_conflicts_no_update;
              DROP TRIGGER feature_artifact_integration_conflicts_no_delete;
@@ -4188,5 +4711,5 @@ fn forward_schema_version_fails_closed_without_backup() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v14.")));
+            .starts_with("master.pre-v15.")));
 }

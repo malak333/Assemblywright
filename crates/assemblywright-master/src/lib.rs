@@ -1,21 +1,23 @@
 use assemblywright_protocol::{
-    AttemptId, CancellationAcknowledgement, CancellationId, CancellationInstruction,
-    CapabilityDescriptor, ContextHandlingPolicy, DeviceId, DeviceRole, DistributedEvent,
-    DistributedEventBatch, DistributedEventBatchRequest, DistributedEventCursor,
-    DistributedEventKind, FeatureConveyorApprovedSpecification,
+    feature_conveyor_validation_request_binding_sha256, AttemptId, CancellationAcknowledgement,
+    CancellationId, CancellationInstruction, CapabilityDescriptor, ContextHandlingPolicy, DeviceId,
+    DeviceRole, DistributedEvent, DistributedEventBatch, DistributedEventBatchRequest,
+    DistributedEventCursor, DistributedEventKind, FeatureConveyorApprovedSpecification,
     FeatureConveyorArtifactIntegrationPlan, FeatureConveyorArtifactIntegrationReceipt,
     FeatureConveyorArtifactIntegrationRequest, FeatureConveyorArtifactIntegrationStatus,
     FeatureConveyorCodingDispatchReceipt, FeatureConveyorCodingDispatchRequest,
     FeatureConveyorCodingDispatchStatus, FeatureConveyorCodingWorkPacketMetadata,
     FeatureConveyorGrantRevisions, FeatureConveyorRepositoryGrantSet,
-    FeatureConveyorRepositoryGrantView, HandshakeRequest, HandshakeResponse, HandshakeStatus,
+    FeatureConveyorRepositoryGrantView, FeatureConveyorValidationCommandId,
+    FeatureConveyorValidationGateReceipt, FeatureConveyorValidationGateRequest,
+    FeatureConveyorValidationGateStatus, HandshakeRequest, HandshakeResponse, HandshakeStatus,
     JobEnvelope, JobResultEnvelope, JobResultStatus, LeaseId, LocalCodingJobRequest,
     LocalCodingJobResult, LocalCodingResultArtifactAdmission, LocalCodingResultArtifactReceipt,
     LocalCodingSnapshotChunkRequest, ProtocolError, Sensitivity, StepId, TaskId,
     CANCELLATION_ACK_DEADLINE_MS, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
-    FIXTURE_REASONING_CAPABILITY_ID, LOCAL_CODING_CAPABILITY_ID, MAX_CAPABILITY_ID_BYTES,
-    MAX_JOB_CONTEXT_BYTES, MAX_LEASE_DURATION_MS, MAX_STEP_DEADLINE_MS,
-    MLX_REASONING_CAPABILITY_ID, PROTOCOL_VERSION,
+    FEATURE_CONVEYOR_VALIDATION_GATE_SCHEMA_VERSION, FIXTURE_REASONING_CAPABILITY_ID,
+    LOCAL_CODING_CAPABILITY_ID, MAX_CAPABILITY_ID_BYTES, MAX_JOB_CONTEXT_BYTES,
+    MAX_LEASE_DURATION_MS, MAX_STEP_DEADLINE_MS, MLX_REASONING_CAPABILITY_ID, PROTOCOL_VERSION,
 };
 use rusqlite::{
     params, Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior,
@@ -36,10 +38,11 @@ mod identity;
 mod integration;
 mod result_artifact;
 mod snapshot;
+pub mod validation_containment;
 
 pub use integration::{
     ArtifactIntegrationError, ArtifactIntegrationStore, CandidateEvidence, IntegrationArtifact,
-    PreparedCandidate,
+    PreparedCandidate, ValidationCandidateScratch,
 };
 pub use result_artifact::{
     PreparedResultArtifact, ResultArtifactReference, ResultArtifactStore, ResultArtifactStoreError,
@@ -56,7 +59,7 @@ pub use identity::{
     SERVER_CERTIFICATE_LIFETIME_MS,
 };
 
-pub const MASTER_SCHEMA_VERSION: i64 = 14;
+pub const MASTER_SCHEMA_VERSION: i64 = 15;
 pub const MAX_QUEUED_OR_LEASED_STEPS: u64 = 256;
 pub const MAX_CONCURRENT_JOBS: u64 = 4;
 pub const MAX_CONVEYOR_NONTERMINAL_FEATURES: u64 = 100;
@@ -259,6 +262,10 @@ pub enum MasterError {
     ArtifactIntegrationUnavailable,
     #[error("artifact integration conflicts with the immutable base")]
     ArtifactIntegrationConflict,
+    #[error("the exact validation gate binding is stale or unavailable")]
+    ValidationGateUnavailable,
+    #[error("required validation evidence did not pass")]
+    ValidationGateFailed,
     #[error("feature coding work must be terminal before lifecycle advancement")]
     FeatureCodingWorkOutstanding,
     #[error(
@@ -792,6 +799,39 @@ pub struct ArtifactIntegrationPlan {
 pub enum ArtifactIntegrationAuthorization {
     Existing(FeatureConveyorArtifactIntegrationReceipt),
     Planned(ArtifactIntegrationPlan),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidationGateExecutionPlan {
+    pub request: FeatureConveyorValidationGateRequest,
+    pub candidate: CandidateEvidence,
+    pub approved_paths: Vec<String>,
+    pub acceptance_criteria_count: u64,
+    pub requirements_sha256: [u8; 32],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ValidationCommandEvidence {
+    pub command_id: FeatureConveyorValidationCommandId,
+    pub passed: bool,
+    pub result_sha256: [u8; 32],
+    pub duration_ms: u64,
+    pub output_truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ValidationGateEvidence {
+    pub commands: Vec<ValidationCommandEvidence>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValidationGateAuthorization {
+    ExistingPassed {
+        receipt: FeatureConveyorValidationGateReceipt,
+        candidate: CandidateEvidence,
+    },
+    ExistingFailed,
+    Planned(ValidationGateExecutionPlan),
 }
 
 pub struct MasterKernel {
@@ -1492,6 +1532,356 @@ impl MasterKernel {
         let receipt = integration_receipt(request, candidate, next_lifecycle);
         tx.commit()?;
         Ok(receipt)
+    }
+
+    pub fn plan_validation_gate(
+        &mut self,
+        request: &FeatureConveyorValidationGateRequest,
+        now_ms: u64,
+    ) -> Result<ValidationGateAuthorization, MasterError> {
+        self.authorize_validation_gate(request, now_ms, true)
+    }
+
+    /// Performs the complete durable-authority comparison without creating a
+    /// new attempt. The process layer uses this before validating candidate,
+    /// scratch, and toolchain resources.
+    pub fn prepare_validation_gate(
+        &mut self,
+        request: &FeatureConveyorValidationGateRequest,
+        now_ms: u64,
+    ) -> Result<ValidationGateAuthorization, MasterError> {
+        self.authorize_validation_gate(request, now_ms, false)
+    }
+
+    fn authorize_validation_gate(
+        &mut self,
+        request: &FeatureConveyorValidationGateRequest,
+        now_ms: u64,
+        persist_new_attempt: bool,
+    ) -> Result<ValidationGateAuthorization, MasterError> {
+        request.validate()?;
+        let request_binding_sha256 = feature_conveyor_validation_request_binding_sha256(request)?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(stored_binding) = tx
+            .query_row(
+                "SELECT request_binding_sha256 FROM feature_validation_attempts
+                 WHERE validation_id=?1",
+                [request.validation_id.to_string()],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .optional()?
+        {
+            if digest_array(&stored_binding)? != request_binding_sha256 {
+                return Err(MasterError::ValidationGateUnavailable);
+            }
+            let completion = load_validation_completion_tx(&tx, request.validation_id)?;
+            return match completion {
+                Some((true, evidence_manifest_sha256, lifecycle_revision)) => {
+                    let candidate = validate_completed_validation_gate_binding_tx(
+                        &tx,
+                        request,
+                        lifecycle_revision,
+                        now_ms,
+                    )?;
+                    Ok(ValidationGateAuthorization::ExistingPassed {
+                        receipt: validation_gate_receipt(
+                            request,
+                            lifecycle_revision,
+                            evidence_manifest_sha256,
+                        ),
+                        candidate,
+                    })
+                }
+                Some((false, _, _)) => {
+                    validate_validation_gate_binding_tx(&tx, request, now_ms)?;
+                    Ok(ValidationGateAuthorization::ExistingFailed)
+                }
+                None => {
+                    let candidate = validate_validation_gate_binding_tx(&tx, request, now_ms)?;
+                    let (approved_paths, acceptance_criteria_count) =
+                        validation_work_packet_scope_tx(&tx, request.integration_id)?;
+                    let requirements_sha256 = validation_requirements_sha256_tx(
+                        &tx,
+                        request.feature_id,
+                        request.specification_revision,
+                    )?;
+                    Ok(ValidationGateAuthorization::Planned(
+                        ValidationGateExecutionPlan {
+                            request: request.clone(),
+                            candidate,
+                            approved_paths,
+                            acceptance_criteria_count,
+                            requirements_sha256,
+                        },
+                    ))
+                }
+            };
+        }
+        let candidate = validate_validation_gate_binding_tx(&tx, request, now_ms)?;
+        let (approved_paths, acceptance_criteria_count) =
+            validation_work_packet_scope_tx(&tx, request.integration_id)?;
+        let requirements_sha256 = validation_requirements_sha256_tx(
+            &tx,
+            request.feature_id,
+            request.specification_revision,
+        )?;
+        if !persist_new_attempt {
+            return Ok(ValidationGateAuthorization::Planned(
+                ValidationGateExecutionPlan {
+                    request: request.clone(),
+                    candidate,
+                    approved_paths,
+                    acceptance_criteria_count,
+                    requirements_sha256,
+                },
+            ));
+        }
+        tx.execute(
+            "INSERT INTO feature_validation_attempts (
+               validation_id,feature_id,specification_revision,lifecycle_revision,
+               feature_lease_id,snapshot_id,snapshot_sha256,integration_id,
+               artifact_set_sha256,candidate_commit,candidate_tree,base_commit,
+               plan_sha256,command_ids_json,queue_revision,emergency_pause_revision,
+               registration_grant_revision,cloud_disclosure_grant_revision,
+               publication_grant_revision,request_binding_sha256,started_at_ms
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,
+                       ?16,?17,?18,?19,?20,?21)",
+            params![
+                request.validation_id.to_string(),
+                request.feature_id.to_string(),
+                u64_to_i64(request.specification_revision)?,
+                u64_to_i64(request.expected_lifecycle_revision)?,
+                request.feature_lease_id.to_string(),
+                request.snapshot_id.to_string(),
+                request.snapshot_sha256.as_slice(),
+                request.integration_id.to_string(),
+                request.artifact_set_sha256.as_slice(),
+                request.candidate_commit,
+                request.candidate_tree,
+                request.base_commit,
+                request.plan_sha256.as_slice(),
+                serde_json::to_string(&request.command_ids)?,
+                u64_to_i64(request.expected_queue_revision)?,
+                u64_to_i64(request.expected_emergency_pause_revision)?,
+                u64_to_i64(request.grants.registration)?,
+                u64_to_i64(request.grants.cloud_disclosure)?,
+                u64_to_i64(request.grants.autonomous_publication)?,
+                request_binding_sha256.as_slice(),
+                u64_to_i64(now_ms)?,
+            ],
+        )?;
+        append_feature_audit_tx(
+            &tx,
+            "feature_validation_started",
+            Some(request.feature_id),
+            now_ms,
+            serde_json::json!({
+                "validation_id": request.validation_id,
+                "command_count": request.command_ids.len(),
+                "plan_digest_present": true,
+                "candidate_commit_present": true,
+                "raw_output_present": false,
+                "path_present": false,
+                "review_authorized": false,
+                "publication_authorized": false
+            }),
+        )?;
+        tx.commit()?;
+        Ok(ValidationGateAuthorization::Planned(
+            ValidationGateExecutionPlan {
+                request: request.clone(),
+                candidate,
+                approved_paths,
+                acceptance_criteria_count,
+                requirements_sha256,
+            },
+        ))
+    }
+
+    pub fn finalize_validation_gate(
+        &mut self,
+        plan: &ValidationGateExecutionPlan,
+        evidence: &ValidationGateEvidence,
+        now_ms: u64,
+    ) -> Result<FeatureConveyorValidationGateReceipt, MasterError> {
+        validate_validation_gate_evidence(&plan.request, evidence)?;
+        let evidence_manifest_sha256: [u8; 32] =
+            Sha256::digest(serde_json::to_vec(evidence)?).into();
+        let passed = evidence.commands.iter().all(|command| command.passed);
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some((stored_passed, stored_digest, lifecycle_revision)) =
+            load_validation_completion_tx(&tx, plan.request.validation_id)?
+        {
+            if stored_passed != passed || stored_digest != evidence_manifest_sha256 {
+                return Err(MasterError::ValidationGateUnavailable);
+            }
+            return if stored_passed {
+                Ok(validation_gate_receipt(
+                    &plan.request,
+                    lifecycle_revision,
+                    stored_digest,
+                ))
+            } else {
+                Err(MasterError::ValidationGateFailed)
+            };
+        }
+        let stored_binding: Vec<u8> = tx
+            .query_row(
+                "SELECT request_binding_sha256 FROM feature_validation_attempts
+                 WHERE validation_id=?1",
+                [plan.request.validation_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or(MasterError::ValidationGateUnavailable)?;
+        let current_binding = feature_conveyor_validation_request_binding_sha256(&plan.request)?;
+        if digest_array(&stored_binding)? != current_binding
+            || validate_validation_gate_binding_tx(&tx, &plan.request, now_ms)? != plan.candidate
+        {
+            return Err(MasterError::ValidationGateUnavailable);
+        }
+        for command in &evidence.commands {
+            tx.execute(
+                "INSERT INTO feature_validation_command_evidence (
+                   validation_id,command_id,passed,result_sha256,duration_ms,output_truncated
+                 ) VALUES (?1,?2,?3,?4,?5,?6)",
+                params![
+                    plan.request.validation_id.to_string(),
+                    serde_json::to_string(&command.command_id)?,
+                    i64::from(command.passed),
+                    command.result_sha256.as_slice(),
+                    u64_to_i64(command.duration_ms)?,
+                    i64::from(command.output_truncated),
+                ],
+            )?;
+        }
+        let lifecycle_revision = if passed {
+            plan.request
+                .expected_lifecycle_revision
+                .checked_add(1)
+                .ok_or(MasterError::ValidationGateUnavailable)?
+        } else {
+            plan.request.expected_lifecycle_revision
+        };
+        tx.execute(
+            "INSERT INTO feature_validation_completions (
+               validation_id,passed,evidence_manifest_sha256,lifecycle_revision,completed_at_ms
+             ) VALUES (?1,?2,?3,?4,?5)",
+            params![
+                plan.request.validation_id.to_string(),
+                i64::from(passed),
+                evidence_manifest_sha256.as_slice(),
+                u64_to_i64(lifecycle_revision)?,
+                u64_to_i64(now_ms)?,
+            ],
+        )?;
+        if passed {
+            if tx.execute(
+                "UPDATE feature_conveyor_features SET status='reviewing',
+                   lifecycle_revision=?1,updated_at_ms=?2
+                 WHERE feature_id=?3 AND status='validating' AND lifecycle_revision=?4",
+                params![
+                    u64_to_i64(lifecycle_revision)?,
+                    u64_to_i64(now_ms)?,
+                    plan.request.feature_id.to_string(),
+                    u64_to_i64(plan.request.expected_lifecycle_revision)?,
+                ],
+            )? != 1
+            {
+                return Err(MasterError::ValidationGateUnavailable);
+            }
+            tx.execute(
+                "INSERT INTO feature_transition_evidence (
+                   feature_id,lifecycle_revision,from_status,to_status,
+                   repository_snapshot_sha256,accepted_evidence_sha256,recorded_at_ms
+                 ) VALUES (?1,?2,'validating','reviewing',?3,?4,?5)",
+                params![
+                    plan.request.feature_id.to_string(),
+                    u64_to_i64(lifecycle_revision)?,
+                    plan.request.snapshot_sha256.as_slice(),
+                    evidence_manifest_sha256.as_slice(),
+                    u64_to_i64(now_ms)?,
+                ],
+            )?;
+        }
+        append_feature_audit_tx(
+            &tx,
+            if passed {
+                "feature_validation_passed"
+            } else {
+                "feature_validation_failed"
+            },
+            Some(plan.request.feature_id),
+            now_ms,
+            serde_json::json!({
+                "validation_id": plan.request.validation_id,
+                "command_count": evidence.commands.len(),
+                "evidence_manifest_digest_present": true,
+                "all_required_evidence_present": true,
+                "passed": passed,
+                "raw_output_present": false,
+                "path_present": false,
+                "from_status": "validating",
+                "to_status": if passed { "reviewing" } else { "validating" },
+                "lifecycle_advanced": passed,
+                "publication_authorized": false
+            }),
+        )?;
+        tx.commit()?;
+        if passed {
+            Ok(validation_gate_receipt(
+                &plan.request,
+                lifecycle_revision,
+                evidence_manifest_sha256,
+            ))
+        } else {
+            Err(MasterError::ValidationGateFailed)
+        }
+    }
+
+    /// Read-only cancellation probe for the contained validator. Any authority
+    /// drift is reported as not current; storage corruption remains an error.
+    pub fn validation_gate_execution_is_current(
+        &self,
+        request: &FeatureConveyorValidationGateRequest,
+        now_ms: u64,
+    ) -> Result<bool, MasterError> {
+        if request.validate().is_err() {
+            return Ok(false);
+        }
+        let tx = self.connection.unchecked_transaction()?;
+        let pending: bool = tx.query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM feature_validation_attempts a
+               WHERE a.validation_id=?1
+                 AND a.request_binding_sha256=?2
+                 AND NOT EXISTS (
+                   SELECT 1 FROM feature_validation_completions c
+                   WHERE c.validation_id=a.validation_id
+                 )
+             )",
+            params![
+                request.validation_id.to_string(),
+                feature_conveyor_validation_request_binding_sha256(request)?.as_slice(),
+            ],
+            |row| row.get(0),
+        )?;
+        if !pending {
+            return Ok(false);
+        }
+        match validate_validation_gate_binding_tx(&tx, request, now_ms) {
+            Ok(_) => Ok(true),
+            Err(MasterError::Storage(error)) => Err(MasterError::Storage(error)),
+            Err(MasterError::Json(error)) => Err(MasterError::Json(error)),
+            Err(MasterError::InvalidStoredState(error)) => {
+                Err(MasterError::InvalidStoredState(error))
+            }
+            Err(_) => Ok(false),
+        }
     }
 
     pub fn owner_control_bridge_designation(
@@ -5170,6 +5560,72 @@ impl MasterKernel {
             )?;
         }
         let version = self.schema_version()?;
+        if version == 14 {
+            self.connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 CREATE TABLE feature_validation_attempts (
+                   validation_id TEXT PRIMARY KEY NOT NULL,
+                   feature_id TEXT NOT NULL REFERENCES feature_conveyor_features(feature_id),
+                   specification_revision INTEGER NOT NULL CHECK(specification_revision>0),
+                   lifecycle_revision INTEGER NOT NULL CHECK(lifecycle_revision>0),
+                   feature_lease_id TEXT NOT NULL,
+                   snapshot_id TEXT NOT NULL REFERENCES feature_repository_snapshot_claims(snapshot_id),
+                   snapshot_sha256 BLOB NOT NULL CHECK(length(snapshot_sha256)=32),
+                   integration_id TEXT NOT NULL REFERENCES feature_artifact_integrations(integration_id),
+                   artifact_set_sha256 BLOB NOT NULL CHECK(length(artifact_set_sha256)=32),
+                   candidate_commit TEXT NOT NULL CHECK(length(candidate_commit)=40),
+                   candidate_tree TEXT NOT NULL CHECK(length(candidate_tree)=40),
+                   base_commit TEXT NOT NULL CHECK(length(base_commit)=40),
+                   plan_sha256 BLOB NOT NULL CHECK(length(plan_sha256)=32),
+                   command_ids_json TEXT NOT NULL CHECK(length(command_ids_json) BETWEEN 2 AND 1024),
+                   queue_revision INTEGER NOT NULL CHECK(queue_revision>=0),
+                   emergency_pause_revision INTEGER NOT NULL CHECK(emergency_pause_revision>=0),
+                   registration_grant_revision INTEGER NOT NULL CHECK(registration_grant_revision>0),
+                   cloud_disclosure_grant_revision INTEGER NOT NULL CHECK(cloud_disclosure_grant_revision>0),
+                   publication_grant_revision INTEGER NOT NULL CHECK(publication_grant_revision>0),
+                   request_binding_sha256 BLOB NOT NULL CHECK(length(request_binding_sha256)=32),
+                   started_at_ms INTEGER NOT NULL CHECK(started_at_ms>0),
+                   UNIQUE(feature_id,specification_revision,feature_lease_id,integration_id)
+                 );
+                 CREATE TRIGGER feature_validation_attempts_no_update
+                   BEFORE UPDATE ON feature_validation_attempts
+                   BEGIN SELECT RAISE(ABORT,'immutable validation attempt'); END;
+                 CREATE TRIGGER feature_validation_attempts_no_delete
+                   BEFORE DELETE ON feature_validation_attempts
+                   BEGIN SELECT RAISE(ABORT,'durable validation attempt'); END;
+                 CREATE TABLE feature_validation_command_evidence (
+                   validation_id TEXT NOT NULL REFERENCES feature_validation_attempts(validation_id),
+                   command_id TEXT NOT NULL CHECK(length(command_id) BETWEEN 3 AND 64),
+                   passed INTEGER NOT NULL CHECK(passed IN(0,1)),
+                   result_sha256 BLOB NOT NULL CHECK(length(result_sha256)=32),
+                   duration_ms INTEGER NOT NULL CHECK(duration_ms>=0),
+                   output_truncated INTEGER NOT NULL CHECK(output_truncated IN(0,1)),
+                   PRIMARY KEY(validation_id,command_id)
+                 );
+                 CREATE TRIGGER feature_validation_command_evidence_no_update
+                   BEFORE UPDATE ON feature_validation_command_evidence
+                   BEGIN SELECT RAISE(ABORT,'immutable validation command evidence'); END;
+                 CREATE TRIGGER feature_validation_command_evidence_no_delete
+                   BEFORE DELETE ON feature_validation_command_evidence
+                   BEGIN SELECT RAISE(ABORT,'durable validation command evidence'); END;
+                 CREATE TABLE feature_validation_completions (
+                   validation_id TEXT PRIMARY KEY NOT NULL REFERENCES feature_validation_attempts(validation_id),
+                   passed INTEGER NOT NULL CHECK(passed IN(0,1)),
+                   evidence_manifest_sha256 BLOB NOT NULL CHECK(length(evidence_manifest_sha256)=32),
+                   lifecycle_revision INTEGER NOT NULL CHECK(lifecycle_revision>0),
+                   completed_at_ms INTEGER NOT NULL CHECK(completed_at_ms>0)
+                 );
+                 CREATE TRIGGER feature_validation_completions_no_update
+                   BEFORE UPDATE ON feature_validation_completions
+                   BEGIN SELECT RAISE(ABORT,'immutable validation completion'); END;
+                 CREATE TRIGGER feature_validation_completions_no_delete
+                   BEFORE DELETE ON feature_validation_completions
+                   BEGIN SELECT RAISE(ABORT,'durable validation completion'); END;
+                 PRAGMA user_version=15;
+                 COMMIT;",
+            )?;
+        }
+        let version = self.schema_version()?;
         if version != MASTER_SCHEMA_VERSION {
             return Err(MasterError::UnsupportedSchemaVersion {
                 expected: MASTER_SCHEMA_VERSION,
@@ -7712,6 +8168,59 @@ fn integration_artifact_ids_tx(
     ids
 }
 
+fn validation_work_packet_scope_tx(
+    tx: &Transaction<'_>,
+    integration_id: Uuid,
+) -> Result<(Vec<String>, u64), MasterError> {
+    let mut statement = tx.prepare(
+        "SELECT d.work_packet_metadata_json
+         FROM feature_artifact_integration_artifacts ia
+         JOIN feature_result_artifacts a ON a.artifact_id=ia.artifact_id
+         JOIN feature_coding_dispatches d ON d.step_id=a.step_id
+         WHERE ia.integration_id=?1 ORDER BY ia.ordinal,ia.packet_id",
+    )?;
+    let rows = statement.query_map([integration_id.to_string()], |row| row.get::<_, String>(0))?;
+    let mut paths = Vec::new();
+    let mut seen = HashSet::new();
+    let mut acceptance_criteria_count = 0u64;
+    for row in rows {
+        let packet: FeatureConveyorCodingWorkPacketMetadata = serde_json::from_str(&row?)?;
+        packet.validate()?;
+        acceptance_criteria_count = acceptance_criteria_count
+            .checked_add(u64::from(packet.acceptance_criteria_count))
+            .ok_or(MasterError::ValidationGateUnavailable)?;
+        for path in packet.allowed_paths {
+            if !seen.insert(path.clone()) {
+                return Err(MasterError::ValidationGateUnavailable);
+            }
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    if paths.is_empty() || acceptance_criteria_count == 0 {
+        return Err(MasterError::ValidationGateUnavailable);
+    }
+    Ok((paths, acceptance_criteria_count))
+}
+
+fn validation_requirements_sha256_tx(
+    tx: &Transaction<'_>,
+    feature_id: Uuid,
+    specification_revision: u64,
+) -> Result<[u8; 32], MasterError> {
+    let digest: Vec<u8> = tx.query_row(
+        "SELECT design_sha256 FROM feature_specification_revisions
+         WHERE feature_id=?1 AND revision=?2",
+        params![feature_id.to_string(), u64_to_i64(specification_revision)?],
+        |row| row.get(0),
+    )?;
+    let digest = digest_array(&digest)?;
+    if digest == [0; 32] {
+        return Err(MasterError::ValidationGateUnavailable);
+    }
+    Ok(digest)
+}
+
 fn integration_receipt_matches_request(
     receipt: &FeatureConveyorArtifactIntegrationReceipt,
     request: &FeatureConveyorArtifactIntegrationRequest,
@@ -7764,6 +8273,270 @@ fn append_feature_audit_tx(
 fn sqlite_integrity_ok(connection: &Connection) -> Result<bool, MasterError> {
     let result: String = connection.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
     Ok(result == "ok")
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredValidationGateManifest {
+    schema_version: u16,
+    command_ids: Vec<FeatureConveyorValidationCommandId>,
+}
+
+fn validation_commands_from_manifest(
+    canonical_manifest_json: &str,
+) -> Result<Vec<FeatureConveyorValidationCommandId>, MasterError> {
+    let manifest: Value = serde_json::from_str(canonical_manifest_json)?;
+    let gate = manifest
+        .get("validation_gate")
+        .cloned()
+        .ok_or(MasterError::ValidationGateUnavailable)?;
+    let gate: StoredValidationGateManifest =
+        serde_json::from_value(gate).map_err(|_| MasterError::ValidationGateUnavailable)?;
+    if gate.schema_version != FEATURE_CONVEYOR_VALIDATION_GATE_SCHEMA_VERSION
+        || gate.command_ids != FeatureConveyorValidationCommandId::REQUIRED
+    {
+        return Err(MasterError::ValidationGateUnavailable);
+    }
+    Ok(gate.command_ids)
+}
+
+fn validate_validation_gate_binding_tx(
+    tx: &Transaction<'_>,
+    request: &FeatureConveyorValidationGateRequest,
+    now_ms: u64,
+) -> Result<CandidateEvidence, MasterError> {
+    validate_validation_gate_binding_state_tx(tx, request, None, now_ms)
+}
+
+fn validate_completed_validation_gate_binding_tx(
+    tx: &Transaction<'_>,
+    request: &FeatureConveyorValidationGateRequest,
+    completed_lifecycle_revision: u64,
+    now_ms: u64,
+) -> Result<CandidateEvidence, MasterError> {
+    if completed_lifecycle_revision
+        != request
+            .expected_lifecycle_revision
+            .checked_add(1)
+            .ok_or(MasterError::ValidationGateUnavailable)?
+    {
+        return Err(MasterError::ValidationGateUnavailable);
+    }
+    validate_validation_gate_binding_state_tx(
+        tx,
+        request,
+        Some(completed_lifecycle_revision),
+        now_ms,
+    )
+}
+
+fn validate_validation_gate_binding_state_tx(
+    tx: &Transaction<'_>,
+    request: &FeatureConveyorValidationGateRequest,
+    completed_lifecycle_revision: Option<u64>,
+    now_ms: u64,
+) -> Result<CandidateEvidence, MasterError> {
+    if emergency_paused_tx(tx)? {
+        return Err(MasterError::EmergencyPaused);
+    }
+    let pause_revision = emergency_pause_revision_tx(tx)?;
+    if pause_revision != request.expected_emergency_pause_revision {
+        return Err(MasterError::StaleEmergencyPauseRevision {
+            expected: request.expected_emergency_pause_revision,
+            found: pause_revision,
+        });
+    }
+    let queue_revision: i64 = tx.query_row(
+        "SELECT queue_revision FROM feature_conveyor_state WHERE singleton=1",
+        [],
+        |row| row.get(0),
+    )?;
+    let queue_revision = i64_to_u64(queue_revision)?;
+    if queue_revision != request.expected_queue_revision {
+        return Err(MasterError::StaleFeatureQueueRevision {
+            expected: request.expected_queue_revision,
+            found: queue_revision,
+        });
+    }
+    require_active_lease_tx(tx, request.feature_id)?;
+    require_current_feature_grants_tx(tx, request.feature_id, now_ms)?;
+    let row = tx
+        .query_row(
+            "SELECT f.current_specification_revision,f.lifecycle_revision,f.status,
+                    l.lease_id,l.snapshot_id,c.snapshot_sha256,c.base_commit,
+                    s.canonical_manifest_json,s.registration_grant_revision,
+                    s.cloud_disclosure_grant_revision,s.publication_grant_revision,
+                    i.feature_id,i.specification_revision,i.lifecycle_revision,
+                    i.feature_lease_id,i.snapshot_id,i.snapshot_sha256,
+                    i.artifact_set_sha256,i.candidate_commit,i.candidate_tree,i.base_commit,
+                    i.queue_revision,i.emergency_pause_revision,
+                    i.registration_grant_revision,i.cloud_disclosure_grant_revision,
+                    i.publication_grant_revision
+             FROM feature_conveyor_features f
+             JOIN feature_active_lease l ON l.feature_id=f.feature_id AND l.singleton=1
+             JOIN feature_repository_snapshot_claims c ON c.snapshot_id=l.snapshot_id
+             JOIN feature_specification_revisions s
+               ON s.feature_id=f.feature_id AND s.revision=f.current_specification_revision
+             JOIN feature_artifact_integrations i ON i.integration_id=?2
+             WHERE f.feature_id=?1",
+            params![
+                request.feature_id.to_string(),
+                request.integration_id.to_string()
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Vec<u8>>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, i64>(8)?,
+                    row.get::<_, i64>(9)?,
+                    row.get::<_, i64>(10)?,
+                    row.get::<_, String>(11)?,
+                    row.get::<_, i64>(12)?,
+                    row.get::<_, i64>(13)?,
+                    row.get::<_, String>(14)?,
+                    row.get::<_, String>(15)?,
+                    row.get::<_, Vec<u8>>(16)?,
+                    row.get::<_, Vec<u8>>(17)?,
+                    row.get::<_, String>(18)?,
+                    row.get::<_, String>(19)?,
+                    row.get::<_, String>(20)?,
+                    row.get::<_, i64>(21)?,
+                    row.get::<_, i64>(22)?,
+                    row.get::<_, i64>(23)?,
+                    row.get::<_, i64>(24)?,
+                    row.get::<_, i64>(25)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or(MasterError::ValidationGateUnavailable)?;
+    let integration_lifecycle = i64_to_u64(row.13)?;
+    let expected_feature_lifecycle =
+        completed_lifecycle_revision.unwrap_or(request.expected_lifecycle_revision);
+    let expected_status = if completed_lifecycle_revision.is_some() {
+        FeatureLifecycleStatus::Reviewing
+    } else {
+        FeatureLifecycleStatus::Validating
+    };
+    if i64_to_u64(row.0)? != request.specification_revision
+        || i64_to_u64(row.1)? != expected_feature_lifecycle
+        || row.2 != expected_status.as_str()
+        || parse_uuid(&row.3)? != request.feature_lease_id
+        || parse_uuid(&row.4)? != request.snapshot_id
+        || digest_array(&row.5)? != request.snapshot_sha256
+        || row.6 != request.base_commit
+        || i64_to_u64(row.8)? != request.grants.registration
+        || i64_to_u64(row.9)? != request.grants.cloud_disclosure
+        || i64_to_u64(row.10)? != request.grants.autonomous_publication
+        || parse_uuid(&row.11)? != request.feature_id
+        || i64_to_u64(row.12)? != request.specification_revision
+        || integration_lifecycle.checked_add(1) != Some(request.expected_lifecycle_revision)
+        || parse_uuid(&row.14)? != request.feature_lease_id
+        || parse_uuid(&row.15)? != request.snapshot_id
+        || digest_array(&row.16)? != request.snapshot_sha256
+        || digest_array(&row.17)? != request.artifact_set_sha256
+        || row.18 != request.candidate_commit
+        || row.19 != request.candidate_tree
+        || row.20 != request.base_commit
+        || i64_to_u64(row.21)? != request.expected_queue_revision
+        || i64_to_u64(row.22)? != request.expected_emergency_pause_revision
+        || i64_to_u64(row.23)? != request.grants.registration
+        || i64_to_u64(row.24)? != request.grants.cloud_disclosure
+        || i64_to_u64(row.25)? != request.grants.autonomous_publication
+    {
+        return Err(MasterError::ValidationGateUnavailable);
+    }
+    let commands = validation_commands_from_manifest(&row.7)?;
+    if commands != request.command_ids
+        || assemblywright_protocol::feature_conveyor_validation_plan_sha256(&commands)?
+            != request.plan_sha256
+    {
+        return Err(MasterError::ValidationGateUnavailable);
+    }
+    let artifact_ids = integration_artifact_ids_tx(tx, request.integration_id)?;
+    Ok(CandidateEvidence {
+        integration_id: request.integration_id,
+        artifact_set_sha256: request.artifact_set_sha256,
+        candidate_commit: request.candidate_commit.clone(),
+        candidate_tree: request.candidate_tree.clone(),
+        base_commit: request.base_commit.clone(),
+        artifact_ids,
+    })
+}
+
+fn validate_validation_gate_evidence(
+    request: &FeatureConveyorValidationGateRequest,
+    evidence: &ValidationGateEvidence,
+) -> Result<(), MasterError> {
+    if evidence.commands.len() != request.command_ids.len() {
+        return Err(MasterError::ValidationGateUnavailable);
+    }
+    for (expected, command) in request.command_ids.iter().zip(&evidence.commands) {
+        if command.command_id != *expected
+            || command.result_sha256 == [0; 32]
+            || (command.passed && command.output_truncated)
+        {
+            return Err(MasterError::ValidationGateUnavailable);
+        }
+    }
+    Ok(())
+}
+
+fn load_validation_completion_tx(
+    tx: &Transaction<'_>,
+    validation_id: Uuid,
+) -> Result<Option<(bool, [u8; 32], u64)>, MasterError> {
+    tx.query_row(
+        "SELECT passed,evidence_manifest_sha256,lifecycle_revision
+         FROM feature_validation_completions WHERE validation_id=?1",
+        [validation_id.to_string()],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Vec<u8>>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        },
+    )
+    .optional()?
+    .map(|(passed, digest, lifecycle)| {
+        Ok((
+            parse_stored_boolean(passed, "validation completion")?,
+            digest_array(&digest)?,
+            i64_to_u64(lifecycle)?,
+        ))
+    })
+    .transpose()
+}
+
+fn validation_gate_receipt(
+    request: &FeatureConveyorValidationGateRequest,
+    lifecycle_revision: u64,
+    evidence_manifest_sha256: [u8; 32],
+) -> FeatureConveyorValidationGateReceipt {
+    FeatureConveyorValidationGateReceipt {
+        schema_version: FEATURE_CONVEYOR_VALIDATION_GATE_SCHEMA_VERSION,
+        validation_id: request.validation_id,
+        feature_id: request.feature_id,
+        specification_revision: request.specification_revision,
+        lifecycle_revision,
+        feature_lease_id: request.feature_lease_id,
+        integration_id: request.integration_id,
+        candidate_commit: request.candidate_commit.clone(),
+        candidate_tree: request.candidate_tree.clone(),
+        evidence_manifest_sha256,
+        plan_sha256: request.plan_sha256,
+        queue_revision: request.expected_queue_revision,
+        emergency_pause_revision: request.expected_emergency_pause_revision,
+        grants: request.grants,
+        status: FeatureConveyorValidationGateStatus::EvidenceAccepted,
+    }
 }
 
 fn prepare_legacy_migration_backup(database_path: &Path) -> Result<Option<PathBuf>, MasterError> {

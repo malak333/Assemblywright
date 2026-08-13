@@ -92,6 +92,34 @@ fn artifact_integration_routes_are_owner_loopback_only_strict_and_redacted() {
         Some(token.trim())
     )
     .starts_with("HTTP/1.1 404 Not Found"));
+
+    let validation_unauthorized = post_request(
+        endpoint,
+        "/v1/feature-conveyor/test-evidence-gates",
+        None,
+        "{}",
+    );
+    assert!(validation_unauthorized.starts_with("HTTP/1.1 401 Unauthorized"));
+    let validation_malformed = post_request(
+        endpoint,
+        "/v1/feature-conveyor/test-evidence-gates",
+        Some(token.trim()),
+        r#"{"schema_version":1,"command":"must-not-run","repository_path":"must-not-leak"}"#,
+    );
+    assert!(validation_malformed.starts_with("HTTP/1.1 422 Unprocessable Entity"));
+    assert_eq!(
+        response_json(&validation_malformed),
+        serde_json::json!({"error":"validation_gate_request_rejected"})
+    );
+    assert!(!validation_malformed.contains("must-not-run"));
+    assert!(!validation_malformed.contains("must-not-leak"));
+    assert!(post_request(
+        endpoint,
+        "/v1/distributed/feature-conveyor/test-evidence-gates",
+        Some(token.trim()),
+        "{}",
+    )
+    .starts_with("HTTP/1.1 404 Not Found"));
 }
 
 impl Drop for ChildGuard {

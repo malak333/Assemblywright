@@ -247,6 +247,55 @@ every referenced candidate repository and commit/tree, and quarantines
 ambiguous active state. Test execution, review, publication, registered-source
 mutation, credential/network access, and autonomous activation remain absent.
 
+Schema v15 implements the persistence, strict protocol, and owner-local
+coordination seam for the next `Evidence Gate` stage. The sole HTTP mutation is
+the owner-token-authenticated loopback-only
+`POST /v1/feature-conveyor/test-evidence-gates`; it is absent from enrolled-
+device mTLS. Its request cannot name a command, executable, argument, path, or
+result. Instead it must reproduce the immutable approved manifest's exact
+protocol-owned ordered plan of all 13 required command identifiers and its
+canonical plan digest. The request binding also covers the exact feature,
+specification and `validating` lifecycle revision, retained feature lease,
+snapshot ID/digest, integration ID/artifact-set digest, frozen candidate
+commit/tree/base commit, queue and Emergency Pause revisions, and all three
+repository-grant revisions. Any drift, missing command, reordering, unknown
+field, zero digest, pause, stale grant, or candidate mismatch fails closed.
+
+The schema stores an immutable attempt, immutable per-command pass bit, result
+digest, duration and truncation bit, and an immutable aggregate evidence-
+manifest digest. It stores no command text, output, path, match, source, secret,
+or caller evidence. All 13 ordered evidence results must be present, nonzero,
+passing, and non-truncated before one immediate transaction advances only
+`validating -> reviewing`, records the accepted evidence digest in transition
+evidence, and appends redacted audit. A completed failure stays `validating`;
+incomplete or malformed evidence does not complete the attempt. An exact retry
+of a passed attempt reopens and revalidates the frozen candidate before
+returning the original receipt; exact retry of a recorded failure returns the
+same fixed failure; validation-ID or request-binding drift rejects. Startup
+quarantines an active `validating` feature as effect-possible and never retries
+it automatically.
+
+Validation execution is connected only on Windows when both fixed, private
+runner inputs exist and validate at startup. Missing inputs return
+`validation_runner_unavailable` before durable attempt/audit mutation. Before a
+start is recorded, the runner revalidates toolchain/cache, authoritative
+candidate, and scratch resources. It binds the approved design digest to exact
+changed paths and acceptance counts from admitted work packets, creates and
+verifies a disposable no-remote candidate copy, runs six
+deterministic master checks and seven fixed contained Cargo commands, and
+revalidates authoritative and disposable candidate identity throughout.
+Coverage uses staged `cargo-llvm-cov` with the protocol-owned 70% minimum line
+threshold; native E2E uses the fixed Rust test-target command. The process
+boundary uses a restricted token, standard zero-capability
+AppContainer, exact minimal environment and inherited-handle list, bounded
+output, Job Object process/memory limits and tree termination, temporary ACLs,
+and checked cleanup. Native Windows tests prove granted-root read/write, active
+cancellation and descendant reaping, outside-root denial, and loopback TCP/UDP
+nondelivery. They do not yet prove installed-service-identity execution, a real
+populated production toolchain/cache, credential-store isolation, actual
+above/below-threshold llvm-cov behavior, signed Mac E2E, or OS-wide outbound
+egress denial. Live provisioning remains blocked on those deployment proofs.
+
 Schema v11 also exposes two separate owner-token loopback-only resolution
 actions: `POST /v1/feature-conveyor/cancel-active-feature` and
 `POST /v1/feature-conveyor/abandon-and-advance`. Both accept only strict,
@@ -396,7 +445,8 @@ canonical repository, master database, canonical memory, credentials, or
 unrelated files. General network access is disabled; only a narrowly controlled
 local-model connection is allowed.
 
-The implemented protocol-v5/schema-v14 kernel accepts one immutable
+The implemented protocol-v5/schema-v15 kernel retains the schema-v14 worker and
+integration boundary and accepts one immutable
 snapshot-bound general coding packet for one exact registered worker. After the
 exact lease, a separate default-off route streams a bounded authenticated
 snapshot bundle to the Mac bridge and native agent. The agent reconstructs an
@@ -418,17 +468,31 @@ bindings with redacted audit. Exact retry is idempotent; drift fails closed;
 startup preserves referenced ambiguity under active-feature quarantine. A
 separate owner-local integration action validates the complete accepted
 artifact set again, applies it only to an isolated no-remote master repository,
-and freezes one exact candidate commit before entering `validating`. Test
-execution, review, publication, and registered-source-checkout mutation remain
-unimplemented. This boundary does not establish an OS sandbox or host-level
-egress control.
+and freezes one exact candidate commit before entering `validating`. Schema
+v15 adds the strict digest-only evidence-gate persistence and a provisioned
+Windows execution path over a disposable candidate. Review, publication, and
+registered-source-checkout mutation remain unimplemented. This boundary does
+not establish installed-service execution, signed Mac E2E, or OS-wide egress
+control.
 
 #### Evidence Gate
 
-The gate assembles digest-bound evidence for requirements, unit tests, E2E
-tests, documentation, knowledge-base outcome, formatting, linting, builds,
-safety rules, changed paths, secret scanning, and repository validation.
-Missing required evidence is a rejection rather than a warning.
+The schema-v15 gate accepts only the approved manifest's exact ordered plan of
+13 protocol-owned identifiers: requirements binding, coverage, focused unit
+tests, native E2E, documentation, knowledge base, formatting, lint, build,
+safety, changed paths, secret scan, and repository validation. Missing,
+reordered, truncated, zero-digest, or failed required evidence is a rejection
+rather than a warning. Only all 13 passes advance the exact frozen candidate
+from `validating` to `reviewing`; a recorded failure remains `validating`.
+SQLite retains immutable result digests and bounded metadata, not raw output.
+The production command runner is connected only on Windows when the fixed
+private toolchain and credential-free dependency-cache inputs validate. It
+executes the master-owned checks and fixed offline Cargo commands against a
+verified disposable copy; otherwise it returns
+`validation_runner_unavailable` before durable attempt or audit mutation. The
+fixture proves the containment and command contract, but not a populated real
+toolchain/cache, installed-service identity, or actual above/below-threshold
+llvm-cov behavior.
 
 #### Review Gateway
 

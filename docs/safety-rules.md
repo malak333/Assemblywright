@@ -156,7 +156,7 @@ release requirements, not optional UX guidance.
   a simultaneous or late result is suppressed. This lane grants no tool, file,
   repository, credential, network, Codex, Git, publication, or unattended
   authority.
-- The Windows `assemblywright-master` schema-v14 database retains the schema-v5
+- The Windows `assemblywright-master` schema-v15 database retains the schema-v5
   Durable Feature Conveyor kernel and is
   default-inert. The owner-token-authenticated loopback
   `GET /v1/feature-conveyor/status` and the dedicated enrolled-device
@@ -418,6 +418,46 @@ release requirements, not optional UX guidance.
   quarantines ambiguous active state. This grants no test execution, evidence
   gate, review, publication, registered-source mutation, credential, network, or
   autonomous authority.
+- Schema v15 test-and-evidence gating is a distinct owner-token-authenticated
+  loopback-only action and must remain absent from enrolled-device mTLS. The
+  immutable approved manifest, not the caller, owns the exact ordered 13-item
+  validation plan: requirements binding, coverage, focused unit tests, native
+  E2E, documentation, knowledge base, formatting, lint, build, safety, changed
+  paths, secret scan, and repository validation. The strict request must bind
+  its canonical plan and request digests to the exact feature/specification/
+  `validating` lifecycle revision/lease, snapshot, integration, artifact set,
+  candidate commit/tree/base commit, queue and Emergency Pause revisions, and
+  all three current repository-grant revisions. Executable, argument, shell,
+  path, output, result, and caller-asserted evidence fields are forbidden.
+  Immutable SQLite evidence may contain only command identifier, pass bit,
+  nonzero result digest, duration, truncation bit, aggregate manifest digest,
+  and exact authority bindings; it must contain no raw output, path, match,
+  source, or secret. Only all 13 ordered, passing, non-truncated results may
+  atomically append redacted audit and exact transition evidence and advance
+  `validating -> reviewing`. A recorded failure remains `validating`; missing
+  or malformed evidence does not complete. Exact passed retry must revalidate
+  the frozen candidate before returning the original receipt, exact failed
+  retry returns the same failure, and any validation-ID or binding drift
+  rejects. Startup must quarantine active `validating` state as effect-possible
+  and must never retry it automatically.
+- The schema-v15 production validation runner may activate only when the fixed
+  private Windows toolchain and credential-free dependency-cache inputs validate
+  at startup. Otherwise `validation_runner_unavailable` must reject before an
+  attempt/audit mutation. It may classify only closed protocol command IDs,
+  derive path and acceptance scope only from immutable admitted work packets,
+  bind that scope to the approved design digest, verify toolchain/cache plus a
+  clean no-remote disposable candidate before recording a start, and own fixed
+  executable, argv, environment, timeout, output selection, and the 70% minimum
+  line-coverage threshold. Its native fixture
+  harness uses a restricted token and standard zero-capability AppContainer,
+  exact minimal environment and handle list, bounded output, Job Object limits/
+  tree termination, temporary root ACL, and profile cleanup. Outside-root and
+  loopback TCP/UDP hostile fixtures do not prove service-identity execution,
+  real production toolchain/cache staging, credential-store denial, production
+  command containment, actual above/below-threshold llvm-cov behavior, signed
+  Mac E2E, or OS-wide outbound-egress denial. No live validation activation,
+  review, publication, or autonomous authority may be inferred without those
+  deployment proofs.
 - Owner resolution is available only through the owner-token-authenticated
   loopback `cancel-active-feature` and `abandon-and-advance` actions. Both must
   compare-and-set the exact feature, lifecycle, queue, and Emergency Pause

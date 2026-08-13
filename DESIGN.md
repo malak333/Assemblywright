@@ -59,7 +59,7 @@ accepted designs and take precedence within their scope:
 
 ### Windows master
 
-`assemblywright-master` owns durable state and every authority decision. Its schema-v14
+`assemblywright-master` owns durable state and every authority decision. Its schema-v15
 SQLite database holds two kernels:
 
 - The distributed device lifecycle: registered devices, connection epochs,
@@ -348,6 +348,54 @@ shape, and lets the existing active-feature restart quarantine dominate any
 ambiguous effect. This adds no test execution, evidence gate, review,
 publication, registered-source mutation, credential, network, or autonomous
 authority.
+
+Schema v15 adds the durable test-and-evidence gate contract without widening
+the worker or enrolled-device surfaces. The owner-token-authenticated loopback
+`POST /v1/feature-conveyor/test-evidence-gates` accepts one strict request whose
+plan must be the exact 13-command list embedded in the immutable approved
+manifest: requirements binding, coverage, focused unit tests, native E2E,
+documentation, knowledge base, formatting, lint, build, safety, changed paths,
+secret scan, and repository validation. The request and plan digests bind the
+exact feature/specification/lifecycle/lease, snapshot, integration, artifact
+set, candidate commit/tree/base commit, queue and Emergency Pause revisions,
+and all three repository-grant revisions. Caller-supplied executable names,
+arguments, paths, evidence, or shell input are not accepted.
+
+Validation attempts, per-command result digests and bounded metadata, and the
+aggregate evidence-manifest digest are immutable and path-free in SQLite.
+Only all 13 present, ordered, nonzero, passing results may atomically advance
+`validating` to `reviewing` with transition evidence and redacted audit. A
+recorded failure remains in `validating`; an incomplete or malformed result is
+rejected without completion. Exact passed retry reopens and revalidates the
+frozen candidate before returning the original receipt, exact failed retry
+returns the same failure, and validation-ID or binding drift rejects. Startup
+continues to quarantine any active `validating` state as effect-possible and
+never retries it automatically. The route is absent from enrolled-device mTLS.
+
+The production validation runner is connected only when the Windows master
+starts with a complete, valid `<data-dir>/validation-runner/toolchain` and
+`dependency-cache-seed`; an unavailable runner rejects before an attempt or
+audit row is created. Before recording a start it revalidates the current
+toolchain/cache, authoritative candidate, and disposable scratch. It binds the
+owner-approved design digest plus approved paths and acceptance counts from the
+immutable admitted work packets, creates a clean no-remote disposable copy of
+the exact candidate, and revalidates the authoritative candidate and scratch
+before and after every command. Master-owned checks bind requirements evidence,
+documentation, knowledge-base, safety, exact changed paths, and secret-scan
+counts. Fixed contained Cargo commands produce llvm-cov coverage with a
+protocol-owned 70% minimum line threshold, focused unit,
+native Rust E2E, formatting, lint, build, and repository-validation evidence.
+The runner owns executable/argv/environment selection. Its native harness uses
+a restricted token and a standard zero-capability AppContainer, with an exact
+minimal environment, explicit inherited-handle list, bounded output,
+memory/process Job Object limits, timeout tree termination, a temporary
+execution-root ACL, and profile cleanup. Windows tests establish granted-root
+operation, active cancellation with full descendant reaping, denial of one
+outside-root fixture, and nondelivery to loopback TCP/UDP probes. Current proof
+does not establish the installed Windows service identity, a real populated
+private toolchain/cache, credential-store denial, actual above/below-threshold
+llvm-cov behavior, signed Mac E2E, or OS-wide outbound-egress enforcement; keep
+live activation unprovisioned until those deployment proofs are complete.
 
 The two-device proof controller creates its disposable repository with a
 non-local clone so Git does not copy source-maintenance caches into the snapshot

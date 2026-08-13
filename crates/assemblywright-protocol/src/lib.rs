@@ -1033,6 +1033,209 @@ impl LocalCodingWriteFileArguments {
 pub const FEATURE_CONVEYOR_ARTIFACT_INTEGRATION_SCHEMA_VERSION: u16 = 1;
 pub const MAX_FEATURE_CONVEYOR_INTEGRATION_ARTIFACTS: usize = 3;
 
+pub const FEATURE_CONVEYOR_VALIDATION_GATE_SCHEMA_VERSION: u16 = 1;
+pub const MAX_FEATURE_CONVEYOR_VALIDATION_COMMANDS: usize = 13;
+pub const FEATURE_CONVEYOR_MINIMUM_LINE_COVERAGE_PERCENT: u8 = 70;
+
+/// Closed, protocol-owned validation commands. These identifiers select
+/// master-owned argv; they are never interpreted as executable names or shell
+/// input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureConveyorValidationCommandId {
+    RequirementsBinding,
+    Coverage,
+    FocusedUnitTests,
+    NativeE2e,
+    Documentation,
+    KnowledgeBase,
+    Formatting,
+    Lint,
+    Build,
+    Safety,
+    ChangedPaths,
+    SecretScan,
+    RepositoryValidation,
+}
+
+impl FeatureConveyorValidationCommandId {
+    pub const REQUIRED: [Self; MAX_FEATURE_CONVEYOR_VALIDATION_COMMANDS] = [
+        Self::RequirementsBinding,
+        Self::Coverage,
+        Self::FocusedUnitTests,
+        Self::NativeE2e,
+        Self::Documentation,
+        Self::KnowledgeBase,
+        Self::Formatting,
+        Self::Lint,
+        Self::Build,
+        Self::Safety,
+        Self::ChangedPaths,
+        Self::SecretScan,
+        Self::RepositoryValidation,
+    ];
+}
+
+pub fn feature_conveyor_validation_plan_sha256(
+    commands: &[FeatureConveyorValidationCommandId],
+) -> Result<[u8; 32], ProtocolError> {
+    validate_validation_command_ids(commands)?;
+    let value = serde_json::to_value(commands).map_err(|error| ProtocolError::Serialization {
+        field: "feature_conveyor_validation_plan",
+        message: error.to_string(),
+    })?;
+    let canonical = canonical_json_bytes(&value)?;
+    let mut digest = Sha256::new();
+    digest.update(b"assemblywright.validation-plan.v1\0");
+    digest.update((canonical.len() as u64).to_be_bytes());
+    digest.update(canonical);
+    Ok(digest.finalize().into())
+}
+
+fn validate_validation_command_ids(
+    commands: &[FeatureConveyorValidationCommandId],
+) -> Result<(), ProtocolError> {
+    if commands != FeatureConveyorValidationCommandId::REQUIRED {
+        return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorValidationGateRequest {
+    pub schema_version: u16,
+    pub validation_id: Uuid,
+    pub feature_id: Uuid,
+    pub specification_revision: u64,
+    pub expected_lifecycle_revision: u64,
+    pub feature_lease_id: Uuid,
+    pub snapshot_id: Uuid,
+    pub snapshot_sha256: [u8; 32],
+    pub integration_id: Uuid,
+    pub artifact_set_sha256: [u8; 32],
+    pub candidate_commit: String,
+    pub candidate_tree: String,
+    pub base_commit: String,
+    pub command_ids: Vec<FeatureConveyorValidationCommandId>,
+    pub plan_sha256: [u8; 32],
+    pub expected_queue_revision: u64,
+    pub expected_emergency_pause_revision: u64,
+    pub grants: FeatureConveyorGrantRevisions,
+}
+
+impl FeatureConveyorValidationGateRequest {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "feature_conveyor_validation_gate_request",
+            frame,
+            MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.schema_version != FEATURE_CONVEYOR_VALIDATION_GATE_SCHEMA_VERSION
+            || self.validation_id.is_nil()
+            || self.feature_id.is_nil()
+            || self.feature_lease_id.is_nil()
+            || self.snapshot_id.is_nil()
+            || self.integration_id.is_nil()
+            || self.specification_revision == 0
+            || self.expected_lifecycle_revision == 0
+            || self.snapshot_sha256 == [0; 32]
+            || self.artifact_set_sha256 == [0; 32]
+            || self.plan_sha256 == [0; 32]
+            || self.grants.registration == 0
+            || self.grants.cloud_disclosure == 0
+            || self.grants.autonomous_publication == 0
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        validate_validation_command_ids(&self.command_ids)?;
+        if feature_conveyor_validation_plan_sha256(&self.command_ids)? != self.plan_sha256 {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        validate_git_commit(&self.base_commit)?;
+        validate_git_commit(&self.candidate_commit)?;
+        validate_git_commit(&self.candidate_tree)?;
+        validate_serialized_limit(
+            "feature_conveyor_validation_gate_request",
+            self,
+            MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES,
+        )
+    }
+}
+
+pub fn feature_conveyor_validation_request_binding_sha256(
+    request: &FeatureConveyorValidationGateRequest,
+) -> Result<[u8; 32], ProtocolError> {
+    request.validate()?;
+    let value = serde_json::to_value(request).map_err(|error| ProtocolError::Serialization {
+        field: "feature_conveyor_validation_gate_request",
+        message: error.to_string(),
+    })?;
+    let canonical = canonical_json_bytes(&value)?;
+    let mut digest = Sha256::new();
+    digest.update(b"assemblywright.validation-request-binding.v1\0");
+    digest.update((canonical.len() as u64).to_be_bytes());
+    digest.update(canonical);
+    Ok(digest.finalize().into())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureConveyorValidationGateStatus {
+    EvidenceAccepted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorValidationGateReceipt {
+    pub schema_version: u16,
+    pub validation_id: Uuid,
+    pub feature_id: Uuid,
+    pub specification_revision: u64,
+    pub lifecycle_revision: u64,
+    pub feature_lease_id: Uuid,
+    pub integration_id: Uuid,
+    pub candidate_commit: String,
+    pub candidate_tree: String,
+    pub evidence_manifest_sha256: [u8; 32],
+    pub plan_sha256: [u8; 32],
+    pub queue_revision: u64,
+    pub emergency_pause_revision: u64,
+    pub grants: FeatureConveyorGrantRevisions,
+    pub status: FeatureConveyorValidationGateStatus,
+}
+
+impl FeatureConveyorValidationGateReceipt {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.schema_version != FEATURE_CONVEYOR_VALIDATION_GATE_SCHEMA_VERSION
+            || self.validation_id.is_nil()
+            || self.feature_id.is_nil()
+            || self.feature_lease_id.is_nil()
+            || self.integration_id.is_nil()
+            || self.specification_revision == 0
+            || self.lifecycle_revision == 0
+            || self.evidence_manifest_sha256 == [0; 32]
+            || self.plan_sha256 == [0; 32]
+            || self.grants.registration == 0
+            || self.grants.cloud_disclosure == 0
+            || self.grants.autonomous_publication == 0
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        validate_git_commit(&self.candidate_commit)?;
+        validate_git_commit(&self.candidate_tree)?;
+        validate_serialized_limit(
+            "feature_conveyor_validation_gate_receipt",
+            self,
+            MAX_FEATURE_CONVEYOR_OWNER_CONTROL_REQUEST_BYTES,
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FeatureConveyorArtifactIntegrationPlan {
