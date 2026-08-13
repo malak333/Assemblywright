@@ -10,23 +10,27 @@ use assemblywright_protocol::{
     FeatureConveyorArtifactIntegrationRequest, FeatureConveyorArtifactIntegrationStatus,
     FeatureConveyorCodingDispatchReceipt, FeatureConveyorCodingDispatchRequest,
     FeatureConveyorCodingDispatchStatus, FeatureConveyorCodingWorkPacketMetadata,
-    FeatureConveyorGrantRevisions, FeatureConveyorPublicationReceipt,
-    FeatureConveyorPublicationRequest, FeatureConveyorPublicationStatus,
-    FeatureConveyorRepositoryGrantSet, FeatureConveyorRepositoryGrantView,
-    FeatureConveyorReviewDecision, FeatureConveyorReviewGatewayReceipt,
-    FeatureConveyorReviewGatewayRequest, FeatureConveyorReviewGatewayStatus,
-    FeatureConveyorReviewPacket, FeatureConveyorReviewProviderOutput,
-    FeatureConveyorValidationCommandId, FeatureConveyorValidationGateReceipt,
-    FeatureConveyorValidationGateRequest, FeatureConveyorValidationGateStatus, HandshakeRequest,
-    HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope, JobResultStatus, LeaseId,
-    LocalCodingJobRequest, LocalCodingJobResult, LocalCodingResultArtifactAdmission,
-    LocalCodingResultArtifactReceipt, LocalCodingSnapshotChunkRequest, ProtocolError, Sensitivity,
-    StepId, TaskId, CANCELLATION_ACK_DEADLINE_MS, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+    FeatureConveyorGrantRevisions, FeatureConveyorOrchestrationAction,
+    FeatureConveyorOrchestrationPauseKind, FeatureConveyorOrchestrationProjection,
+    FeatureConveyorOrchestrationReason, FeatureConveyorOrchestrationStage,
+    FeatureConveyorPublicationReceipt, FeatureConveyorPublicationRequest,
+    FeatureConveyorPublicationStatus, FeatureConveyorRepositoryGrantSet,
+    FeatureConveyorRepositoryGrantView, FeatureConveyorReviewDecision,
+    FeatureConveyorReviewGatewayReceipt, FeatureConveyorReviewGatewayRequest,
+    FeatureConveyorReviewGatewayStatus, FeatureConveyorReviewPacket,
+    FeatureConveyorReviewProviderOutput, FeatureConveyorValidationCommandId,
+    FeatureConveyorValidationGateReceipt, FeatureConveyorValidationGateRequest,
+    FeatureConveyorValidationGateStatus, HandshakeRequest, HandshakeResponse, HandshakeStatus,
+    JobEnvelope, JobResultEnvelope, JobResultStatus, LeaseId, LocalCodingJobRequest,
+    LocalCodingJobResult, LocalCodingResultArtifactAdmission, LocalCodingResultArtifactReceipt,
+    LocalCodingSnapshotChunkRequest, ProtocolError, Sensitivity, StepId, TaskId,
+    CANCELLATION_ACK_DEADLINE_MS, FEATURE_CONVEYOR_ORCHESTRATION_SCHEMA_VERSION,
+    FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
     FEATURE_CONVEYOR_PUBLICATION_COORDINATOR_SCHEMA_VERSION, FEATURE_CONVEYOR_REVIEW_BACKOFF_MS,
     FEATURE_CONVEYOR_REVIEW_GATEWAY_SCHEMA_VERSION,
     FEATURE_CONVEYOR_VALIDATION_GATE_SCHEMA_VERSION, FIXTURE_REASONING_CAPABILITY_ID,
-    LOCAL_CODING_CAPABILITY_ID, MAX_CAPABILITY_ID_BYTES,
-    MAX_FEATURE_CONVEYOR_REVIEW_CALLS_PER_FEATURE,
+    LOCAL_CODING_CAPABILITY_ID, MAX_CAPABILITY_ID_BYTES, MAX_FEATURE_CONVEYOR_ACTIVE_PROCESSING_MS,
+    MAX_FEATURE_CONVEYOR_REPLACEMENT_CANDIDATES, MAX_FEATURE_CONVEYOR_REVIEW_CALLS_PER_FEATURE,
     MAX_FEATURE_CONVEYOR_REVIEW_REQUIREMENT_COVERAGE,
     MAX_FEATURE_CONVEYOR_REVIEW_TRANSPORT_ATTEMPTS_PER_CANDIDATE, MAX_JOB_CONTEXT_BYTES,
     MAX_LEASE_DURATION_MS, MAX_STEP_DEADLINE_MS, MLX_REASONING_CAPABILITY_ID, PROTOCOL_VERSION,
@@ -85,13 +89,13 @@ pub use identity::{
     SERVER_CERTIFICATE_LIFETIME_MS,
 };
 
-pub const MASTER_SCHEMA_VERSION: i64 = 17;
+pub const MASTER_SCHEMA_VERSION: i64 = 18;
 pub const MAX_QUEUED_OR_LEASED_STEPS: u64 = 256;
 pub const MAX_CONCURRENT_JOBS: u64 = 4;
 pub const MAX_CONVEYOR_NONTERMINAL_FEATURES: u64 = 100;
 pub const MAX_CONVEYOR_STATUS_FEATURES: usize = 100;
 pub const MAX_APPROVED_FEATURE_SPECIFICATION_BYTES: usize = 256 * 1024;
-pub const FEATURE_CONVEYOR_STATUS_SCHEMA_VERSION: i64 = 8;
+pub const FEATURE_CONVEYOR_STATUS_SCHEMA_VERSION: i64 = 9;
 pub const MAX_RETAINED_CODING_WORKSPACE_MS: u64 = 60 * 60 * 1000;
 
 const REASON_UNKNOWN_DEVICE: &str = "unknown_device";
@@ -122,6 +126,10 @@ const FEATURE_CONVEYOR_STATUS_COUNTS_SQL: &str = "
       COALESCE(SUM(CASE WHEN status = 'reviewing' THEN 1 ELSE 0 END), 0),
       COALESCE(SUM(CASE WHEN status = 'publishing' THEN 1 ELSE 0 END), 0),
       COALESCE(SUM(CASE WHEN status = 'verifying_main' THEN 1 ELSE 0 END), 0),
+      COALESCE(SUM(CASE WHEN status = 'repairing' THEN 1 ELSE 0 END), 0),
+      COALESCE(SUM(CASE WHEN status = 'paused' THEN 1 ELSE 0 END), 0),
+      COALESCE(SUM(CASE WHEN status = 'attention_required' THEN 1 ELSE 0 END), 0),
+      COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0),
       COALESCE(SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END), 0),
       COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END), 0),
       COALESCE(SUM(CASE WHEN status = 'abandoned' THEN 1 ELSE 0 END), 0),
@@ -302,6 +310,14 @@ pub enum MasterError {
     PublicationCoordinatorUnavailable,
     #[error("a publication effect is ambiguous and requires reconciliation")]
     PublicationEffectAmbiguous,
+    #[error(
+        "feature orchestration is inactive until separately activated with durable owner evidence"
+    )]
+    OrchestrationInactive,
+    #[error("feature orchestration revision is stale: expected {expected}, found {found}")]
+    StaleOrchestrationRevision { expected: u64, found: u64 },
+    #[error("the orchestration checkpoint is effect-possible and must be quarantined")]
+    OrchestrationEffectAmbiguous,
     #[error("feature coding work must be terminal before lifecycle advancement")]
     FeatureCodingWorkOutstanding,
     #[error(
@@ -620,6 +636,10 @@ pub enum FeatureLifecycleStatus {
     Reviewing,
     Publishing,
     VerifyingMain,
+    Repairing,
+    Paused,
+    AttentionRequired,
+    Failed,
     Succeeded,
     Cancelled,
     Abandoned,
@@ -635,6 +655,10 @@ impl FeatureLifecycleStatus {
             Self::Reviewing => "reviewing",
             Self::Publishing => "publishing",
             Self::VerifyingMain => "verifying_main",
+            Self::Repairing => "repairing",
+            Self::Paused => "paused",
+            Self::AttentionRequired => "attention_required",
+            Self::Failed => "failed",
             Self::Succeeded => "succeeded",
             Self::Cancelled => "cancelled",
             Self::Abandoned => "abandoned",
@@ -650,6 +674,10 @@ impl FeatureLifecycleStatus {
             "reviewing" => Ok(Self::Reviewing),
             "publishing" => Ok(Self::Publishing),
             "verifying_main" => Ok(Self::VerifyingMain),
+            "repairing" => Ok(Self::Repairing),
+            "paused" => Ok(Self::Paused),
+            "attention_required" => Ok(Self::AttentionRequired),
+            "failed" => Ok(Self::Failed),
             "succeeded" => Ok(Self::Succeeded),
             "cancelled" => Ok(Self::Cancelled),
             "abandoned" => Ok(Self::Abandoned),
@@ -668,6 +696,8 @@ impl FeatureLifecycleStatus {
                 | Self::Reviewing
                 | Self::Publishing
                 | Self::VerifyingMain
+                | Self::Repairing
+                | Self::Paused
         )
     }
 }
@@ -715,6 +745,10 @@ pub struct FeatureConveyorStatusCounts {
     pub reviewing: u64,
     pub publishing: u64,
     pub verifying_main: u64,
+    pub repairing: u64,
+    pub paused: u64,
+    pub attention_required: u64,
+    pub failed: u64,
     pub succeeded: u64,
     pub cancelled: u64,
     pub abandoned: u64,
@@ -912,6 +946,17 @@ pub struct PublicationExecutionPlan {
 pub enum PublicationAuthorization {
     Existing(Box<FeatureConveyorPublicationReceipt>),
     Planned(Box<PublicationExecutionPlan>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DerivedOrchestrationDecision {
+    stage: FeatureConveyorOrchestrationStage,
+    action: FeatureConveyorOrchestrationAction,
+    reason: FeatureConveyorOrchestrationReason,
+    pause_kind: Option<FeatureConveyorOrchestrationPauseKind>,
+    next_retry_at_ms: Option<u64>,
+    evidence_sha256: Option<[u8; 32]>,
+    effect_possible: bool,
 }
 
 pub fn publication_branch_policy_sha256(
@@ -1216,6 +1261,78 @@ impl MasterKernel {
         let was_paused = emergency_paused_tx(&tx)?;
         if paused && !was_paused {
             request_active_remote_work_cancellations_tx(&tx, now_ms)?;
+            let active_clock = tx
+                .query_row(
+                    "SELECT s.feature_id,s.orchestration_revision,
+                            s.active_processing_ms,s.clock_started_at_ms
+                     FROM feature_orchestration_state s
+                     JOIN feature_active_lease l ON l.feature_id=s.feature_id
+                     WHERE l.singleton=1 AND s.clock_started_at_ms IS NOT NULL",
+                    [],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, i64>(2)?,
+                            row.get::<_, i64>(3)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            if let Some((feature_id, orchestration_revision, active_ms, clock_started_at_ms)) =
+                active_clock
+            {
+                let feature_id = parse_uuid(&feature_id)?;
+                let orchestration_revision = i64_to_u64(orchestration_revision)?;
+                let active_ms = i64_to_u64(active_ms)?;
+                if active_ms > MAX_FEATURE_CONVEYOR_ACTIVE_PROCESSING_MS {
+                    return Err(MasterError::InvalidStoredState(
+                        "orchestration active-processing budget is invalid".to_string(),
+                    ));
+                }
+                let clock_started_at_ms = i64_to_u64(clock_started_at_ms)?;
+                let elapsed_ms = now_ms.saturating_sub(clock_started_at_ms);
+                let charged_ms = active_ms
+                    .saturating_add(elapsed_ms)
+                    .min(MAX_FEATURE_CONVEYOR_ACTIVE_PROCESSING_MS);
+                let charged_interval_ms = charged_ms.saturating_sub(active_ms);
+                if tx.execute(
+                    "UPDATE feature_orchestration_state
+                     SET active_processing_ms=?1,clock_started_at_ms=NULL,updated_at_ms=?2
+                     WHERE feature_id=?3 AND orchestration_revision=?4
+                       AND active_processing_ms=?5 AND clock_started_at_ms=?6",
+                    params![
+                        u64_to_i64(charged_ms)?,
+                        u64_to_i64(now_ms)?,
+                        feature_id.to_string(),
+                        u64_to_i64(orchestration_revision)?,
+                        u64_to_i64(active_ms)?,
+                        u64_to_i64(clock_started_at_ms)?,
+                    ],
+                )? != 1
+                {
+                    return Err(MasterError::InvalidStoredState(
+                        "orchestration clock changed during emergency pause".to_string(),
+                    ));
+                }
+                append_feature_audit_tx(
+                    &tx,
+                    "feature_orchestration_clock_suspended",
+                    Some(feature_id),
+                    now_ms,
+                    serde_json::json!({
+                        "orchestration_revision": orchestration_revision,
+                        "elapsed_charged_ms": charged_interval_ms,
+                        "active_processing_ms": charged_ms,
+                        "active_processing_budget_ms":
+                            MAX_FEATURE_CONVEYOR_ACTIVE_PROCESSING_MS,
+                        "clock_suspended": true,
+                        "emergency_pause": true,
+                        "effect_possible": false,
+                        "side_effect_executed": false
+                    }),
+                )?;
+            }
         }
         let changed = tx.execute(
             "UPDATE master_metadata SET integer_value = ?1\n\
@@ -2936,6 +3053,10 @@ impl MasterKernel {
                     row.get::<_, i64>(8)?,
                     row.get::<_, i64>(9)?,
                     row.get::<_, i64>(10)?,
+                    row.get::<_, i64>(11)?,
+                    row.get::<_, i64>(12)?,
+                    row.get::<_, i64>(13)?,
+                    row.get::<_, i64>(14)?,
                 ))
             })?;
         let visible_feature_count = i64_to_u64(counts.0)?;
@@ -2946,10 +3067,14 @@ impl MasterKernel {
             reviewing: i64_to_u64(counts.4)?,
             publishing: i64_to_u64(counts.5)?,
             verifying_main: i64_to_u64(counts.6)?,
-            succeeded: i64_to_u64(counts.7)?,
-            cancelled: i64_to_u64(counts.8)?,
-            abandoned: i64_to_u64(counts.9)?,
-            quarantined: i64_to_u64(counts.10)?,
+            repairing: i64_to_u64(counts.7)?,
+            paused: i64_to_u64(counts.8)?,
+            attention_required: i64_to_u64(counts.9)?,
+            failed: i64_to_u64(counts.10)?,
+            succeeded: i64_to_u64(counts.11)?,
+            cancelled: i64_to_u64(counts.12)?,
+            abandoned: i64_to_u64(counts.13)?,
+            quarantined: i64_to_u64(counts.14)?,
         };
         let mut statement = self
             .connection
@@ -3002,6 +3127,296 @@ impl MasterKernel {
         })
     }
 
+    /// Advances only the master-owned orchestration ledger. No route exposes
+    /// this coordinator in schema v18, and the activation table has no writer
+    /// in this slice. Future owner activation must durably populate that table
+    /// before this method can initialize or mutate a feature checkpoint.
+    pub fn coordinate_feature_orchestration(
+        &mut self,
+        feature_id: Uuid,
+        expected_orchestration_revision: u64,
+        now_ms: u64,
+    ) -> Result<FeatureConveyorOrchestrationProjection, MasterError> {
+        if feature_id.is_nil() || now_ms == 0 {
+            return Err(MasterError::InvalidFeatureConveyorInput(
+                "orchestration requires a non-nil feature and positive time".to_string(),
+            ));
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // Emergency pause dominates every orchestration concern, including
+        // activation, lease lookup, CAS validation, and active-time accounting.
+        // Returning from the open transaction leaves no checkpoint or audit.
+        if emergency_paused_tx(&tx)? {
+            return Err(MasterError::EmergencyPaused);
+        }
+        let activated: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM feature_orchestration_activation WHERE singleton=1)",
+            [],
+            |row| row.get(0),
+        )?;
+        if !activated {
+            return Err(MasterError::OrchestrationInactive);
+        }
+        require_active_lease_tx(&tx, feature_id)?;
+        let (current_status, mut lifecycle_revision) =
+            feature_status_and_revision_tx(&tx, feature_id)?;
+        // Owner resolution states are immutable to automatic coordination.
+        // In particular, cancellation must remain available for the owner's
+        // explicit reconciliation and abandonment action.
+        if matches!(
+            current_status,
+            FeatureLifecycleStatus::Cancelled
+                | FeatureLifecycleStatus::AttentionRequired
+                | FeatureLifecycleStatus::Abandoned
+                | FeatureLifecycleStatus::Succeeded
+                | FeatureLifecycleStatus::Failed
+        ) {
+            return Err(MasterError::InvalidFeatureTransition);
+        }
+        let existing = load_orchestration_state_tx(&tx, feature_id)?;
+        let current_revision = existing
+            .as_ref()
+            .map(|state| state.orchestration_revision)
+            .unwrap_or(0);
+        if current_revision != expected_orchestration_revision {
+            return Err(MasterError::StaleOrchestrationRevision {
+                expected: expected_orchestration_revision,
+                found: current_revision,
+            });
+        }
+
+        let mut active_processing_ms = existing
+            .as_ref()
+            .map(|state| state.active_processing_ms)
+            .unwrap_or(0);
+        let clock_started_at_ms = existing
+            .as_ref()
+            .and_then(|state| state.clock_started_at_ms);
+        let elapsed = clock_started_at_ms
+            .map(|started| now_ms.saturating_sub(started))
+            .unwrap_or(0);
+        let charged_active_processing_ms = active_processing_ms.saturating_add(elapsed);
+        let budget_exhausted =
+            charged_active_processing_ms >= MAX_FEATURE_CONVEYOR_ACTIVE_PROCESSING_MS;
+        if budget_exhausted {
+            active_processing_ms = MAX_FEATURE_CONVEYOR_ACTIVE_PROCESSING_MS;
+        } else if existing.is_none() {
+            active_processing_ms = 0;
+        }
+
+        let mut decision = derive_orchestration_decision_tx(
+            &tx,
+            feature_id,
+            current_status,
+            existing.as_ref(),
+            now_ms,
+        )?;
+        if budget_exhausted
+            && !matches!(
+                decision.stage,
+                FeatureConveyorOrchestrationStage::Succeeded
+                    | FeatureConveyorOrchestrationStage::Quarantined
+                    | FeatureConveyorOrchestrationStage::Failed
+            )
+        {
+            decision = DerivedOrchestrationDecision {
+                stage: FeatureConveyorOrchestrationStage::AttentionRequired,
+                action: FeatureConveyorOrchestrationAction::OwnerAttentionRequired,
+                reason: FeatureConveyorOrchestrationReason::ActiveProcessingBudgetExhausted,
+                pause_kind: None,
+                next_retry_at_ms: None,
+                evidence_sha256: None,
+                effect_possible: false,
+            };
+        }
+
+        let starts_clock = !matches!(
+            decision.stage,
+            FeatureConveyorOrchestrationStage::Paused
+                | FeatureConveyorOrchestrationStage::AttentionRequired
+                | FeatureConveyorOrchestrationStage::Failed
+                | FeatureConveyorOrchestrationStage::Succeeded
+                | FeatureConveyorOrchestrationStage::Quarantined
+        );
+
+        if let Some(existing) = existing.as_ref() {
+            let checkpoint = load_orchestration_checkpoint_tx(&tx, existing.checkpoint_id)?;
+            if checkpoint.stage == decision.stage
+                && checkpoint.action == decision.action
+                && checkpoint.reason == decision.reason
+                && existing.pause_kind == decision.pause_kind
+                && existing.next_retry_at_ms == decision.next_retry_at_ms
+                && elapsed == 0
+                && (!starts_clock || existing.clock_started_at_ms.is_some())
+            {
+                let projection = orchestration_projection(feature_id, existing, &checkpoint);
+                projection.validate()?;
+                tx.commit()?;
+                return Ok(projection);
+            }
+        }
+
+        let target_status = lifecycle_status_for_orchestration_stage(decision.stage);
+        if target_status != current_status {
+            let next_lifecycle_revision = lifecycle_revision
+                .checked_add(1)
+                .ok_or_else(|| MasterError::InvalidStoredState("lifecycle overflow".to_string()))?;
+            if tx.execute(
+                "UPDATE feature_conveyor_features SET status=?1,lifecycle_revision=?2,
+                   effect_possible=?3,updated_at_ms=?4
+                 WHERE feature_id=?5 AND status=?6 AND lifecycle_revision=?7",
+                params![
+                    target_status.as_str(),
+                    u64_to_i64(next_lifecycle_revision)?,
+                    i64::from(decision.effect_possible),
+                    u64_to_i64(now_ms)?,
+                    feature_id.to_string(),
+                    current_status.as_str(),
+                    u64_to_i64(lifecycle_revision)?,
+                ],
+            )? != 1
+            {
+                return Err(MasterError::InvalidFeatureTransition);
+            }
+            tx.execute(
+                "INSERT INTO feature_transition_evidence(
+                   feature_id,lifecycle_revision,from_status,to_status,accepted_evidence_sha256,
+                   recorded_at_ms
+                 ) VALUES(?1,?2,?3,?4,?5,?6)",
+                params![
+                    feature_id.to_string(),
+                    u64_to_i64(next_lifecycle_revision)?,
+                    current_status.as_str(),
+                    target_status.as_str(),
+                    decision
+                        .evidence_sha256
+                        .as_ref()
+                        .map(|digest| digest.as_slice()),
+                    u64_to_i64(now_ms)?,
+                ],
+            )?;
+            lifecycle_revision = next_lifecycle_revision;
+        }
+
+        let replacement_candidates_used = existing
+            .as_ref()
+            .map(|state| state.replacement_candidates_used)
+            .unwrap_or(0);
+        if replacement_candidates_used > MAX_FEATURE_CONVEYOR_REPLACEMENT_CANDIDATES {
+            return Err(MasterError::InvalidStoredState(
+                "orchestration repair budget exceeds protocol maximum".to_string(),
+            ));
+        }
+        if existing.is_some() && !budget_exhausted {
+            active_processing_ms = charged_active_processing_ms;
+        }
+        let orchestration_revision = current_revision
+            .checked_add(1)
+            .ok_or_else(|| MasterError::InvalidStoredState("orchestration overflow".to_string()))?;
+        let checkpoint_sha256 = orchestration_checkpoint_sha256(
+            feature_id,
+            orchestration_revision,
+            lifecycle_revision,
+            decision,
+            replacement_candidates_used,
+            active_processing_ms,
+        );
+        let checkpoint_id = orchestration_checkpoint_id(checkpoint_sha256);
+        let resume_stage = if decision.stage == FeatureConveyorOrchestrationStage::Paused {
+            Some(orchestration_stage_for_lifecycle_status(current_status))
+        } else {
+            None
+        };
+        tx.execute(
+            "INSERT INTO feature_orchestration_checkpoints(
+               checkpoint_id,feature_id,orchestration_revision,lifecycle_revision,stage,action,
+               reason,checkpoint_sha256,evidence_sha256,replacement_candidates_used,
+               active_processing_ms,effect_possible,recorded_at_ms
+             ) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+            params![
+                checkpoint_id.to_string(),
+                feature_id.to_string(),
+                u64_to_i64(orchestration_revision)?,
+                u64_to_i64(lifecycle_revision)?,
+                orchestration_stage_str(decision.stage),
+                orchestration_action_str(decision.action),
+                orchestration_reason_str(decision.reason),
+                checkpoint_sha256.as_slice(),
+                decision
+                    .evidence_sha256
+                    .as_ref()
+                    .map(|digest| digest.as_slice()),
+                i64::from(replacement_candidates_used),
+                u64_to_i64(active_processing_ms)?,
+                i64::from(decision.effect_possible),
+                u64_to_i64(now_ms)?,
+            ],
+        )?;
+        tx.execute(
+            "INSERT INTO feature_orchestration_state(
+               feature_id,orchestration_revision,checkpoint_id,stage,resume_stage,pause_kind,
+               replacement_candidates_used,active_processing_ms,clock_started_at_ms,
+               next_retry_at_ms,effect_possible,updated_at_ms
+             ) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
+             ON CONFLICT(feature_id) DO UPDATE SET
+               orchestration_revision=excluded.orchestration_revision,
+               checkpoint_id=excluded.checkpoint_id,stage=excluded.stage,
+               resume_stage=excluded.resume_stage,pause_kind=excluded.pause_kind,
+               replacement_candidates_used=excluded.replacement_candidates_used,
+               active_processing_ms=excluded.active_processing_ms,
+               clock_started_at_ms=excluded.clock_started_at_ms,
+               next_retry_at_ms=excluded.next_retry_at_ms,
+               effect_possible=excluded.effect_possible,updated_at_ms=excluded.updated_at_ms
+             WHERE feature_orchestration_state.orchestration_revision=?13",
+            params![
+                feature_id.to_string(),
+                u64_to_i64(orchestration_revision)?,
+                checkpoint_id.to_string(),
+                orchestration_stage_str(decision.stage),
+                resume_stage.map(orchestration_stage_str),
+                decision.pause_kind.map(orchestration_pause_kind_str),
+                i64::from(replacement_candidates_used),
+                u64_to_i64(active_processing_ms)?,
+                starts_clock.then_some(u64_to_i64(now_ms)?),
+                decision.next_retry_at_ms.map(u64_to_i64).transpose()?,
+                i64::from(decision.effect_possible),
+                u64_to_i64(now_ms)?,
+                u64_to_i64(current_revision)?,
+            ],
+        )?;
+        append_feature_audit_tx(
+            &tx,
+            "feature_orchestration_checkpointed",
+            Some(feature_id),
+            now_ms,
+            serde_json::json!({
+                "orchestration_revision": orchestration_revision,
+                "lifecycle_revision": lifecycle_revision,
+                "stage": orchestration_stage_str(decision.stage),
+                "action": orchestration_action_str(decision.action),
+                "reason": orchestration_reason_str(decision.reason),
+                "checkpoint_digest_present": true,
+                "evidence_digest_present": decision.evidence_sha256.is_some(),
+                "replacement_candidates_used": replacement_candidates_used,
+                "active_processing_ms": active_processing_ms,
+                "active_processing_budget_ms": MAX_FEATURE_CONVEYOR_ACTIVE_PROCESSING_MS,
+                "effect_possible": decision.effect_possible,
+                "automatic_lease_release": false,
+                "side_effect_executed": false
+            }),
+        )?;
+        let state = load_orchestration_state_tx(&tx, feature_id)?.ok_or_else(|| {
+            MasterError::InvalidStoredState("orchestration state was not stored".to_string())
+        })?;
+        let checkpoint = load_orchestration_checkpoint_tx(&tx, checkpoint_id)?;
+        let projection = orchestration_projection(feature_id, &state, &checkpoint);
+        projection.validate()?;
+        tx.commit()?;
+        Ok(projection)
+    }
+
     fn feature_conveyor_owner_guidance(
         &self,
         queue_revision: u64,
@@ -3043,7 +3458,10 @@ impl MasterKernel {
         if let Some((feature_id, specification_revision, lifecycle_revision, status)) = active {
             let status = FeatureLifecycleStatus::parse(&status)?;
             let (state, reason_code, next_owner_action) = match status {
-                FeatureLifecycleStatus::Cancelled | FeatureLifecycleStatus::Quarantined => (
+                FeatureLifecycleStatus::Cancelled
+                | FeatureLifecycleStatus::AttentionRequired
+                | FeatureLifecycleStatus::Failed
+                | FeatureLifecycleStatus::Quarantined => (
                     FeatureConveyorGuidanceState::Blocked,
                     FeatureConveyorGuidanceReason::ActiveRequiresReconciliation,
                     FeatureConveyorNextOwnerAction::ReconcileActiveFeature,
@@ -4220,7 +4638,10 @@ impl MasterKernel {
         }
         if !matches!(
             status,
-            FeatureLifecycleStatus::Cancelled | FeatureLifecycleStatus::Quarantined
+            FeatureLifecycleStatus::Cancelled
+                | FeatureLifecycleStatus::Quarantined
+                | FeatureLifecycleStatus::AttentionRequired
+                | FeatureLifecycleStatus::Failed
         ) {
             return Err(MasterError::InvalidFeatureTransition);
         }
@@ -6760,6 +7181,126 @@ impl MasterKernel {
             )?;
         }
         let version = self.schema_version()?;
+        if version == 17 {
+            self.connection.execute_batch(
+                "PRAGMA foreign_keys=OFF;
+                 PRAGMA legacy_alter_table=ON;
+                 BEGIN IMMEDIATE;
+                 ALTER TABLE feature_conveyor_features RENAME TO feature_conveyor_features_v17;
+                 CREATE TABLE feature_conveyor_features (
+                   feature_id TEXT PRIMARY KEY NOT NULL,
+                   current_specification_revision INTEGER NOT NULL
+                     CHECK(current_specification_revision>0),
+                   status TEXT NOT NULL CHECK(status IN(
+                     'queued','implementing','validating','reviewing','publishing',
+                     'verifying_main','repairing','paused','attention_required',
+                     'failed','succeeded','cancelled','abandoned','quarantined'
+                   )),
+                   lifecycle_revision INTEGER NOT NULL CHECK(lifecycle_revision>0),
+                   queue_position INTEGER NOT NULL CHECK(queue_position>0),
+                   effect_possible INTEGER NOT NULL CHECK(effect_possible IN(0,1)),
+                   created_at_ms INTEGER NOT NULL CHECK(created_at_ms>=0),
+                   updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms>=created_at_ms),
+                   FOREIGN KEY(feature_id,current_specification_revision)
+                     REFERENCES feature_specification_revisions(feature_id,revision)
+                 );
+                 INSERT INTO feature_conveyor_features
+                   SELECT * FROM feature_conveyor_features_v17;
+                 DROP TABLE feature_conveyor_features_v17;
+                 CREATE INDEX feature_conveyor_features_status_idx
+                   ON feature_conveyor_features(status,queue_position);
+                 DROP TRIGGER IF EXISTS feature_orchestration_checkpoints_no_delete;
+                 DROP TRIGGER IF EXISTS feature_orchestration_checkpoints_no_update;
+                 DROP TRIGGER IF EXISTS feature_orchestration_activation_no_delete;
+                 DROP TRIGGER IF EXISTS feature_orchestration_activation_no_update;
+                 DROP TABLE IF EXISTS feature_orchestration_checkpoints;
+                 DROP TABLE IF EXISTS feature_orchestration_state;
+                 DROP TABLE IF EXISTS feature_orchestration_activation;
+                 CREATE TABLE feature_orchestration_activation (
+                   singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton=1),
+                   activation_id TEXT NOT NULL UNIQUE,
+                   owner_evidence_sha256 BLOB NOT NULL CHECK(length(owner_evidence_sha256)=32),
+                   live_evidence_sha256 BLOB NOT NULL CHECK(length(live_evidence_sha256)=32),
+                   activated_at_ms INTEGER NOT NULL CHECK(activated_at_ms>0)
+                 );
+                 CREATE TRIGGER feature_orchestration_activation_no_update
+                   BEFORE UPDATE ON feature_orchestration_activation
+                   BEGIN SELECT RAISE(ABORT,'immutable orchestration activation'); END;
+                 CREATE TRIGGER feature_orchestration_activation_no_delete
+                   BEFORE DELETE ON feature_orchestration_activation
+                   BEGIN SELECT RAISE(ABORT,'durable orchestration activation'); END;
+                 CREATE TABLE feature_orchestration_state (
+                   feature_id TEXT PRIMARY KEY NOT NULL REFERENCES feature_conveyor_features(feature_id),
+                   orchestration_revision INTEGER NOT NULL CHECK(orchestration_revision>0),
+                   checkpoint_id TEXT NOT NULL UNIQUE,
+                   stage TEXT NOT NULL CHECK(stage IN(
+                     'implementing','validating','reviewing','publishing','verifying_main',
+                     'repairing','paused','attention_required','failed','succeeded','quarantined'
+                   )),
+                   resume_stage TEXT CHECK(resume_stage IS NULL OR resume_stage IN(
+                     'implementing','validating','reviewing','publishing','verifying_main','repairing'
+                   )),
+                   pause_kind TEXT CHECK(pause_kind IS NULL OR pause_kind IN(
+                     'provider','worker','maintenance','owner'
+                   )),
+                   replacement_candidates_used INTEGER NOT NULL
+                     CHECK(replacement_candidates_used BETWEEN 0 AND 3),
+                   active_processing_ms INTEGER NOT NULL
+                     CHECK(active_processing_ms BETWEEN 0 AND 86400000),
+                   clock_started_at_ms INTEGER CHECK(clock_started_at_ms IS NULL OR clock_started_at_ms>0),
+                   next_retry_at_ms INTEGER CHECK(next_retry_at_ms IS NULL OR next_retry_at_ms>0),
+                   effect_possible INTEGER NOT NULL CHECK(effect_possible IN(0,1)),
+                   updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms>0),
+                   CHECK((stage='paused')=(pause_kind IS NOT NULL)),
+                   CHECK((stage='paused')=(resume_stage IS NOT NULL)),
+                   CHECK(stage='paused' OR next_retry_at_ms IS NULL)
+                 );
+                 CREATE TABLE feature_orchestration_checkpoints (
+                   checkpoint_id TEXT PRIMARY KEY NOT NULL,
+                   feature_id TEXT NOT NULL REFERENCES feature_conveyor_features(feature_id),
+                   orchestration_revision INTEGER NOT NULL CHECK(orchestration_revision>0),
+                   lifecycle_revision INTEGER NOT NULL CHECK(lifecycle_revision>0),
+                   stage TEXT NOT NULL CHECK(stage IN(
+                     'implementing','validating','reviewing','publishing','verifying_main',
+                     'repairing','paused','attention_required','failed','succeeded','quarantined'
+                   )),
+                   action TEXT NOT NULL CHECK(length(action) BETWEEN 3 AND 64),
+                   reason TEXT NOT NULL CHECK(length(reason) BETWEEN 3 AND 64),
+                   checkpoint_sha256 BLOB NOT NULL UNIQUE CHECK(length(checkpoint_sha256)=32),
+                   evidence_sha256 BLOB CHECK(evidence_sha256 IS NULL OR length(evidence_sha256)=32),
+                   replacement_candidates_used INTEGER NOT NULL
+                     CHECK(replacement_candidates_used BETWEEN 0 AND 3),
+                   active_processing_ms INTEGER NOT NULL
+                     CHECK(active_processing_ms BETWEEN 0 AND 86400000),
+                   effect_possible INTEGER NOT NULL CHECK(effect_possible IN(0,1)),
+                   recorded_at_ms INTEGER NOT NULL CHECK(recorded_at_ms>0),
+                   UNIQUE(feature_id,orchestration_revision)
+                 );
+                 CREATE TRIGGER feature_orchestration_checkpoints_no_update
+                   BEFORE UPDATE ON feature_orchestration_checkpoints
+                   BEGIN SELECT RAISE(ABORT,'immutable orchestration checkpoint'); END;
+                 CREATE TRIGGER feature_orchestration_checkpoints_no_delete
+                   BEFORE DELETE ON feature_orchestration_checkpoints
+                   BEGIN SELECT RAISE(ABORT,'durable orchestration checkpoint'); END;
+                 CREATE INDEX feature_orchestration_checkpoints_feature_idx
+                   ON feature_orchestration_checkpoints(feature_id,orchestration_revision);
+                 PRAGMA user_version=18;
+                 COMMIT;
+                 PRAGMA legacy_alter_table=OFF;
+                 PRAGMA foreign_keys=ON;"
+            )?;
+            let violations: i64 = self.connection.query_row(
+                "SELECT COUNT(*) FROM pragma_foreign_key_check",
+                [],
+                |row| row.get(0),
+            )?;
+            if violations != 0 {
+                return Err(MasterError::InvalidStoredState(
+                    "schema-v18 migration produced foreign-key violations".to_string(),
+                ));
+            }
+        }
+        let version = self.schema_version()?;
         if version != MASTER_SCHEMA_VERSION {
             return Err(MasterError::UnsupportedSchemaVersion {
                 expected: MASTER_SCHEMA_VERSION,
@@ -6792,7 +7333,14 @@ impl MasterKernel {
         let mut quarantined = 0;
         if let Some((feature_id, status, revision)) = active {
             let status = FeatureLifecycleStatus::parse(&status)?;
-            if status.is_active_execution() {
+            let feature_uuid = parse_uuid(&feature_id)?;
+            let resumable = status == FeatureLifecycleStatus::Paused
+                && orchestration_paused_checkpoint_is_restart_safe_tx(
+                    &tx,
+                    feature_uuid,
+                    i64_to_u64(revision)?,
+                )?;
+            if status.is_active_execution() && !resumable {
                 let changed = tx.execute(
                     "UPDATE feature_conveyor_features
                      SET status = 'quarantined',
@@ -6821,7 +7369,7 @@ impl MasterKernel {
                 append_feature_audit_tx(
                     &tx,
                     "feature_startup_quarantined",
-                    Some(parse_uuid(&feature_id)?),
+                    Some(feature_uuid),
                     now_ms,
                     serde_json::json!({
                         "from_status": status.as_str(),
@@ -9085,7 +9633,10 @@ fn backfill_legacy_feature_resolution_evidence_tx(tx: &Transaction<'_>) -> Resul
     let status = FeatureLifecycleStatus::parse(&status)?;
     if !matches!(
         status,
-        FeatureLifecycleStatus::Cancelled | FeatureLifecycleStatus::Quarantined
+        FeatureLifecycleStatus::Cancelled
+            | FeatureLifecycleStatus::Quarantined
+            | FeatureLifecycleStatus::AttentionRequired
+            | FeatureLifecycleStatus::Failed
     ) {
         return Ok(());
     }
@@ -9102,6 +9653,18 @@ fn backfill_legacy_feature_resolution_evidence_tx(tx: &Transaction<'_>) -> Resul
     if receipt_exists {
         feature_resolution_origin_tx(tx, feature_uuid, status, lifecycle_revision)?;
         return Ok(());
+    }
+
+    // Attention/failure were introduced with immutable transition evidence.
+    // There is no legacy audit shape from which an exact origin can safely be
+    // inferred, so a missing receipt is corruption rather than a backfill.
+    if matches!(
+        status,
+        FeatureLifecycleStatus::AttentionRequired | FeatureLifecycleStatus::Failed
+    ) {
+        return Err(MasterError::InvalidStoredState(
+            "feature resolution transition evidence is missing".to_string(),
+        ));
     }
 
     let event_kind = match status {
@@ -9227,7 +9790,13 @@ fn feature_resolution_origin_tx(
             )
         })?;
     let from_status = FeatureLifecycleStatus::parse(&evidence.0)?;
-    if evidence.1 != resolution_status.as_str()
+    if !matches!(
+        resolution_status,
+        FeatureLifecycleStatus::Cancelled
+            | FeatureLifecycleStatus::Quarantined
+            | FeatureLifecycleStatus::AttentionRequired
+            | FeatureLifecycleStatus::Failed
+    ) || evidence.1 != resolution_status.as_str()
         || !from_status.is_active_execution()
         || evidence.2.is_some()
         || evidence.3.is_some()
@@ -10198,6 +10767,737 @@ fn review_gateway_plan_tx(
         candidate_attempt,
         feature_call,
     })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StoredOrchestrationState {
+    orchestration_revision: u64,
+    checkpoint_id: Uuid,
+    stage: FeatureConveyorOrchestrationStage,
+    resume_stage: Option<FeatureConveyorOrchestrationStage>,
+    pause_kind: Option<FeatureConveyorOrchestrationPauseKind>,
+    replacement_candidates_used: u8,
+    active_processing_ms: u64,
+    clock_started_at_ms: Option<u64>,
+    next_retry_at_ms: Option<u64>,
+    effect_possible: bool,
+}
+
+fn orchestration_stage_str(stage: FeatureConveyorOrchestrationStage) -> &'static str {
+    match stage {
+        FeatureConveyorOrchestrationStage::Implementing => "implementing",
+        FeatureConveyorOrchestrationStage::Validating => "validating",
+        FeatureConveyorOrchestrationStage::Reviewing => "reviewing",
+        FeatureConveyorOrchestrationStage::Publishing => "publishing",
+        FeatureConveyorOrchestrationStage::VerifyingMain => "verifying_main",
+        FeatureConveyorOrchestrationStage::Repairing => "repairing",
+        FeatureConveyorOrchestrationStage::Paused => "paused",
+        FeatureConveyorOrchestrationStage::AttentionRequired => "attention_required",
+        FeatureConveyorOrchestrationStage::Failed => "failed",
+        FeatureConveyorOrchestrationStage::Succeeded => "succeeded",
+        FeatureConveyorOrchestrationStage::Quarantined => "quarantined",
+    }
+}
+
+fn parse_orchestration_stage(
+    value: &str,
+) -> Result<FeatureConveyorOrchestrationStage, MasterError> {
+    match value {
+        "implementing" => Ok(FeatureConveyorOrchestrationStage::Implementing),
+        "validating" => Ok(FeatureConveyorOrchestrationStage::Validating),
+        "reviewing" => Ok(FeatureConveyorOrchestrationStage::Reviewing),
+        "publishing" => Ok(FeatureConveyorOrchestrationStage::Publishing),
+        "verifying_main" => Ok(FeatureConveyorOrchestrationStage::VerifyingMain),
+        "repairing" => Ok(FeatureConveyorOrchestrationStage::Repairing),
+        "paused" => Ok(FeatureConveyorOrchestrationStage::Paused),
+        "attention_required" => Ok(FeatureConveyorOrchestrationStage::AttentionRequired),
+        "failed" => Ok(FeatureConveyorOrchestrationStage::Failed),
+        "succeeded" => Ok(FeatureConveyorOrchestrationStage::Succeeded),
+        "quarantined" => Ok(FeatureConveyorOrchestrationStage::Quarantined),
+        _ => Err(MasterError::InvalidStoredState(
+            "unknown orchestration stage".to_string(),
+        )),
+    }
+}
+
+fn orchestration_action_str(action: FeatureConveyorOrchestrationAction) -> &'static str {
+    match action {
+        FeatureConveyorOrchestrationAction::Inactive => "inactive",
+        FeatureConveyorOrchestrationAction::AwaitImplementationEvidence => {
+            "await_implementation_evidence"
+        }
+        FeatureConveyorOrchestrationAction::AwaitValidationEvidence => "await_validation_evidence",
+        FeatureConveyorOrchestrationAction::AwaitReviewDecision => "await_review_decision",
+        FeatureConveyorOrchestrationAction::RetryReviewTransport => "retry_review_transport",
+        FeatureConveyorOrchestrationAction::AwaitPublicationEvidence => {
+            "await_publication_evidence"
+        }
+        FeatureConveyorOrchestrationAction::AwaitMainVerification => "await_main_verification",
+        FeatureConveyorOrchestrationAction::ReplacementCandidateRequired => {
+            "replacement_candidate_required"
+        }
+        FeatureConveyorOrchestrationAction::OwnerAttentionRequired => "owner_attention_required",
+        FeatureConveyorOrchestrationAction::ReconcileQuarantine => "reconcile_quarantine",
+        FeatureConveyorOrchestrationAction::Terminal => "terminal",
+    }
+}
+
+fn parse_orchestration_action(
+    value: &str,
+) -> Result<FeatureConveyorOrchestrationAction, MasterError> {
+    match value {
+        "inactive" => Ok(FeatureConveyorOrchestrationAction::Inactive),
+        "await_implementation_evidence" => {
+            Ok(FeatureConveyorOrchestrationAction::AwaitImplementationEvidence)
+        }
+        "await_validation_evidence" => {
+            Ok(FeatureConveyorOrchestrationAction::AwaitValidationEvidence)
+        }
+        "await_review_decision" => Ok(FeatureConveyorOrchestrationAction::AwaitReviewDecision),
+        "retry_review_transport" => Ok(FeatureConveyorOrchestrationAction::RetryReviewTransport),
+        "await_publication_evidence" => {
+            Ok(FeatureConveyorOrchestrationAction::AwaitPublicationEvidence)
+        }
+        "await_main_verification" => Ok(FeatureConveyorOrchestrationAction::AwaitMainVerification),
+        "replacement_candidate_required" => {
+            Ok(FeatureConveyorOrchestrationAction::ReplacementCandidateRequired)
+        }
+        "owner_attention_required" => {
+            Ok(FeatureConveyorOrchestrationAction::OwnerAttentionRequired)
+        }
+        "reconcile_quarantine" => Ok(FeatureConveyorOrchestrationAction::ReconcileQuarantine),
+        "terminal" => Ok(FeatureConveyorOrchestrationAction::Terminal),
+        _ => Err(MasterError::InvalidStoredState(
+            "unknown orchestration action".to_string(),
+        )),
+    }
+}
+
+fn orchestration_reason_str(reason: FeatureConveyorOrchestrationReason) -> &'static str {
+    match reason {
+        FeatureConveyorOrchestrationReason::CapabilityInactive => "capability_inactive",
+        FeatureConveyorOrchestrationReason::CheckpointEffectFree => "checkpoint_effect_free",
+        FeatureConveyorOrchestrationReason::ExistingEffectAmbiguous => "existing_effect_ambiguous",
+        FeatureConveyorOrchestrationReason::ValidationFailed => "validation_failed",
+        FeatureConveyorOrchestrationReason::ReviewRejected => "review_rejected",
+        FeatureConveyorOrchestrationReason::ReviewTransportBackoff => "review_transport_backoff",
+        FeatureConveyorOrchestrationReason::ReviewBudgetExhausted => "review_budget_exhausted",
+        FeatureConveyorOrchestrationReason::PublicationFailed => "publication_failed",
+        FeatureConveyorOrchestrationReason::ReplacementCandidateContractUnavailable => {
+            "replacement_candidate_contract_unavailable"
+        }
+        FeatureConveyorOrchestrationReason::RepairBudgetExhausted => "repair_budget_exhausted",
+        FeatureConveyorOrchestrationReason::ActiveProcessingBudgetExhausted => {
+            "active_processing_budget_exhausted"
+        }
+        FeatureConveyorOrchestrationReason::Cancelled => "cancelled",
+        FeatureConveyorOrchestrationReason::Failed => "failed",
+        FeatureConveyorOrchestrationReason::Succeeded => "succeeded",
+    }
+}
+
+fn parse_orchestration_reason(
+    value: &str,
+) -> Result<FeatureConveyorOrchestrationReason, MasterError> {
+    match value {
+        "capability_inactive" => Ok(FeatureConveyorOrchestrationReason::CapabilityInactive),
+        "checkpoint_effect_free" => Ok(FeatureConveyorOrchestrationReason::CheckpointEffectFree),
+        "existing_effect_ambiguous" => {
+            Ok(FeatureConveyorOrchestrationReason::ExistingEffectAmbiguous)
+        }
+        "validation_failed" => Ok(FeatureConveyorOrchestrationReason::ValidationFailed),
+        "review_rejected" => Ok(FeatureConveyorOrchestrationReason::ReviewRejected),
+        "review_transport_backoff" => {
+            Ok(FeatureConveyorOrchestrationReason::ReviewTransportBackoff)
+        }
+        "review_budget_exhausted" => Ok(FeatureConveyorOrchestrationReason::ReviewBudgetExhausted),
+        "publication_failed" => Ok(FeatureConveyorOrchestrationReason::PublicationFailed),
+        "replacement_candidate_contract_unavailable" => {
+            Ok(FeatureConveyorOrchestrationReason::ReplacementCandidateContractUnavailable)
+        }
+        "repair_budget_exhausted" => Ok(FeatureConveyorOrchestrationReason::RepairBudgetExhausted),
+        "active_processing_budget_exhausted" => {
+            Ok(FeatureConveyorOrchestrationReason::ActiveProcessingBudgetExhausted)
+        }
+        "cancelled" => Ok(FeatureConveyorOrchestrationReason::Cancelled),
+        "failed" => Ok(FeatureConveyorOrchestrationReason::Failed),
+        "succeeded" => Ok(FeatureConveyorOrchestrationReason::Succeeded),
+        _ => Err(MasterError::InvalidStoredState(
+            "unknown orchestration reason".to_string(),
+        )),
+    }
+}
+
+fn orchestration_pause_kind_str(kind: FeatureConveyorOrchestrationPauseKind) -> &'static str {
+    match kind {
+        FeatureConveyorOrchestrationPauseKind::Provider => "provider",
+        FeatureConveyorOrchestrationPauseKind::Worker => "worker",
+        FeatureConveyorOrchestrationPauseKind::Maintenance => "maintenance",
+        FeatureConveyorOrchestrationPauseKind::Owner => "owner",
+    }
+}
+
+fn parse_orchestration_pause_kind(
+    value: &str,
+) -> Result<FeatureConveyorOrchestrationPauseKind, MasterError> {
+    match value {
+        "provider" => Ok(FeatureConveyorOrchestrationPauseKind::Provider),
+        "worker" => Ok(FeatureConveyorOrchestrationPauseKind::Worker),
+        "maintenance" => Ok(FeatureConveyorOrchestrationPauseKind::Maintenance),
+        "owner" => Ok(FeatureConveyorOrchestrationPauseKind::Owner),
+        _ => Err(MasterError::InvalidStoredState(
+            "unknown orchestration pause kind".to_string(),
+        )),
+    }
+}
+
+fn orchestration_stage_for_lifecycle_status(
+    status: FeatureLifecycleStatus,
+) -> FeatureConveyorOrchestrationStage {
+    match status {
+        FeatureLifecycleStatus::Queued | FeatureLifecycleStatus::Implementing => {
+            FeatureConveyorOrchestrationStage::Implementing
+        }
+        FeatureLifecycleStatus::Validating => FeatureConveyorOrchestrationStage::Validating,
+        FeatureLifecycleStatus::Reviewing => FeatureConveyorOrchestrationStage::Reviewing,
+        FeatureLifecycleStatus::Publishing => FeatureConveyorOrchestrationStage::Publishing,
+        FeatureLifecycleStatus::VerifyingMain => FeatureConveyorOrchestrationStage::VerifyingMain,
+        FeatureLifecycleStatus::Repairing => FeatureConveyorOrchestrationStage::Repairing,
+        FeatureLifecycleStatus::Paused => FeatureConveyorOrchestrationStage::Paused,
+        FeatureLifecycleStatus::AttentionRequired => {
+            FeatureConveyorOrchestrationStage::AttentionRequired
+        }
+        FeatureLifecycleStatus::Failed | FeatureLifecycleStatus::Cancelled => {
+            FeatureConveyorOrchestrationStage::Failed
+        }
+        FeatureLifecycleStatus::Succeeded | FeatureLifecycleStatus::Abandoned => {
+            FeatureConveyorOrchestrationStage::Succeeded
+        }
+        FeatureLifecycleStatus::Quarantined => FeatureConveyorOrchestrationStage::Quarantined,
+    }
+}
+
+fn lifecycle_status_for_orchestration_stage(
+    stage: FeatureConveyorOrchestrationStage,
+) -> FeatureLifecycleStatus {
+    match stage {
+        FeatureConveyorOrchestrationStage::Implementing => FeatureLifecycleStatus::Implementing,
+        FeatureConveyorOrchestrationStage::Validating => FeatureLifecycleStatus::Validating,
+        FeatureConveyorOrchestrationStage::Reviewing => FeatureLifecycleStatus::Reviewing,
+        FeatureConveyorOrchestrationStage::Publishing => FeatureLifecycleStatus::Publishing,
+        FeatureConveyorOrchestrationStage::VerifyingMain => FeatureLifecycleStatus::VerifyingMain,
+        FeatureConveyorOrchestrationStage::Repairing => FeatureLifecycleStatus::Repairing,
+        FeatureConveyorOrchestrationStage::Paused => FeatureLifecycleStatus::Paused,
+        FeatureConveyorOrchestrationStage::AttentionRequired => {
+            FeatureLifecycleStatus::AttentionRequired
+        }
+        FeatureConveyorOrchestrationStage::Failed => FeatureLifecycleStatus::Failed,
+        FeatureConveyorOrchestrationStage::Succeeded => FeatureLifecycleStatus::Succeeded,
+        FeatureConveyorOrchestrationStage::Quarantined => FeatureLifecycleStatus::Quarantined,
+    }
+}
+
+fn orchestration_checkpoint_sha256(
+    feature_id: Uuid,
+    orchestration_revision: u64,
+    lifecycle_revision: u64,
+    decision: DerivedOrchestrationDecision,
+    replacement_candidates_used: u8,
+    active_processing_ms: u64,
+) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"assemblywright.orchestration-checkpoint.v1\0");
+    digest.update(feature_id.as_bytes());
+    digest.update(orchestration_revision.to_be_bytes());
+    digest.update(lifecycle_revision.to_be_bytes());
+    digest.update(orchestration_stage_str(decision.stage).as_bytes());
+    digest.update([0]);
+    digest.update(orchestration_action_str(decision.action).as_bytes());
+    digest.update([0]);
+    digest.update(orchestration_reason_str(decision.reason).as_bytes());
+    digest.update([replacement_candidates_used]);
+    digest.update(active_processing_ms.to_be_bytes());
+    digest.update([u8::from(decision.effect_possible)]);
+    if let Some(kind) = decision.pause_kind {
+        digest.update(orchestration_pause_kind_str(kind).as_bytes());
+    }
+    digest.update(decision.next_retry_at_ms.unwrap_or(0).to_be_bytes());
+    digest.update(decision.evidence_sha256.unwrap_or([0; 32]));
+    digest.finalize().into()
+}
+
+fn orchestration_checkpoint_id(digest: [u8; 32]) -> Uuid {
+    let mut bytes = [0_u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Uuid::from_bytes(bytes)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StoredOrchestrationCheckpoint {
+    checkpoint_id: Uuid,
+    lifecycle_revision: u64,
+    stage: FeatureConveyorOrchestrationStage,
+    action: FeatureConveyorOrchestrationAction,
+    reason: FeatureConveyorOrchestrationReason,
+    checkpoint_sha256: [u8; 32],
+}
+
+fn load_orchestration_state_tx(
+    tx: &Transaction<'_>,
+    feature_id: Uuid,
+) -> Result<Option<StoredOrchestrationState>, MasterError> {
+    tx.query_row(
+        "SELECT orchestration_revision,checkpoint_id,stage,resume_stage,pause_kind,
+                replacement_candidates_used,active_processing_ms,clock_started_at_ms,
+                next_retry_at_ms,effect_possible
+         FROM feature_orchestration_state WHERE feature_id=?1",
+        [feature_id.to_string()],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, Option<i64>>(7)?,
+                row.get::<_, Option<i64>>(8)?,
+                row.get::<_, i64>(9)?,
+            ))
+        },
+    )
+    .optional()?
+    .map(
+        |(
+            orchestration_revision,
+            checkpoint_id,
+            stage,
+            resume_stage,
+            pause_kind,
+            replacement_candidates_used,
+            active_processing_ms,
+            clock_started_at_ms,
+            next_retry_at_ms,
+            effect_possible,
+        )| {
+            Ok(StoredOrchestrationState {
+                orchestration_revision: i64_to_u64(orchestration_revision)?,
+                checkpoint_id: parse_uuid(&checkpoint_id)?,
+                stage: parse_orchestration_stage(&stage)?,
+                resume_stage: resume_stage
+                    .as_deref()
+                    .map(parse_orchestration_stage)
+                    .transpose()?,
+                pause_kind: pause_kind
+                    .as_deref()
+                    .map(parse_orchestration_pause_kind)
+                    .transpose()?,
+                replacement_candidates_used: u8::try_from(replacement_candidates_used).map_err(
+                    |_| {
+                        MasterError::InvalidStoredState(
+                            "invalid orchestration repair count".to_string(),
+                        )
+                    },
+                )?,
+                active_processing_ms: i64_to_u64(active_processing_ms)?,
+                clock_started_at_ms: clock_started_at_ms.map(i64_to_u64).transpose()?,
+                next_retry_at_ms: next_retry_at_ms.map(i64_to_u64).transpose()?,
+                effect_possible: parse_stored_boolean(
+                    effect_possible,
+                    "orchestration effect_possible",
+                )?,
+            })
+        },
+    )
+    .transpose()
+}
+
+fn orchestration_paused_checkpoint_is_restart_safe_tx(
+    tx: &Transaction<'_>,
+    feature_id: Uuid,
+    lifecycle_revision: u64,
+) -> Result<bool, MasterError> {
+    let safe: bool = tx.query_row(
+        "SELECT EXISTS(
+           SELECT 1 FROM feature_orchestration_activation a
+           JOIN feature_orchestration_state s ON s.feature_id=?1
+           JOIN feature_orchestration_checkpoints c ON c.checkpoint_id=s.checkpoint_id
+           WHERE a.singleton=1 AND s.stage='paused' AND s.pause_kind IS NOT NULL
+             AND s.resume_stage IS NOT NULL AND s.clock_started_at_ms IS NULL
+             AND s.effect_possible=0 AND c.effect_possible=0
+             AND c.lifecycle_revision=?2 AND c.orchestration_revision=s.orchestration_revision
+             AND c.stage='paused'
+         )",
+        params![feature_id.to_string(), u64_to_i64(lifecycle_revision)?],
+        |row| row.get(0),
+    )?;
+    Ok(safe)
+}
+
+fn load_orchestration_checkpoint_tx(
+    tx: &Transaction<'_>,
+    checkpoint_id: Uuid,
+) -> Result<StoredOrchestrationCheckpoint, MasterError> {
+    tx.query_row(
+        "SELECT lifecycle_revision,stage,action,reason,checkpoint_sha256
+         FROM feature_orchestration_checkpoints WHERE checkpoint_id=?1",
+        [checkpoint_id.to_string()],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Vec<u8>>(4)?,
+            ))
+        },
+    )
+    .optional()?
+    .map(
+        |(lifecycle_revision, stage, action, reason, checkpoint_sha256)| {
+            Ok::<StoredOrchestrationCheckpoint, MasterError>(StoredOrchestrationCheckpoint {
+                checkpoint_id,
+                lifecycle_revision: i64_to_u64(lifecycle_revision)?,
+                stage: parse_orchestration_stage(&stage)?,
+                action: parse_orchestration_action(&action)?,
+                reason: parse_orchestration_reason(&reason)?,
+                checkpoint_sha256: digest_array(&checkpoint_sha256)?,
+            })
+        },
+    )
+    .transpose()?
+    .ok_or_else(|| {
+        MasterError::InvalidStoredState("orchestration checkpoint is missing".to_string())
+    })
+}
+
+fn derive_orchestration_decision_tx(
+    tx: &Transaction<'_>,
+    feature_id: Uuid,
+    status: FeatureLifecycleStatus,
+    state: Option<&StoredOrchestrationState>,
+    now_ms: u64,
+) -> Result<DerivedOrchestrationDecision, MasterError> {
+    if matches!(
+        status,
+        FeatureLifecycleStatus::Publishing | FeatureLifecycleStatus::VerifyingMain
+    ) {
+        let ambiguous: bool = tx.query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM feature_publication_action_intents i
+               JOIN feature_publications p ON p.publication_id=i.publication_id
+               LEFT JOIN feature_publication_action_outcomes o
+                 ON o.publication_id=i.publication_id AND o.ordinal=i.ordinal
+               WHERE p.feature_id=?1 AND o.publication_id IS NULL
+             )",
+            [feature_id.to_string()],
+            |row| row.get(0),
+        )?;
+        if ambiguous {
+            return Ok(DerivedOrchestrationDecision {
+                stage: FeatureConveyorOrchestrationStage::Quarantined,
+                action: FeatureConveyorOrchestrationAction::ReconcileQuarantine,
+                reason: FeatureConveyorOrchestrationReason::ExistingEffectAmbiguous,
+                pause_kind: None,
+                next_retry_at_ms: None,
+                evidence_sha256: None,
+                effect_possible: true,
+            });
+        }
+    }
+    if status == FeatureLifecycleStatus::Reviewing {
+        let ambiguous: bool = tx.query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM feature_review_calls c
+               LEFT JOIN feature_review_call_outcomes o ON o.review_call_id=c.review_call_id
+               WHERE c.feature_id=?1 AND o.review_call_id IS NULL
+             )",
+            [feature_id.to_string()],
+            |row| row.get(0),
+        )?;
+        if ambiguous {
+            return Ok(DerivedOrchestrationDecision {
+                stage: FeatureConveyorOrchestrationStage::Quarantined,
+                action: FeatureConveyorOrchestrationAction::ReconcileQuarantine,
+                reason: FeatureConveyorOrchestrationReason::ExistingEffectAmbiguous,
+                pause_kind: None,
+                next_retry_at_ms: None,
+                evidence_sha256: None,
+                effect_possible: true,
+            });
+        }
+    }
+    if status == FeatureLifecycleStatus::Paused {
+        let state = state.ok_or_else(|| {
+            MasterError::InvalidStoredState(
+                "paused lifecycle lacks orchestration state".to_string(),
+            )
+        })?;
+        if state.pause_kind == Some(FeatureConveyorOrchestrationPauseKind::Provider)
+            && state.next_retry_at_ms.is_some_and(|retry| now_ms >= retry)
+        {
+            let stage = state.resume_stage.ok_or_else(|| {
+                MasterError::InvalidStoredState("paused lifecycle lacks resume stage".to_string())
+            })?;
+            return Ok(DerivedOrchestrationDecision {
+                stage,
+                action: FeatureConveyorOrchestrationAction::RetryReviewTransport,
+                reason: FeatureConveyorOrchestrationReason::CheckpointEffectFree,
+                pause_kind: None,
+                next_retry_at_ms: None,
+                evidence_sha256: None,
+                effect_possible: false,
+            });
+        }
+        return Ok(DerivedOrchestrationDecision {
+            stage: FeatureConveyorOrchestrationStage::Paused,
+            action: FeatureConveyorOrchestrationAction::AwaitReviewDecision,
+            reason: FeatureConveyorOrchestrationReason::ReviewTransportBackoff,
+            pause_kind: state.pause_kind,
+            next_retry_at_ms: state.next_retry_at_ms,
+            evidence_sha256: None,
+            effect_possible: false,
+        });
+    }
+    let ordinary = |stage, action| DerivedOrchestrationDecision {
+        stage,
+        action,
+        reason: FeatureConveyorOrchestrationReason::CheckpointEffectFree,
+        pause_kind: None,
+        next_retry_at_ms: None,
+        evidence_sha256: None,
+        effect_possible: false,
+    };
+    match status {
+        FeatureLifecycleStatus::Implementing => Ok(ordinary(
+            FeatureConveyorOrchestrationStage::Implementing,
+            FeatureConveyorOrchestrationAction::AwaitImplementationEvidence,
+        )),
+        FeatureLifecycleStatus::Validating => {
+            let failed = tx
+                .query_row(
+                    "SELECT c.evidence_manifest_sha256
+                     FROM feature_validation_completions c
+                     JOIN feature_validation_attempts a ON a.validation_id=c.validation_id
+                     WHERE a.feature_id=?1 AND c.passed=0
+                     ORDER BY c.completed_at_ms DESC LIMIT 1",
+                    [feature_id.to_string()],
+                    |row| row.get::<_, Vec<u8>>(0),
+                )
+                .optional()?;
+            if let Some(evidence) = failed {
+                return Ok(DerivedOrchestrationDecision {
+                    stage: FeatureConveyorOrchestrationStage::Repairing,
+                    action: FeatureConveyorOrchestrationAction::ReplacementCandidateRequired,
+                    reason: FeatureConveyorOrchestrationReason::ValidationFailed,
+                    pause_kind: None,
+                    next_retry_at_ms: None,
+                    evidence_sha256: Some(digest_array(&evidence)?),
+                    effect_possible: false,
+                });
+            }
+            Ok(ordinary(
+                FeatureConveyorOrchestrationStage::Validating,
+                FeatureConveyorOrchestrationAction::AwaitValidationEvidence,
+            ))
+        }
+        FeatureLifecycleStatus::Reviewing => {
+            let decision = tx
+                .query_row(
+                    "SELECT d.decision,d.decision_sha256
+                     FROM feature_review_decisions d
+                     WHERE d.feature_id=?1 ORDER BY d.decided_at_ms DESC LIMIT 1",
+                    [feature_id.to_string()],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)),
+                )
+                .optional()?;
+            if let Some((decision, evidence)) = decision {
+                if decision == "rejected" {
+                    return Ok(DerivedOrchestrationDecision {
+                        stage: FeatureConveyorOrchestrationStage::Repairing,
+                        action: FeatureConveyorOrchestrationAction::ReplacementCandidateRequired,
+                        reason: FeatureConveyorOrchestrationReason::ReviewRejected,
+                        pause_kind: None,
+                        next_retry_at_ms: None,
+                        evidence_sha256: Some(digest_array(&evidence)?),
+                        effect_possible: false,
+                    });
+                }
+            }
+            let latest_candidate = tx
+                .query_row(
+                    "SELECT candidate_commit FROM feature_review_calls
+                     WHERE feature_id=?1
+                     ORDER BY feature_call DESC,started_at_ms DESC,review_call_id DESC
+                     LIMIT 1",
+                    [feature_id.to_string()],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            if let Some(candidate_commit) = latest_candidate {
+                let candidate_calls = i64_to_u64(tx.query_row(
+                    "SELECT COUNT(*) FROM feature_review_calls c
+                     JOIN feature_review_call_outcomes o
+                       ON o.review_call_id=c.review_call_id
+                     WHERE c.feature_id=?1 AND c.candidate_commit=?2",
+                    params![feature_id.to_string(), candidate_commit],
+                    |row| row.get::<_, i64>(0),
+                )?)?;
+                let feature_calls = i64_to_u64(tx.query_row(
+                    "SELECT COUNT(*) FROM feature_review_calls c
+                     JOIN feature_review_call_outcomes o
+                       ON o.review_call_id=c.review_call_id
+                     WHERE c.feature_id=?1",
+                    [feature_id.to_string()],
+                    |row| row.get::<_, i64>(0),
+                )?)?;
+                if candidate_calls
+                    >= u64::from(MAX_FEATURE_CONVEYOR_REVIEW_TRANSPORT_ATTEMPTS_PER_CANDIDATE)
+                    || feature_calls >= u64::from(MAX_FEATURE_CONVEYOR_REVIEW_CALLS_PER_FEATURE)
+                {
+                    return Ok(DerivedOrchestrationDecision {
+                        stage: FeatureConveyorOrchestrationStage::AttentionRequired,
+                        action: FeatureConveyorOrchestrationAction::OwnerAttentionRequired,
+                        reason: FeatureConveyorOrchestrationReason::ReviewBudgetExhausted,
+                        pause_kind: None,
+                        next_retry_at_ms: None,
+                        evidence_sha256: None,
+                        effect_possible: false,
+                    });
+                }
+            }
+            let retry = tx
+                .query_row(
+                    "SELECT o.next_retry_at_ms,o.outcome_sha256
+                     FROM feature_review_call_outcomes o
+                     JOIN feature_review_calls c ON c.review_call_id=o.review_call_id
+                     WHERE c.feature_id=?1 AND o.next_retry_at_ms IS NOT NULL
+                     ORDER BY o.completed_at_ms DESC LIMIT 1",
+                    [feature_id.to_string()],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?)),
+                )
+                .optional()?;
+            if let Some((retry_at, evidence)) = retry {
+                let retry_at = i64_to_u64(retry_at)?;
+                if now_ms < retry_at {
+                    return Ok(DerivedOrchestrationDecision {
+                        stage: FeatureConveyorOrchestrationStage::Paused,
+                        action: FeatureConveyorOrchestrationAction::AwaitReviewDecision,
+                        reason: FeatureConveyorOrchestrationReason::ReviewTransportBackoff,
+                        pause_kind: Some(FeatureConveyorOrchestrationPauseKind::Provider),
+                        next_retry_at_ms: Some(retry_at),
+                        evidence_sha256: Some(digest_array(&evidence)?),
+                        effect_possible: false,
+                    });
+                }
+                return Ok(DerivedOrchestrationDecision {
+                    stage: FeatureConveyorOrchestrationStage::Reviewing,
+                    action: FeatureConveyorOrchestrationAction::RetryReviewTransport,
+                    reason: FeatureConveyorOrchestrationReason::CheckpointEffectFree,
+                    pause_kind: None,
+                    next_retry_at_ms: None,
+                    evidence_sha256: Some(digest_array(&evidence)?),
+                    effect_possible: false,
+                });
+            }
+            Ok(ordinary(
+                FeatureConveyorOrchestrationStage::Reviewing,
+                FeatureConveyorOrchestrationAction::AwaitReviewDecision,
+            ))
+        }
+        FeatureLifecycleStatus::Publishing => Ok(ordinary(
+            FeatureConveyorOrchestrationStage::Publishing,
+            FeatureConveyorOrchestrationAction::AwaitPublicationEvidence,
+        )),
+        FeatureLifecycleStatus::VerifyingMain => Ok(ordinary(
+            FeatureConveyorOrchestrationStage::VerifyingMain,
+            FeatureConveyorOrchestrationAction::AwaitMainVerification,
+        )),
+        FeatureLifecycleStatus::Repairing => Ok(DerivedOrchestrationDecision {
+            stage: FeatureConveyorOrchestrationStage::AttentionRequired,
+            action: FeatureConveyorOrchestrationAction::OwnerAttentionRequired,
+            reason: FeatureConveyorOrchestrationReason::ReplacementCandidateContractUnavailable,
+            pause_kind: None,
+            next_retry_at_ms: None,
+            evidence_sha256: None,
+            effect_possible: false,
+        }),
+        FeatureLifecycleStatus::AttentionRequired => Ok(DerivedOrchestrationDecision {
+            stage: FeatureConveyorOrchestrationStage::AttentionRequired,
+            action: FeatureConveyorOrchestrationAction::OwnerAttentionRequired,
+            reason: FeatureConveyorOrchestrationReason::ReplacementCandidateContractUnavailable,
+            pause_kind: None,
+            next_retry_at_ms: None,
+            evidence_sha256: None,
+            effect_possible: false,
+        }),
+        FeatureLifecycleStatus::Failed | FeatureLifecycleStatus::Cancelled => {
+            Ok(DerivedOrchestrationDecision {
+                stage: FeatureConveyorOrchestrationStage::Failed,
+                action: FeatureConveyorOrchestrationAction::Terminal,
+                reason: if status == FeatureLifecycleStatus::Cancelled {
+                    FeatureConveyorOrchestrationReason::Cancelled
+                } else {
+                    FeatureConveyorOrchestrationReason::Failed
+                },
+                pause_kind: None,
+                next_retry_at_ms: None,
+                evidence_sha256: None,
+                effect_possible: true,
+            })
+        }
+        FeatureLifecycleStatus::Succeeded | FeatureLifecycleStatus::Abandoned => {
+            Ok(DerivedOrchestrationDecision {
+                stage: FeatureConveyorOrchestrationStage::Succeeded,
+                action: FeatureConveyorOrchestrationAction::Terminal,
+                reason: FeatureConveyorOrchestrationReason::Succeeded,
+                pause_kind: None,
+                next_retry_at_ms: None,
+                evidence_sha256: None,
+                effect_possible: false,
+            })
+        }
+        FeatureLifecycleStatus::Quarantined => Ok(DerivedOrchestrationDecision {
+            stage: FeatureConveyorOrchestrationStage::Quarantined,
+            action: FeatureConveyorOrchestrationAction::ReconcileQuarantine,
+            reason: FeatureConveyorOrchestrationReason::ExistingEffectAmbiguous,
+            pause_kind: None,
+            next_retry_at_ms: None,
+            evidence_sha256: None,
+            effect_possible: true,
+        }),
+        FeatureLifecycleStatus::Queued | FeatureLifecycleStatus::Paused => {
+            Err(MasterError::InvalidFeatureTransition)
+        }
+    }
+}
+
+fn orchestration_projection(
+    feature_id: Uuid,
+    state: &StoredOrchestrationState,
+    checkpoint: &StoredOrchestrationCheckpoint,
+) -> FeatureConveyorOrchestrationProjection {
+    FeatureConveyorOrchestrationProjection {
+        schema_version: FEATURE_CONVEYOR_ORCHESTRATION_SCHEMA_VERSION,
+        feature_id,
+        lifecycle_revision: checkpoint.lifecycle_revision,
+        orchestration_revision: state.orchestration_revision,
+        stage: checkpoint.stage,
+        action: checkpoint.action,
+        reason: checkpoint.reason,
+        checkpoint_id: checkpoint.checkpoint_id,
+        checkpoint_sha256: checkpoint.checkpoint_sha256,
+        replacement_candidates_used: state.replacement_candidates_used,
+        active_processing_ms: state.active_processing_ms,
+        active_processing_budget_ms: MAX_FEATURE_CONVEYOR_ACTIVE_PROCESSING_MS,
+        pause_kind: state.pause_kind,
+        next_retry_at_ms: state.next_retry_at_ms,
+        effect_possible: state.effect_possible,
+        activated: true,
+    }
 }
 
 fn publication_plan_tx(

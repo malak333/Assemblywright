@@ -1461,7 +1461,7 @@ fn feature_conveyor_status_is_owner_authenticated_bounded_and_redacted() {
     let empty = get_request(empty_endpoint, "/v1/feature-conveyor/status", Some(token));
     assert!(empty.starts_with("HTTP/1.1 200 OK"), "{empty}");
     let empty_json = response_json(&empty);
-    assert_eq!(empty_json["schema_version"], 8);
+    assert_eq!(empty_json["schema_version"], 9);
     assert_eq!(empty_json["queue_revision"], 0);
     assert_eq!(empty_json["startup_quarantine_count"], 0);
     assert_eq!(empty_json["visible_feature_count"], 0);
@@ -2342,6 +2342,10 @@ fn assert_status_json_allowlist(value: &Value) {
             "reviewing",
             "publishing",
             "verifying_main",
+            "repairing",
+            "paused",
+            "attention_required",
+            "failed",
             "succeeded",
             "cancelled",
             "abandoned",

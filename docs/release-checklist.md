@@ -205,6 +205,15 @@ Before starting a release pass, confirm the claim you intend to make.
   those hosted boundaries.
   Prove a durable merge intent prevents `merged:false` abandonment from a
   `publishing`-origin quarantine until healthy-main reconciliation is recorded.
+- Confirm schema-v18 orchestration remains kernel-only and default-inert: no
+  activation writer or owner/device route; immutable path-free checkpoints and
+  same-transaction redacted audit; stale CAS/idempotence; initial candidate
+  free and three-replacement ceiling; three/12 review budgets; 24 active hours
+  with provider/worker/maintenance/owner pauses excluded; restart resume only
+  for a complete effect-free pause; ambiguous effects quarantine; and
+  substantive failure stops at `attention_required` when a safe replacement-
+  candidate contract is unavailable. Confirm cancellation, failure, attention,
+  quarantine, and abandonment retain the lease and never auto-advance.
 - Confirm the owner-token loopback-only `cancel-active-feature` and
   `abandon-and-advance` routes are absent from enrolled-device mTLS. Prove
   strict duplicate/unknown/oversized-frame denial; exact feature, lifecycle,

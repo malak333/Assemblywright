@@ -8,7 +8,7 @@ Scope: Approved target design plus the bounded repository-kernel implementation
 status below. This document does not claim autonomous activation, live-device
 proof, or production readiness.
 
-Implementation status: the default-inert protocol-v5/schema-v17 Windows
+Implementation status: the default-inert protocol-v5/schema-v18 Windows
 `assemblywright-master` kernel is implemented through the independent-review
 gateway. The detailed implemented boundary is summarized under
 `Implementation Boundary` below. It retains immutable approved specification
@@ -39,7 +39,7 @@ A dedicated `GET /v1/distributed/feature-conveyor/status` returns the exact same
 projection only after the TLS-exporter-bound application handshake is accepted
 for an enrolled `MacBridge`; pre-handshake and non-MacBridge requests are
 denied, and no owner token crosses the device boundary. The Swift helper
-strictly decodes the bounded schema-v8 allowlist, cancels on drift, and includes
+strictly decodes the bounded schema-v9 allowlist, cancels on drift, and includes
 the projection only in authenticated snapshots. The app renders a compact
 read-only queue/guidance section and never presents `next_owner_action` as a
 button. Neither observation route grants enqueue, execution, review,
@@ -47,7 +47,9 @@ repository, Git, publication, audit-event, or activation authority. The
 separate schema-v16 independent-review gateway is implemented and defaults
 unavailable until one fixed adapter is provisioned. Schema v17 implements the
 durable owner-loopback Publication Coordinator and controlled bare-Git proof,
-while its credential-owning GitHub adapter remains default-unavailable. No automatic dispatcher, registered-
+while its credential-owning GitHub adapter remains default-unavailable. Schema
+v18 adds the internal deterministic orchestration checkpoint kernel described
+below, but no route or activation writer. No automatic dispatcher, registered-
 source mutation, Mac control UI, or autonomous activation is implemented. The
 remainder of this document beyond the explicit implementation boundary is
 still target design.
@@ -340,6 +342,32 @@ Snapshot transfer and cancellation polling remain concurrent for cancellation
 dominance, but every network request crosses one relay-local FIFO permit so the
 production authenticated session still has exactly one request in flight.
 
+Schema v18 adds immutable path-free orchestration state and checkpoints under a
+backup-first migration. The internal coordinator derives every stage/action and
+failure classification from master state and existing exact evidence. It never
+accepts caller commands, paths, provider output, adapter evidence, credentials,
+or retry classifications. The activation-evidence table intentionally has no
+writer because capability 7 owns owner activation and functional live evidence;
+there is no owner-loopback or enrolled-device orchestration route in this slice.
+
+The ledger supports `repairing`, `paused`, `attention_required`, and `failed`.
+Only `succeeded` automatically releases the lease. Coordination rejects
+`cancelled`, `attention_required`, and `failed` without mutation; after exact
+reconciliation, the owner may explicitly use `abandon-and-advance` to release
+one of those retained leases. Provider transport backoff is an effect-
+free pause and consumes neither active time nor repair budget. The initial
+candidate is free, replacements are capped at three, review calls retain the
+three-per-candidate and twelve-per-feature ceilings, and the 24-hour active
+clock is restart-safe. Emergency Pause atomically charges only through the
+pause instant and suspends the clock; a fresh immutable checkpoint restarts it
+after resume. Completed immutable calls reaching either review ceiling require
+owner attention instead of another retry. Startup resumes only a complete paused checkpoint with
+`effect_possible:false`; unsafe legacy stages, in-flight provider calls, and
+unresolved publication intents quarantine. Current artifact/dispatch contracts
+cannot express a replacement candidate safely, so substantive validation or
+review failure records `repairing` and then `attention_required` without
+charging a repair or fabricating completion.
+
 ## Understanding Summary
 
 - Assemblywright will add an owner-managed autonomous development queue for personal,
@@ -451,7 +479,7 @@ canonical repository, master database, canonical memory, credentials, or
 unrelated files. General network access is disabled; only a narrowly controlled
 local-model connection is allowed.
 
-The implemented protocol-v5/schema-v17 kernel retains the schema-v14 worker and
+The implemented protocol-v5/schema-v18 kernel retains the schema-v14 worker and
 integration boundary and accepts one immutable
 snapshot-bound general coding packet for one exact registered worker. After the
 exact lease, a separate default-off route streams a bounded authenticated

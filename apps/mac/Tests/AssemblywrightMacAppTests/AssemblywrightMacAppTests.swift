@@ -31,7 +31,7 @@ struct AssemblywrightMacAppTests {
     @Test("Feature Conveyor presentation is compact read-only guidance")
     func featureConveyorPresentationIsReadOnlyGuidance() throws {
         let data = Data(
-            #"{"schema_version":8,"queue_revision":1,"startup_quarantine_count":0,"counts_by_status":{"queued":1,"implementing":0,"validating":0,"reviewing":0,"publishing":0,"verifying_main":0,"succeeded":0,"cancelled":0,"abandoned":0,"quarantined":0},"visible_feature_count":1,"features_truncated":false,"features":[{"feature_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","specification_revision":1,"lifecycle_revision":1,"queue_position":1,"status":"queued","lease_present":false,"effect_possible":false}],"owner_guidance":{"state":"ready","reason_code":"head_dependency_satisfied","next_owner_action":"await_owner_control_surface","feature_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","specification_revision":1,"lifecycle_revision":1,"queue_revision":1,"emergency_pause_revision":0}}"#.utf8
+            #"{"schema_version":9,"queue_revision":1,"startup_quarantine_count":0,"counts_by_status":{"queued":1,"implementing":0,"validating":0,"reviewing":0,"publishing":0,"verifying_main":0,"repairing":0,"paused":0,"attention_required":0,"failed":0,"succeeded":0,"cancelled":0,"abandoned":0,"quarantined":0},"visible_feature_count":1,"features_truncated":false,"features":[{"feature_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","specification_revision":1,"lifecycle_revision":1,"queue_position":1,"status":"queued","lease_present":false,"effect_possible":false}],"owner_guidance":{"state":"ready","reason_code":"head_dependency_satisfied","next_owner_action":"await_owner_control_surface","feature_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","specification_revision":1,"lifecycle_revision":1,"queue_revision":1,"emergency_pause_revision":0}}"#.utf8
         )
         let status = try JSONDecoder().decode(
             AssemblywrightMacFeatureConveyorStatus.self,
@@ -150,7 +150,7 @@ private func featureConveyorStatus(
     nextOwnerAction: AssemblywrightMacFeatureConveyorNextOwnerAction = .prepareApprovedFeature
 ) -> AssemblywrightMacFeatureConveyorStatus {
     AssemblywrightMacFeatureConveyorStatus(
-        schemaVersion: 7,
+        schemaVersion: 9,
         queueRevision: 0,
         startupQuarantineCount: 0,
         countsByStatus: .init(
@@ -160,6 +160,10 @@ private func featureConveyorStatus(
             reviewing: 0,
             publishing: 0,
             verifyingMain: 0,
+            repairing: 0,
+            paused: 0,
+            attentionRequired: 0,
+            failed: 0,
             succeeded: 0,
             cancelled: 0,
             abandoned: 0,

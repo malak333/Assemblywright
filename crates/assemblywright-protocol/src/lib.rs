@@ -1036,6 +1036,9 @@ pub const MAX_FEATURE_CONVEYOR_INTEGRATION_ARTIFACTS: usize = 3;
 pub const FEATURE_CONVEYOR_VALIDATION_GATE_SCHEMA_VERSION: u16 = 1;
 pub const FEATURE_CONVEYOR_REVIEW_GATEWAY_SCHEMA_VERSION: u16 = 1;
 pub const FEATURE_CONVEYOR_PUBLICATION_COORDINATOR_SCHEMA_VERSION: u16 = 1;
+pub const FEATURE_CONVEYOR_ORCHESTRATION_SCHEMA_VERSION: u16 = 1;
+pub const MAX_FEATURE_CONVEYOR_REPLACEMENT_CANDIDATES: u8 = 3;
+pub const MAX_FEATURE_CONVEYOR_ACTIVE_PROCESSING_MS: u64 = 24 * 60 * 60 * 1_000;
 pub const MAX_FEATURE_CONVEYOR_PUBLICATION_CHECKS: usize = 64;
 pub const MAX_FEATURE_CONVEYOR_REVIEW_PACKET_BYTES: usize = 256 * 1024;
 pub const MAX_FEATURE_CONVEYOR_REVIEW_OUTPUT_BYTES: usize = 64 * 1024;
@@ -1047,6 +1050,121 @@ pub const MAX_FEATURE_CONVEYOR_REVIEW_CALLS_PER_FEATURE: u8 = 12;
 pub const FEATURE_CONVEYOR_REVIEW_BACKOFF_MS: [u64; 3] = [60_000, 300_000, 900_000];
 pub const MAX_FEATURE_CONVEYOR_VALIDATION_COMMANDS: usize = 13;
 pub const FEATURE_CONVEYOR_MINIMUM_LINE_COVERAGE_PERCENT: u8 = 70;
+
+/// Durable orchestration checkpoints are path-free master projections. They
+/// never carry commands, paths, provider output, adapter evidence,
+/// credentials, or caller-selected failure classifications.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureConveyorOrchestrationStage {
+    Implementing,
+    Validating,
+    Reviewing,
+    Publishing,
+    VerifyingMain,
+    Repairing,
+    Paused,
+    AttentionRequired,
+    Failed,
+    Succeeded,
+    Quarantined,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureConveyorOrchestrationAction {
+    Inactive,
+    AwaitImplementationEvidence,
+    AwaitValidationEvidence,
+    AwaitReviewDecision,
+    RetryReviewTransport,
+    AwaitPublicationEvidence,
+    AwaitMainVerification,
+    ReplacementCandidateRequired,
+    OwnerAttentionRequired,
+    ReconcileQuarantine,
+    Terminal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureConveyorOrchestrationPauseKind {
+    Provider,
+    Worker,
+    Maintenance,
+    Owner,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureConveyorOrchestrationReason {
+    CapabilityInactive,
+    CheckpointEffectFree,
+    ExistingEffectAmbiguous,
+    ValidationFailed,
+    ReviewRejected,
+    ReviewTransportBackoff,
+    ReviewBudgetExhausted,
+    PublicationFailed,
+    ReplacementCandidateContractUnavailable,
+    RepairBudgetExhausted,
+    ActiveProcessingBudgetExhausted,
+    Cancelled,
+    Failed,
+    Succeeded,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorOrchestrationProjection {
+    pub schema_version: u16,
+    pub feature_id: Uuid,
+    pub lifecycle_revision: u64,
+    pub orchestration_revision: u64,
+    pub stage: FeatureConveyorOrchestrationStage,
+    pub action: FeatureConveyorOrchestrationAction,
+    pub reason: FeatureConveyorOrchestrationReason,
+    pub checkpoint_id: Uuid,
+    pub checkpoint_sha256: [u8; 32],
+    pub replacement_candidates_used: u8,
+    pub active_processing_ms: u64,
+    pub active_processing_budget_ms: u64,
+    pub pause_kind: Option<FeatureConveyorOrchestrationPauseKind>,
+    pub next_retry_at_ms: Option<u64>,
+    pub effect_possible: bool,
+    pub activated: bool,
+}
+
+impl FeatureConveyorOrchestrationProjection {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.schema_version != FEATURE_CONVEYOR_ORCHESTRATION_SCHEMA_VERSION
+            || self.feature_id.is_nil()
+            || self.lifecycle_revision == 0
+            || self.orchestration_revision == 0
+            || self.checkpoint_id.is_nil()
+            || self.checkpoint_sha256 == [0; 32]
+            || self.replacement_candidates_used > MAX_FEATURE_CONVEYOR_REPLACEMENT_CANDIDATES
+            || self.active_processing_ms > MAX_FEATURE_CONVEYOR_ACTIVE_PROCESSING_MS
+            || self.active_processing_budget_ms != MAX_FEATURE_CONVEYOR_ACTIVE_PROCESSING_MS
+            || (self.pause_kind.is_some()
+                != matches!(self.stage, FeatureConveyorOrchestrationStage::Paused))
+            || (self.next_retry_at_ms.is_some()
+                && !matches!(
+                    self.reason,
+                    FeatureConveyorOrchestrationReason::ReviewTransportBackoff
+                ))
+            || (!self.activated
+                && (!matches!(self.action, FeatureConveyorOrchestrationAction::Inactive)
+                    || !matches!(
+                        self.reason,
+                        FeatureConveyorOrchestrationReason::CapabilityInactive
+                    )))
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        Ok(())
+    }
+}
 
 /// Closed, protocol-owned validation commands. These identifiers select
 /// master-owned argv; they are never interpreted as executable names or shell

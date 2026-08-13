@@ -59,7 +59,7 @@ accepted designs and take precedence within their scope:
 
 ### Windows master
 
-`assemblywright-master` owns durable state and every authority decision. Its schema-v17
+`assemblywright-master` owns durable state and every authority decision. Its schema-v18
 SQLite database holds two kernels:
 
 - The distributed device lifecycle: registered devices, connection epochs,
@@ -450,6 +450,27 @@ Any durable merge intent makes a merge possible for owner resolution, even if
 the feature was quarantined from `publishing`; abandonment then requires
 merged/healthy-main reconciliation and cannot use `merged:false` to bypass it.
 
+Schema v18 adds a kernel-only automatic-orchestration coordinator and immutable,
+path-free checkpoint ledger. It derives decisions solely from lifecycle and
+existing exact candidate, validation, review, provider-retry, publication, and
+healthy-main evidence; callers cannot supply commands, paths, provider output,
+adapter evidence, credentials, or failure classifications. The activation-
+evidence table has no writer or HTTP route in this slice, so the coordinator is
+durable but default-inert. It caps replacement candidates at three, reuses the
+three-review-attempt/twelve-call limits and fixed backoff, and charges at most
+24 active-processing hours while provider, worker, maintenance, and owner
+pauses stop the clock. Emergency Pause atomically closes the active interval;
+resume requires a fresh immutable checkpoint to restart it. Either immutable
+review-call ceiling requires owner attention, never another retry. Only a
+complete effect-free paused checkpoint survives restart; ambiguous effects quarantine. Substantive validation or review failure
+enters `repairing`, but the current artifact/dispatch contract cannot safely
+build a replacement candidate, so the next checkpoint is `attention_required`
+without consuming repair budget or fabricating success. Cancellation, failure,
+attention, and quarantine never auto-advance; coordination rejects the first
+three without mutation. Only existing exact healthy-main success automatically
+releases the lease, while an owner may release a reconciled retained lease with
+the exact-CAS `abandon-and-advance` action.
+
 The two-device proof controller creates its disposable repository with a
 non-local clone so Git does not copy source-maintenance caches into the snapshot
 authority boundary. Before a claim, it may remove only the strictly named,
@@ -506,7 +527,7 @@ session, directly supervises the pinned agent over a mutually
 code-identity-pinned local socket, and forwards authenticated metadata pages
 into a durable cursor. The enrolled key never leaves the helper, and the helper
 is not bundled inside the app. After health succeeds, the helper fetches the
-  exact schema-v8 Feature Conveyor projection on the same authenticated session,
+  exact schema-v9 Feature Conveyor projection on the same authenticated session,
 strictly validates and bounds it, and includes it only in authenticated app
 snapshots. The SwiftUI app renders queue state and guidance as compact read-only
 text; a malformed or drifted projection cancels the session and no stale status

@@ -15,6 +15,8 @@ use assemblywright_protocol::{
     DeviceId, DeviceRole, FeatureConveyorArtifactIntegrationRequest,
     FeatureConveyorCodingDispatchRequest, FeatureConveyorCodingWorkPacketMetadata,
     FeatureConveyorGrantRevisions, FeatureConveyorKnowledgeBaseDetermination,
+    FeatureConveyorOrchestrationAction, FeatureConveyorOrchestrationPauseKind,
+    FeatureConveyorOrchestrationReason, FeatureConveyorOrchestrationStage,
     FeatureConveyorPublicationRequest, FeatureConveyorReviewCoverageStatus,
     FeatureConveyorReviewDecision, FeatureConveyorReviewFinding,
     FeatureConveyorReviewGatewayRequest, FeatureConveyorReviewPacket,
@@ -25,7 +27,8 @@ use assemblywright_protocol::{
     FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
     FEATURE_CONVEYOR_PUBLICATION_COORDINATOR_SCHEMA_VERSION,
     FEATURE_CONVEYOR_REVIEW_GATEWAY_SCHEMA_VERSION, LOCAL_CODING_COMPLETED_STATUS,
-    LOCAL_CODING_FIXTURE_CONTENT, LOCAL_CODING_FIXTURE_TEST_STATUS, PROTOCOL_VERSION,
+    LOCAL_CODING_FIXTURE_CONTENT, LOCAL_CODING_FIXTURE_TEST_STATUS,
+    MAX_FEATURE_CONVEYOR_ACTIVE_PROCESSING_MS, PROTOCOL_VERSION,
 };
 use rusqlite::{params, Connection};
 use serde::Serialize;
@@ -279,6 +282,39 @@ fn artifact_integration_and_validation_gate_freeze_candidate_advance_and_reject_
 
 fn digest(label: &str) -> [u8; 32] {
     Sha256::digest(label.as_bytes()).into()
+}
+
+fn activate_orchestration(directory: &tempfile::TempDir, at_ms: u64) {
+    Connection::open(directory.path().join("master.sqlite3"))
+        .unwrap()
+        .execute(
+            "INSERT INTO feature_orchestration_activation(
+               singleton,activation_id,owner_evidence_sha256,live_evidence_sha256,activated_at_ms
+             ) VALUES(1,?1,?2,?3,?4)",
+            params![
+                Uuid::new_v4().to_string(),
+                digest("owner-orchestration-activation").as_slice(),
+                digest("live-orchestration-activation").as_slice(),
+                at_ms as i64,
+            ],
+        )
+        .unwrap();
+}
+
+fn orchestration_claim_fixture() -> (tempfile::TempDir, MasterKernel, Uuid, u64) {
+    let directory = tempdir().unwrap();
+    let mut kernel = MasterKernel::open(directory.path().join("master.sqlite3")).unwrap();
+    let repository_id = Uuid::new_v4();
+    install_grants(&mut kernel, repository_id);
+    let feature = specification(Uuid::new_v4(), repository_id, vec![]);
+    kernel.enqueue_approved_feature(&feature, 0, 10).unwrap();
+    let claim = claim_feature(&mut kernel, &feature, 1, 11).unwrap();
+    (
+        directory,
+        kernel,
+        claim.feature_id,
+        claim.lifecycle_revision,
+    )
 }
 
 fn integrated_validation_fixture(
@@ -550,6 +586,523 @@ fn validation_gate_failure_is_durable_idempotent_and_does_not_advance() {
         kernel.plan_validation_gate(&drift, 22),
         Err(MasterError::ValidationGateUnavailable)
     ));
+}
+
+#[test]
+fn orchestration_is_default_inert_and_creates_no_checkpoint_or_audit() {
+    let (directory, mut kernel, feature_id, _) = orchestration_claim_fixture();
+    assert!(matches!(
+        kernel.coordinate_feature_orchestration(feature_id, 0, 20),
+        Err(MasterError::OrchestrationInactive)
+    ));
+    let connection = Connection::open(directory.path().join("master.sqlite3")).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM feature_orchestration_checkpoints",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM feature_conveyor_audit
+                 WHERE event_kind='feature_orchestration_checkpointed'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn orchestration_checkpoint_is_idempotent_cas_bound_and_time_budgeted() {
+    let (directory, mut kernel, feature_id, initial_lifecycle) = orchestration_claim_fixture();
+    activate_orchestration(&directory, 12);
+    let initial = kernel
+        .coordinate_feature_orchestration(feature_id, 0, 20)
+        .unwrap();
+    assert_eq!(
+        initial.stage,
+        FeatureConveyorOrchestrationStage::Implementing
+    );
+    assert_eq!(
+        initial.action,
+        FeatureConveyorOrchestrationAction::AwaitImplementationEvidence
+    );
+    assert_eq!(initial.orchestration_revision, 1);
+    assert_eq!(initial.active_processing_ms, 0);
+    let exact_retry = kernel
+        .coordinate_feature_orchestration(feature_id, 1, 20)
+        .unwrap();
+    assert_eq!(exact_retry, initial);
+    let charged = kernel
+        .coordinate_feature_orchestration(feature_id, 1, 21)
+        .unwrap();
+    assert_eq!(charged.orchestration_revision, 2);
+    assert_eq!(charged.active_processing_ms, 1);
+    assert!(matches!(
+        kernel.coordinate_feature_orchestration(feature_id, 0, 21),
+        Err(MasterError::StaleOrchestrationRevision {
+            expected: 0,
+            found: 2
+        })
+    ));
+
+    let exhausted_at = 20 + MAX_FEATURE_CONVEYOR_ACTIVE_PROCESSING_MS;
+    let exhausted = kernel
+        .coordinate_feature_orchestration(feature_id, 2, exhausted_at)
+        .unwrap();
+    assert_eq!(
+        exhausted.stage,
+        FeatureConveyorOrchestrationStage::AttentionRequired
+    );
+    assert_eq!(
+        exhausted.reason,
+        FeatureConveyorOrchestrationReason::ActiveProcessingBudgetExhausted
+    );
+    assert_eq!(
+        exhausted.active_processing_ms,
+        MAX_FEATURE_CONVEYOR_ACTIVE_PROCESSING_MS
+    );
+    assert_eq!(exhausted.lifecycle_revision, initial_lifecycle + 1);
+    assert!(kernel
+        .feature_snapshot(feature_id)
+        .unwrap()
+        .active_lease_id
+        .is_some());
+    assert!(matches!(
+        kernel.coordinate_feature_orchestration(feature_id, 3, exhausted_at + 1),
+        Err(MasterError::InvalidFeatureTransition)
+    ));
+}
+
+#[test]
+fn emergency_pause_dominates_orchestration_without_checkpoint_audit_or_clock_charge() {
+    let (directory, mut kernel, feature_id, _) = orchestration_claim_fixture();
+    activate_orchestration(&directory, 12);
+    let initial = kernel
+        .coordinate_feature_orchestration(feature_id, 0, 20)
+        .unwrap();
+    kernel.set_emergency_paused_at(true, 25).unwrap();
+    let connection = Connection::open(directory.path().join("master.sqlite3")).unwrap();
+    let checkpoint_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM feature_orchestration_checkpoints",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let audit_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM feature_conveyor_audit
+             WHERE event_kind='feature_orchestration_checkpointed'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let active_processing_ms: i64 = connection
+        .query_row(
+            "SELECT active_processing_ms FROM feature_orchestration_state WHERE feature_id=?1",
+            [feature_id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let clock_started_at_ms: Option<i64> = connection
+        .query_row(
+            "SELECT clock_started_at_ms FROM feature_orchestration_state WHERE feature_id=?1",
+            [feature_id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let clock_audit_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM feature_conveyor_audit
+             WHERE event_kind='feature_orchestration_clock_suspended'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(active_processing_ms, 5);
+    assert_eq!(clock_started_at_ms, None);
+    assert_eq!(clock_audit_count, 1);
+    drop(connection);
+
+    assert!(matches!(
+        kernel.coordinate_feature_orchestration(feature_id, initial.orchestration_revision, 200),
+        Err(MasterError::EmergencyPaused)
+    ));
+    let connection = Connection::open(directory.path().join("master.sqlite3")).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM feature_orchestration_checkpoints",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        checkpoint_count
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM feature_conveyor_audit
+                 WHERE event_kind='feature_orchestration_checkpointed'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        audit_count
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT active_processing_ms FROM feature_orchestration_state WHERE feature_id=?1",
+                [feature_id.to_string()],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        active_processing_ms
+    );
+    drop(connection);
+
+    kernel.set_emergency_paused_at(false, 1_000).unwrap();
+    let resumed = kernel
+        .coordinate_feature_orchestration(feature_id, initial.orchestration_revision, 1_001)
+        .unwrap();
+    assert_eq!(
+        resumed.orchestration_revision,
+        initial.orchestration_revision + 1
+    );
+    assert_eq!(resumed.active_processing_ms, 5);
+    let post_resume = kernel
+        .coordinate_feature_orchestration(feature_id, resumed.orchestration_revision, 1_011)
+        .unwrap();
+    assert_eq!(post_resume.active_processing_ms, 15);
+    assert_eq!(
+        post_resume.orchestration_revision,
+        resumed.orchestration_revision + 1
+    );
+}
+
+#[test]
+fn cancellation_is_stable_under_coordinate_until_owner_abandons() {
+    let (directory, mut kernel, feature_id, lifecycle_revision) = orchestration_claim_fixture();
+    activate_orchestration(&directory, 12);
+    let initial = kernel
+        .coordinate_feature_orchestration(feature_id, 0, 20)
+        .unwrap();
+    let queue_revision = kernel.feature_queue_revision().unwrap();
+    let pause_revision = kernel.emergency_pause_revision().unwrap();
+    let cancelled = kernel
+        .cancel_active_feature(
+            feature_id,
+            lifecycle_revision,
+            queue_revision,
+            pause_revision,
+            21,
+        )
+        .unwrap();
+    let connection = Connection::open(directory.path().join("master.sqlite3")).unwrap();
+    let checkpoint_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM feature_orchestration_checkpoints",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let audit_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM feature_conveyor_audit", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    drop(connection);
+
+    assert!(matches!(
+        kernel.coordinate_feature_orchestration(feature_id, initial.orchestration_revision, 22),
+        Err(MasterError::InvalidFeatureTransition)
+    ));
+    let retained = kernel.feature_snapshot(feature_id).unwrap();
+    assert_eq!(retained, cancelled);
+    let connection = Connection::open(directory.path().join("master.sqlite3")).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM feature_orchestration_checkpoints",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        checkpoint_count
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM feature_conveyor_audit", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        audit_count
+    );
+    drop(connection);
+
+    let abandoned = kernel
+        .abandon_and_advance(
+            feature_id,
+            cancelled.lifecycle_revision,
+            queue_revision,
+            pause_revision,
+            FeatureAbandonmentEvidence {
+                safe_reconciliation_sha256: digest("cancel-coordinate-owner-resolution"),
+                merged: false,
+                verified_healthy_main_sha256: None,
+            },
+            23,
+        )
+        .unwrap();
+    assert_eq!(abandoned.status, FeatureLifecycleStatus::Abandoned);
+    assert!(abandoned.active_lease_id.is_none());
+    assert_eq!(kernel.feature_queue_revision().unwrap(), queue_revision + 1);
+}
+
+#[test]
+fn substantive_validation_failure_enters_repair_then_attention_without_fake_candidate() {
+    let gate = serde_json::json!({
+        "schema_version": 1,
+        "command_ids": [
+            "requirements_binding", "coverage", "focused_unit_tests", "native_e2e",
+            "documentation", "knowledge_base", "formatting", "lint", "build", "safety",
+            "changed_paths", "secret_scan", "repository_validation"
+        ]
+    });
+    let (directory, mut kernel, request, mut evidence) = integrated_validation_fixture(Some(gate));
+    activate_orchestration(&directory, 19);
+    let plan = match kernel.plan_validation_gate(&request, 20).unwrap() {
+        ValidationGateAuthorization::Planned(plan) => plan,
+        other => panic!("unexpected validation authorization: {other:?}"),
+    };
+    evidence.commands[0].passed = false;
+    assert!(matches!(
+        kernel.finalize_validation_gate(&plan, &evidence, 21),
+        Err(MasterError::ValidationGateFailed)
+    ));
+    let repairing = kernel
+        .coordinate_feature_orchestration(request.feature_id, 0, 22)
+        .unwrap();
+    assert_eq!(
+        repairing.stage,
+        FeatureConveyorOrchestrationStage::Repairing
+    );
+    assert_eq!(
+        repairing.action,
+        FeatureConveyorOrchestrationAction::ReplacementCandidateRequired
+    );
+    assert_eq!(repairing.replacement_candidates_used, 0);
+    let attention = kernel
+        .coordinate_feature_orchestration(request.feature_id, 1, 23)
+        .unwrap();
+    assert_eq!(
+        attention.stage,
+        FeatureConveyorOrchestrationStage::AttentionRequired
+    );
+    assert_eq!(
+        attention.reason,
+        FeatureConveyorOrchestrationReason::ReplacementCandidateContractUnavailable
+    );
+    assert_eq!(attention.replacement_candidates_used, 0);
+    assert!(kernel
+        .feature_snapshot(request.feature_id)
+        .unwrap()
+        .active_lease_id
+        .is_some());
+    assert!(matches!(
+        kernel.coordinate_feature_orchestration(request.feature_id, 2, 24),
+        Err(MasterError::InvalidFeatureTransition)
+    ));
+    let queue_revision = kernel.feature_queue_revision().unwrap();
+    let pause_revision = kernel.emergency_pause_revision().unwrap();
+    let abandoned = kernel
+        .abandon_and_advance(
+            request.feature_id,
+            attention.lifecycle_revision,
+            queue_revision,
+            pause_revision,
+            FeatureAbandonmentEvidence {
+                safe_reconciliation_sha256: digest("attention-owner-resolution"),
+                merged: false,
+                verified_healthy_main_sha256: None,
+            },
+            25,
+        )
+        .unwrap();
+    assert_eq!(abandoned.status, FeatureLifecycleStatus::Abandoned);
+    assert!(abandoned.active_lease_id.is_none());
+    assert_eq!(kernel.feature_queue_revision().unwrap(), queue_revision + 1);
+}
+
+#[test]
+fn failed_resolution_requires_exact_transition_evidence_and_owner_abandonment() {
+    let (directory, mut kernel, feature_id, lifecycle_revision) = orchestration_claim_fixture();
+    activate_orchestration(&directory, 12);
+    let next_revision = lifecycle_revision + 1;
+    let mut connection = Connection::open(directory.path().join("master.sqlite3")).unwrap();
+    let tx = connection.transaction().unwrap();
+    tx.execute(
+        "UPDATE feature_conveyor_features
+         SET status='failed',lifecycle_revision=?1,effect_possible=1,updated_at_ms=20
+         WHERE feature_id=?2 AND status='implementing' AND lifecycle_revision=?3",
+        params![
+            next_revision as i64,
+            feature_id.to_string(),
+            lifecycle_revision as i64
+        ],
+    )
+    .unwrap();
+    tx.execute(
+        "INSERT INTO feature_transition_evidence(
+           feature_id,lifecycle_revision,from_status,to_status,recorded_at_ms
+         ) VALUES(?1,?2,'implementing','failed',20)",
+        params![feature_id.to_string(), next_revision as i64],
+    )
+    .unwrap();
+    tx.execute(
+        "INSERT INTO feature_conveyor_audit(event_kind,feature_id,occurred_at_ms,redacted_metadata_json)
+         VALUES('feature_failed',?1,20,?2)",
+        params![
+            feature_id.to_string(),
+            json!({
+                "from_status": "implementing",
+                "to_status": "failed",
+                "lifecycle_revision": next_revision,
+                "lease_retained": true,
+                "effect_possible": true,
+                "side_effect_executed": false
+            })
+            .to_string()
+        ],
+    )
+    .unwrap();
+    tx.commit().unwrap();
+    drop(connection);
+
+    let queue_revision = kernel.feature_queue_revision().unwrap();
+    assert!(matches!(
+        kernel.coordinate_feature_orchestration(feature_id, 0, 21),
+        Err(MasterError::InvalidFeatureTransition)
+    ));
+    assert_eq!(
+        kernel.feature_snapshot(feature_id).unwrap().status,
+        FeatureLifecycleStatus::Failed
+    );
+    assert_eq!(kernel.feature_queue_revision().unwrap(), queue_revision);
+    let pause_revision = kernel.emergency_pause_revision().unwrap();
+    let abandoned = kernel
+        .abandon_and_advance(
+            feature_id,
+            next_revision,
+            queue_revision,
+            pause_revision,
+            FeatureAbandonmentEvidence {
+                safe_reconciliation_sha256: digest("failed-owner-resolution"),
+                merged: false,
+                verified_healthy_main_sha256: None,
+            },
+            22,
+        )
+        .unwrap();
+    assert_eq!(abandoned.status, FeatureLifecycleStatus::Abandoned);
+    assert!(abandoned.active_lease_id.is_none());
+    assert_eq!(kernel.feature_queue_revision().unwrap(), queue_revision + 1);
+}
+
+#[test]
+fn provider_backoff_pauses_without_charging_time_and_restart_resumes_safe_checkpoint() {
+    let (directory, mut kernel, request, packet) = reviewing_fixture();
+    activate_orchestration(&directory, 22);
+    let initial = kernel
+        .coordinate_feature_orchestration(request.feature_id, 0, 23)
+        .unwrap();
+    assert_eq!(initial.stage, FeatureConveyorOrchestrationStage::Reviewing);
+    let plan = match kernel.begin_review_gateway(&request, &packet, 24).unwrap() {
+        ReviewGatewayAuthorization::Planned(plan) => *plan,
+        other => panic!("unexpected review authorization: {other:?}"),
+    };
+    let retry_at = kernel
+        .finalize_review_transport_failure(&plan, ReviewTransportFailure::ProviderOutage, 25)
+        .unwrap();
+    let paused = kernel
+        .coordinate_feature_orchestration(request.feature_id, 1, 26)
+        .unwrap();
+    assert_eq!(paused.stage, FeatureConveyorOrchestrationStage::Paused);
+    assert_eq!(
+        paused.pause_kind,
+        Some(FeatureConveyorOrchestrationPauseKind::Provider)
+    );
+    assert_eq!(paused.next_retry_at_ms, Some(retry_at));
+    let charged_before_pause = paused.active_processing_ms;
+    drop(kernel);
+
+    let mut reopened = MasterKernel::open(directory.path().join("master.sqlite3")).unwrap();
+    assert_eq!(reopened.feature_startup_quarantines(), 0);
+    let still_paused = reopened
+        .coordinate_feature_orchestration(request.feature_id, 2, retry_at - 1)
+        .unwrap();
+    assert_eq!(still_paused, paused);
+    let resumed = reopened
+        .coordinate_feature_orchestration(request.feature_id, 2, retry_at)
+        .unwrap();
+    assert_eq!(resumed.stage, FeatureConveyorOrchestrationStage::Reviewing);
+    assert_eq!(
+        resumed.action,
+        FeatureConveyorOrchestrationAction::RetryReviewTransport
+    );
+    assert_eq!(resumed.active_processing_ms, charged_before_pause);
+}
+
+#[test]
+fn orchestration_schema_v17_migrates_backup_first_and_ledger_is_immutable() {
+    let directory = tempdir().unwrap();
+    let database = directory.path().join("master.sqlite3");
+    let process = MasterProcess::acquire(directory.path()).unwrap();
+    drop(process);
+    let connection = Connection::open(&database).unwrap();
+    connection.execute_batch("PRAGMA user_version=17;").unwrap();
+    drop(connection);
+
+    let process = MasterProcess::acquire(directory.path()).unwrap();
+    assert_eq!(process.kernel().schema_version().unwrap(), 18);
+    assert!(process
+        .migration_backup_path()
+        .is_some_and(|path| path.exists()));
+    drop(process);
+
+    let connection = Connection::open(&database).unwrap();
+    connection
+        .execute(
+            "INSERT INTO feature_orchestration_activation(
+               singleton,activation_id,owner_evidence_sha256,live_evidence_sha256,activated_at_ms
+             ) VALUES(1,?1,?2,?3,1)",
+            params![
+                Uuid::new_v4().to_string(),
+                digest("owner-evidence").as_slice(),
+                digest("live-evidence").as_slice(),
+            ],
+        )
+        .unwrap();
+    assert!(connection
+        .execute(
+            "UPDATE feature_orchestration_activation SET activated_at_ms=2 WHERE singleton=1",
+            [],
+        )
+        .is_err());
+    assert!(connection
+        .execute(
+            "DELETE FROM feature_orchestration_activation WHERE singleton=1",
+            [],
+        )
+        .is_err());
 }
 
 #[test]
@@ -1545,7 +2098,7 @@ fn review_rejection_is_immutable_and_keeps_active_lease_for_later_repair() {
 
 #[test]
 fn review_transport_failures_backoff_without_repair_and_enforce_three_attempts() {
-    let (_directory, mut kernel, mut request, packet) = reviewing_fixture();
+    let (directory, mut kernel, mut request, packet) = reviewing_fixture();
     let first = match kernel.begin_review_gateway(&request, &packet, 23).unwrap() {
         ReviewGatewayAuthorization::Planned(plan) => plan,
         other => panic!("unexpected review authorization: {other:?}"),
@@ -1596,6 +2149,18 @@ fn review_transport_failures_backoff_without_repair_and_enforce_three_attempts()
         kernel.feature_conveyor_status().unwrap().features[0].status,
         FeatureLifecycleStatus::Reviewing
     );
+    activate_orchestration(&directory, 1_260_027);
+    let exhausted = kernel
+        .coordinate_feature_orchestration(request.feature_id, 0, 1_260_028)
+        .unwrap();
+    assert_eq!(
+        exhausted.stage,
+        FeatureConveyorOrchestrationStage::AttentionRequired
+    );
+    assert_eq!(
+        exhausted.reason,
+        FeatureConveyorOrchestrationReason::ReviewBudgetExhausted
+    );
 }
 
 #[test]
@@ -1603,6 +2168,7 @@ fn review_gateway_enforces_twelve_feature_calls_across_candidate_commits() {
     let (directory, mut kernel, mut request, _packet) = reviewing_fixture();
     let connection = Connection::open(directory.path().join("master.sqlite3")).unwrap();
     for feature_call in 1..=12_i64 {
+        let review_call_id = Uuid::new_v4();
         connection
             .execute(
                 "INSERT INTO feature_review_calls (
@@ -1616,7 +2182,7 @@ fn review_gateway_enforces_twelve_feature_calls_across_candidate_commits() {
                  ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,1,
                            ?16,?17,?18,?19,?20,?21,?22,?23)",
                 rusqlite::params![
-                    Uuid::new_v4().to_string(),
+                    review_call_id.to_string(),
                     request.feature_id.to_string(),
                     request.specification_revision as i64,
                     request.expected_lifecycle_revision as i64,
@@ -1642,12 +2208,38 @@ fn review_gateway_enforces_twelve_feature_calls_across_candidate_commits() {
                 ],
             )
             .unwrap();
+        connection
+            .execute(
+                "INSERT INTO feature_review_call_outcomes(
+                   review_call_id,outcome_kind,outcome_sha256,next_retry_at_ms,completed_at_ms
+                 ) VALUES(?1,'provider_outage',?2,?3,?4)",
+                params![
+                    review_call_id.to_string(),
+                    digest(&format!("outcome-{feature_call}")).as_slice(),
+                    200 + feature_call,
+                    100 + feature_call,
+                ],
+            )
+            .unwrap();
     }
     request.review_call_id = Uuid::new_v4();
     assert!(matches!(
         kernel.prepare_review_gateway(&request, 100),
         Err(MasterError::ReviewBudgetExhausted)
     ));
+    drop(connection);
+    activate_orchestration(&directory, 300);
+    let exhausted = kernel
+        .coordinate_feature_orchestration(request.feature_id, 0, 301)
+        .unwrap();
+    assert_eq!(
+        exhausted.stage,
+        FeatureConveyorOrchestrationStage::AttentionRequired
+    );
+    assert_eq!(
+        exhausted.reason,
+        FeatureConveyorOrchestrationReason::ReviewBudgetExhausted
+    );
 }
 
 #[test]
@@ -1821,13 +2413,13 @@ fn review_gateway_schema_v15_migrates_backup_first_to_immutable_v16_tables() {
     drop_review_gateway_schema_for_legacy_fixture(&connection);
     connection.pragma_update(None, "user_version", 15).unwrap();
     let process = MasterProcess::acquire(directory.path()).unwrap();
-    assert_eq!(process.kernel().schema_version().unwrap(), 17);
+    assert_eq!(process.kernel().schema_version().unwrap(), 18);
     let backup = process.migration_backup_path().unwrap();
     assert!(backup
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v17."));
+        .starts_with("master.pre-v18."));
     assert_eq!(
         Connection::open(backup)
             .unwrap()
@@ -1862,13 +2454,13 @@ fn publication_schema_v16_migrates_backup_first_to_immutable_v17_tables() {
     drop(connection);
 
     let process = MasterProcess::acquire(directory.path()).unwrap();
-    assert_eq!(process.kernel().schema_version().unwrap(), 17);
+    assert_eq!(process.kernel().schema_version().unwrap(), 18);
     let backup = process.migration_backup_path().unwrap();
     assert!(backup
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v17."));
+        .starts_with("master.pre-v18."));
     assert_eq!(
         Connection::open(backup)
             .unwrap()
@@ -1912,7 +2504,7 @@ fn validation_gate_schema_v14_migrates_backup_first_to_immutable_v15_tables() {
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v17."));
+        .starts_with("master.pre-v18."));
     assert_eq!(
         Connection::open(backup)
             .unwrap()
@@ -2847,6 +3439,10 @@ fn assert_status_json_allowlist(value: &Value) {
             "reviewing",
             "publishing",
             "verifying_main",
+            "repairing",
+            "paused",
+            "attention_required",
+            "failed",
             "succeeded",
             "cancelled",
             "abandoned",
@@ -2971,7 +3567,7 @@ fn abandon_feature(kernel: &mut MasterKernel, feature: &ApprovedFeatureSpecifica
 fn status_projection_is_empty_bounded_and_redacted() {
     let mut kernel = MasterKernel::in_memory().unwrap();
     let empty = kernel.feature_conveyor_status().unwrap();
-    assert_eq!(empty.schema_version, 8);
+    assert_eq!(empty.schema_version, 9);
     assert_eq!(empty.queue_revision, 0);
     assert_eq!(empty.startup_quarantine_count, 0);
     assert_eq!(empty.visible_feature_count, 0);
@@ -5422,7 +6018,7 @@ fn master_process_v10_backfills_resolution_receipts_from_exact_immutable_audit()
             .file_name()
             .unwrap()
             .to_string_lossy()
-            .starts_with("master.pre-v17."));
+            .starts_with("master.pre-v18."));
         assert_eq!(
             Connection::open(backup)
                 .unwrap()
@@ -5546,7 +6142,7 @@ fn master_process_v10_ambiguous_resolution_audit_fails_closed_and_restores_backu
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v17.")));
+            .starts_with("master.pre-v18.")));
 }
 
 #[test]
@@ -5714,7 +6310,7 @@ fn master_process_v4_backup_migration_reopen_and_restore_on_failure() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v17.")));
+            .starts_with("master.pre-v18.")));
 }
 
 #[test]
@@ -5780,7 +6376,7 @@ fn master_process_v12_backup_first_migration_adds_retained_workspace_binding() {
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v17."));
+        .starts_with("master.pre-v18."));
     assert_eq!(
         Connection::open(backup)
             .unwrap()
@@ -5841,7 +6437,7 @@ fn master_process_v12_failed_migration_restores_verified_backup() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v17.")));
+            .starts_with("master.pre-v18.")));
 }
 
 #[test]
@@ -5908,7 +6504,7 @@ fn master_process_v6_backup_migration_binds_pause_and_default_inert_owner_contro
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v17."));
+        .starts_with("master.pre-v18."));
     let backup = Connection::open(backup).unwrap();
     assert_eq!(
         backup
@@ -6017,5 +6613,5 @@ fn forward_schema_version_fails_closed_without_backup() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v17.")));
+            .starts_with("master.pre-v18.")));
 }

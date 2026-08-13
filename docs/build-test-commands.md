@@ -154,6 +154,24 @@ before intent without a fixed credential-owning adapter; no live GitHub API,
 credential custody, required hosted checks, branch protection, or merge policy
 is claimed.
 
+The schema-v18 orchestration kernel is covered by the native conveyor suite:
+
+```sh
+cargo test -p assemblywright-master --test feature_conveyor_kernel orchestration -- --nocapture
+cargo test -p assemblywright-master --test feature_conveyor_kernel substantive_validation_failure -- --nocapture
+cargo test -p assemblywright-master --test feature_conveyor_kernel provider_backoff -- --nocapture
+```
+
+These tests prove default-inert behavior, stale CAS and exact idempotence,
+24-hour budget enforcement, substantive failure classification, no fabricated
+replacement candidate, provider-pause time exclusion, and restart-safe resume
+of one effect-free checkpoint. They also prove Emergency Pause excludes all
+paused wall time and both immutable review-call ceilings require owner
+attention. The capability has no process or HTTP boundary,
+so a new route E2E is not applicable; the existing owner-loopback and remote-
+absence E2E remains unchanged. Live activation and real replacement-candidate
+execution remain capability-7 proof.
+
 On the owner-controlled Windows validation host, the connected containment
 runner and its hostile fixture boundary have native coverage:
 
@@ -308,7 +326,7 @@ model-quality, OS-sandbox, repository, Git, unattended, signing, notarization,
 or release evidence.
 
 The base `--run` lane additionally requires the signed helper monitor and the
-production app lifecycle to receive and strictly decode the schema-v8 Feature
+production app lifecycle to receive and strictly decode the schema-v9 Feature
 Conveyor snapshot over the accepted MacBridge session. This proves live
 read-only observation only; it grants no queue mutation or owner-action
 authority.
@@ -404,7 +422,7 @@ Deterministic cross-process coverage proves:
   The designated-owner POST is bound to the exact queue, designation, and pause
   revisions and reuses the manifest, grants, dependency, capacity, immutable-
   specification, and atomic-enqueue checks without claiming a lease. Swift tests
-  prove strict schema-v8 decoding, request ordering, exact digest shapes,
+  prove strict schema-v9 decoding, request ordering, exact digest shapes,
   self-dependency rejection, server-authoritative canonical-digest handling,
   redacted-receipt validation, fail-closed cancellation, authenticated snapshot
   propagation, and read-only app presentation. The display labels do not

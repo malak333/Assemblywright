@@ -182,7 +182,7 @@ require_text "README non-claims" "$README" "Autonomous dispatch"
 require_text "DESIGN conveyor pointer" "$DESIGN" "docs/feature-conveyor-design.md"
 require_text "DESIGN distributed pointer" "$DESIGN" "docs/distributed-developer-mode-design.md"
 require_text "DESIGN assistant non-goal" "$DESIGN" "No general-purpose assistant surface."
-require_text "DESIGN current master schema" "$DESIGN" "schema-v17"
+require_text "DESIGN current master schema" "$DESIGN" "schema-v18"
 require_text "DESIGN result artifact boundary" "$DESIGN" \
   "Schema v13 adds bounded general-worker packet"
 
@@ -382,9 +382,9 @@ require_text "conveyor Swift negative-path regression" "$MAC_BRIDGE_TESTS" \
 require_text "conveyor live observer requires signed helper" "$MAC_BRIDGE_LIVE_E2E" \
   'codesign --verify --strict "$BRIDGE_BIN"'
 require_text "conveyor live observer requires schema marker" "$MAC_BRIDGE_LIVE_E2E" \
-  'feature_conveyor_schema=8'
+  'feature_conveyor_schema=9'
 require_text "conveyor live observer validates schema eight" "$MAC_BRIDGE_LIVE_E2E" \
-  'Feature Conveyor schema was not v8'
+  'Feature Conveyor schema was not v9'
 forbid_text "conveyor live observer rejects stale schema seven" \
   "$MAC_BRIDGE_LIVE_E2E" 'Feature Conveyor schema was not v7'
 require_text "conveyor live observer requires repeated monitor samples" \
@@ -412,7 +412,7 @@ require_text "knowledge base conveyor guidance boundary" "$KB" \
 require_text "knowledge base conveyor pause revision" "$KB" \
   '`emergency_pause_revision`'
 require_text "knowledge base conveyor live observer proof" "$KB" \
-  '`feature_conveyor_schema=8`'
+  '`feature_conveyor_schema=9`'
 require_text "knowledge base owner designation boundary" "$KB" \
   "POST /v1/feature-conveyor/owner-control-bridge"
 require_text "knowledge base remote owner action boundary" "$KB" \
@@ -465,11 +465,11 @@ require_text "release checklist schema-v14 integration invariant" "$CHECKLIST" \
 require_text "architecture schema-v13 artifact store" "$ARCHITECTURE" \
   "Private bytes outside SQLite; immutable schema-v13 metadata and redacted audit"
 require_text "architecture current master schema" "$ARCHITECTURE" \
-  '`assemblywright-master` schema version 17'
+  '`assemblywright-master` schema version 18'
 require_text "architecture current general worker" "$ARCHITECTURE" \
   "Protocol v5 replaces the historical v4 fixed-child"
 require_text "feature design current general worker" "$FEATURE_CONVEYOR_DESIGN" \
-  "implemented protocol-v5/schema-v17 kernel"
+  "default-inert protocol-v5/schema-v18 Windows"
 require_text "feature design review gateway" "$FEATURE_CONVEYOR_DESIGN" \
   "independent-review gateway"
 require_text "release checklist review boundary" "$CHECKLIST" \
@@ -492,6 +492,14 @@ require_text "feature design publication boundary" "$FEATURE_CONVEYOR_DESIGN" \
   "credential-owning GitHub adapter remains default-unavailable"
 require_text "release checklist publication boundary" "$CHECKLIST" \
   "schema-v17 publication"
+require_text "feature design orchestration boundary" "$FEATURE_CONVEYOR_DESIGN" \
+  "Schema v18 adds immutable path-free orchestration state"
+require_text "safety orchestration boundary" "$SAFETY_RULES" \
+  "Schema v18 orchestration is an internal, default-inert kernel"
+require_text "release checklist orchestration boundary" "$CHECKLIST" \
+  "schema-v18 orchestration remains kernel-only"
+require_text "knowledge base orchestration boundary" "$KB" \
+  "Schema v18 adds a backup-first, path-free immutable orchestration checkpoint"
 require_text "knowledge base publication closeout" "$KB" \
   "d18d15b1b988e471ce69c7e5287c10f1506f0c42"
 require_text "knowledge base publication documentation verdict" "$KB" \

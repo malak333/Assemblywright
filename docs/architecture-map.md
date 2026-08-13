@@ -25,7 +25,7 @@ flowchart LR
   Process --> Service["Windows SCM host: automatic start, bounded recovery, status, maintenance, uninstall"]
   Service --> Maintenance["Durable fail-closed marker blocks new enqueue and lease admission"]
   Master --> Durable["Registered devices, epochs, queue, attempts, cancellation, expiry, restart reconciliation, exact results"]
-  Master --> Conveyor["Default-inert Feature Conveyor repository kernel retained through schema v17"]
+  Master --> Conveyor["Default-inert Feature Conveyor repository kernel retained through schema v18"]
   Conveyor --> ConveyorSafety["Immutable approved specs and grants, strict CAS queue, one active lease, atomic redacted audit, and startup quarantine"]
   Conveyor --> Observer["Exact bounded status projection: local owner route plus accepted-session MacBridge-only remote GET"]
   Observer --> Helper
@@ -77,7 +77,7 @@ a headless master executable. The contract seam provides the current protocol
 version, typed device/task/step/attempt/lease/cancellation identifiers, bounded
 capability advertisements, handshake messages, job and result envelopes, strict
 bound-before-decode JSON entry points, nil-identity rejection, and a golden
-compatibility fixture. `assemblywright-master` schema version 17 preserves the
+compatibility fixture. `assemblywright-master` schema version 18 preserves the
 schema-v4 distributed-device lifecycle, the schema-v5 Feature Conveyor, and
 schema-v6 dedicated pending capability-rebind evidence, then adds the durable
 Emergency Pause revision, then adds one nullable compare-and-set owner-control
@@ -135,7 +135,7 @@ one display-only next owner action. It does not determine claimability or
   authorize that action. The local owner observation route is unchanged; a dedicated
 `GET /v1/distributed/feature-conveyor/status` reuses the exact projection only
 after an accepted exporter-bound MacBridge session, denies other roles, and
-forwards no owner token. The Swift helper validates the exact schema-v8
+forwards no owner token. The Swift helper validates the exact schema-v9
 allowlist and the app displays it only while authenticated. A separate
 owner-token-authenticated loopback grant surface records one strict contiguous
 compare-and-set digest-only revision and inspects current grant metadata for a
@@ -182,7 +182,7 @@ profile the Swift supervisor validates the singleton capability and required
 relay before connecting, performs authenticated health, and relays without
 requesting or emitting the MacBridge-only Feature Conveyor projection.
 
-Protocol v5/schema v17 keeps the historical schema-v10 through schema-v16 lanes
+Protocol v5/schema v18 keeps the historical schema-v10 through schema-v17 lanes
 below and adds only deterministic bounded multi-file edits. Rust and Swift share
 16 KiB complete-job, 12 KiB context, and 4 KiB replacement limits. The agent
 mutates through held owner-private no-follow parent descriptors using exclusive
@@ -211,6 +211,11 @@ publication intent/evidence coordination, exact remote-main verification, and
 atomic success/queue advancement. Its owner-loopback route is absent from mTLS,
 and the credential-owning GitHub adapter remains default-unavailable;
 controlled bare-Git proof is not hosted branch-protection proof.
+Schema v18 adds only an internal, path-free immutable orchestration checkpoint
+ledger and deterministic coordinator. It has no route or activation writer,
+resumes only a proven effect-free pause, and quarantines ambiguous effects.
+Replacement-candidate construction remains unavailable under the current
+artifact/dispatch contract, so substantive failures stop at owner attention.
 Delete first atomically captures the leaf in the held parent and rolls mismatch
 back without deleting the replacement. Windows decodes canonical artifact bytes
 against the immutable packet and independently matches stored retention/expiry
@@ -229,7 +234,7 @@ operation. It verifies the exact changed-path set and canonical multi-file
 artifact, then seals successful state until exact cancellation/resolution or
 bounded expiry. Cancellation, pause-driven durable cancellation,
 lease/deadline loss, shutdown, and failure dominate completion and cleanup. No
-host sandbox or host-egress enforcement is claimed. The schema-v17 master may
+host sandbox or host-egress enforcement is claimed. The schema-v18 master may
 integrate and, only with validated private Windows runner provisioning, execute
 the fixed validation plan against a verified disposable candidate. Registered-
 source mutation and autonomous activation are not implemented. Schema v16

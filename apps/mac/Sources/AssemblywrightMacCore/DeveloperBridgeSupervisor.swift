@@ -37,6 +37,10 @@ public enum AssemblywrightMacFeatureConveyorLifecycleStatus: String, Codable, Eq
     case reviewing
     case publishing
     case verifyingMain = "verifying_main"
+    case repairing
+    case paused
+    case attentionRequired = "attention_required"
+    case failed
     case succeeded
     case cancelled
     case abandoned
@@ -69,7 +73,7 @@ public enum AssemblywrightMacFeatureConveyorNextOwnerAction: String, Codable, Eq
 }
 
 public struct AssemblywrightMacFeatureConveyorStatus: Codable, Equatable, Sendable {
-    public static let expectedSchemaVersion: UInt64 = 8
+    public static let expectedSchemaVersion: UInt64 = 9
     public static let maximumFeatures = 100
     public static let maximumVisibleFeatures: UInt64 = 101
 
@@ -80,6 +84,10 @@ public struct AssemblywrightMacFeatureConveyorStatus: Codable, Equatable, Sendab
         public let reviewing: UInt64
         public let publishing: UInt64
         public let verifyingMain: UInt64
+        public let repairing: UInt64
+        public let paused: UInt64
+        public let attentionRequired: UInt64
+        public let failed: UInt64
         public let succeeded: UInt64
         public let cancelled: UInt64
         public let abandoned: UInt64
@@ -88,13 +96,17 @@ public struct AssemblywrightMacFeatureConveyorStatus: Codable, Equatable, Sendab
         enum CodingKeys: String, CodingKey, CaseIterable {
             case queued, implementing, validating, reviewing, publishing
             case verifyingMain = "verifying_main"
+            case repairing, paused
+            case attentionRequired = "attention_required"
+            case failed
             case succeeded, cancelled, abandoned, quarantined
         }
 
         fileprivate var orderedValues: [UInt64] {
             [
                 queued, implementing, validating, reviewing, publishing,
-                verifyingMain, succeeded, cancelled, abandoned, quarantined
+                verifyingMain, repairing, paused, attentionRequired, failed,
+                succeeded, cancelled, abandoned, quarantined
             ]
         }
 
@@ -106,6 +118,10 @@ public struct AssemblywrightMacFeatureConveyorStatus: Codable, Equatable, Sendab
             case .reviewing: reviewing
             case .publishing: publishing
             case .verifyingMain: verifyingMain
+            case .repairing: repairing
+            case .paused: paused
+            case .attentionRequired: attentionRequired
+            case .failed: failed
             case .succeeded: succeeded
             case .cancelled: cancelled
             case .abandoned: abandoned
@@ -1141,11 +1157,16 @@ private enum AssemblywrightMacRemoteFeatureConveyorStatus {
                 guard !feature.leasePresent, !feature.effectPossible else {
                     throw AssemblywrightMacRemoteFeatureConveyorStatusError.invalid
                 }
-            case .implementing, .validating, .reviewing, .publishing, .verifyingMain:
+            case .implementing, .validating, .reviewing, .publishing, .verifyingMain,
+                 .repairing, .paused:
                 guard feature.leasePresent else {
                     throw AssemblywrightMacRemoteFeatureConveyorStatusError.invalid
                 }
-            case .cancelled, .quarantined:
+            case .attentionRequired:
+                guard feature.leasePresent else {
+                    throw AssemblywrightMacRemoteFeatureConveyorStatusError.invalid
+                }
+            case .cancelled, .failed, .quarantined:
                 guard feature.leasePresent, feature.effectPossible else {
                     throw AssemblywrightMacRemoteFeatureConveyorStatusError.invalid
                 }
@@ -1164,7 +1185,7 @@ private enum AssemblywrightMacRemoteFeatureConveyorStatus {
             for lifecycleStatus in [
                 AssemblywrightMacFeatureConveyorLifecycleStatus.queued,
                 .implementing, .validating, .reviewing, .publishing, .verifyingMain,
-                .cancelled, .quarantined
+                .repairing, .paused, .attentionRequired, .failed, .cancelled, .quarantined
             ] {
                 guard observedCounts[lifecycleStatus, default: 0]
                         == status.countsByStatus.count(for: lifecycleStatus) else {

@@ -250,6 +250,10 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
             "reviewing",
             "publishing",
             "verifying_main",
+            "repairing",
+            "paused",
+            "attention_required",
+            "failed",
             "succeeded",
             "cancelled",
             "abandoned",
@@ -269,7 +273,7 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
             "emergency_pause_revision",
         ],
     );
-    assert_eq!(remote_feature_status["schema_version"], 8);
+    assert_eq!(remote_feature_status["schema_version"], 9);
     assert_eq!(remote_feature_status["visible_feature_count"], 0);
     assert_eq!(remote_feature_status["features"], serde_json::json!([]));
     let redacted = serde_json::to_string(&remote_feature_status).expect("serialize status");

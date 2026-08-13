@@ -347,7 +347,7 @@ an old one.
   observer: it requires the separately Apple-signed helper, an authenticated
   MacBridge session to the live Windows service, repeated monitor and reconnect
   samples, and a production Swift lifecycle marker bound to
-  `feature_conveyor_schema=8`. A successful source pull is not this proof: stop,
+  `feature_conveyor_schema=9`. A successful source pull is not this proof: stop,
   rebuild, and restart the configured Windows release service, confirm its
   health reports the expected schema and a fresh process, then run the Mac lane.
   The owner-token file is in `%LOCALAPPDATA%\Assemblywright\master`; the legacy
@@ -1059,6 +1059,27 @@ an old one.
   owner resolution. Even if quarantine origin is `publishing`, abandonment
   requires merged healthy-main evidence and rejects `merged:false`. Pre-v17
   resolution remains governed by its historical immutable transition origin.
+- Schema v18 adds a backup-first, path-free immutable orchestration checkpoint
+  ledger and deterministic internal coordinator. It has no activation writer or
+  HTTP/device route, so it is durable but default-inert pending capability 7 and
+  owner-recorded live evidence. Decisions derive only from lifecycle and exact
+  admitted validation/review/publication evidence; caller commands, paths,
+  provider/adapter output, credentials, and retry classification are excluded.
+- The schema-v18 active clock is capped at 24 hours and excludes provider,
+  worker, maintenance, and owner pauses. A complete provider-backoff pause is
+  restart-safe; Emergency Pause charges through the pause instant and requires
+  a fresh coordination checkpoint to restart the clock after resume. Unresolved
+  provider calls, repository effects, and publication intents quarantine. The
+  initial candidate is free, the repair ceiling is three replacements, and
+  completed immutable calls at either review ceiling require owner attention.
+- Current protocol-v5 dispatch and artifact admission cannot safely bind a
+  replacement candidate to a prior substantive failure. The coordinator
+  therefore records `repairing` and then `attention_required` without charging
+  repair or claiming completion. Only existing exact healthy-main success may
+  automatically release the active lease. Coordination rejects cancellation,
+  attention, and failure without mutation; the owner may explicitly reconcile
+  and abandon those states through exact lifecycle/queue/pause CAS and durable
+  transition-origin evidence. Quarantine and abandonment never auto-advance.
 - The 2026-08-13 Publication Coordinator closeout reached exact published
   commit `d18d15b1b988e471ce69c7e5287c10f1506f0c42`. Independent high-risk
   review first rejected ambiguous-merge abandonment, generic adapter evidence,

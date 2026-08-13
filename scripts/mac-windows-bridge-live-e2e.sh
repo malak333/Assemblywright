@@ -28,8 +28,8 @@ assert_feature_conveyor_sample() {
   queue_revision="$(json_value "$sample" feature_conveyor.queue_revision)"
   guidance_state="$(json_value "$sample" feature_conveyor.owner_guidance.state)"
   next_owner_action="$(json_value "$sample" feature_conveyor.owner_guidance.next_owner_action)"
-  [[ "$schema" == "8" ]] \
-    || fail "$label Feature Conveyor schema was not v8"
+  [[ "$schema" == "9" ]] \
+    || fail "$label Feature Conveyor schema was not v9"
   [[ "$queue_revision" =~ ^[0-9]+$ ]] \
     || fail "$label Feature Conveyor queue revision was invalid"
   [[ "$guidance_state" =~ ^(idle|ready|blocked|in_progress)$ ]] \
@@ -290,8 +290,8 @@ if [[ "$MODE" != "--run-fixture" && "$MODE" != "--run-mlx" \
   && "$MODE" != "--run-local-coding" ]]; then
   [[ "$app_lifecycle_output" == *"assemblywright_mac_app_bridge_live_e2e_ok"* ]] \
     || fail "production app bridge lifecycle omitted its live E2E marker"
-  [[ "$app_lifecycle_output" == *"feature_conveyor_schema=8"* ]] \
-    || fail "production app bridge lifecycle omitted schema-v8 Feature Conveyor proof"
+  [[ "$app_lifecycle_output" == *"feature_conveyor_schema=9"* ]] \
+    || fail "production app bridge lifecycle omitted schema-v9 Feature Conveyor proof"
 fi
 
 if [[ "$MODE" == "--run-relay" ]]; then

@@ -156,7 +156,7 @@ release requirements, not optional UX guidance.
   a simultaneous or late result is suppressed. This lane grants no tool, file,
   repository, credential, network, Codex, Git, publication, or unattended
   authority.
-- The Windows `assemblywright-master` schema-v17 database retains the schema-v5
+- The Windows `assemblywright-master` schema-v18 database retains the schema-v5
   Durable Feature Conveyor kernel and is
   default-inert. The owner-token-authenticated loopback
   `GET /v1/feature-conveyor/status` and the dedicated enrolled-device
@@ -510,6 +510,27 @@ release requirements, not optional UX guidance.
 - A durable merge intent is effect-possible evidence for abandonment even when
   quarantine originated in `publishing`. Owner resolution must require exact
   healthy-main reconciliation; `merged:false` cannot release that lease.
+- Schema v18 orchestration is an internal, default-inert kernel with no route or
+  activation writer. It derives actions and failure classes only from immutable
+  master state and exact admitted evidence; callers cannot provide commands,
+  paths, provider/adapter output, credentials, or retry classifications. Its
+  path-free checkpoints are immutable, and every mutation commits a redacted
+  audit in the same transaction. Provider, worker, maintenance, and owner pauses
+  stop the 24-hour active clock. Emergency Pause charges only through the pause
+  instant and resume needs a fresh checkpoint to restart the clock. The initial
+  candidate is free and at most three replacements may be recorded. Three
+  completed calls for one candidate or 12 for the feature require owner
+  attention, never another retry. Restart may resume only a complete paused,
+  effect-free checkpoint. Any in-flight repository, provider, publication, or
+  other effect ambiguity quarantines without retry. Without a protocol-safe
+  replacement-candidate contract, substantive failure must move through
+  `repairing` to `attention_required` without charging repair or claiming
+  completion. Cancellation, failure, attention, quarantine, and abandonment
+  never auto-advance; coordination rejects cancellation, attention, and failure
+  without mutation. Only exact healthy-main success auto-releases the lease.
+  A deliberate owner `abandon-and-advance` may release a cancelled,
+  quarantined, attention-required, or failed lease only after exact durable
+  resolution-origin and merge reconciliation checks.
 - Owner resolution is available only through the owner-token-authenticated
   loopback `cancel-active-feature` and `abandon-and-advance` actions. Both must
   compare-and-set the exact feature, lifecycle, queue, and Emergency Pause
@@ -663,7 +684,7 @@ release requirements, not optional UX guidance.
   The agent cursor may store only stream ID, sequence, and update time.
 - By default the long-running helper may request only authenticated MacBridge health, the
   exact bounded Feature Conveyor observation route, and the metadata event
-  route. Feature Conveyor status is strictly decoded as schema v8, may appear
+  route. Feature Conveyor status is strictly decoded as schema v9, may appear
   only in authenticated supervisor/app snapshots, and is never forwarded to
   the agent. Unknown, duplicate, extra, oversized, inconsistent, or drifted
   status cancels the session and clears the observation.

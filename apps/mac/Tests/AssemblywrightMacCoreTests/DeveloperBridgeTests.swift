@@ -1621,7 +1621,7 @@ struct DeveloperBridgeTests {
         #expect(first.connectionEpoch == 41)
         #expect(first.masterStatus == "ok")
         #expect(first.schemaVersion == 11)
-        #expect(first.featureConveyor?.schemaVersion == 8)
+        #expect(first.featureConveyor?.schemaVersion == 9)
         #expect(first.featureConveyor?.ownerGuidance.state == .idle)
         #expect(first.errorCode == nil)
         #expect(strictlyDecodedSnapshot == first)
@@ -5167,25 +5167,25 @@ private func validRemoteHealthData(schemaVersion: UInt64 = 8) -> Data {
 
 private func pausedRemoteHealthData() -> Data {
     Data(
-        #"{"status":"paused","mode":"developer_remote_master","host_mode":"windows_service","service_identity":"MIKE-PC\\mike","maintenance_active":false,"maintenance_reason":null,"emergency_paused":true,"protocol_version":5,"schema_version":8,"process_id":43752,"started_at_ms":1784749559000,"startup_reconciliation":{"disconnected_connections":0,"abandoned_attempts":0,"requeued_steps":0},"state":{"registered_devices":1,"active_device_certificates":1,"unconsumed_enrollment_grants":2,"active_connections":1,"queued_steps":0,"leased_steps":1,"terminal_steps":0,"active_attempts":1},"boundary":"TLS 1.3 mutual authentication with enrolled-device certificate and durable revocation checks"}"#.utf8
+        #"{"status":"paused","mode":"developer_remote_master","host_mode":"windows_service","service_identity":"MIKE-PC\\mike","maintenance_active":false,"maintenance_reason":null,"emergency_paused":true,"protocol_version":5,"schema_version":18,"process_id":43752,"started_at_ms":1784749559000,"startup_reconciliation":{"disconnected_connections":0,"abandoned_attempts":0,"requeued_steps":0},"state":{"registered_devices":1,"active_device_certificates":1,"unconsumed_enrollment_grants":2,"active_connections":1,"queued_steps":0,"leased_steps":1,"terminal_steps":0,"active_attempts":1},"boundary":"TLS 1.3 mutual authentication with enrolled-device certificate and durable revocation checks"}"#.utf8
     )
 }
 
 private func validFeatureConveyorData() -> Data {
     Data(
-        #"{"schema_version":8,"queue_revision":0,"startup_quarantine_count":0,"counts_by_status":{"queued":0,"implementing":0,"validating":0,"reviewing":0,"publishing":0,"verifying_main":0,"succeeded":0,"cancelled":0,"abandoned":0,"quarantined":0},"visible_feature_count":0,"features_truncated":false,"features":[],"owner_guidance":{"state":"idle","reason_code":"queue_empty","next_owner_action":"prepare_approved_feature","feature_id":null,"specification_revision":null,"lifecycle_revision":null,"queue_revision":0,"emergency_pause_revision":0}}"#.utf8
+        #"{"schema_version":9,"queue_revision":0,"startup_quarantine_count":0,"counts_by_status":{"queued":0,"implementing":0,"validating":0,"reviewing":0,"publishing":0,"verifying_main":0,"repairing":0,"paused":0,"attention_required":0,"failed":0,"succeeded":0,"cancelled":0,"abandoned":0,"quarantined":0},"visible_feature_count":0,"features_truncated":false,"features":[],"owner_guidance":{"state":"idle","reason_code":"queue_empty","next_owner_action":"prepare_approved_feature","feature_id":null,"specification_revision":null,"lifecycle_revision":null,"queue_revision":0,"emergency_pause_revision":0}}"#.utf8
     )
 }
 
 private func readyFeatureConveyorData() -> Data {
     Data(
-        #"{"schema_version":8,"queue_revision":1,"startup_quarantine_count":0,"counts_by_status":{"queued":1,"implementing":0,"validating":0,"reviewing":0,"publishing":0,"verifying_main":0,"succeeded":0,"cancelled":0,"abandoned":0,"quarantined":0},"visible_feature_count":1,"features_truncated":false,"features":[{"feature_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","specification_revision":1,"lifecycle_revision":1,"queue_position":1,"status":"queued","lease_present":false,"effect_possible":false}],"owner_guidance":{"state":"ready","reason_code":"head_dependency_satisfied","next_owner_action":"await_owner_control_surface","feature_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","specification_revision":1,"lifecycle_revision":1,"queue_revision":1,"emergency_pause_revision":0}}"#.utf8
+        #"{"schema_version":9,"queue_revision":1,"startup_quarantine_count":0,"counts_by_status":{"queued":1,"implementing":0,"validating":0,"reviewing":0,"publishing":0,"verifying_main":0,"repairing":0,"paused":0,"attention_required":0,"failed":0,"succeeded":0,"cancelled":0,"abandoned":0,"quarantined":0},"visible_feature_count":1,"features_truncated":false,"features":[{"feature_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","specification_revision":1,"lifecycle_revision":1,"queue_position":1,"status":"queued","lease_present":false,"effect_possible":false}],"owner_guidance":{"state":"ready","reason_code":"head_dependency_satisfied","next_owner_action":"await_owner_control_surface","feature_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","specification_revision":1,"lifecycle_revision":1,"queue_revision":1,"emergency_pause_revision":0}}"#.utf8
     )
 }
 
 private func reconciliationFeatureConveyorData() -> Data {
     Data(
-        #"{"schema_version":8,"queue_revision":2,"startup_quarantine_count":0,"counts_by_status":{"queued":0,"implementing":0,"validating":0,"reviewing":0,"publishing":0,"verifying_main":0,"succeeded":0,"cancelled":1,"abandoned":0,"quarantined":0},"visible_feature_count":1,"features_truncated":false,"features":[{"feature_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","specification_revision":1,"lifecycle_revision":3,"queue_position":1,"status":"cancelled","lease_present":true,"effect_possible":true}],"owner_guidance":{"state":"blocked","reason_code":"active_requires_reconciliation","next_owner_action":"reconcile_active_feature","feature_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","specification_revision":1,"lifecycle_revision":3,"queue_revision":2,"emergency_pause_revision":0}}"#.utf8
+        #"{"schema_version":9,"queue_revision":2,"startup_quarantine_count":0,"counts_by_status":{"queued":0,"implementing":0,"validating":0,"reviewing":0,"publishing":0,"verifying_main":0,"repairing":0,"paused":0,"attention_required":0,"failed":0,"succeeded":0,"cancelled":1,"abandoned":0,"quarantined":0},"visible_feature_count":1,"features_truncated":false,"features":[{"feature_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","specification_revision":1,"lifecycle_revision":3,"queue_position":1,"status":"cancelled","lease_present":true,"effect_possible":true}],"owner_guidance":{"state":"blocked","reason_code":"active_requires_reconciliation","next_owner_action":"reconcile_active_feature","feature_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","specification_revision":1,"lifecycle_revision":3,"queue_revision":2,"emergency_pause_revision":0}}"#.utf8
     )
 }
 
@@ -5207,7 +5207,7 @@ private func maximumFeatureConveyorData() -> Data {
     }
     let firstID = features[0]["feature_id"]!
     let object: [String: Any] = [
-        "schema_version": 8,
+        "schema_version": 9,
         "queue_revision": 100,
         "startup_quarantine_count": 0,
         "counts_by_status": [
@@ -5217,6 +5217,10 @@ private func maximumFeatureConveyorData() -> Data {
             "reviewing": 0,
             "publishing": 0,
             "verifying_main": 0,
+            "repairing": 0,
+            "paused": 0,
+            "attention_required": 0,
+            "failed": 0,
             "succeeded": 0,
             "cancelled": 0,
             "abandoned": 0,
@@ -5266,7 +5270,7 @@ private func truncatedFeatureConveyorData() -> Data {
         ]
     })
     let object: [String: Any] = [
-        "schema_version": 8,
+        "schema_version": 9,
         "queue_revision": 101,
         "startup_quarantine_count": 0,
         "counts_by_status": [
@@ -5276,6 +5280,10 @@ private func truncatedFeatureConveyorData() -> Data {
             "reviewing": 0,
             "publishing": 0,
             "verifying_main": 0,
+            "repairing": 0,
+            "paused": 0,
+            "attention_required": 0,
+            "failed": 0,
             "succeeded": 0,
             "cancelled": 1,
             "abandoned": 0,
@@ -5300,7 +5308,7 @@ private func truncatedFeatureConveyorData() -> Data {
 
 private func pausedFeatureConveyorData() -> Data {
     Data(
-        #"{"schema_version":8,"queue_revision":0,"startup_quarantine_count":0,"counts_by_status":{"queued":0,"implementing":0,"validating":0,"reviewing":0,"publishing":0,"verifying_main":0,"succeeded":0,"cancelled":0,"abandoned":0,"quarantined":0},"visible_feature_count":0,"features_truncated":false,"features":[],"owner_guidance":{"state":"blocked","reason_code":"emergency_paused","next_owner_action":"resume_emergency_pause","feature_id":null,"specification_revision":null,"lifecycle_revision":null,"queue_revision":0,"emergency_pause_revision":1}}"#.utf8
+        #"{"schema_version":9,"queue_revision":0,"startup_quarantine_count":0,"counts_by_status":{"queued":0,"implementing":0,"validating":0,"reviewing":0,"publishing":0,"verifying_main":0,"repairing":0,"paused":0,"attention_required":0,"failed":0,"succeeded":0,"cancelled":0,"abandoned":0,"quarantined":0},"visible_feature_count":0,"features_truncated":false,"features":[],"owner_guidance":{"state":"blocked","reason_code":"emergency_paused","next_owner_action":"resume_emergency_pause","feature_id":null,"specification_revision":null,"lifecycle_revision":null,"queue_revision":0,"emergency_pause_revision":1}}"#.utf8
     )
 }
 
@@ -5324,7 +5332,7 @@ private func authenticatedSnapshotData(
         "maintenance_active": maintenanceActive,
         "emergency_paused": emergencyPaused,
         "protocol_version": 5,
-        "schema_version": 8,
+        "schema_version": 18,
         "feature_conveyor": featureObject
     ]
     return try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
