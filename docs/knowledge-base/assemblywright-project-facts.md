@@ -1059,6 +1059,38 @@ an old one.
   owner resolution. Even if quarantine origin is `publishing`, abandonment
   requires merged healthy-main evidence and rejects `merged:false`. Pre-v17
   resolution remains governed by its historical immutable transition origin.
+- The 2026-08-13 Publication Coordinator closeout reached exact published
+  commit `d18d15b1b988e471ce69c7e5287c10f1506f0c42`. Independent high-risk
+  review first rejected ambiguous-merge abandonment, generic adapter evidence,
+  and missing in-flight cancellation; the corrected tree requires healthy-main
+  reconciliation after any durable merge intent, stage-specific self-bound
+  evidence, and cooperative deadline/current-authority/cancellation polling.
+  Native proof comprised three strict protocol tests, eleven publication
+  kernel/migration/concurrency cases, a controlled bare-Git remote, the real
+  owner-loopback master process with remote-mTLS absence, and the canonical
+  local gate. Playwright, visual regression, and cross-browser testing were not
+  applicable because the slice has no browser surface. Documentation and
+  safety verdict: the phase followed `DESIGN.md`, `docs/safety-rules.md`, and
+  the feature-conveyor/release workflow, preserved fail-closed authority and
+  evidence boundaries, and passed the documentation drift contract.
+  `unit-testing-test-generate` verdict: followed with a requirements-derived
+  matrix spanning success, idempotence, malformed/stale evidence, every
+  capability and token boundary, cancellation, authority revocation, deadline,
+  restart, migration, and ambiguous effects. `e2e-testing` verdict: followed
+  with native Rust, SQLite, process, mTLS-route, and controlled-Git boundaries.
+- Both hosted gates passed for that exact commit: Windows Distributed run
+  `31737160863` and Release Local run `31737160996`. The authoritative Windows
+  checkout was fast-forwarded to the same SHA; `AssemblywrightMaster` rebuilt,
+  migrated backup-first from schema 16 to schema 17, and returned healthy at
+  protocol 5/schema 17 with Emergency Pause and maintenance clear and no
+  active, queued, or leased work. The verified migration artifact was
+  `master.pre-v17.6fa7d45a-b179-4065-b094-1c1b4f81e7b8.sqlite3` (1,826,816
+  bytes), SHA-256
+  `03baecfc0ecac6828d4471853ebce2dce208548a59a61e8db678037b953bcc43`.
+  This is source, CI, migration, and deployed-service proof only: the production
+  GitHub adapter remains default-unavailable, and live GitHub credential/API,
+  branch-protection, PR/check/merge, signing/notarization, clean-profile, and
+  owner-recorded live-device evidence remain separate activation boundaries.
 - A Rust integration test's `current_exe()` is the test harness, not Cargo's
   product binary. The Windows review-provider Job/launcher E2E must inject
   `CARGO_BIN_EXE_assemblywright-master` through the Windows debug-only test

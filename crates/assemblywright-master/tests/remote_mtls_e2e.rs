@@ -386,6 +386,23 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
         local_review_over_remote.starts_with("HTTP/1.1 404 Not Found"),
         "owner-token independent-review route leaked onto the remote router: {local_review_over_remote}"
     );
+    let (local_publication_handshake, local_publication_over_remote) =
+        authenticated_application_request(
+            remote_endpoint,
+            &valid,
+            "POST",
+            "/v1/feature-conveyor/publications",
+            &serde_json::json!({}),
+        )
+        .await;
+    assert_eq!(
+        local_publication_handshake.status,
+        HandshakeStatus::Accepted
+    );
+    assert!(
+        local_publication_over_remote.starts_with("HTTP/1.1 404 Not Found"),
+        "owner-token publication route leaked onto the remote router: {local_publication_over_remote}"
+    );
     for path in [
         "/v1/feature-conveyor/cancel-active-feature",
         "/v1/feature-conveyor/abandon-and-advance",

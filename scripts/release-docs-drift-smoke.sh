@@ -484,10 +484,22 @@ require_text "publication protocol contract present" "$PROTOCOL_PUBLICATION_E2E"
   "publication_request_is_strict_path_free_and_every_binding_changes_identity"
 require_text "publication adapter default boundary" "$MASTER_PUBLICATION" \
   "fn is_available(&self) -> bool"
+require_text "publication execution control unit coverage" "$MASTER_PUBLICATION" \
+  "execution_control_cancellation_and_authority_loss_fail_closed"
+require_text "publication remote mTLS route denial coverage" "$MASTER_REMOTE_MTLS_E2E" \
+  "owner-token publication route leaked onto the remote router"
 require_text "feature design publication boundary" "$FEATURE_CONVEYOR_DESIGN" \
   "credential-owning GitHub adapter remains default-unavailable"
 require_text "release checklist publication boundary" "$CHECKLIST" \
   "schema-v17 publication"
+require_text "knowledge base publication closeout" "$KB" \
+  "d18d15b1b988e471ce69c7e5287c10f1506f0c42"
+require_text "knowledge base publication documentation verdict" "$KB" \
+  "safety verdict: the phase followed"
+require_text "knowledge base publication unit-test verdict" "$KB" \
+  '`unit-testing-test-generate` verdict: followed'
+require_text "knowledge base publication E2E verdict" "$KB" \
+  '`e2e-testing` verdict: followed'
 forbid_text "readme stale review non-claim" "$README" \
   "review-provider invocation,"
 forbid_text "release checklist stale review non-claim" "$CHECKLIST" \

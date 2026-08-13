@@ -120,3 +120,73 @@ pub fn run_publication<A: PublicationAdapter>(
     }
     Err(MasterError::PublicationCoordinatorUnavailable)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn control(
+        cancelled: Arc<AtomicBool>,
+        deadline: Instant,
+        authority_current: Arc<AtomicBool>,
+    ) -> PublicationExecutionControl {
+        PublicationExecutionControl::new(
+            cancelled,
+            deadline,
+            Arc::new(move || authority_current.load(Ordering::Acquire)),
+        )
+    }
+
+    #[test]
+    fn execution_control_accepts_only_current_uncancelled_work_before_deadline() {
+        let control = control(
+            Arc::new(AtomicBool::new(false)),
+            Instant::now() + Duration::from_secs(1),
+            Arc::new(AtomicBool::new(true)),
+        );
+
+        assert_eq!(control.poll(), Ok(()));
+    }
+
+    #[test]
+    fn execution_control_cancellation_and_authority_loss_fail_closed() {
+        let cancelled = Arc::new(AtomicBool::new(true));
+        let cancelled_control = control(
+            Arc::clone(&cancelled),
+            Instant::now() + Duration::from_secs(1),
+            Arc::new(AtomicBool::new(true)),
+        );
+        assert_eq!(
+            cancelled_control.poll(),
+            Err(PublicationAdapterError::Cancelled)
+        );
+
+        cancelled.store(false, Ordering::Release);
+        let authority_current = Arc::new(AtomicBool::new(true));
+        let stale_authority_control = control(
+            cancelled,
+            Instant::now() + Duration::from_secs(1),
+            Arc::clone(&authority_current),
+        );
+        assert_eq!(stale_authority_control.poll(), Ok(()));
+        authority_current.store(false, Ordering::Release);
+        assert_eq!(
+            stale_authority_control.poll(),
+            Err(PublicationAdapterError::Cancelled)
+        );
+    }
+
+    #[test]
+    fn execution_control_deadline_fails_closed() {
+        let control = control(
+            Arc::new(AtomicBool::new(false)),
+            Instant::now() - Duration::from_millis(1),
+            Arc::new(AtomicBool::new(true)),
+        );
+
+        assert_eq!(
+            control.poll(),
+            Err(PublicationAdapterError::DeadlineExceeded)
+        );
+    }
+}
