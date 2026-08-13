@@ -1080,6 +1080,37 @@ an old one.
   attention, and failure without mutation; the owner may explicitly reconcile
   and abandon those states through exact lifecycle/queue/pause CAS and durable
   transition-origin evidence. Quarantine and abandonment never auto-advance.
+- The 2026-08-13 Automatic Orchestration and Repair kernel closeout reached
+  exact feature commit `542d3577e9e674c21a7378a36d9879f20b1fc7d6`.
+  Independent high-risk review rejected terminal-state lease traps, Emergency
+  Pause wall-time charging after resume, and unbounded review transport retry;
+  the corrected kernel preserves explicit owner resolution, suspends and
+  restarts its active clock at verified checkpoints, and moves exhausted
+  review budgets to owner attention. The requirements-derived unit matrix and
+  native Rust, SQLite, process, Swift, signed-helper, and live Mac/Windows E2E
+  passed. Playwright, visual regression, and cross-browser testing were not
+  applicable because the phase has no browser surface. Documentation and
+  safety verdict: the phase followed `DESIGN.md`, `docs/safety-rules.md`, the
+  feature-conveyor design, and the feature-closeout workflow; the documentation
+  drift contract and canonical local gate passed.
+- Both hosted gates passed for that exact feature commit: Windows Distributed
+  run `31749837880` and Release Local run `31749837805`. The authoritative
+  Windows checkout was fast-forwarded to the same SHA, `AssemblywrightMaster`
+  rebuilt, and the database migrated backup-first from schema 17 to schema 18.
+  The live database and retained 1,880,064-byte backup
+  `master.pre-v18.680a6a2b-766f-461d-affe-629122f6098b.sqlite3` passed
+  `PRAGMA integrity_check`; the backup SHA-256 was
+  `b4a52f0288a18a83fb5cf5351dc8312366a1f57eef19cd93da470b1f20f92d9d`.
+  Final health was protocol 5/schema 18, running and unpaused with maintenance
+  clear and no active, connected, queued, or leased work.
+- After a strict Swift Feature Conveyor schema change, a previously signed
+  helper can still authenticate its initial connection yet fail closed while
+  decoding monitor samples. Rebuild and independently sign the production
+  helper before live proof; never treat a source-only Swift build as deployed
+  helper parity. For schema v9, the refreshed Apple-signed helper completed the
+  live monitor and reconnect lane against `100.64.23.14:7792`, with two bounded
+  authenticated samples on one connection and reconnect epochs `6763` to
+  `6764` under team `H686S3N4V9`.
 - The 2026-08-13 Publication Coordinator closeout reached exact published
   commit `d18d15b1b988e471ce69c7e5287c10f1506f0c42`. Independent high-risk
   review first rejected ambiguous-merge abandonment, generic adapter evidence,
