@@ -79,6 +79,10 @@ Every feature or phase closes as one auditable slice. Before publication:
 7. When the owner requested publication, commit without bypassing hooks, push
    to `main`, verify local `HEAD` equals `origin/main`, and wait for every
    required hosted gate. A local pass or successful push alone is not closeout.
+   If deployment or live proof happens after the implementation commit, record
+   that evidence in a docs-only closeout commit, run the required hosted gates
+   for that exact final SHA, and restore authoritative-host source parity. Do
+   not leave the only durable phase evidence in a conversation or terminal.
 8. For Windows-master or cross-device changes, fast-forward the authoritative
    Windows checkout to that exact published SHA. Rebuild and restart the
    `AssemblywrightMaster` service when its runtime inputs changed, then verify

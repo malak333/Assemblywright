@@ -529,6 +529,14 @@ require_text "knowledge base publication unit-test verdict" "$KB" \
   '`unit-testing-test-generate` verdict: followed'
 require_text "knowledge base publication E2E verdict" "$KB" \
   '`e2e-testing` verdict: followed'
+require_text "knowledge base owner activation documentation verdict" "$KB" \
+  'safety verdict: followed and implemented'
+require_text "knowledge base owner activation unit-test verdict" "$KB" \
+  '`unit-testing-test-generate` verdict: followed'
+require_text "knowledge base owner activation E2E verdict" "$KB" \
+  '`e2e-testing` verdict: followed with native'
+require_text "knowledge base durable post-deployment closeout" "$KB" \
+  "Deployment and live proof that occurs after a feature commit"
 forbid_text "readme stale review non-claim" "$README" \
   "review-provider invocation,"
 forbid_text "release checklist stale review non-claim" "$CHECKLIST" \
@@ -590,6 +598,8 @@ require_text "agent workflow native E2E boundary" "$AGENT_WORKFLOW" \
   "native cross-process"
 require_text "agent workflow Windows deployment parity" "$AGENT_WORKFLOW" \
   "fast-forward the authoritative"
+require_text "agent workflow durable post-deployment closeout" "$AGENT_WORKFLOW" \
+  "docs-only closeout commit"
 require_text "agent workflow explicit closeout verdicts" "$AGENT_WORKFLOW" \
   "state explicit verdicts for documentation and safety"
 

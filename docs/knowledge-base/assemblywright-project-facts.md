@@ -1188,9 +1188,17 @@ an old one.
   corrected and the final verdict was approval. Requirements-derived unit and
   native Rust, SQLite, process, Windows mTLS, Swift, signed-helper, and live
   Mac/Windows E2E passed. Playwright, visual regression, and cross-browser
-  testing were not applicable because this is a native surface. The
-  `unit-testing-test-generate` and `e2e-testing` workflows were followed, and
-  the documentation drift contract plus canonical local gate passed.
+  testing were not applicable because this is a native surface. Documentation
+  and safety verdict: followed and implemented against `DESIGN.md`,
+  `docs/safety-rules.md`, the Feature Conveyor design, and the phase-closeout
+  contract. `unit-testing-test-generate` verdict: followed with a
+  requirements-derived matrix covering success, all six missing-evidence
+  positions, malformed/stale/category/origin input, redaction, idempotence,
+  Emergency Pause, durable tamper/reopen, non-owner pauses, and helper teardown
+  edges. `e2e-testing` verdict: followed with native Rust/SQLite/process,
+  Windows mTLS/SCM, Swift signed-helper, and live Mac/Windows app-lifecycle
+  boundaries. The documentation drift contract plus canonical local gate
+  passed.
 - Hosted Windows Distributed run `31758741258` and Release Local run
   `31758741133` passed for that exact SHA. The native Windows gate also exposed
   and closed a test-only exact-binding bug: a local-coding result and its
@@ -1214,3 +1222,12 @@ an old one.
   evidence slots were empty. This proves the deployed control/inspection and
   fail-closed blocker path, not genuine provider/GitHub/restart activation,
   Developer ID distribution, notarization, or clean-profile installation.
+- Deployment and live proof that occurs after a feature commit must not remain
+  only in terminal output or conversation history. Publish a docs-only closeout
+  commit, require the hosted gates for that exact final SHA, then fast-forward
+  the authoritative Windows checkout and recheck service health. Feature 7 did
+  this at `40456d366280c2525bc5968024f132aa6880396a`: Release Local run
+  `31759496009` passed; Windows Distributed run `31759496029` transiently hit
+  Win32 timeout `258` in the unchanged review-provider E2E, then passed attempt
+  2 at the same SHA without weakening the test. Windows final source parity and
+  the already-deployed protocol 5/schema 19 service health were reverified.
