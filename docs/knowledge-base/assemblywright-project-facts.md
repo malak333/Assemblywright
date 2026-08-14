@@ -1205,6 +1205,11 @@ an old one.
   check, unknown-mode rejection, and extra-argument rejection) and proves that
   a rejected rerun invalidates an earlier receipt pair rather than exposing it
   as evidence for the failed attempt.
+  Gate failure terminates its complete process group immediately. A successful
+  gate leader may briefly outlive one naturally exiting group member, so only
+  that success path performs a bounded natural drain before deciding the group
+  survived. A member still present at that deadline is terminated, reaped, and
+  makes the proof attempt fail.
 - The macOS app remains outside TLS-key and owner-token custody. For an explicit
   confirmed owner action it stops and reaps its monitor child, revalidates the
   same independently signed helper, launches one bounded `--confirm` command,

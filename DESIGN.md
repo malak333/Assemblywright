@@ -139,7 +139,10 @@ The controller holds the validated output directory as its current directory,
 binds both `target` and output device/inode identities, rejects a group/world-
 writable `target`, revalidates the path and held identities before and after
 relative-name publication, and never cleans through a replaced path. Gate
-execution has a separate process group. HUP, INT, or TERM propagates to the
+execution has a separate process group. Gate failure terminates that group
+immediately. Only after successful leader exit, a short bounded natural drain
+permits already-exiting members to disappear; a member still present at the
+deadline fails proof. HUP, INT, or TERM propagates to the
 complete group, escalates boundedly to KILL, reaps the controller-owned leader,
 and suppresses the receipt if any child survives or the gate fails.
 

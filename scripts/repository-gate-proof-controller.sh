@@ -298,6 +298,16 @@ terminate_gate_group() {
   gate_pid=""
 }
 
+wait_for_gate_group_drain() {
+  local count=0
+  [[ "$gate_pid" =~ ^[1-9][0-9]*$ ]] || return 0
+  while kill -0 -- "-$gate_pid" >/dev/null 2>&1; do
+    count=$((count + 1))
+    [[ "$count" -lt 50 ]] || return 1
+    sleep 0.1
+  done
+}
+
 run_committed_gate() {
   local root="$1"
   local head="$2"
@@ -322,13 +332,16 @@ run_committed_gate() {
   wait "$gate_pid"
   gate_status="$?"
   set -e
-  if kill -0 -- "-$gate_pid" >/dev/null 2>&1; then
+  if [[ "$gate_status" -ne 0 ]]; then
+    terminate_gate_group
+    fail "committed canonical release-local gate failed"
+  fi
+  if ! wait_for_gate_group_drain; then
     group_remained=1
     terminate_gate_group
   else
     gate_pid=""
   fi
-  [[ "$gate_status" -eq 0 ]] || fail "committed canonical release-local gate failed"
   [[ "$group_remained" -eq 0 ]] || fail "committed canonical gate left a live descendant"
 }
 
@@ -476,6 +489,8 @@ self_test_controller() {
   local scratch success dirty wrong_branch gate_failure origin_drift status_drift cancellation
   local hostile_target hostile_external directory_swap writable_target environment_hardening
   local hidden_index hidden_skip_worktree digest_move_failure receipt_move_failure mv_wrapper_dir
+  local natural_drain persistent_descendant failed_gate_descendant
+  local failed_gate_sentinel
   local cancellation_sentinel cancellation_ready swapped_output controller_pid controller_status
   local cancellation_wait_count
   local receipt digest expected_digest actual_digest receipt_bytes file_count
@@ -581,6 +596,15 @@ self_test_controller() {
   initialize_fixture "$gate_failure" 'exit 23'
   expect_controller_failure "$gate_failure"
 
+  failed_gate_descendant="$scratch/failed-gate-descendant"
+  failed_gate_sentinel="$scratch/failed-gate-descendant-survived"
+  initialize_fixture "$failed_gate_descendant" \
+    "(sleep 2; printf survived >'$failed_gate_sentinel') & exit 23"
+  expect_controller_failure "$failed_gate_descendant"
+  sleep 3
+  [[ ! -e "$failed_gate_sentinel" ]] \
+    || fail "self-test failed gate left a live descendant"
+
   origin_drift="$scratch/origin-drift"
   initialize_fixture "$origin_drift" \
     'git update-ref refs/remotes/origin/main 0000000000000000000000000000000000000000'
@@ -589,6 +613,15 @@ self_test_controller() {
   status_drift="$scratch/status-drift"
   initialize_fixture "$status_drift" 'printf drift >post-gate-drift.txt'
   expect_controller_failure "$status_drift"
+
+  natural_drain="$scratch/natural-drain"
+  initialize_fixture "$natural_drain" '(sleep 1) &'
+  run_controller "$natural_drain" >/dev/null
+
+  persistent_descendant="$scratch/persistent-descendant"
+  initialize_fixture "$persistent_descendant" \
+    "(trap '' TERM; while :; do sleep 1; done) &"
+  expect_controller_failure "$persistent_descendant"
 
   cancellation="$scratch/cancellation"
   cancellation_sentinel="$scratch/cancellation-descendant-survived"
@@ -694,7 +727,7 @@ self_test_controller() {
   assert_no_proof_output "$receipt_move_failure"
 
   printf 'Assemblywright repository-gate proof controller self-test: ok\n'
-  printf 'Proof boundary: disposable Git/process fixtures prove CLI shape, committed-byte execution structure, dirty/hidden-index/wrong-branch/origin/status drift, stale-receipt invalidation, gate and atomic-move failure, process-group cancellation, hostile/swap/writable-target denial, environment hardening, redaction, digest, permissions, and no-output behavior only.\n'
+  printf 'Proof boundary: disposable Git/process fixtures prove CLI shape, committed-byte execution structure, dirty/hidden-index/wrong-branch/origin/status drift, stale-receipt invalidation, immediate failed-gate descendant suppression, atomic-move failure, success-only natural process-group drain, persistent-descendant rejection, cancellation, hostile/swap/writable-target denial, environment hardening, redaction, digest, permissions, and no-output behavior only.\n'
 }
 
 MODE="${1:---check}"

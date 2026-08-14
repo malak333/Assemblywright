@@ -562,8 +562,10 @@ gate recover the already-fixed root; caller values are cleared and the gate
 unsets the marker before running commands. `target` is non-group/world-writable,
 and the controller holds the output directory while binding and revalidating
 target/output device and inode before and after relative-name publication.
-HUP, INT, TERM, failure, or a surviving descendant drains the separate gate
-process group boundedly and suppresses the receipt.
+Gate failure drains the separate process group immediately and suppresses the
+receipt. Only after the successful gate leader exits does the controller permit
+a short bounded natural group drain. A member still present at that deadline,
+or HUP, INT, or TERM, drains the group forcibly and suppresses the receipt.
 Every tracked index entry must have Git's normal `H` tag; hidden
 assume-unchanged, skip-worktree, or other index state is ineligible. Pre/post
 stability catches same-UID mutation of other gate-consumed files at the

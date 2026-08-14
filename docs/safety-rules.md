@@ -241,7 +241,9 @@ release requirements, not optional UX guidance.
   held identities before and after relative-name publication, and clean only
   relative fixed leaves in the held directory. HUP, INT, and TERM must terminate
   the gate's separate process group, boundedly escalate and reap it, and leave
-  no receipt; a live descendant after the gate is a failure.
+  no receipt. Gate failure must start that drain immediately. Only after a
+  successful leader exit, allow a short bounded natural group drain; a member
+  still live at that deadline is a failure.
   Every tracked index entry must carry the normal `H` tag; assume-unchanged,
   skip-worktree, or another hidden-state tag rejects before the gate. Pre/post
   clean and stable observations detect concurrent same-UID changes to other

@@ -105,7 +105,11 @@ disable replace objects, and remain fixed to the controller root. The
 self-test additionally covers committed-byte execution, hostile Git/internal-
 marker environment, group/world-writable target rejection, concurrent
 target/output directory replacement, held-directory cleanup, and TERM of a
-gate descendant process group with bounded drain and no late sentinel.
+gate descendant process group with bounded drain and no late sentinel. It
+allows a bounded natural process-group drain after the gate leader exits, but
+fails the run and force-cleans the group when a descendant persists.
+That grace period is success-only: a failed gate terminates its complete group
+immediately, and the self-test proves no delayed side effect survives.
 It also rejects assume-unchanged, skip-worktree, or any other non-`H` tracked
 index tag. Pre/post stability is edge detection for concurrent same-UID changes
 to other gate-consumed files, not host-isolation proof.
