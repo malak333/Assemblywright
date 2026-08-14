@@ -1180,3 +1180,37 @@ an old one.
   GitHub-publication, restart-recovery, and live Mac/Windows control plus event-
   streaming receipts. Signing, notarization, clean-profile install, and broader
   production readiness remain separate evidence boundaries.
+- The 2026-08-13 Owner Control and Activation Surface closeout reached exact
+  published source commit `aee87048b30c7b2601d2dd001e219938d82ff349`.
+  Independent high-risk review first rejected non-owner pause decoding and
+  action exposure, an unbounded helper teardown, weak durable evidence-role
+  revalidation, and missing remote owner-mutation coverage; every finding was
+  corrected and the final verdict was approval. Requirements-derived unit and
+  native Rust, SQLite, process, Windows mTLS, Swift, signed-helper, and live
+  Mac/Windows E2E passed. Playwright, visual regression, and cross-browser
+  testing were not applicable because this is a native surface. The
+  `unit-testing-test-generate` and `e2e-testing` workflows were followed, and
+  the documentation drift contract plus canonical local gate passed.
+- Hosted Windows Distributed run `31758741258` and Release Local run
+  `31758741133` passed for that exact SHA. The native Windows gate also exposed
+  and closed a test-only exact-binding bug: a local-coding result and its
+  artifact admission had independently sampled the workspace expiry clock and
+  could differ by one millisecond. The fixture now captures one expiry for both
+  documents; production equality remains strict.
+- The authoritative Windows checkout was fast-forwarded to the exact source
+  SHA, the native owner-control mTLS test passed on the live host, and
+  `AssemblywrightMaster` rebuilt and migrated backup-first from schema 18 to
+  schema 19. The live database passed `PRAGMA integrity_check`. The retained
+  1,925,120-byte backup
+  `master.pre-v19.8b726bff-e9b8-427a-a646-d5334e2570fa.sqlite3` has SHA-256
+  `c29cfb868437eb95e0cffac5ff1e0f273b641a9be7510a7de4c6075ae09d17a8`.
+  Final service health was protocol 5/schema 19, running and unpaused with
+  maintenance clear and no active, connected, queued, or leased work.
+- The refreshed Apple Development-signed production helper completed live
+  authenticated monitoring, reconnect, and production-app supervision against
+  `100.64.23.14:7792` under team `H686S3N4V9`. Its live redacted owner
+  projection reported queue revision 24, designation revision 1, no active
+  feature, and `activation_status=inactive` with `evidence_required`: all six
+  evidence slots were empty. This proves the deployed control/inspection and
+  fail-closed blocker path, not genuine provider/GitHub/restart activation,
+  Developer ID distribution, notarization, or clean-profile installation.
