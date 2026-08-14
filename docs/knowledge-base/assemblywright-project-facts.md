@@ -1210,6 +1210,36 @@ an old one.
   that success path performs a bounded natural drain before deciding the group
   survived. A member still present at that deadline is terminated, reaped, and
   makes the proof attempt fail.
+- The 2026-08-14 Feature 1 Repository-gate Proof Controller implementation is
+  published at exact commit `eb4cc0e9933601f9e141523dba4fa24772ffef75`.
+  Independent high-risk review approved the final fail-closed design after its
+  findings on committed-byte execution, Git environment hardening, output-path
+  identity, index flags, and process-group lifecycle were corrected. The
+  requirements-derived unit matrix covers the fixed CLI, success receipt and
+  digest binding, dirty/wrong-branch/origin/status drift, assume-unchanged and
+  skip-worktree rejection, prior-receipt invalidation, hostile/swap/writable
+  target denial, environment isolation, atomic-move failures, cancellation,
+  immediate failed-gate descendant suppression, success-only natural drain,
+  and persistent-descendant rejection. The native Git/process/filesystem E2E
+  ran the exact committed `release-local.sh` bytes from clean published `main`;
+  the full canonical gate passed and emitted the fixed 0600 receipt pair at
+  `2026-08-14T20:53:04Z`. The receipt binds tree
+  `ab4829427e896132a41a80c7bb8251a30d9f8edb`, gate-definition SHA-256
+  `93c2367b4fd588af058d0b6bff1f35d2ac25ac3c4d24bcd6be2754c5a39bff49`,
+  and receipt SHA-256
+  `0342cf1956682b4669f4c6d2802398a7158e9afea6ce00e467051072f3521f3e`.
+  A diagnostic run with the noncanonical 45-second release-local heartbeat
+  override left its current heartbeat sleep in the gate process group; the
+  controller correctly rejected that attempt and emitted no receipt. Rerunning
+  without the diagnostic override passed, preserving the rule that progress
+  instrumentation is outside the proof environment. Documentation and safety
+  rules were followed; `unit-testing-test-generate` and `e2e-testing` were
+  applied, with Playwright excluded because this is a native shell/Git/process
+  boundary rather than a browser surface. This local receipt has not been
+  admitted by the Windows owner, does not advance the 0/6 activation count,
+  and proves no restricted worker, review provider, GitHub publication,
+  restart recovery, live Mac/Windows control, Windows deployment, signing,
+  notarization, clean-profile install, live-device QA, or production readiness.
 - The macOS app remains outside TLS-key and owner-token custody. For an explicit
   confirmed owner action it stops and reaps its monitor child, revalidates the
   same independently signed helper, launches one bounded `--confirm` command,
