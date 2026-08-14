@@ -809,7 +809,7 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
         &activation,
     )
     .await;
-    assert_eq!(response_json(&activation_retry), first_activation);
+    assert_eq!(response_json::<Value>(&activation_retry), first_activation);
 
     let mut exact = approved.clone();
     exact.emergency_pause_revision = 2;
@@ -1109,7 +1109,7 @@ async fn remote_owner_controls_require_exact_designated_current_macbridge_bindin
             .enqueue_approved_feature(&specification, 0, 31)
             .expect("enqueue owner-control fixture");
         let plan = process
-            .kernel()
+            .kernel_mut()
             .prepare_repository_snapshot_claim(
                 &FeatureSnapshotClaimPlan {
                     feature_id: specification.feature_id,
