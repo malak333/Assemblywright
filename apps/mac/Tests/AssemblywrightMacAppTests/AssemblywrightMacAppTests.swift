@@ -86,6 +86,22 @@ struct AssemblywrightMacAppTests {
         #expect(AssemblywrightMenuBarContract.title == "Assemblywright")
     }
 
+    @Test("Owner activation preview shows blockers and never enables an unsigned app action")
+    func ownerActivationPreviewGatesAppAction() throws {
+        let ready = FeatureConveyorOwnerControlPresentation(
+            control: try ownerControlProjection(completeEvidence: true)
+        )
+        #expect(ready.activationLabel == "Ready for owner confirmation")
+        #expect(ready.blockerLabel == "None")
+        #expect(ready.evidenceLabel == "6 of 6 Windows-admitted categories ready")
+
+        let blocked = FeatureConveyorOwnerControlPresentation(
+            control: try ownerControlProjection(emergencyPaused: true)
+        )
+        #expect(blocked.blockerLabel == "Emergency Pause")
+        #expect(blocked.evidenceDigests.allSatisfy { $0.contains("missing") })
+    }
+
     @Test("Menu bar presentation maps every bridge lifecycle state")
     func menuBarPresentationMapsBridgeLifecycle() {
         let cases: [(AssemblywrightDeveloperBridgeAppPhase, String, String)] = [
@@ -143,6 +159,34 @@ struct AssemblywrightMacAppTests {
             #expect(template.isTemplate)
         }
     }
+}
+
+private func ownerControlProjection(
+    emergencyPaused: Bool = false,
+    completeEvidence: Bool = false
+) throws -> AssemblywrightMacFeatureConveyorOwnerControlProjection {
+    let names = ["repository_gate_proof", "restricted_worker_live", "review_provider_live",
+                 "github_publication_live", "restart_recovery_live", "mac_windows_control_event_streaming_live"]
+    var evidence: [String: Any] = [:]
+    for (index, name) in names.enumerated() {
+        evidence[name] = completeEvidence ? [
+            "evidence_id": String(format: "%08x-0000-4000-8000-%012x", index + 1, index + 1),
+            "revision": 1,
+            "receipt_sha256": Array(repeating: index + 1, count: 32)
+        ] : NSNull()
+    }
+    let ready = !emergencyPaused && completeEvidence
+    let object: [String: Any] = [
+        "schema_version": 1, "queue_revision": 0,
+        "emergency_paused": emergencyPaused, "emergency_pause_revision": emergencyPaused ? 1 : 0,
+        "owner_control_designation_revision": 1, "activation_status": "inactive",
+        "activation_id": NSNull(), "activation_ready": ready,
+        "activation_blocker": emergencyPaused ? "emergency_paused" : completeEvidence ? "none" : "evidence_required",
+        "active_feature": NSNull(), "evidence": evidence
+    ]
+    return try AssemblywrightMacFeatureConveyorOwnerControlProjection.decodeStrict(
+        JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+    )
 }
 
 private func featureConveyorStatus(

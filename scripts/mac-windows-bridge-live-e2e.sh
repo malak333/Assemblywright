@@ -38,6 +38,25 @@ assert_feature_conveyor_sample() {
     || fail "$label Feature Conveyor guidance action was invalid"
 }
 
+assert_owner_control_sample() {
+  local sample="$1"
+  local label="$2"
+  local schema queue_revision designation_revision activation_status activation_ready blocker
+  schema="$(json_value "$sample" owner_control.schema_version)"
+  queue_revision="$(json_value "$sample" owner_control.queue_revision)"
+  designation_revision="$(json_value "$sample" owner_control.owner_control_designation_revision)"
+  activation_status="$(json_value "$sample" owner_control.activation_status)"
+  activation_ready="$(json_value "$sample" owner_control.activation_ready)"
+  blocker="$(json_value "$sample" owner_control.activation_blocker)"
+  [[ "$schema" == "1" ]] || fail "$label owner-control schema was not v1"
+  [[ "$queue_revision" =~ ^[0-9]+$ && "$designation_revision" =~ ^[1-9][0-9]*$ ]] \
+    || fail "$label owner-control revision binding was invalid"
+  [[ "$activation_status" =~ ^(inactive|active)$ \
+    && "$activation_ready" =~ ^(true|false)$ \
+    && "$blocker" =~ ^(none|emergency_paused|evidence_required|already_activated)$ ]] \
+    || fail "$label owner-control activation state was invalid"
+}
+
 case "$MODE" in
   --check)
     [[ -f "$PACKAGE_PATH/Package.swift" ]] || fail "missing Mac Swift package"
@@ -185,6 +204,8 @@ monitor_second_epoch="$(json_value "$monitor_second" connection_epoch)"
   || fail "bridge monitor did not reuse one authenticated connection"
 assert_feature_conveyor_sample "$monitor_first" "first bridge monitor sample"
 assert_feature_conveyor_sample "$monitor_second" "second bridge monitor sample"
+assert_owner_control_sample "$monitor_first" "first bridge monitor sample"
+assert_owner_control_sample "$monitor_second" "second bridge monitor sample"
 for forbidden in grant_secret certificate_pem ca_certificate_pem maintenance_reason boundary service_identity repository_id provider_id model_id owner_token; do
   [[ "$monitor_json" != *"$forbidden"* ]] \
     || fail "live monitor exposed forbidden field: $forbidden"
@@ -210,6 +231,8 @@ reconnect_second_epoch="$(json_value "$reconnect_second" connection_epoch)"
   || fail "bridge reconnect diagnostic did not advance the connection epoch"
 assert_feature_conveyor_sample "$reconnect_first" "first bridge reconnect sample"
 assert_feature_conveyor_sample "$reconnect_second" "second bridge reconnect sample"
+assert_owner_control_sample "$reconnect_first" "first bridge reconnect sample"
+assert_owner_control_sample "$reconnect_second" "second bridge reconnect sample"
 for forbidden in grant_secret certificate_pem ca_certificate_pem maintenance_reason boundary service_identity repository_id provider_id model_id owner_token; do
   [[ "$reconnect_json" != *"$forbidden"* ]] \
     || fail "live reconnect diagnostic exposed forbidden field: $forbidden"

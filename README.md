@@ -11,15 +11,18 @@ observation surface.
 
 This repository is foundation work. The durable contracts, the master kernel,
 the enrollment and mTLS identity path, the Windows service lifecycle, the Mac
-bridge and worker agent, and the release gate are implemented. Autonomous
-activation, registered-source-checkout mutation, production review-provider
-provisioning and reviewer-quality proof, live GitHub publication-adapter activation, and
-the queue control UI are still design. The Windows master implements bounded
-general coding, isolated artifact integration, deterministic validation, a
+bridge and worker agent, and the release gate are implemented. Registered-
+source-checkout mutation, production review-provider provisioning and reviewer-
+quality proof, and live GitHub publication-adapter provisioning remain
+unavailable. The Windows master implements bounded general coding, isolated
+artifact integration, deterministic validation, a
 default-unavailable independent-review gateway, schema-v17 durable publication
-coordination as explicit owner actions, and a schema-v18 default-inert
-orchestration checkpoint kernel. Publication transport is
-default-unavailable and no live GitHub authority is activated.
+coordination as
+explicit owner actions, and a schema-v19 default-inert orchestration checkpoint
+kernel with a real Mac owner-control and activation surface. Activation remains
+unavailable until Windows has admitted all six required live proof receipts.
+Publication transport is default-unavailable and no live GitHub authority is
+activated.
 
 ## What Is Implemented
 
@@ -29,7 +32,7 @@ advertisements; handshake, job, and result envelopes; strict bound-before-decode
 JSON entry points; nil-identity rejection; fixed-schema Feature Conveyor owner-
 control request/receipt contracts; and a golden compatibility fixture.
 
-**`assemblywright-master`** — a portable schema-v18 SQLite database retaining
+**`assemblywright-master`** — a portable schema-v19 SQLite database retaining
 the schema-v4 device lifecycle, schema-v5 Feature Conveyor, schema-v6
 capability rebind evidence, schema-v7 Emergency Pause revision, and schema-v8
 single owner-control bridge designation, schema-v9 immutable repository
@@ -40,8 +43,9 @@ candidate-commit evidence, schema-v15 immutable validation-gate evidence, and
 schema-v16 immutable independent-review calls, outcomes, and decisions, plus
 schema-v17 immutable publication intents, observations, and healthy-main
 completion, plus schema-v18 immutable path-free orchestration checkpoints,
-repair/time budgets, and restart-safe pause accounting with backup-first
-fail-closed legacy migration,
+repair/time budgets, and restart-safe pause accounting, and schema-v19
+immutable category-bound activation-evidence references, one global activation,
+and revision-bound owner controls with backup-first fail-closed legacy migration,
 plus a headless single-owner
 executable.
 

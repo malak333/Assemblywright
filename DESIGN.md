@@ -59,7 +59,7 @@ accepted designs and take precedence within their scope:
 
 ### Windows master
 
-`assemblywright-master` owns durable state and every authority decision. Its schema-v18
+`assemblywright-master` owns durable state and every authority decision. Its schema-v19
 SQLite database holds two kernels:
 
 - The distributed device lifecycle: registered devices, connection epochs,
@@ -81,6 +81,36 @@ SQLite database holds two kernels:
   claimability or expose a callable action. Other enrolled-device roles are
   denied, and neither observation route adds mutation, audit, worker,
   repository, provider, publication, or owner-action authority.
+
+Schema v19 adds a separate strict owner-control projection only for the exact
+current designated non-fixture MacBridge after an exporter-bound accepted
+session. It contains fixed lifecycle, orchestration, readiness, blocker,
+revision, ID, and digest-reference fields; paths, content, commands,
+credentials, raw evidence, and provider output are forbidden.
+
+Schema v19 keeps orchestration globally inert until one immutable singleton
+activation. The six prerequisites are one deterministic repository-gate proof
+and five separately admitted live-proof-controller receipt digests: restricted
+worker, review provider, GitHub publication, restart recovery, and Mac/Windows
+control plus event streaming. Only the owner-token loopback route may admit a
+strict category/origin-bound receipt reference, with contiguous revision,
+Emergency Pause binding, non-future observed time, and same-transaction
+redacted audit. The designated bridge may only authorize activation against the
+exact current six Windows-admitted references plus queue, designation, and
+Emergency Pause revisions. Activation is global, creates no lease or action,
+and exact retry returns the original immutable receipt.
+
+The designated bridge may explicitly owner-pause or resume only an exact
+active, effect-free orchestration checkpoint using lifecycle, orchestration,
+queue, designation, and Emergency Pause revisions. Owner pause stops the active
+clock and resume starts it from a fresh checkpoint. Existing cancel and
+abandon-resolution actions use the same exact remote boundary and retain their
+no-advance and safe-reconciliation rules. Global Emergency Pause remains
+separate and safety-dominant.
+
+Compatibility note: schema-v18 introduced the internal orchestration ledger;
+schema v19 migrates that ledger backup-first and adds its first authoritative
+activation writer without changing protocol v5.
 
 Schema v8 adds one nullable, compare-and-set, Windows-authoritative owner-control
 bridge designation. Its owner-token-authenticated loopback mutation accepts

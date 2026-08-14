@@ -25,7 +25,7 @@ flowchart LR
   Process --> Service["Windows SCM host: automatic start, bounded recovery, status, maintenance, uninstall"]
   Service --> Maintenance["Durable fail-closed marker blocks new enqueue and lease admission"]
   Master --> Durable["Registered devices, epochs, queue, attempts, cancellation, expiry, restart reconciliation, exact results"]
-  Master --> Conveyor["Default-inert Feature Conveyor repository kernel retained through schema v18"]
+  Master --> Conveyor["Default-inert Feature Conveyor repository kernel retained through schema v19"]
   Conveyor --> ConveyorSafety["Immutable approved specs and grants, strict CAS queue, one active lease, atomic redacted audit, and startup quarantine"]
   Conveyor --> Observer["Exact bounded status projection: local owner route plus accepted-session MacBridge-only remote GET"]
   Observer --> Helper
@@ -182,7 +182,7 @@ profile the Swift supervisor validates the singleton capability and required
 relay before connecting, performs authenticated health, and relays without
 requesting or emitting the MacBridge-only Feature Conveyor projection.
 
-Protocol v5/schema v18 keeps the historical schema-v10 through schema-v17 lanes
+Protocol v5/schema v19 keeps the historical schema-v10 through schema-v18 lanes
 below and adds only deterministic bounded multi-file edits. Rust and Swift share
 16 KiB complete-job, 12 KiB context, and 4 KiB replacement limits. The agent
 mutates through held owner-private no-follow parent descriptors using exclusive
@@ -211,9 +211,15 @@ publication intent/evidence coordination, exact remote-main verification, and
 atomic success/queue advancement. Its owner-loopback route is absent from mTLS,
 and the credential-owning GitHub adapter remains default-unavailable;
 controlled bare-Git proof is not hosted branch-protection proof.
-Schema v18 adds only an internal, path-free immutable orchestration checkpoint
-ledger and deterministic coordinator. It has no route or activation writer,
-resumes only a proven effect-free pause, and quarantines ambiguous effects.
+Schema v18 introduced the internal, path-free immutable orchestration checkpoint
+ledger and deterministic coordinator. Schema v19 adds the first authoritative
+activation writer: Windows loopback admits six strict category-bound proof
+references, while only the exact designated exporter-bound MacBridge may bind
+their current revisions into the immutable global activation. The same bridge
+may pause/resume effect-free orchestration or submit exact cancel/abandon owner
+resolution. Emergency Pause remains separate and dominant; the Mac app holds
+neither the owner token nor evidence-admission authority and executes actions
+only through its independently signed helper.
 Replacement-candidate construction remains unavailable under the current
 artifact/dispatch contract, so substantive failures stop at owner attention.
 Delete first atomically captures the leaf in the held parent and rolls mismatch

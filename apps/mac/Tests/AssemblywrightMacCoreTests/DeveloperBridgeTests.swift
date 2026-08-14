@@ -190,6 +190,19 @@ private actor FakeSupervisorSession: AssemblywrightMacBridgeSession {
             case .failure: throw FakeSupervisorError()
             }
         }
+        if request.path == AssemblywrightMacBridgeSupervisor.ownerControlPath {
+            switch featureConveyorOutcome {
+            case let .response(response):
+                let feature = (try? JSONSerialization.jsonObject(with: response.body)) as? [String: Any]
+                let guidance = feature?["owner_guidance"] as? [String: Any]
+                return .init(status: 200, body: ownerControlData(
+                    queueRevision: feature?["queue_revision"] as? UInt64 ?? 0,
+                    emergencyPaused: guidance?["reason_code"] as? String == "emergency_paused",
+                    emergencyPauseRevision: guidance?["emergency_pause_revision"] as? UInt64 ?? 0
+                ))
+            case .failure: throw FakeSupervisorError()
+            }
+        }
         guard !outcomes.isEmpty else { throw FakeSupervisorError() }
         switch outcomes.removeFirst() {
         case let .response(response):
@@ -743,10 +756,16 @@ private actor FakeBridgeProcessSession: AssemblywrightDeveloperBridgeProcessSess
 
 private actor FakeBridgeProcessLauncher: AssemblywrightDeveloperBridgeProcessLaunching {
     let session: FakeBridgeProcessSession
+    let restartSession: FakeBridgeProcessSession?
+    let commandSucceeds: Bool
     private(set) var launchCount = 0
+    private(set) var commands: [([String], Data)] = []
+    private(set) var commandSawStoppedMonitor = false
 
-    init(session: FakeBridgeProcessSession) {
+    init(session: FakeBridgeProcessSession, restartSession: FakeBridgeProcessSession? = nil, commandSucceeds: Bool = true) {
         self.session = session
+        self.restartSession = restartSession
+        self.commandSucceeds = commandSucceeds
     }
 
     func launch(
@@ -754,7 +773,17 @@ private actor FakeBridgeProcessLauncher: AssemblywrightDeveloperBridgeProcessLau
         eventRelayConfiguration _: AssemblywrightMacDeveloperEventRelayConfiguration?
     ) async throws -> any AssemblywrightDeveloperBridgeProcessSession {
         launchCount += 1
-        return session
+        return launchCount > 1 ? (restartSession ?? session) : session
+    }
+
+    func runCommand(
+        executable _: AssemblywrightDeveloperBridgeValidatedExecutable,
+        arguments: [String], input: Data
+    ) async throws -> Data {
+        commandSawStoppedMonitor = await session.stopped
+        commands.append((arguments, input))
+        guard commandSucceeds else { throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot }
+        return activationReceiptData(request: input)
     }
 }
 
@@ -1633,8 +1662,10 @@ struct DeveloperBridgeTests {
         #expect(await session.requests.map(\.path) == [
             AssemblywrightMacBridgeSupervisor.healthPath,
             AssemblywrightMacBridgeSupervisor.featureConveyorPath,
+            AssemblywrightMacBridgeSupervisor.ownerControlPath,
             AssemblywrightMacBridgeSupervisor.healthPath,
-            AssemblywrightMacBridgeSupervisor.featureConveyorPath
+            AssemblywrightMacBridgeSupervisor.featureConveyorPath,
+            AssemblywrightMacBridgeSupervisor.ownerControlPath
         ])
         #expect(await session.cancelled == false)
         await supervisor.stop()
@@ -1660,7 +1691,8 @@ struct DeveloperBridgeTests {
         #expect(snapshot.featureConveyor?.ownerGuidance.state == .idle)
         #expect(await session.requests.map(\.path) == [
             AssemblywrightMacBridgeSupervisor.healthPath,
-            AssemblywrightMacBridgeSupervisor.featureConveyorPath
+            AssemblywrightMacBridgeSupervisor.featureConveyorPath,
+            AssemblywrightMacBridgeSupervisor.ownerControlPath
         ])
         #expect(await relay.epochs == [141])
         await supervisor.stop()
@@ -2108,6 +2140,167 @@ struct DeveloperBridgeTests {
             #expect(await session.requests.count == 1)
             #expect(await session.cancelled)
         }
+    }
+
+    @Test("Activation projection strictly accepts all-six, partial, and active evidence states")
+    func activationProjectionStrictStates() throws {
+        let ready = try AssemblywrightMacFeatureConveyorOwnerControlProjection.decodeStrict(
+            ownerControlData(queueRevision: 7, completeEvidence: true)
+        )
+        #expect(ready.activationReady)
+        #expect(ready.activationBlocker == .none)
+        #expect(ready.evidence.readyCount == 6)
+
+        let partial = try AssemblywrightMacFeatureConveyorOwnerControlProjection.decodeStrict(
+            ownerControlData(queueRevision: 7)
+        )
+        #expect(!partial.activationReady)
+        #expect(partial.activationBlocker == .evidenceRequired)
+        #expect(partial.evidence.readyCount == 0)
+
+        let active = try AssemblywrightMacFeatureConveyorOwnerControlProjection.decodeStrict(
+            ownerControlData(queueRevision: 7, completeEvidence: true, active: true)
+        )
+        #expect(active.activationStatus == .active)
+        #expect(active.activationBlocker == .alreadyActivated)
+        #expect(!active.activationReady)
+    }
+
+    @Test("Owner-control projection distinguishes non-owner pauses from owner pauses")
+    func ownerControlProjectionAcceptsNonOwnerPausedCheckpoint() throws {
+        let providerPaused = try AssemblywrightMacFeatureConveyorOwnerControlProjection.decodeStrict(
+            ownerControlDataWithActiveFeature(stage: "paused", ownerPaused: false)
+        )
+        #expect(providerPaused.activeFeature?.stage == .paused)
+        #expect(providerPaused.activeFeature?.lifecycleStatus == .paused)
+        #expect(providerPaused.activeFeature?.ownerPaused == false)
+        #expect(throws: ControlError.invalidRequest) {
+            try AssemblywrightMacFeatureConveyorActivationControl.orchestrationRequest(
+                from: providerPaused,
+                action: .pause
+            )
+        }
+        #expect(throws: ControlError.invalidRequest) {
+            try AssemblywrightMacFeatureConveyorActivationControl.orchestrationRequest(
+                from: providerPaused,
+                action: .resume
+            )
+        }
+
+        let ownerPaused = try AssemblywrightMacFeatureConveyorOwnerControlProjection.decodeStrict(
+            ownerControlDataWithActiveFeature(stage: "paused", ownerPaused: true)
+        )
+        #expect(ownerPaused.activeFeature?.ownerPaused == true)
+        _ = try AssemblywrightMacFeatureConveyorActivationControl.orchestrationRequest(
+            from: ownerPaused,
+            action: .resume
+        )
+
+        #expect(throws: ControlError.invalidProjection) {
+            try AssemblywrightMacFeatureConveyorOwnerControlProjection.decodeStrict(
+                ownerControlDataWithActiveFeature(stage: "reviewing", ownerPaused: true)
+            )
+        }
+    }
+
+    @Test("Activation projection rejects extra, duplicate, contradictory, and oversized data")
+    func activationProjectionRejectsMalformedAndOversized() {
+        let valid = ownerControlData(completeEvidence: true)
+        var extra = try! JSONSerialization.jsonObject(with: valid) as! [String: Any]
+        extra["owner_token"] = "forbidden"
+        let extraData = try! JSONSerialization.data(withJSONObject: extra)
+        let duplicate = Data((String(data: valid, encoding: .utf8)!
+            .replacingOccurrences(of: "\"schema_version\":1", with: "\"schema_version\":1,\"schema_version\":1")).utf8)
+        var contradictory = try! JSONSerialization.jsonObject(with: valid) as! [String: Any]
+        contradictory["activation_ready"] = false
+        let contradictoryData = try! JSONSerialization.data(withJSONObject: contradictory)
+        let oversized = Data(repeating: 0x61, count: 8 * 1_024 + 1)
+        for data in [extraData, duplicate, contradictoryData, oversized] {
+            #expect(throws: ControlError.invalidProjection) {
+                try AssemblywrightMacFeatureConveyorOwnerControlProjection.decodeStrict(data)
+            }
+        }
+    }
+
+    @Test("Activation command binds the snapshot revisions and rejects receipt drift")
+    func activationCommandBindsRevisionsAndReceipt() async throws {
+        let projection = try AssemblywrightMacFeatureConveyorOwnerControlProjection.decodeStrict(
+            ownerControlData(queueRevision: 7, completeEvidence: true)
+        )
+        let request = try AssemblywrightMacFeatureConveyorActivationControl.activationRequest(from: projection)
+        let receipt = activationReceiptData(request: request)
+        let success = FakeSupervisorSession(
+            connectionEpoch: 200,
+            outcomes: [.response(.init(status: 200, body: receipt))]
+        )
+        _ = try await AssemblywrightMacFeatureConveyorActivationControl.perform(
+            action: .activation, requestData: request, using: success
+        )
+        #expect(await success.requests.first?.path == AssemblywrightMacOwnerControlAction.activation.path)
+        #expect(await success.cancelled)
+
+        var drifted = try JSONSerialization.jsonObject(with: receipt) as! [String: Any]
+        drifted["queue_revision"] = 8
+        let driftedData = try JSONSerialization.data(withJSONObject: drifted)
+        let failure = FakeSupervisorSession(
+            connectionEpoch: 201,
+            outcomes: [.response(.init(status: 200, body: driftedData))]
+        )
+        await #expect(throws: ControlError.invalidReceipt) {
+            _ = try await AssemblywrightMacFeatureConveyorActivationControl.perform(
+                action: .activation, requestData: request, using: failure
+            )
+        }
+        #expect(await failure.cancelled)
+    }
+
+    @Test("Foundation one-shot helper routes one bounded confirmed activation command")
+    func foundationOneShotOwnerCommandRoutesExactArguments() async throws {
+        let projection = try AssemblywrightMacFeatureConveyorOwnerControlProjection.decodeStrict(
+            ownerControlData(queueRevision: 7, completeEvidence: true)
+        )
+        let request = try AssemblywrightMacFeatureConveyorActivationControl.activationRequest(from: projection)
+        let receipt = activationReceiptData(request: request)
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("assemblywright-owner-command-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let executable = directory.appendingPathComponent("bridge-fixture")
+        let receiptText = try #require(String(data: receipt, encoding: .utf8))
+        let script = "#!/bin/sh\nread ignored\nprintf '%s\\n' '\(receiptText)'\n"
+        try Data(script.utf8).write(to: executable, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        let validated = AssemblywrightDeveloperBridgeValidatedExecutable(
+            executableURL: executable, teamIdentifier: "ABCDEFGHIJ",
+            codeRequirement: "anchor apple generic", cdHash: Data(repeating: 0x11, count: 20)
+        )
+        let output = try await FoundationAssemblywrightDeveloperBridgeProcessLauncher(
+            runningProcessValidator: FakeBridgeRunningProcessValidator()
+        ).runCommand(
+            executable: validated,
+            arguments: AssemblywrightDeveloperBridgeProcessLifecycle.helperArguments(for: .activation),
+            input: request
+        )
+        #expect(output == receipt)
+        try AssemblywrightMacFeatureConveyorActivationControl.validateCommandReceipt(
+            output, requestData: request, action: .activation
+        )
+    }
+
+    @Test("One-shot helper reaps a child that closes stdout and hangs")
+    func oneShotOwnerCommandReapsClosedStdoutHang() async throws {
+        try await assertHostileOneShotHelperIsReaped(
+            script: "#!/bin/sh\nexec 1>&-\nwhile :; do :; done\n"
+        )
+    }
+
+    @Test("One-shot helper escalates to KILL when a hung child ignores TERM")
+    func oneShotOwnerCommandKillsTermIgnoringHang() async throws {
+        try await assertHostileOneShotHelperIsReaped(
+            script: "#!/usr/bin/perl\n$SIG{TERM} = 'IGNORE';\nclose STDOUT;\nwhile (1) {}\n",
+            minimumDuration: .milliseconds(700),
+            commandTimeout: .milliseconds(300)
+        )
     }
 
     @Test("Supervisor rejects malformed health, cancels, and reconnects")
@@ -3582,6 +3775,59 @@ struct DeveloperBridgeTests {
         await lifecycle.stop()
         #expect(await session.stopped)
         #expect(lifecycle.status.phase == .stopped)
+    }
+
+    @MainActor
+    @Test("Owner action reaps monitor before one-shot helper and restarts observation")
+    func ownerActionSerializesHelperChildrenAndRecoversMonitor() async {
+        let readyLine = authenticatedSnapshotData(
+            connectionEpoch: 44,
+            ownerControl: ownerControlData(completeEvidence: true)
+        )
+        let first = FakeBridgeProcessSession(lines: [readyLine])
+        let restarted = FakeBridgeProcessSession(lines: [readyLine])
+        let launcher = FakeBridgeProcessLauncher(session: first, restartSession: restarted)
+        let lifecycle = AssemblywrightDeveloperBridgeProcessLifecycle(
+            configuration: .init(environment: [
+                AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey: "/tmp/assemblywright-mac-bridge",
+                AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey: "ABCDEFGHIJ"
+            ]),
+            validator: FakeBridgeExecutableValidator(), launcher: launcher
+        )
+        lifecycle.start()
+        for _ in 0 ..< 100 where lifecycle.status.ownerControl?.activationReady != true { await Task.yield() }
+        await lifecycle.performOwnerAction(.activation)
+        for _ in 0 ..< 100 where await launcher.launchCount < 2 { await Task.yield() }
+
+        #expect(await launcher.commandSawStoppedMonitor)
+        #expect(await launcher.commands.count == 1)
+        #expect(await launcher.commands.first?.0 == AssemblywrightDeveloperBridgeProcessLifecycle.helperArguments(for: .activation))
+        #expect(await launcher.launchCount == 2)
+        #expect(lifecycle.ownerActionErrorCode == nil)
+        await lifecycle.stop()
+    }
+
+    @MainActor
+    @Test("Owner action receipt failure fails closed and still relaunches monitor")
+    func ownerActionReceiptFailureFailsClosedAndRecovers() async {
+        let readyLine = authenticatedSnapshotData(connectionEpoch: 44, ownerControl: ownerControlData(completeEvidence: true))
+        let first = FakeBridgeProcessSession(lines: [readyLine])
+        let restarted = FakeBridgeProcessSession(lines: [readyLine])
+        let launcher = FakeBridgeProcessLauncher(session: first, restartSession: restarted, commandSucceeds: false)
+        let lifecycle = AssemblywrightDeveloperBridgeProcessLifecycle(
+            configuration: .init(environment: [
+                AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey: "/tmp/assemblywright-mac-bridge",
+                AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey: "ABCDEFGHIJ"
+            ]), validator: FakeBridgeExecutableValidator(), launcher: launcher
+        )
+        lifecycle.start()
+        for _ in 0 ..< 100 where lifecycle.status.ownerControl?.activationReady != true { await Task.yield() }
+        await lifecycle.performOwnerAction(.activation)
+        for _ in 0 ..< 100 where await launcher.launchCount < 2 { await Task.yield() }
+        #expect(await launcher.commandSawStoppedMonitor)
+        #expect(lifecycle.ownerActionErrorCode == "invalid_helper_snapshot")
+        #expect(await launcher.launchCount == 2)
+        await lifecycle.stop()
     }
 
     @MainActor
@@ -5317,9 +5563,16 @@ private func authenticatedSnapshotData(
     maintenanceActive: Bool = false,
     emergencyPaused: Bool = false,
     masterStatus: String? = nil,
-    featureConveyor: Data = validFeatureConveyorData()
+    featureConveyor: Data = validFeatureConveyorData(),
+    ownerControl: Data? = nil
 ) -> Data {
     let featureObject = try! JSONSerialization.jsonObject(with: featureConveyor)
+    let guidance = (featureObject as? [String: Any])?["owner_guidance"] as? [String: Any]
+    let ownerObject = try! JSONSerialization.jsonObject(with: ownerControl ?? ownerControlData(
+        queueRevision: (featureObject as? [String: Any])?["queue_revision"] as? UInt64 ?? 0,
+        emergencyPaused: emergencyPaused,
+        emergencyPauseRevision: guidance?["emergency_pause_revision"] as? UInt64 ?? 0
+    ))
     let object: [String: Any] = [
         "phase": "authenticated",
         "device_id": "22222222-2222-4222-8222-222222222222",
@@ -5333,7 +5586,8 @@ private func authenticatedSnapshotData(
         "emergency_paused": emergencyPaused,
         "protocol_version": 5,
         "schema_version": 18,
-        "feature_conveyor": featureObject
+        "feature_conveyor": featureObject,
+        "owner_control": ownerObject
     ]
     return try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
 }
@@ -5347,7 +5601,115 @@ private func localCodingAuthenticatedSnapshotData(connectionEpoch: UInt64) -> Da
         with: authenticatedSnapshotData(connectionEpoch: connectionEpoch)
     ) as! [String: Any]
     object.removeValue(forKey: "feature_conveyor")
+    object.removeValue(forKey: "owner_control")
     return try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+}
+
+private func ownerControlData(
+    queueRevision: UInt64 = 0,
+    emergencyPaused: Bool = false,
+    emergencyPauseRevision: UInt64 = 0,
+    completeEvidence: Bool = false,
+    active: Bool = false
+) -> Data {
+    let names = ["repository_gate_proof", "restricted_worker_live", "review_provider_live",
+                 "github_publication_live", "restart_recovery_live", "mac_windows_control_event_streaming_live"]
+    var evidence: [String: Any] = [:]
+    for (index, name) in names.enumerated() {
+        evidence[name] = completeEvidence ? [
+            "evidence_id": String(format: "%08x-0000-4000-8000-%012x", index + 1, index + 1),
+            "revision": 1,
+            "receipt_sha256": Array(repeating: index + 1, count: 32)
+        ] : NSNull()
+    }
+    let ready = !active && !emergencyPaused && completeEvidence
+    let object: [String: Any] = [
+        "schema_version": 1,
+        "queue_revision": queueRevision,
+        "emergency_paused": emergencyPaused,
+        "emergency_pause_revision": emergencyPauseRevision,
+        "owner_control_designation_revision": 1,
+        "activation_status": active ? "active" : "inactive",
+        "activation_id": active ? "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" : NSNull(),
+        "activation_ready": ready,
+        "activation_blocker": active ? "already_activated" : emergencyPaused ? "emergency_paused" : completeEvidence ? "none" : "evidence_required",
+        "active_feature": NSNull(),
+        "evidence": evidence
+    ]
+    return try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+}
+
+private func ownerControlDataWithActiveFeature(
+    stage: String,
+    ownerPaused: Bool
+) -> Data {
+    var object = try! JSONSerialization.jsonObject(
+        with: ownerControlData()
+    ) as! [String: Any]
+    object["active_feature"] = [
+        "feature_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "specification_revision": 1,
+        "lifecycle_revision": 3,
+        "lifecycle_status": "paused",
+        "orchestration_revision": 4,
+        "stage": stage,
+        "owner_paused": ownerPaused,
+    ]
+    return try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+}
+
+private func assertHostileOneShotHelperIsReaped(
+    script: String,
+    minimumDuration: Duration = .zero,
+    commandTimeout: Duration = .milliseconds(100)
+) async throws {
+    let projection = try AssemblywrightMacFeatureConveyorOwnerControlProjection.decodeStrict(
+        ownerControlData(completeEvidence: true)
+    )
+    let request = try AssemblywrightMacFeatureConveyorActivationControl.activationRequest(
+        from: projection
+    )
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+        "assemblywright-hostile-owner-command-\(UUID().uuidString)",
+        isDirectory: true
+    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let executable = directory.appendingPathComponent("bridge-fixture")
+    try Data(script.utf8).write(to: executable, options: .atomic)
+    try FileManager.default.setAttributes(
+        [.posixPermissions: 0o700],
+        ofItemAtPath: executable.path
+    )
+    let validated = AssemblywrightDeveloperBridgeValidatedExecutable(
+        executableURL: executable,
+        teamIdentifier: "ABCDEFGHIJ",
+        codeRequirement: "anchor apple generic",
+        cdHash: Data(repeating: 0x11, count: 20)
+    )
+    let validator = RecordingBridgeRunningProcessValidator()
+    let launcher = FoundationAssemblywrightDeveloperBridgeProcessLauncher(
+        runningProcessValidator: validator,
+        ownerCommandTimeout: commandTimeout
+    )
+    let started = ContinuousClock.now
+    do {
+        _ = try await launcher.runCommand(
+            executable: validated,
+            arguments: AssemblywrightDeveloperBridgeProcessLifecycle.helperArguments(
+                for: .activation
+            ),
+            input: request
+        )
+        Issue.record("hostile one-shot helper unexpectedly succeeded")
+    } catch {
+        #expect(error is AssemblywrightDeveloperBridgeProcessError)
+    }
+    let duration = started.duration(to: .now)
+    #expect(duration >= minimumDuration)
+    #expect(duration < .seconds(2))
+    let processIdentifier = try #require(validator.processIdentifier)
+    #expect(!processExists(processIdentifier))
 }
 
 private func approvedFeatureOwnerControlRequestData() -> Data {
@@ -5431,6 +5793,21 @@ private func approvedFeatureOwnerControlReceiptData(queueRevision: UInt64 = 1) -
         "owner_control_designation_revision": 3,
         "emergency_pause_revision": 0,
         "status": "queued"
+    ]
+    return try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+}
+
+private func activationReceiptData(request: Data) -> Data {
+    let requestObject = try! JSONSerialization.jsonObject(with: request) as! [String: Any]
+    let object: [String: Any] = [
+        "schema_version": 1,
+        "activation_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "queue_revision": requestObject["expected_queue_revision"]!,
+        "owner_control_designation_revision": requestObject["expected_owner_control_designation_revision"]!,
+        "emergency_pause_revision": requestObject["expected_emergency_pause_revision"]!,
+        "evidence": requestObject["evidence"]!,
+        "activated_at_ms": 1_000,
+        "status": "active"
     ]
     return try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
 }

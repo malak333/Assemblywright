@@ -1,20 +1,27 @@
 #![cfg(windows)]
 
 use assemblywright_master::{
-    current_time_ms, EnrollmentGrantSpec, EnrollmentRequest, IdentityAuthority, MasterProcess,
-    NewStep, PlatformSecretProtector, RepositoryGrantKind, RepositoryGrantRevision,
+    current_time_ms, ApprovedFeatureSpecification, DeviceRegistration, EnrollmentGrantSpec,
+    EnrollmentRequest, FeatureSnapshotClaimPlan, IdentityAuthority, MasterProcess, NewStep,
+    PlatformSecretProtector, RepositoryGrantKind, RepositoryGrantRevision,
+    RepositorySnapshotEvidence,
 };
 use assemblywright_protocol::{
     local_coding_admission_sha256, AuthenticatedHandshakeRequest, CapabilityDescriptor, DeviceRole,
     DistributedEventBatch, DistributedEventBatchRequest, DistributedEventKind,
-    FeatureConveyorApprovedFeatureRequest, FeatureConveyorApprovedSpecification,
-    FeatureConveyorCodingDispatchReceipt, FeatureConveyorCodingDispatchRequest,
-    FeatureConveyorCodingWorkPacketMetadata, FeatureConveyorGrantRevisions,
-    FeatureConveyorRepositoryScopeDocument, FeatureConveyorRepositorySnapshotClaimReceipt,
-    FeatureConveyorRepositorySnapshotClaimRequest, HandshakeRequest, HandshakeResponse,
-    HandshakeStatus, JobEnvelope, JobResultEnvelope, JobResultStatus, LocalCodingJobResult,
-    LocalCodingResultArtifact, LocalCodingResultArtifactAdmission, LocalCodingSnapshotChunk,
-    LocalCodingSnapshotChunkRequest, Sensitivity, StepId, TaskId,
+    FeatureConveyorAbandonmentEvidence, FeatureConveyorActivationEvidenceAdmissionRequest,
+    FeatureConveyorActivationEvidenceCategory, FeatureConveyorActivationEvidenceOrigin,
+    FeatureConveyorActivationRequest, FeatureConveyorApprovedFeatureRequest,
+    FeatureConveyorApprovedSpecification, FeatureConveyorCodingDispatchReceipt,
+    FeatureConveyorCodingDispatchRequest, FeatureConveyorCodingWorkPacketMetadata,
+    FeatureConveyorGrantRevisions, FeatureConveyorOwnerControlProjection,
+    FeatureConveyorOwnerOrchestrationControlRequest, FeatureConveyorRemoteAbandonAndAdvanceRequest,
+    FeatureConveyorRemoteCancelActiveFeatureRequest, FeatureConveyorRepositoryScopeDocument,
+    FeatureConveyorRepositorySnapshotClaimReceipt, FeatureConveyorRepositorySnapshotClaimRequest,
+    HandshakeRequest, HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope,
+    JobResultStatus, LocalCodingJobResult, LocalCodingResultArtifact,
+    LocalCodingResultArtifactAdmission, LocalCodingSnapshotChunk, LocalCodingSnapshotChunkRequest,
+    Sensitivity, StepId, TaskId, FEATURE_CONVEYOR_OWNER_ACTIVATION_SCHEMA_VERSION,
     FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, LOCAL_CODING_COMPLETED_STATUS,
     LOCAL_CODING_FIXTURE_TEST_STATUS, PROTOCOL_VERSION,
 };
@@ -200,6 +207,18 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
         pre_handshake_enqueue.starts_with("HTTP/1.1 401 Unauthorized"),
         "pre-handshake client reached owner-control enqueue: {pre_handshake_enqueue}"
     );
+    let (pre_handshake_owner_control, _) = tls_request(
+        remote_endpoint,
+        owner_control.config.clone(),
+        "GET",
+        "/v1/distributed/feature-conveyor/owner-control",
+        None::<&Value>,
+    )
+    .await;
+    assert!(
+        pre_handshake_owner_control.starts_with("HTTP/1.1 401 Unauthorized"),
+        "pre-handshake client reached owner-control projection: {pre_handshake_owner_control}"
+    );
 
     let (health_handshake, health) = authenticated_application_request(
         remote_endpoint,
@@ -213,6 +232,75 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
     assert!(health.starts_with("HTTP/1.1 200 OK"), "{health}");
     assert!(health.contains("developer_remote_master"), "{health}");
     tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let (_, non_designated_owner_control) = authenticated_application_request(
+        remote_endpoint,
+        &non_designated_bridge,
+        "GET",
+        "/v1/distributed/feature-conveyor/owner-control",
+        &serde_json::json!({}),
+    )
+    .await;
+    assert!(
+        non_designated_owner_control.starts_with("HTTP/1.1 401 Unauthorized"),
+        "non-designated bridge reached owner control: {non_designated_owner_control}"
+    );
+    let (_, owner_control_projection) = authenticated_application_request(
+        remote_endpoint,
+        &owner_control,
+        "GET",
+        "/v1/distributed/feature-conveyor/owner-control",
+        &serde_json::json!({}),
+    )
+    .await;
+    assert!(owner_control_projection.starts_with("HTTP/1.1 200 OK"));
+    let owner_control_projection: Value = response_json(&owner_control_projection);
+    assert_exact_object_keys(
+        &owner_control_projection,
+        &[
+            "schema_version",
+            "queue_revision",
+            "emergency_paused",
+            "emergency_pause_revision",
+            "owner_control_designation_revision",
+            "activation_status",
+            "activation_id",
+            "activation_ready",
+            "activation_blocker",
+            "active_feature",
+            "evidence",
+        ],
+    );
+    assert_eq!(owner_control_projection["activation_ready"], false);
+    assert_eq!(
+        owner_control_projection["activation_blocker"],
+        "evidence_required"
+    );
+    let (_, local_evidence_over_remote) = authenticated_application_request(
+        remote_endpoint,
+        &owner_control,
+        "POST",
+        "/v1/feature-conveyor/activation-evidence",
+        &serde_json::json!({}),
+    )
+    .await;
+    assert!(
+        local_evidence_over_remote.starts_with("HTTP/1.1 404 Not Found"),
+        "owner-local evidence admission leaked remotely: {local_evidence_over_remote}"
+    );
+    let (_, malformed_activation) = authenticated_application_request(
+        remote_endpoint,
+        &owner_control,
+        "POST",
+        "/v1/distributed/feature-conveyor/activation",
+        &serde_json::json!({"path":"C:\\secret"}),
+    )
+    .await;
+    assert_fixed_error(
+        &malformed_activation,
+        "HTTP/1.1 422 Unprocessable Entity",
+        "feature_activation_request_rejected",
+    );
 
     let (status_handshake, remote_feature_status) = authenticated_application_request(
         remote_endpoint,
@@ -633,6 +721,96 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
         "approved_feature_enqueue_rejected",
     );
 
+    for (index, (category, origin)) in [
+        (
+            FeatureConveyorActivationEvidenceCategory::RepositoryGateProof,
+            FeatureConveyorActivationEvidenceOrigin::RepositoryGateProofController,
+        ),
+        (
+            FeatureConveyorActivationEvidenceCategory::RestrictedWorkerLive,
+            FeatureConveyorActivationEvidenceOrigin::RestrictedWorkerProofController,
+        ),
+        (
+            FeatureConveyorActivationEvidenceCategory::ReviewProviderLive,
+            FeatureConveyorActivationEvidenceOrigin::ReviewProviderProofController,
+        ),
+        (
+            FeatureConveyorActivationEvidenceCategory::GithubPublicationLive,
+            FeatureConveyorActivationEvidenceOrigin::GithubPublicationProofController,
+        ),
+        (
+            FeatureConveyorActivationEvidenceCategory::RestartRecoveryLive,
+            FeatureConveyorActivationEvidenceOrigin::RestartRecoveryProofController,
+        ),
+        (
+            FeatureConveyorActivationEvidenceCategory::MacWindowsControlEventStreamingLive,
+            FeatureConveyorActivationEvidenceOrigin::MacWindowsControlEventStreamingProofController,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let admission = FeatureConveyorActivationEvidenceAdmissionRequest {
+            schema_version: FEATURE_CONVEYOR_OWNER_ACTIVATION_SCHEMA_VERSION,
+            category,
+            origin,
+            evidence_id: Uuid::new_v4(),
+            revision: 1,
+            expected_current_revision: 0,
+            receipt_sha256: [u8::try_from(index + 1).unwrap(); 32],
+            observed_at_ms: 1,
+            expected_emergency_pause_revision: 2,
+        };
+        let evidence_response = local_post(
+            local_endpoint,
+            "/v1/feature-conveyor/activation-evidence",
+            development_token.trim(),
+            &serde_json::to_string(&admission).unwrap(),
+        );
+        assert!(
+            evidence_response.starts_with("HTTP/1.1 200 OK"),
+            "owner evidence admission failed: {evidence_response}"
+        );
+    }
+    let (_, ready_projection) = authenticated_application_request(
+        remote_endpoint,
+        &owner_control,
+        "GET",
+        "/v1/distributed/feature-conveyor/owner-control",
+        &serde_json::json!({}),
+    )
+    .await;
+    let ready_projection: FeatureConveyorOwnerControlProjection =
+        serde_json::from_value(response_json(&ready_projection)).unwrap();
+    assert!(ready_projection.activation_ready);
+    let activation = FeatureConveyorActivationRequest {
+        schema_version: FEATURE_CONVEYOR_OWNER_ACTIVATION_SCHEMA_VERSION,
+        expected_queue_revision: ready_projection.queue_revision,
+        expected_owner_control_designation_revision: ready_projection
+            .owner_control_designation_revision,
+        expected_emergency_pause_revision: ready_projection.emergency_pause_revision,
+        evidence: ready_projection.evidence.complete().unwrap(),
+    };
+    let (_, activation_response) = authenticated_application_request(
+        remote_endpoint,
+        &owner_control,
+        "POST",
+        "/v1/distributed/feature-conveyor/activation",
+        &activation,
+    )
+    .await;
+    assert!(activation_response.starts_with("HTTP/1.1 200 OK"));
+    let first_activation: Value = response_json(&activation_response);
+    let (_, activation_retry) = authenticated_application_request(
+        remote_endpoint,
+        &owner_control,
+        "POST",
+        "/v1/distributed/feature-conveyor/activation",
+        &activation,
+    )
+    .await;
+    assert_eq!(response_json(&activation_retry), first_activation);
+
     let mut exact = approved.clone();
     exact.emergency_pause_revision = 2;
     let (_, enqueue_response) = authenticated_application_request(
@@ -798,6 +976,458 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
             .map(|response| !response.0.starts_with("HTTP/1.1 200"))
             .unwrap_or(true),
         "revoked enrolled certificate reached remote health"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn remote_owner_controls_require_exact_designated_current_macbridge_bindings() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let directory = tempfile::tempdir().expect("remote owner-control data directory");
+    let binary = env!("CARGO_BIN_EXE_assemblywright-master");
+    assert_success(
+        &Command::new(binary)
+            .arg("--data-dir")
+            .arg(directory.path())
+            .arg("setup")
+            .output()
+            .expect("setup owner-control master"),
+        "setup owner-control master",
+    );
+    let designated = enroll_client_with_capabilities(
+        directory.path(),
+        "designated-controls",
+        DeviceRole::MacBridge,
+        false,
+        vec![CapabilityDescriptor::mlx_reasoning(
+            "designated-controls-mlx",
+            32 * 1024,
+            32 * 1024,
+        )],
+    );
+    let other_bridge = enroll_client_with_capabilities(
+        directory.path(),
+        "other-controls",
+        DeviceRole::MacBridge,
+        false,
+        vec![CapabilityDescriptor::mlx_reasoning(
+            "other-controls-mlx",
+            32 * 1024,
+            32 * 1024,
+        )],
+    );
+    let wrong_role = enroll_client(
+        directory.path(),
+        "wrong-role-controls",
+        DeviceRole::InferenceWorker,
+        false,
+    );
+    let repository_id = Uuid::new_v4();
+    let approved = approved_feature_request(repository_id);
+    let registration = DeviceRegistration {
+        device_id: designated.handshake.device_id,
+        device_name: designated.handshake.device_name.clone(),
+        role: designated.handshake.role,
+        registry_revision: designated.handshake.registry_revision,
+        capabilities: designated.handshake.capabilities.clone(),
+    };
+    let initial_pause;
+    {
+        let mut process = MasterProcess::acquire(directory.path()).expect("seed owner controls");
+        install_repository_grants(process.kernel_mut(), repository_id);
+        process
+            .kernel_mut()
+            .designate_owner_control_bridge(registration.device_id, 0, 10)
+            .expect("designate owner-control bridge");
+        for (index, (category, origin)) in [
+            (
+                FeatureConveyorActivationEvidenceCategory::RepositoryGateProof,
+                FeatureConveyorActivationEvidenceOrigin::RepositoryGateProofController,
+            ),
+            (
+                FeatureConveyorActivationEvidenceCategory::RestrictedWorkerLive,
+                FeatureConveyorActivationEvidenceOrigin::RestrictedWorkerProofController,
+            ),
+            (
+                FeatureConveyorActivationEvidenceCategory::ReviewProviderLive,
+                FeatureConveyorActivationEvidenceOrigin::ReviewProviderProofController,
+            ),
+            (
+                FeatureConveyorActivationEvidenceCategory::GithubPublicationLive,
+                FeatureConveyorActivationEvidenceOrigin::GithubPublicationProofController,
+            ),
+            (
+                FeatureConveyorActivationEvidenceCategory::RestartRecoveryLive,
+                FeatureConveyorActivationEvidenceOrigin::RestartRecoveryProofController,
+            ),
+            (
+                FeatureConveyorActivationEvidenceCategory::MacWindowsControlEventStreamingLive,
+                FeatureConveyorActivationEvidenceOrigin::MacWindowsControlEventStreamingProofController,
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            process
+                .kernel_mut()
+                .admit_feature_activation_evidence(
+                    &FeatureConveyorActivationEvidenceAdmissionRequest {
+                        schema_version: FEATURE_CONVEYOR_OWNER_ACTIVATION_SCHEMA_VERSION,
+                        category,
+                        origin,
+                        evidence_id: Uuid::new_v4(),
+                        revision: 1,
+                        expected_current_revision: 0,
+                        receipt_sha256: [u8::try_from(index + 1).unwrap(); 32],
+                        observed_at_ms: 11 + index as u64,
+                        expected_emergency_pause_revision: 0,
+                    },
+                    20 + index as u64,
+                )
+                .expect("admit activation evidence");
+        }
+        let readiness = process
+            .kernel_mut()
+            .feature_conveyor_owner_control_projection(&registration)
+            .expect("owner readiness");
+        process
+            .kernel_mut()
+            .activate_feature_orchestration_from_owner_bridge(
+                &FeatureConveyorActivationRequest {
+                    schema_version: FEATURE_CONVEYOR_OWNER_ACTIVATION_SCHEMA_VERSION,
+                    expected_queue_revision: readiness.queue_revision,
+                    expected_owner_control_designation_revision: 1,
+                    expected_emergency_pause_revision: 0,
+                    evidence: readiness.evidence.complete().unwrap(),
+                },
+                &registration,
+                30,
+            )
+            .expect("activate orchestration");
+        let specification: ApprovedFeatureSpecification = approved.specification.clone().into();
+        process
+            .kernel_mut()
+            .enqueue_approved_feature(&specification, 0, 31)
+            .expect("enqueue owner-control fixture");
+        let plan = process
+            .kernel()
+            .prepare_repository_snapshot_claim(
+                &FeatureSnapshotClaimPlan {
+                    feature_id: specification.feature_id,
+                    specification_revision: specification.revision,
+                    repository_id,
+                    expected_queue_revision: 1,
+                    expected_emergency_pause_revision: 0,
+                    scope_sha256: Sha256::digest(b"remote-scope-0").into(),
+                    provider_id: specification.provider_id.clone(),
+                    model_id: specification.model_id.clone(),
+                    grants: specification.grants,
+                    base_commit: "1234567890abcdef1234567890abcdef12345678".to_string(),
+                },
+                32,
+            )
+            .expect("plan snapshot claim");
+        let claim = process
+            .kernel_mut()
+            .finalize_repository_snapshot_claim(
+                &plan,
+                &RepositorySnapshotEvidence {
+                    snapshot_id: Uuid::new_v4(),
+                    snapshot_sha256: Sha256::digest(b"owner-control-snapshot").into(),
+                    base_commit: plan.base_commit.clone(),
+                },
+                33,
+            )
+            .expect("claim feature");
+        let checkpoint = process
+            .kernel_mut()
+            .coordinate_feature_orchestration(claim.feature_id, 0, 34)
+            .expect("initialize orchestration");
+        initial_pause = FeatureConveyorOwnerOrchestrationControlRequest {
+            schema_version: FEATURE_CONVEYOR_OWNER_ACTIVATION_SCHEMA_VERSION,
+            feature_id: claim.feature_id,
+            expected_lifecycle_revision: checkpoint.lifecycle_revision,
+            expected_orchestration_revision: checkpoint.orchestration_revision,
+            expected_queue_revision: 2,
+            expected_owner_control_designation_revision: 1,
+            expected_emergency_pause_revision: 0,
+        };
+        process
+            .kernel_mut()
+            .pause_feature_orchestration_from_owner_bridge(&initial_pause, &registration, 35)
+            .expect("seed restart-safe owner pause");
+    }
+
+    let local_endpoint = unused_loopback_addr();
+    let remote_endpoint = unused_loopback_addr();
+    let mut server = spawn_server(binary, directory.path(), local_endpoint, remote_endpoint);
+    read_ready(&mut server.child);
+
+    for path in [
+        "/v1/distributed/feature-conveyor/orchestration/pause",
+        "/v1/distributed/feature-conveyor/orchestration/resume",
+        "/v1/distributed/feature-conveyor/cancel-active-feature",
+        "/v1/distributed/feature-conveyor/abandon-and-advance",
+    ] {
+        let (response, _) = tls_request(
+            remote_endpoint,
+            designated.config.clone(),
+            "POST",
+            path,
+            Some(&serde_json::json!({})),
+        )
+        .await;
+        assert!(
+            response.starts_with("HTTP/1.1 401 Unauthorized"),
+            "{path}: {response}"
+        );
+    }
+
+    for client in [&other_bridge, &wrong_role] {
+        let (_, rejected) = authenticated_application_request(
+            remote_endpoint,
+            client,
+            "POST",
+            "/v1/distributed/feature-conveyor/orchestration/pause",
+            &initial_pause,
+        )
+        .await;
+        assert!(
+            rejected.starts_with("HTTP/1.1 401 Unauthorized")
+                || rejected.starts_with("HTTP/1.1 409 Conflict"),
+            "wrong identity reached pause: {rejected}"
+        );
+    }
+    for stale_request in [
+        FeatureConveyorOwnerOrchestrationControlRequest {
+            expected_owner_control_designation_revision: 2,
+            ..initial_pause
+        },
+        FeatureConveyorOwnerOrchestrationControlRequest {
+            expected_emergency_pause_revision: 1,
+            ..initial_pause
+        },
+    ] {
+        let (_, rejected) = authenticated_application_request(
+            remote_endpoint,
+            &designated,
+            "POST",
+            "/v1/distributed/feature-conveyor/orchestration/pause",
+            &stale_request,
+        )
+        .await;
+        assert_fixed_error(
+            &rejected,
+            "HTTP/1.1 409 Conflict",
+            "feature_orchestration_control_rejected",
+        );
+    }
+    let (_, exact_pause_retry) = authenticated_application_request(
+        remote_endpoint,
+        &designated,
+        "POST",
+        "/v1/distributed/feature-conveyor/orchestration/pause",
+        &initial_pause,
+    )
+    .await;
+    assert!(
+        exact_pause_retry.starts_with("HTTP/1.1 200 OK"),
+        "{exact_pause_retry}"
+    );
+    let paused: Value = response_json(&exact_pause_retry);
+    let resume = FeatureConveyorOwnerOrchestrationControlRequest {
+        expected_lifecycle_revision: paused["lifecycle_revision"].as_u64().unwrap(),
+        expected_orchestration_revision: paused["orchestration_revision"].as_u64().unwrap(),
+        ..initial_pause
+    };
+
+    for client in [&other_bridge, &wrong_role] {
+        let (_, rejected) = authenticated_application_request(
+            remote_endpoint,
+            client,
+            "POST",
+            "/v1/distributed/feature-conveyor/orchestration/resume",
+            &resume,
+        )
+        .await;
+        assert!(
+            rejected.starts_with("HTTP/1.1 401 Unauthorized")
+                || rejected.starts_with("HTTP/1.1 409 Conflict"),
+            "wrong identity reached resume: {rejected}"
+        );
+    }
+    let mut stale_designation = resume;
+    stale_designation.expected_owner_control_designation_revision += 1;
+    let (_, rejected) = authenticated_application_request(
+        remote_endpoint,
+        &designated,
+        "POST",
+        "/v1/distributed/feature-conveyor/orchestration/resume",
+        &stale_designation,
+    )
+    .await;
+    assert_fixed_error(
+        &rejected,
+        "HTTP/1.1 409 Conflict",
+        "feature_orchestration_control_rejected",
+    );
+    let mut stale_pause = resume;
+    stale_pause.expected_emergency_pause_revision += 1;
+    let (_, rejected) = authenticated_application_request(
+        remote_endpoint,
+        &designated,
+        "POST",
+        "/v1/distributed/feature-conveyor/orchestration/resume",
+        &stale_pause,
+    )
+    .await;
+    assert_fixed_error(
+        &rejected,
+        "HTTP/1.1 409 Conflict",
+        "feature_orchestration_control_rejected",
+    );
+    let (_, resumed_response) = authenticated_application_request(
+        remote_endpoint,
+        &designated,
+        "POST",
+        "/v1/distributed/feature-conveyor/orchestration/resume",
+        &resume,
+    )
+    .await;
+    assert!(
+        resumed_response.starts_with("HTTP/1.1 200 OK"),
+        "{resumed_response}"
+    );
+    let resumed: Value = response_json(&resumed_response);
+
+    let cancel = FeatureConveyorRemoteCancelActiveFeatureRequest {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        feature_id: initial_pause.feature_id,
+        expected_lifecycle_revision: resumed["lifecycle_revision"].as_u64().unwrap(),
+        expected_queue_revision: 2,
+        expected_owner_control_designation_revision: 1,
+        expected_emergency_pause_revision: 0,
+    };
+    let mut stale_cancel = cancel;
+    stale_cancel.expected_owner_control_designation_revision = 2;
+    let (_, rejected) = authenticated_application_request(
+        remote_endpoint,
+        &designated,
+        "POST",
+        "/v1/distributed/feature-conveyor/cancel-active-feature",
+        &stale_cancel,
+    )
+    .await;
+    assert_fixed_error(
+        &rejected,
+        "HTTP/1.1 409 Conflict",
+        "feature_cancel_rejected",
+    );
+    let mut stale_cancel_pause = cancel;
+    stale_cancel_pause.expected_emergency_pause_revision = 1;
+    let (_, rejected) = authenticated_application_request(
+        remote_endpoint,
+        &designated,
+        "POST",
+        "/v1/distributed/feature-conveyor/cancel-active-feature",
+        &stale_cancel_pause,
+    )
+    .await;
+    assert_fixed_error(
+        &rejected,
+        "HTTP/1.1 409 Conflict",
+        "feature_cancel_rejected",
+    );
+    for client in [&other_bridge, &wrong_role] {
+        let (_, rejected) = authenticated_application_request(
+            remote_endpoint,
+            client,
+            "POST",
+            "/v1/distributed/feature-conveyor/cancel-active-feature",
+            &cancel,
+        )
+        .await;
+        assert!(
+            rejected.starts_with("HTTP/1.1 401 Unauthorized")
+                || rejected.starts_with("HTTP/1.1 409 Conflict"),
+            "wrong identity reached cancellation: {rejected}"
+        );
+    }
+    let (_, cancelled_response) = authenticated_application_request(
+        remote_endpoint,
+        &designated,
+        "POST",
+        "/v1/distributed/feature-conveyor/cancel-active-feature",
+        &cancel,
+    )
+    .await;
+    assert!(
+        cancelled_response.starts_with("HTTP/1.1 200 OK"),
+        "{cancelled_response}"
+    );
+    let cancelled: Value = response_json(&cancelled_response);
+    let abandon = FeatureConveyorRemoteAbandonAndAdvanceRequest {
+        schema_version: FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+        feature_id: cancel.feature_id,
+        expected_lifecycle_revision: cancelled["lifecycle_revision"].as_u64().unwrap(),
+        expected_queue_revision: 2,
+        expected_owner_control_designation_revision: 1,
+        expected_emergency_pause_revision: 0,
+        evidence: FeatureConveyorAbandonmentEvidence {
+            safe_reconciliation_sha256: Sha256::digest(b"remote-safe-reconciliation").into(),
+            merged: false,
+            verified_healthy_main_sha256: None,
+        },
+    };
+    for stale_request in [
+        FeatureConveyorRemoteAbandonAndAdvanceRequest {
+            expected_owner_control_designation_revision: 2,
+            ..abandon
+        },
+        FeatureConveyorRemoteAbandonAndAdvanceRequest {
+            expected_emergency_pause_revision: 1,
+            ..abandon
+        },
+    ] {
+        let (_, rejected) = authenticated_application_request(
+            remote_endpoint,
+            &designated,
+            "POST",
+            "/v1/distributed/feature-conveyor/abandon-and-advance",
+            &stale_request,
+        )
+        .await;
+        assert_fixed_error(
+            &rejected,
+            "HTTP/1.1 409 Conflict",
+            "feature_abandonment_rejected",
+        );
+    }
+    for client in [&other_bridge, &wrong_role] {
+        let (_, rejected) = authenticated_application_request(
+            remote_endpoint,
+            client,
+            "POST",
+            "/v1/distributed/feature-conveyor/abandon-and-advance",
+            &abandon,
+        )
+        .await;
+        assert!(
+            rejected.starts_with("HTTP/1.1 401 Unauthorized")
+                || rejected.starts_with("HTTP/1.1 409 Conflict"),
+            "wrong identity reached abandonment: {rejected}"
+        );
+    }
+    let (_, abandoned_response) = authenticated_application_request(
+        remote_endpoint,
+        &designated,
+        "POST",
+        "/v1/distributed/feature-conveyor/abandon-and-advance",
+        &abandon,
+    )
+    .await;
+    assert!(
+        abandoned_response.starts_with("HTTP/1.1 200 OK"),
+        "{abandoned_response}"
     );
 }
 

@@ -5,13 +5,16 @@ Status: APPROVED by owner and structured multi-agent design review
 Date: 2026-07-24
 
 Scope: Approved target design plus the bounded repository-kernel implementation
-status below. This document does not claim autonomous activation, live-device
-proof, or production readiness.
+status below. This document does not claim that activation prerequisites have
+been satisfied, live-device proof, or production readiness.
 
-Implementation status: the default-inert protocol-v5/schema-v18 Windows
-`assemblywright-master` kernel is implemented through the independent-review
-gateway. The detailed implemented boundary is summarized under
-`Implementation Boundary` below. It retains immutable approved specification
+Implementation status: the default-inert protocol-v5/schema-v19 Windows
+`assemblywright-master` kernel is implemented through the owner-control and
+activation surface. The detailed implemented boundary is summarized under
+`Implementation Boundary` below. The default-inert protocol-v5/schema-v18 Windows
+predecessor introduced the internal orchestration ledger; schema v19 migrates it
+backup-first and adds the bounded activation and owner-control authority.
+It retains immutable approved specification
 revisions, the bounded owner-ordered queue, dependency blocking, compare-and-
 set revisions, one active lease, exact lifecycle advancement, cancellation
 without advancement, explicit safe abandonment, startup quarantine, and same-
@@ -48,11 +51,13 @@ separate schema-v16 independent-review gateway is implemented and defaults
 unavailable until one fixed adapter is provisioned. Schema v17 implements the
 durable owner-loopback Publication Coordinator and controlled bare-Git proof,
 while its credential-owning GitHub adapter remains default-unavailable. Schema
-v18 adds the internal deterministic orchestration checkpoint kernel described
-below, but no route or activation writer. No automatic dispatcher, registered-
-source mutation, Mac control UI, or autonomous activation is implemented. The
-remainder of this document beyond the explicit implementation boundary is
-still target design.
+v18 added the internal deterministic orchestration checkpoint kernel described
+below. Schema v19 adds owner-token activation-evidence admission, designated
+exporter-bound Mac activation and owner-control routes, and confirmed signed-
+helper SwiftUI controls. No automatic dispatcher or registered-source mutation
+is implemented, and activation remains blocked until all six genuine live proof
+receipts are admitted. The remainder of this document beyond the explicit
+implementation boundary is still target design.
 
 Master schema v8 adds the first bounded owner-control transport without
 activating the conveyor. An owner-token-authenticated Windows loopback action
@@ -131,7 +136,9 @@ The one-shot signed Mac helper requires `--confirm`, reads the bounded request
 from stdin, strictly validates the redacted receipt, and closes the session.
 It does not create grants or brainstorming proof, claim or dispatch the queue,
 invoke a worker or provider, access a repository, or grant Git/publication or
-autonomous activation. The SwiftUI app remains observation only.
+autonomous activation. That schema-v8 enqueue slice left the SwiftUI app
+observation-only; schema v19 adds the separate confirmed owner-action surface
+described under `Implementation Boundary`.
 
 The following paragraph records the historical protocol-v4/schema-v12 worker.
 Master schema v10 added the first separate metadata-only coding-dispatch
@@ -343,12 +350,14 @@ dominance, but every network request crosses one relay-local FIFO permit so the
 production authenticated session still has exactly one request in flight.
 
 Schema v18 adds immutable path-free orchestration state and checkpoints under a
-backup-first migration. The internal coordinator derives every stage/action and
+backup-first migration. This paragraph describes the historical v18 boundary;
+schema v19 adds the owner controls above. The internal coordinator derives every stage/action and
 failure classification from master state and existing exact evidence. It never
 accepts caller commands, paths, provider output, adapter evidence, credentials,
 or retry classifications. The activation-evidence table intentionally has no
-writer because capability 7 owns owner activation and functional live evidence;
-there is no owner-loopback or enrolled-device orchestration route in this slice.
+writer in that historical slice because capability 7 owns owner activation and
+functional live evidence. Schema v19 supplies the bounded writer and routes
+without changing how the coordinator derives actions.
 
 The ledger supports `repairing`, `paused`, `attention_required`, and `failed`.
 Only `succeeded` automatically releases the lease. Coordination rejects
@@ -479,7 +488,7 @@ canonical repository, master database, canonical memory, credentials, or
 unrelated files. General network access is disabled; only a narrowly controlled
 local-model connection is allowed.
 
-The implemented protocol-v5/schema-v18 kernel retains the schema-v14 worker and
+The implemented protocol-v5/schema-v19 kernel retains the schema-v14 worker and
 integration boundary and accepts one immutable
 snapshot-bound general coding packet for one exact registered worker. After the
 exact lease, a separate default-off route streams a bounded authenticated
@@ -509,6 +518,28 @@ independent-review gateway described below. Publication and registered-source-
 checkout mutation remain unimplemented. This boundary does
 not establish installed-service execution, signed Mac E2E, or OS-wide egress
 control.
+
+Schema v19 closes owner activation without turning the Mac into an evidence
+authority. Windows admits six fixed, digest-only proof-controller receipt
+categories over an owner-token loopback route, then projects their current
+references to the exact designated exporter-bound MacBridge. Remote activation
+can select only those already-admitted references and exact queue, designation,
+and Emergency Pause revisions. The global singleton is immutable and creates
+no lease; orchestration stays default-inert until it exists. Owner pause/resume
+is a distinct active-feature action bound to exact lifecycle and orchestration
+revisions. It requires an effect-free checkpoint, preserves active-time
+accounting, and never substitutes for global Emergency Pause. Cancel retains
+the lease; abandon still requires safe reconciliation and healthy-main proof
+where publication might have merged.
+
+The concrete authority endpoints are loopback-only
+`POST /v1/feature-conveyor/activation-evidence` and exporter-bound designated-
+bridge `GET /v1/distributed/feature-conveyor/owner-control`, plus remote POSTs
+for `activation`, `orchestration/pause`, `orchestration/resume`,
+`cancel-active-feature`, and `abandon-and-advance`. The signed helper exposes
+each mutation only as an explicit bounded `--confirm` command. The SwiftUI app
+stops and reaps monitoring, revalidates that same helper, owns one command child,
+strictly validates its receipt, and restores observation.
 
 #### Evidence Gate
 

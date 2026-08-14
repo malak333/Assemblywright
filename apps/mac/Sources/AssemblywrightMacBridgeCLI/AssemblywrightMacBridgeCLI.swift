@@ -11,7 +11,7 @@ private enum BridgeCLIError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .usage:
-            "Usage: assemblywright-mac-bridge enrollment prepare|install [--identity-profile fixture|local-coding] | enrollment rebind prepare|stage|promote|cancel --confirm | enrollment remove --confirm --identity-profile fixture|local-coding | feature-conveyor approve-and-enqueue --confirm | status|connect [--identity-profile fixture|local-coding] | monitor|relay [--identity-profile fixture|local-coding] [--samples COUNT] [--interval-ms MILLISECONDS] [--reconnect-between-samples]"
+            "Usage: assemblywright-mac-bridge enrollment prepare|install [--identity-profile fixture|local-coding] | enrollment rebind prepare|stage|promote|cancel --confirm | enrollment remove --confirm --identity-profile fixture|local-coding | feature-conveyor approve-and-enqueue|activation|orchestration pause|orchestration resume|cancel-active-feature|abandon-and-advance --confirm | status|connect [--identity-profile fixture|local-coding] | monitor|relay [--identity-profile fixture|local-coding] [--samples COUNT] [--interval-ms MILLISECONDS] [--reconnect-between-samples]"
         case .inputTooLarge:
             "Input exceeds this command's fixed document limit."
         case .notEnrolled:
@@ -166,6 +166,19 @@ private struct AssemblywrightMacBridgeCLI {
             let receipt = try await AssemblywrightMacFeatureConveyorOwnerControl
                 .approveAndEnqueue(requestData: request, using: session)
             try writeEncodableJSON(receipt)
+        case let arguments where parsed.profile == .standard && ownerControlAction(arguments) != nil:
+            guard let action = ownerControlAction(arguments) else { throw BridgeCLIError.usage }
+            guard let profile = try coordinator.status() else { throw BridgeCLIError.notEnrolled }
+            let request = try readBoundedStdin(
+                maximum: AssemblywrightMacFeatureConveyorActivationControl.maximumFrameBytes
+            )
+            let session = try await AssemblywrightMacMTLSBridgeTransport(
+                factory: NetworkAssemblywrightMacTLSChannelFactory(identityStore: identityStore)
+            ).connect(profile: profile)
+            let receipt = try await AssemblywrightMacFeatureConveyorActivationControl.perform(
+                action: action, requestData: request, using: session
+            )
+            try writeStdout(receipt)
         case let arguments where arguments.first == "monitor":
             guard let profile = try coordinator.status() else { throw BridgeCLIError.notEnrolled }
             let options = try monitorOptions(Array(arguments.dropFirst()))
@@ -199,6 +212,19 @@ private struct AssemblywrightMacBridgeCLI {
             )
         default:
             throw BridgeCLIError.usage
+        }
+    }
+
+    private static func ownerControlAction(
+        _ arguments: [String]
+    ) -> AssemblywrightMacOwnerControlAction? {
+        switch arguments {
+        case ["feature-conveyor", "activation", "--confirm"]: .activation
+        case ["feature-conveyor", "orchestration", "pause", "--confirm"]: .pause
+        case ["feature-conveyor", "orchestration", "resume", "--confirm"]: .resume
+        case ["feature-conveyor", "cancel-active-feature", "--confirm"]: .cancelActiveFeature
+        case ["feature-conveyor", "abandon-and-advance", "--confirm"]: .abandonAndAdvance
+        default: nil
         }
     }
 

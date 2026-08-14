@@ -1037,6 +1037,8 @@ pub const FEATURE_CONVEYOR_VALIDATION_GATE_SCHEMA_VERSION: u16 = 1;
 pub const FEATURE_CONVEYOR_REVIEW_GATEWAY_SCHEMA_VERSION: u16 = 1;
 pub const FEATURE_CONVEYOR_PUBLICATION_COORDINATOR_SCHEMA_VERSION: u16 = 1;
 pub const FEATURE_CONVEYOR_ORCHESTRATION_SCHEMA_VERSION: u16 = 1;
+pub const FEATURE_CONVEYOR_OWNER_ACTIVATION_SCHEMA_VERSION: u16 = 1;
+pub const MAX_FEATURE_CONVEYOR_OWNER_ACTIVATION_FRAME_BYTES: usize = 8 * 1024;
 pub const MAX_FEATURE_CONVEYOR_REPLACEMENT_CANDIDATES: u8 = 3;
 pub const MAX_FEATURE_CONVEYOR_ACTIVE_PROCESSING_MS: u64 = 24 * 60 * 60 * 1_000;
 pub const MAX_FEATURE_CONVEYOR_PUBLICATION_CHECKS: usize = 64;
@@ -1160,6 +1162,520 @@ impl FeatureConveyorOrchestrationProjection {
                         FeatureConveyorOrchestrationReason::CapabilityInactive
                     )))
         {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        Ok(())
+    }
+}
+
+/// A fixed, path-free summary of the exact active feature that owner control
+/// may act on. `orchestration_revision` is zero only before the first durable
+/// orchestration checkpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorOwnerActiveFeature {
+    pub feature_id: Uuid,
+    pub specification_revision: u64,
+    pub lifecycle_revision: u64,
+    pub orchestration_revision: u64,
+    pub lifecycle_status: FeatureConveyorOwnerLifecycleStatus,
+    pub stage: FeatureConveyorOrchestrationStage,
+    pub owner_paused: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureConveyorOwnerLifecycleStatus {
+    Implementing,
+    Validating,
+    Reviewing,
+    Publishing,
+    VerifyingMain,
+    Repairing,
+    Paused,
+    AttentionRequired,
+    Failed,
+    Cancelled,
+    Quarantined,
+}
+
+impl FeatureConveyorOwnerActiveFeature {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_uuid("feature_id", self.feature_id)?;
+        validate_positive_limit(
+            "specification_revision",
+            self.specification_revision,
+            u64::MAX,
+        )?;
+        validate_positive_limit("lifecycle_revision", self.lifecycle_revision, u64::MAX)?;
+        if self.owner_paused
+            && (self.stage != FeatureConveyorOrchestrationStage::Paused
+                || self.lifecycle_status != FeatureConveyorOwnerLifecycleStatus::Paused
+                || self.orchestration_revision == 0)
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureConveyorActivationStatus {
+    Inactive,
+    Active,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureConveyorActivationBlocker {
+    None,
+    EmergencyPaused,
+    EvidenceRequired,
+    AlreadyActivated,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureConveyorActivationEvidenceCategory {
+    RepositoryGateProof,
+    RestrictedWorkerLive,
+    ReviewProviderLive,
+    GithubPublicationLive,
+    RestartRecoveryLive,
+    MacWindowsControlEventStreamingLive,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureConveyorActivationEvidenceOrigin {
+    RepositoryGateProofController,
+    RestrictedWorkerProofController,
+    ReviewProviderProofController,
+    GithubPublicationProofController,
+    RestartRecoveryProofController,
+    MacWindowsControlEventStreamingProofController,
+}
+
+impl FeatureConveyorActivationEvidenceCategory {
+    pub fn accepts_origin(self, origin: FeatureConveyorActivationEvidenceOrigin) -> bool {
+        matches!(
+            (self, origin),
+            (
+                Self::RepositoryGateProof,
+                FeatureConveyorActivationEvidenceOrigin::RepositoryGateProofController
+            ) | (
+                Self::RestrictedWorkerLive,
+                FeatureConveyorActivationEvidenceOrigin::RestrictedWorkerProofController
+            ) | (
+                Self::ReviewProviderLive,
+                FeatureConveyorActivationEvidenceOrigin::ReviewProviderProofController
+            ) | (
+                Self::GithubPublicationLive,
+                FeatureConveyorActivationEvidenceOrigin::GithubPublicationProofController
+            ) | (
+                Self::RestartRecoveryLive,
+                FeatureConveyorActivationEvidenceOrigin::RestartRecoveryProofController
+            ) | (
+                Self::MacWindowsControlEventStreamingLive,
+                FeatureConveyorActivationEvidenceOrigin::MacWindowsControlEventStreamingProofController
+            )
+        )
+    }
+}
+
+/// A Windows-admitted digest-only proof-controller receipt. Remote activation
+/// can reference this record but cannot create it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorActivationEvidenceReference {
+    pub evidence_id: Uuid,
+    pub revision: u64,
+    pub receipt_sha256: [u8; 32],
+}
+
+impl FeatureConveyorActivationEvidenceReference {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_uuid("evidence_id", self.evidence_id)?;
+        validate_positive_limit("evidence_revision", self.revision, u64::MAX)?;
+        if self.receipt_sha256 == [0; 32] {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorActivationEvidenceSet {
+    pub repository_gate_proof: FeatureConveyorActivationEvidenceReference,
+    pub restricted_worker_live: FeatureConveyorActivationEvidenceReference,
+    pub review_provider_live: FeatureConveyorActivationEvidenceReference,
+    pub github_publication_live: FeatureConveyorActivationEvidenceReference,
+    pub restart_recovery_live: FeatureConveyorActivationEvidenceReference,
+    pub mac_windows_control_event_streaming_live: FeatureConveyorActivationEvidenceReference,
+}
+
+impl FeatureConveyorActivationEvidenceSet {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        self.repository_gate_proof.validate()?;
+        self.restricted_worker_live.validate()?;
+        self.review_provider_live.validate()?;
+        self.github_publication_live.validate()?;
+        self.restart_recovery_live.validate()?;
+        self.mac_windows_control_event_streaming_live.validate()?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorActivationEvidenceProjection {
+    pub repository_gate_proof: Option<FeatureConveyorActivationEvidenceReference>,
+    pub restricted_worker_live: Option<FeatureConveyorActivationEvidenceReference>,
+    pub review_provider_live: Option<FeatureConveyorActivationEvidenceReference>,
+    pub github_publication_live: Option<FeatureConveyorActivationEvidenceReference>,
+    pub restart_recovery_live: Option<FeatureConveyorActivationEvidenceReference>,
+    pub mac_windows_control_event_streaming_live:
+        Option<FeatureConveyorActivationEvidenceReference>,
+}
+
+impl FeatureConveyorActivationEvidenceProjection {
+    pub fn complete(self) -> Option<FeatureConveyorActivationEvidenceSet> {
+        Some(FeatureConveyorActivationEvidenceSet {
+            repository_gate_proof: self.repository_gate_proof?,
+            restricted_worker_live: self.restricted_worker_live?,
+            review_provider_live: self.review_provider_live?,
+            github_publication_live: self.github_publication_live?,
+            restart_recovery_live: self.restart_recovery_live?,
+            mac_windows_control_event_streaming_live: self
+                .mac_windows_control_event_streaming_live?,
+        })
+    }
+
+    fn validate(&self) -> Result<(), ProtocolError> {
+        for value in [
+            self.repository_gate_proof,
+            self.restricted_worker_live,
+            self.review_provider_live,
+            self.github_publication_live,
+            self.restart_recovery_live,
+            self.mac_windows_control_event_streaming_live,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            value.validate()?;
+        }
+        Ok(())
+    }
+}
+
+/// Owner-token loopback-only admission of one external proof-controller
+/// receipt. The master stores no report body, command, path, provider output,
+/// credential, or secret.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorActivationEvidenceAdmissionRequest {
+    pub schema_version: u16,
+    pub category: FeatureConveyorActivationEvidenceCategory,
+    pub origin: FeatureConveyorActivationEvidenceOrigin,
+    pub evidence_id: Uuid,
+    pub revision: u64,
+    pub expected_current_revision: u64,
+    pub receipt_sha256: [u8; 32],
+    pub observed_at_ms: u64,
+    pub expected_emergency_pause_revision: u64,
+}
+
+impl FeatureConveyorActivationEvidenceAdmissionRequest {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "feature_conveyor_activation_evidence_admission_request",
+            frame,
+            MAX_FEATURE_CONVEYOR_OWNER_ACTIVATION_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_fixed_value(
+            "schema_version",
+            self.schema_version.to_string(),
+            FEATURE_CONVEYOR_OWNER_ACTIVATION_SCHEMA_VERSION.to_string(),
+        )?;
+        validate_uuid("evidence_id", self.evidence_id)?;
+        validate_positive_limit("revision", self.revision, u64::MAX)?;
+        validate_positive_limit("observed_at_ms", self.observed_at_ms, u64::MAX)?;
+        if self.revision != self.expected_current_revision.saturating_add(1)
+            || self.expected_current_revision == u64::MAX
+            || self.receipt_sha256 == [0; 32]
+            || !self.category.accepts_origin(self.origin)
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        validate_serialized_limit(
+            "feature_conveyor_activation_evidence_admission_request",
+            self,
+            MAX_FEATURE_CONVEYOR_OWNER_ACTIVATION_FRAME_BYTES,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorActivationEvidenceAdmissionReceipt {
+    pub schema_version: u16,
+    pub category: FeatureConveyorActivationEvidenceCategory,
+    pub origin: FeatureConveyorActivationEvidenceOrigin,
+    pub evidence: FeatureConveyorActivationEvidenceReference,
+    pub observed_at_ms: u64,
+    pub emergency_pause_revision: u64,
+}
+
+impl FeatureConveyorActivationEvidenceAdmissionReceipt {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        self.evidence.validate()?;
+        validate_positive_limit("observed_at_ms", self.observed_at_ms, u64::MAX)?;
+        if self.schema_version != FEATURE_CONVEYOR_OWNER_ACTIVATION_SCHEMA_VERSION
+            || !self.category.accepts_origin(self.origin)
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        Ok(())
+    }
+}
+
+/// Windows-authoritative owner-control projection. It is deliberately limited
+/// to revision bindings, fixed enums, IDs, and digests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorOwnerControlProjection {
+    pub schema_version: u16,
+    pub queue_revision: u64,
+    pub emergency_paused: bool,
+    pub emergency_pause_revision: u64,
+    pub owner_control_designation_revision: u64,
+    pub activation_status: FeatureConveyorActivationStatus,
+    pub activation_id: Option<Uuid>,
+    pub activation_ready: bool,
+    pub activation_blocker: FeatureConveyorActivationBlocker,
+    pub active_feature: Option<FeatureConveyorOwnerActiveFeature>,
+    pub evidence: FeatureConveyorActivationEvidenceProjection,
+}
+
+impl FeatureConveyorOwnerControlProjection {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_fixed_value(
+            "schema_version",
+            self.schema_version.to_string(),
+            FEATURE_CONVEYOR_OWNER_ACTIVATION_SCHEMA_VERSION.to_string(),
+        )?;
+        validate_positive_limit(
+            "owner_control_designation_revision",
+            self.owner_control_designation_revision,
+            u64::MAX,
+        )?;
+        if let Some(active) = self.active_feature {
+            active.validate()?;
+        }
+        self.evidence.validate()?;
+        let active = self.activation_status == FeatureConveyorActivationStatus::Active;
+        if active != self.activation_id.is_some()
+            || (active && self.evidence.complete().is_none())
+            || self.activation_id.is_some_and(|id| id.is_nil())
+            || self.activation_ready
+                != (!active && !self.emergency_paused && self.evidence.complete().is_some())
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        let expected_blocker = if active {
+            FeatureConveyorActivationBlocker::AlreadyActivated
+        } else if self.emergency_paused {
+            FeatureConveyorActivationBlocker::EmergencyPaused
+        } else if self.evidence.complete().is_none() {
+            FeatureConveyorActivationBlocker::EvidenceRequired
+        } else {
+            FeatureConveyorActivationBlocker::None
+        };
+        if self.activation_blocker != expected_blocker {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        validate_serialized_limit(
+            "feature_conveyor_owner_control_projection",
+            self,
+            MAX_FEATURE_CONVEYOR_OWNER_ACTIVATION_FRAME_BYTES,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorActivationRequest {
+    pub schema_version: u16,
+    pub expected_queue_revision: u64,
+    pub expected_owner_control_designation_revision: u64,
+    pub expected_emergency_pause_revision: u64,
+    pub evidence: FeatureConveyorActivationEvidenceSet,
+}
+
+impl FeatureConveyorActivationRequest {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "feature_conveyor_activation_request",
+            frame,
+            MAX_FEATURE_CONVEYOR_OWNER_ACTIVATION_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_fixed_value(
+            "schema_version",
+            self.schema_version.to_string(),
+            FEATURE_CONVEYOR_OWNER_ACTIVATION_SCHEMA_VERSION.to_string(),
+        )?;
+        validate_positive_limit(
+            "expected_owner_control_designation_revision",
+            self.expected_owner_control_designation_revision,
+            u64::MAX,
+        )?;
+        self.evidence.validate()?;
+        validate_serialized_limit(
+            "feature_conveyor_activation_request",
+            self,
+            MAX_FEATURE_CONVEYOR_OWNER_ACTIVATION_FRAME_BYTES,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorActivationReceipt {
+    pub schema_version: u16,
+    pub activation_id: Uuid,
+    pub queue_revision: u64,
+    pub owner_control_designation_revision: u64,
+    pub emergency_pause_revision: u64,
+    pub evidence: FeatureConveyorActivationEvidenceSet,
+    pub activated_at_ms: u64,
+    pub status: FeatureConveyorActivationStatus,
+}
+
+impl FeatureConveyorActivationReceipt {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        let request = FeatureConveyorActivationRequest {
+            schema_version: self.schema_version,
+            expected_queue_revision: self.queue_revision,
+            expected_owner_control_designation_revision: self.owner_control_designation_revision,
+            expected_emergency_pause_revision: self.emergency_pause_revision,
+            evidence: self.evidence,
+        };
+        request.validate()?;
+        validate_uuid("activation_id", self.activation_id)?;
+        validate_positive_limit("activated_at_ms", self.activated_at_ms, u64::MAX)?;
+        if self.status != FeatureConveyorActivationStatus::Active {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorOwnerOrchestrationControlRequest {
+    pub schema_version: u16,
+    pub feature_id: Uuid,
+    pub expected_lifecycle_revision: u64,
+    pub expected_orchestration_revision: u64,
+    pub expected_queue_revision: u64,
+    pub expected_owner_control_designation_revision: u64,
+    pub expected_emergency_pause_revision: u64,
+}
+
+impl FeatureConveyorOwnerOrchestrationControlRequest {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "feature_conveyor_owner_orchestration_control_request",
+            frame,
+            MAX_FEATURE_CONVEYOR_OWNER_ACTIVATION_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_fixed_value(
+            "schema_version",
+            self.schema_version.to_string(),
+            FEATURE_CONVEYOR_OWNER_ACTIVATION_SCHEMA_VERSION.to_string(),
+        )?;
+        validate_uuid("feature_id", self.feature_id)?;
+        validate_positive_limit(
+            "expected_lifecycle_revision",
+            self.expected_lifecycle_revision,
+            u64::MAX,
+        )?;
+        validate_positive_limit(
+            "expected_orchestration_revision",
+            self.expected_orchestration_revision,
+            u64::MAX,
+        )?;
+        validate_positive_limit(
+            "expected_owner_control_designation_revision",
+            self.expected_owner_control_designation_revision,
+            u64::MAX,
+        )?;
+        validate_serialized_limit(
+            "feature_conveyor_owner_orchestration_control_request",
+            self,
+            MAX_FEATURE_CONVEYOR_OWNER_ACTIVATION_FRAME_BYTES,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureConveyorOwnerOrchestrationControlStatus {
+    Paused,
+    Resumed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorOwnerOrchestrationControlReceipt {
+    pub schema_version: u16,
+    pub feature_id: Uuid,
+    pub lifecycle_revision: u64,
+    pub orchestration_revision: u64,
+    pub queue_revision: u64,
+    pub owner_control_designation_revision: u64,
+    pub emergency_pause_revision: u64,
+    pub checkpoint_id: Uuid,
+    pub checkpoint_sha256: [u8; 32],
+    pub status: FeatureConveyorOwnerOrchestrationControlStatus,
+}
+
+impl FeatureConveyorOwnerOrchestrationControlReceipt {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_fixed_value(
+            "schema_version",
+            self.schema_version.to_string(),
+            FEATURE_CONVEYOR_OWNER_ACTIVATION_SCHEMA_VERSION.to_string(),
+        )?;
+        validate_uuid("feature_id", self.feature_id)?;
+        validate_uuid("checkpoint_id", self.checkpoint_id)?;
+        validate_positive_limit("lifecycle_revision", self.lifecycle_revision, u64::MAX)?;
+        validate_positive_limit(
+            "orchestration_revision",
+            self.orchestration_revision,
+            u64::MAX,
+        )?;
+        validate_positive_limit(
+            "owner_control_designation_revision",
+            self.owner_control_designation_revision,
+            u64::MAX,
+        )?;
+        if self.checkpoint_sha256 == [0; 32] {
             return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
         }
         Ok(())
@@ -2571,6 +3087,46 @@ pub struct FeatureConveyorCancelActiveFeatureRequest {
     pub expected_emergency_pause_revision: u64,
 }
 
+/// Remote designated-bridge form of owner cancellation. The designation CAS
+/// is additional to the existing lifecycle/queue/Emergency Pause bindings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorRemoteCancelActiveFeatureRequest {
+    pub schema_version: u16,
+    pub feature_id: Uuid,
+    pub expected_lifecycle_revision: u64,
+    pub expected_queue_revision: u64,
+    pub expected_owner_control_designation_revision: u64,
+    pub expected_emergency_pause_revision: u64,
+}
+
+impl FeatureConveyorRemoteCancelActiveFeatureRequest {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "feature_conveyor_remote_cancel_active_feature_request",
+            frame,
+            MAX_FEATURE_CONVEYOR_OWNER_RESOLUTION_REQUEST_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        FeatureConveyorCancelActiveFeatureRequest {
+            schema_version: self.schema_version,
+            feature_id: self.feature_id,
+            expected_lifecycle_revision: self.expected_lifecycle_revision,
+            expected_queue_revision: self.expected_queue_revision,
+            expected_emergency_pause_revision: self.expected_emergency_pause_revision,
+        }
+        .validate()?;
+        validate_positive_limit(
+            "expected_owner_control_designation_revision",
+            self.expected_owner_control_designation_revision,
+            u64::MAX,
+        )
+    }
+}
+
 impl FeatureConveyorCancelActiveFeatureRequest {
     pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
         decode_strict_and_validate_frame(
@@ -2680,6 +3236,46 @@ pub struct FeatureConveyorAbandonAndAdvanceRequest {
     pub expected_queue_revision: u64,
     pub expected_emergency_pause_revision: u64,
     pub evidence: FeatureConveyorAbandonmentEvidence,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorRemoteAbandonAndAdvanceRequest {
+    pub schema_version: u16,
+    pub feature_id: Uuid,
+    pub expected_lifecycle_revision: u64,
+    pub expected_queue_revision: u64,
+    pub expected_owner_control_designation_revision: u64,
+    pub expected_emergency_pause_revision: u64,
+    pub evidence: FeatureConveyorAbandonmentEvidence,
+}
+
+impl FeatureConveyorRemoteAbandonAndAdvanceRequest {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "feature_conveyor_remote_abandon_and_advance_request",
+            frame,
+            MAX_FEATURE_CONVEYOR_OWNER_RESOLUTION_REQUEST_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        FeatureConveyorAbandonAndAdvanceRequest {
+            schema_version: self.schema_version,
+            feature_id: self.feature_id,
+            expected_lifecycle_revision: self.expected_lifecycle_revision,
+            expected_queue_revision: self.expected_queue_revision,
+            expected_emergency_pause_revision: self.expected_emergency_pause_revision,
+            evidence: self.evidence,
+        }
+        .validate()?;
+        validate_positive_limit(
+            "expected_owner_control_designation_revision",
+            self.expected_owner_control_designation_revision,
+            u64::MAX,
+        )
+    }
 }
 
 impl FeatureConveyorAbandonAndAdvanceRequest {

@@ -154,12 +154,15 @@ before intent without a fixed credential-owning adapter; no live GitHub API,
 credential custody, required hosted checks, branch protection, or merge policy
 is claimed.
 
-The schema-v18 orchestration kernel is covered by the native conveyor suite:
+The schema-v19 orchestration and owner-activation kernel is covered by the native conveyor suite:
 
 ```sh
 cargo test -p assemblywright-master --test feature_conveyor_kernel orchestration -- --nocapture
 cargo test -p assemblywright-master --test feature_conveyor_kernel substantive_validation_failure -- --nocapture
 cargo test -p assemblywright-master --test feature_conveyor_kernel provider_backoff -- --nocapture
+cargo test -p assemblywright-master --test feature_conveyor_kernel activation_ -- --nocapture
+cargo test -p assemblywright-master --test feature_conveyor_kernel owner_pause -- --nocapture
+cargo test -p assemblywright-protocol --test owner_activation_contract
 ```
 
 These tests prove default-inert behavior, stale CAS and exact idempotence,
@@ -167,10 +170,12 @@ These tests prove default-inert behavior, stale CAS and exact idempotence,
 replacement candidate, provider-pause time exclusion, and restart-safe resume
 of one effect-free checkpoint. They also prove Emergency Pause excludes all
 paused wall time and both immutable review-call ceilings require owner
-attention. The capability has no process or HTTP boundary,
-so a new route E2E is not applicable; the existing owner-loopback and remote-
-absence E2E remains unchanged. Live activation and real replacement-candidate
-execution remain capability-7 proof.
+attention. The owner-token process test proves strict, redacted, authenticated
+evidence admission. The Windows-only remote-mTLS E2E proves pre-handshake,
+wrong-role, non-designated, stale, malformed, and positive designated-bridge
+owner-control behavior over the real TLS/exporter-bound route. Live activation
+still requires six genuine proof-controller receipts; tests must never invent
+those receipts to claim deployment readiness.
 
 On the owner-controlled Windows validation host, the connected containment
 runner and its hostile fixture boundary have native coverage:
@@ -240,7 +245,7 @@ executable changes as release evidence.
 | Master kernel | `cargo test -p assemblywright-master` |
 | Feature Conveyor kernel, grant CAS/projection, owner designation, enqueue, snapshot claim, coding dispatch, and status | `cargo test -p assemblywright-master --test feature_conveyor_kernel` |
 | Master process E2E, including authenticated loopback grant/preflight/snapshot/dispatch/status/designation routes | `cargo test -p assemblywright-master --test master_process_e2e` |
-| Windows remote mTLS observer and designated-owner enqueue denial/success | `cargo test -p assemblywright-master --test remote_mtls_e2e remote_listener_requires_enrollment_tls13_and_channel_bound_identity -- --nocapture` |
+| Windows remote mTLS observer, designated-owner enqueue, owner-control projection, activation, and denial/success | `cargo test -p assemblywright-master --test remote_mtls_e2e remote_listener_requires_enrollment_tls13_and_channel_bound_identity -- --nocapture` |
 | Swift strict Feature Conveyor observer, one-shot owner action, and helper lifecycle | `swift test --disable-sandbox --package-path apps/mac --filter DeveloperBridgeTests` |
 | Enrollment, two-phase capability rebind, and identity | `cargo test -p assemblywright-master --test enrollment_identity_e2e` |
 | Remote mTLS | `cargo test -p assemblywright-master --test remote_mtls_e2e` |

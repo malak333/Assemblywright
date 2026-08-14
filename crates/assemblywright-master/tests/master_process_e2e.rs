@@ -5,13 +5,16 @@ use assemblywright_master::{
 };
 use assemblywright_protocol::{
     CapabilityDescriptor, DeviceId, DeviceRole, FeatureConveyorAbandonAndAdvanceRequest,
-    FeatureConveyorAbandonmentEvidence, FeatureConveyorCancelActiveFeatureRequest,
-    FeatureConveyorCodingDispatchRequest, FeatureConveyorCodingWorkPacketMetadata,
-    FeatureConveyorGrantRevisions, FeatureConveyorOwnerBridgeDesignationRequest,
-    FeatureConveyorRepositoryGrantKind, FeatureConveyorRepositoryGrantRequest,
-    FeatureConveyorRepositoryGrantRevision, FeatureConveyorRepositoryPreflightRequest,
-    FeatureConveyorRepositoryScopeDocument, FeatureConveyorRepositorySnapshotClaimReceipt,
-    FeatureConveyorRepositorySnapshotClaimRequest, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
+    FeatureConveyorAbandonmentEvidence, FeatureConveyorActivationEvidenceAdmissionRequest,
+    FeatureConveyorActivationEvidenceCategory, FeatureConveyorActivationEvidenceOrigin,
+    FeatureConveyorCancelActiveFeatureRequest, FeatureConveyorCodingDispatchRequest,
+    FeatureConveyorCodingWorkPacketMetadata, FeatureConveyorGrantRevisions,
+    FeatureConveyorOwnerBridgeDesignationRequest, FeatureConveyorRepositoryGrantKind,
+    FeatureConveyorRepositoryGrantRequest, FeatureConveyorRepositoryGrantRevision,
+    FeatureConveyorRepositoryPreflightRequest, FeatureConveyorRepositoryScopeDocument,
+    FeatureConveyorRepositorySnapshotClaimReceipt, FeatureConveyorRepositorySnapshotClaimRequest,
+    FEATURE_CONVEYOR_OWNER_ACTIVATION_SCHEMA_VERSION,
+    FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
     MAX_FEATURE_CONVEYOR_OWNER_RESOLUTION_REQUEST_BYTES,
     MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES, MAX_WIRE_FRAME_BYTES,
     PROTOCOL_VERSION,
@@ -164,6 +167,59 @@ fn artifact_integration_routes_are_owner_loopback_only_strict_and_redacted() {
     assert!(post_request(
         endpoint,
         "/v1/distributed/feature-conveyor/publications",
+        Some(token.trim()),
+        "{}",
+    )
+    .starts_with("HTTP/1.1 404 Not Found"));
+
+    let activation_evidence_unauthorized = post_request(
+        endpoint,
+        "/v1/feature-conveyor/activation-evidence",
+        None,
+        "{}",
+    );
+    assert!(activation_evidence_unauthorized.starts_with("HTTP/1.1 401 Unauthorized"));
+    let activation_evidence_malformed = post_request(
+        endpoint,
+        "/v1/feature-conveyor/activation-evidence",
+        Some(token.trim()),
+        r#"{"schema_version":1,"path":"must-not-leak","provider_output":"must-not-leak"}"#,
+    );
+    assert!(activation_evidence_malformed.starts_with("HTTP/1.1 422 Unprocessable Entity"));
+    assert_eq!(
+        response_json(&activation_evidence_malformed),
+        serde_json::json!({"error":"feature_activation_evidence_request_rejected"})
+    );
+    assert!(!activation_evidence_malformed.contains("must-not-leak"));
+    let admission = FeatureConveyorActivationEvidenceAdmissionRequest {
+        schema_version: FEATURE_CONVEYOR_OWNER_ACTIVATION_SCHEMA_VERSION,
+        category: FeatureConveyorActivationEvidenceCategory::RepositoryGateProof,
+        origin: FeatureConveyorActivationEvidenceOrigin::RepositoryGateProofController,
+        evidence_id: Uuid::new_v4(),
+        revision: 1,
+        expected_current_revision: 0,
+        receipt_sha256: [7; 32],
+        observed_at_ms: 1,
+        expected_emergency_pause_revision: 0,
+    };
+    let admission_body = serde_json::to_string(&admission).unwrap();
+    let admitted = post_request(
+        endpoint,
+        "/v1/feature-conveyor/activation-evidence",
+        Some(token.trim()),
+        &admission_body,
+    );
+    assert!(admitted.starts_with("HTTP/1.1 200 OK"), "{admitted}");
+    let exact_retry = post_request(
+        endpoint,
+        "/v1/feature-conveyor/activation-evidence",
+        Some(token.trim()),
+        &admission_body,
+    );
+    assert_eq!(response_json(&exact_retry), response_json(&admitted));
+    assert!(post_request(
+        endpoint,
+        "/v1/distributed/feature-conveyor/activation",
         Some(token.trim()),
         "{}",
     )

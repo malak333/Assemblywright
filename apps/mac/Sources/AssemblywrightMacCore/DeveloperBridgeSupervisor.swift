@@ -230,6 +230,7 @@ public struct AssemblywrightMacBridgeSupervisorSnapshot: Codable, Equatable, Sen
     public let protocolVersion: UInt16?
     public let schemaVersion: Int64?
     public let featureConveyor: AssemblywrightMacFeatureConveyorStatus?
+    public let ownerControl: AssemblywrightMacFeatureConveyorOwnerControlProjection?
     public let errorCode: String?
 
     enum CodingKeys: String, CodingKey {
@@ -245,6 +246,7 @@ public struct AssemblywrightMacBridgeSupervisorSnapshot: Codable, Equatable, Sen
         case protocolVersion = "protocol_version"
         case schemaVersion = "schema_version"
         case featureConveyor = "feature_conveyor"
+        case ownerControl = "owner_control"
         case errorCode = "error_code"
     }
 
@@ -272,9 +274,9 @@ public struct AssemblywrightMacBridgeSupervisorSnapshot: Codable, Equatable, Sen
             "phase", "device_id", "master_endpoint", "connection_epoch",
             "consecutive_failures", "next_delay_ms", "master_status",
             "maintenance_active", "emergency_paused", "protocol_version",
-            "schema_version", "feature_conveyor"
+            "schema_version", "feature_conveyor", "owner_control"
         ])
-        let authenticatedLocalCoding = authenticatedObservation.subtracting(["feature_conveyor"])
+        let authenticatedLocalCoding = authenticatedObservation.subtracting(["feature_conveyor", "owner_control"])
         let backingOff = Set([
             "phase", "device_id", "master_endpoint", "consecutive_failures",
             "next_delay_ms", "error_code"
@@ -328,12 +330,21 @@ public struct AssemblywrightMacBridgeSupervisorSnapshot: Codable, Equatable, Sen
             }
             if localCodingSnapshotsEnabled {
                 guard snapshot.featureConveyor == nil,
-                      object["feature_conveyor"] == nil else {
+                      snapshot.ownerControl == nil,
+                      object["feature_conveyor"] == nil,
+                      object["owner_control"] == nil else {
                     throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
                 }
             } else {
                 guard let featureObject = object["feature_conveyor"] as? [String: Any],
-                      let featureConveyor = snapshot.featureConveyor else {
+                      let featureConveyor = snapshot.featureConveyor,
+                      let ownerObject = object["owner_control"] as? [String: Any],
+                      let ownerData = try? JSONSerialization.data(withJSONObject: ownerObject),
+                      let ownerControl = try? AssemblywrightMacFeatureConveyorOwnerControlProjection.decodeStrict(ownerData),
+                      ownerControl == snapshot.ownerControl,
+                      ownerControl.queueRevision == featureConveyor.queueRevision,
+                      ownerControl.emergencyPauseRevision == featureConveyor.ownerGuidance.emergencyPauseRevision,
+                      ownerControl.emergencyPaused == snapshot.emergencyPaused else {
                     throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
                 }
                 try AssemblywrightMacRemoteFeatureConveyorStatus.validate(
@@ -348,7 +359,8 @@ public struct AssemblywrightMacBridgeSupervisorSnapshot: Codable, Equatable, Sen
                     .contains(snapshot.nextDelayMilliseconds),
                   [
                       "invalid_health", "bridge_unavailable", "connection_failed",
-                      "event_relay_failed", "invalid_feature_conveyor_status"
+                      "event_relay_failed", "invalid_feature_conveyor_status",
+                      "invalid_owner_control"
                   ]
                     .contains(snapshot.errorCode),
                   snapshot.masterStatus == nil,
@@ -356,7 +368,8 @@ public struct AssemblywrightMacBridgeSupervisorSnapshot: Codable, Equatable, Sen
                   snapshot.emergencyPaused == nil,
                   snapshot.protocolVersion == nil,
                   snapshot.schemaVersion == nil,
-                  snapshot.featureConveyor == nil else {
+                  snapshot.featureConveyor == nil,
+                  snapshot.ownerControl == nil else {
                 throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
             }
         case .stopped:
@@ -368,6 +381,7 @@ public struct AssemblywrightMacBridgeSupervisorSnapshot: Codable, Equatable, Sen
                   snapshot.protocolVersion == nil,
                   snapshot.schemaVersion == nil,
                   snapshot.featureConveyor == nil,
+                  snapshot.ownerControl == nil,
                   snapshot.errorCode == nil else {
                 throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
             }
@@ -839,6 +853,7 @@ struct AssemblywrightMacMLXControlReceipt: Equatable, Sendable {
 public actor AssemblywrightMacBridgeSupervisor {
     public static let healthPath = "/health"
     public static let featureConveyorPath = "/v1/distributed/feature-conveyor/status"
+    public static let ownerControlPath = "/v1/distributed/feature-conveyor/owner-control"
     public static let healthMaximumBytes = 64 * 1_024
     public static let featureConveyorMaximumBytes = 64 * 1_024
     public static let normalPollDelayMilliseconds: UInt64 = 5_000
@@ -885,6 +900,7 @@ public actor AssemblywrightMacBridgeSupervisor {
             )
             let health = try AssemblywrightMacRemoteMasterHealth.decode(response)
             let featureConveyor: AssemblywrightMacFeatureConveyorStatus?
+            let ownerControl: AssemblywrightMacFeatureConveyorOwnerControlProjection?
             switch supervisionMode {
             case .macBridgeObservation:
                 let featureResponse = try await activeSession.send(
@@ -901,8 +917,20 @@ public actor AssemblywrightMacBridgeSupervisor {
                     throw AssemblywrightMacRemoteFeatureConveyorStatusError.invalid
                 }
                 featureConveyor = decoded
+                let ownerResponse = try await activeSession.send(
+                    AssemblywrightMacBridgeHTTPRequest(method: "GET", path: Self.ownerControlPath)
+                )
+                guard ownerResponse.status == 200 else { throw ControlError.invalidProjection }
+                let owner = try AssemblywrightMacFeatureConveyorOwnerControlProjection.decodeStrict(ownerResponse.body)
+                guard owner.queueRevision == decoded.queueRevision,
+                      owner.emergencyPauseRevision == decoded.ownerGuidance.emergencyPauseRevision,
+                      owner.emergencyPaused == health.emergencyPaused else {
+                    throw ControlError.invalidProjection
+                }
+                ownerControl = owner
             case .localCodingRelay:
                 featureConveyor = nil
+                ownerControl = nil
             }
             if let eventRelay {
                 let progress = try await eventRelay.relayEvents(using: activeSession)
@@ -925,6 +953,7 @@ public actor AssemblywrightMacBridgeSupervisor {
                 protocolVersion: health.protocolVersion,
                 schemaVersion: health.schemaVersion,
                 featureConveyor: featureConveyor,
+                ownerControl: ownerControl,
                 errorCode: nil
             )
         } catch is CancellationError {
@@ -947,6 +976,7 @@ public actor AssemblywrightMacBridgeSupervisor {
                 protocolVersion: nil,
                 schemaVersion: nil,
                 featureConveyor: nil,
+                ownerControl: nil,
                 errorCode: Self.redactedErrorCode(for: error)
             )
         }
@@ -986,6 +1016,7 @@ public actor AssemblywrightMacBridgeSupervisor {
             protocolVersion: nil,
             schemaVersion: nil,
             featureConveyor: nil,
+            ownerControl: nil,
             errorCode: nil
         )
     }
@@ -995,6 +1026,7 @@ public actor AssemblywrightMacBridgeSupervisor {
         if error is AssemblywrightMacRemoteFeatureConveyorStatusError {
             return "invalid_feature_conveyor_status"
         }
+        if error is ControlError { return "invalid_owner_control" }
         if error is AssemblywrightMacDeveloperBridgeError { return "bridge_unavailable" }
         if error is AssemblywrightMacDeveloperEventRelayError { return "event_relay_failed" }
         return "connection_failed"

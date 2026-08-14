@@ -156,7 +156,7 @@ release requirements, not optional UX guidance.
   a simultaneous or late result is suppressed. This lane grants no tool, file,
   repository, credential, network, Codex, Git, publication, or unattended
   authority.
-- The Windows `assemblywright-master` schema-v18 database retains the schema-v5
+- The Windows `assemblywright-master` schema-v19 database retains the schema-v5
   Durable Feature Conveyor kernel and is
   default-inert. The owner-token-authenticated loopback
   `GET /v1/feature-conveyor/status` and the dedicated enrolled-device
@@ -193,6 +193,27 @@ release requirements, not optional UX guidance.
   registration drift, revocation, a stale designation revision, a missing
   designation, or any fixture identity fails closed. Possessing another valid
   MacBridge certificate never implies owner-control authority.
+- Schema v19 activation remains globally inert until six independent
+  Windows-admitted references exist: deterministic repository-gate proof plus
+  restricted-worker, review-provider, GitHub-publication, restart-recovery, and
+  Mac/Windows-control-and-event-streaming live evidence. Receipt admission is
+  owner-token loopback-only, strict, contiguous, category/origin bound,
+  nonzero-digest-only, non-future-dated, and atomically redacted-audited. It
+  accepts no report body, command, path, credential, provider output, or raw
+  evidence. The remote designated bridge may bind only exact current admitted
+  references and exact queue, designation, and Emergency Pause revisions; it
+  cannot create evidence. Activation creates no queue or lease and is safe with
+  an empty queue. Exact retry returns the original immutable receipt; mismatch,
+  stale state, Emergency Pause, redesignation, or incomplete evidence fails
+  closed.
+- Feature orchestration owner pause/resume is separate from Emergency Pause and
+  is available only to the exact current designated non-fixture MacBridge after
+  an accepted exporter-bound session. It compare-and-sets feature lifecycle,
+  orchestration, queue, designation, and Emergency Pause revisions. Only an
+  effect-free checkpoint may owner-pause; pause stops the active clock and
+  resume creates a fresh checkpoint. Cancel and abandon use the same remote
+  designation boundary, cancellation retains the lease, and abandonment stays
+  safe-reconciliation-gated.
 - Repository-grant preparation and inspection are Windows-loopback-only and
   owner-token authenticated. A mutation carries only repository identity,
   grant kind, exact scope and approval digests, optional expiry, revocation,
@@ -510,8 +531,9 @@ release requirements, not optional UX guidance.
 - A durable merge intent is effect-possible evidence for abandonment even when
   quarantine originated in `publishing`. Owner resolution must require exact
   healthy-main reconciliation; `merged:false` cannot release that lease.
-- Schema v18 orchestration is an internal, default-inert kernel with no route or
-  activation writer. It derives actions and failure classes only from immutable
+- Schema v18 orchestration is an internal, default-inert kernel that was
+  introduced with no route or activation writer; schema v19 adds the separately
+  bounded owner-control authority above. The coordinator derives actions and failure classes only from immutable
   master state and exact admitted evidence; callers cannot provide commands,
   paths, provider/adapter output, credentials, or retry classifications. Its
   path-free checkpoints are immutable, and every mutation commits a redacted

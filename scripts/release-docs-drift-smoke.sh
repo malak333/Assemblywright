@@ -67,6 +67,7 @@ MAC_BRIDGE_KEYCHAIN="apps/mac/Sources/AssemblywrightMacCore/KeychainDeveloperIde
 MAC_BRIDGE_NETWORK="apps/mac/Sources/AssemblywrightMacCore/NetworkMTLSBridge.swift"
 MAC_BRIDGE_SUPERVISOR="apps/mac/Sources/AssemblywrightMacCore/DeveloperBridgeSupervisor.swift"
 MAC_OWNER_CONTROL="apps/mac/Sources/AssemblywrightMacCore/FeatureConveyorOwnerControl.swift"
+MAC_ACTIVATION_CONTROL="apps/mac/Sources/AssemblywrightMacCore/FeatureConveyorActivationControl.swift"
 MAC_BRIDGE_PROCESS="apps/mac/Sources/AssemblywrightMacCore/DeveloperBridgeProcessLifecycle.swift"
 MAC_EVENT_RELAY="apps/mac/Sources/AssemblywrightMacCore/DeveloperEventRelay.swift"
 MAC_APP="apps/mac/Sources/AssemblywrightMacApp/AssemblywrightMacApp.swift"
@@ -182,7 +183,7 @@ require_text "README non-claims" "$README" "Autonomous dispatch"
 require_text "DESIGN conveyor pointer" "$DESIGN" "docs/feature-conveyor-design.md"
 require_text "DESIGN distributed pointer" "$DESIGN" "docs/distributed-developer-mode-design.md"
 require_text "DESIGN assistant non-goal" "$DESIGN" "No general-purpose assistant surface."
-require_text "DESIGN current master schema" "$DESIGN" "schema-v18"
+require_text "DESIGN current master schema" "$DESIGN" "schema-v19"
 require_text "DESIGN result artifact boundary" "$DESIGN" \
   "Schema v13 adds bounded general-worker packet"
 
@@ -240,6 +241,16 @@ require_text "conveyor cancellation implementation" "$MASTER_PROCESS" \
   '"/v1/feature-conveyor/cancel-active-feature"'
 require_text "conveyor abandonment implementation" "$MASTER_PROCESS" \
   '"/v1/feature-conveyor/abandon-and-advance"'
+require_text "conveyor activation evidence implementation" "$MASTER_PROCESS" \
+  '"/v1/feature-conveyor/activation-evidence"'
+require_text "conveyor remote owner projection implementation" "$MASTER_PROCESS" \
+  '"/v1/distributed/feature-conveyor/owner-control"'
+require_text "conveyor remote activation implementation" "$MASTER_PROCESS" \
+  '"/v1/distributed/feature-conveyor/activation"'
+require_text "conveyor remote orchestration pause implementation" "$MASTER_PROCESS" \
+  '"/v1/distributed/feature-conveyor/orchestration/pause"'
+require_text "conveyor remote orchestration resume implementation" "$MASTER_PROCESS" \
+  '"/v1/distributed/feature-conveyor/orchestration/resume"'
 require_text "conveyor live local-coding lane" "$MAC_BRIDGE_LIVE_E2E" \
   "--run-local-coding"
 require_text "conveyor live controller cancellation" "$WINDOWS_LOCAL_CODING_LIVE_CONTROL" \
@@ -375,6 +386,14 @@ require_text "conveyor read-only Mac presentation" "$MAC_APP" \
   "Guidance is not an approval or callable action"
 require_text "conveyor explicit signed-helper action" "$MAC_BRIDGE_CLI" \
   '"feature-conveyor", "approve-and-enqueue", "--confirm"'
+require_text "conveyor explicit signed-helper activation" "$MAC_BRIDGE_CLI" \
+  '"feature-conveyor", "activation", "--confirm"'
+require_text "conveyor strict activation evidence" "$MAC_ACTIVATION_CONTROL" \
+  "mac_windows_control_event_streaming_live"
+require_text "conveyor app confirmed owner action" "$MAC_APP" \
+  "Confirm Windows-authoritative owner action"
+require_text "conveyor app signed-helper handoff" "$MAC_BRIDGE_PROCESS" \
+  "runCommand"
 require_text "conveyor strict signed-helper owner action" "$MAC_OWNER_CONTROL" \
   "owner_control_designation_revision"
 require_text "conveyor Swift negative-path regression" "$MAC_BRIDGE_TESTS" \
@@ -383,6 +402,8 @@ require_text "conveyor live observer requires signed helper" "$MAC_BRIDGE_LIVE_E
   'codesign --verify --strict "$BRIDGE_BIN"'
 require_text "conveyor live observer requires schema marker" "$MAC_BRIDGE_LIVE_E2E" \
   'feature_conveyor_schema=9'
+require_text "conveyor live owner-control projection" "$MAC_BRIDGE_LIVE_E2E" \
+  "assert_owner_control_sample"
 require_text "conveyor live observer validates schema eight" "$MAC_BRIDGE_LIVE_E2E" \
   'Feature Conveyor schema was not v9'
 forbid_text "conveyor live observer rejects stale schema seven" \

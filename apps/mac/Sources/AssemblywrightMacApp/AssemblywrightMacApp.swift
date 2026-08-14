@@ -54,6 +54,10 @@ struct AssemblywrightShellView: View {
 
 struct DeveloperBridgeStatusView: View {
     @ObservedObject var model: AssemblywrightDeveloperBridgeProcessLifecycle
+    @State private var pendingAction: AssemblywrightMacOwnerControlAction?
+    @State private var reconciliationDigest = ""
+    @State private var mergedBeforeAbandon = false
+    @State private var healthyMainDigest = ""
 
     private var presentation: DeveloperBridgeStatusPresentation {
         DeveloperBridgeStatusPresentation(status: model.status)
@@ -101,8 +105,104 @@ struct DeveloperBridgeStatusView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+
+            if let control = model.status.ownerControl {
+                let owner = FeatureConveyorOwnerControlPresentation(control: control)
+                Section("Owner control and activation") {
+                    LabeledContent("Activation", value: owner.activationLabel)
+                    LabeledContent("Blocker", value: owner.blockerLabel)
+                    LabeledContent("Evidence", value: owner.evidenceLabel)
+                    if let feature = owner.activeFeatureLabel {
+                        LabeledContent("Active feature", value: feature)
+                    }
+                    ForEach(owner.evidenceDigests, id: \.self) { digest in
+                        Text(digest).font(.caption.monospaced()).foregroundStyle(.secondary)
+                    }
+                    if control.activationReady {
+                        Button("Activate Feature Conveyor…") { pendingAction = .activation }
+                    }
+                    if let feature = control.activeFeature {
+                        if feature.ownerPaused || feature.stage != .paused {
+                            Button(feature.ownerPaused ? "Resume orchestration…" : "Pause orchestration…") {
+                                pendingAction = feature.ownerPaused ? .resume : .pause
+                            }
+                        }
+                        Button("Cancel active feature…", role: .destructive) { pendingAction = .cancelActiveFeature }
+                        if [.cancelled, .quarantined, .attentionRequired, .failed].contains(feature.lifecycleStatus) {
+                            TextField("Safe reconciliation SHA-256", text: $reconciliationDigest)
+                            Toggle("Candidate was merged", isOn: $mergedBeforeAbandon)
+                            if mergedBeforeAbandon {
+                                TextField("Verified healthy-main SHA-256", text: $healthyMainDigest)
+                            }
+                            Button("Abandon and advance…", role: .destructive) { pendingAction = .abandonAndAdvance }
+                                .disabled(Self.digest(reconciliationDigest) == nil || (mergedBeforeAbandon && Self.digest(healthyMainDigest) == nil))
+                        }
+                    }
+                    Text("Every action stops and reaps observation, revalidates the same signed helper, runs one explicit --confirm command, validates its receipt, then restarts observation. Stale revisions fail closed on Windows.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
         .formStyle(.grouped)
+        .disabled(model.ownerActionInProgress)
+        .confirmationDialog(
+            "Confirm Windows-authoritative owner action",
+            isPresented: Binding(get: { pendingAction != nil }, set: { if !$0 { pendingAction = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Confirm", role: pendingAction == .cancelActiveFeature ? .destructive : nil) {
+                guard let action = pendingAction else { return }
+                pendingAction = nil
+                Task {
+                    await model.performOwnerAction(
+                        action,
+                        safeReconciliationSHA256: Self.digest(reconciliationDigest),
+                        merged: mergedBeforeAbandon,
+                        verifiedHealthyMainSHA256: Self.digest(healthyMainDigest)
+                    )
+                }
+            }
+            Button("Cancel", role: .cancel) { pendingAction = nil }
+        } message: {
+            Text("The current queue, designation, lifecycle, orchestration, and Emergency Pause revisions are included. This cannot resume Emergency Pause.")
+        }
+    }
+
+    private static func digest(_ text: String) -> [UInt8]? {
+        let normalized = text.lowercased()
+        guard normalized.count == 64, normalized.allSatisfy({ $0.isHexDigit }) else { return nil }
+        return stride(from: 0, to: 64, by: 2).compactMap { offset in
+            UInt8(normalized.dropFirst(offset).prefix(2), radix: 16)
+        }
+    }
+}
+
+struct FeatureConveyorOwnerControlPresentation: Equatable {
+    let activationLabel: String
+    let blockerLabel: String
+    let evidenceLabel: String
+    let activeFeatureLabel: String?
+    let evidenceDigests: [String]
+
+    init(control: AssemblywrightMacFeatureConveyorOwnerControlProjection) {
+        activationLabel = control.activationStatus == .active ? "Active" : control.activationReady ? "Ready for owner confirmation" : "Inactive"
+        switch control.activationBlocker {
+        case .none: blockerLabel = "None"
+        case .emergencyPaused: blockerLabel = "Emergency Pause"
+        case .evidenceRequired: blockerLabel = "Evidence required"
+        case .alreadyActivated: blockerLabel = "Already activated"
+        }
+        evidenceLabel = "\(control.evidence.readyCount) of 6 Windows-admitted categories ready"
+        if let feature = control.activeFeature {
+            activeFeatureLabel = "\(feature.featureID.uuidString.lowercased().prefix(8)) · \(feature.stage.rawValue)"
+        } else { activeFeatureLabel = nil }
+        let labels = ["repository", "worker", "review", "github", "restart", "control-stream"]
+        evidenceDigests = zip(labels, control.evidence.referencesForPresentation).map { label, reference in
+            guard let reference else { return "\(label): missing" }
+            let digest = reference.receiptSHA256.prefix(4).map { String(format: "%02x", $0) }.joined()
+            return "\(label): r\(reference.revision) \(digest)…"
+        }
     }
 }
 

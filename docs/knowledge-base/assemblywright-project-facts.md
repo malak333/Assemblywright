@@ -1159,3 +1159,24 @@ an old one.
   empty queue remained unpaused. The production adapter directory remained
   absent, which is the intended default-unavailable state rather than live
   selected-provider or reviewer-quality evidence.
+- Schema v19 is the first authoritative Feature Conveyor owner-activation
+  surface. Windows alone admits six fixed, category/origin-bound digest
+  references over the owner-token loopback boundary. The exact designated,
+  current, non-fixture, exporter-bound MacBridge may inspect their redacted
+  projection and bind only those exact current references into one immutable
+  global activation; it cannot admit evidence. Activation creates no lease or
+  queue work and remains blocked by incomplete evidence or Emergency Pause.
+- The macOS app remains outside TLS-key and owner-token custody. For an explicit
+  confirmed owner action it stops and reaps its monitor child, revalidates the
+  same independently signed helper, launches one bounded `--confirm` command,
+  validates the exact revision-bound receipt, and then restores monitoring.
+  At most one helper child is owned at a time. Owner orchestration pause is not
+  Emergency Pause; cancel retains the feature lease, while abandon-and-advance
+  requires an explicit safe-reconciliation digest and healthy-main evidence
+  whenever a merge may have occurred.
+- Repository tests, controlled providers/remotes, and source builds do not
+  satisfy schema-v19 live activation. The six admitted categories must refer to
+  genuine repository-gate, restricted-worker, selected-review-provider,
+  GitHub-publication, restart-recovery, and live Mac/Windows control plus event-
+  streaming receipts. Signing, notarization, clean-profile install, and broader
+  production readiness remain separate evidence boundaries.

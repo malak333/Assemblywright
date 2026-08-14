@@ -18,6 +18,7 @@ public struct AssemblywrightDeveloperBridgeAppStatus: Equatable, Sendable {
     public let masterEndpoint: String?
     public let connectionEpoch: UInt64?
     public let featureConveyor: AssemblywrightMacFeatureConveyorStatus?
+    public let ownerControl: AssemblywrightMacFeatureConveyorOwnerControlProjection?
     public let errorCode: String?
 
     public init(
@@ -25,12 +26,14 @@ public struct AssemblywrightDeveloperBridgeAppStatus: Equatable, Sendable {
         masterEndpoint: String? = nil,
         connectionEpoch: UInt64? = nil,
         featureConveyor: AssemblywrightMacFeatureConveyorStatus? = nil,
+        ownerControl: AssemblywrightMacFeatureConveyorOwnerControlProjection? = nil,
         errorCode: String? = nil
     ) {
         self.phase = phase
         self.masterEndpoint = masterEndpoint
         self.connectionEpoch = connectionEpoch
         self.featureConveyor = featureConveyor
+        self.ownerControl = ownerControl
         self.errorCode = errorCode
     }
 
@@ -363,18 +366,34 @@ public protocol AssemblywrightDeveloperBridgeProcessLaunching: Sendable {
         executable: AssemblywrightDeveloperBridgeValidatedExecutable,
         eventRelayConfiguration: AssemblywrightMacDeveloperEventRelayConfiguration?
     ) async throws -> any AssemblywrightDeveloperBridgeProcessSession
+    func runCommand(
+        executable: AssemblywrightDeveloperBridgeValidatedExecutable,
+        arguments: [String],
+        input: Data
+    ) async throws -> Data
+}
+
+public extension AssemblywrightDeveloperBridgeProcessLaunching {
+    func runCommand(
+        executable _: AssemblywrightDeveloperBridgeValidatedExecutable,
+        arguments _: [String],
+        input _: Data
+    ) async throws -> Data { throw AssemblywrightDeveloperBridgeProcessError.launchFailed }
 }
 
 public struct FoundationAssemblywrightDeveloperBridgeProcessLauncher:
     AssemblywrightDeveloperBridgeProcessLaunching, Sendable
 {
     private let runningProcessValidator: any AssemblywrightDeveloperBridgeRunningProcessValidating
+    private let ownerCommandTimeout: Duration
 
     public init(
         runningProcessValidator: any AssemblywrightDeveloperBridgeRunningProcessValidating =
-            SecurityAssemblywrightDeveloperBridgeRunningProcessValidator()
+            SecurityAssemblywrightDeveloperBridgeRunningProcessValidator(),
+        ownerCommandTimeout: Duration = .seconds(30)
     ) {
         self.runningProcessValidator = runningProcessValidator
+        self.ownerCommandTimeout = ownerCommandTimeout
     }
 
     public func launch(
@@ -386,6 +405,127 @@ public struct FoundationAssemblywrightDeveloperBridgeProcessLauncher:
             eventRelayConfiguration: eventRelayConfiguration,
             runningProcessValidator: runningProcessValidator
         )
+    }
+
+
+    public func runCommand(
+        executable: AssemblywrightDeveloperBridgeValidatedExecutable,
+        arguments: [String],
+        input: Data
+    ) async throws -> Data {
+        let allowed = AssemblywrightMacOwnerControlAction.allCases.map(
+            AssemblywrightDeveloperBridgeProcessLifecycle.helperArguments(for:)
+        )
+        guard allowed.contains(arguments), input.count <= 8 * 1_024 else {
+            throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
+        }
+        let process = Process()
+        let inputPipe = Pipe()
+        let outputPipe = Pipe()
+        process.executableURL = executable.executableURL
+        process.arguments = arguments
+        process.environment = [:]
+        process.standardInput = inputPipe
+        process.standardOutput = outputPipe
+        process.standardError = FileHandle.nullDevice
+        do { try process.run() } catch { throw AssemblywrightDeveloperBridgeProcessError.launchFailed }
+        let commandDeadline = ContinuousClock.now + ownerCommandTimeout
+        let timeoutMilliseconds = max(
+            Int(ownerCommandTimeout.components.seconds * 1_000)
+                + Int(ownerCommandTimeout.components.attoseconds / 1_000_000_000_000_000),
+            1
+        )
+        let timeout = DispatchWorkItem { Self.terminateThenKill(process) }
+        DispatchQueue.global(qos: .utility).asyncAfter(
+            deadline: .now() + .milliseconds(timeoutMilliseconds),
+            execute: timeout
+        )
+        do {
+            try runningProcessValidator.validate(processIdentifier: process.processIdentifier, expected: executable)
+            try inputPipe.fileHandleForWriting.write(contentsOf: input)
+            try inputPipe.fileHandleForWriting.close()
+            let output = try await withTaskCancellationHandler {
+                var result = Data()
+                while true {
+                    let remaining = 8 * 1_024 + 2 - result.count
+                    guard remaining > 0 else { throw AssemblywrightDeveloperBridgeProcessError.outputTooLarge }
+                    let chunk = try outputPipe.fileHandleForReading.read(upToCount: min(4 * 1_024, remaining)) ?? Data()
+                    if chunk.isEmpty { break }
+                    result.append(chunk)
+                }
+                return result
+            } onCancel: {
+                Self.terminateThenKill(process)
+            }
+            let reaped = await Self.waitForProcessExit(
+                process,
+                until: commandDeadline + .seconds(2)
+            )
+            timeout.cancel()
+            guard reaped else {
+                _ = Self.signal(process, SIGKILL)
+                guard await Self.waitForProcessExit(
+                    process,
+                    until: ContinuousClock.now + .seconds(1)
+                ) else {
+                    throw AssemblywrightDeveloperBridgeProcessError.teardownFailed
+                }
+                throw AssemblywrightDeveloperBridgeProcessError.teardownFailed
+            }
+            try Task.checkCancellation()
+            guard process.terminationStatus == 0, !output.isEmpty, output.count <= 8 * 1_024 + 1,
+                  output.last == 0x0a else { throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot }
+            let line = output.dropLast()
+            guard !line.isEmpty, !line.contains(0x0a) else { throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot }
+            return Data(line)
+        } catch {
+            timeout.cancel()
+            try? inputPipe.fileHandleForWriting.close()
+            guard await Self.terminateKillAndReap(process) else {
+                throw AssemblywrightDeveloperBridgeProcessError.teardownFailed
+            }
+            throw error
+        }
+    }
+
+    private static func terminateThenKill(_ process: Process) {
+        guard process.isRunning else { return }
+        process.terminate()
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + .milliseconds(500)) {
+            _ = signal(process, SIGKILL)
+        }
+    }
+
+    private static func terminateKillAndReap(_ process: Process) async -> Bool {
+        guard process.isRunning else { return true }
+        process.terminate()
+        if await waitForProcessExit(
+            process,
+            until: ContinuousClock.now + .milliseconds(500)
+        ) {
+            return true
+        }
+        _ = signal(process, SIGKILL)
+        return await waitForProcessExit(
+            process,
+            until: ContinuousClock.now + .seconds(1)
+        )
+    }
+
+    private static func signal(_ process: Process, _ signal: Int32) -> Bool {
+        guard process.isRunning else { return true }
+        let result = Darwin.kill(process.processIdentifier, signal)
+        return result == 0 || errno == ESRCH
+    }
+
+    private static func waitForProcessExit(
+        _ process: Process,
+        until deadline: ContinuousClock.Instant
+    ) async -> Bool {
+        while process.isRunning, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        return !process.isRunning
     }
 
     static func helperArguments(
@@ -550,9 +690,11 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
     nonisolated public static let maximumLineBytes = 96 * 1_024
     nonisolated public static let maximumBufferedBytes = maximumLineBytes + 1
     nonisolated public static let proofBoundary =
-        "Read-only Developer Mode health, Feature Conveyor observation, and metadata relay, with a separately explicit Public synthetic fixture-job diagnostic. Guidance is display-only and does not enable models, tools, files, repositories, Codex, Git, or owner-action authority."
+        "Read-only app preview observes bounded Windows-authoritative Feature Conveyor and activation readiness. Owner actions require separate explicit confirmation in the signed helper; the preview does not enable authority and stores no token, command, path, raw evidence, credential, or provider output."
 
     @Published public private(set) var status: AssemblywrightDeveloperBridgeAppStatus
+    @Published public private(set) var ownerActionInProgress = false
+    @Published public private(set) var ownerActionErrorCode: String?
 
     private let configuration: AssemblywrightDeveloperBridgeProcessConfiguration
     private let validator: any AssemblywrightDeveloperBridgeExecutableValidating
@@ -656,6 +798,62 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
         await stop()
     }
 
+    public func performOwnerAction(
+        _ action: AssemblywrightMacOwnerControlAction,
+        safeReconciliationSHA256: [UInt8]? = nil,
+        merged: Bool = false,
+        verifiedHealthyMainSHA256: [UInt8]? = nil
+    ) async {
+        guard !ownerActionInProgress, let projection = status.ownerControl,
+              let executableURL = configuration.executableURL,
+              let expectedTeamIdentifier = configuration.expectedTeamIdentifier else { return }
+        ownerActionInProgress = true
+        ownerActionErrorCode = nil
+        defer { ownerActionInProgress = false }
+        let request: Data
+        do {
+            switch action {
+            case .activation:
+                request = try AssemblywrightMacFeatureConveyorActivationControl.activationRequest(from: projection)
+            case .pause, .resume:
+                request = try AssemblywrightMacFeatureConveyorActivationControl.orchestrationRequest(from: projection, action: action)
+            case .cancelActiveFeature:
+                request = try AssemblywrightMacFeatureConveyorActivationControl.cancelRequest(from: projection)
+            case .abandonAndAdvance:
+                guard let safeReconciliationSHA256 else { throw ControlError.invalidRequest }
+                request = try AssemblywrightMacFeatureConveyorActivationControl.abandonRequest(
+                    from: projection,
+                    safeReconciliationSHA256: safeReconciliationSHA256, merged: merged,
+                    verifiedHealthyMainSHA256: verifiedHealthyMainSHA256
+                )
+            }
+            await stop()
+            let validated = try validator.validate(executableURL: executableURL, expectedTeamIdentifier: expectedTeamIdentifier)
+            let receipt = try await launcher.runCommand(
+                executable: validated, arguments: Self.helperArguments(for: action), input: request
+            )
+            try AssemblywrightMacFeatureConveyorActivationControl.validateCommandReceipt(
+                receipt, requestData: request, action: action
+            )
+            status = .init(phase: .starting)
+            start()
+        } catch {
+            ownerActionErrorCode = error is ControlError ? "owner_action_rejected" : Self.errorCode(for: error)
+            status = .init(phase: .masterOffline, errorCode: ownerActionErrorCode)
+            start()
+        }
+    }
+
+    nonisolated public static func helperArguments(for action: AssemblywrightMacOwnerControlAction) -> [String] {
+        switch action {
+        case .activation: ["feature-conveyor", "activation", "--confirm"]
+        case .pause: ["feature-conveyor", "orchestration", "pause", "--confirm"]
+        case .resume: ["feature-conveyor", "orchestration", "resume", "--confirm"]
+        case .cancelActiveFeature: ["feature-conveyor", "cancel-active-feature", "--confirm"]
+        case .abandonAndAdvance: ["feature-conveyor", "abandon-and-advance", "--confirm"]
+        }
+    }
+
     nonisolated public static func status(
         from line: Data,
         localCodingSnapshotsEnabled: Bool = false
@@ -678,7 +876,8 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
                 phase: phase,
                 masterEndpoint: snapshot.masterEndpoint,
                 connectionEpoch: snapshot.connectionEpoch,
-                featureConveyor: snapshot.featureConveyor
+                featureConveyor: snapshot.featureConveyor,
+                ownerControl: snapshot.ownerControl
             )
         case .backingOff:
             return AssemblywrightDeveloperBridgeAppStatus(

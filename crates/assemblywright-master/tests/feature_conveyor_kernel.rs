@@ -12,11 +12,14 @@ use assemblywright_master::{
 };
 use assemblywright_protocol::{
     build_local_coding_fixture_patch_artifact, local_coding_admission_sha256, CapabilityDescriptor,
-    DeviceId, DeviceRole, FeatureConveyorArtifactIntegrationRequest,
-    FeatureConveyorCodingDispatchRequest, FeatureConveyorCodingWorkPacketMetadata,
-    FeatureConveyorGrantRevisions, FeatureConveyorKnowledgeBaseDetermination,
-    FeatureConveyorOrchestrationAction, FeatureConveyorOrchestrationPauseKind,
-    FeatureConveyorOrchestrationReason, FeatureConveyorOrchestrationStage,
+    DeviceId, DeviceRole, FeatureConveyorActivationEvidenceAdmissionRequest,
+    FeatureConveyorActivationEvidenceCategory, FeatureConveyorActivationEvidenceOrigin,
+    FeatureConveyorActivationRequest, FeatureConveyorActivationStatus,
+    FeatureConveyorArtifactIntegrationRequest, FeatureConveyorCodingDispatchRequest,
+    FeatureConveyorCodingWorkPacketMetadata, FeatureConveyorGrantRevisions,
+    FeatureConveyorKnowledgeBaseDetermination, FeatureConveyorOrchestrationAction,
+    FeatureConveyorOrchestrationPauseKind, FeatureConveyorOrchestrationReason,
+    FeatureConveyorOrchestrationStage, FeatureConveyorOwnerOrchestrationControlRequest,
     FeatureConveyorPublicationRequest, FeatureConveyorReviewCoverageStatus,
     FeatureConveyorReviewDecision, FeatureConveyorReviewFinding,
     FeatureConveyorReviewGatewayRequest, FeatureConveyorReviewPacket,
@@ -24,6 +27,7 @@ use assemblywright_protocol::{
     FeatureConveyorValidationCommandId, FeatureConveyorValidationGateRequest, HandshakeRequest,
     JobEnvelope, JobResultEnvelope, JobResultStatus, LocalCodingJobResult,
     LocalCodingResultArtifact, LocalCodingResultArtifactAdmission, LocalCodingSnapshotChunkRequest,
+    FEATURE_CONVEYOR_OWNER_ACTIVATION_SCHEMA_VERSION,
     FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
     FEATURE_CONVEYOR_PUBLICATION_COORDINATOR_SCHEMA_VERSION,
     FEATURE_CONVEYOR_REVIEW_GATEWAY_SCHEMA_VERSION, LOCAL_CODING_COMPLETED_STATUS,
@@ -285,20 +289,70 @@ fn digest(label: &str) -> [u8; 32] {
 }
 
 fn activate_orchestration(directory: &tempfile::TempDir, at_ms: u64) {
-    Connection::open(directory.path().join("master.sqlite3"))
-        .unwrap()
+    let mut connection = Connection::open(directory.path().join("master.sqlite3")).unwrap();
+    let transaction = connection.transaction().unwrap();
+    let categories = [
+        ("repository_gate_proof", "repository_gate_proof_controller"),
+        (
+            "restricted_worker_live",
+            "restricted_worker_proof_controller",
+        ),
+        ("review_provider_live", "review_provider_proof_controller"),
+        (
+            "github_publication_live",
+            "github_publication_proof_controller",
+        ),
+        ("restart_recovery_live", "restart_recovery_proof_controller"),
+        (
+            "mac_windows_control_event_streaming_live",
+            "mac_windows_control_event_streaming_proof_controller",
+        ),
+    ];
+    let evidence_ids = categories
+        .iter()
+        .enumerate()
+        .map(|(index, (category, origin))| {
+            let evidence_id = Uuid::new_v4();
+            transaction
+                .execute(
+                    "INSERT INTO feature_activation_evidence(
+                       category,revision,evidence_id,origin,receipt_sha256,observed_at_ms,
+                       emergency_pause_revision,recorded_at_ms
+                     ) VALUES(?1,1,?2,?3,?4,?5,0,?5)",
+                    params![
+                        category,
+                        evidence_id.to_string(),
+                        origin,
+                        digest(&format!("activation-evidence-{index}")).as_slice(),
+                        at_ms as i64,
+                    ],
+                )
+                .unwrap();
+            evidence_id
+        })
+        .collect::<Vec<_>>();
+    transaction
         .execute(
             "INSERT INTO feature_orchestration_activation(
-               singleton,activation_id,owner_evidence_sha256,live_evidence_sha256,activated_at_ms
-             ) VALUES(1,?1,?2,?3,?4)",
+               singleton,activation_id,queue_revision,owner_control_designation_revision,
+               emergency_pause_revision,repository_gate_evidence_id,
+               restricted_worker_evidence_id,review_provider_evidence_id,
+               github_publication_evidence_id,restart_recovery_evidence_id,
+               control_event_streaming_evidence_id,activated_at_ms
+             ) VALUES(1,?1,0,1,0,?2,?3,?4,?5,?6,?7,?8)",
             params![
                 Uuid::new_v4().to_string(),
-                digest("owner-orchestration-activation").as_slice(),
-                digest("live-orchestration-activation").as_slice(),
+                evidence_ids[0].to_string(),
+                evidence_ids[1].to_string(),
+                evidence_ids[2].to_string(),
+                evidence_ids[3].to_string(),
+                evidence_ids[4].to_string(),
+                evidence_ids[5].to_string(),
                 at_ms as i64,
             ],
         )
         .unwrap();
+    transaction.commit().unwrap();
 }
 
 fn orchestration_claim_fixture() -> (tempfile::TempDir, MasterKernel, Uuid, u64) {
@@ -617,6 +671,226 @@ fn orchestration_is_default_inert_and_creates_no_checkpoint_or_audit() {
             .unwrap(),
         0
     );
+}
+
+#[test]
+fn activation_requires_six_owner_admitted_receipts_is_global_idempotent_and_immutable() {
+    let directory = tempdir().unwrap();
+    let database = directory.path().join("master.sqlite3");
+    let mut kernel = MasterKernel::open(&database).unwrap();
+    let bridge = bridge_registration("activation-owner");
+    let other = bridge_registration("other-bridge");
+    kernel.register_device(&bridge).unwrap();
+    kernel.register_device(&other).unwrap();
+    kernel
+        .designate_owner_control_bridge(bridge.device_id, 0, 1)
+        .unwrap();
+    let initial = kernel
+        .feature_conveyor_owner_control_projection(&bridge)
+        .unwrap();
+    assert!(!initial.activation_ready);
+    assert!(initial.active_feature.is_none());
+    assert!(kernel
+        .feature_conveyor_owner_control_projection(&other)
+        .is_err());
+
+    let categories = [
+        (
+            FeatureConveyorActivationEvidenceCategory::RepositoryGateProof,
+            FeatureConveyorActivationEvidenceOrigin::RepositoryGateProofController,
+        ),
+        (
+            FeatureConveyorActivationEvidenceCategory::RestrictedWorkerLive,
+            FeatureConveyorActivationEvidenceOrigin::RestrictedWorkerProofController,
+        ),
+        (
+            FeatureConveyorActivationEvidenceCategory::ReviewProviderLive,
+            FeatureConveyorActivationEvidenceOrigin::ReviewProviderProofController,
+        ),
+        (
+            FeatureConveyorActivationEvidenceCategory::GithubPublicationLive,
+            FeatureConveyorActivationEvidenceOrigin::GithubPublicationProofController,
+        ),
+        (
+            FeatureConveyorActivationEvidenceCategory::RestartRecoveryLive,
+            FeatureConveyorActivationEvidenceOrigin::RestartRecoveryProofController,
+        ),
+        (
+            FeatureConveyorActivationEvidenceCategory::MacWindowsControlEventStreamingLive,
+            FeatureConveyorActivationEvidenceOrigin::MacWindowsControlEventStreamingProofController,
+        ),
+    ];
+    let mut first_request = None;
+    for (index, (category, origin)) in categories.into_iter().enumerate() {
+        let request = FeatureConveyorActivationEvidenceAdmissionRequest {
+            schema_version: FEATURE_CONVEYOR_OWNER_ACTIVATION_SCHEMA_VERSION,
+            category,
+            origin,
+            evidence_id: Uuid::new_v4(),
+            revision: 1,
+            expected_current_revision: 0,
+            receipt_sha256: [u8::try_from(index + 1).unwrap(); 32],
+            observed_at_ms: 10 + index as u64,
+            expected_emergency_pause_revision: 0,
+        };
+        kernel
+            .admit_feature_activation_evidence(&request, 20 + index as u64)
+            .unwrap();
+        if index == 0 {
+            first_request = Some(request);
+        }
+    }
+    kernel.set_emergency_paused_at(true, 30).unwrap();
+    assert_eq!(
+        kernel
+            .admit_feature_activation_evidence(&first_request.unwrap(), 31)
+            .unwrap()
+            .observed_at_ms,
+        10,
+        "exact retry must return the original receipt after pause revision drift"
+    );
+    kernel.set_emergency_paused_at(false, 32).unwrap();
+    let ready = kernel
+        .feature_conveyor_owner_control_projection(&bridge)
+        .unwrap();
+    assert!(ready.activation_ready);
+    assert!(ready.active_feature.is_none());
+    let request = FeatureConveyorActivationRequest {
+        schema_version: FEATURE_CONVEYOR_OWNER_ACTIVATION_SCHEMA_VERSION,
+        expected_queue_revision: ready.queue_revision,
+        expected_owner_control_designation_revision: ready.owner_control_designation_revision,
+        expected_emergency_pause_revision: ready.emergency_pause_revision,
+        evidence: ready.evidence.complete().unwrap(),
+    };
+    let activated = kernel
+        .activate_feature_orchestration_from_owner_bridge(&request, &bridge, 40)
+        .unwrap();
+    assert_eq!(activated.status, FeatureConveyorActivationStatus::Active);
+    assert_eq!(
+        kernel
+            .activate_feature_orchestration_from_owner_bridge(&request, &bridge, 41)
+            .unwrap(),
+        activated
+    );
+    let mut mismatch = request;
+    mismatch.expected_queue_revision += 1;
+    assert!(matches!(
+        kernel.activate_feature_orchestration_from_owner_bridge(&mismatch, &bridge, 42),
+        Err(MasterError::FeatureActivationImmutable)
+    ));
+    let v2 = FeatureConveyorActivationEvidenceAdmissionRequest {
+        revision: 2,
+        expected_current_revision: 1,
+        evidence_id: Uuid::new_v4(),
+        receipt_sha256: [99; 32],
+        observed_at_ms: 41,
+        expected_emergency_pause_revision: ready.emergency_pause_revision,
+        ..first_request.unwrap()
+    };
+    assert!(matches!(
+        kernel.admit_feature_activation_evidence(&v2, 43),
+        Err(MasterError::FeatureActivationImmutable)
+    ));
+    let active = kernel
+        .feature_conveyor_owner_control_projection(&bridge)
+        .unwrap();
+    assert_eq!(active.activation_id, Some(activated.activation_id));
+    assert_eq!(active.evidence.complete().unwrap(), activated.evidence);
+
+    drop(kernel);
+    let connection = Connection::open(database).unwrap();
+    assert!(connection
+        .execute(
+            "UPDATE feature_orchestration_activation SET activated_at_ms=99 WHERE singleton=1",
+            [],
+        )
+        .is_err());
+    assert!(connection
+        .execute("DELETE FROM feature_activation_evidence", [])
+        .is_err());
+    connection
+        .execute_batch("DROP TRIGGER feature_activation_evidence_no_update;")
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE feature_activation_evidence
+             SET category='review_provider_live',revision=2,
+                 origin='review_provider_proof_controller'
+             WHERE evidence_id=?1",
+            [activated
+                .evidence
+                .repository_gate_proof
+                .evidence_id
+                .to_string()],
+        )
+        .unwrap();
+    drop(connection);
+
+    let mut reopened = MasterKernel::open(directory.path().join("master.sqlite3")).unwrap();
+    assert!(matches!(
+        reopened.feature_conveyor_owner_control_projection(&bridge),
+        Err(MasterError::InvalidStoredState(message))
+            if message == "activation evidence role binding is invalid"
+    ));
+}
+
+#[test]
+fn owner_pause_resume_is_revision_bound_effect_free_and_exactly_idempotent() {
+    let (directory, mut kernel, feature_id, _) = orchestration_claim_fixture();
+    let bridge = bridge_registration("pause-owner");
+    kernel.register_device(&bridge).unwrap();
+    kernel
+        .designate_owner_control_bridge(bridge.device_id, 0, 12)
+        .unwrap();
+    activate_orchestration(&directory, 13);
+    let initial = kernel
+        .coordinate_feature_orchestration(feature_id, 0, 20)
+        .unwrap();
+    let pause = FeatureConveyorOwnerOrchestrationControlRequest {
+        schema_version: FEATURE_CONVEYOR_OWNER_ACTIVATION_SCHEMA_VERSION,
+        feature_id,
+        expected_lifecycle_revision: initial.lifecycle_revision,
+        expected_orchestration_revision: initial.orchestration_revision,
+        expected_queue_revision: kernel.feature_queue_revision().unwrap(),
+        expected_owner_control_designation_revision: 1,
+        expected_emergency_pause_revision: kernel.emergency_pause_revision().unwrap(),
+    };
+    let paused = kernel
+        .pause_feature_orchestration_from_owner_bridge(&pause, &bridge, 25)
+        .unwrap();
+    assert_eq!(paused.lifecycle_revision, initial.lifecycle_revision + 1);
+    assert_eq!(
+        kernel
+            .pause_feature_orchestration_from_owner_bridge(&pause, &bridge, 26)
+            .unwrap(),
+        paused
+    );
+    let resume = FeatureConveyorOwnerOrchestrationControlRequest {
+        expected_lifecycle_revision: paused.lifecycle_revision,
+        expected_orchestration_revision: paused.orchestration_revision,
+        ..pause
+    };
+    let resumed = kernel
+        .resume_feature_orchestration_from_owner_bridge(&resume, &bridge, 30)
+        .unwrap();
+    assert_eq!(resumed.lifecycle_revision, paused.lifecycle_revision + 1);
+    assert_eq!(
+        kernel
+            .resume_feature_orchestration_from_owner_bridge(&resume, &bridge, 31)
+            .unwrap(),
+        resumed
+    );
+    kernel.set_emergency_paused_at(true, 32).unwrap();
+    let stale = FeatureConveyorOwnerOrchestrationControlRequest {
+        expected_lifecycle_revision: resumed.lifecycle_revision,
+        expected_orchestration_revision: resumed.orchestration_revision,
+        expected_emergency_pause_revision: 1,
+        ..pause
+    };
+    assert!(matches!(
+        kernel.pause_feature_orchestration_from_owner_bridge(&stale, &bridge, 33),
+        Err(MasterError::EmergencyPaused) | Err(MasterError::StaleEmergencyPauseRevision { .. })
+    ));
 }
 
 #[test]
@@ -1068,29 +1342,27 @@ fn orchestration_schema_v17_migrates_backup_first_and_ledger_is_immutable() {
     let process = MasterProcess::acquire(directory.path()).unwrap();
     drop(process);
     let connection = Connection::open(&database).unwrap();
-    connection.execute_batch("PRAGMA user_version=17;").unwrap();
+    connection
+        .execute_batch(
+            "PRAGMA foreign_keys=OFF;
+             DROP TABLE feature_owner_orchestration_controls;
+             DROP TABLE feature_orchestration_activation;
+             DROP TABLE feature_activation_evidence;
+             PRAGMA user_version=17;
+             PRAGMA foreign_keys=ON;",
+        )
+        .unwrap();
     drop(connection);
 
     let process = MasterProcess::acquire(directory.path()).unwrap();
-    assert_eq!(process.kernel().schema_version().unwrap(), 18);
+    assert_eq!(process.kernel().schema_version().unwrap(), 19);
     assert!(process
         .migration_backup_path()
         .is_some_and(|path| path.exists()));
     drop(process);
 
+    activate_orchestration(&directory, 1);
     let connection = Connection::open(&database).unwrap();
-    connection
-        .execute(
-            "INSERT INTO feature_orchestration_activation(
-               singleton,activation_id,owner_evidence_sha256,live_evidence_sha256,activated_at_ms
-             ) VALUES(1,?1,?2,?3,1)",
-            params![
-                Uuid::new_v4().to_string(),
-                digest("owner-evidence").as_slice(),
-                digest("live-evidence").as_slice(),
-            ],
-        )
-        .unwrap();
     assert!(connection
         .execute(
             "UPDATE feature_orchestration_activation SET activated_at_ms=2 WHERE singleton=1",
@@ -1103,6 +1375,106 @@ fn orchestration_schema_v17_migrates_backup_first_and_ledger_is_immutable() {
             [],
         )
         .is_err());
+}
+
+fn downgrade_activation_tables_to_v18(database: &std::path::Path, with_legacy_row: bool) {
+    let connection = Connection::open(database).unwrap();
+    connection
+        .execute_batch(
+            "PRAGMA foreign_keys=OFF;
+             DROP TABLE feature_owner_orchestration_controls;
+             DROP TABLE feature_orchestration_activation;
+             DROP TABLE feature_activation_evidence;
+             CREATE TABLE feature_orchestration_activation (
+               singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton=1),
+               activation_id TEXT NOT NULL UNIQUE,
+               owner_evidence_sha256 BLOB NOT NULL CHECK(length(owner_evidence_sha256)=32),
+               live_evidence_sha256 BLOB NOT NULL CHECK(length(live_evidence_sha256)=32),
+               activated_at_ms INTEGER NOT NULL CHECK(activated_at_ms>0)
+             );
+             CREATE TRIGGER feature_orchestration_activation_no_update
+               BEFORE UPDATE ON feature_orchestration_activation
+               BEGIN SELECT RAISE(ABORT,'immutable orchestration activation'); END;
+             CREATE TRIGGER feature_orchestration_activation_no_delete
+               BEFORE DELETE ON feature_orchestration_activation
+               BEGIN SELECT RAISE(ABORT,'durable orchestration activation'); END;
+             PRAGMA user_version=18;
+             PRAGMA foreign_keys=ON;",
+        )
+        .unwrap();
+    if with_legacy_row {
+        connection
+            .execute(
+                "INSERT INTO feature_orchestration_activation(
+                   singleton,activation_id,owner_evidence_sha256,live_evidence_sha256,activated_at_ms
+                 ) VALUES(1,?1,?2,?3,1)",
+                params![
+                    Uuid::new_v4().to_string(),
+                    digest("legacy-owner-evidence").as_slice(),
+                    digest("legacy-live-evidence").as_slice(),
+                ],
+            )
+            .unwrap();
+    }
+}
+
+#[test]
+fn activation_schema_v18_migrates_backup_first_to_v19() {
+    let directory = tempdir().unwrap();
+    let database = directory.path().join("master.sqlite3");
+    drop(MasterProcess::acquire(directory.path()).unwrap());
+    downgrade_activation_tables_to_v18(&database, false);
+
+    let process = MasterProcess::acquire(directory.path()).unwrap();
+    assert_eq!(process.kernel().schema_version().unwrap(), 19);
+    let backup = process.migration_backup_path().unwrap();
+    assert!(backup.exists());
+    assert_eq!(
+        Connection::open(backup)
+            .unwrap()
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        18
+    );
+    drop(process);
+    let connection = Connection::open(database).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('feature_activation_evidence')",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        8
+    );
+}
+
+#[test]
+fn activation_schema_v18_ambiguous_legacy_activation_restores_verified_backup() {
+    let directory = tempdir().unwrap();
+    let database = directory.path().join("master.sqlite3");
+    drop(MasterProcess::acquire(directory.path()).unwrap());
+    downgrade_activation_tables_to_v18(&database, true);
+
+    assert!(MasterProcess::acquire(directory.path()).is_err());
+    let restored = Connection::open(database).unwrap();
+    assert_eq!(
+        restored
+            .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+            .unwrap(),
+        18
+    );
+    assert_eq!(
+        restored
+            .query_row(
+                "SELECT COUNT(*) FROM feature_orchestration_activation",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
 }
 
 #[test]
@@ -2413,13 +2785,16 @@ fn review_gateway_schema_v15_migrates_backup_first_to_immutable_v16_tables() {
     drop_review_gateway_schema_for_legacy_fixture(&connection);
     connection.pragma_update(None, "user_version", 15).unwrap();
     let process = MasterProcess::acquire(directory.path()).unwrap();
-    assert_eq!(process.kernel().schema_version().unwrap(), 18);
+    assert_eq!(
+        process.kernel().schema_version().unwrap(),
+        MASTER_SCHEMA_VERSION
+    );
     let backup = process.migration_backup_path().unwrap();
     assert!(backup
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v18."));
+        .starts_with("master.pre-v19."));
     assert_eq!(
         Connection::open(backup)
             .unwrap()
@@ -2454,13 +2829,16 @@ fn publication_schema_v16_migrates_backup_first_to_immutable_v17_tables() {
     drop(connection);
 
     let process = MasterProcess::acquire(directory.path()).unwrap();
-    assert_eq!(process.kernel().schema_version().unwrap(), 18);
+    assert_eq!(
+        process.kernel().schema_version().unwrap(),
+        MASTER_SCHEMA_VERSION
+    );
     let backup = process.migration_backup_path().unwrap();
     assert!(backup
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v18."));
+        .starts_with("master.pre-v19."));
     assert_eq!(
         Connection::open(backup)
             .unwrap()
@@ -2504,7 +2882,7 @@ fn validation_gate_schema_v14_migrates_backup_first_to_immutable_v15_tables() {
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v18."));
+        .starts_with("master.pre-v19."));
     assert_eq!(
         Connection::open(backup)
             .unwrap()
@@ -5810,7 +6188,10 @@ fn drop_review_gateway_schema_for_legacy_fixture(connection: &Connection) {
 fn drop_publication_schema_for_legacy_fixture(connection: &Connection) {
     connection
         .execute_batch(
-            "DROP TRIGGER feature_publication_completions_no_update;
+            "DROP TABLE feature_owner_orchestration_controls;
+             DROP TABLE feature_orchestration_activation;
+             DROP TABLE feature_activation_evidence;
+             DROP TRIGGER feature_publication_completions_no_update;
              DROP TRIGGER feature_publication_completions_no_delete;
              DROP TABLE feature_publication_completions;
              DROP TRIGGER feature_publication_action_outcomes_no_update;
@@ -6018,7 +6399,7 @@ fn master_process_v10_backfills_resolution_receipts_from_exact_immutable_audit()
             .file_name()
             .unwrap()
             .to_string_lossy()
-            .starts_with("master.pre-v18."));
+            .starts_with("master.pre-v19."));
         assert_eq!(
             Connection::open(backup)
                 .unwrap()
@@ -6142,7 +6523,7 @@ fn master_process_v10_ambiguous_resolution_audit_fails_closed_and_restores_backu
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v18.")));
+            .starts_with("master.pre-v19.")));
 }
 
 #[test]
@@ -6310,7 +6691,7 @@ fn master_process_v4_backup_migration_reopen_and_restore_on_failure() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v18.")));
+            .starts_with("master.pre-v19.")));
 }
 
 #[test]
@@ -6376,7 +6757,7 @@ fn master_process_v12_backup_first_migration_adds_retained_workspace_binding() {
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v18."));
+        .starts_with("master.pre-v19."));
     assert_eq!(
         Connection::open(backup)
             .unwrap()
@@ -6437,7 +6818,7 @@ fn master_process_v12_failed_migration_restores_verified_backup() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v18.")));
+            .starts_with("master.pre-v19.")));
 }
 
 #[test]
@@ -6504,7 +6885,7 @@ fn master_process_v6_backup_migration_binds_pause_and_default_inert_owner_contro
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v18."));
+        .starts_with("master.pre-v19."));
     let backup = Connection::open(backup).unwrap();
     assert_eq!(
         backup
@@ -6613,5 +6994,5 @@ fn forward_schema_version_fails_closed_without_backup() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v18.")));
+            .starts_with("master.pre-v19.")));
 }
