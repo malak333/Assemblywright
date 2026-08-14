@@ -1815,6 +1815,7 @@ async fn remote_local_coding_dispatch_is_exporter_bound_exact_and_pause_dominant
             LocalCodingResultArtifact::from_bytes(Uuid::new_v4(), &artifact_bytes).unwrap();
         let allowed_paths_sha256 =
             assemblywright_protocol::local_coding_fixture_allowed_paths_sha256();
+        let workspace_expires_at_ms = current_time_ms().unwrap() + 3_600_000;
         let payload = serde_json::to_value(LocalCodingJobResult {
             status: LOCAL_CODING_COMPLETED_STATUS.to_string(),
             work_packet_sha256: packet_sha256,
@@ -1830,7 +1831,7 @@ async fn remote_local_coding_dispatch_is_exporter_bound_exact_and_pause_dominant
             test_status: LOCAL_CODING_FIXTURE_TEST_STATUS.to_string(),
             mutation_performed: true,
             workspace_retained: true,
-            workspace_expires_at_ms: current_time_ms().unwrap() + 3_600_000,
+            workspace_expires_at_ms,
             ambiguous: false,
         })
         .expect("serialize coding acknowledgement payload");
@@ -1864,7 +1865,7 @@ async fn remote_local_coding_dispatch_is_exporter_bound_exact_and_pause_dominant
             snapshot_sha256: context.snapshot_sha256,
             work_packet_sha256: context.work_packet_sha256,
             workspace_retained: true,
-            workspace_expires_at_ms: current_time_ms().unwrap() + 3_600_000,
+            workspace_expires_at_ms,
             artifact,
         };
         (result, admission)
