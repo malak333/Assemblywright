@@ -76,6 +76,7 @@ MAC_APP_TESTS="apps/mac/Tests/AssemblywrightMacAppTests/AssemblywrightMacAppTest
 
 MAC_BRIDGE_LIVE_E2E="scripts/mac-windows-bridge-live-e2e.sh"
 MAC_LOCAL_CODING_SNAPSHOT_E2E="scripts/mac-local-coding-snapshot-e2e.sh"
+REPOSITORY_GATE_PROOF_CONTROLLER="scripts/repository-gate-proof-controller.sh"
 WINDOWS_FIXTURE_LIVE_CONTROL="scripts/windows-fixture-live-control.ps1"
 WINDOWS_MLX_LIVE_CONTROL="scripts/windows-mlx-live-control.ps1"
 WINDOWS_LOCAL_CODING_LIVE_CONTROL="scripts/windows-local-coding-live-control.ps1"
@@ -138,6 +139,7 @@ for file in \
   "$MAC_BRIDGE_SUPERVISOR" "$MAC_OWNER_CONTROL" "$MAC_BRIDGE_PROCESS" "$MAC_EVENT_RELAY" \
   "$MAC_APP" "$MAC_BRIDGE_TESTS" "$MAC_APP_TESTS" \
   "$MAC_BRIDGE_LIVE_E2E" "$MAC_LOCAL_CODING_SNAPSHOT_E2E" \
+  "$REPOSITORY_GATE_PROOF_CONTROLLER" \
   "$WINDOWS_FIXTURE_LIVE_CONTROL" \
   "$WINDOWS_MLX_LIVE_CONTROL" "$WINDOWS_LOCAL_CODING_LIVE_CONTROL" \
   "$WINDOWS_LOCAL_CODING_LIVE_CONTROL_SELF_CHECK" "$WINDOWS_PROTOCOL_WORKFLOW" \
@@ -604,6 +606,43 @@ require_text "agent workflow explicit closeout verdicts" "$AGENT_WORKFLOW" \
   "state explicit verdicts for documentation and safety"
 
 require_text "build docs local gate" "$BUILD_DOCS" "./scripts/release-local.sh"
+require_text "build docs repository-gate proof controller" "$BUILD_DOCS" \
+  "./scripts/repository-gate-proof-controller.sh --run"
+require_text "design repository-gate controller boundary" "$DESIGN" \
+  "repository_gate_proof_controller"
+require_text "safety repository-gate controller fail-closed boundary" "$SAFETY_RULES" \
+  "Handled cancellation and every rejected or failed run leave no receipt"
+require_text "conveyor design repository-gate controller boundary" "$FEATURE_CONVEYOR_DESIGN" \
+  "Feature 1 supplies only the deterministic repository-gate proof controller"
+require_text "knowledge base repository-gate controller" "$KB" \
+  "Feature 1 adds the separate Mac/local repository-gate proof controller"
+require_text "repository-gate controller exact main" "$REPOSITORY_GATE_PROOF_CONTROLLER" \
+  'refs/remotes/origin/main^{commit}'
+require_text "repository-gate controller fixed canonical gate" \
+  "$REPOSITORY_GATE_PROOF_CONTROLLER" \
+  'git_safe "$root" show "$head:scripts/release-local.sh"'
+require_text "repository-gate controller committed stdin execution" \
+  "$REPOSITORY_GATE_PROOF_CONTROLLER" "exec bash -s"
+require_text "repository-gate controller fixed-root Git" "$REPOSITORY_GATE_PROOF_CONTROLLER" \
+  'git --no-replace-objects'
+require_text "repository-gate controller held output identity" \
+  "$REPOSITORY_GATE_PROOF_CONTROLLER" 'prepared_output_identity'
+require_text "repository-gate controller process-group cancellation" \
+  "$REPOSITORY_GATE_PROOF_CONTROLLER" 'terminate_gate_group'
+require_text "repository-gate controller hidden-index rejection" \
+  "$REPOSITORY_GATE_PROOF_CONTROLLER" "repository index contains hidden tracked-state flags"
+require_text "release-local committed stdin marker" "$LOCAL_GATE" \
+  'ASSEMBLYWRIGHT_REPOSITORY_GATE_INTERNAL_STDIN_V1'
+require_text "repository-gate controller atomic receipt" "$REPOSITORY_GATE_PROOF_CONTROLLER" \
+  'mv -f -- "$receipt_temp" "$RECEIPT_NAME"'
+require_text "repository-gate controller redaction self-test" \
+  "$REPOSITORY_GATE_PROOF_CONTROLLER" "self-test receipt leaked a path or remote"
+require_text "local gate repository-gate controller check" "$LOCAL_GATE" \
+  "./scripts/repository-gate-proof-controller.sh --check"
+require_text "local gate repository-gate controller self-test" "$LOCAL_GATE" \
+  "./scripts/repository-gate-proof-controller.sh --self-test"
+forbid_text "local gate repository-gate controller recursion" "$LOCAL_GATE" \
+  "./scripts/repository-gate-proof-controller.sh --run"
 require_text "build docs local-coding live closeout" "$BUILD_DOCS" \
   "./scripts/mac-windows-bridge-live-e2e.sh --run-local-coding"
 require_text "build docs result-artifact live boundary" "$BUILD_DOCS" \

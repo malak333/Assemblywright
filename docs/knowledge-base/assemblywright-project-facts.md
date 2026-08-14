@@ -1166,6 +1166,45 @@ an old one.
   projection and bind only those exact current references into one immutable
   global activation; it cannot admit evidence. Activation creates no lease or
   queue work and remains blocked by incomplete evidence or Emergency Pause.
+- Feature 1 adds the separate Mac/local repository-gate proof controller at
+  `scripts/repository-gate-proof-controller.sh`. Its owner-run `--run` accepts
+  no repository or command argument, requires exact clean `main` with `HEAD ==
+  refs/remotes/origin/main`, compares branch/HEAD/tree/status/origin and the
+  committed `release-local.sh` definition before and after executing only that
+  exact committed blob through argument-free Bash stdin, and fails closed on drift, failure, or handled
+  cancellation. Success atomically publishes an owner-only, path-free bounded
+  schema-v1 receipt and raw SHA-256 sidecar beneath the ignored
+  `target/repository-gate-proof/` directory. The receipt binds category
+  `repository_gate_proof`, origin `repository_gate_proof_controller`, exact
+  HEAD/tree, gate-definition digest, fixed gate identity, observed time, pass
+  status, and the narrow repository proof boundary. `--check` and the
+  disposable native Git/process `--self-test` run inside `release-local.sh`;
+  the canonical gate never invokes `--run`, avoiding recursion. The controller
+  neither admits its digest nor activates, mutates source, or claims any live,
+  provider, publication, signing, notarization, or production proof. Windows
+  owner-token admission and its atomic redacted audit remain separate.
+  `target` and the proof directory must be ordinary owner-matched directories;
+  symlink/reparse-style ambiguity fails before cleanup. A new run then removes
+  only the exact old receipt pair so a failure cannot leave stale output that
+  appears current. Archive any receipt the owner intends to retain before
+  deliberately rerunning the controller.
+  All Git observations use fixed-root, environment-empty Git with replacement,
+  config, index/work-tree, object-directory, and alternate-object redirections
+  disabled. The committed gate's internal stdin/root marker is cleared from
+  caller input and unset before its command list. `target` must not be group or
+  world writable. The controller holds the output directory, binds and
+  revalidates target/output device and inode across the gate and relative-name
+  publication, and cleans only through that held directory. HUP/INT/TERM drains
+  and reaps the gate's separate process group with bounded TERM-to-KILL; any
+  surviving descendant suppresses proof.
+  All tracked index entries must retain the normal `H` tag; assume-unchanged,
+  skip-worktree, and every other hidden tracked-state tag reject. Pre/post
+  stability detects concurrent same-UID changes to other gate-consumed files at
+  the controller edges but is not a host sandbox or same-UID isolation claim.
+  The disposable controller suite also fixes the public CLI contract (default
+  check, unknown-mode rejection, and extra-argument rejection) and proves that
+  a rejected rerun invalidates an earlier receipt pair rather than exposing it
+  as evidence for the failed attempt.
 - The macOS app remains outside TLS-key and owner-token custody. For an explicit
   confirmed owner action it stops and reaps its monitor child, revalidates the
   same independently signed helper, launches one bounded `--confirm` command,

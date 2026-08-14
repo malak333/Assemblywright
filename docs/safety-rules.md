@@ -206,6 +206,46 @@ release requirements, not optional UX guidance.
   an empty queue. Exact retry returns the original immutable receipt; mismatch,
   stale state, Emergency Pause, redesignation, or incomplete evidence fails
   closed.
+- The owner-run repository-gate proof controller is not an evidence-admission
+  or activation client. `--run` accepts no repository, command, or remote
+  argument and may execute only the exact committed
+  `scripts/release-local.sh` blob through argument-free Bash stdin from its own
+  exact clean `main` when `HEAD`
+  equals `refs/remotes/origin/main`. It must capture and compare branch, HEAD,
+  tree, status, origin ref, and committed gate-definition digest before and
+  after the gate. Any dirty state, wrong branch, origin or repository drift,
+  gate failure, malformed observation, or handled cancellation removes partial
+  output and creates no receipt. Success may write only one bounded path-free
+  receipt and raw digest sidecar beneath the fixed ignored
+  `target/repository-gate-proof` directory with owner-only permissions and
+  atomic receipt publication. The receipt must bind schema, exact activation
+  category/origin, HEAD/tree, committed gate-definition SHA-256, fixed gate
+  identity, observed time, pass status, and the narrow repository-only proof
+  boundary. It must not POST, admit, self-approve, activate, mutate source, or
+  claim signing, notarization, live-device, worker, provider, GitHub, restart,
+  control-stream, or production-readiness proof. Owner-token loopback admission
+  and its same-transaction redacted audit remain a separate deliberate action.
+  Handled cancellation and every rejected or failed run leave no receipt.
+  The repository `target` and proof output directories must be ordinary,
+  owner-matched, canonically stable directories, never symlinks. Reject an
+  unsafe component before cleanup. After those checks, a new run removes only
+  the exact fixed prior receipt pair, intentionally preventing failed reruns
+  from presenting stale local evidence as current output.
+  Git observations must be fixed to the controller root, discard all inherited
+  Git configuration/redirection/replacement/alternate-object environment, and
+  disable replace objects. The internal stdin/root marker used by the committed
+  gate is not a public selector: clear caller values, accept it only during
+  argument-free stdin execution, and unset it before the release command list.
+  `target` must also reject group/world write access. Hold the validated output
+  directory, bind target/output device and inode, revalidate both pathname and
+  held identities before and after relative-name publication, and clean only
+  relative fixed leaves in the held directory. HUP, INT, and TERM must terminate
+  the gate's separate process group, boundedly escalate and reap it, and leave
+  no receipt; a live descendant after the gate is a failure.
+  Every tracked index entry must carry the normal `H` tag; assume-unchanged,
+  skip-worktree, or another hidden-state tag rejects before the gate. Pre/post
+  clean and stable observations detect concurrent same-UID changes to other
+  gate-consumed files at those edges; they are not host-level isolation.
 - Feature orchestration owner pause/resume is separate from Emergency Pause and
   is available only to the exact current designated non-fixture MacBridge after
   an accepted exporter-bound session. It compare-and-sets feature lifecycle,

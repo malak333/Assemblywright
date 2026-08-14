@@ -100,6 +100,49 @@ exact current six Windows-admitted references plus queue, designation, and
 Emergency Pause revisions. Activation is global, creates no lease or action,
 and exact retry returns the original immutable receipt.
 
+The first proof-controller slice is an owner-run macOS/local repository-gate
+controller, separate from the schema-v19 admission route. Its `--run` mode has
+no repository or command arguments: it accepts only the controller's own exact
+clean `main` checkout when `HEAD` equals `refs/remotes/origin/main`, captures
+the branch, HEAD, tree, status, and committed `scripts/release-local.sh`
+definition before and after executing only those exact committed blob bytes
+through argument-free Bash stdin, and fails closed on any drift or interruption. A
+success produces one bounded path-free schema-v1 JSON receipt plus its raw
+SHA-256 sidecar under the fixed ignored `target/repository-gate-proof`
+directory, using owner-only permissions and temporary-file rename with the
+receipt as the final commit marker. The receipt binds the protocol category
+`repository_gate_proof`, origin `repository_gate_proof_controller`, HEAD and
+tree object IDs, committed gate-definition digest, fixed gate identity,
+millisecond observed time, pass status, and an explicit narrow proof boundary.
+Failure and handled cancellation remove partial or final output. The
+controller never POSTs or admits the digest, writes source, activates, or
+claims signing, notarization, live-device, restricted-worker, review-provider,
+GitHub-publication, restart-recovery, or Mac/Windows-control proof. Later
+owner-token loopback admission remains the Windows-authoritative, atomically
+audited approval boundary. This adds no protocol or database-schema change.
+The repository `target` and proof-directory components must be ordinary,
+owner-matched local directories rather than symlinks; an ambiguous component
+is rejected before cleanup or creation. A new `--run` deliberately invalidates
+only the exact prior fixed receipt pair after those directory checks, so a
+failed current attempt cannot leave a stale file that appears to describe it.
+Every Git observation runs at the fixed controller root with an empty inherited
+environment, disabled replace objects, and no external config, alternate object
+directory, index/work-tree redirection, or hook/fsmonitor authority. The
+index must report the normal `H` tag for every tracked entry; assume-unchanged,
+skip-worktree, and every other hidden tracked-state tag fail before execution.
+The clean/stable checks edge-detect concurrent same-UID mutation of other files
+consumed by the committed gate, but do not claim host isolation from that owner.
+The committed gate receives only a narrowly recognized internal stdin/root marker;
+caller-supplied copies are cleared, the marker never selects another public
+controller root, and `release-local.sh` unsets it before its command list.
+The controller holds the validated output directory as its current directory,
+binds both `target` and output device/inode identities, rejects a group/world-
+writable `target`, revalidates the path and held identities before and after
+relative-name publication, and never cleans through a replaced path. Gate
+execution has a separate process group. HUP, INT, or TERM propagates to the
+complete group, escalates boundedly to KILL, reaps the controller-owned leader,
+and suppresses the receipt if any child survives or the gate fails.
+
 The designated bridge may explicitly owner-pause or resume only an exact
 active, effect-free orchestration checkpoint using lifecycle, orchestration,
 queue, designation, and Emergency Pause revisions. Owner pause stops the active

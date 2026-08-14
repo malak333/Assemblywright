@@ -1,7 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+INTERNAL_STDIN_MARKER="${ASSEMBLYWRIGHT_REPOSITORY_GATE_INTERNAL_STDIN_V1:-}"
+INTERNAL_ROOT_MARKER="${ASSEMBLYWRIGHT_REPOSITORY_GATE_INTERNAL_ROOT:-}"
+unset ASSEMBLYWRIGHT_REPOSITORY_GATE_INTERNAL_STDIN_V1
+unset ASSEMBLYWRIGHT_REPOSITORY_GATE_INTERNAL_ROOT
+
+if [[ "$INTERNAL_STDIN_MARKER" == "assemblywright.repository-gate-proof.v1" ]]; then
+  [[ -z "${BASH_SOURCE[0]-}" && "$0" == "bash" && "$#" -eq 0 ]] || {
+    printf 'error: repository-gate internal mode requires argument-free bash stdin execution\n' >&2
+    exit 1
+  }
+  [[ "$INTERNAL_ROOT_MARKER" == /* && -d "$INTERNAL_ROOT_MARKER" && ! -L "$INTERNAL_ROOT_MARKER" ]] || {
+    printf 'error: repository-gate internal root is invalid\n' >&2
+    exit 1
+  }
+  ROOT_DIR="$(cd "$INTERNAL_ROOT_MARKER" && pwd -P)"
+  [[ "$ROOT_DIR" == "$INTERNAL_ROOT_MARKER" ]] || {
+    printf 'error: repository-gate internal root is ambiguous\n' >&2
+    exit 1
+  }
+else
+  ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+fi
+unset INTERNAL_STDIN_MARKER
+unset INTERNAL_ROOT_MARKER
 cd "$ROOT_DIR"
 export CLANG_MODULE_CACHE_PATH="${CLANG_MODULE_CACHE_PATH:-$ROOT_DIR/target/clang-module-cache}"
 mkdir -p "$CLANG_MODULE_CACHE_PATH"
@@ -80,6 +103,8 @@ fi
 run ./scripts/release-version-consistency.sh --check
 run ./scripts/release-ci-workflow-smoke.sh
 run ./scripts/release-docs-drift-smoke.sh
+run ./scripts/repository-gate-proof-controller.sh --check
+run ./scripts/repository-gate-proof-controller.sh --self-test
 run ./scripts/release-naming-contract-smoke.sh --check
 run ./scripts/release-naming-contract-smoke.sh --self-test
 run ./scripts/release-shell-portability-smoke.sh --check

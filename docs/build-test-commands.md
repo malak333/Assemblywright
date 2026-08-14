@@ -31,6 +31,8 @@ The gate runs, in order:
 ./scripts/release-version-consistency.sh --check
 ./scripts/release-ci-workflow-smoke.sh
 ./scripts/release-docs-drift-smoke.sh
+./scripts/repository-gate-proof-controller.sh --check
+./scripts/repository-gate-proof-controller.sh --self-test
 ./scripts/release-naming-contract-smoke.sh --check
 ./scripts/release-naming-contract-smoke.sh --self-test
 ./scripts/release-shell-portability-smoke.sh --check
@@ -65,6 +67,51 @@ cargo run -p assemblywright-cli -- release live-device-runbook
 swift test --disable-sandbox --package-path apps/mac
 swift build --disable-sandbox --package-path apps/mac
 ```
+
+## Repository-Gate Proof Controller
+
+Validate the controller contract and its disposable native Git/process
+regression matrix with:
+
+```sh
+./scripts/repository-gate-proof-controller.sh --check
+./scripts/repository-gate-proof-controller.sh --self-test
+```
+
+After the implementation is committed to `main`, fetched as
+`refs/remotes/origin/main`, and the checkout is clean and exactly equal to that
+ref, the owner may create the local proof receipt with:
+
+```sh
+./scripts/repository-gate-proof-controller.sh --run
+```
+
+`--run` accepts no alternate command or repository. It runs only the exact
+committed `scripts/release-local.sh` bytes via argument-free Bash stdin,
+requires stable pre/post HEAD, tree, origin and
+status, and atomically writes an owner-only, path-free bounded JSON receipt plus
+raw SHA-256 sidecar under `target/repository-gate-proof/`. The receipt is local
+repository-gate evidence only. It is not posted or admitted automatically and
+does not prove Windows activation, signing, notarization, live-device behavior,
+restricted-worker execution, a selected review provider, GitHub publication,
+restart recovery, Mac/Windows control streaming, or production readiness.
+Handled cancellation and every rejected or failed run leave no receipt.
+The controller rejects a symlinked or non-directory `target` before touching
+external state. After validating the fixed owner-matched directory chain, a new
+run invalidates only the prior fixed receipt and sidecar so a failed rerun
+cannot be mistaken for a new pass.
+Git observations discard inherited Git environment/config/redirection,
+disable replace objects, and remain fixed to the controller root. The
+self-test additionally covers committed-byte execution, hostile Git/internal-
+marker environment, group/world-writable target rejection, concurrent
+target/output directory replacement, held-directory cleanup, and TERM of a
+gate descendant process group with bounded drain and no late sentinel.
+It also rejects assume-unchanged, skip-worktree, or any other non-`H` tracked
+index tag. Pre/post stability is edge detection for concurrent same-UID changes
+to other gate-consumed files, not host-isolation proof.
+The self-test exercises the default, unknown, and extra-argument CLI shapes and
+proves that a rejected rerun removes the prior fixed receipt pair instead of
+leaving stale evidence that appears current.
 
 ## Windows Distributed Gate
 

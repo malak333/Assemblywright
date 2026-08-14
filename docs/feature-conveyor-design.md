@@ -532,6 +532,43 @@ accounting, and never substitutes for global Emergency Pause. Cancel retains
 the lease; abandon still requires safe reconciliation and healthy-main proof
 where publication might have merged.
 
+Feature 1 supplies only the deterministic repository-gate proof controller.
+The owner explicitly invokes
+`./scripts/repository-gate-proof-controller.sh --run` on the Mac. The command
+cannot select a repository or gate; it requires the controller's exact clean
+`main` checkout to equal `refs/remotes/origin/main`, records stable pre/post
+branch, HEAD, tree, status and origin state, and executes only the exact
+committed `scripts/release-local.sh` bytes through argument-free Bash stdin. Its fixed ignored owner-private output
+contains a bounded, path-free schema-v1 receipt and raw SHA-256 sidecar. The
+receipt binds `repository_gate_proof` to
+`repository_gate_proof_controller`, the exact commit/tree, the committed local-
+gate definition digest, `assemblywright.release-local.v1`, observed time,
+pass status, and the repository-only boundary. Drift, failure, and handled
+cancellation leave no receipt; temporary files are never evidence. This
+controller performs no Windows request or audit, evidence admission, source
+mutation, approval, activation, or live proof. The owner separately decides
+whether to admit its digest through the existing owner-token loopback route;
+that Windows transaction remains authoritative and audited. Protocol v5 and
+schema v19 are unchanged.
+The fixed `target` chain must remain ordinary, owner-matched and non-symlinked;
+reparse-style ambiguity is rejected before output cleanup or creation. Once
+that chain validates, beginning a new run removes only the exact previous
+receipt and sidecar. This deliberate invalidation ensures a failed rerun does
+not expose stale local evidence as though it came from the current attempt.
+Repository observations use environment-empty, fixed-root Git with replace
+objects and inherited config, index/work-tree, object-directory and alternate
+redirections disabled. A narrow internal stdin/root marker lets the committed
+gate recover the already-fixed root; caller values are cleared and the gate
+unsets the marker before running commands. `target` is non-group/world-writable,
+and the controller holds the output directory while binding and revalidating
+target/output device and inode before and after relative-name publication.
+HUP, INT, TERM, failure, or a surviving descendant drains the separate gate
+process group boundedly and suppresses the receipt.
+Every tracked index entry must have Git's normal `H` tag; hidden
+assume-unchanged, skip-worktree, or other index state is ineligible. Pre/post
+stability catches same-UID mutation of other gate-consumed files at the
+controller edges, not through a claimed host sandbox.
+
 The concrete authority endpoints are loopback-only
 `POST /v1/feature-conveyor/activation-evidence` and exporter-bound designated-
 bridge `GET /v1/distributed/feature-conveyor/owner-control`, plus remote POSTs
