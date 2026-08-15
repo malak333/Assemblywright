@@ -30,9 +30,19 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+foreach ($gitEnvironmentEntry in @(Get-ChildItem Env: | Where-Object { $_.Name -like "GIT_*" })) {
+    Remove-Item -LiteralPath "Env:$($gitEnvironmentEntry.Name)"
+}
+$env:GIT_CONFIG_GLOBAL = "NUL"
+$env:GIT_CONFIG_SYSTEM = "NUL"
+$env:GIT_CONFIG_NOSYSTEM = "1"
+$env:GIT_ATTR_NOSYSTEM = "1"
+$env:GIT_TERMINAL_PROMPT = "0"
+$env:GIT_OPTIONAL_LOCKS = "0"
+
 $protocolVersion = 5
-$masterSchemaVersion = 14
-$featureConveyorProjectionSchemaVersion = 8
+$masterSchemaVersion = 19
+$featureConveyorProjectionSchemaVersion = 9
 $ownerControlSchemaVersion = 1
 $uuidPattern = "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 $commitPattern = "^[0-9a-f]{40}$"
@@ -73,7 +83,7 @@ function Get-GitBlobSha256Bytes {
     }
     $startInfo = New-Object System.Diagnostics.ProcessStartInfo
     $startInfo.FileName = "git"
-    $startInfo.Arguments = "-C `"$Repository`" cat-file blob `"$Commit`:$BlobPath`""
+    $startInfo.Arguments = "--no-replace-objects -c core.fsmonitor=false -c core.hooksPath=NUL -C `"$Repository`" cat-file blob `"$Commit`:$BlobPath`""
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardOutput = $true
@@ -243,11 +253,32 @@ function Assert-SnapshotCompatibleObjectStore {
 
 function Invoke-Git {
     param([Parameter(Mandatory = $true)][string]$Repository, [Parameter(Mandatory = $true)][string[]]$Arguments)
-    $output = @(& git -C $Repository @Arguments 2>&1)
+    $output = @(& git --no-replace-objects -c core.fsmonitor=false -c core.hooksPath=NUL -C $Repository @Arguments 2>&1)
     if ($LASTEXITCODE -ne 0) {
         throw "Git rejected the bounded live-proof operation."
     }
     return ($output -join "`n").Trim()
+}
+
+function Assert-SourceRepositoryEligible {
+    param([Parameter(Mandatory = $true)][string]$Repository)
+    $head = Invoke-Git $Repository @("rev-parse", "refs/heads/main")
+    $originMain = Invoke-Git $Repository @("rev-parse", "refs/remotes/origin/main")
+    $branch = Invoke-Git $Repository @("branch", "--show-current")
+    $status = Invoke-Git $Repository @("status", "--porcelain=v1", "--untracked-files=all")
+    $tracked = Invoke-Git $Repository @("ls-files", "-v", "--")
+    $trackedLines = @($tracked -split "`r?`n" | Where-Object { $_.Length -gt 0 })
+    if (
+        $head -notmatch $commitPattern -or
+        $head -cne $originMain -or
+        $branch -cne "main" -or
+        $status.Length -ne 0 -or
+        $trackedLines.Count -eq 0 -or
+        @($trackedLines | Where-Object { $_ -cnotmatch "^H " }).Count -ne 0
+    ) {
+        throw "The Windows source checkout is not exact clean main at origin/main with normal tracked-index state."
+    }
+    return $head
 }
 
 function Invoke-ExactPost {
@@ -317,25 +348,77 @@ function Read-ProofMarker {
     $marker = Get-Content -LiteralPath $markerPath -Raw | ConvertFrom-Json
     Assert-ExactKeys $marker @(
         "schema_version", "status", "source_repository", "proof_repository",
-        "repository_id", "feature_id", "head_commit"
+        "repository_id", "feature_id", "head_commit", "queue_revision",
+        "emergency_pause_revision", "owner_control_designation_revision"
     ) "Disposable checkout marker"
     if (
-        [UInt64]$marker.schema_version -ne 1 -or
+        [UInt64]$marker.schema_version -ne 2 -or
         $marker.status -ne "local_coding_disposable_checkout" -or
         $marker.source_repository -cne $ExpectedSource -or
         $marker.proof_repository -cne $Path -or
         $marker.repository_id -notmatch $uuidPattern -or
         $marker.feature_id -notmatch $uuidPattern -or
-        $marker.head_commit -notmatch $commitPattern
+        $marker.head_commit -notmatch $commitPattern -or
+        [UInt64]$marker.owner_control_designation_revision -eq 0
     ) {
         throw "The disposable checkout marker binding drifted."
     }
-    $sourceHead = Invoke-Git $ExpectedSource @("rev-parse", "refs/heads/main")
-    $sourceOriginHead = Invoke-Git $ExpectedSource @("rev-parse", "refs/remotes/origin/main")
-    if ($sourceHead -ne $marker.head_commit -or $sourceOriginHead -ne $marker.head_commit) {
+    $sourceHead = Assert-SourceRepositoryEligible $ExpectedSource
+    if ($sourceHead -ne $marker.head_commit) {
         throw "The marker-bound source main identity drifted."
     }
     return $marker
+}
+
+function Write-ProofMarkerAtomically {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)]$Document
+    )
+    $gitDirectory = Join-Path $Path ".git"
+    Assert-NoReparseComponents $gitDirectory $false
+    Assert-ExactKeys $Document @(
+        "schema_version", "status", "source_repository", "proof_repository",
+        "repository_id", "feature_id", "head_commit", "queue_revision",
+        "emergency_pause_revision", "owner_control_designation_revision"
+    ) "Disposable checkout marker publication"
+    $markerPath = Join-Path $gitDirectory "assemblywright-local-coding-live-proof"
+    if (Test-Path -LiteralPath $markerPath) {
+        throw "The disposable checkout marker publication target already exists."
+    }
+    $markerJson = $Document | ConvertTo-Json -Compress
+    $markerBytes = [Text.UTF8Encoding]::new($false).GetBytes($markerJson)
+    if ($markerBytes.Length -eq 0 -or $markerBytes.Length -gt 4096) {
+        throw "The disposable checkout marker publication was empty or oversized."
+    }
+    $temporaryPath = Join-Path $gitDirectory ".assemblywright-local-coding-live-proof-$([Guid]::NewGuid().ToString('N')).tmp"
+    $stream = $null
+    try {
+        $stream = [IO.FileStream]::new(
+            $temporaryPath,
+            [IO.FileMode]::CreateNew,
+            [IO.FileAccess]::Write,
+            [IO.FileShare]::None,
+            4096,
+            [IO.FileOptions]::WriteThrough
+        )
+        $stream.Write($markerBytes, 0, $markerBytes.Length)
+        $stream.Flush($true)
+        $stream.Dispose()
+        $stream = $null
+        if ([IO.File]::ReadAllText($temporaryPath) -cne $markerJson) {
+            throw "The disposable checkout marker temporary bytes drifted."
+        }
+        [IO.File]::Move($temporaryPath, $markerPath)
+        if ([IO.File]::ReadAllText($markerPath) -cne $markerJson) {
+            throw "The atomically published disposable checkout marker drifted."
+        }
+    } finally {
+        if ($null -ne $stream) { $stream.Dispose() }
+        if (Test-Path -LiteralPath $temporaryPath) {
+            Remove-Item -LiteralPath $temporaryPath -Force
+        }
+    }
 }
 
 function Assert-ProofRepositoryClean {
@@ -525,8 +608,8 @@ if ($Action -eq "Check") {
     if (
         $testDigest.Length -ne 64 -or
         $protocolVersion -ne 5 -or
-        $masterSchemaVersion -ne 14 -or
-        $featureConveyorProjectionSchemaVersion -ne 8 -or
+        $masterSchemaVersion -ne 19 -or
+        $featureConveyorProjectionSchemaVersion -ne 9 -or
         $ownerControlSchemaVersion -ne 1
     ) {
         throw "Local-coding live controller self-check failed."
@@ -560,57 +643,132 @@ switch ($Action) {
             throw "The source checkout is unavailable."
         }
         Assert-NoReparseComponents $paths.source $false
+        $status = Get-ConveyorStatus
+        $main = Assert-SourceRepositoryEligible $paths.source
         Assert-NoReparseComponents $paths.proof $true
         if (Test-Path -LiteralPath $paths.proof) {
-            throw "The disposable proof checkout already exists."
+            $markerPath = Join-Path $paths.proof ".git\assemblywright-local-coding-live-proof"
+            if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) {
+                if (
+                    $status.owner_guidance.reason_code -ne "queue_empty" -or
+                    $status.visible_feature_count -ne 0 -or $status.features_truncated -ne $false
+                ) {
+                    throw "An unmarked partial clone can be recovered only while the queue is empty."
+                }
+                Assert-NoReparseTree $paths.proof
+                $partialHead = Invoke-Git $paths.proof @("rev-parse", "HEAD")
+                $partialBranch = Invoke-Git $paths.proof @("branch", "--show-current")
+                $partialStatus = Invoke-Git $paths.proof @("status", "--porcelain=v1", "--untracked-files=all")
+                $partialTracked = Invoke-Git $paths.proof @("ls-files", "-v", "--")
+                $partialRemotes = Invoke-Git $paths.proof @("remote")
+                $partialOrigin = Invoke-Git $paths.proof @("remote", "get-url", "--all", "origin")
+                if (
+                    $partialHead -ne $main -or $partialBranch -ne "main" -or
+                    $partialStatus.Length -ne 0 -or $partialRemotes -cne "origin" -or
+                    $partialOrigin -cne $paths.source -or
+                    @($partialTracked -split "`r?`n" | Where-Object { $_.Length -gt 0 -and $_ -cnotmatch "^H " }).Count -ne 0
+                ) {
+                    throw "The unmarked partial clone did not match the exact recoverable source."
+                }
+                Remove-Item -LiteralPath $paths.proof -Recurse -Force
+                if (Test-Path -LiteralPath $paths.proof) {
+                    throw "The exact unmarked partial clone was not removed."
+                }
+            }
         }
-        $status = Get-ConveyorStatus
-        if (
-            $status.owner_guidance.reason_code -ne "queue_empty" -or
-            $status.visible_feature_count -ne 0 -or
-            $status.features_truncated -ne $false
-        ) {
-            throw "Prepare requires an unpaused empty Feature Conveyor."
+        $resumedPreparation = Test-Path -LiteralPath $paths.proof
+        if ($resumedPreparation) {
+            $marker = Read-ProofMarker $paths.proof $paths.source
+            if (
+                [UInt64]$marker.owner_control_designation_revision -ne $OwnerControlDesignationRevision -or
+                [UInt64]$marker.emergency_pause_revision -ne [UInt64]$status.owner_guidance.emergency_pause_revision
+            ) {
+                throw "The resumable preparation marker drifted from owner-control authority."
+            }
+            $repository = [string]$marker.repository_id
+            $feature = [string]$marker.feature_id
+            $main = [string]$marker.head_commit
+            $prepareQueueRevision = [UInt64]$marker.queue_revision
+            $preparePauseRevision = [UInt64]$marker.emergency_pause_revision
+        } else {
+            if (
+                $status.owner_guidance.reason_code -ne "queue_empty" -or
+                $status.visible_feature_count -ne 0 -or
+                $status.features_truncated -ne $false
+            ) {
+                throw "Fresh Prepare requires an unpaused empty Feature Conveyor."
+            }
+            $repository = [guid]::NewGuid().ToString().ToLowerInvariant()
+            $feature = [guid]::NewGuid().ToString().ToLowerInvariant()
+            $prepareQueueRevision = [UInt64]$status.queue_revision
+            $preparePauseRevision = [UInt64]$status.owner_guidance.emergency_pause_revision
+            $cloneErrorActionPreference = $ErrorActionPreference
+            try {
+                # Windows PowerShell 5 surfaces a native process's stderr as
+                # ErrorRecord values. Git writes normal clone progress there, so
+                # capture it and make the native exit code the sole verdict.
+                $ErrorActionPreference = "Continue"
+                $cloneOutput = @(& git --no-replace-objects -c core.autocrlf=false -c core.fsmonitor=false -c core.hooksPath=NUL -c core.safecrlf=false -c init.templateDir= clone --no-local --single-branch --branch main $paths.source $paths.proof 2>&1)
+                $cloneExitCode = $LASTEXITCODE
+            } finally {
+                $ErrorActionPreference = $cloneErrorActionPreference
+            }
+            if ($cloneExitCode -ne 0) {
+                if (Test-Path -LiteralPath $paths.proof) {
+                    Assert-NoReparseTree $paths.proof
+                    Remove-Item -LiteralPath $paths.proof -Recurse -Force
+                }
+                throw "Git could not create the standalone disposable checkout."
+            }
+            Assert-NoReparseComponents $paths.proof $false
+            $marker = [ordered]@{
+                schema_version = 2
+                status = "local_coding_disposable_checkout"
+                source_repository = $paths.source
+                proof_repository = $paths.proof
+                repository_id = $repository
+                feature_id = $feature
+                head_commit = $main
+                queue_revision = $prepareQueueRevision
+                emergency_pause_revision = $preparePauseRevision
+                owner_control_designation_revision = $OwnerControlDesignationRevision
+            }
+            Write-ProofMarkerAtomically $paths.proof $marker
         }
-        $main = Invoke-Git $paths.source @("rev-parse", "refs/heads/main")
-        $originMain = Invoke-Git $paths.source @("rev-parse", "refs/remotes/origin/main")
-        if ($main -notmatch $commitPattern -or $main -ne $originMain) {
-            throw "The Windows source main ref does not exactly match origin/main."
+        $remotes = Invoke-Git $paths.proof @("remote")
+        if ($remotes -eq "origin") {
+            Invoke-Git $paths.proof @("remote", "remove", "origin") | Out-Null
+        } elseif ($remotes.Length -ne 0) {
+            throw "The resumable proof checkout contained an unexpected remote."
         }
-        $repository = [guid]::NewGuid().ToString().ToLowerInvariant()
-        $feature = [guid]::NewGuid().ToString().ToLowerInvariant()
-        $cloneErrorActionPreference = $ErrorActionPreference
-        try {
-            # Windows PowerShell 5 surfaces a native process's stderr as
-            # ErrorRecord values. Git writes normal clone progress there, so
-            # capture it and make the native exit code the sole verdict.
-            $ErrorActionPreference = "Continue"
-            $cloneOutput = @(& git clone --no-local --single-branch --branch main $paths.source $paths.proof 2>&1)
-            $cloneExitCode = $LASTEXITCODE
-        } finally {
-            $ErrorActionPreference = $cloneErrorActionPreference
-        }
-        if ($cloneExitCode -ne 0) { throw "Git could not create the standalone disposable checkout." }
-        Assert-NoReparseComponents $paths.proof $false
-        Invoke-Git $paths.proof @("remote", "remove", "origin") | Out-Null
         Remove-BoundedCommitGraphCache $paths.proof
         Assert-SnapshotCompatibleObjectStore $paths.proof
-        $marker = [ordered]@{
-            schema_version = 1
-            status = "local_coding_disposable_checkout"
-            source_repository = $paths.source
-            proof_repository = $paths.proof
-            repository_id = $repository
-            feature_id = $feature
-            head_commit = $main
-        }
-        $markerPath = Join-Path $paths.proof ".git\assemblywright-local-coding-live-proof"
-        [IO.File]::WriteAllText(
-            $markerPath,
-            ($marker | ConvertTo-Json -Compress),
-            [Text.UTF8Encoding]::new($false)
-        )
         Assert-ProofRepositoryClean $paths.proof $paths.source $repository $feature $main
+
+        $visibleFeatures = @($status.features)
+        $enqueueAlreadyCommitted = $false
+        if ($status.visible_feature_count -eq 0 -and $visibleFeatures.Count -eq 0) {
+            if (
+                [UInt64]$status.queue_revision -ne $prepareQueueRevision -or
+                $status.owner_guidance.reason_code -ne "queue_empty"
+            ) {
+                throw "The resumable empty queue drifted from its preparation baseline."
+            }
+        } elseif (
+            $status.visible_feature_count -eq 1 -and $visibleFeatures.Count -eq 1 -and
+            $status.features_truncated -eq $false -and
+            $visibleFeatures[0].feature_id -eq $feature -and
+            [UInt64]$visibleFeatures[0].specification_revision -eq 1 -and
+            [UInt64]$visibleFeatures[0].lifecycle_revision -eq 1 -and
+            $visibleFeatures[0].status -eq "queued" -and
+            $visibleFeatures[0].lease_present -eq $false -and
+            $visibleFeatures[0].effect_possible -eq $false -and
+            [UInt64]$status.queue_revision -eq ($prepareQueueRevision + 1)
+        ) {
+            $enqueueAlreadyCommitted = $true
+        } else {
+            throw "Prepare found state other than its empty baseline or one exact committed enqueue."
+        }
 
         $scope = [ordered]@{
             expected_base_branch = "main"
@@ -626,6 +784,13 @@ switch ($Action) {
             autonomous_publication = 1
         }
         $grantKinds = @("registration", "cloud_disclosure", "autonomous_publication")
+        $grantSet = Invoke-ExactGet -Path "/v1/feature-conveyor/repositories/$repository/grants"
+        if (
+            $grantSet.repository_id -ne $repository -or $grantSet.emergency_paused -ne $false -or
+            [UInt64]$grantSet.emergency_pause_revision -ne $preparePauseRevision
+        ) {
+            throw "The resumable repository-grant authority drifted."
+        }
         foreach ($kind in $grantKinds) {
             $grantScope = if ($kind -eq "registration") {
                 $scopeDigest
@@ -633,23 +798,40 @@ switch ($Action) {
                 @(Get-Sha256Bytes "assemblywright.local-coding-live.$kind.scope.v1`0$repository")
             }
             $approval = @(Get-Sha256Bytes "assemblywright.local-coding-live.$kind.owner-approval.v1`0$repository")
-            $request = [ordered]@{
-                schema_version = $ownerControlSchemaVersion
-                expected_current_revision = 0
-                expected_emergency_pause_revision = [UInt64]$status.owner_guidance.emergency_pause_revision
-                grant = [ordered]@{
-                    repository_id = $repository
-                    kind = $kind
-                    revision = 1
-                    scope_sha256 = $grantScope
-                    owner_approval_sha256 = $approval
-                    expires_at_ms = $null
-                    revoked = $false
+            $currentGrant = $grantSet.$kind
+            if ($null -eq $currentGrant) {
+                if ($enqueueAlreadyCommitted) {
+                    throw "The committed enqueue lost its exact $kind grant."
                 }
-            }
-            $recorded = Invoke-ExactPost -Path "/v1/feature-conveyor/repository-grants" -Body $request
-            if ($recorded.status -ne "recorded" -or [UInt64]$recorded.revision -ne 1) {
-                throw "The Windows master did not record the exact $kind grant."
+                $request = [ordered]@{
+                    schema_version = $ownerControlSchemaVersion
+                    expected_current_revision = 0
+                    expected_emergency_pause_revision = $preparePauseRevision
+                    grant = [ordered]@{
+                        repository_id = $repository
+                        kind = $kind
+                        revision = 1
+                        scope_sha256 = $grantScope
+                        owner_approval_sha256 = $approval
+                        expires_at_ms = $null
+                        revoked = $false
+                    }
+                }
+                $recorded = Invoke-ExactPost -Path "/v1/feature-conveyor/repository-grants" -Body $request
+                if (
+                    $recorded.status -ne "recorded" -or [UInt64]$recorded.revision -ne 1 -or
+                    (Convert-BytesToHex $recorded.scope_sha256) -cne (Convert-BytesToHex $grantScope) -or
+                    (Convert-BytesToHex $recorded.owner_approval_sha256) -cne (Convert-BytesToHex $approval)
+                ) {
+                    throw "The Windows master did not record the exact $kind grant."
+                }
+            } elseif (
+                [UInt64]$currentGrant.revision -ne 1 -or $currentGrant.revoked -ne $false -or
+                $currentGrant.active -ne $true -or $null -ne $currentGrant.expires_at_ms -or
+                (Convert-BytesToHex $currentGrant.scope_sha256) -cne (Convert-BytesToHex $grantScope) -or
+                (Convert-BytesToHex $currentGrant.owner_approval_sha256) -cne (Convert-BytesToHex $approval)
+            ) {
+                throw "Prepare found a non-resumable $kind grant revision."
             }
         }
         $preflightRequest = [ordered]@{
@@ -657,7 +839,7 @@ switch ($Action) {
             scope = $scope
             scope_sha256 = $scopeDigest
             registration_grant_revision = 1
-            expected_emergency_pause_revision = [UInt64]$status.owner_guidance.emergency_pause_revision
+            expected_emergency_pause_revision = $preparePauseRevision
         }
         $preflight = Invoke-ExactPost -Path "/v1/feature-conveyor/repository-preflight" -Body $preflightRequest
         Assert-Digest $preflight.preflight_fingerprint_sha256 "Repository preflight fingerprint"
@@ -669,16 +851,16 @@ switch ($Action) {
             throw "The repository preflight receipt drifted."
         }
         $manifest = [ordered]@{
-            acceptance_criteria = @("execute the exact bounded README.md file.write.v1 packet, admit its canonical artifact, and retain one sealed attempt plus recovery record until resolution")
-            feature_kind = "contained_coding_live_proof"
+            acceptance = @("restricted-worker-live-attempt")
+            allowed_paths = @("README.md")
             outcome = "prove one owner-approved snapshot-bound local-coding attempt"
         }
         $manifestJson = $manifest | ConvertTo-Json -Compress
         $approvedRequest = [ordered]@{
             schema_version = $ownerControlSchemaVersion
-            expected_queue_revision = [UInt64]$status.queue_revision
+            expected_queue_revision = $prepareQueueRevision
             owner_control_designation_revision = $OwnerControlDesignationRevision
-            emergency_pause_revision = [UInt64]$status.owner_guidance.emergency_pause_revision
+            emergency_pause_revision = $preparePauseRevision
             specification = [ordered]@{
                 feature_id = $feature
                 revision = 1
@@ -702,8 +884,10 @@ switch ($Action) {
             feature_id = $feature
             head_commit = $main
             scope_sha256 = Convert-BytesToHex $scopeDigest
-            queue_revision = [UInt64]$status.queue_revision
-            emergency_pause_revision = [UInt64]$status.owner_guidance.emergency_pause_revision
+            queue_revision = $prepareQueueRevision
+            enqueue_queue_revision = if ($enqueueAlreadyCommitted) { [UInt64]$status.queue_revision } else { $null }
+            enqueue_already_committed = $enqueueAlreadyCommitted
+            emergency_pause_revision = $preparePauseRevision
             owner_control_designation_revision = $OwnerControlDesignationRevision
             preflight_fingerprint_sha256 = Convert-BytesToHex $preflight.preflight_fingerprint_sha256
             approved_request_sha256 = Convert-BytesToHex (Get-Sha256Bytes $approvedJson)

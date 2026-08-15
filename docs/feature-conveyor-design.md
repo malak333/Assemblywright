@@ -571,6 +571,48 @@ assume-unchanged, skip-worktree, or other index state is ineligible. Pre/post
 stability catches same-UID mutation of other gate-consumed files at the
 controller edges, not through a claimed host sandbox.
 
+Feature 2 supplies the separate owner-supervised restricted-worker live proof
+controller at `scripts/restricted-worker-proof-controller.sh`. Its public
+`--run` accepts no repository, remote, worker, executable, packet, or alternate
+harness. The controller requires exact clean `main` at
+`refs/remotes/origin/main`, then executes only the committed Mac live-harness
+blob through Bash stdin. Sanitized Windows-local control receipts use a
+separate inherited descriptor, preventing coordination input from becoming
+executable script content. The fixed harness requires the signed Swift relay,
+the separate singleton `local.coding.v1` identity, and the real Rust agent. It
+binds one protocol-v5 packet to the schema-v19 Windows master, observes exact
+queued/leased/succeeded events, validates the admitted artifact and detached
+remote-free candidate, checks retained Mac state, and ends only after explicit
+cancel, safe abandon, grant revocation, disposable-checkout removal, and empty
+active/transfer state. The controller accepts one exact bounded terminal record,
+after exactly six unique ordered action markers. It hashes and removes the
+complete private transcript, rechecks stable repository/controller state, and writes
+only a fixed owner-private path-free receipt plus digest under
+`target/restricted-worker-live-proof`. The receipt binds
+`restricted_worker_live` to `restricted_worker_proof_controller`, exact
+HEAD/tree, both committed control-definition digests, the private transcript
+digest, fixed identity, observed time, and its narrow boundary. It neither
+admits that digest nor activates. Same-owner process and live-device proof does
+not establish a portable host sandbox, OS-wide egress denial, review-provider,
+GitHub-publication, restart-recovery, control-streaming, signing distribution,
+notarization, clean-profile, or production-readiness evidence. Protocol v5 and
+schema v19 do not change.
+
+Prepare is resumable without adding master authority. The Windows disposable
+checkout marker is byte-validated and published by same-directory atomic rename
+before grants, durably binding the generated repository/feature IDs and exact
+queue, Emergency Pause, owner-designation, source, and commit baseline before
+grant creation. A retry reconstructs the identical approved request and creates
+only missing exact revision-1 grants; exact existing grants must match every
+digest and state field. If the helper enqueue committed but its receipt was
+lost, retry accepts only one exact queued lifecycle-revision-1 feature matching
+the marker and baseline-plus-one queue revision, then continues without issuing
+a duplicate enqueue. Any other partial or drifted state fails closed and remains
+available to the existing explicit Cleanup action. The narrow pre-marker crash
+window is recoverable only by deleting an exact clean, normal-index clone whose
+exact remote-name set is `{origin}` and whose sole origin URL still equals the
+fixed source while the queue remains empty.
+
 The concrete authority endpoints are loopback-only
 `POST /v1/feature-conveyor/activation-evidence` and exporter-bound designated-
 bridge `GET /v1/distributed/feature-conveyor/owner-control`, plus remote POSTs

@@ -117,6 +117,67 @@ The self-test exercises the default, unknown, and extra-argument CLI shapes and
 proves that a rejected rerun removes the prior fixed receipt pair instead of
 leaving stale evidence that appears current.
 
+## Restricted-worker Live Proof Controller
+
+Static prerequisites and the requirements-derived disposable Git/process suite
+run inside the canonical local gate:
+
+```sh
+./scripts/restricted-worker-proof-controller.sh --check
+./scripts/restricted-worker-proof-controller.sh --self-test
+```
+
+After this feature is committed to clean published `main`, the Windows checkout
+is fast-forwarded to the same commit, schema-v19 service health is confirmed,
+and the signed Mac helper remains current, set the exact current owner-control
+designation revision and start the owner-supervised proof:
+
+```sh
+ASSEMBLYWRIGHT_FEATURE_CONVEYOR_OWNER_CONTROL_DESIGNATION_REVISION=<revision> \
+  ./scripts/restricted-worker-proof-controller.sh --run
+```
+
+The command prints only fixed Windows-local actions. Run each against the
+already-authenticated Windows session with the exact committed
+`scripts/windows-local-coding-live-control.ps1`, then paste its single sanitized
+JSON receipt into the controller. Coordination receipts are read on a separate
+descriptor from the committed Mac harness bytes. A complete pass atomically
+writes `target/restricted-worker-live-proof/restricted-worker-live-proof.json`
+and its raw SHA-256 sidecar. The receipt is path-free and binds the exact
+published HEAD/tree, the committed Mac and Windows controller definitions, and
+the digest of the complete validated private live transcript. The transcript itself is
+removed. `--run` does not admit the receipt or activate the conveyor.
+
+If Prepare is interrupted after creating the disposable marker or any subset of
+the three grants, rerun the same controller and repeat the emitted Prepare
+action. The marker is flushed, byte-validated, and atomically renamed into place
+before grants. Windows resumes only the marker-bound exact state and reconstructs the
+same approved request. If the signed-helper enqueue committed but its receipt
+was lost, that rerun recognizes only the sole exact queued revision-1 feature
+at the marker baseline plus one and skips a duplicate enqueue. Any other state
+fails closed; use the explicit Cleanup action only after the queue is empty.
+An interrupted clone before marker creation is removed on retry only if it is
+an exact clean normal-index clone of the fixed source with that source as its
+sole origin and the queue is still empty.
+
+The self-test covers the fixed CLI, committed-byte/receipt-descriptor split,
+strict terminal record and revision/digest validation, dirty/wrong-branch/
+origin/status drift, hidden-index rejection, environment isolation,
+stale-receipt invalidation, malformed or duplicate
+success/action markers, complete-transcript digest sensitivity, process failure,
+cancellation and descendant reaping, hostile/swap/
+writable target rejection, atomic publication failure, permissions, redaction,
+and failure-without-output. The functional native two-device proof still runs
+the signed Swift relay, real Rust agent, Keychain `local-coding` identity, mTLS,
+Windows owner-loopback actions, SQLite-backed queue/artifact/candidate state,
+and cleanup. Playwright, screenshots, visual regression, and cross-browser
+testing do not apply to this native boundary.
+
+This receipt proves only the restricted-worker category. It is not evidence of
+a host sandbox or OS-wide egress control, review-provider quality, GitHub
+publication, restart recovery, Mac/Windows owner-control streaming, signing
+distribution, notarization, clean-profile install, or production readiness.
+
 ## Windows Distributed Gate
 
 The schema-v9 snapshot-claim, schema-v10 coding-dispatch, schema-v11 owner-resolution,

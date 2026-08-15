@@ -146,6 +146,48 @@ deadline fails proof. HUP, INT, or TERM propagates to the
 complete group, escalates boundedly to KILL, reaps the controller-owned leader,
 and suppresses the receipt if any child survives or the gate fails.
 
+The second proof-controller slice is the owner-supervised Mac/Windows
+restricted-worker controller. Its `--run` mode accepts no repository, remote,
+worker, executable, work packet, or alternate harness. It requires the
+controller's exact clean `main` at `refs/remotes/origin/main`, executes only the
+committed `scripts/mac-windows-bridge-live-e2e.sh` bytes through Bash stdin, and
+uses a separate inherited descriptor for the sanitized Windows-local receipts
+so live coordination cannot replace the committed script. The fixed harness
+uses the independently signed Swift relay, the separately enrolled singleton
+`local.coding.v1` `InferenceWorker`, and the real Rust agent against the
+schema-v19 Windows master. One protocol-v5 bounded packet is snapshot-bound,
+leased, executed in private Mac state, independently artifact-validated on
+Windows, integrated into a detached remote-free candidate, observed as one
+retained workspace/record pair, then explicitly cancelled, safely abandoned,
+and cleaned with the queue, lease, distributed active state, transfer staging,
+temporary grants, and disposable checkout empty or terminal. Only one exact,
+ordered set of six action markers followed by one bounded success record is
+accepted. The complete private transcript is hashed and deleted; late duplicate,
+extra, or reordered action markers reject. Before enqueue, the Windows control
+writes, flushes, validates, and same-directory atomically renames an owner-private
+marker containing the random repository/feature IDs and
+exact queue, pause, designation, source, and commit baseline. A repeated Prepare
+resumes only missing exact revision-1 grants and reconstructs the identical
+approved request. If enqueue committed but its helper receipt was lost, the
+marker plus the sole exact queued lifecycle-revision-1 feature recovers the
+committed queue revision without a second enqueue. All other queue, authority,
+grant, repository, or lifecycle state fails closed. The controller then rechecks
+the branch, HEAD, tree, status, origin, and both
+committed live-control definitions, and atomically publishes only a path-free
+schema-v1 receipt plus raw digest under the fixed ignored
+`target/restricted-worker-live-proof` directory. Its receipt binds category
+`restricted_worker_live`, origin `restricted_worker_proof_controller`, the
+exact commit/tree, both controller-definition digests, the transcript digest,
+fixed proof identity, observed time, pass status, and a narrow claim boundary.
+Failure, drift, malformed or duplicate success, a surviving descendant, and
+handled cancellation leave no receipt. A rerun invalidates the prior fixed
+pair only after the ordinary owner-matched output chain is validated. This is
+same-owner functional live proof, not a portable host sandbox or OS-wide egress
+claim, and it never admits evidence, activates, or proves review provider,
+GitHub publication, restart recovery, Mac/Windows control streaming, signing
+distribution, notarization, clean-profile installation, or production readiness.
+Protocol v5 and schema v19 are unchanged.
+
 The designated bridge may explicitly owner-pause or resume only an exact
 active, effect-free orchestration checkpoint using lifecycle, orchestration,
 queue, designation, and Emergency Pause revisions. Owner pause stops the active

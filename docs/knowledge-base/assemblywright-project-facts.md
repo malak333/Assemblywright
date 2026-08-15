@@ -1210,6 +1210,50 @@ an old one.
   that success path performs a bounded natural drain before deciding the group
   survived. A member still present at that deadline is terminated, reaped, and
   makes the proof attempt fail.
+- Feature 2 adds `scripts/restricted-worker-proof-controller.sh` as a separate
+  owner-supervised live-proof wrapper around the existing real Mac/Windows local-
+  coding boundary. It accepts no repository, remote, worker, executable, work
+  packet, or alternate harness; requires exact clean published `main`; runs only
+  the committed `mac-windows-bridge-live-e2e.sh` blob through Bash stdin; and
+  reads the sanitized Windows-local phase receipts from a different inherited
+  descriptor. Caller helper, agent, Tailscale, Git, and internal-marker
+  overrides are cleared. The live lane uses the signed Swift helper, separate
+  singleton `local.coding.v1` Keychain identity, real Rust agent, protocol v5,
+  schema-v19 master, and schema-v9 conveyor projection. One bounded worker
+  attempt must reach strictly ordered queued/leased/succeeded events, Windows
+  artifact admission and candidate verification, private Mac retained-pair
+  observation, explicit cancellation, safe abandonment, grant revocation, and
+  complete disposable state cleanup. Exactly six unique ordered Windows-action
+  markers followed by one exact terminal record are accepted. The complete
+  owner-private temporary transcript is hashed and removed. The fixed `0600` receipt pair under ignored
+  `target/restricted-worker-live-proof` contains only category
+  `restricted_worker_live`, origin `restricted_worker_proof_controller`, exact
+  commit/tree, committed Mac/Windows controller digests, transcript digest,
+  fixed proof identity, observed time, pass status, and the narrow boundary.
+  New runs invalidate the prior pair only after validating the ordinary owner-
+  matched output chain; failure, drift, malformed/duplicate success, surviving
+  descendants, or handled cancellation leaves no receipt. The controller does
+  not admit evidence or activate, and this same-owner live proof is not a host-
+  sandbox, OS-wide egress, review-provider, GitHub, restart-recovery, control-
+  streaming, signing/notarization, clean-profile, or production-readiness claim.
+- Feature 2 Prepare recovery is marker-bound rather than a second enqueue API.
+  The Windows disposable marker is flushed, byte-validated, and atomically
+  renamed into place before grants; it persists the generated repository/feature IDs
+  and queue, Emergency Pause, owner-designation, source, and commit baseline.
+  Retry creates only missing exact revision-1 grants and reconstructs the same
+  approved request. A lost signed-helper enqueue receipt is recoverable only
+  when the status surface contains the sole exact queued lifecycle-revision-1
+  feature and baseline-plus-one queue revision; any other state fails closed.
+- An owner-supervised shell controller must not leave its background live
+  process reading the shared interactive TTY: job control can stop it with
+  `SIGTTIN`. Feature 2 keeps the controller in the foreground for bounded owner
+  input, relays each sanitized receipt through a private FIFO to descriptor 3,
+  and keeps the committed Bash-stdin script bytes on a separate channel.
+- Shell parameter expansion such as `${token#feature_id=}` returns the original
+  token when the prefix is absent; it is extraction, not label validation.
+  Exact live-proof records therefore match each complete `name=value` token
+  before validating or extracting its UUID/digest, with missing-label and
+  wrong-label negative fixtures.
 - The 2026-08-14 Feature 1 Repository-gate Proof Controller implementation is
   published at exact commit `eb4cc0e9933601f9e141523dba4fa24772ffef75`.
   Independent high-risk review approved the final fail-closed design after its

@@ -1,7 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+INTERNAL_RESTRICTED_WORKER_MARKER="${ASSEMBLYWRIGHT_RESTRICTED_WORKER_INTERNAL_STDIN_V1:-}"
+INTERNAL_RESTRICTED_WORKER_ROOT="${ASSEMBLYWRIGHT_RESTRICTED_WORKER_INTERNAL_ROOT:-}"
+INTERNAL_RESTRICTED_WORKER_RECEIPT_FD="${ASSEMBLYWRIGHT_RESTRICTED_WORKER_RECEIPT_FD:-}"
+unset ASSEMBLYWRIGHT_RESTRICTED_WORKER_INTERNAL_STDIN_V1
+unset ASSEMBLYWRIGHT_RESTRICTED_WORKER_INTERNAL_ROOT
+unset ASSEMBLYWRIGHT_RESTRICTED_WORKER_RECEIPT_FD
+
+if [[ "$INTERNAL_RESTRICTED_WORKER_MARKER" == "assemblywright.restricted-worker-live-proof.v1" ]]; then
+  [[ -z "${BASH_SOURCE[0]-}" && "$0" == "bash" && "$#" -eq 1 \
+    && "${1:-}" == "--run-local-coding" \
+    && "$INTERNAL_RESTRICTED_WORKER_RECEIPT_FD" == "3" ]] \
+    || { printf 'error: restricted-worker internal mode requires the fixed live mode and receipt descriptor\n' >&2; exit 1; }
+  [[ "$INTERNAL_RESTRICTED_WORKER_ROOT" == /* \
+    && -d "$INTERNAL_RESTRICTED_WORKER_ROOT" \
+    && ! -L "$INTERNAL_RESTRICTED_WORKER_ROOT" ]] \
+    || { printf 'error: restricted-worker internal root is invalid\n' >&2; exit 1; }
+  ROOT_DIR="$(cd "$INTERNAL_RESTRICTED_WORKER_ROOT" && pwd -P)"
+  [[ "$ROOT_DIR" == "$INTERNAL_RESTRICTED_WORKER_ROOT" ]] \
+    || { printf 'error: restricted-worker internal root is ambiguous\n' >&2; exit 1; }
+  RECEIPT_INPUT_FD=3
+else
+  ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+  RECEIPT_INPUT_FD=0
+fi
+unset INTERNAL_RESTRICTED_WORKER_MARKER
+unset INTERNAL_RESTRICTED_WORKER_ROOT
+unset INTERNAL_RESTRICTED_WORKER_RECEIPT_FD
 MODE="${1:---run}"
 PACKAGE_PATH="$ROOT_DIR/apps/mac"
 PRODUCT="assemblywright-mac-bridge"
@@ -206,6 +232,9 @@ assert_feature_conveyor_sample "$monitor_first" "first bridge monitor sample"
 assert_feature_conveyor_sample "$monitor_second" "second bridge monitor sample"
 assert_owner_control_sample "$monitor_first" "first bridge monitor sample"
 assert_owner_control_sample "$monitor_second" "second bridge monitor sample"
+observed_owner_designation_revision="$(
+  json_value "$monitor_second" owner_control.owner_control_designation_revision
+)"
 for forbidden in grant_secret certificate_pem ca_certificate_pem maintenance_reason boundary service_identity repository_id provider_id model_id owner_token; do
   [[ "$monitor_json" != *"$forbidden"* ]] \
     || fail "live monitor exposed forbidden field: $forbidden"
@@ -379,8 +408,10 @@ if [[ "$MODE" == "--run-local-coding" ]]; then
     && "$local_coding_endpoint" == "$standard_master_endpoint" ]] \
     || fail "the local-coding identity was not isolated and endpoint-bound"
   owner_designation_revision="${ASSEMBLYWRIGHT_FEATURE_CONVEYOR_OWNER_CONTROL_DESIGNATION_REVISION:-}"
-  [[ "$owner_designation_revision" =~ ^[0-9]+$ && "$owner_designation_revision" -gt 0 ]] \
-    || fail "set ASSEMBLYWRIGHT_FEATURE_CONVEYOR_OWNER_CONTROL_DESIGNATION_REVISION to the exact current revision"
+  [[ "$owner_designation_revision" =~ ^[0-9]+$ \
+    && "$owner_designation_revision" -gt 0 \
+    && "$owner_designation_revision" == "$observed_owner_designation_revision" ]] \
+    || fail "set ASSEMBLYWRIGHT_FEATURE_CONVEYOR_OWNER_CONTROL_DESIGNATION_REVISION to the exact observed current revision"
 
   local_coding_coordination_directory="$relay_directory/local-coding-coordination"
   mkdir "$local_coding_coordination_directory"
@@ -411,7 +442,7 @@ if [[ "$MODE" == "--run-local-coding" ]]; then
     local filename="$1"
     local label="$2"
     local receipt=""
-    if ! IFS= read -r -t 600 receipt; then
+    if ! IFS= read -r -t 600 -u "$RECEIPT_INPUT_FD" receipt; then
       fail "timed out waiting for the sanitized $label receipt on stdin"
     fi
     [[ -n "$receipt" && "${#receipt}" -le 8192 ]] \
@@ -436,6 +467,7 @@ if [[ "$MODE" == "--run-local-coding" ]]; then
   local_coding_feature_id="$(json_value "$prepare_receipt" feature_id)"
   local_coding_head_commit="$(json_value "$prepare_receipt" head_commit)"
   local_coding_prepare_queue_revision="$(json_value "$prepare_receipt" queue_revision)"
+  local_coding_enqueue_already_committed="$(json_value "$prepare_receipt" enqueue_already_committed)"
   local_coding_pause_revision="$(json_value "$prepare_receipt" emergency_pause_revision)"
   local_coding_approved_request_sha="$(json_value "$prepare_receipt" approved_request_sha256)"
   local_coding_approved_request_base64="$(json_value "$prepare_receipt" approved_request_base64)"
@@ -443,6 +475,7 @@ if [[ "$MODE" == "--run-local-coding" ]]; then
     && "$local_coding_feature_id" =~ ^[0-9a-fA-F-]{36}$ \
     && "$local_coding_head_commit" =~ ^[0-9a-f]{40}$ \
     && "$local_coding_prepare_queue_revision" =~ ^[0-9]+$ \
+    && "$local_coding_enqueue_already_committed" =~ ^(true|false)$ \
     && "$local_coding_pause_revision" =~ ^[0-9]+$ \
     && "$local_coding_approved_request_sha" =~ ^[0-9a-f]{64}$ \
     && "${#local_coding_approved_request_base64}" -le 6144 ]] \
@@ -452,20 +485,27 @@ if [[ "$MODE" == "--run-local-coding" ]]; then
   computed_approved_request_sha="$(printf '%s' "$local_coding_approved_request" | shasum -a 256 | awk '{print $1}')"
   [[ "$computed_approved_request_sha" == "$local_coding_approved_request_sha" ]] \
     || fail "the approved local-coding request digest drifted"
-  enqueue_receipt="$(printf '%s' "$local_coding_approved_request" \
-    | "$BRIDGE_BIN" feature-conveyor approve-and-enqueue --confirm)"
-  enqueue_receipt_feature_id="$(
-    json_value "$enqueue_receipt" feature_id | tr '[:upper:]' '[:lower:]'
-  )"
-  [[ "$(json_value "$enqueue_receipt" status)" == "queued" \
-    && "$enqueue_receipt_feature_id" == "$local_coding_feature_id" \
-    && "$(json_value "$enqueue_receipt" specification_revision)" == "1" \
-    && "$(json_value "$enqueue_receipt" lifecycle_revision)" == "1" \
-    && "$(json_value "$enqueue_receipt" queue_revision)" -eq $((local_coding_prepare_queue_revision + 1)) \
-    && "$(json_value "$enqueue_receipt" owner_control_designation_revision)" == "$owner_designation_revision" \
-    && "$(json_value "$enqueue_receipt" emergency_pause_revision)" == "$local_coding_pause_revision" ]] \
-    || fail "the signed-helper enqueue receipt drifted"
-  local_coding_enqueue_queue_revision="$(json_value "$enqueue_receipt" queue_revision)"
+  if [[ "$local_coding_enqueue_already_committed" == "true" ]]; then
+    local_coding_enqueue_queue_revision="$(json_value "$prepare_receipt" enqueue_queue_revision)"
+    [[ "$local_coding_enqueue_queue_revision" =~ ^[0-9]+$ \
+      && "$local_coding_enqueue_queue_revision" -eq $((local_coding_prepare_queue_revision + 1)) ]] \
+      || fail "the recovered enqueue revision drifted from the marker-bound request"
+  else
+    enqueue_receipt="$(printf '%s' "$local_coding_approved_request" \
+      | "$BRIDGE_BIN" feature-conveyor approve-and-enqueue --confirm)"
+    enqueue_receipt_feature_id="$(
+      json_value "$enqueue_receipt" feature_id | tr '[:upper:]' '[:lower:]'
+    )"
+    [[ "$(json_value "$enqueue_receipt" status)" == "queued" \
+      && "$enqueue_receipt_feature_id" == "$local_coding_feature_id" \
+      && "$(json_value "$enqueue_receipt" specification_revision)" == "1" \
+      && "$(json_value "$enqueue_receipt" lifecycle_revision)" == "1" \
+      && "$(json_value "$enqueue_receipt" queue_revision)" -eq $((local_coding_prepare_queue_revision + 1)) \
+      && "$(json_value "$enqueue_receipt" owner_control_designation_revision)" == "$owner_designation_revision" \
+      && "$(json_value "$enqueue_receipt" emergency_pause_revision)" == "$local_coding_pause_revision" ]] \
+      || fail "the signed-helper enqueue receipt drifted"
+    local_coding_enqueue_queue_revision="$(json_value "$enqueue_receipt" queue_revision)"
+  fi
 
   local_coding_startup="$(printf \
     '{"agent_data_dir":"%s","agent_executable_path":"%s","fixture_jobs_enabled":false,"local_coding_snapshots_enabled":true,"mlx_executable_path":null,"mlx_jobs_enabled":false,"mlx_model_dir":null,"mlx_model_id":null,"version":4}' \
@@ -649,8 +689,8 @@ if [[ "$MODE" == "--run-local-coding" ]]; then
     && "$(json_value "$local_coding_status_after" device_id)" == "$local_coding_device_id" \
     && "$(json_value "$local_coding_status_after" registry_revision)" == "$local_coding_registry_revision" ]] \
     || fail "the live proof changed the separate local-coding identity"
-  printf 'assemblywright_mac_windows_local_coding_live_e2e_ok endpoint=%s feature_id=%s task_id=%s step_id=%s queued_sequence=%s leased_sequence=%s succeeded_sequence=%s snapshot_sha256=%s work_packet_sha256=%s integration_id=%s candidate_commit=%s candidate_tree=%s artifact_set_sha256=%s separate_identity=verified signed_swift_relay=verified real_rust_agent=verified mac_retained_attempt_pair_shape=verified harness_owned_pair_cleanup=verified artifact_integration=verified detached_candidate=verified candidate_remote_absent=verified candidate_fsck_clean=verified exact_integration_retry=verified source_checkout_clean=verified owner_cancel=verified owner_abandon=verified queue_empty=verified feature_lease_empty=verified distributed_active_state_empty=verified windows_transfer_staging_empty=verified grants_revoked=verified disposable_checkout_removed=verified\n' \
-    "$local_coding_endpoint" "$local_coding_feature_id" "$local_coding_task_id" \
+  printf 'assemblywright_mac_windows_local_coding_live_e2e_ok endpoint=%s head_commit=%s protocol_version=5 master_schema_version=19 feature_conveyor_schema_version=9 feature_id=%s task_id=%s step_id=%s queued_sequence=%s leased_sequence=%s succeeded_sequence=%s snapshot_sha256=%s work_packet_sha256=%s integration_id=%s candidate_commit=%s candidate_tree=%s artifact_set_sha256=%s separate_identity=verified signed_swift_relay=verified real_rust_agent=verified mac_retained_attempt_pair_shape=verified harness_owned_pair_cleanup=verified artifact_integration=verified detached_candidate=verified candidate_remote_absent=verified candidate_fsck_clean=verified exact_integration_retry=verified source_checkout_clean=verified owner_cancel=verified owner_abandon=verified queue_empty=verified feature_lease_empty=verified distributed_active_state_empty=verified windows_transfer_staging_empty=verified grants_revoked=verified disposable_checkout_removed=verified\n' \
+    "$local_coding_endpoint" "$local_coding_head_commit" "$local_coding_feature_id" "$local_coding_task_id" \
     "$local_coding_step_id" "$local_coding_queued_sequence" "$local_coding_leased_sequence" \
     "$local_coding_succeeded_sequence" "$local_coding_snapshot_sha" "$local_coding_packet_sha" \
     "$local_coding_integration_id" "$local_coding_candidate_commit" \

@@ -77,6 +77,7 @@ MAC_APP_TESTS="apps/mac/Tests/AssemblywrightMacAppTests/AssemblywrightMacAppTest
 MAC_BRIDGE_LIVE_E2E="scripts/mac-windows-bridge-live-e2e.sh"
 MAC_LOCAL_CODING_SNAPSHOT_E2E="scripts/mac-local-coding-snapshot-e2e.sh"
 REPOSITORY_GATE_PROOF_CONTROLLER="scripts/repository-gate-proof-controller.sh"
+RESTRICTED_WORKER_PROOF_CONTROLLER="scripts/restricted-worker-proof-controller.sh"
 WINDOWS_FIXTURE_LIVE_CONTROL="scripts/windows-fixture-live-control.ps1"
 WINDOWS_MLX_LIVE_CONTROL="scripts/windows-mlx-live-control.ps1"
 WINDOWS_LOCAL_CODING_LIVE_CONTROL="scripts/windows-local-coding-live-control.ps1"
@@ -139,7 +140,7 @@ for file in \
   "$MAC_BRIDGE_SUPERVISOR" "$MAC_OWNER_CONTROL" "$MAC_BRIDGE_PROCESS" "$MAC_EVENT_RELAY" \
   "$MAC_APP" "$MAC_BRIDGE_TESTS" "$MAC_APP_TESTS" \
   "$MAC_BRIDGE_LIVE_E2E" "$MAC_LOCAL_CODING_SNAPSHOT_E2E" \
-  "$REPOSITORY_GATE_PROOF_CONTROLLER" \
+  "$REPOSITORY_GATE_PROOF_CONTROLLER" "$RESTRICTED_WORKER_PROOF_CONTROLLER" \
   "$WINDOWS_FIXTURE_LIVE_CONTROL" \
   "$WINDOWS_MLX_LIVE_CONTROL" "$WINDOWS_LOCAL_CODING_LIVE_CONTROL" \
   "$WINDOWS_LOCAL_CODING_LIVE_CONTROL_SELF_CHECK" "$WINDOWS_PROTOCOL_WORKFLOW" \
@@ -643,6 +644,34 @@ require_text "local gate repository-gate controller self-test" "$LOCAL_GATE" \
   "./scripts/repository-gate-proof-controller.sh --self-test"
 forbid_text "local gate repository-gate controller recursion" "$LOCAL_GATE" \
   "./scripts/repository-gate-proof-controller.sh --run"
+require_text "build docs restricted-worker proof controller" "$BUILD_DOCS" \
+  "./scripts/restricted-worker-proof-controller.sh --run"
+require_text "design restricted-worker controller boundary" "$DESIGN" \
+  "restricted_worker_proof_controller"
+require_text "safety restricted-worker controller fail-closed boundary" "$SAFETY_RULES" \
+  "descendant-surviving attempt must"
+require_text "conveyor design restricted-worker controller boundary" "$FEATURE_CONVEYOR_DESIGN" \
+  "Feature 2 supplies the separate owner-supervised restricted-worker"
+require_text "knowledge base restricted-worker controller" "$KB" \
+  'Feature 2 adds `scripts/restricted-worker-proof-controller.sh`'
+require_text "restricted-worker controller exact main" "$RESTRICTED_WORKER_PROOF_CONTROLLER" \
+  'refs/remotes/origin/main^{commit}'
+require_text "restricted-worker controller committed Mac harness" "$RESTRICTED_WORKER_PROOF_CONTROLLER" \
+  'git_safe "$root" show "$head:$MAC_HARNESS_PATH"'
+require_text "restricted-worker controller receipt descriptor" "$RESTRICTED_WORKER_PROOF_CONTROLLER" \
+  'ASSEMBLYWRIGHT_RESTRICTED_WORKER_RECEIPT_FD=3'
+require_text "restricted-worker controller Windows schema" "$RESTRICTED_WORKER_PROOF_CONTROLLER" \
+  'master_schema_version=19'
+require_text "restricted-worker controller process-group cancellation" "$RESTRICTED_WORKER_PROOF_CONTROLLER" \
+  'terminate_live_group'
+require_text "restricted-worker controller atomic receipt" "$RESTRICTED_WORKER_PROOF_CONTROLLER" \
+  'mv -f -- "$receipt_temp" "$RECEIPT_NAME"'
+require_text "local gate restricted-worker controller check" "$LOCAL_GATE" \
+  "./scripts/restricted-worker-proof-controller.sh --check"
+require_text "local gate restricted-worker controller self-test" "$LOCAL_GATE" \
+  "./scripts/restricted-worker-proof-controller.sh --self-test"
+forbid_text "local gate restricted-worker controller live recursion" "$LOCAL_GATE" \
+  "./scripts/restricted-worker-proof-controller.sh --run"
 require_text "build docs local-coding live closeout" "$BUILD_DOCS" \
   "./scripts/mac-windows-bridge-live-e2e.sh --run-local-coding"
 require_text "build docs result-artifact live boundary" "$BUILD_DOCS" \

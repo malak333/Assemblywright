@@ -109,6 +109,26 @@ Before starting a release pass, confirm the claim you intend to make.
   worker checkout, arbitrary coding/test execution, canonical-repository
   mutation, result integration, review provider, publication coordinator, Mac
   control UI, queue advancement, or autonomous activation.
+- For Feature 2 restricted-worker activation evidence, require the exact clean
+  published `main` controller with no repository/remote/worker/executable/packet
+  selector; committed Mac-harness stdin execution with a distinct sanitized-
+  receipt descriptor; the separately enrolled singleton `local.coding.v1`
+  identity; signed Swift relay; real Rust agent; protocol v5/schema v19; strict
+  queued/leased/succeeded order; exact snapshot, packet, artifact, and detached
+  remote-free candidate evidence; private retained-pair observation; explicit
+  cancel and safe abandon; and empty queue, lease, active distributed state,
+  transfer staging, temporary grants, and disposable checkout. Reject dirty or
+  hidden-index state, repository/controller drift, malformed or duplicate
+  terminal/action records, surviving descendants, unrecoverable partial
+  preparation, partial cleanup, or stale prior
+  output. The local path-free receipt must expose only fixed category/origin,
+  commit/tree, definition and private-transcript digests, proof identity, time,
+  pass status, and boundary. Do not admit it automatically or treat it as host-
+  sandbox, OS-wide-egress, provider, GitHub, restart, control-streaming,
+  signing/notarization, clean-profile, or production-readiness proof.
+  Confirm Prepare resumes only marker-bound missing exact revision-1 grants and
+  that a lost helper enqueue receipt can continue only from the one exact queued
+  lifecycle-revision-1 feature at baseline queue revision plus one.
 - Confirm protocol-v5/schema-v13 result-artifact admission uses only an exact
   immutable packet with sorted normalized relative paths and deterministic
   write/delete schemas; SHA-256 covers the complete packet and exact canonical

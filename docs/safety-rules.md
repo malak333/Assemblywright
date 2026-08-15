@@ -248,6 +248,41 @@ release requirements, not optional UX guidance.
   skip-worktree, or another hidden-state tag rejects before the gate. Pre/post
   clean and stable observations detect concurrent same-UID changes to other
   gate-consumed files at those edges; they are not host-level isolation.
+- The owner-supervised restricted-worker proof controller is separate from
+  activation-evidence admission and activation. `--run` accepts no repository,
+  remote, worker, executable, packet, or alternate harness. It requires exact
+  clean `main == refs/remotes/origin/main`, normal tracked-index state, and
+  stable branch, HEAD, tree, status, origin, and committed Mac/Windows live-
+  controller definitions. Only the exact committed Mac harness bytes may run
+  through Bash stdin; sanitized Windows-local receipts must arrive on a
+  distinct inherited descriptor and may not become script bytes. Caller
+  executable, agent, Tailscale, Git, and internal-marker overrides are cleared.
+  The live flow must use the separate exact singleton `local.coding.v1`
+  `InferenceWorker`, signed production Swift relay, real Rust agent, protocol
+  v5, schema-v19 master, and schema-v9 conveyor projection. It must prove one
+  strict queued/leased/succeeded event order, exact snapshot and packet
+  bindings, Windows-side artifact validation, detached clean remote-free
+  candidate integration with exact retry, private Mac retained-pair shape,
+  then explicit cancellation, safe abandonment, and complete bounded cleanup.
+  Prepare markers bind the generated IDs and exact queue/pause/designation/source
+  baseline before grants. Retry may resume only missing exact revision-1 grants,
+  or recognize one exact marker-bound queued lifecycle-revision-1 feature after
+  a lost enqueue receipt; all drift fails closed. Only six unique strictly
+  ordered action markers followed by one exact bounded success record are
+  eligible. The complete private transcript is hashed then removed; the
+  published schema-v1 receipt contains only the
+  category/origin, commit/tree, committed controller-definition digests,
+  transcript digest, fixed proof identity, observed time, pass status, and
+  narrow proof boundary. It must contain no endpoint, device, feature, task,
+  step, attempt, path, artifact, candidate, grant, or raw result. Output uses a
+  fixed ignored owner-only directory, two fixed `0600` files, held directory
+  identity, and digest-first/receipt-last atomic publication. Validate the
+  target/output chain before invalidating a prior pair. Any malformed,
+  duplicate, extra, reordered, failed, drifted, interrupted, or descendant-surviving attempt must
+  remove temporary/final output and boundedly TERM-to-KILL reap the complete
+  live process group. The controller never POSTs admission, activates, or
+  claims a host sandbox, OS-wide egress enforcement, provider, GitHub, restart,
+  control-streaming, notarization, clean-profile, or production-readiness proof.
 - Feature orchestration owner pause/resume is separate from Emergency Pause and
   is available only to the exact current designated non-fixture MacBridge after
   an accepted exporter-bound session. It compare-and-sets feature lifecycle,

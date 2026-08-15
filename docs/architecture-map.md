@@ -220,6 +220,13 @@ may pause/resume effect-free orchestration or submit exact cancel/abandon owner
 resolution. Emergency Pause remains separate and dominant; the Mac app holds
 neither the owner token nor evidence-admission authority and executes actions
 only through its independently signed helper.
+The Feature 2 restricted-worker proof controller remains outside that authority:
+it runs only the committed Mac live harness from exact clean published `main`,
+keeps the Windows-local sanitized receipt stream separate from executable
+bytes, validates one complete signed-Swift/real-Rust/schema-v19 worker flow and
+cleanup, resumes only exact marker-bound preparation/enqueue state after lost
+output, then emits only a path-free full-transcript-digest-bound local receipt. Admission and
+activation remain later Windows-authoritative owner actions.
 Replacement-candidate construction remains unavailable under the current
 artifact/dispatch contract, so substantive failures stop at owner attention.
 Delete first atomically captures the leaf in the held parent and rolls mismatch

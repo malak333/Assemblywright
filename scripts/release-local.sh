@@ -105,6 +105,8 @@ run ./scripts/release-ci-workflow-smoke.sh
 run ./scripts/release-docs-drift-smoke.sh
 run ./scripts/repository-gate-proof-controller.sh --check
 run ./scripts/repository-gate-proof-controller.sh --self-test
+run ./scripts/restricted-worker-proof-controller.sh --check
+run ./scripts/restricted-worker-proof-controller.sh --self-test
 run ./scripts/release-naming-contract-smoke.sh --check
 run ./scripts/release-naming-contract-smoke.sh --self-test
 run ./scripts/release-shell-portability-smoke.sh --check

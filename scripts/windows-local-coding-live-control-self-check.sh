@@ -13,13 +13,21 @@ fail() {
 
 for required in \
   '"Check", "Prepare", "ClaimAndDispatch", "Integrate", "Cancel", "Abandon", "Cleanup"' \
-  '$masterSchemaVersion = 14' \
-  '$featureConveyorProjectionSchemaVersion = 8' \
+  '$masterSchemaVersion = 19' \
+  '$featureConveyorProjectionSchemaVersion = 9' \
   '$ownerControlSchemaVersion = 1' \
+  'Remove-Item -LiteralPath "Env:$($gitEnvironmentEntry.Name)"' \
+  '$env:GIT_CONFIG_GLOBAL = "NUL"' \
+  '$env:GIT_CONFIG_NOSYSTEM = "1"' \
+  'acceptance = @("restricted-worker-live-attempt")' \
   'acceptance_criteria_count = 1' \
   'allowed_paths = @("README.md")' \
   'tool_id = "file.write.v1"' \
   'expected_before_sha256 = @(Get-GitBlobSha256Bytes $paths.proof $HeadCommit "README.md")' \
+  'Assert-SourceRepositoryEligible' \
+  'normal tracked-index state' \
+  'git --no-replace-objects -c core.fsmonitor=false -c core.hooksPath=NUL' \
+  'git --no-replace-objects -c core.autocrlf=false -c core.fsmonitor=false -c core.hooksPath=NUL' \
   'Immutable Git blob binding did not reject CRLF working-tree or path drift.' \
   'git_blob_crlf_regression' \
   'commit.gpgSign=false' \
@@ -51,7 +59,20 @@ for required in \
   'Remove-BoundedCommitGraphCache' \
   'Assert-SnapshotCompatibleObjectStore' \
   'graph-([0-9a-f]{40}|[0-9a-f]{64})' \
-  'git clone --no-local' \
+  'clone --no-local --single-branch --branch main' \
+  'schema_version = 2' \
+  'queue_revision = $prepareQueueRevision' \
+  'enqueue_already_committed = $enqueueAlreadyCommitted' \
+  'An unmarked partial clone can be recovered only while the queue is empty.' \
+  'The unmarked partial clone did not match the exact recoverable source.' \
+  'Write-ProofMarkerAtomically $paths.proof $marker' \
+  '[IO.FileOptions]::WriteThrough' \
+  '$stream.Flush($true)' \
+  '[IO.File]::Move($temporaryPath, $markerPath)' \
+  '$partialRemotes -cne "origin"' \
+  '@("remote", "get-url", "--all", "origin")' \
+  'Prepare found state other than its empty baseline or one exact committed enqueue.' \
+  'Prepare found a non-resumable $kind grant revision.' \
   'non-resumable $kind grant revision' \
   'Cleanup without a checkout requires its exact prior binding.' \
   '$absentGrantCount += 1' \
@@ -73,11 +94,11 @@ fi
 grep -Fq -- 'retain no workspace' "$CONTROLLER" \
   && fail "Windows local-coding controller retained the stale protocol-v4 no-retention criterion"
 
-tree_check_line="$(grep -nF 'Assert-NoReparseTree $paths.proof' "$CONTROLLER" | cut -d: -f1)"
-delete_line="$(grep -nF 'Remove-Item -LiteralPath $paths.proof -Recurse -Force' "$CONTROLLER" | cut -d: -f1)"
+tree_check_line="$(grep -nF 'Assert-NoReparseTree $paths.proof' "$CONTROLLER" | tail -1 | cut -d: -f1)"
+delete_line="$(grep -nF 'Remove-Item -LiteralPath $paths.proof -Recurse -Force' "$CONTROLLER" | tail -1 | cut -d: -f1)"
 terminal_grants_line="$(grep -nF 'Cleanup did not reach an absent-or-revoked terminal grant state.' "$CONTROLLER" | cut -d: -f1)"
 prepare_status_line="$(grep -nF '$status = Get-ConveyorStatus' "$CONTROLLER" | head -1 | cut -d: -f1)"
-clone_line="$(grep -nF '$cloneOutput = @(& git clone' "$CONTROLLER" | cut -d: -f1)"
+clone_line="$(grep -nF '$cloneOutput = @(& git --no-replace-objects' "$CONTROLLER" | cut -d: -f1)"
 clone_policy_line="$(grep -nF '$ErrorActionPreference = "Continue"' "$CONTROLLER" | tail -1 | cut -d: -f1)"
 clone_exit_line="$(grep -nF '$cloneExitCode = $LASTEXITCODE' "$CONTROLLER" | cut -d: -f1)"
 marker_recovery_line="$(grep -nF '$marker = Read-ProofMarker $paths.proof $paths.source' "$CONTROLLER" | tail -1 | cut -d: -f1)"
