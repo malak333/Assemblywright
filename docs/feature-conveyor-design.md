@@ -578,7 +578,13 @@ harness. The controller requires exact clean `main` at
 `refs/remotes/origin/main`, then executes only the committed Mac live-harness
 blob through Bash stdin. Sanitized Windows-local control receipts use a
 separate inherited descriptor, preventing coordination input from becoming
-executable script content. The fixed harness requires the signed Swift relay,
+executable script content. While reading each receipt from an interactive Mac
+terminal, the controller temporarily uses no-echo noncanonical input so the
+bounded JSON can exceed the PTY's 1,024-byte `MAX_CANON`; it restores the exact
+saved terminal state on every success, failure, and handled signal. A real-PTY
+self-test binds the full 2,182-byte fixture digest, proves storage remains capped
+while a 9,000-byte line is drained and rejected, and verifies TERM restoration. The
+fixed harness requires the signed Swift relay,
 the separate singleton `local.coding.v1` identity, and the real Rust agent. It
 binds one protocol-v5 packet to the schema-v19 Windows master, observes exact
 queued/leased/succeeded events, validates the admitted artifact and detached

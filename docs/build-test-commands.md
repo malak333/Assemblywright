@@ -140,7 +140,13 @@ ASSEMBLYWRIGHT_FEATURE_CONVEYOR_OWNER_CONTROL_DESIGNATION_REVISION=<revision> \
 The command prints only fixed Windows-local actions. Run each against the
 already-authenticated Windows session with the exact committed
 `scripts/windows-local-coding-live-control.ps1`, then paste its single sanitized
-JSON receipt into the controller. Coordination receipts are read on a separate
+JSON receipt into the controller. On an interactive terminal the controller
+temporarily disables canonical input and echo only while reading each bounded
+receipt, so receipts larger than macOS `MAX_CANON` are accepted; it restores the
+exact prior terminal state before continuing, failing, or handling a signal.
+Input storage remains capped at 8,192 bytes; an oversized line is drained
+through its newline and rejected before the controller exits.
+Coordination receipts are read on a separate
 descriptor from the committed Mac harness bytes. A complete pass atomically
 writes `target/restricted-worker-live-proof/restricted-worker-live-proof.json`
 and its raw SHA-256 sidecar. The receipt is path-free and binds the exact

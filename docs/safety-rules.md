@@ -257,6 +257,11 @@ release requirements, not optional UX guidance.
   through Bash stdin; sanitized Windows-local receipts must arrive on a
   distinct inherited descriptor and may not become script bytes. Caller
   executable, agent, Tailscale, Git, and internal-marker overrides are cleared.
+  Interactive receipt reads must not be truncated by the terminal's canonical
+  line limit: temporarily enter no-echo noncanonical mode only for the bounded
+  read, cap stored input at 8,192 bytes while draining an oversized line through
+  its newline, save and restore the exact prior state on every handled exit path,
+  and prove accepted, oversized, and signalled cases through real PTY regressions.
   The live flow must use the separate exact singleton `local.coding.v1`
   `InferenceWorker`, signed production Swift relay, real Rust agent, protocol
   v5, schema-v19 master, and schema-v9 conveyor projection. It must prove one

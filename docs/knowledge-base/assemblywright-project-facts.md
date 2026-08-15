@@ -1249,6 +1249,14 @@ an old one.
   `SIGTTIN`. Feature 2 keeps the controller in the foreground for bounded owner
   input, relays each sanitized receipt through a private FIFO to descriptor 3,
   and keeps the committed Bash-stdin script bytes on a separate channel.
+- macOS interactive PTYs report `MAX_CANON=1024`, while the sanitized Feature 2
+  Prepare receipt can exceed two KiB. The controller therefore switches stdin
+  to no-echo, noncanonical mode only for each bounded receipt read and restores
+  the exact saved terminal state on success, failure, or handled signal. Its self-test
+  sends 2,182-byte and 9,000-byte lines through real PTYs, verifies digest
+  equality for the accepted receipt, caps stored input at 8,192 bytes while
+  draining and rejecting the oversized line, and separately proves TERM
+  restoration.
 - Windows PowerShell adapts JSON objects and ordered dictionaries differently:
   `PSObject.Properties.Name` enumerates JSON-object keys but not the entry keys
   of an `OrderedDictionary`. Exact-key guards that accept both shapes must use

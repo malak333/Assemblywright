@@ -660,6 +660,16 @@ require_text "restricted-worker controller committed Mac harness" "$RESTRICTED_W
   'git_safe "$root" show "$head:$MAC_HARNESS_PATH"'
 require_text "restricted-worker controller receipt descriptor" "$RESTRICTED_WORKER_PROOF_CONTROLLER" \
   'ASSEMBLYWRIGHT_RESTRICTED_WORKER_RECEIPT_FD=3'
+require_text "restricted-worker controller noncanonical receipt input" "$RESTRICTED_WORKER_PROOF_CONTROLLER" \
+  'stty -echo -icanon min 1 time 0'
+require_text "restricted-worker controller PTY receipt regression" "$RESTRICTED_WORKER_PROOF_CONTROLLER" \
+  'assemblywright_pty_receipt_reader_ok bytes=2182'
+require_text "restricted-worker controller oversized PTY rejection" "$RESTRICTED_WORKER_PROOF_CONTROLLER" \
+  'assemblywright_pty_receipt_oversized_rejected bytes=%s error=%s'
+require_text "restricted-worker controller signalled PTY restoration" "$RESTRICTED_WORKER_PROOF_CONTROLLER" \
+  'assemblywright_pty_receipt_signal_restored signal=TERM'
+require_text "build docs restricted-worker terminal restoration" "$BUILD_DOCS" \
+  'receipts larger than macOS `MAX_CANON` are accepted'
 require_text "restricted-worker controller Windows schema" "$RESTRICTED_WORKER_PROOF_CONTROLLER" \
   'master_schema_version=19'
 require_text "restricted-worker controller process-group cancellation" "$RESTRICTED_WORKER_PROOF_CONTROLLER" \

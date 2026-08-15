@@ -18,6 +18,8 @@ PROOF_BOUNDARY="One owner-supervised signed Swift relay and real Rust agent comp
 unset ASSEMBLYWRIGHT_RESTRICTED_WORKER_INTERNAL_STDIN_V1
 unset ASSEMBLYWRIGHT_RESTRICTED_WORKER_INTERNAL_ROOT
 unset ASSEMBLYWRIGHT_RESTRICTED_WORKER_RECEIPT_FD
+receipt_terminal_state=""
+receipt_read_error=""
 
 fail() {
   printf 'error: %s\n' "$1" >&2
@@ -82,6 +84,59 @@ validate_sha256() {
 
 validate_uuid() {
   [[ "$1" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]
+}
+
+restore_receipt_terminal() {
+  local saved_state="${receipt_terminal_state:-}"
+  [[ -n "$saved_state" ]] || return 0
+  stty "$saved_state" <&0 || return 1
+  receipt_terminal_state=""
+}
+
+read_live_receipt() {
+  local destination="$1"
+  local ready_marker="${2:-}"
+  local LC_ALL=C
+  local line="" character="" read_status=0 oversized=0 deadline remaining
+  receipt_terminal_state=""
+  receipt_read_error=""
+  if [[ -t 0 ]]; then
+    if ! receipt_terminal_state="$(stty -g <&0)"; then
+      receipt_read_error="terminal_state_unavailable"
+      return 1
+    fi
+    if ! stty -echo -icanon min 1 time 0 <&0; then
+      receipt_read_error="terminal_mode_unavailable"
+      restore_receipt_terminal || true
+      return 1
+    fi
+  fi
+  [[ -z "$ready_marker" ]] || printf '%s\n' "$ready_marker"
+  deadline=$((SECONDS + 600))
+  while :; do
+    remaining=$((deadline - SECONDS))
+    if [[ "$remaining" -le 0 ]] || ! IFS= read -r -t "$remaining" -n 1 character; then
+      receipt_read_error="incomplete"
+      read_status=1
+      break
+    fi
+    [[ -n "$character" ]] || break
+    if [[ "${#line}" -lt 8192 ]]; then
+      line+="$character"
+    else
+      oversized=1
+    fi
+  done
+  if [[ "$oversized" -eq 1 ]]; then
+    receipt_read_error="oversized"
+    read_status=1
+  fi
+  if ! restore_receipt_terminal; then
+    receipt_read_error="terminal_restore_failed"
+    return 1
+  fi
+  printf -v "$destination" '%s' "$line"
+  return "$read_status"
 }
 
 validate_owner_directory() {
@@ -277,7 +332,7 @@ relay_live_receipts() {
     assemblywright_mac_windows_local_coding_abandon_required
     assemblywright_mac_windows_local_coding_cleanup_required
   )
-  for marker in "${markers[@]}"; do
+  for marker in ${markers[@]+"${markers[@]}"}; do
     wait_count=0
     while :; do
       marker_count="$(grep -c "^$marker " "$transcript" || true)"
@@ -292,8 +347,18 @@ relay_live_receipts() {
       sleep 0.1
     done
     receipt=""
-    if ! IFS= read -r -t 600 receipt; then
-      fail "timed out waiting for one sanitized Windows-local receipt"
+    if ! read_live_receipt receipt; then
+      case "$receipt_read_error" in
+        oversized)
+          fail "sanitized Windows-local receipt exceeded the 8192-byte input bound"
+          ;;
+        incomplete)
+          fail "timed out waiting for one complete sanitized Windows-local receipt"
+          ;;
+        *)
+          fail "could not safely read and restore one sanitized Windows-local receipt"
+          ;;
+      esac
     fi
     [[ -n "$receipt" && "${#receipt}" -le 8192 ]] \
       || fail "sanitized Windows-local receipt was empty or oversized"
@@ -371,7 +436,7 @@ validate_live_transcript() {
   action_marker_count="$(grep -Ec '^assemblywright_mac_windows_.*_required ' "$transcript" || true)"
   [[ "$action_marker_count" == "${#action_markers[@]}" ]] \
     || fail "live transcript contained an unexpected Windows-local action marker set"
-  for marker in "${action_markers[@]}"; do
+  for marker in ${action_markers[@]+"${action_markers[@]}"}; do
     marker_count="$(grep -c "^$marker " "$transcript" || true)"
     [[ "$marker_count" == "1" ]] \
       || fail "live transcript did not contain one exact $marker record"
@@ -438,7 +503,7 @@ validate_live_transcript() {
     disposable_checkout_removed
   )
   local index=18 flag
-  for flag in "${expected_flags[@]}"; do
+  for flag in ${expected_flags[@]+"${expected_flags[@]}"}; do
     [[ "${fields[$index]}" == "$flag=verified" ]] \
       || fail "live success record omitted exact $flag proof"
     index=$((index + 1))
@@ -491,6 +556,7 @@ run_controller() (
   local receipt_writer_open=0
 
   cleanup_controller() {
+    restore_receipt_terminal || true
     if [[ "$receipt_writer_open" -eq 1 ]]; then
       exec 4>&-
       receipt_writer_open=0
@@ -508,6 +574,7 @@ run_controller() (
   handle_controller_signal() {
     local exit_status="$1"
     trap - HUP INT TERM
+    restore_receipt_terminal || true
     terminate_live_group
     exit "$exit_status"
   }
@@ -571,7 +638,7 @@ run_controller() (
 
 check_controller() {
   local command_name
-  for command_name in git shasum awk mktemp mkfifo date id stat chmod mkdir mv rm wc tr grep find ln tee env sleep sed cut; do
+  for command_name in git shasum awk mktemp mkfifo date id stat chmod mkdir mv rm wc tr grep find ln tee env sleep sed cut stty expect; do
     require_command "$command_name"
   done
   [[ -f "$ROOT_DIR/$MAC_HARNESS_PATH" ]] || fail "Mac live harness is unavailable"
@@ -691,6 +758,7 @@ self_test_controller() {
   local success_transcript_digest variant_transcript_digest
   local success_head success_tree success_mac_digest success_windows_digest
   local mv_wrapper_dir digest_move_failure receipt_move_failure
+  local pty_reader pty_expect long_receipt long_receipt_digest oversized_receipt
   local coordination_body terminal_body success_body missing_label_body wrong_label_body
   scratch="$(mktemp -d -t assemblywright-restricted-worker-proof)"
   chmod 700 "$scratch"
@@ -707,6 +775,97 @@ self_test_controller() {
   fi
   if "$ROOT_DIR/scripts/restricted-worker-proof-controller.sh" --check extra >/dev/null 2>&1; then
     fail "self-test accepted an extra controller argument"
+  fi
+
+  pty_reader="$scratch/pty-receipt-reader.sh"
+  {
+    printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
+      'receipt_terminal_state=""' 'receipt_read_error=""'
+    declare -f restore_receipt_terminal read_live_receipt
+    cat <<'PTY_READER'
+before_state="$(stty -g <&0)"
+receipt=""
+case "${PTY_MODE:?}" in
+  success)
+    read_live_receipt receipt assemblywright_pty_receipt_reader_ready
+    after_state="$(stty -g <&0)"
+    [[ "$after_state" == "$before_state" ]]
+    receipt_digest="$(printf '%s' "$receipt" | shasum -a 256 | awk '{print $1}')"
+    printf 'assemblywright_pty_receipt_reader_ok bytes=%s sha256=%s terminal_restored=verified\n' \
+      "${#receipt}" "$receipt_digest"
+    ;;
+  oversized)
+    if read_live_receipt receipt assemblywright_pty_receipt_reader_ready; then
+      exit 41
+    fi
+    after_state="$(stty -g <&0)"
+    [[ "$after_state" == "$before_state" && "$receipt_read_error" == "oversized" ]]
+    printf 'assemblywright_pty_receipt_oversized_rejected bytes=%s error=%s terminal_restored=verified\n' \
+      "${#receipt}" "$receipt_read_error"
+    ;;
+  signal)
+    handle_term() {
+      restore_receipt_terminal
+      after_state="$(stty -g <&0)"
+      [[ "$after_state" == "$before_state" ]]
+      printf 'assemblywright_pty_receipt_signal_restored signal=TERM terminal_restored=verified\n'
+      exit 143
+    }
+    trap handle_term TERM
+    read_live_receipt receipt assemblywright_pty_receipt_reader_ready
+    exit 42
+    ;;
+  *) exit 43 ;;
+esac
+PTY_READER
+  } >"$pty_reader"
+  chmod 700 "$pty_reader"
+  pty_expect="$scratch/pty-receipt-expect.tcl"
+  cat <<'EXPECT' >"$pty_expect"
+log_user 0
+set timeout 10
+spawn -noecho env PTY_MODE=$env(PTY_MODE) $env(PTY_READER)
+expect -re {assemblywright_pty_receipt_reader_ready}
+if {$env(PTY_MODE) eq "signal"} {
+  exec kill -TERM [exp_pid]
+} else {
+  send -- "$env(PTY_RECEIPT)\r"
+}
+expect {
+  -re $env(PTY_EXPECTED_MARKER) {}
+  timeout { exit 2 }
+  eof { exit 3 }
+}
+expect eof
+wait
+exit 0
+EXPECT
+  chmod 600 "$pty_expect"
+  long_receipt='{"receipt":"'
+  while [[ "${#long_receipt}" -lt 2180 ]]; do long_receipt+="x"; done
+  long_receipt+='"}'
+  [[ "${#long_receipt}" -eq 2182 ]] \
+    || fail "self-test PTY receipt fixture had the wrong length"
+  long_receipt_digest="$(printf '%s' "$long_receipt" | sha256_stdin)"
+  if ! env PTY_MODE=success PTY_READER="$pty_reader" PTY_RECEIPT="$long_receipt" \
+      PTY_EXPECTED_MARKER="assemblywright_pty_receipt_reader_ok bytes=2182 sha256=$long_receipt_digest terminal_restored=verified" \
+      expect "$pty_expect" >/dev/null; then
+    fail "self-test PTY receipt reader failed"
+  fi
+  oversized_receipt='{"receipt":"'
+  while [[ "${#oversized_receipt}" -lt 8998 ]]; do oversized_receipt+="y"; done
+  oversized_receipt+='"}'
+  [[ "${#oversized_receipt}" -eq 9000 ]] \
+    || fail "self-test oversized PTY receipt fixture had the wrong length"
+  if ! env PTY_MODE=oversized PTY_READER="$pty_reader" PTY_RECEIPT="$oversized_receipt" \
+      PTY_EXPECTED_MARKER='assemblywright_pty_receipt_oversized_rejected bytes=8192 error=oversized terminal_restored=verified' \
+      expect "$pty_expect" >/dev/null; then
+    fail "self-test oversized PTY receipt rejection failed"
+  fi
+  if ! env PTY_MODE=signal PTY_READER="$pty_reader" PTY_RECEIPT='' \
+      PTY_EXPECTED_MARKER='assemblywright_pty_receipt_signal_restored signal=TERM terminal_restored=verified' \
+      expect "$pty_expect" >/dev/null; then
+    fail "self-test signalled PTY receipt restoration failed"
   fi
 
   success="$scratch/success"
@@ -924,7 +1083,7 @@ self_test_controller() {
   assert_no_proof_output "$receipt_move_failure"
 
   printf 'Assemblywright restricted-worker live proof controller self-test: ok\n'
-  printf 'Proof boundary: disposable Git/process fixtures prove fixed CLI, committed-byte/receipt-FD structure, exact ordered action/success transcript validation, complete-transcript digest binding, dirty/hidden-index/wrong-branch/origin/status drift, environment isolation, stale-proof invalidation, malformed/duplicate output, descendant rejection, cancellation, hostile/swap/writable-target denial, atomic publication failure, permissions, redaction, and no-output behavior only.\n'
+  printf 'Proof boundary: disposable Git/process/PTY fixtures prove fixed CLI, committed-byte/receipt-FD structure, bounded long receipt input beyond MAX_CANON, oversized-line drain/rejection, success/TERM terminal restoration, exact ordered action/success transcript validation, complete-transcript digest binding, dirty/hidden-index/wrong-branch/origin/status drift, environment isolation, stale-proof invalidation, malformed/duplicate output, descendant rejection, cancellation, hostile/swap/writable-target denial, atomic publication failure, permissions, redaction, and no-output behavior only.\n'
 }
 
 MODE="${1:---check}"
