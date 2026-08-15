@@ -132,10 +132,19 @@ function Assert-ExactKeys {
         [Parameter(Mandatory = $true)][string[]]$Keys,
         [Parameter(Mandatory = $true)][string]$Label
     )
-    $actual = @($Value.PSObject.Properties.Name | Sort-Object)
-    $expected = @($Keys | Sort-Object)
-    if (($actual -join "|") -ne ($expected -join "|")) {
+    if ($Value -is [System.Collections.IDictionary]) {
+        $actual = @($Value.Keys | ForEach-Object { [string]$_ } | Sort-Object -CaseSensitive)
+    } else {
+        $actual = @($Value.PSObject.Properties.Name | Sort-Object -CaseSensitive)
+    }
+    $expected = @($Keys | Sort-Object -CaseSensitive)
+    if ($actual.Count -ne $expected.Count) {
         throw "$Label returned an unexpected JSON shape."
+    }
+    for ($index = 0; $index -lt $expected.Count; $index += 1) {
+        if ($actual[$index] -cne $expected[$index]) {
+            throw "$Label returned an unexpected JSON shape."
+        }
     }
 }
 
@@ -568,6 +577,53 @@ if ($Action -eq "Check") {
             throw "Git revision lookup failed in the blob-binding regression."
         }
 
+        $checkMarker = [ordered]@{
+            schema_version = 2
+            status = "local_coding_disposable_checkout"
+            source_repository = $checkRepository
+            proof_repository = $checkRepository
+            repository_id = "11111111-1111-4111-8111-111111111111"
+            feature_id = "22222222-2222-4222-8222-222222222222"
+            head_commit = $checkCommit
+            queue_revision = 1
+            emergency_pause_revision = 0
+            owner_control_designation_revision = 1
+        }
+        Write-ProofMarkerAtomically $checkRepository $checkMarker
+        $checkMarkerPath = Join-Path $checkRepository ".git\assemblywright-local-coding-live-proof"
+        $checkPublishedMarker = Get-Content -LiteralPath $checkMarkerPath -Raw | ConvertFrom-Json
+        Assert-ExactKeys $checkPublishedMarker @(
+            "schema_version", "status", "source_repository", "proof_repository",
+            "repository_id", "feature_id", "head_commit", "queue_revision",
+            "emergency_pause_revision", "owner_control_designation_revision"
+        ) "Atomic ordered-dictionary marker regression"
+        $wrongCaseRejected = $false
+        try {
+            Assert-ExactKeys ([ordered]@{ Schema_version = 2; status = "fixture" }) @(
+                "schema_version", "status"
+            ) "Wrong-case ordered-dictionary regression"
+        } catch {
+            if ($_.Exception.Message -cne "Wrong-case ordered-dictionary regression returned an unexpected JSON shape.") {
+                throw
+            }
+            $wrongCaseRejected = $true
+        }
+        $compositeKeyRejected = $false
+        try {
+            Assert-ExactKeys ([ordered]@{ "a|b" = 1; c = 2 }) @(
+                "a", "b|c"
+            ) "Composite-key ordered-dictionary regression"
+        } catch {
+            if ($_.Exception.Message -cne "Composite-key ordered-dictionary regression returned an unexpected JSON shape.") {
+                throw
+            }
+            $compositeKeyRejected = $true
+        }
+        if (-not $wrongCaseRejected -or -not $compositeKeyRejected) {
+            throw "Exact ordered-dictionary key regressions were not rejected."
+        }
+        Remove-Item -LiteralPath $checkMarkerPath -Force
+
         [IO.File]::WriteAllBytes($checkReadme, [Text.Encoding]::UTF8.GetBytes("immutable blob`r`n"))
         $blobDigest = Convert-BytesToHex (Get-GitBlobSha256Bytes $checkRepository $checkCommit "README.md")
         $expectedBlobDigest = Convert-BytesToHex (Get-Sha256Bytes "immutable blob`n")
@@ -614,7 +670,7 @@ if ($Action -eq "Check") {
     ) {
         throw "Local-coding live controller self-check failed."
     }
-    '{"git_blob_crlf_regression":"verified","schema_version":1,"status":"local_coding_live_control_ready"}'
+    '{"atomic_marker_publication_regression":"verified","exact_key_negative_regressions":"verified","git_blob_crlf_regression":"verified","schema_version":1,"status":"local_coding_live_control_ready"}'
     exit 0
 }
 

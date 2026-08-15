@@ -1249,6 +1249,13 @@ an old one.
   `SIGTTIN`. Feature 2 keeps the controller in the foreground for bounded owner
   input, relays each sanitized receipt through a private FIFO to descriptor 3,
   and keeps the committed Bash-stdin script bytes on a separate channel.
+- Windows PowerShell adapts JSON objects and ordered dictionaries differently:
+  `PSObject.Properties.Name` enumerates JSON-object keys but not the entry keys
+  of an `OrderedDictionary`. Exact-key guards that accept both shapes must use
+  `IDictionary.Keys` for dictionaries and compare counts plus ordinally sorted
+  keys without delimiter serialization. The Windows-executed `Check` lane
+  exercises the same atomic marker writer used by live `Prepare` and rejects
+  wrong-case and composite-key collision fixtures.
 - Shell parameter expansion such as `${token#feature_id=}` returns the original
   token when the prefix is absent; it is extraction, not label validation.
   Exact live-proof records therefore match each complete `name=value` token

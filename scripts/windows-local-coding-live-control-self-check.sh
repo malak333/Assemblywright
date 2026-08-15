@@ -66,6 +66,13 @@ for required in \
   'An unmarked partial clone can be recovered only while the queue is empty.' \
   'The unmarked partial clone did not match the exact recoverable source.' \
   'Write-ProofMarkerAtomically $paths.proof $marker' \
+  '$Value -is [System.Collections.IDictionary]' \
+  'Sort-Object -CaseSensitive' \
+  'Atomic ordered-dictionary marker regression' \
+  'atomic_marker_publication_regression' \
+  'Wrong-case ordered-dictionary regression' \
+  'Composite-key ordered-dictionary regression' \
+  'exact_key_negative_regressions' \
   '[IO.FileOptions]::WriteThrough' \
   '$stream.Flush($true)' \
   '[IO.File]::Move($temporaryPath, $markerPath)' \
