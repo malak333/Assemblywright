@@ -1264,6 +1264,42 @@ an old one.
   keys without delimiter serialization. The Windows-executed `Check` lane
   exercises the same atomic marker writer used by live `Prepare` and rejects
   wrong-case and composite-key collision fixtures.
+- The 2026-08-15 Feature 2 Restricted-worker Live Proof Controller ran from
+  exact clean published `main` at implementation commit
+  `8a9e373ea1e61e9504ec0630971f7aeebc2bec1f`. Independent high-risk review
+  approved the final fail-closed design after its findings on Windows ordered-
+  dictionary key validation and bounded interactive-terminal receipt handling
+  were corrected. The requirements-derived unit matrix covers fixed CLI and
+  committed-byte execution, clean-main and definition drift, exact action and
+  terminal transcript shapes, hostile output paths, prior-receipt
+  invalidation, environment isolation, atomic publication failure, process-
+  group cancellation and descendant rejection, plus real-PTY acceptance of a
+  2,182-byte receipt, drain-and-rejection of a 9,000-byte line, and exact
+  terminal restoration on success and TERM.
+  The native cross-device E2E used the Apple Development-signed Swift relay
+  under team `H686S3N4V9`, the separately enrolled `local.coding.v1` identity,
+  and the real Rust agent against the live Windows service at protocol 5 and
+  schema 19. The exact snapshot-bound README-only attempt reached event
+  sequences 13987/13989/13990 for queued/leased/succeeded, froze detached
+  candidate `b0157ee223ef4f41a57346ab492ef23fbf680293`, then proved explicit
+  owner cancellation, safe abandonment, empty queue and lease state, three
+  grant revocations, empty transfer staging, retained-pair cleanup, and removal
+  of the disposable checkout. Final Windows health was running, unpaused, and
+  maintenance-clear with no active attempts, connections, queued steps, or
+  leased steps.
+  The 0600 receipt was observed at `2026-08-15T14:26:43Z`; it binds tree
+  `ce527610ae10a57b3a5d027057e301c5f5f0442d`, transcript SHA-256
+  `48d81091ed50b4064af5abf9c98328d28f534b73ae70ebf7d8c2942063ac4e99`,
+  and receipt SHA-256
+  `670778420b977356a1a01b5895d76f02f69241482bdda43f1b47835b961bc83c`.
+  Documentation and safety rules were followed; `unit-testing-test-generate`
+  and `e2e-testing` were applied, with Playwright excluded because the proof is
+  a native Bash/PowerShell/Rust/Swift/process/protocol/live-device boundary and
+  has no browser surface. This receipt remains local and unadmitted: it does
+  not activate the conveyor or prove selected-review-provider integration,
+  GitHub publication, restart recovery, Mac/Windows control streaming,
+  Developer ID distribution, notarization, clean-profile installation, or
+  production readiness.
 - Shell parameter expansion such as `${token#feature_id=}` returns the original
   token when the prefix is absent; it is extraction, not label validation.
   Exact live-proof records therefore match each complete `name=value` token
