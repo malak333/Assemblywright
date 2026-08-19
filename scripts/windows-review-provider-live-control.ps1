@@ -79,9 +79,14 @@ function Get-SourceHead {
     $status = Invoke-Git @("status", "--porcelain=v1", "--untracked-files=all")
     $trackedOutput = Invoke-Git @("ls-files", "-v", "--")
     $tracked = @($trackedOutput -split "`r?`n" | Where-Object { $_.Length -gt 0 })
-    if ($head -notmatch $commitPattern -or $head -cne $origin -or $branch -cne "main" -or
-        $status.Length -ne 0 -or $tracked.Count -eq 0 -or
-        @($tracked | Where-Object { $_ -cnotmatch "^H " }).Count -ne 0) {
+    $hasAbnormalTrackedEntry = @($tracked | Where-Object { $_ -cnotmatch "^H " }).Count -ne 0
+    $invalidSource = $head -notmatch $commitPattern
+    $invalidOrigin = $head -cne $origin
+    $invalidBranch = $branch -cne "main"
+    $dirtyWorktree = $status.Length -ne 0
+    $emptyOrAbnormalIndex = $tracked.Count -eq 0 -or $hasAbnormalTrackedEntry
+    if ($invalidSource -or $invalidOrigin -or $invalidBranch -or
+        $dirtyWorktree -or $emptyOrAbnormalIndex) {
         throw "The Windows checkout is not exact clean main at origin/main with normal tracked-index state."
     }
     return $head
@@ -92,11 +97,24 @@ function Get-MasterExecutable {
     if ($null -eq $service -or $service.StartName -notmatch "(^|\\)mike$") {
         throw "The fixed Windows master service identity is unavailable."
     }
-    $match = [regex]::Match([string]$service.PathName, '^"([^\"]+assemblywright-master\.exe)"')
+    $match = [regex]::Match(
+        [string]$service.PathName,
+        '^(?:"([^"]+assemblywright-master\.exe)"|(\S+assemblywright-master\.exe))(?=\s|$)'
+    )
     if (-not $match.Success) { throw "The Windows master service image path was not exact." }
-    $executable = [IO.Path]::GetFullPath($match.Groups[1].Value)
+    $capturedExecutable = if ($match.Groups[1].Success) {
+        $match.Groups[1].Value
+    } else {
+        $match.Groups[2].Value
+    }
+    $executable = [IO.Path]::GetFullPath($capturedExecutable)
+    $comparisonExecutable = if ($executable.StartsWith("\\?\", [StringComparison]::Ordinal)) {
+        $executable.Substring(4)
+    } else {
+        $executable
+    }
     $expected = [IO.Path]::GetFullPath((Join-Path $sourceRepository "target\release\assemblywright-master.exe"))
-    if ($executable -cne $expected) { throw "The Windows master is not the exact source-checkout release executable." }
+    if ($comparisonExecutable -cne $expected) { throw "The Windows master is not the exact source-checkout release executable." }
     Assert-NoReparseComponents $executable $false
     return $executable
 }
