@@ -1804,18 +1804,16 @@ fn run_bounded_command(
         }
     };
     #[cfg(windows)]
-    if prepared.gated {
-        if child
+    if prepared.gated
+        && child
             .stdin
             .take()
             .is_none_or(|mut stdin| stdin.write_all(&[PUBLICATION_LAUNCH_GATE]).is_err())
-        {
-            #[cfg(windows)]
-            containment.terminate();
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(PublicationAdapterError::Unavailable);
-        }
+    {
+        containment.terminate();
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(PublicationAdapterError::Unavailable);
     }
     #[cfg(not(windows))]
     debug_assert!(!prepared.gated);
