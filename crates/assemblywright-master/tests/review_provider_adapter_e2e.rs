@@ -81,7 +81,7 @@ fn adapter_uses_only_fixed_environment_and_disabled_tool_configuration() {
     fs::write(
         &codex,
         format!(
-            "#!/bin/sh\nset -eu\n[ \"${{CODEX_HOME-}}\" = '{}' ]\nargs=\" $* \"\ncase \"$args\" in *' features.shell_tool=false '*) ;; *) exit 21;; esac\ncase \"$args\" in *' web_search=\"disabled\" '*) ;; *) exit 22;; esac\ncase \"$args\" in *' tools.web_search=false '*) ;; *) exit 23;; esac\ncase \"$args\" in *' --strict-config '*) ;; *) exit 24;; esac\ncase \"$args\" in *' features.view_image=false '*) ;; *) exit 25;; esac\ncase \"$args\" in *' features.image_generation=false '*) ;; *) exit 26;; esac\ncase \"$args\" in *' features.skill_mcp_dependency_install=false '*) ;; *) exit 27;; esac\ncase \"$args\" in *' features.skill_search=false '*) ;; *) exit 28;; esac\ncase \"$args\" in *' features.plugins=false '*) ;; *) exit 29;; esac\ncat >/dev/null\nprintf '%s' '{}'
+            "#!/bin/sh\nset -eu\n[ \"${{CODEX_HOME-}}\" = '{}' ]\nargs=\" $* \"\ncase \"$args\" in *' features.shell_tool=false '*) ;; *) exit 21;; esac\ncase \"$args\" in *' web_search=\"disabled\" '*) ;; *) exit 22;; esac\ncase \"$args\" in *' tools.web_search=false '*) ;; *) exit 23;; esac\ncase \"$args\" in *' --strict-config '*) ;; *) exit 24;; esac\ncase \"$args\" in *' features.view_image=false '*) ;; *) exit 25;; esac\ncase \"$args\" in *' features.image_generation=false '*) ;; *) exit 26;; esac\ncase \"$args\" in *' features.skill_mcp_dependency_install=false '*) ;; *) exit 27;; esac\ncase \"$args\" in *' features.skill_search=false '*) ;; *) exit 28;; esac\ncase \"$args\" in *' features.plugins=false '*) ;; *) exit 29;; esac\ncase \"$args\" in *' - '*) ;; *) exit 30;; esac\ncat >\"$CODEX_HOME/captured-review-prompt\"\nprintf '%s' '{}'
 ",
             codex_home.display(),
             output_json.replace('\'', "'\\''")
@@ -111,10 +111,7 @@ fn adapter_uses_only_fixed_environment_and_disabled_tool_configuration() {
     count.stdin.take().unwrap().write_all(&canonical).unwrap();
     let count = count.wait_with_output().unwrap();
     assert!(count.status.success(), "{:?}", count.stderr);
-    assert_eq!(
-        String::from_utf8(count.stdout).unwrap(),
-        canonical.len().to_string()
-    );
+    let counted_prompt_bytes = String::from_utf8(count.stdout).unwrap();
 
     let mut review = Command::new(adapter);
     configure(&mut review);
@@ -126,6 +123,16 @@ fn adapter_uses_only_fixed_environment_and_disabled_tool_configuration() {
         FeatureConveyorReviewProviderOutput::decode_frame(&review.stdout).unwrap(),
         output
     );
+    let captured_prompt = fs::read(codex_home.join("captured-review-prompt")).unwrap();
+    assert_eq!(counted_prompt_bytes, captured_prompt.len().to_string());
+    assert!(captured_prompt.ends_with(&canonical));
+    let digest_marker = format!(
+        "Trusted canonical review_packet_sha256 bytes (copy exactly): {}",
+        serde_json::to_string(&packet.sha256().unwrap()).unwrap()
+    );
+    assert!(String::from_utf8(captured_prompt)
+        .unwrap()
+        .contains(&digest_marker));
 
     let mut polluted = Command::new(adapter);
     configure(&mut polluted);

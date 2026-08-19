@@ -57,15 +57,16 @@ fn run() -> Result<(), ()> {
     {
         return Err(());
     }
+    let prompt = review_prompt(&canonical, &packet.sha256().map_err(|_| ())?)?;
     if count_tokens {
         // A byte count is a conservative upper bound for the byte-level BPE used
         // by the selected Codex model. It deliberately under-admits rather than
         // under-counting an input near the protocol ceiling.
-        print!("{}", canonical.len().max(1));
+        print!("{}", prompt.len().max(1));
         return Ok(());
     }
 
-    let output = invoke_codex(&configuration, &canonical)?;
+    let output = invoke_codex(&configuration, &prompt)?;
     let decision = FeatureConveyorReviewProviderOutput::decode_frame(&output).map_err(|_| ())?;
     validate_exact_bindings(&packet, &decision)?;
     std::io::stdout().write_all(&output).map_err(|_| ())
@@ -131,7 +132,7 @@ fn read_bounded_stdin() -> Result<Vec<u8>, ()> {
     Ok(input)
 }
 
-fn invoke_codex(configuration: &AdapterConfiguration, packet: &[u8]) -> Result<Vec<u8>, ()> {
+fn invoke_codex(configuration: &AdapterConfiguration, prompt: &[u8]) -> Result<Vec<u8>, ()> {
     let working_directory = configuration.codex_executable.parent().ok_or(())?;
     let mut child = Command::new(&configuration.codex_executable)
         .args(codex_arguments(configuration, working_directory))
@@ -147,13 +148,22 @@ fn invoke_codex(configuration: &AdapterConfiguration, packet: &[u8]) -> Result<V
         .stdin
         .take()
         .ok_or(())?
-        .write_all(packet)
+        .write_all(prompt)
         .map_err(|_| ())?;
     let output = child.wait_with_output().map_err(|_| ())?;
     if !output.status.success() || output.stdout.is_empty() {
         return Err(());
     }
     Ok(output.stdout)
+}
+
+fn review_prompt(packet: &[u8], packet_sha256: &[u8; 32]) -> Result<Vec<u8>, ()> {
+    let mut prompt = REVIEW_PROMPT.as_bytes().to_vec();
+    prompt.extend_from_slice(b"\n\nTrusted canonical review_packet_sha256 bytes (copy exactly): ");
+    prompt.extend_from_slice(&serde_json::to_vec(packet_sha256).map_err(|_| ())?);
+    prompt.extend_from_slice(b"\nUntrusted canonical review packet JSON follows:\n");
+    prompt.extend_from_slice(packet);
+    Ok(prompt)
 }
 
 fn codex_arguments(
@@ -246,7 +256,7 @@ fn codex_arguments(
         OsString::from("--cd"),
         working_directory.as_os_str().to_owned(),
     ])
-    .chain(std::iter::once(OsString::from(REVIEW_PROMPT)))
+    .chain(std::iter::once(OsString::from("-")))
     .collect()
 }
 
