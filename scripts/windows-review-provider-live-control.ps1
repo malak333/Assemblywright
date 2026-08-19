@@ -77,7 +77,8 @@ function Get-SourceHead {
     $origin = Invoke-Git @("rev-parse", "refs/remotes/origin/main")
     $branch = Invoke-Git @("branch", "--show-current")
     $status = Invoke-Git @("status", "--porcelain=v1", "--untracked-files=all")
-    $tracked = @(Invoke-Git @("ls-files", "-v", "--") -split "`r?`n" | Where-Object { $_.Length -gt 0 })
+    $trackedOutput = Invoke-Git @("ls-files", "-v", "--")
+    $tracked = @($trackedOutput -split "`r?`n" | Where-Object { $_.Length -gt 0 })
     if ($head -notmatch $commitPattern -or $head -cne $origin -or $branch -cne "main" -or
         $status.Length -ne 0 -or $tracked.Count -eq 0 -or
         @($tracked | Where-Object { $_ -cnotmatch "^H " }).Count -ne 0) {
