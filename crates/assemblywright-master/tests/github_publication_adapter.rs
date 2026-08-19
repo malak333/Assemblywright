@@ -23,6 +23,7 @@ fn default_configuration_is_unavailable_without_creating_state() {
 }
 
 #[test]
+#[cfg(not(windows))]
 fn configuration_rejects_paths_commands_plaintext_tokens_and_identity_drift() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().join("github-publication");
@@ -189,16 +190,18 @@ fn required_checks_parser_pins_github_app_and_uses_latest_run() {
         Err(PublicationAdapterError::MissingEvidence)
     );
 
-    let trusted_release = include_bytes!("../../../.github/workflows/release-local.yml");
+    let trusted_release = normalized_lf(include_bytes!(
+        "../../../.github/workflows/release-local.yml"
+    ));
     assert_eq!(
         validate_github_workflow_content(
             ".github/workflows/release-local.yml",
             "51e809a94f59193e213bdff6e49f3a86e612643f094e366055f42f8745026fd7",
-            trusted_release,
+            &trusted_release,
         ),
         Ok(())
     );
-    let mut replaced = trusted_release.to_vec();
+    let mut replaced = trusted_release;
     replaced.extend_from_slice(b"\n# hostile same-name workflow\n");
     assert_eq!(
         validate_github_workflow_content(
@@ -270,25 +273,46 @@ fn source_base_and_sanitized_path_bindings_reject_drift() {
         Err(PublicationAdapterError::AmbiguousEffect)
     );
 
-    let root = Path::new("/fixed/publication");
-    let candidate = Path::new("/fixed/feature-conveyor-candidates/candidate");
-    let git = Path::new("/fixed/git/bin/git");
-    let gh = Path::new("/fixed/gh/bin/gh");
+    #[cfg(not(windows))]
+    let (root, candidate, git, gh) = (
+        Path::new("/fixed/publication"),
+        Path::new("/fixed/feature-conveyor-candidates/candidate"),
+        Path::new("/fixed/git/bin/git"),
+        Path::new("/fixed/gh/bin/gh"),
+    );
+    #[cfg(windows)]
+    let (root, candidate, git, gh) = (
+        Path::new(r"C:\fixed\publication"),
+        Path::new(r"C:\fixed\feature-conveyor-candidates\candidate"),
+        Path::new(r"C:\fixed\git\bin\git.exe"),
+        Path::new(r"C:\fixed\gh\bin\gh.exe"),
+    );
     let path = sanitized_publication_command_path(git, gh, root).unwrap();
     let entries = std::env::split_paths(&path).collect::<Vec<_>>();
     assert_eq!(
         entries,
-        vec![
-            Path::new("/fixed/git/bin"),
-            Path::new("/fixed/gh/bin"),
-            root
-        ]
+        vec![git.parent().unwrap(), gh.parent().unwrap(), root]
     );
     assert!(!entries.iter().any(|entry| entry == candidate));
     let (credential_cwd, git_dir) = credential_git_process_boundary(root, candidate).unwrap();
     assert_eq!(credential_cwd, root);
     assert_ne!(credential_cwd, candidate);
     assert_eq!(git_dir, candidate.join(".git"));
+}
+
+fn normalized_lf(bytes: &[u8]) -> Vec<u8> {
+    let mut normalized = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index..].starts_with(b"\r\n") {
+            normalized.push(b'\n');
+            index += 2;
+        } else {
+            normalized.push(bytes[index]);
+            index += 1;
+        }
+    }
+    normalized
 }
 
 fn valid_config(gh: &[u8], git: &[u8]) -> serde_json::Value {
