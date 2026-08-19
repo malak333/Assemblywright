@@ -33,7 +33,7 @@ $env:GIT_OPTIONAL_LOCKS = "0"
 
 function Invoke-Git {
     param([string[]]$Arguments)
-    $output = @(& git --no-replace-objects -c core.fsmonitor=false -c core.hooksPath=NUL -C $sourceRepository @Arguments 2>&1)
+    $output = @(& git --no-replace-objects -c core.fsmonitor=false -c core.hooksPath=NUL -c core.autocrlf=true -C $sourceRepository @Arguments 2>&1)
     if ($LASTEXITCODE -ne 0) { throw "Git rejected the fixed review-provider operation." }
     return ($output -join "`n").Trim()
 }
