@@ -76,14 +76,16 @@ function Get-SourceHead {
     $head = Invoke-Git @("rev-parse", "refs/heads/main")
     $origin = Invoke-Git @("rev-parse", "refs/remotes/origin/main")
     $branch = Invoke-Git @("branch", "--show-current")
-    $status = Invoke-Git @("status", "--porcelain=v1", "--untracked-files=all")
+    $unstaged = Invoke-Git @("diff", "--name-only", "--no-ext-diff", "--")
+    $staged = Invoke-Git @("diff", "--cached", "--name-only", "--no-ext-diff", "--")
+    $untracked = Invoke-Git @("ls-files", "--others", "--exclude-standard", "--")
     $trackedOutput = Invoke-Git @("ls-files", "-v", "--")
     $tracked = @($trackedOutput -split "`r?`n" | Where-Object { $_.Length -gt 0 })
     $hasAbnormalTrackedEntry = @($tracked | Where-Object { $_ -cnotmatch "^H " }).Count -ne 0
     $invalidSource = $head -notmatch $commitPattern
     $invalidOrigin = $head -cne $origin
     $invalidBranch = $branch -cne "main"
-    $dirtyWorktree = $status.Length -ne 0
+    $dirtyWorktree = $unstaged.Length -ne 0 -or $staged.Length -ne 0 -or $untracked.Length -ne 0
     $emptyOrAbnormalIndex = $tracked.Count -eq 0 -or $hasAbnormalTrackedEntry
     if ($invalidSource -or $invalidOrigin -or $invalidBranch -or
         $dirtyWorktree -or $emptyOrAbnormalIndex) {
