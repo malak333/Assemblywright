@@ -84,6 +84,9 @@ RESTRICTED_WORKER_PROOF_CONTROLLER="scripts/restricted-worker-proof-controller.s
 REVIEW_PROVIDER_PROOF_CONTROLLER="scripts/review-provider-proof-controller.sh"
 REVIEW_PROVIDER_LIVE_E2E="scripts/review-provider-live-e2e.sh"
 WINDOWS_REVIEW_PROVIDER_LIVE_CONTROL="scripts/windows-review-provider-live-control.ps1"
+GITHUB_PUBLICATION_PROOF_CONTROLLER="scripts/github-publication-proof-controller.sh"
+GITHUB_PUBLICATION_LIVE_E2E="scripts/github-publication-live-e2e.sh"
+WINDOWS_GITHUB_PUBLICATION_LIVE_CONTROL="scripts/windows-github-publication-live-control.ps1"
 WINDOWS_FIXTURE_LIVE_CONTROL="scripts/windows-fixture-live-control.ps1"
 WINDOWS_MLX_LIVE_CONTROL="scripts/windows-mlx-live-control.ps1"
 WINDOWS_LOCAL_CODING_LIVE_CONTROL="scripts/windows-local-coding-live-control.ps1"
@@ -278,6 +281,40 @@ require_text "review-provider proof controller local gate check" "$LOCAL_GATE" \
   "review-provider-proof-controller.sh --check"
 require_text "review-provider proof controller local gate self-test" "$LOCAL_GATE" \
   "review-provider-proof-controller.sh --self-test"
+require_text "GitHub-publication proof controller local gate check" "$LOCAL_GATE" \
+  "github-publication-proof-controller.sh --check"
+require_text "GitHub-publication proof controller local gate self-test" "$LOCAL_GATE" \
+  "github-publication-proof-controller.sh --self-test"
+forbid_text "local gate GitHub-publication controller live recursion" "$LOCAL_GATE" \
+  "github-publication-proof-controller.sh --run"
+require_text "GitHub-publication controller fixed repository" "$WINDOWS_GITHUB_PUBLICATION_LIVE_CONTROL" \
+  '$repository = "malak333/Assemblywright"'
+require_text "GitHub-publication controller fixed GitHub CLI digest" "$WINDOWS_GITHUB_PUBLICATION_LIVE_CONTROL" \
+  '$ghExecutableSha256 = "cd79f16203f1fbe56937c4c96e2b6eadd10549418dcb241d91576ac77af0ac8b"'
+require_text "GitHub-publication controller fixed Git digest" "$WINDOWS_GITHUB_PUBLICATION_LIVE_CONTROL" \
+  '$gitExecutableSha256 = "22fead8244ef3a7225fb800099a4e43eca8bcec0466774917669599c2f19a05a"'
+require_text "GitHub-publication controller exact release context" "$WINDOWS_GITHUB_PUBLICATION_LIVE_CONTROL" \
+  'context = "Release local gate"'
+require_text "GitHub-publication controller exact Windows context" "$WINDOWS_GITHUB_PUBLICATION_LIVE_CONTROL" \
+  'context = "Protocol, master, identity, mTLS, and SCM"'
+require_text "GitHub-publication controller exact GitHub Actions app" "$WINDOWS_GITHUB_PUBLICATION_LIVE_CONTROL" \
+  'app_id = 15368'
+require_text "GitHub-publication controller exact release workflow id" "$WINDOWS_GITHUB_PUBLICATION_LIVE_CONTROL" \
+  'workflow_id = 282605278'
+require_text "GitHub-publication controller exact Windows workflow id" "$WINDOWS_GITHUB_PUBLICATION_LIVE_CONTROL" \
+  'workflow_id = 314849303'
+require_text "GitHub-publication controller service digest binding" "$WINDOWS_GITHUB_PUBLICATION_LIVE_CONTROL" \
+  'master_executable_sha256 = $proof.master_executable_sha256'
+require_text "GitHub-publication provisioning rollback" "$WINDOWS_GITHUB_PUBLICATION_LIVE_CONTROL" \
+  'Restore-PreviousPublicationDeployment -Master $master'
+require_text "GitHub-publication serialized control" "$WINDOWS_GITHUB_PUBLICATION_LIVE_CONTROL" \
+  'Global\Assemblywright.GitHubPublication.Control.v1'
+require_text "GitHub-publication live source refresh" "$WINDOWS_GITHUB_PUBLICATION_LIVE_CONTROL" \
+  '+refs/heads/main:refs/remotes/origin/main'
+require_text "GitHub-publication harness isolated receipt descriptor" "$GITHUB_PUBLICATION_LIVE_E2E" \
+  'ASSEMBLYWRIGHT_GITHUB_PUBLICATION_RECEIPT_FD'
+require_text "GitHub-publication fixed reauthentication failure" "$WINDOWS_GITHUB_PUBLICATION_LIVE_CONTROL" \
+  'GitHub CLI reauthentication is required.'
 require_text "review-provider fixed provider" "$MASTER_REVIEW_PROVIDER_ADAPTER" \
   'const PROVIDER_ID: &str = "openai.codex"'
 require_text "review-provider Windows OS-derived root" "$MASTER_REVIEW_PROVIDER_ADAPTER" \
@@ -555,7 +592,7 @@ require_text "publication execution control unit coverage" "$MASTER_PUBLICATION"
 require_text "publication remote mTLS route denial coverage" "$MASTER_REMOTE_MTLS_E2E" \
   "owner-token publication route leaked onto the remote router"
 require_text "feature design publication boundary" "$FEATURE_CONVEYOR_DESIGN" \
-  "credential-owning GitHub adapter remains default-unavailable"
+  "Feature 4 provisions its fixed credential-owning Windows GitHub adapter"
 require_text "release checklist publication boundary" "$CHECKLIST" \
   "schema-v17 publication"
 require_text "feature design orchestration boundary" "$FEATURE_CONVEYOR_DESIGN" \
@@ -724,6 +761,24 @@ require_text "local gate restricted-worker controller self-test" "$LOCAL_GATE" \
   "./scripts/restricted-worker-proof-controller.sh --self-test"
 forbid_text "local gate restricted-worker controller live recursion" "$LOCAL_GATE" \
   "./scripts/restricted-worker-proof-controller.sh --run"
+require_text "build docs GitHub-publication proof controller" "$BUILD_DOCS" \
+  "./scripts/github-publication-proof-controller.sh --run"
+require_text "design GitHub-publication controller boundary" "$DESIGN" \
+  "github_publication_proof_controller"
+require_text "knowledge base GitHub-publication controller" "$KB" \
+  "github-publication-proof-controller.sh"
+require_text "GitHub-publication controller exact initial main" "$GITHUB_PUBLICATION_PROOF_CONTROLLER" \
+  'refs/remotes/origin/main^{commit}'
+require_text "GitHub-publication controller committed harness" "$GITHUB_PUBLICATION_PROOF_CONTROLLER" \
+  'git_safe "$root" show "$head:$HARNESS_PATH"'
+require_text "GitHub-publication controller noncanonical receipt input" "$GITHUB_PUBLICATION_PROOF_CONTROLLER" \
+  'stty -echo -icanon min 1 time 0'
+require_text "GitHub-publication controller origin reconciliation" "$GITHUB_PUBLICATION_PROOF_CONTROLLER" \
+  'origin/main did not equal the reported protected merge commit'
+require_text "GitHub-publication controller process-group cancellation" "$GITHUB_PUBLICATION_PROOF_CONTROLLER" \
+  'terminate_live_group'
+require_text "GitHub-publication controller atomic receipt" "$GITHUB_PUBLICATION_PROOF_CONTROLLER" \
+  'mv -f -- "$receipt_tmp" "$RECEIPT_NAME"'
 require_text "build docs local-coding live closeout" "$BUILD_DOCS" \
   "./scripts/mac-windows-bridge-live-e2e.sh --run-local-coding"
 require_text "build docs result-artifact live boundary" "$BUILD_DOCS" \

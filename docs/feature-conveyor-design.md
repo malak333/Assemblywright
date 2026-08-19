@@ -49,8 +49,10 @@ button. Neither observation route grants enqueue, execution, review,
 repository, Git, publication, audit-event, or activation authority. The
 separate schema-v16 independent-review gateway is implemented and defaults
 unavailable until one fixed adapter is provisioned. Schema v17 implements the
-durable owner-loopback Publication Coordinator and controlled bare-Git proof,
-while its credential-owning GitHub adapter remains default-unavailable. Schema
+durable owner-loopback Publication Coordinator and controlled bare-Git proof.
+Feature 4 provisions its fixed credential-owning Windows GitHub adapter only
+after exact tool, private configuration, repository, protection, and check
+policy validation; the adapter remains unavailable by default. Schema
 v18 added the internal deterministic orchestration checkpoint kernel described
 below. Schema v19 adds owner-token activation-evidence admission, designated
 exporter-bound Mac activation and owner-control routes, and confirmed signed-
@@ -637,6 +639,46 @@ This proves selected-provider integration and two-case semantic sanity, not
 general review quality, an actual queued feature review, activation admission,
 GitHub publication, or production readiness. Protocol v5 and schema v19 remain
 unchanged.
+
+#### GitHub Publication Live Proof
+
+Feature 4 connects the existing schema-v17 coordinator to one fixed Windows
+GitHub transport without adding a caller-selected repository, executable,
+credential, command, or evidence seam. Provisioning pins `gh.exe` and
+`git.exe`, the running master executable, the public `malak333/Assemblywright`
+repository, base branch `main`,
+the internal `release-local` and `protocol-windows` check identifiers and their
+exact GitHub Actions context names, workflow IDs and paths, trusted workflow
+file digests, and an owner/SYSTEM-private GitHub CLI
+configuration. Authentication must already be valid for the fixed owner
+account; raw tokens are never copied into the repository, master data, argv,
+environment, logs, audit, controller transcript, or proof receipt.
+
+The production adapter derives all operations from the master plan. It pushes
+only the exact frozen candidate commit from the reviewed live base, upserts only the derived feature branch
+pull request, requires current branch protection with strict required checks
+and administrator enforcement, never requests an admin merge, waits with
+deadline/cancellation/current-authority polling, verifies the PR head and
+normal configured merge result, reconciles exact remote `main`, and treats only
+the exact successful `release-local` check on that merged commit as the fixed
+post-merge gate. The owner-loopback route serializes publication, releases the
+master process lock around external work, and rechecks durable authority before
+accepting every adapter result. Any missing, stale, cancelled, deadline-expired,
+or ambiguous result is quarantined with `effect_possible:true`; remote mTLS
+still has no publication route.
+
+Provisioning and proof execution are mutually exclusive, transactionally
+rollback service/configuration changes, and fail for owner reconciliation on
+stale recovery state. The live proof uses the same provisioned adapter against a disposable bounded
+metadata-only proof-marker commit based on exact published `main`. The
+protected pull request intentionally advances `main` with that durable public
+proof marker and no product-code change. The Mac controller binds the starting
+source commit, exact resulting protected merge commit, both hosted check
+contexts, protection/no-bypass observation, pinned tool and service digests,
+and a private transcript digest into one path-free owner-only receipt. It does
+not enqueue or mutate Feature Conveyor state, admit its own receipt, or claim
+general publication, signing, notarization, clean-profile, or production
+readiness.
 
 Prepare is resumable without adding master authority. The Windows disposable
 checkout marker is byte-validated and published by same-directory atomic rename

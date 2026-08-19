@@ -260,8 +260,13 @@ integrate and, only with validated private Windows runner provisioning, execute
 the fixed validation plan against a verified disposable candidate. Registered-
 source mutation and autonomous activation are not implemented. Schema v16
 implements the separate owner-loopback independent-review gateway; schema v17
-implements durable publication coordination while leaving live GitHub
-transport and credentials unprovisioned.
+implements durable publication coordination. Feature 4 adds one
+default-unavailable fixed Windows GitHub transport that is eligible only after
+the pinned Git/GitHub CLI identities, owner-private authentication boundary,
+fixed repository, protected `main`, and exact hosted-check mapping validate.
+The loopback runtime releases its state lock during external work and accepts
+adapter evidence only after cancellation and authority rechecks; enrolled mTLS
+still exposes no publication route.
 Two additional owner-token loopback-only resolution routes compare-and-set the
 exact feature, lifecycle, queue, and Emergency Pause revisions inside the
 authoritative transaction. Cancellation cancels bound coding work, retains the

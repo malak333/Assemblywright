@@ -150,6 +150,29 @@ Before starting a release pass, confirm the claim you intend to make.
   reconstruct it from terminal output. Do not admit it automatically or treat
   it as general reviewer
   competence, actual gateway lifecycle, GitHub, activation, or release proof.
+- Confirm the fixed GitHub-publication adapter remains unavailable before exact
+  Windows provisioning and never accepts a caller repository, remote,
+  executable, credential, command, check name, or adapter evidence. Verify the
+  pinned `gh.exe`/`git.exe` identities, owner/SYSTEM-private GitHub CLI
+  configuration, fixed `malak333/Assemblywright` repository, protected `main`,
+  administrator enforcement, strict required checks, no force/delete policy,
+  and exact internal-to-GitHub check mapping. Exercise push, exact PR upsert,
+  required-check wait, reviewed-head check, normal non-admin merge, remote-main
+  reconciliation, and post-merge `release-local` observation through the same
+  adapter while polling deadline/cancellation/current authority. Missing,
+  failed, stale, late, or ambiguous evidence after intent must quarantine
+  without retry. Keep the route owner-loopback-only and prove authenticated
+  remote mTLS still returns 404.
+- Run `github-publication-proof-controller.sh --check` and `--self-test` in the
+  canonical gate. For live proof, require exact clean published source on both
+  hosts, valid fixed Windows GitHub authentication, a quiescent protocol-5/
+  schema-19 master, and one bounded metadata-only proof-marker candidate merged through protected
+  `main`. Bind the exact starting source and resulting remote-main commit,
+  hosted checks, protection/no-bypass state, pinned tool/service identities,
+  and transcript digest into the owner-private receipt pair. The source
+  checkout itself must remain unchanged during the proof. Do not admit the
+  receipt automatically or treat it as a queued feature, general repository,
+  signing, notarization, clean-profile, or production-readiness proof.
 - Confirm protocol-v5/schema-v13 result-artifact admission uses only an exact
   immutable packet with sorted normalized relative paths and deterministic
   write/delete schemas; SHA-256 covers the complete packet and exact canonical

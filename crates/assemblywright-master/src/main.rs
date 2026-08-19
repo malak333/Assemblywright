@@ -5,13 +5,14 @@ use assemblywright_master::validation_containment::{
     VerifiedValidationCopy,
 };
 use assemblywright_master::{
-    current_time_ms, execute_review_provider_live_proof, invoke_review_provider,
-    prepare_review_provider_call, AcceptedCancellation, AcceptedResult,
+    current_time_ms, execute_github_publication_live_proof, execute_review_provider_live_proof,
+    invoke_review_provider, prepare_review_provider_call, AcceptedCancellation, AcceptedResult,
     ApprovedFeatureSpecification, ArtifactIntegrationAuthorization, ArtifactIntegrationError,
     CapabilityRebindAcknowledgement, DeviceRegistration, EnrollmentGrantSpec, EnrollmentRequest,
     EphemeralServerIdentity, FeatureAbandonmentEvidence, FeatureConveyorStatus,
     FeatureGrantRevisions, FeatureSnapshotClaimPlan, IdentityAuthority, MasterHealthSnapshot,
-    MasterProcess, NewStep, PlatformSecretProtector, ProcessReviewProvider, RemoteWorkContract,
+    MasterProcess, NewStep, PlatformSecretProtector, ProcessGithubPublication,
+    ProcessReviewProvider, PublicationAdapter, PublicationExecutionControl, RemoteWorkContract,
     RepositoryGrantKind, RepositoryGrantRevision, RepositorySnapshotEvidence,
     RepositorySnapshotStore, ResultArtifactReference, ReviewGatewayAuthorization, ReviewProvider,
     ReviewProviderInvocationError, ReviewTransportFailure, StartupReconciliation,
@@ -156,6 +157,14 @@ enum Command {
     ReviewProviderProof {
         #[arg(long)]
         confirm: bool,
+    },
+    /// Run the fixed protected-GitHub publication live proof without queue/database mutation.
+    GithubPublicationProof {
+        #[arg(long)]
+        confirm: bool,
+        /// Exact authenticated main commit from the clean published Windows checkout.
+        #[arg(long)]
+        expected_source_head: String,
     },
     /// Manage the Windows enrollment identity and short-lived device grants.
     Enrollment {
@@ -408,7 +417,9 @@ struct AppState {
     artifact_integration_reservation: Arc<tokio::sync::Mutex<()>>,
     validation_gate_reservation: Arc<tokio::sync::Mutex<()>>,
     review_gateway_reservation: Arc<tokio::sync::Mutex<()>>,
+    publication_reservation: Arc<tokio::sync::Mutex<()>>,
     review_provider: Arc<dyn ReviewProvider>,
+    github_publication: Option<Arc<ProcessGithubPublication>>,
     validation_runtime: ValidationRuntime,
 }
 
@@ -543,6 +554,10 @@ type ApiResult<T> = Result<Json<T>, ApiError>;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     #[cfg(windows)]
+    if let Some(exit_code) = assemblywright_master::github_publication_launcher_exit_code() {
+        std::process::exit(exit_code);
+    }
+    #[cfg(windows)]
     if let Some(exit_code) = assemblywright_master::review_provider_launcher_exit_code() {
         std::process::exit(exit_code);
     }
@@ -573,6 +588,29 @@ async fn main() -> anyhow::Result<()> {
             }
             let receipt = execute_review_provider_live_proof(&provider, current_time_ms()?)
                 .map_err(|_| anyhow::anyhow!("selected review-provider live proof failed"))?;
+            println!("{}", serde_json::to_string(&receipt)?);
+            Ok(())
+        }
+        Command::GithubPublicationProof {
+            confirm,
+            expected_source_head,
+        } => {
+            require_operator_confirmation(confirm, "protected GitHub publication live proof")?;
+            let runtime = ProcessGithubPublication::load(&data_dir)?
+                .context("GitHub publication adapter is not provisioned")?;
+            let receipt = execute_github_publication_live_proof(
+                &runtime,
+                &expected_source_head,
+                current_time_ms()?,
+            )
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "GitHub publication proof failed; credential reauthentication may be required"
+                )
+            })?;
+            receipt
+                .validate()
+                .map_err(|_| anyhow::anyhow!("GitHub publication proof receipt was invalid"))?;
             println!("{}", serde_json::to_string(&receipt)?);
             Ok(())
         }
@@ -1541,6 +1579,7 @@ async fn serve_runtime(
             Some(provider) => Arc::new(provider),
             None => Arc::new(UnavailableReviewProvider),
         };
+    let github_publication = ProcessGithubPublication::load(process.data_dir())?.map(Arc::new);
     let state = AppState {
         process: Arc::new(Mutex::new(process)),
         token_sha256: Sha256::digest(token.as_bytes()).into(),
@@ -1550,7 +1589,9 @@ async fn serve_runtime(
         artifact_integration_reservation: Arc::new(tokio::sync::Mutex::new(())),
         validation_gate_reservation: Arc::new(tokio::sync::Mutex::new(())),
         review_gateway_reservation: Arc::new(tokio::sync::Mutex::new(())),
+        publication_reservation: Arc::new(tokio::sync::Mutex::new(())),
         review_provider,
+        github_publication,
         validation_runtime,
     };
 
@@ -3491,10 +3532,24 @@ async fn feature_publication(
             "publication_request_rejected",
         )
     })?;
-    // A credential-owning GitHub adapter has deliberately not been provisioned.
-    // Validate the complete durable binding, but create no external-effect
-    // intent until a fixed adapter can actually execute it.
-    let authorization = lock_process(&state)?
+    let reservation = state
+        .publication_reservation
+        .clone()
+        .try_lock_owned()
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "publication_in_progress"))?;
+    let state_for_work = state.clone();
+    spawn_reserved_blocking(reservation, move || {
+        perform_feature_publication(&state_for_work, request)
+    })
+    .await
+    .map_err(|_| fixed_error(StatusCode::CONFLICT, "publication_rejected"))?
+}
+
+fn perform_feature_publication(
+    state: &AppState,
+    request: FeatureConveyorPublicationRequest,
+) -> Result<Response, ApiError> {
+    let authorization = lock_process(state)?
         .kernel_mut()
         .prepare_publication(
             &request,
@@ -3502,15 +3557,170 @@ async fn feature_publication(
                 .map_err(|_| fixed_error(StatusCode::CONFLICT, "publication_rejected"))?,
         )
         .map_err(|_| fixed_error(StatusCode::CONFLICT, "publication_rejected"))?;
-    match authorization {
+    let plan = match authorization {
         assemblywright_master::PublicationAuthorization::Existing(receipt) => {
-            Ok(Json(*receipt).into_response())
+            return Ok(Json(*receipt).into_response())
         }
-        assemblywright_master::PublicationAuthorization::Planned(_) => Err(fixed_error(
+        assemblywright_master::PublicationAuthorization::Planned(plan) => *plan,
+    };
+    let runtime = state.github_publication.as_ref().ok_or_else(|| {
+        fixed_error(
             StatusCode::SERVICE_UNAVAILABLE,
             "publication_adapter_unavailable",
-        )),
+        )
+    })?;
+    let (store, candidate) = {
+        let process = lock_process(state)?;
+        let candidate = process
+            .kernel()
+            .candidate_references()
+            .map_err(|_| fixed_error(StatusCode::CONFLICT, "publication_rejected"))?
+            .into_iter()
+            .find(|candidate| candidate.integration_id == request.integration_id)
+            .ok_or_else(|| fixed_error(StatusCode::CONFLICT, "publication_rejected"))?;
+        (process.artifact_integration_store(), candidate)
+    };
+    let mut adapter = runtime
+        .bind_candidate(&plan, store, candidate)
+        .map_err(|_| {
+            fixed_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "publication_adapter_unavailable",
+            )
+        })?;
+    if !adapter.is_available() {
+        return Err(fixed_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "publication_adapter_unavailable",
+        ));
     }
+    runtime.preflight_for_plan(&plan).map_err(|_| {
+        fixed_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "publication_credential_reauthentication_required",
+        )
+    })?;
+    lock_process(state)?
+        .kernel_mut()
+        .begin_publication(
+            &plan,
+            current_time_ms()
+                .map_err(|_| fixed_error(StatusCode::CONFLICT, "publication_rejected"))?,
+        )
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "publication_rejected"))?;
+
+    for action in assemblywright_master::PublicationActionKind::ORDERED {
+        let current = lock_process(state)?
+            .kernel()
+            .publication_execution_is_current(
+                &request,
+                action,
+                current_time_ms().map_err(|_| {
+                    fixed_error(StatusCode::CONFLICT, "publication_effect_ambiguous")
+                })?,
+            )
+            .unwrap_or(false);
+        if !current {
+            quarantine_publication(state, &plan, action)?;
+            return Err(fixed_error(
+                StatusCode::CONFLICT,
+                "publication_effect_ambiguous",
+            ));
+        }
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let monitor_state = state.clone();
+        let monitor_request = request.clone();
+        let control = PublicationExecutionControl::new(
+            cancelled,
+            Instant::now() + assemblywright_master::GITHUB_PUBLICATION_ACTION_DEADLINE,
+            Arc::new(move || {
+                let (maintenance, _) = monitor_state.lifecycle.maintenance_snapshot();
+                !maintenance
+                    && current_time_ms()
+                        .ok()
+                        .and_then(|now_ms| {
+                            monitor_state.process.lock().ok().and_then(|process| {
+                                process
+                                    .kernel()
+                                    .publication_execution_is_current(
+                                        &monitor_request,
+                                        action,
+                                        now_ms,
+                                    )
+                                    .ok()
+                            })
+                        })
+                        .unwrap_or(false)
+            }),
+        );
+        let evidence = match adapter.execute(&plan, action, &control) {
+            Ok(evidence) => evidence,
+            Err(_) => {
+                quarantine_publication(state, &plan, action)?;
+                return Err(fixed_error(
+                    StatusCode::CONFLICT,
+                    "publication_effect_ambiguous",
+                ));
+            }
+        };
+        if control.poll().is_err() {
+            quarantine_publication(state, &plan, action)?;
+            return Err(fixed_error(
+                StatusCode::CONFLICT,
+                "publication_effect_ambiguous",
+            ));
+        }
+        let completion = lock_process(state)?
+            .kernel_mut()
+            .complete_publication_action(
+                &plan,
+                &evidence,
+                current_time_ms().map_err(|_| {
+                    fixed_error(StatusCode::CONFLICT, "publication_effect_ambiguous")
+                })?,
+            );
+        match completion {
+            Ok(Some(receipt)) => {
+                receipt.validate().map_err(|_| {
+                    fixed_error(StatusCode::INTERNAL_SERVER_ERROR, "internal_error")
+                })?;
+                return Ok(Json(receipt).into_response());
+            }
+            Ok(None) => {}
+            Err(_) => {
+                quarantine_publication(state, &plan, action)?;
+                return Err(fixed_error(
+                    StatusCode::CONFLICT,
+                    "publication_effect_ambiguous",
+                ));
+            }
+        }
+    }
+    quarantine_publication(
+        state,
+        &plan,
+        assemblywright_master::PublicationActionKind::RunPostMergeGate,
+    )?;
+    Err(fixed_error(
+        StatusCode::CONFLICT,
+        "publication_effect_ambiguous",
+    ))
+}
+
+fn quarantine_publication(
+    state: &AppState,
+    plan: &assemblywright_master::PublicationExecutionPlan,
+    action: assemblywright_master::PublicationActionKind,
+) -> Result<(), ApiError> {
+    lock_process(state)?
+        .kernel_mut()
+        .quarantine_ambiguous_publication(
+            plan,
+            action,
+            current_time_ms()
+                .map_err(|_| fixed_error(StatusCode::CONFLICT, "publication_effect_ambiguous"))?,
+        )
+        .map_err(|_| fixed_error(StatusCode::CONFLICT, "publication_effect_ambiguous"))
 }
 
 fn perform_feature_review_gateway(
@@ -5364,7 +5574,9 @@ mod tests {
             artifact_integration_reservation: Arc::new(tokio::sync::Mutex::new(())),
             validation_gate_reservation: Arc::new(tokio::sync::Mutex::new(())),
             review_gateway_reservation: Arc::new(tokio::sync::Mutex::new(())),
+            publication_reservation: Arc::new(tokio::sync::Mutex::new(())),
             review_provider: Arc::new(UnavailableReviewProvider),
+            github_publication: None,
             validation_runtime: ValidationRuntime::Disabled,
         };
         let rejection = require_work_admission(&state).expect_err("pause must dominate work");

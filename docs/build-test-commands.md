@@ -237,6 +237,53 @@ and canonical. If the directory or either file is absent or invalid, rerun the
 exact clean published proof controller. Do not reconstruct a missing proof pair
 from terminal output.
 
+## GitHub-publication Live Proof Controller
+
+Static validation and disposable controller regressions run in the canonical
+local gate:
+
+```sh
+./scripts/github-publication-live-e2e.sh --check
+./scripts/github-publication-proof-controller.sh --check
+./scripts/github-publication-proof-controller.sh --self-test
+```
+
+On exact clean protected GitHub `main`, validate or provision the fixed Windows
+GitHub CLI/Git identities and owner-private authentication boundary from the
+authenticated Administrator session:
+
+```powershell
+& .\scripts\windows-github-publication-live-control.ps1 -Action Check
+& .\scripts\windows-github-publication-live-control.ps1 -Action Provision -ConfirmAction
+```
+
+After Mac and Windows equal the exact published implementation commit, start
+the Mac controller:
+
+```sh
+./scripts/github-publication-proof-controller.sh --run
+```
+
+When it emits the single Windows action marker, run and return the one sanitized
+JSON line:
+
+```powershell
+& .\scripts\windows-github-publication-live-control.ps1 -Action Run -ConfirmAction
+```
+
+The fixed live lane uses GitHub CLI secure storage for `malak333`, repository
+`malak333/Assemblywright`, protected `main`, normal merge, and the exact
+`Release local gate` plus `Protocol, master, identity, mTLS, and SCM` contexts.
+It creates a disposable bounded metadata-only proof-marker commit and
+intentionally advances `main` through one non-admin protected pull request,
+then verifies the exact merge and
+post-merge `Release local gate`. A pass writes the owner-private
+`target/github-publication-live-proof/github-publication-live-proof.json` plus
+raw SHA-256 sidecar. The receipt is not admitted automatically and is not an
+actual queued-feature publication, signing/notarization, clean-profile, or
+production-readiness claim. Playwright does not apply to this native
+Rust/Git/GitHub/PowerShell boundary.
+
 ## Windows Distributed Gate
 
 The schema-v9 snapshot-claim, schema-v10 coding-dispatch, schema-v11 owner-resolution,
