@@ -1444,3 +1444,23 @@ an old one.
   `32272305779` and Windows Distributed run `32272306493` at that exact commit.
   No evidence was admitted, no activation was attempted, and the live proof
   does not change the six-slot activation projection.
+- Feature 3 testing uses the native boundaries that actually carry authority:
+  Rust unit tests cover closed environment selection, complete Codex tool
+  disablement, and OS-derived Windows DNS environment; native Rust integration
+  and subprocess tests cover canonical prompt/digest framing,
+  environment-pollution denial, provider admission/cancellation, pinned assets,
+  semantic approval/rejection, Windows verified-image and Job Object
+  containment; controller fixtures plus the live Windows lane cover clean
+  published-source binding, strict receipt validation, private output, and
+  hostile-output denial. The requested browser Playwright, visual-regression,
+  and cross-browser phases do not apply because Feature 3 has no browser
+  surface. `cargo llvm-cov` was unavailable during the closeout audit, so no
+  numeric coverage percentage is claimed.
+- Owner-private proof receipts under ignored `target/` paths are not durable
+  merely because a terminal reported success. After any later build, packaging,
+  or release activity, closeout must revalidate the ordinary owner-owned mode-
+  `0700` canonical non-symlink directory plus each file's type, owner, mode,
+  link count, and receipt/sidecar digest equality. The Feature 3 pair was
+  observed absent after later verification and was restored by rerunning the
+  exact clean published controller. A missing pair must never be reconstructed
+  from copied terminal output.

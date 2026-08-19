@@ -142,7 +142,13 @@ Before starting a release pass, confirm the claim you intend to make.
   schema/harness selector, separates committed bytes from the sanitized Windows
   receipt, rejects dirty/hidden/drifted state and malformed evidence, removes
   its private transcript, and publishes only its fixed owner-private receipt
-  pair. Do not admit it automatically or treat it as general reviewer
+  pair. Run the canonical local gate before live proof, then revalidate that the
+  ignored proof directory remains ordinary, owner-owned, mode `0700`,
+  non-symlink, and canonical, and that the receipt and digest remain owner-only,
+  mode `0600`, single-link, regular, and digest-matched after later build/release activity;
+  regenerate an absent or invalid pair through the exact controller and never
+  reconstruct it from terminal output. Do not admit it automatically or treat
+  it as general reviewer
   competence, actual gateway lifecycle, GitHub, activation, or release proof.
 - Confirm protocol-v5/schema-v13 result-artifact admission uses only an exact
   immutable packet with sorted normalized relative paths and deterministic

@@ -227,6 +227,16 @@ actual queued-feature gateway lifecycle, GitHub publication, signing,
 notarization, or production readiness. Playwright does not apply to this native
 Rust/process/PowerShell boundary.
 
+Run the canonical local gate before the live `--run` lane. The proof pair is an
+ignored owner-private artifact under `target/`, so terminal success alone does
+not establish that it remains retained after later build, packaging, or release
+activity. Before closeout, recheck that both files are owner-only mode `0600`
+and single-link regular files whose raw sidecar equals the receipt SHA-256. The proof
+directory must also remain ordinary, owner-owned, mode `0700`, non-symlink,
+and canonical. If the directory or either file is absent or invalid, rerun the
+exact clean published proof controller. Do not reconstruct a missing proof pair
+from terminal output.
+
 ## Windows Distributed Gate
 
 The schema-v9 snapshot-claim, schema-v10 coding-dispatch, schema-v11 owner-resolution,

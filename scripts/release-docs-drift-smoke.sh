@@ -296,6 +296,14 @@ require_text "review-provider Windows pinned Codex executable digest" "$WINDOWS_
   '$codexExecutableSha256 = "2ad2cf8a732da68b8f141634f92db1a03016c5faf533a7225fbc0fb740130410"'
 require_text "review-provider proof boundary documentation" "$BUILD_DOCS" \
   "Review-provider Live Proof Controller"
+require_text "review-provider retained receipt audit" "$BUILD_DOCS" \
+  "Do not reconstruct a missing proof pair"
+require_text "review-provider retained proof directory audit" "$BUILD_DOCS" \
+  'directory must also remain ordinary, owner-owned, mode `0700`, non-symlink,'
+require_text "review-provider retained proof file ownership audit" "$BUILD_DOCS" \
+  'both files are owner-only mode `0600`'
+require_text "review-provider retained proof file link and digest audit" "$BUILD_DOCS" \
+  "single-link regular files whose raw sidecar equals the receipt SHA-256."
 forbid_text "conveyor live controller stale no-retention criterion" \
   "$WINDOWS_LOCAL_CODING_LIVE_CONTROL" "retain no workspace"
 require_text "conveyor live Mac retained-attempt pair-shape proof" "$MAC_BRIDGE_LIVE_E2E" \
