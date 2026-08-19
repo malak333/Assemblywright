@@ -607,7 +607,9 @@ schema v19 do not change.
 Feature 3 supplies a fixed production Codex review adapter plus a separate live
 proof controller. `scripts/windows-review-provider-live-control.ps1` pins the
 selection to `openai.codex` / `gpt-5.6-sol` and Codex `0.148.0`, verifies exact
-clean Windows source, builds both master binaries, and stages the adapter,
+clean Windows source, downloads the fixed Windows package only from its
+committed registry URL, verifies committed package and native-executable
+digests before first execution, builds both master binaries, and stages the adapter,
 native Codex executable, committed strict output schema, and digest-bound
 schema-v2 `provider.json` in an owner/SYSTEM-private directory while the service
 is stopped. The master accepts no runtime provider path or model override. It

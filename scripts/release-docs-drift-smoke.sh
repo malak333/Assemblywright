@@ -286,6 +286,10 @@ require_text "review-provider live semantic proof" "$MASTER_REVIEW_PROVIDER" \
   "execute_review_provider_live_proof"
 require_text "review-provider Windows pinned Codex" "$WINDOWS_REVIEW_PROVIDER_LIVE_CONTROL" \
   '$codexVersion = "0.148.0"'
+require_text "review-provider Windows pinned Codex package digest" "$WINDOWS_REVIEW_PROVIDER_LIVE_CONTROL" \
+  '$codexPackageSha512 = "fc983c798c3406a4c6354a67af3cd694ada46eedbd35683bb7aa6750311fc6aa5351ffa62bcaf7a245d09fad198db93d227619e1df12c128ebb4e6be8b98523f"'
+require_text "review-provider Windows pinned Codex executable digest" "$WINDOWS_REVIEW_PROVIDER_LIVE_CONTROL" \
+  '$codexExecutableSha256 = "2ad2cf8a732da68b8f141634f92db1a03016c5faf533a7225fbc0fb740130410"'
 require_text "review-provider proof boundary documentation" "$BUILD_DOCS" \
   "Review-provider Live Proof Controller"
 forbid_text "conveyor live controller stale no-retention criterion" \

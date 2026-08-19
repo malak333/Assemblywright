@@ -291,7 +291,10 @@ release requirements, not optional UX guidance.
 - The review-provider live integration is fixed rather than operator-routable:
   `openai.codex`, `gpt-5.6-sol`, Codex `0.148.0`, the committed adapter and
   structured-output schema, and the owner-private Windows Codex auth home are
-  the only eligible production selection. Provisioning requires exact clean
+  the only eligible production selection. Windows provisioning downloads the
+  fixed package URL into private checkout-local staging and verifies committed
+  package and native-executable digests before extraction output is executed.
+  Provisioning requires exact clean
   Windows `main == origin/main`, rejects reparse ambiguity, stages an owner/
   SYSTEM-private provider directory while the master is stopped, and restarts
   into a healthy protocol-v5/schema-v19 service. The master verifies and holds

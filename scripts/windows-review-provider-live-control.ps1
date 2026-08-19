@@ -16,6 +16,9 @@ $endpoint = "127.0.0.1:7791"
 $providerId = "openai.codex"
 $modelId = "gpt-5.6-sol"
 $codexVersion = "0.148.0"
+$codexPackageUrl = "https://registry.npmjs.org/@openai/codex/-/codex-0.148.0-win32-x64.tgz"
+$codexPackageSha512 = "fc983c798c3406a4c6354a67af3cd694ada46eedbd35683bb7aa6750311fc6aa5351ffa62bcaf7a245d09fad198db93d227619e1df12c128ebb4e6be8b98523f"
+$codexExecutableSha256 = "2ad2cf8a732da68b8f141634f92db1a03016c5faf533a7225fbc0fb740130410"
 $protocolVersion = 5
 $masterSchemaVersion = 19
 $shaPattern = "^[0-9a-f]{64}$"
@@ -184,9 +187,8 @@ function Set-PrivateFileAcl {
 }
 
 function Get-CodexNativeExecutable {
-    $npmRoot = (& npm root -g).Trim()
-    if ($LASTEXITCODE -ne 0 -or $npmRoot.Length -eq 0) { throw "The pinned npm root was unavailable." }
-    $packageRoot = Join-Path $npmRoot "@openai\codex-win32-x64"
+    param([Parameter(Mandatory = $true)][string]$InstallRoot)
+    $packageRoot = Join-Path $InstallRoot "package"
     Assert-NoReparseComponents $packageRoot $false
     $matches = @(Get-ChildItem -LiteralPath $packageRoot -Filter "codex.exe" -File -Recurse)
     if ($matches.Count -ne 1) { throw "The pinned Windows Codex native executable was not unique." }
@@ -215,9 +217,27 @@ function Invoke-Provision {
     if (-not $ConfirmAction) { throw "Provision requires -ConfirmAction." }
     $head = Get-SourceHead
     $master = Get-MasterExecutable
-    & npm install -g "@openai/codex@$codexVersion" --ignore-scripts --no-audit --no-fund
-    if ($LASTEXITCODE -ne 0) { throw "The pinned Codex installation failed." }
-    $codex = Get-CodexNativeExecutable
+    $packageStaging = Join-Path $sourceRepository "target\review-provider-codex-package"
+    Assert-NoReparseComponents $packageStaging $true
+    try {
+    if (Test-Path -LiteralPath $packageStaging) {
+        Remove-Item -LiteralPath $packageStaging -Recurse -Force
+    }
+    New-Item -ItemType Directory -Path $packageStaging | Out-Null
+    Set-PrivateAcl $packageStaging
+    $archive = Join-Path $packageStaging "codex.tgz"
+    Invoke-WebRequest -UseBasicParsing -MaximumRedirection 0 -Uri $codexPackageUrl -OutFile $archive
+    $archiveSha = (Get-FileHash -Algorithm SHA512 -LiteralPath $archive).Hash.ToLowerInvariant()
+    if ($archiveSha -cne $codexPackageSha512) { throw "The pinned Codex package digest was not exact." }
+    $tar = Join-Path ([Environment]::SystemDirectory) "tar.exe"
+    Assert-NoReparseComponents $tar $false
+    & $tar -xzf $archive -C $packageStaging
+    if ($LASTEXITCODE -ne 0) { throw "The pinned Codex package extraction failed." }
+    $codex = Get-CodexNativeExecutable $packageStaging
+    $downloadedCodexSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $codex).Hash.ToLowerInvariant()
+    if ($downloadedCodexSha -cne $codexExecutableSha256) {
+        throw "The pinned Codex executable digest was not exact."
+    }
     $version = (& $codex --version).Trim()
     if ($LASTEXITCODE -ne 0 -or $version -notmatch "(^| )$([regex]::Escape($codexVersion))($| )") {
         throw "The native Codex version was not the fixed pinned version."
@@ -308,6 +328,12 @@ function Invoke-Provision {
         model_id = $modelId
         codex_version = $codexVersion
     } | ConvertTo-Json -Compress
+    } finally {
+        if (Test-Path -LiteralPath $packageStaging) {
+            Assert-NoReparseComponents $packageStaging $false
+            Remove-Item -LiteralPath $packageStaging -Recurse -Force
+        }
+    }
 }
 
 function Invoke-Run {
