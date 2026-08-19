@@ -280,6 +280,10 @@ require_text "review-provider proof controller local gate self-test" "$LOCAL_GAT
   "review-provider-proof-controller.sh --self-test"
 require_text "review-provider fixed provider" "$MASTER_REVIEW_PROVIDER_ADAPTER" \
   'const PROVIDER_ID: &str = "openai.codex"'
+require_text "review-provider Windows OS-derived root" "$MASTER_REVIEW_PROVIDER_ADAPTER" \
+  "GetWindowsDirectoryW"
+require_text "review-provider Windows system-only path" "$MASTER_REVIEW_PROVIDER_ADAPTER" \
+  "GetSystemDirectoryW"
 require_text "review-provider fixed model" "$MASTER_REVIEW_PROVIDER" \
   'REVIEW_PROVIDER_CODEX_MODEL_ID: &str = "gpt-5.6-sol"'
 require_text "review-provider live semantic proof" "$MASTER_REVIEW_PROVIDER" \

@@ -135,7 +135,8 @@ Before starting a release pass, confirm the claim you intend to make.
   adapter/Codex/schema digests and source-HEAD-bound deployment manifest;
   owner/SYSTEM-only protected auth DACLs; the master-cleared four-variable adapter launch;
   the existing Windows Job Object gate; adapter-cleared Codex execution with
-  only `CODEX_HOME`, strict config, ephemeral/read-only mode, and every tool surface disabled;
+  `CODEX_HOME` plus only the OS-derived Windows `SystemRoot` and system-directory
+  `PATH`, strict config, ephemeral/read-only mode, and every tool surface disabled;
   strict canonical packet/output bindings; and one fixed approval plus one
   fixed rejection. The controller accepts no path/provider/model/executable/
   schema/harness selector, separates committed bytes from the sanitized Windows

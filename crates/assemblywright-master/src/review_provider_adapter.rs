@@ -6,6 +6,8 @@ use std::collections::BTreeSet;
 use std::env;
 use std::ffi::OsString;
 use std::io::{Read, Write};
+#[cfg(windows)]
+use std::os::windows::ffi::OsStringExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
@@ -134,16 +136,18 @@ fn read_bounded_stdin() -> Result<Vec<u8>, ()> {
 
 fn invoke_codex(configuration: &AdapterConfiguration, prompt: &[u8]) -> Result<Vec<u8>, ()> {
     let working_directory = configuration.codex_executable.parent().ok_or(())?;
-    let mut child = Command::new(&configuration.codex_executable)
+    let mut command = Command::new(&configuration.codex_executable);
+    command
         .args(codex_arguments(configuration, working_directory))
         .current_dir(working_directory)
         .env_clear()
         .env("CODEX_HOME", &configuration.codex_home)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|_| ())?;
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    configure_windows_network_environment(&mut command)?;
+    let mut child = command.spawn().map_err(|_| ())?;
     child
         .stdin
         .take()
@@ -155,6 +159,45 @@ fn invoke_codex(configuration: &AdapterConfiguration, prompt: &[u8]) -> Result<V
         return Err(());
     }
     Ok(output.stdout)
+}
+
+#[cfg(windows)]
+fn configure_windows_network_environment(command: &mut Command) -> Result<(), ()> {
+    use windows_sys::Win32::System::SystemInformation::{
+        GetSystemDirectoryW, GetWindowsDirectoryW,
+    };
+
+    let mut system_root = [0_u16; 32_768];
+    let mut system_directory = [0_u16; 32_768];
+    let root_length = unsafe {
+        GetWindowsDirectoryW(
+            system_root.as_mut_ptr(),
+            system_root.len().try_into().map_err(|_| ())?,
+        )
+    } as usize;
+    let directory_length = unsafe {
+        GetSystemDirectoryW(
+            system_directory.as_mut_ptr(),
+            system_directory.len().try_into().map_err(|_| ())?,
+        )
+    } as usize;
+    if root_length == 0
+        || root_length >= system_root.len()
+        || directory_length == 0
+        || directory_length >= system_directory.len()
+    {
+        return Err(());
+    }
+    command
+        .env(
+            "SystemRoot",
+            OsString::from_wide(&system_root[..root_length]),
+        )
+        .env(
+            "PATH",
+            OsString::from_wide(&system_directory[..directory_length]),
+        );
+    Ok(())
 }
 
 fn review_prompt(packet: &[u8], packet_sha256: &[u8; 32]) -> Result<Vec<u8>, ()> {
@@ -370,5 +413,29 @@ mod tests {
         assert!(arguments
             .iter()
             .any(|argument| argument == "--strict-config"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_network_environment_is_os_derived_and_closed() {
+        let mut command = Command::new("unused.exe");
+        command.env_clear();
+        configure_windows_network_environment(&mut command).unwrap();
+        let environment = command
+            .get_envs()
+            .map(|(name, value)| {
+                (
+                    name.to_string_lossy().into_owned(),
+                    value.unwrap().to_string_lossy().into_owned(),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(
+            environment.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["PATH", "SystemRoot"]
+        );
+        assert!(!environment["SystemRoot"].is_empty());
+        assert!(!environment["PATH"].is_empty());
+        assert!(!environment["PATH"].contains(';'));
     }
 }

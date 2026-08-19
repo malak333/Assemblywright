@@ -302,7 +302,9 @@ release requirements, not optional UX guidance.
   adapter variables after environment clearing, requires owner/SYSTEM-only
   protected DACLs on the Codex home and auth file, and preserves the pre-spawn
   Windows Job Object gate. The adapter clears again and passes only
-  `CODEX_HOME`, uses ephemeral read-only noninteractive execution, and disables
+  `CODEX_HOME` on non-Windows hosts; on Windows, OS APIs additionally supply
+  `SystemRoot` and a system-directory-only `PATH` required by native DNS. It
+  uses ephemeral read-only noninteractive execution and disables
   shell, agent, skill-install, image, and web surfaces. Input/output remain
   strict canonical protocol documents under `--strict-config`; credentials,
   stderr, provider prose,

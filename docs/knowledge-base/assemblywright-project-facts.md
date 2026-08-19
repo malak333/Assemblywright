@@ -1407,8 +1407,9 @@ an old one.
   and holds adapter/Codex/schema identities across each response-only Job Object
   call, requires owner/SYSTEM-only protected auth DACLs,
   clears the adapter environment to four exact bindings, and exposes no runtime
-  path/provider/model selector. The adapter clears again, passes only
-  `CODEX_HOME`, uses strict-config ephemeral read-only Codex execution, disables shell,
+  path/provider/model selector. The adapter clears again, passes `CODEX_HOME`
+  plus only OS-derived Windows `SystemRoot` and a system-directory-only `PATH`,
+  uses strict-config ephemeral read-only Codex execution, disables shell,
   snapshot, agent, skill-install, image, and web surfaces, and rejects packet or
   output binding drift.
 - `scripts/review-provider-proof-controller.sh --run` accepts no repository,

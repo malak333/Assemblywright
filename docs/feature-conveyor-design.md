@@ -616,8 +616,10 @@ is stopped. The master accepts no runtime provider path or model override. It
 verifies the adapter/Codex/schema digests and ordinary canonical support assets,
 requires owner/SYSTEM-only protected auth DACLs, retains locked handles during the
 call, clears the provider environment, and uses the existing Windows Job Object
-gate before process execution. The adapter clears again and passes only the
-owner-private `CODEX_HOME`; Codex uses strict configuration parsing, is
+gate before process execution. The adapter clears again and passes the
+owner-private `CODEX_HOME`; on Windows it additionally derives `SystemRoot` and
+the system-directory-only `PATH` directly from OS APIs so native DNS can operate
+without ambient user environment. Codex uses strict configuration parsing, is
 ephemeral and read-only, and is configured with
 shell, snapshot, subagent, skill-install, image, and web surfaces disabled.
 
