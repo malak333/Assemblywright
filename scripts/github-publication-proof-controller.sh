@@ -378,6 +378,7 @@ initialize_fixture() {
   printf 'fixture controller\n' >"$fixture/$CONTROLLER_PATH"; printf '[System.Collections.IDictionary]\n' >"$fixture/$WINDOWS_PATH"
   git_safe "$fixture" add .; git_safe "$fixture" commit -q -m fixture
   git_safe "$fixture" remote add origin "$bare"; git -c protocol.file.allow=always -C "$fixture" push -q -u origin main
+  git --git-dir="$bare" symbolic-ref HEAD refs/heads/main
 }
 
 fixture_harness() {
