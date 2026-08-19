@@ -322,6 +322,46 @@ release requirements, not optional UX guidance.
   output chain leaves no current receipt. This proves selected-provider
   integration and two-case semantic sanity only, not general review competence,
   queue/gateway lifecycle, GitHub publication, activation, or release readiness.
+- The GitHub-publication production adapter is fixed and default-unavailable.
+  Provisioning may accept only the pinned Windows master, `gh.exe`, and `git.exe`
+  identities, an owner/SYSTEM-private GitHub CLI configuration for the fixed
+  owner account, repository `malak333/Assemblywright`, base `main`, and the
+  exact mapping from protocol check identifiers to the two GitHub Actions
+  contexts, workflow IDs and paths, and trusted workflow-file digests. A caller
+  may never select a repository, executable, remote,
+  credential, command, check name, branch-protection policy, or evidence body.
+  Authentication tokens must remain in GitHub CLI secure storage and must not
+  enter argv, environment, files created by Assemblywright, logs, audit,
+  transcripts, or receipts. Missing authentication, identity, private ACL,
+  protection, context, or repository state keeps the adapter unavailable before
+  durable effect intent. Credential-owning processes must start only from the
+  owner-private publication root with a sanitized path; worker candidate paths
+  may be derived Git arguments but never process search paths or working directories.
+- Every GitHub adapter action must derive from the immutable master plan and
+  poll deadline, cancellation, and current authority before, during, and after
+  external work. Push only the exact frozen candidate to the derived feature
+  branch; create or recover only its exact pull request; require strict
+  up-to-date `main` checks, pull-request protection, administrator enforcement,
+  no force/delete policy, and no bypass; verify the reviewed head; request only
+  the configured normal merge; reconcile the exact resulting `main`; and
+  accept the post-merge gate only from the exact successful `release-local`
+  GitHub check on that commit. Never use `--admin` or an equivalent bypass.
+  Missing, failed, stale, cancelled, deadline-expired, late, or ambiguous
+  evidence after intent creation quarantines with effect possible and is never
+  automatically retried.
+- `github-publication-proof-controller.sh --run` is separate from evidence
+  admission and activation. It accepts no repository, remote, executable,
+  credential, branch, check, or alternate harness argument; requires exact
+  clean published `main` and normal tracked-index state at start; executes only
+  the exact committed native harness bytes; and receives sanitized Windows
+  evidence on a distinct descriptor. The live fixture may advance protected
+  `main` only with one bounded metadata-only proof-marker commit created in
+  disposable private state. The source checkout must remain unchanged while fetched `origin/main`
+  advances exactly to the reported protected merge. The controller hashes and
+  removes its bounded private transcript and publishes only the fixed
+  owner-private path-free receipt/digest pair. It never POSTs admission,
+  activates, enqueues, or claims general repository support, signing,
+  notarization, clean-profile, or production-readiness proof.
 - Feature orchestration owner pause/resume is separate from Emergency Pause and
   is available only to the exact current designated non-fixture MacBridge after
   an accepted exporter-bound session. It compare-and-sets feature lifecycle,

@@ -61,6 +61,7 @@ use uuid::Uuid;
 
 use fs2::FileExt;
 
+mod github_publication;
 mod identity;
 mod integration;
 pub mod publication;
@@ -69,10 +70,21 @@ mod review_provider;
 mod snapshot;
 pub mod validation_containment;
 
+#[cfg(windows)]
+pub use github_publication::github_publication_launcher_exit_code;
+pub use github_publication::{
+    credential_git_process_boundary, execute_github_publication_live_proof,
+    sanitized_publication_command_path, validate_github_branch_protection_observation,
+    validate_github_required_checks_observation, validate_github_workflow_content,
+    validate_proof_cleanup_status, validate_proof_source_binding, validate_remote_base_observation,
+    GithubPublicationConfigError, GithubPublicationLiveProofReceipt, GithubPublicationSession,
+    ProcessGithubPublication, GITHUB_PUBLICATION_ACTION_DEADLINE,
+};
 pub use integration::{
     ArtifactIntegrationError, ArtifactIntegrationStore, CandidateEvidence, IntegrationArtifact,
     PreparedCandidate, ValidationCandidateScratch,
 };
+pub use publication::{PublicationAdapter, PublicationAdapterError, PublicationExecutionControl};
 pub use result_artifact::{
     PreparedResultArtifact, ResultArtifactReference, ResultArtifactStore, ResultArtifactStoreError,
     VerifiedResultArtifact,

@@ -213,6 +213,45 @@ mutate the queue, prove general reviewer competence, exercise feature gateway
 lifecycle, publish to GitHub, or establish production readiness. Protocol v5
 and schema v19 are unchanged.
 
+The fourth slice is the fixed GitHub-publication live integration and proof
+controller. The schema-v17 Publication Coordinator remains the only durable
+publication authority. Its Windows production adapter is unavailable unless
+the owner has provisioned the exact pinned master, `gh.exe`, and `git.exe` identities,
+an owner/SYSTEM-private GitHub CLI configuration, and the fixed public
+`malak333/Assemblywright` repository policy. Internal check identifiers map
+only to the two committed GitHub Actions contexts, workflow IDs and paths, and
+trusted workflow-file digests at the checked commit. The adapter pushes the exact
+frozen candidate from the master-owned repository, creates or recovers the
+single exact pull request, observes strict `main` protection with administrator
+enforcement and no bypass, waits for the complete required-check set, rechecks
+the reviewed head, performs only the configured normal protected merge,
+reconciles exact remote `main`, and observes the fixed post-merge
+`release-local` check. Credentials remain in GitHub CLI secure storage and are
+never request, argv, environment, file, audit, log, or receipt data. The master
+persists an immutable intent before each possible effect, releases its process
+lock during external work, monitors current authority and cancellation, and
+quarantines every ambiguous or late result without retry.
+
+The owner-run `scripts/github-publication-proof-controller.sh --run` starts
+only from exact clean published `main`, executes only the committed native
+harness bytes, and receives one sanitized Windows result on a separate
+descriptor. The live fixture creates a disposable no-remote working repository
+with one bounded metadata-only proof-marker commit, then uses the same
+production adapter to push, open, check, normally merge, reconcile, and
+post-merge-check that metadata-only marker commit through protected GitHub
+`main`. Because the proof intentionally
+advances `origin/main`, the controller requires the source checkout itself to
+remain unchanged while the fetched remote advances to the exact reported merge
+commit. It hashes and deletes the private transcript and atomically publishes
+only a path-free owner-private receipt/digest pair under
+`target/github-publication-live-proof`. The controller never admits activation
+evidence or activates orchestration; its activation origin is the fixed
+`github_publication_proof_controller` identifier. This proves the fixed GitHub credential,
+push, pull-request, hosted-check, protection, merge, and reconciliation path;
+it does not prove a queued feature publication, general repository support,
+signing, notarization, clean-profile installation, or production readiness.
+Protocol v5 and schema v19 are unchanged.
+
 The designated bridge may explicitly owner-pause or resume only an exact
 active, effect-free orchestration checkpoint using lifecycle, orchestration,
 queue, designation, and Emergency Pause revisions. Owner pause stops the active

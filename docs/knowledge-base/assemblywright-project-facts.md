@@ -1464,3 +1464,40 @@ an old one.
   observed absent after later verification and was restored by rerunning the
   exact clean published controller. A missing pair must never be reconstructed
   from copied terminal output.
+- Feature 4 connects the schema-v17 Publication Coordinator to one fixed,
+  default-unavailable Windows GitHub adapter. The production selection is
+  `malak333/Assemblywright`, base `main`, pinned master, GitHub CLI, and Git binaries,
+  owner/SYSTEM-private GitHub CLI authentication state, normal protected merge,
+  and exact mappings from protocol IDs `release-local` and
+  `protocol-windows` to the GitHub Actions contexts `Release local gate` and
+  `Protocol, master, identity, mTLS, and SCM`, their exact workflow IDs and
+  paths, and trusted workflow-file digests. No caller-selected repository,
+  remote, executable, credential, command, context, protection policy, or
+  adapter evidence is accepted.
+- GitHub `main` is protected with pull requests, strict up-to-date required
+  checks, both hosted contexts, administrator enforcement, and conversation
+  resolution; force pushes and deletion are disabled. Publication must observe
+  that policy and use a normal merge. An admin merge or any bypass is forbidden
+  evidence, not a fallback.
+- The GitHub adapter keeps credentials inside GitHub CLI secure storage and
+  polls cancellation, deadline, and current authority around every effect. It
+  pushes only the frozen candidate, binds one exact pull request and reviewed
+  head, reconciles exact remote `main`, and accepts the fixed post-merge gate
+  only from the successful `Release local gate` check on that commit. Any
+  missing, stale, failed, late, or ambiguous result after durable intent
+  quarantines without automatic retry.
+- The Feature 4 live proof uses the production adapter with one disposable
+  bounded metadata-only proof-marker commit. Its protected pull request
+  advances `main` with that durable public marker and no product-code change,
+  so the Mac controller must keep its source checkout
+  unchanged while fetching and binding the exact reported merged
+  `origin/main`. The path-free owner-private receipt proves the fixed GitHub
+  credential, push, PR, hosted-check, protection/no-bypass, normal-merge, and
+  reconciliation path only; it is not activation admission, a queued feature,
+  general repository support, signing, notarization, clean-profile, or
+  production-readiness evidence.
+- `scripts/github-publication-proof-controller.sh --run` accepts no alternate
+  repository, remote, branch, tool, credential, context, or harness. It keeps
+  committed harness bytes separate from the sanitized Windows receipt, removes
+  its private transcript, and publishes only the fixed ignored owner-private
+  `target/github-publication-live-proof` receipt/digest pair.
