@@ -1422,3 +1422,25 @@ an old one.
   `target/review-provider-live-proof` receipt pair. It does not admit evidence,
   activate, enqueue, prove general reviewer competence, exercise a real feature
   gateway lifecycle, or prove GitHub/signing/notarization/production readiness.
+- Feature 3 live closeout passed at published implementation commit
+  `2291432c3b91307654dc327edf4db630bd7fb7f3`. Windows provisioned the fixed
+  `openai.codex` / `gpt-5.6-sol` provider with Codex `0.148.0`, then the native
+  proof exercised one semantic approval and one semantic rejection against the
+  healthy protocol 5/schema 19 service while the queue was empty and unpaused.
+  The service, adapter, Codex, and output-schema SHA-256 identities were
+  `c5776702ec9276579fc97960e4a2154aabb956379eef887c5d11319af4eec444`,
+  `67d5cfbe01036939ad1ebf35db51a687def36ec8e31d769c14ec4504b02237d8`,
+  `2ad2cf8a732da68b8f141634f92db1a03016c5faf533a7225fbc0fb740130410`,
+  and `62af1c4c71e1592f3b6b42fa72ea19ed56de6fe61034ae866d0032d212fa1fe9`.
+  The approval packet/output digests were
+  `0051e11bc685936f5493ba062692e78ba7269722501b22e1600ba2b587a90427` /
+  `97722b79662e76772a7aff9f0c127e78bd999e96dc4e476eda9307c568fafbea`;
+  the retained rerun's rejection pair was
+  `ba25a3a99e5ea5cf24d1c805c3d5eca191eb5a234d715ad219c3a04068161b3e` /
+  `db890d6f79fee1e8ec186b323c76d553cccda5e7e417a1285b25df50c7e4995f`.
+  The retained owner-private Mac receipt SHA-256 is
+  `5306041761b199da2503945d33b8d9f3b4df6fba862200aab7a9dd81505801fe`.
+  Canonical local release verification passed, as did Release Local run
+  `32272305779` and Windows Distributed run `32272306493` at that exact commit.
+  No evidence was admitted, no activation was attempted, and the live proof
+  does not change the six-slot activation projection.
