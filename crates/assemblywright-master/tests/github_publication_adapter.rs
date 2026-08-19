@@ -6,6 +6,7 @@ use assemblywright_master::{
     PublicationAdapterError, PublicationExecutionControl,
 };
 use serde_json::json;
+#[cfg(not(windows))]
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
@@ -315,6 +316,7 @@ fn normalized_lf(bytes: &[u8]) -> Vec<u8> {
     normalized
 }
 
+#[cfg(not(windows))]
 fn valid_config(gh: &[u8], git: &[u8]) -> serde_json::Value {
     let master = fs::read(std::env::current_exe().unwrap()).unwrap();
     json!({
@@ -334,6 +336,7 @@ fn valid_config(gh: &[u8], git: &[u8]) -> serde_json::Value {
     })
 }
 
+#[cfg(not(windows))]
 fn write_config(root: &Path, value: &serde_json::Value) {
     fs::write(
         root.join("publication.json"),
@@ -392,6 +395,7 @@ fn workflow_runs(commit: &str) -> serde_json::Value {
     ])
 }
 
+#[cfg(not(windows))]
 fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
     let mut encoded = String::with_capacity(bytes.len() * 2);
@@ -401,21 +405,21 @@ fn hex(bytes: &[u8]) -> String {
     encoded
 }
 
-#[cfg(unix)]
+#[cfg(all(not(windows), unix))]
 fn make_private(path: &Path, directory: bool) {
     use std::os::unix::fs::PermissionsExt;
     let mode = if directory { 0o700 } else { 0o600 };
     fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
 }
 
-#[cfg(not(unix))]
+#[cfg(all(not(windows), not(unix)))]
 fn make_private(_path: &Path, _directory: bool) {}
 
-#[cfg(unix)]
+#[cfg(all(not(windows), unix))]
 fn make_executable(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
 }
 
-#[cfg(not(unix))]
+#[cfg(all(not(windows), not(unix)))]
 fn make_executable(_path: &Path) {}
