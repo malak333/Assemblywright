@@ -40,8 +40,14 @@ function Invoke-Git {
 
 function Assert-NoReparseComponents {
     param([Parameter(Mandatory = $true)][string]$Path, [bool]$AllowMissingLeaf = $false)
-    $full = [IO.Path]::GetFullPath($Path)
+    if ($Path.StartsWith("\\?\", [StringComparison]::Ordinal)) {
+        throw "A fixed review-provider path used an unsupported extended namespace."
+    }
+    $candidate = $Path
+    if ($candidate -notmatch '^[A-Za-z]:\\') { throw "A fixed review-provider path was not drive-qualified." }
+    $full = [IO.Path]::GetFullPath($candidate)
     $root = [IO.Path]::GetPathRoot($full)
+    if ([string]::IsNullOrEmpty($root)) { throw "A fixed review-provider path was not rooted." }
     $current = $root
     $parts = @($full.Substring($root.Length) -split "[\\/]" | Where-Object { $_.Length -gt 0 })
     for ($index = 0; $index -lt $parts.Count; $index += 1) {
@@ -117,8 +123,8 @@ function Get-MasterExecutable {
     }
     $expected = [IO.Path]::GetFullPath((Join-Path $sourceRepository "target\release\assemblywright-master.exe"))
     if ($comparisonExecutable -cne $expected) { throw "The Windows master is not the exact source-checkout release executable." }
-    Assert-NoReparseComponents $executable $false
-    return $executable
+    Assert-NoReparseComponents $expected $false
+    return $expected
 }
 
 function Invoke-MasterHealth {
