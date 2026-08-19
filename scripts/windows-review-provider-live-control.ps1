@@ -152,7 +152,9 @@ function Assert-ConveyorQuiescent {
     if ($token.Length -lt 32 -or $token.Length -gt 256) { throw "The owner-loopback token shape was invalid." }
     $status = Invoke-RestMethod -Method Get -Uri "http://$endpoint/v1/feature-conveyor/status" -Headers @{ Authorization = "Bearer $token" }
     if ([UInt64]$status.schema_version -ne 9 -or [UInt64]$status.visible_feature_count -ne 0 -or
-        @($status.features).Count -ne 0 -or $null -ne $status.owner_guidance.active_feature_id) {
+        @($status.features).Count -ne 0 -or $status.owner_guidance.state -cne "idle" -or
+        $status.owner_guidance.reason_code -cne "queue_empty" -or
+        $null -ne $status.owner_guidance.feature_id) {
         throw "The Feature Conveyor was not quiescent before provider provisioning."
     }
     foreach ($property in @($status.counts_by_status.PSObject.Properties)) {
