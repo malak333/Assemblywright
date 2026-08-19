@@ -227,6 +227,14 @@ bytes, validates one complete signed-Swift/real-Rust/schema-v19 worker flow and
 cleanup, resumes only exact marker-bound preparation/enqueue state after lost
 output, then emits only a path-free full-transcript-digest-bound local receipt. Admission and
 activation remain later Windows-authoritative owner actions.
+Feature 3 likewise remains outside evidence-admission authority. The Windows
+master owns a single digest-bound `openai.codex` / `gpt-5.6-sol` adapter
+selection and launches it through the schema-v16 response-only Job Object
+boundary. The adapter owns only one ephemeral, read-only, tool-disabled Codex
+call and receives no repository or credential bytes from the packet. The Mac
+proof controller coordinates one fixed approval/rejection semantic pair,
+records only definition/transcript/packet/output digests, and never mutates the
+queue or admits its receipt.
 Replacement-candidate construction remains unavailable under the current
 artifact/dispatch contract, so substantive failures stop at owner attention.
 Delete first atomically captures the leaf in the held parent and rolls mismatch

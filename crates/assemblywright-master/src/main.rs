@@ -5,13 +5,14 @@ use assemblywright_master::validation_containment::{
     VerifiedValidationCopy,
 };
 use assemblywright_master::{
-    current_time_ms, invoke_review_provider, prepare_review_provider_call, AcceptedCancellation,
-    AcceptedResult, ApprovedFeatureSpecification, ArtifactIntegrationAuthorization,
-    ArtifactIntegrationError, CapabilityRebindAcknowledgement, DeviceRegistration,
-    EnrollmentGrantSpec, EnrollmentRequest, EphemeralServerIdentity, FeatureAbandonmentEvidence,
-    FeatureConveyorStatus, FeatureGrantRevisions, FeatureSnapshotClaimPlan, IdentityAuthority,
-    MasterHealthSnapshot, MasterProcess, NewStep, PlatformSecretProtector, ProcessReviewProvider,
-    RemoteWorkContract, RepositoryGrantKind, RepositoryGrantRevision, RepositorySnapshotEvidence,
+    current_time_ms, execute_review_provider_live_proof, invoke_review_provider,
+    prepare_review_provider_call, AcceptedCancellation, AcceptedResult,
+    ApprovedFeatureSpecification, ArtifactIntegrationAuthorization, ArtifactIntegrationError,
+    CapabilityRebindAcknowledgement, DeviceRegistration, EnrollmentGrantSpec, EnrollmentRequest,
+    EphemeralServerIdentity, FeatureAbandonmentEvidence, FeatureConveyorStatus,
+    FeatureGrantRevisions, FeatureSnapshotClaimPlan, IdentityAuthority, MasterHealthSnapshot,
+    MasterProcess, NewStep, PlatformSecretProtector, ProcessReviewProvider, RemoteWorkContract,
+    RepositoryGrantKind, RepositoryGrantRevision, RepositorySnapshotEvidence,
     RepositorySnapshotStore, ResultArtifactReference, ReviewGatewayAuthorization, ReviewProvider,
     ReviewProviderInvocationError, ReviewTransportFailure, StartupReconciliation,
     UnavailableReviewProvider, ValidationCommandEvidence, ValidationGateAuthorization,
@@ -150,6 +151,11 @@ enum Command {
         endpoint: SocketAddr,
         #[arg(long, default_value = "prove the Windows master process boundary")]
         prompt: String,
+    },
+    /// Run the fixed selected-provider approval/rejection live proof without queue mutation.
+    ReviewProviderProof {
+        #[arg(long)]
+        confirm: bool,
     },
     /// Manage the Windows enrollment identity and short-lived device grants.
     Enrollment {
@@ -557,6 +563,18 @@ async fn main() -> anyhow::Result<()> {
         Command::Health { endpoint } => health(&data_dir, endpoint).await,
         Command::FixtureWorker { endpoint, prompt } => {
             fixture_worker(&data_dir, endpoint, prompt).await
+        }
+        Command::ReviewProviderProof { confirm } => {
+            require_operator_confirmation(confirm, "selected review-provider live proof")?;
+            let provider = ProcessReviewProvider::load(&data_dir)?
+                .context("selected review provider is not provisioned")?;
+            if !provider.is_pinned_codex_adapter() {
+                bail!("selected review provider is not the pinned Codex adapter");
+            }
+            let receipt = execute_review_provider_live_proof(&provider, current_time_ms()?)
+                .map_err(|_| anyhow::anyhow!("selected review-provider live proof failed"))?;
+            println!("{}", serde_json::to_string(&receipt)?);
+            Ok(())
         }
         Command::Enrollment { command } => enrollment(&data_dir, command),
         Command::Service { command } => service_command(&data_dir, command).await,

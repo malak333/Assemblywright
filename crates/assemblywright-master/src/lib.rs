@@ -80,10 +80,11 @@ pub use result_artifact::{
 #[cfg(windows)]
 pub use review_provider::review_provider_launcher_exit_code;
 pub use review_provider::{
-    invoke_review_provider, prepare_review_provider_call, PreparedReviewProviderCall,
-    ProcessReviewProvider, ReviewProvider, ReviewProviderCapabilities, ReviewProviderConfigError,
-    ReviewProviderInvocationError, ReviewProviderTokenCountError, ReviewProviderTransportError,
-    UnavailableReviewProvider, MAX_FEATURE_CONVEYOR_REVIEW_INPUT_TOKENS,
+    execute_review_provider_live_proof, invoke_review_provider, prepare_review_provider_call,
+    PreparedReviewProviderCall, ProcessReviewProvider, ReviewProvider, ReviewProviderCapabilities,
+    ReviewProviderConfigError, ReviewProviderInvocationError, ReviewProviderLiveProofReceipt,
+    ReviewProviderTokenCountError, ReviewProviderTransportError, UnavailableReviewProvider,
+    MAX_FEATURE_CONVEYOR_REVIEW_INPUT_TOKENS,
 };
 pub use snapshot::{PreparedRepositorySnapshot, RepositorySnapshotError, RepositorySnapshotStore};
 

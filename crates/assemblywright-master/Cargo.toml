@@ -13,6 +13,10 @@ publish = false
 name = "assemblywright-master"
 path = "src/main.rs"
 
+[[bin]]
+name = "assemblywright-review-provider"
+path = "src/review_provider_adapter.rs"
+
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true

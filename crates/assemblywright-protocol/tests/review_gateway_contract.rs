@@ -143,6 +143,11 @@ fn review_request_rejects_unknown_zero_and_unbounded_fields() {
 fn review_packet_binds_exact_spec_diff_evidence_and_size() {
     let packet = packet();
     assert!(packet.validate().is_ok());
+    let encoded = packet.canonical_bytes().unwrap();
+    assert_eq!(
+        FeatureConveyorReviewPacket::decode_frame(&encoded).unwrap(),
+        packet
+    );
     let expected: [u8; 32] = Sha256::digest(packet.canonical_bytes().unwrap()).into();
     assert_eq!(packet.sha256().unwrap(), expected);
 
@@ -158,6 +163,15 @@ fn review_packet_binds_exact_spec_diff_evidence_and_size() {
     oversized.candidate_diff = "x".repeat(256 * 1024);
     oversized.candidate_diff_sha256 = Sha256::digest(oversized.candidate_diff.as_bytes()).into();
     assert!(oversized.validate().is_err());
+
+    let duplicate = encoded
+        .strip_suffix(b"}")
+        .unwrap()
+        .iter()
+        .copied()
+        .chain(br#",\"schema_version\":1}"#.iter().copied())
+        .collect::<Vec<_>>();
+    assert!(FeatureConveyorReviewPacket::decode_frame(&duplicate).is_err());
 }
 
 #[test]

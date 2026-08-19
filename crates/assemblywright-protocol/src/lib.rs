@@ -2155,6 +2155,15 @@ pub struct FeatureConveyorReviewPacket {
 }
 
 impl FeatureConveyorReviewPacket {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "feature_conveyor_review_packet",
+            frame,
+            MAX_FEATURE_CONVEYOR_REVIEW_PACKET_BYTES,
+            Self::validate,
+        )
+    }
+
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, ProtocolError> {
         self.validate()?;
         let value = serde_json::to_value(self).map_err(|error| ProtocolError::Serialization {

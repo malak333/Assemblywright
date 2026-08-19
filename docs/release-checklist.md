@@ -129,6 +129,20 @@ Before starting a release pass, confirm the claim you intend to make.
   Confirm Prepare resumes only marker-bound missing exact revision-1 grants and
   that a lost helper enqueue receipt can continue only from the one exact queued
   lifecycle-revision-1 feature at baseline queue revision plus one.
+- For Feature 3 review-provider activation evidence, require exact published
+  Mac/Windows `main` parity; the fixed `openai.codex` / `gpt-5.6-sol` selection;
+  pinned Codex `0.148.0`; owner-private auth and staged adapter assets; exact
+  adapter/Codex/schema digests and source-HEAD-bound deployment manifest;
+  owner/SYSTEM-only protected auth DACLs; the master-cleared four-variable adapter launch;
+  the existing Windows Job Object gate; adapter-cleared Codex execution with
+  only `CODEX_HOME`, strict config, ephemeral/read-only mode, and every tool surface disabled;
+  strict canonical packet/output bindings; and one fixed approval plus one
+  fixed rejection. The controller accepts no path/provider/model/executable/
+  schema/harness selector, separates committed bytes from the sanitized Windows
+  receipt, rejects dirty/hidden/drifted state and malformed evidence, removes
+  its private transcript, and publishes only its fixed owner-private receipt
+  pair. Do not admit it automatically or treat it as general reviewer
+  competence, actual gateway lifecycle, GitHub, activation, or release proof.
 - Confirm protocol-v5/schema-v13 result-artifact admission uses only an exact
   immutable packet with sorted normalized relative paths and deterministic
   write/delete schemas; SHA-256 covers the complete packet and exact canonical

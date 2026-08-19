@@ -12,11 +12,12 @@ observation surface.
 This repository is foundation work. The durable contracts, the master kernel,
 the enrollment and mTLS identity path, the Windows service lifecycle, the Mac
 bridge and worker agent, and the release gate are implemented. Registered-
-source-checkout mutation, production review-provider provisioning and reviewer-
-quality proof, and live GitHub publication-adapter provisioning remain
-unavailable. The Windows master implements bounded general coding, isolated
+source-checkout mutation, general reviewer-quality proof, and live GitHub
+publication-adapter provisioning remain unavailable. The Windows master
+implements bounded general coding, isolated
 artifact integration, deterministic validation, a
-default-unavailable independent-review gateway, schema-v17 durable publication
+  independent-review gateway with a separately provisioned pinned Codex adapter
+  and narrow live semantic proof controller, schema-v17 durable publication
 coordination as
 explicit owner actions, and a schema-v19 default-inert orchestration checkpoint
 kernel with a real Mac owner-control and activation surface. Activation remains

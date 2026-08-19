@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "review_packet_sha256": { "$ref": "#/$defs/digest" },
+    "provider_id": { "type": "string", "const": "openai.codex" },
+    "model_id": { "type": "string", "const": "gpt-5.6-sol" },
+    "decision": { "type": "string", "enum": ["approved", "rejected"] },
+    "blocking_findings": {
+      "type": "array",
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/finding" }
+    },
+    "non_blocking_findings": {
+      "type": "array",
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/finding" }
+    },
+    "requirement_coverage": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "requirement_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "status": { "type": "string", "enum": ["covered", "uncovered"] },
+          "evidence_sha256": { "$ref": "#/$defs/digest" }
+        },
+        "required": ["requirement_id", "status", "evidence_sha256"]
+      }
+    },
+    "evidence_digests": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/digest" }
+    },
+    "knowledge_base_determination": {
+      "type": "string",
+      "enum": ["updated", "no_new_knowledge", "update_required"]
+    },
+    "knowledge_base_evidence_sha256": { "$ref": "#/$defs/digest" }
+  },
+  "required": [
+    "schema_version",
+    "review_packet_sha256",
+    "provider_id",
+    "model_id",
+    "decision",
+    "blocking_findings",
+    "non_blocking_findings",
+    "requirement_coverage",
+    "evidence_digests",
+    "knowledge_base_determination",
+    "knowledge_base_evidence_sha256"
+  ],
+  "$defs": {
+    "byte": { "type": "integer", "minimum": 0, "maximum": 255 },
+    "digest": {
+      "type": "array",
+      "minItems": 32,
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/byte" }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "finding_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "requirement_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "evidence_sha256": { "$ref": "#/$defs/digest" }
+      },
+      "required": ["finding_id", "requirement_id", "evidence_sha256"]
+    }
+  }
+}

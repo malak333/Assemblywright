@@ -1400,3 +1400,24 @@ an old one.
   Win32 timeout `258` in the unchanged review-provider E2E, then passed attempt
   2 at the same SHA without weakening the test. Windows final source parity and
   the already-deployed protocol 5/schema 19 service health were reverified.
+- Feature 3 adds a fixed selected review-provider integration and proof
+  controller. Windows provisioning accepts only exact clean published `main`,
+  `openai.codex`, `gpt-5.6-sol`, Codex `0.148.0`, the fixed owner-private Codex
+  auth home, and committed adapter/output-schema assets. The master verifies
+  and holds adapter/Codex/schema identities across each response-only Job Object
+  call, requires owner/SYSTEM-only protected auth DACLs,
+  clears the adapter environment to four exact bindings, and exposes no runtime
+  path/provider/model selector. The adapter clears again, passes only
+  `CODEX_HOME`, uses strict-config ephemeral read-only Codex execution, disables shell,
+  snapshot, agent, skill-install, image, and web surfaces, and rejects packet or
+  output binding drift.
+- `scripts/review-provider-proof-controller.sh --run` accepts no repository,
+  provider, model, executable, schema, or harness argument. Exact committed
+  harness bytes and the sanitized Windows receipt use separate descriptors.
+  The live command requires one fixed valid candidate approval and one fixed
+  invalid candidate rejection, then binds only the exact published commit/tree,
+  five committed definition digests, bounded private-transcript digest,
+  provider/model, time, pass status, and narrow boundary into the owner-private
+  `target/review-provider-live-proof` receipt pair. It does not admit evidence,
+  activate, enqueue, prove general reviewer competence, exercise a real feature
+  gateway lifecycle, or prove GitHub/signing/notarization/production readiness.

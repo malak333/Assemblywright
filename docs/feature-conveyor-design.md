@@ -604,6 +604,36 @@ GitHub-publication, restart-recovery, control-streaming, signing distribution,
 notarization, clean-profile, or production-readiness evidence. Protocol v5 and
 schema v19 do not change.
 
+Feature 3 supplies a fixed production Codex review adapter plus a separate live
+proof controller. `scripts/windows-review-provider-live-control.ps1` pins the
+selection to `openai.codex` / `gpt-5.6-sol` and Codex `0.148.0`, verifies exact
+clean Windows source, builds both master binaries, and stages the adapter,
+native Codex executable, committed strict output schema, and digest-bound
+schema-v2 `provider.json` in an owner/SYSTEM-private directory while the service
+is stopped. The master accepts no runtime provider path or model override. It
+verifies the adapter/Codex/schema digests and ordinary canonical support assets,
+requires owner/SYSTEM-only protected auth DACLs, retains locked handles during the
+call, clears the provider environment, and uses the existing Windows Job Object
+gate before process execution. The adapter clears again and passes only the
+owner-private `CODEX_HOME`; Codex uses strict configuration parsing, is
+ephemeral and read-only, and is configured with
+shell, snapshot, subagent, skill-install, image, and web surfaces disabled.
+
+After exact published Mac/Windows parity, the owner runs
+`./scripts/review-provider-proof-controller.sh --run` and supplies the one
+sanitized output from the committed Windows control. The native harness rejects
+duplicate/extra keys and binds source HEAD, protocol 5, master schema 19,
+provider/model, four packet/output digests, and live time. The production path
+must approve a fixed specification-matching candidate and reject a fixed
+mismatch. The controller revalidates the repository and five committed
+definition blobs, hashes and removes its private transcript, then atomically
+publishes a bounded path-free schema-v1 receipt and raw digest under
+`target/review-provider-live-proof`. It never posts that digest to Windows.
+This proves selected-provider integration and two-case semantic sanity, not
+general review quality, an actual queued feature review, activation admission,
+GitHub publication, or production readiness. Protocol v5 and schema v19 remain
+unchanged.
+
 Prepare is resumable without adding master authority. The Windows disposable
 checkout marker is byte-validated and published by same-directory atomic rename
 before grants, durably binding the generated repository/feature IDs and exact

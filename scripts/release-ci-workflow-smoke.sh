@@ -73,6 +73,8 @@ expected_local_gate_commands=(
   "run ./scripts/repository-gate-proof-controller.sh --self-test"
   "run ./scripts/restricted-worker-proof-controller.sh --check"
   "run ./scripts/restricted-worker-proof-controller.sh --self-test"
+  "run ./scripts/review-provider-proof-controller.sh --check"
+  "run ./scripts/review-provider-proof-controller.sh --self-test"
   "run ./scripts/release-naming-contract-smoke.sh --check"
   "run ./scripts/release-naming-contract-smoke.sh --self-test"
   "run ./scripts/release-shell-portability-smoke.sh --check"

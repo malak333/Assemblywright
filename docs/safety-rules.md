@@ -288,6 +288,35 @@ release requirements, not optional UX guidance.
   live process group. The controller never POSTs admission, activates, or
   claims a host sandbox, OS-wide egress enforcement, provider, GitHub, restart,
   control-streaming, notarization, clean-profile, or production-readiness proof.
+- The review-provider live integration is fixed rather than operator-routable:
+  `openai.codex`, `gpt-5.6-sol`, Codex `0.148.0`, the committed adapter and
+  structured-output schema, and the owner-private Windows Codex auth home are
+  the only eligible production selection. Provisioning requires exact clean
+  Windows `main == origin/main`, rejects reparse ambiguity, stages an owner/
+  SYSTEM-private provider directory while the master is stopped, and restarts
+  into a healthy protocol-v5/schema-v19 service. The master verifies and holds
+  adapter, Codex, and schema identities across each call, passes only four fixed
+  adapter variables after environment clearing, requires owner/SYSTEM-only
+  protected DACLs on the Codex home and auth file, and preserves the pre-spawn
+  Windows Job Object gate. The adapter clears again and passes only
+  `CODEX_HOME`, uses ephemeral read-only noninteractive execution, and disables
+  shell, agent, skill-install, image, and web surfaces. Input/output remain
+  strict canonical protocol documents under `--strict-config`; credentials,
+  stderr, provider prose,
+  paths, and raw outputs may not enter the live receipt.
+- `review-provider-proof-controller.sh --run` is separate from evidence
+  admission and activation. It accepts no repository, provider, model,
+  executable, schema, or alternate harness, requires exact clean published
+  `main` with normal index state and stable committed definitions, and accepts
+  only one fixed approval plus one fixed rejection through the Windows-selected
+  provider. Windows coordination uses a separate descriptor from committed
+  harness bytes. The bounded private transcript is validated, hashed, and
+  removed; success publishes only an owner-private digest-first/receipt-last
+  pair. Malformed input, definition/repository drift, provider mismatch,
+  unexpected decision, surviving descendants, interruption, or an unsafe
+  output chain leaves no current receipt. This proves selected-provider
+  integration and two-case semantic sanity only, not general review competence,
+  queue/gateway lifecycle, GitHub publication, activation, or release readiness.
 - Feature orchestration owner pause/resume is separate from Emergency Pause and
   is available only to the exact current designated non-fixture MacBridge after
   an accepted exporter-bound session. It compare-and-sets feature lifecycle,

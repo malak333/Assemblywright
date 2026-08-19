@@ -125,6 +125,8 @@ run inside the canonical local gate:
 ```sh
 ./scripts/restricted-worker-proof-controller.sh --check
 ./scripts/restricted-worker-proof-controller.sh --self-test
+./scripts/review-provider-proof-controller.sh --check
+./scripts/review-provider-proof-controller.sh --self-test
 ```
 
 After this feature is committed to clean published `main`, the Windows checkout
@@ -183,6 +185,47 @@ This receipt proves only the restricted-worker category. It is not evidence of
 a host sandbox or OS-wide egress control, review-provider quality, GitHub
 publication, restart recovery, Mac/Windows owner-control streaming, signing
 distribution, notarization, clean-profile install, or production readiness.
+
+## Review-provider Live Proof Controller
+
+Static validation and disposable native Git/process regressions run in the
+canonical local gate:
+
+```sh
+./scripts/review-provider-live-e2e.sh --check
+./scripts/review-provider-proof-controller.sh --check
+./scripts/review-provider-proof-controller.sh --self-test
+```
+
+On exact clean Windows `main == origin/main`, provision the fixed pinned adapter
+and restart the service from the authenticated Administrator session:
+
+```powershell
+& .\scripts\windows-review-provider-live-control.ps1 -Action Provision -ConfirmAction
+```
+
+After Mac and Windows equal the exact published commit, start the Mac controller:
+
+```sh
+./scripts/review-provider-proof-controller.sh --run
+```
+
+When it emits the single Windows action marker, run and return the one sanitized
+JSON line:
+
+```powershell
+& .\scripts\windows-review-provider-live-control.ps1 -Action Run -ConfirmAction
+```
+
+The flow is fixed to `openai.codex`, `gpt-5.6-sol`, and Codex `0.148.0`. It
+uses the production schema-v16 provider process/Job Object path and requires a
+known-good approval plus a known-bad rejection. A pass writes the owner-private
+`target/review-provider-live-proof/review-provider-live-proof.json` and raw
+SHA-256 sidecar. Provider output and credentials are absent. The receipt is not
+admitted automatically and is not evidence of general review competence, an
+actual queued-feature gateway lifecycle, GitHub publication, signing,
+notarization, or production readiness. Playwright does not apply to this native
+Rust/process/PowerShell boundary.
 
 ## Windows Distributed Gate
 

@@ -53,6 +53,9 @@ MASTER_VALIDATION_CONTAINMENT="crates/assemblywright-master/src/validation_conta
 MASTER_VALIDATION_CONTAINMENT_E2E="crates/assemblywright-master/tests/windows_validation_containment_e2e.rs"
 MASTER_REVIEW_PROVIDER="crates/assemblywright-master/src/review_provider.rs"
 MASTER_REVIEW_PROVIDER_E2E="crates/assemblywright-master/tests/review_provider_e2e.rs"
+MASTER_REVIEW_PROVIDER_ADAPTER="crates/assemblywright-master/src/review_provider_adapter.rs"
+MASTER_REVIEW_PROVIDER_ADAPTER_E2E="crates/assemblywright-master/tests/review_provider_adapter_e2e.rs"
+MASTER_REVIEW_OUTPUT_SCHEMA="crates/assemblywright-master/resources/review-output-schema.json"
 MASTER_PUBLICATION="crates/assemblywright-master/src/publication.rs"
 MASTER_SERVICE_E2E="crates/assemblywright-master/tests/windows_service_lifecycle_e2e.rs"
 AGENT_E2E="crates/assemblywright-agent/tests/local_relay_e2e.rs"
@@ -78,6 +81,9 @@ MAC_BRIDGE_LIVE_E2E="scripts/mac-windows-bridge-live-e2e.sh"
 MAC_LOCAL_CODING_SNAPSHOT_E2E="scripts/mac-local-coding-snapshot-e2e.sh"
 REPOSITORY_GATE_PROOF_CONTROLLER="scripts/repository-gate-proof-controller.sh"
 RESTRICTED_WORKER_PROOF_CONTROLLER="scripts/restricted-worker-proof-controller.sh"
+REVIEW_PROVIDER_PROOF_CONTROLLER="scripts/review-provider-proof-controller.sh"
+REVIEW_PROVIDER_LIVE_E2E="scripts/review-provider-live-e2e.sh"
+WINDOWS_REVIEW_PROVIDER_LIVE_CONTROL="scripts/windows-review-provider-live-control.ps1"
 WINDOWS_FIXTURE_LIVE_CONTROL="scripts/windows-fixture-live-control.ps1"
 WINDOWS_MLX_LIVE_CONTROL="scripts/windows-mlx-live-control.ps1"
 WINDOWS_LOCAL_CODING_LIVE_CONTROL="scripts/windows-local-coding-live-control.ps1"
@@ -134,6 +140,8 @@ for file in \
   "$MASTER_ARTIFACT_INTEGRATION" "$MASTER_ARTIFACT_INTEGRATION_E2E" \
   "$MASTER_VALIDATION_CONTAINMENT" "$MASTER_VALIDATION_CONTAINMENT_E2E" \
   "$MASTER_REVIEW_PROVIDER" "$MASTER_REVIEW_PROVIDER_E2E" \
+  "$MASTER_REVIEW_PROVIDER_ADAPTER" "$MASTER_REVIEW_PROVIDER_ADAPTER_E2E" \
+  "$MASTER_REVIEW_OUTPUT_SCHEMA" \
   "$MASTER_SERVICE_E2E" "$AGENT_E2E" "$AGENT_LOCAL_CODING_E2E" "$CLI_NAMING_E2E" \
   "$CLI_READINESS_E2E" \
   "$MAC_BRIDGE" "$MAC_BRIDGE_CLI" "$MAC_BRIDGE_KEYCHAIN" "$MAC_BRIDGE_NETWORK" \
@@ -141,6 +149,8 @@ for file in \
   "$MAC_APP" "$MAC_BRIDGE_TESTS" "$MAC_APP_TESTS" \
   "$MAC_BRIDGE_LIVE_E2E" "$MAC_LOCAL_CODING_SNAPSHOT_E2E" \
   "$REPOSITORY_GATE_PROOF_CONTROLLER" "$RESTRICTED_WORKER_PROOF_CONTROLLER" \
+  "$REVIEW_PROVIDER_PROOF_CONTROLLER" "$REVIEW_PROVIDER_LIVE_E2E" \
+  "$WINDOWS_REVIEW_PROVIDER_LIVE_CONTROL" \
   "$WINDOWS_FIXTURE_LIVE_CONTROL" \
   "$WINDOWS_MLX_LIVE_CONTROL" "$WINDOWS_LOCAL_CODING_LIVE_CONTROL" \
   "$WINDOWS_LOCAL_CODING_LIVE_CONTROL_SELF_CHECK" "$WINDOWS_PROTOCOL_WORKFLOW" \
@@ -182,6 +192,8 @@ require_text "README positioning" "$README" "Orchestrated intelligence. Verified
 require_text "README license" "$README" "Apache License 2.0"
 require_text "README conveyor framing" "$README" "owner-approved feature queue"
 require_text "README non-claims" "$README" "Autonomous dispatch"
+require_text "README selected review-provider integration" "$README" \
+  "narrow live semantic proof controller"
 
 require_text "DESIGN conveyor pointer" "$DESIGN" "docs/feature-conveyor-design.md"
 require_text "DESIGN distributed pointer" "$DESIGN" "docs/distributed-developer-mode-design.md"
@@ -262,6 +274,20 @@ require_text "conveyor live controller Mac cleanup binding" "$WINDOWS_LOCAL_CODI
   "mac_cleanup_sha256"
 require_text "conveyor live controller Git blob CRLF unit regression" \
   "$WINDOWS_LOCAL_CODING_LIVE_CONTROL" "git_blob_crlf_regression"
+require_text "review-provider proof controller local gate check" "$LOCAL_GATE" \
+  "review-provider-proof-controller.sh --check"
+require_text "review-provider proof controller local gate self-test" "$LOCAL_GATE" \
+  "review-provider-proof-controller.sh --self-test"
+require_text "review-provider fixed provider" "$MASTER_REVIEW_PROVIDER_ADAPTER" \
+  'const PROVIDER_ID: &str = "openai.codex"'
+require_text "review-provider fixed model" "$MASTER_REVIEW_PROVIDER" \
+  'REVIEW_PROVIDER_CODEX_MODEL_ID: &str = "gpt-5.6-sol"'
+require_text "review-provider live semantic proof" "$MASTER_REVIEW_PROVIDER" \
+  "execute_review_provider_live_proof"
+require_text "review-provider Windows pinned Codex" "$WINDOWS_REVIEW_PROVIDER_LIVE_CONTROL" \
+  '$codexVersion = "0.148.0"'
+require_text "review-provider proof boundary documentation" "$BUILD_DOCS" \
+  "Review-provider Live Proof Controller"
 forbid_text "conveyor live controller stale no-retention criterion" \
   "$WINDOWS_LOCAL_CODING_LIVE_CONTROL" "retain no workspace"
 require_text "conveyor live Mac retained-attempt pair-shape proof" "$MAC_BRIDGE_LIVE_E2E" \
@@ -503,7 +529,7 @@ require_text "knowledge base review boundary" "$KB" \
 require_text "readme review default" "$README" \
   "default-unavailable owner-loopback independent-review gateway"
 require_text "readme current review boundary" "$README" \
-  "default-unavailable independent-review gateway"
+  "independent-review gateway with a separately provisioned pinned Codex adapter"
 require_text "publication protocol contract present" "$PROTOCOL_PUBLICATION_E2E" \
   "publication_request_is_strict_path_free_and_every_binding_changes_identity"
 require_text "publication adapter default boundary" "$MASTER_PUBLICATION" \

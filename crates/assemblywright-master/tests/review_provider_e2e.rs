@@ -1,13 +1,13 @@
 use assemblywright_master::{
-    invoke_review_provider, prepare_review_provider_call, ProcessReviewProvider, ReviewProvider,
-    ReviewProviderCapabilities, ReviewProviderInvocationError, ReviewProviderTokenCountError,
-    ReviewProviderTransportError, UnavailableReviewProvider,
-    MAX_FEATURE_CONVEYOR_REVIEW_INPUT_TOKENS,
+    execute_review_provider_live_proof, invoke_review_provider, prepare_review_provider_call,
+    ProcessReviewProvider, ReviewProvider, ReviewProviderCapabilities,
+    ReviewProviderInvocationError, ReviewProviderTokenCountError, ReviewProviderTransportError,
+    UnavailableReviewProvider, MAX_FEATURE_CONVEYOR_REVIEW_INPUT_TOKENS,
 };
 use assemblywright_protocol::{
     FeatureConveyorGrantRevisions, FeatureConveyorKnowledgeBaseDetermination,
     FeatureConveyorReviewCoverageStatus, FeatureConveyorReviewDecision,
-    FeatureConveyorReviewGatewayRequest, FeatureConveyorReviewPacket,
+    FeatureConveyorReviewFinding, FeatureConveyorReviewGatewayRequest, FeatureConveyorReviewPacket,
     FeatureConveyorReviewProviderOutput, FeatureConveyorReviewRequirementCoverage,
     FEATURE_CONVEYOR_REVIEW_GATEWAY_SCHEMA_VERSION, MAX_FEATURE_CONVEYOR_REVIEW_OUTPUT_BYTES,
     MAX_FEATURE_CONVEYOR_REVIEW_PACKET_BYTES,
@@ -211,6 +211,101 @@ fn post_response_cancellation_suppresses_an_otherwise_valid_output() {
     assert_eq!(provider.calls.load(Ordering::Acquire), 1);
 }
 
+struct SemanticProofProvider {
+    calls: AtomicUsize,
+}
+
+impl ReviewProvider for SemanticProofProvider {
+    fn capabilities(&self) -> Option<ReviewProviderCapabilities> {
+        Some(ReviewProviderCapabilities {
+            provider_id: "openai.codex".to_string(),
+            model_id: "gpt-5.6-sol".to_string(),
+            max_input_bytes: MAX_FEATURE_CONVEYOR_REVIEW_PACKET_BYTES,
+            max_input_tokens: MAX_FEATURE_CONVEYOR_REVIEW_INPUT_TOKENS,
+            max_output_bytes: MAX_FEATURE_CONVEYOR_REVIEW_OUTPUT_BYTES,
+            strict_structured_output: true,
+            response_only: true,
+            fresh_session_per_call: true,
+        })
+    }
+
+    fn count_input_tokens(
+        &self,
+        canonical_packet: &[u8],
+    ) -> Result<u64, ReviewProviderTokenCountError> {
+        Ok(canonical_packet.len() as u64)
+    }
+
+    fn review_response_only(
+        &self,
+        request: &FeatureConveyorReviewGatewayRequest,
+        canonical_packet: &[u8],
+        _cancelled: &AtomicBool,
+    ) -> Result<Vec<u8>, ReviewProviderTransportError> {
+        self.calls.fetch_add(1, Ordering::AcqRel);
+        let packet = FeatureConveyorReviewPacket::decode_frame(canonical_packet).unwrap();
+        let approved = packet
+            .candidate_diff
+            .contains("+review-provider-live=approved\n");
+        serde_json::to_vec(&FeatureConveyorReviewProviderOutput {
+            schema_version: FEATURE_CONVEYOR_REVIEW_GATEWAY_SCHEMA_VERSION,
+            review_packet_sha256: request.review_packet_sha256,
+            provider_id: request.provider_id.clone(),
+            model_id: request.model_id.clone(),
+            decision: if approved {
+                FeatureConveyorReviewDecision::Approved
+            } else {
+                FeatureConveyorReviewDecision::Rejected
+            },
+            blocking_findings: if approved {
+                vec![]
+            } else {
+                vec![FeatureConveyorReviewFinding {
+                    finding_id: "proof-candidate-mismatch".to_string(),
+                    requirement_id: packet.requirement_ids[0].clone(),
+                    evidence_sha256: packet.evidence_digests[0],
+                }]
+            },
+            non_blocking_findings: vec![],
+            requirement_coverage: vec![FeatureConveyorReviewRequirementCoverage {
+                requirement_id: packet.requirement_ids[0].clone(),
+                status: if approved {
+                    FeatureConveyorReviewCoverageStatus::Covered
+                } else {
+                    FeatureConveyorReviewCoverageStatus::Uncovered
+                },
+                evidence_sha256: packet.evidence_digests[0],
+            }],
+            evidence_digests: packet.evidence_digests.clone(),
+            knowledge_base_determination: FeatureConveyorKnowledgeBaseDetermination::NoNewKnowledge,
+            knowledge_base_evidence_sha256: packet.evidence_digests[1],
+        })
+        .map_err(|_| ReviewProviderTransportError::IncompleteTransport)
+    }
+}
+
+#[test]
+fn live_proof_requires_fresh_semantic_approval_and_rejection_calls() {
+    let provider = SemanticProofProvider {
+        calls: AtomicUsize::new(0),
+    };
+    let receipt = execute_review_provider_live_proof(&provider, 1234).unwrap();
+    assert_eq!(provider.calls.load(Ordering::Acquire), 2);
+    assert_eq!(receipt.status, "review_provider_live_proof_passed");
+    assert_eq!(receipt.provider_id, "openai.codex");
+    assert_eq!(receipt.model_id, "gpt-5.6-sol");
+    assert_eq!(receipt.observed_at_ms, 1234);
+    for digest in [
+        receipt.approval_packet_sha256,
+        receipt.approval_output_sha256,
+        receipt.rejection_packet_sha256,
+        receipt.rejection_output_sha256,
+    ] {
+        assert_eq!(digest.len(), 64);
+        assert!(digest.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    }
+}
+
 struct AdmissionProvider {
     capabilities: Option<ReviewProviderCapabilities>,
     token_count: Result<u64, ReviewProviderTokenCountError>,
@@ -377,6 +472,7 @@ fn configured_adapter_uses_a_fresh_cleared_environment_process_per_call() {
     let provider = ProcessReviewProvider::load(directory.path())
         .unwrap()
         .unwrap();
+    assert!(!provider.is_pinned_codex_adapter());
     let prepared = prepare_review_provider_call(&provider, &request, &packet).unwrap();
     let started = Instant::now();
     for _ in 0..2 {
@@ -398,6 +494,118 @@ fn configured_adapter_uses_a_fresh_cleared_environment_process_per_call() {
         prepare_review_provider_call(&provider, &request, &packet).unwrap_err(),
         ReviewProviderInvocationError::Unavailable
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn codex_adapter_configuration_binds_auth_location_and_support_asset_bytes() {
+    let (packet, request) = packet_and_request();
+    let mut live_request = request.clone();
+    let mut live_packet = packet.clone();
+    live_request.provider_id = "openai.codex".to_string();
+    live_request.model_id = "gpt-5.6-sol".to_string();
+    live_packet.provider_id = live_request.provider_id.clone();
+    live_packet.model_id = live_request.model_id.clone();
+    live_request.review_packet_sha256 = live_packet.sha256().unwrap();
+    let output = FeatureConveyorReviewProviderOutput {
+        schema_version: FEATURE_CONVEYOR_REVIEW_GATEWAY_SCHEMA_VERSION,
+        review_packet_sha256: live_request.review_packet_sha256,
+        provider_id: live_request.provider_id.clone(),
+        model_id: live_request.model_id.clone(),
+        decision: FeatureConveyorReviewDecision::Approved,
+        blocking_findings: vec![],
+        non_blocking_findings: vec![],
+        requirement_coverage: vec![FeatureConveyorReviewRequirementCoverage {
+            requirement_id: packet.requirement_ids[0].clone(),
+            status: FeatureConveyorReviewCoverageStatus::Covered,
+            evidence_sha256: packet.evidence_digests[0],
+        }],
+        evidence_digests: packet.evidence_digests.clone(),
+        knowledge_base_determination: FeatureConveyorKnowledgeBaseDetermination::NoNewKnowledge,
+        knowledge_base_evidence_sha256: packet.evidence_digests[0],
+    };
+    let directory = tempdir().unwrap();
+    let root = directory.path().join("review-provider");
+    fs::create_dir(&root).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    let codex_home = directory.path().join("codex-home");
+    fs::create_dir(&codex_home).unwrap();
+    fs::set_permissions(&codex_home, fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(codex_home.join("auth.json"), b"fixture-auth").unwrap();
+    fs::set_permissions(
+        codex_home.join("auth.json"),
+        fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+    let codex = root.join("codex");
+    fs::write(&codex, b"#!/bin/sh\nexit 0\n").unwrap();
+    fs::set_permissions(&codex, fs::Permissions::from_mode(0o700)).unwrap();
+    let schema = root.join("review-output-schema.json");
+    let schema_bytes = b"{\"type\":\"object\"}\n";
+    fs::write(&schema, schema_bytes).unwrap();
+    fs::set_permissions(&schema, fs::Permissions::from_mode(0o600)).unwrap();
+    let executable = root.join("review-provider");
+    let output_json = serde_json::to_string(&output).unwrap();
+    fs::write(
+        &executable,
+        format!(
+            "#!/bin/sh\nset -eu\n[ \"${{ASSEMBLYWRIGHT_REVIEW_CODEX_HOME-}}\" = '{}' ]\n[ \"${{ASSEMBLYWRIGHT_REVIEW_CODEX_EXECUTABLE-}}\" = '{}' ]\n[ \"${{ASSEMBLYWRIGHT_REVIEW_OUTPUT_SCHEMA-}}\" = '{}' ]\n[ \"${{ASSEMBLYWRIGHT_REVIEW_MODEL_ID-}}\" = 'gpt-5.6-sol' ]\ncat >/dev/null\nif [ \"${{1-}}\" = '--count-tokens' ]; then printf 100; else printf '%s' '{}'; fi\n",
+            fs::canonicalize(&codex_home).unwrap().display(),
+            fs::canonicalize(&codex).unwrap().display(),
+            fs::canonicalize(&schema).unwrap().display(),
+            output_json.replace('\'', "'\\''")
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+    let digest = |path: &std::path::Path| {
+        Sha256::digest(fs::read(path).unwrap())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    };
+    let config = json!({
+        "schema_version": 2,
+        "provider_id": "openai.codex",
+        "model_id": "gpt-5.6-sol",
+        "max_input_tokens": 64000,
+        "review_provider_executable_sha256": digest(&executable),
+        "codex_adapter": {
+            "kind": "codex_exec_v1",
+            "codex_home": fs::canonicalize(&codex_home).unwrap(),
+            "codex_executable_sha256": digest(&codex),
+            "output_schema_sha256": digest(&schema)
+        }
+    });
+    fs::write(
+        root.join("provider.json"),
+        serde_json::to_vec(&config).unwrap(),
+    )
+    .unwrap();
+    fs::set_permissions(
+        root.join("provider.json"),
+        fs::Permissions::from_mode(0o600),
+    )
+    .unwrap();
+
+    let provider = ProcessReviewProvider::load(directory.path())
+        .unwrap()
+        .unwrap();
+    assert!(provider.is_pinned_codex_adapter());
+    let prepared = prepare_review_provider_call(&provider, &live_request, &live_packet).unwrap();
+    let decision =
+        invoke_review_provider(&provider, &live_request, &prepared, &AtomicBool::new(false))
+            .unwrap();
+    assert_eq!(decision.decision, FeatureConveyorReviewDecision::Approved);
+
+    fs::write(&schema, b"replaced").unwrap();
+    assert_eq!(
+        prepare_review_provider_call(&provider, &live_request, &live_packet).unwrap_err(),
+        ReviewProviderInvocationError::Unavailable
+    );
+    fs::write(&schema, schema_bytes).unwrap();
+    fs::write(&executable, b"#!/bin/sh\nexit 0\n").unwrap();
+    assert!(ProcessReviewProvider::load(directory.path()).is_err());
 }
 
 #[cfg(windows)]

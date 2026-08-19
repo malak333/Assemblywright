@@ -188,6 +188,31 @@ GitHub publication, restart recovery, Mac/Windows control streaming, signing
 distribution, notarization, clean-profile installation, or production readiness.
 Protocol v5 and schema v19 are unchanged.
 
+The third slice is the selected review-provider live integration and proof
+controller. Windows provisioning is fixed to `openai.codex`, `gpt-5.6-sol`,
+Codex `0.148.0`, the owner-private `C:\Users\mike\.codex` authentication home,
+and committed adapter/output-schema bytes. The schema-v16 production provider
+loader verifies the adapter, Codex, and output-schema digests and ordinary-file
+identities, requires an owner/SYSTEM-only protected Codex auth DACL,
+holds non-delete-share handles across each invocation, clears the adapter
+environment, and launches every response-only provider process through the
+existing pre-spawn Windows Job Object gate. The adapter then clears the Codex
+environment, supplies only `CODEX_HOME`, enables strict configuration parsing,
+forces ephemeral read-only execution,
+disables shell, agent, skill-install, image, and web surfaces, and strictly
+validates every packet/output binding before returning JSON. The owner-run
+`scripts/review-provider-proof-controller.sh --run` accepts no provider, model,
+executable, repository, schema, or harness selector. From exact clean published
+`main`, it executes the committed native harness with Windows coordination on a
+separate descriptor and requires one fixed valid candidate to be approved and
+one fixed invalid candidate to be rejected. Only a path-free receipt and digest
+are atomically published under `target/review-provider-live-proof`; the private
+transcript is hashed and removed. This is selected-provider integration and
+fixed semantic sanity proof only. It does not admit activation evidence,
+mutate the queue, prove general reviewer competence, exercise feature gateway
+lifecycle, publish to GitHub, or establish production readiness. Protocol v5
+and schema v19 are unchanged.
+
 The designated bridge may explicitly owner-pause or resume only an exact
 active, effect-free orchestration checkpoint using lifecycle, orchestration,
 queue, designation, and Emergency Pause revisions. Owner pause stops the active
