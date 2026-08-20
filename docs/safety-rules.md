@@ -391,6 +391,12 @@ release requirements, not optional UX guidance.
   evidence admission, activation, signing, notarization, installation, and
   production readiness remain outside the claim. Master startup ambiguity must
   continue to quarantine without retry under the native focused tests.
+- A Cargo-produced Windows service image that is still hard-linked to `deps` or
+  inherits broader checkout ACLs is not eligible restart-proof input. Deployment
+  may prepare the exact bytes only while the service is stopped, must create a
+  new single-link service-path file protected to the fixed owner and SYSTEM,
+  must preserve the digest, and must restore verified health before proof. The
+  read-only `Check` action never performs this preparation implicitly.
 - Feature orchestration owner pause/resume is separate from Emergency Pause and
   is available only to the exact current designated non-fixture MacBridge after
   an accepted exporter-bound session. It compare-and-sets feature lifecycle,

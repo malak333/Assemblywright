@@ -269,8 +269,11 @@ Windows receipt arrives on a separate descriptor, never as executable input.
 
 The fixed Windows control requires deliberate `Run` confirmation and serializes
 operations. It binds the controller-reported commit to exact clean Windows
-source, the literal service/data paths, exact `MIKE-PC\mike` service owner, and
-the source-checkout release image. It stops the service to freeze authority,
+source, the literal service/data paths, the SID-bound local `MIKE-PC\mike`
+service owner (including SCM's exact `.\mike` display alias), and the source-
+checkout release image. It accepts the extended-length path namespace only
+when the executable and data-directory arguments use it consistently. It stops
+the service to freeze authority,
 requires no SQLite sidecar, hashes and integrity-checks the complete database
 and bounded migration backups, then rebuilds the exact expected HEAD offline
 with the fixed absolute Cargo/Rust/MSVC toolchain into owner/SYSTEM-private
@@ -282,6 +285,13 @@ healthy PID with protocol 5, schema 19, Emergency Pause clear, and empty
 distributed and Feature Conveyor state. Failure attempts exact healthy service
 restoration and emits no receipt. The JSON binds the pinned Cargo, rustc, MSVC,
 service-image, and frozen-database digests without paths.
+
+The installed image is a deployment prerequisite, not controller-created
+trust. A direct Cargo release output may share an inode with its `deps` artifact
+and inherit broader checkout ACLs; it is ineligible until a stopped-service
+deployment preserves the exact bytes in a new single-link file protected to the
+owner and SYSTEM, then restores healthy service operation. `Check` observes and
+rejects this drift without mutating it.
 
 The Mac controller hashes and deletes its private transcript, rechecks the
 source and committed definitions, and atomically publishes one owner-private

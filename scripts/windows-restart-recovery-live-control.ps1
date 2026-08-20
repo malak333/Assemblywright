@@ -14,6 +14,10 @@ $dataDir = "C:\Users\mike\AppData\Local\Assemblywright\master"
 $databasePath = Join-Path $dataDir "master.sqlite3"
 $serviceName = "AssemblywrightMaster"
 $serviceOwner = "MIKE-PC\mike"
+$serviceOwnerAliases = @($serviceOwner, ".\mike")
+$serviceOwnerSid = ([Security.Principal.NTAccount]$serviceOwner).Translate(
+    [Security.Principal.SecurityIdentifier]
+).Value
 $endpoint = "127.0.0.1:7791"
 $remoteEndpoint = "100.64.23.14:7792"
 $protocolVersion = 5
@@ -242,18 +246,33 @@ function Get-ExactSourceHead {
 
 function Get-ExactMasterService {
     $service = Get-CimInstance Win32_Service -Filter "Name='$serviceName'"
-    if ($null -eq $service -or [string]$service.StartName -cne $serviceOwner) {
+    if ($null -eq $service) { throw "The fixed Windows master service owner was not exact." }
+    $reportedOwner = [string]$service.StartName
+    if ($serviceOwnerAliases -cnotcontains $reportedOwner) {
         throw "The fixed Windows master service owner was not exact."
+    }
+    $normalizedOwner = if ($reportedOwner -ceq ".\mike") { $serviceOwner } else { $reportedOwner }
+    try {
+        $reportedOwnerSid = ([Security.Principal.NTAccount]$normalizedOwner).Translate(
+            [Security.Principal.SecurityIdentifier]
+        ).Value
+    } catch {
+        throw "The fixed Windows master service owner SID was unavailable."
+    }
+    if ($reportedOwnerSid -cne $serviceOwnerSid) {
+        throw "The fixed Windows master service owner SID was not exact."
     }
     $match = [regex]::Match([string]$service.PathName, '^(?:"([^"]+assemblywright-master\.exe)"|(\S+assemblywright-master\.exe))(?=\s|$)')
     if (-not $match.Success) { throw "The fixed Windows master service image was not exact." }
     $captured = if ($match.Groups[1].Success) { $match.Groups[1].Value } else { $match.Groups[2].Value }
+    $usesExtendedNamespace = $captured.StartsWith("\\?\", [StringComparison]::Ordinal)
     $actual = [IO.Path]::GetFullPath($captured)
-    if ($actual.StartsWith("\\?\", [StringComparison]::Ordinal)) { $actual = $actual.Substring(4) }
+    if ($usesExtendedNamespace) { $actual = $actual.Substring(4) }
     $expected = [IO.Path]::GetFullPath((Join-Path $sourceRepository "target\release\assemblywright-master.exe"))
     if ($actual -cne $expected) { throw "The fixed Windows master service image was not exact." }
     $argumentTail = ([string]$service.PathName).Substring($match.Length).Trim()
-    $expectedTail = "--data-dir $dataDir service-run --service-name $serviceName --bind $endpoint --service-identity $serviceOwner --remote-bind $remoteEndpoint"
+    $serviceDataDir = if ($usesExtendedNamespace) { "\\?\$dataDir" } else { $dataDir }
+    $expectedTail = "--data-dir $serviceDataDir service-run --service-name $serviceName --bind $endpoint --service-identity $serviceOwner --remote-bind $remoteEndpoint"
     if ($argumentTail -cne $expectedTail) { throw "The fixed Windows master service data, bind, identity, or remote-bind arguments were not exact." }
     Assert-NoReparseComponents $expected
     [ordered]@{ Executable = $expected; ProcessId = [UInt32]$service.ProcessId; State = [string]$service.State }
