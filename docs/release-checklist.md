@@ -197,6 +197,11 @@ Before starting a release pass, confirm the claim you intend to make.
   Bind SCM's `MIKE-PC\mike`/`.\mike` local-account spellings through the same
   fixed SID, and require any `\\?\` executable/data namespace use to be
   consistent before service mutation.
+  If Cargo left the installed image hard-linked into `target\release\deps` or
+  with inherited checkout ACLs, perform an explicit stopped-service deployment
+  that preserves its digest while creating an owner/SYSTEM-only single-link
+  service-path file; verify health before `Check`. This prepares trust state but
+  creates no proof receipt.
   Observe a stopped, full-database-SHA freeze; exact-HEAD offline rebuild with
   fixed absolute Cargo/Rust/MSVC tools; owner/SYSTEM-only ordinary single-link
   service-image digest equality; a healthy changed PID; a second stopped freeze

@@ -286,6 +286,13 @@ distributed and Feature Conveyor state. Failure attempts exact healthy service
 restoration and emits no receipt. The JSON binds the pinned Cargo, rustc, MSVC,
 service-image, and frozen-database digests without paths.
 
+The installed image is a deployment prerequisite, not controller-created
+trust. A direct Cargo release output may share an inode with its `deps` artifact
+and inherit broader checkout ACLs; it is ineligible until a stopped-service
+deployment preserves the exact bytes in a new single-link file protected to the
+owner and SYSTEM, then restores healthy service operation. `Check` observes and
+rejects this drift without mutating it.
+
 The Mac controller hashes and deletes its private transcript, rechecks the
 source and committed definitions, and atomically publishes one owner-private
 `0600` receipt plus raw SHA-256 sidecar under

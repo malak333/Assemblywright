@@ -327,6 +327,16 @@ start the fixed Mac controller:
 ./scripts/restart-recovery-proof-controller.sh --run
 ```
 
+Before the Windows `Check`, the installed service executable must already be
+an ordinary single-link file with a protected ACL limited to the fixed owner
+and SYSTEM. A direct `cargo build --release` output can remain hard-linked to a
+file under `target\release\deps` and inherit broader checkout ACLs; that is not
+eligible proof state. Stop the service, preserve the exact executable digest,
+materialize those same bytes into a new single-link service-path file, apply the
+owner/SYSTEM-only ACL, verify the digest is unchanged, restart, and recheck
+health. This is explicit deployment preparation, creates no proof receipt, and
+must not be confused with the subsequent recovery proof.
+
 When it prints the single action marker, copy its `expected_source_head` into
 the authenticated Windows Administrator session and return only the sanitized
 JSON line:

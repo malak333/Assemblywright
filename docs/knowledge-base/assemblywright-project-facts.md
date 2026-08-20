@@ -1563,6 +1563,13 @@ an old one.
   may likewise use the `\\?\` extended namespace. Accept it only when both the
   service executable and data-directory argument consistently resolve to the
   fixed ordinary paths; a display-string comparison alone creates false drift.
+- Cargo's Windows release executable can be a hard link to the corresponding
+  `target\release\deps` artifact and can inherit broader checkout ACLs. That is
+  valid build output but not an eligible service-image trust boundary for the
+  restart proof. Deployment must stop the service, preserve the exact digest,
+  materialize the same bytes as a new single-link service-path file, protect it
+  to the fixed owner and SYSTEM, verify unchanged bytes, and restore health.
+  `Check` remains read-only and rejects an unprepared image.
 - Feature 5 removes its private transcript after hashing and atomically retains
   only owner-private path-free schema-v1 receipt/raw-digest files. Its self-test
   covers stale invalidation, dirty/wrong/stale/hidden Git state, hostile output,
