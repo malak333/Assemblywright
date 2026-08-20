@@ -395,10 +395,26 @@ function Invoke-ExactOfflineMasterBuild {
         (Get-FileHash -Algorithm SHA256 -LiteralPath $msvcEnvironmentScript).Hash.ToLowerInvariant() -cne $msvcSha) {
         throw "The fixed Windows compiler or MSVC environment identity changed during the build."
     }
-    $built = Join-Path $target "release\assemblywright-master.exe"
+    $cargoOutput = Join-Path $target "release\assemblywright-master.exe"
+    Assert-NoReparseComponents $cargoOutput
+    $cargoOutputItem = Get-Item -LiteralPath $cargoOutput -Force
+    if ($cargoOutputItem.PSIsContainer -or ($cargoOutputItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "The fixed Cargo build did not produce an ordinary executable."
+    }
+    $cargoOutputSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $cargoOutput).Hash.ToLowerInvariant()
+
+    # Cargo can hard-link the release binary to its deps artifact. Materialize
+    # the verified bytes into a fresh proof-owned single-link file before that
+    # file can cross the service-image trust boundary.
+    $built = Join-Path $recoveryRoot "rebuilt-assemblywright-master.exe"
+    [IO.File]::Copy($cargoOutput, $built, $false)
     Set-OwnerSystemAcl -Path $built
     Assert-OwnerSystemFileIdentity $built
-    [ordered]@{ Executable = $built; CargoSha256 = $cargoSha; RustcSha256 = $rustcSha; MsvcEnvironmentSha256 = $msvcSha; ExecutableSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $built).Hash.ToLowerInvariant() }
+    $builtSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $built).Hash.ToLowerInvariant()
+    if ($builtSha -cne $cargoOutputSha) {
+        throw "The materialized single-link rebuild did not preserve the Cargo output digest."
+    }
+    [ordered]@{ Executable = $built; CargoSha256 = $cargoSha; RustcSha256 = $rustcSha; MsvcEnvironmentSha256 = $msvcSha; ExecutableSha256 = $builtSha }
 }
 
 function Invoke-MasterHealth {

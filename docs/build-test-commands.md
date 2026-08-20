@@ -352,6 +352,11 @@ that progress into a terminating `NativeCommandError`. The fixed build runs
 Cargo in a child scope with `ErrorActionPreference=Continue`, redirects every
 stream to the bounded private build log, and accepts success only from Cargo's
 captured native exit code. The global fail-closed preference remains unchanged.
+Cargo can also hard-link the fresh release output to its `deps` artifact. The
+control treats that as valid compiler output but not as an eligible service
+image: it hashes the ordinary Cargo output, copies those bytes into a new
+proof-owned single-link file, applies the owner/SYSTEM-only ACL, and requires
+the materialized digest to match before installation.
 
 When it prints the single action marker, copy its `expected_source_head` into
 the authenticated Windows Administrator session and return only the sanitized
@@ -365,8 +370,9 @@ JSON line:
 The Windows run is a real stopped-state recovery-and-restoration sequence for
 the fixed `AssemblywrightMaster` service. It freezes/hashes the sidecar-free
 database, rebuilds exact HEAD offline with the fixed absolute toolchain,
-requires the rebuilt owner/SYSTEM-only single-link image to match the installed
-digest, proves a healthy changed PID, stops and requires the exact same full
+materializes Cargo's output as a rebuilt owner/SYSTEM-only single-link image,
+requires it to match both the Cargo output and installed digest, proves a
+healthy changed PID, stops and requires the exact same full
 database SHA plus logical/migration continuity, restores the original image,
 then proves a distinct final healthy PID and empty state. Failure attempts exact
 healthy restoration and emits no receipt. The Mac controller likewise uses
