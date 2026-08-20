@@ -407,7 +407,10 @@ release requirements, not optional UX guidance.
   tracked-index state and fixed system/owner tools. Caller bridge, agent,
   Tailscale, build-tool, PATH, exported shell-function, relay, model, Git, and
   internal overrides must be cleared before a minimal fixed environment is
-  created. The fixed signed helper and agent ordinary-file/signature identities,
+  created. A fixed internal stdin identity and exact canonical repository root
+  are accepted by the harness only for `--run-relay`, must be mutually exclusive
+  with restricted-worker stdin mode, and must be unset before the live boundary.
+  The fixed signed helper and agent ordinary-file/signature identities,
   source, tree, and committed definitions must be stable before and after.
   Accept only one exact ordered terminal relay/bridge marker pair with a
   strictly advancing same-stream cursor already validated by the harness. Malformed, extra,
