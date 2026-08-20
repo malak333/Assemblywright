@@ -717,6 +717,27 @@ active published effect, SCM retry policy, signed-helper behavior, Feature 6
 streaming, evidence admission or activation, signing/notarization, installation,
 or production readiness.
 
+Feature 6 supplies the separate owner-run Mac/Windows control-streaming proof
+controller. From exact clean published `main`, it executes only the committed
+native bridge harness through fixed Bash stdin in `--run-relay` mode with
+caller executable/tool/PATH/relay overrides cleared. The real boundary is the
+independently signed Swift helper, exporter-bound mTLS owner-control projection,
+exact signed Rust agent, and one durable event cursor that remains on the same
+stream and strictly advances after helper/agent restart. Its bounded private
+transcript is hashed and deleted; endpoint and stream identifiers are excluded
+from the schema-v1 receipt. The receipt binds exact source/tree, committed
+controller/harness digests, stable helper/agent identities, transcript digest,
+time, pass, category `mac_windows_control_event_streaming_live`, and origin
+`mac_windows_control_event_streaming_proof_controller`.
+
+This proof controller has no evidence-admission or activation authority. It
+does not approve work, create a queue/lease, change protocol v5 or schema v19,
+grant runtime authority, establish current-source linkage for the built helper
+or agent, or prove Developer ID distribution, notarization, clean-profile
+installation, unattended operation, or production readiness. Playwright is
+inapplicable because the exercised surface is native Swift/process/mTLS/SQLite,
+not a browser.
+
 Prepare is resumable without adding master authority. The Windows disposable
 checkout marker is byte-validated and published by same-directory atomic rename
 before grants, durably binding the generated repository/feature IDs and exact

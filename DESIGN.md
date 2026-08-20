@@ -311,6 +311,33 @@ active published effect, SCM retry policy, the signed helper, Feature 6
 streaming, evidence admission, activation, signing, notarization, live-device
 installation, or production readiness. Protocol v5 and schema v19 are unchanged.
 
+The sixth slice is the owner-run Mac/Windows control-streaming proof controller.
+`scripts/mac-windows-control-streaming-proof-controller.sh --run` starts only
+from exact clean published `main`, normal tracked-index state, and stable
+committed controller plus `mac-windows-bridge-live-e2e.sh` definitions. It
+clears caller executable, tool, PATH, relay, model, Git, and internal overrides,
+then executes only the committed harness bytes through fixed Bash stdin in
+`--run-relay` mode. The native boundary is the independently signed Swift
+helper, exporter-bound mTLS owner-control projection, exact signed Rust agent,
+and durable same-stream cursor that advances after a fresh helper/agent chain.
+The controller accepts exactly one ordered terminal relay/bridge marker pair,
+hashes and deletes the private transcript, and never retains its endpoint or
+stream ID.
+
+The path-free schema-v1 receipt binds category
+`mac_windows_control_event_streaming_live` to origin
+`mac_windows_control_event_streaming_proof_controller`, exact HEAD/tree,
+controller/harness definitions, fixed helper/agent executable and signature
+identities, transcript digest, time, pass, and the narrow boundary. It is
+published digest-first and receipt-last as owner-private `0600` files in a held
+owner-only `target/mac-windows-control-streaming-live-proof` directory. Source,
+definition, binary, output, marker, cancellation, or descendant drift fails
+closed and leaves no pair. This controller produces evidence only: it never
+admits evidence, approves, activates, or changes protocol v5, schema v19, or
+runtime authority. Built-binary current-source linkage, Developer ID
+distribution, notarization, clean-profile installation, unattended operation,
+and production readiness remain separate claims.
+
 The designated bridge may explicitly owner-pause or resume only an exact
 active, effect-free orchestration checkpoint using lifecycle, orchestration,
 queue, designation, and Emergency Pause revisions. Owner pause stops the active

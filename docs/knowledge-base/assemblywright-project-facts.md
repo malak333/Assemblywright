@@ -1616,6 +1616,36 @@ an old one.
   evidence. Neither controller nor tests prove active published-effect crash
   recovery, SCM retry policy, signed-helper behavior, Feature 6 streaming,
   admission/activation, signing/notarization, installation, or production.
+- Feature 6 adds `scripts/mac-windows-control-streaming-proof-controller.sh` as
+  a proof-only owner-run boundary. It accepts no selectors, starts from exact
+  clean published `main`, validates normal tracked state and stable committed
+  controller/harness definitions, clears caller tool/executable/PATH/exported-
+  function/relay overrides into a minimal environment, and executes only the
+  committed bridge harness through fixed Bash stdin as `--run-relay`. The
+  native claim is the independently signed Swift
+  helper's exporter-bound mTLS owner-control projection plus the exact signed
+  Rust agent's durable same-stream event cursor advancing after helper/agent
+  restart. One exact ordered terminal relay/bridge marker pair is accepted; the
+  private transcript is bounded, hashed, and deleted, and its endpoint/stream
+  identifiers never enter retained evidence. Digest-first/receipt-last
+  publication leaves one owner-private,
+  path-free schema-v1 pair bound to source/tree, definitions, stable executable
+  identities, transcript digest, and `mac_windows_control_event_streaming_live`
+  / `mac_windows_control_event_streaming_proof_controller`. It does not admit
+  evidence, approve, activate, change protocol/schema/runtime authority, prove
+  current-source binary linkage, Developer ID/notarization/installation,
+  unattended operation, or production readiness. The disposable self-test is
+  the unit/negative workflow; the committed signed Swift/process/mTLS/SQLite
+  relay is native E2E. Playwright is not applicable.
+- The committed relay harness emits its event-relay success marker immediately
+  before the generic bridge success marker. A proof validator must bind that
+  exact ordered pair, including their shared endpoint and advancing cursor/
+  reconnect epochs; treating the relay marker as the final transcript line
+  rejects every production-shaped run even when a simplified fixture passes.
+  Clearing environment variables alone is also insufficient for a Bash proof
+  boundary because exported `BASH_FUNC_*` definitions can replace bare-name
+  tools. Feature 6 therefore removes imported functions and invokes the harness
+  under `env -i` with only fixed owner identity, locale, and tool paths.
 - Native Mac relay tests must keep their client read timeout above the server's
   ten-second peer-code-identity validation bound. A five-second client timeout
   can surface Security.framework latency as `WouldBlock` before the server's

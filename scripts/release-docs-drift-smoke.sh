@@ -90,6 +90,7 @@ WINDOWS_GITHUB_PUBLICATION_LIVE_CONTROL="scripts/windows-github-publication-live
 RESTART_RECOVERY_PROOF_CONTROLLER="scripts/restart-recovery-proof-controller.sh"
 RESTART_RECOVERY_LIVE_E2E="scripts/restart-recovery-live-e2e.sh"
 WINDOWS_RESTART_RECOVERY_LIVE_CONTROL="scripts/windows-restart-recovery-live-control.ps1"
+MAC_WINDOWS_CONTROL_STREAMING_PROOF_CONTROLLER="scripts/mac-windows-control-streaming-proof-controller.sh"
 WINDOWS_FIXTURE_LIVE_CONTROL="scripts/windows-fixture-live-control.ps1"
 WINDOWS_MLX_LIVE_CONTROL="scripts/windows-mlx-live-control.ps1"
 WINDOWS_LOCAL_CODING_LIVE_CONTROL="scripts/windows-local-coding-live-control.ps1"
@@ -160,7 +161,7 @@ for file in \
   "$GITHUB_PUBLICATION_PROOF_CONTROLLER" "$GITHUB_PUBLICATION_LIVE_E2E" \
   "$WINDOWS_GITHUB_PUBLICATION_LIVE_CONTROL" \
   "$RESTART_RECOVERY_PROOF_CONTROLLER" "$RESTART_RECOVERY_LIVE_E2E" \
-  "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
+  "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" "$MAC_WINDOWS_CONTROL_STREAMING_PROOF_CONTROLLER" \
   "$WINDOWS_FIXTURE_LIVE_CONTROL" \
   "$WINDOWS_MLX_LIVE_CONTROL" "$WINDOWS_LOCAL_CODING_LIVE_CONTROL" \
   "$WINDOWS_LOCAL_CODING_LIVE_CONTROL_SELF_CHECK" "$WINDOWS_PROTOCOL_WORKFLOW" \
@@ -298,6 +299,34 @@ require_text "restart-recovery proof controller local gate self-test" "$LOCAL_GA
   "restart-recovery-proof-controller.sh --self-test"
 forbid_text "local gate restart-recovery controller live recursion" "$LOCAL_GATE" \
   "restart-recovery-proof-controller.sh --run"
+require_text "Mac/Windows control-streaming proof controller local gate check" "$LOCAL_GATE" \
+  "mac-windows-control-streaming-proof-controller.sh --check"
+require_text "Mac/Windows control-streaming proof controller local gate self-test" "$LOCAL_GATE" \
+  "mac-windows-control-streaming-proof-controller.sh --self-test"
+forbid_text "local gate Mac/Windows control-streaming live recursion" "$LOCAL_GATE" \
+  "mac-windows-control-streaming-proof-controller.sh --run"
+require_text "Mac/Windows control-streaming committed harness" "$MAC_WINDOWS_CONTROL_STREAMING_PROOF_CONTROLLER" \
+  'git_safe "$root" show "$head:$HARNESS_PATH"'
+require_text "Mac/Windows control-streaming fixed relay mode" "$MAC_WINDOWS_CONTROL_STREAMING_PROOF_CONTROLLER" \
+  'PATH="$LIVE_PATH" LC_ALL=C "$FIXED_BASH" -s -- --run-relay'
+require_text "Mac/Windows control-streaming process-group cancellation" "$MAC_WINDOWS_CONTROL_STREAMING_PROOF_CONTROLLER" \
+  "terminate_live_group"
+require_text "Mac/Windows control-streaming path-free category" "$MAC_WINDOWS_CONTROL_STREAMING_PROOF_CONTROLLER" \
+  'CATEGORY="mac_windows_control_event_streaming_live"'
+require_text "Mac/Windows control-streaming exact origin" "$MAC_WINDOWS_CONTROL_STREAMING_PROOF_CONTROLLER" \
+  'ORIGIN="mac_windows_control_event_streaming_proof_controller"'
+require_text "Mac/Windows control-streaming digest-first publication" "$MAC_WINDOWS_CONTROL_STREAMING_PROOF_CONTROLLER" \
+  '/bin/mv -f -- "$digest_tmp" "$DIGEST_NAME"'
+require_text "Mac/Windows control-streaming build docs" "$BUILD_DOCS" \
+  "./scripts/mac-windows-control-streaming-proof-controller.sh --run"
+require_text "Mac/Windows control-streaming design boundary" "$DESIGN" \
+  "mac_windows_control_event_streaming_proof_controller"
+require_text "Mac/Windows control-streaming safety boundary" "$SAFETY_RULES" \
+  "Mac/Windows control-streaming proof controller"
+require_text "Mac/Windows control-streaming feature design" "$FEATURE_CONVEYOR_DESIGN" \
+  "Feature 6 supplies the separate owner-run Mac/Windows control-streaming proof"
+require_text "Mac/Windows control-streaming knowledge base" "$KB" \
+  'Feature 6 adds `scripts/mac-windows-control-streaming-proof-controller.sh`'
 require_text "restart-recovery controller exact native agent E2E" "$RESTART_RECOVERY_LIVE_E2E" \
   "authenticated_uds_local_coding_snapshot_admission_cancellation_and_restart_cleanup"
 require_text "agent shutdown marker honors peer identity bound" "$AGENT_E2E" \
