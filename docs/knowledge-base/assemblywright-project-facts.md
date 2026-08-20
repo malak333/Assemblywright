@@ -1658,6 +1658,14 @@ an old one.
   other mode's caller-supplied internal markers before exporting its own trusted
   handoff; mutual exclusion alone would turn a stray marker into a cross-feature
   denial of every otherwise valid live proof.
+- A live harness that falls back to `cargo build` can replace its agent after a
+  controller's initial executable-identity snapshot. Even a fully successful
+  native stream/reconnect run must then fail closed at the post-run identity
+  check and retain no receipt. Feature 6 clears the caller's agent override but
+  injects its own already captured exact agent path into the minimal child
+  environment, forcing the shared harness to use those stable bytes. Its
+  production-shaped disposable fixture requires that exact internal binding so
+  unit coverage cannot silently exercise the harness's rebuild fallback.
 - Native Mac relay tests must keep their client read timeout above the server's
   ten-second peer-code-identity validation bound. A five-second client timeout
   can surface Security.framework latency as `WouldBlock` before the server's
