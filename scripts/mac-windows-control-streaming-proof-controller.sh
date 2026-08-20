@@ -267,7 +267,10 @@ run_committed_harness() {
       cd "$root" || exit 1
       clear_live_environment
       exec /usr/bin/env -i HOME="$FIXED_HOME" USER="$FIXED_USER" LOGNAME="$FIXED_USER" \
-        PATH="$LIVE_PATH" LC_ALL=C "$FIXED_BASH" -s -- --run-relay
+        PATH="$LIVE_PATH" LC_ALL=C \
+        ASSEMBLYWRIGHT_CONTROL_STREAMING_INTERNAL_STDIN_V1="$PROOF_IDENTITY" \
+        ASSEMBLYWRIGHT_CONTROL_STREAMING_INTERNAL_ROOT="$root" \
+        "$FIXED_BASH" -c 'exec -a bash /bin/bash -s -- "$@"' bash --run-relay
     ) 2>&1 | LC_ALL=C /usr/bin/awk -v max_bytes="$MAX_TRANSCRIPT_BYTES" -v max_lines="$MAX_TRANSCRIPT_LINES" -v max_line="$MAX_LINE_BYTES" '
       BEGIN { bytes=0; lines=0 }
       { bytes += length($0)+1; lines++; if (bytes > max_bytes || lines > max_lines || length($0) > max_line) exit 97; print; fflush() }
@@ -419,6 +422,8 @@ check_controller() {
   ! /usr/bin/grep -Fq 'mac-windows-control-streaming-proof-controller.sh --run' "$ROOT_DIR/scripts/release-local.sh" \
     || fail "release-local must never run live control-stream proof"
   /usr/bin/grep -Fq -- '--run-relay' "$ROOT_DIR/$HARNESS_PATH" || fail "committed harness omits fixed relay mode"
+  /usr/bin/grep -Fq 'ASSEMBLYWRIGHT_CONTROL_STREAMING_INTERNAL_STDIN_V1' "$ROOT_DIR/$HARNESS_PATH" \
+    || fail "committed harness omits fixed control-stream stdin identity"
   /usr/bin/grep -Fq 'assemblywright_mac_windows_event_relay_live_e2e_ok' "$ROOT_DIR/$HARNESS_PATH" \
     || fail "committed harness omits terminal stream marker"
   printf 'Assemblywright Mac/Windows control-streaming proof controller check: ok\n'
@@ -428,7 +433,16 @@ check_controller() {
 write_fixture_files() {
   local fixture="$1" body="$2"
   /bin/mkdir -p "$fixture/scripts" "$fixture/${HELPER_RELATIVE%/*}" "$fixture/${AGENT_RELATIVE%/*}"
-  printf '#!/bin/bash\nset -euo pipefail\n%s\n' "$body" >"$fixture/$HARNESS_PATH"
+  printf '%s\n' '#!/bin/bash' 'set -euo pipefail' \
+    'internal_marker="${ASSEMBLYWRIGHT_CONTROL_STREAMING_INTERNAL_STDIN_V1:-}"' \
+    'internal_root="${ASSEMBLYWRIGHT_CONTROL_STREAMING_INTERNAL_ROOT:-}"' \
+    'unset ASSEMBLYWRIGHT_CONTROL_STREAMING_INTERNAL_STDIN_V1' \
+    'unset ASSEMBLYWRIGHT_CONTROL_STREAMING_INTERNAL_ROOT' \
+    '[[ -z "${BASH_SOURCE[0]-}" && "$0" == bash && "$#" -eq 1 && "${1:-}" == --run-relay ]] || exit 91' \
+    '[[ "$internal_marker" == assemblywright.mac-windows-control-event-streaming-live.v1 ]] || exit 92' \
+    '[[ "$internal_root" == /* && -d "$internal_root" && ! -L "$internal_root" ]] || exit 93' \
+    '[[ "$(cd "$internal_root" && pwd -P)" == "$internal_root" ]] || exit 94' \
+    "$body" >"$fixture/$HARNESS_PATH"
   printf '#!/bin/bash\nexit 0\n' >"$fixture/$CONTROLLER_PATH"
   printf '#!/bin/bash\nexit 0\n' >"$fixture/$HELPER_RELATIVE"
   printf '#!/bin/bash\nexit 0\n' >"$fixture/$AGENT_RELATIVE"

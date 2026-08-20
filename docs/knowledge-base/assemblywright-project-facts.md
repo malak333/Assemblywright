@@ -1646,6 +1646,18 @@ an old one.
   boundary because exported `BASH_FUNC_*` definitions can replace bare-name
   tools. Feature 6 therefore removes imported functions and invokes the harness
   under `env -i` with only fixed owner identity, locale, and tool paths.
+- A committed harness executed through Bash stdin has no script pathname in
+  `BASH_SOURCE[0]`; a production harness that derives its repository root only
+  from that value fails before reaching its live boundary even when simplified
+  fixtures pass. Feature 6 uses a distinct fixed internal relay identity plus
+  an exact canonical repository root in its minimal child environment. The
+  harness accepts that pair only for stdin `--run-relay`, keeps it mutually
+  exclusive with restricted-worker stdin mode, unsets it before execution, and
+  the disposable fixture reproduces the missing-`BASH_SOURCE` shape. Because
+  both proof controllers share the harness, each controller must also clear the
+  other mode's caller-supplied internal markers before exporting its own trusted
+  handoff; mutual exclusion alone would turn a stray marker into a cross-feature
+  denial of every otherwise valid live proof.
 - Native Mac relay tests must keep their client read timeout above the server's
   ten-second peer-code-identity validation bound. A five-second client timeout
   can surface Security.framework latency as `WouldBlock` before the server's

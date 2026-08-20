@@ -308,7 +308,9 @@ forbid_text "local gate Mac/Windows control-streaming live recursion" "$LOCAL_GA
 require_text "Mac/Windows control-streaming committed harness" "$MAC_WINDOWS_CONTROL_STREAMING_PROOF_CONTROLLER" \
   'git_safe "$root" show "$head:$HARNESS_PATH"'
 require_text "Mac/Windows control-streaming fixed relay mode" "$MAC_WINDOWS_CONTROL_STREAMING_PROOF_CONTROLLER" \
-  'PATH="$LIVE_PATH" LC_ALL=C "$FIXED_BASH" -s -- --run-relay'
+  '"$FIXED_BASH" -c '\''exec -a bash /bin/bash -s -- "$@"'\'' bash --run-relay'
+require_text "Mac/Windows control-streaming stdin root handshake" "$MAC_BRIDGE_LIVE_E2E" \
+  'INTERNAL_CONTROL_STREAM_MARKER="${ASSEMBLYWRIGHT_CONTROL_STREAMING_INTERNAL_STDIN_V1:-}"'
 require_text "Mac/Windows control-streaming process-group cancellation" "$MAC_WINDOWS_CONTROL_STREAMING_PROOF_CONTROLLER" \
   "terminate_live_group"
 require_text "Mac/Windows control-streaming path-free category" "$MAC_WINDOWS_CONTROL_STREAMING_PROOF_CONTROLLER" \

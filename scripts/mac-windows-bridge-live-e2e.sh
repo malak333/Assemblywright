@@ -4,14 +4,19 @@ set -euo pipefail
 INTERNAL_RESTRICTED_WORKER_MARKER="${ASSEMBLYWRIGHT_RESTRICTED_WORKER_INTERNAL_STDIN_V1:-}"
 INTERNAL_RESTRICTED_WORKER_ROOT="${ASSEMBLYWRIGHT_RESTRICTED_WORKER_INTERNAL_ROOT:-}"
 INTERNAL_RESTRICTED_WORKER_RECEIPT_FD="${ASSEMBLYWRIGHT_RESTRICTED_WORKER_RECEIPT_FD:-}"
+INTERNAL_CONTROL_STREAM_MARKER="${ASSEMBLYWRIGHT_CONTROL_STREAMING_INTERNAL_STDIN_V1:-}"
+INTERNAL_CONTROL_STREAM_ROOT="${ASSEMBLYWRIGHT_CONTROL_STREAMING_INTERNAL_ROOT:-}"
 unset ASSEMBLYWRIGHT_RESTRICTED_WORKER_INTERNAL_STDIN_V1
 unset ASSEMBLYWRIGHT_RESTRICTED_WORKER_INTERNAL_ROOT
 unset ASSEMBLYWRIGHT_RESTRICTED_WORKER_RECEIPT_FD
+unset ASSEMBLYWRIGHT_CONTROL_STREAMING_INTERNAL_STDIN_V1
+unset ASSEMBLYWRIGHT_CONTROL_STREAMING_INTERNAL_ROOT
 
 if [[ "$INTERNAL_RESTRICTED_WORKER_MARKER" == "assemblywright.restricted-worker-live-proof.v1" ]]; then
   [[ -z "${BASH_SOURCE[0]-}" && "$0" == "bash" && "$#" -eq 1 \
     && "${1:-}" == "--run-local-coding" \
-    && "$INTERNAL_RESTRICTED_WORKER_RECEIPT_FD" == "3" ]] \
+    && "$INTERNAL_RESTRICTED_WORKER_RECEIPT_FD" == "3" \
+    && -z "$INTERNAL_CONTROL_STREAM_MARKER$INTERNAL_CONTROL_STREAM_ROOT" ]] \
     || { printf 'error: restricted-worker internal mode requires the fixed live mode and receipt descriptor\n' >&2; exit 1; }
   [[ "$INTERNAL_RESTRICTED_WORKER_ROOT" == /* \
     && -d "$INTERNAL_RESTRICTED_WORKER_ROOT" \
@@ -21,6 +26,19 @@ if [[ "$INTERNAL_RESTRICTED_WORKER_MARKER" == "assemblywright.restricted-worker-
   [[ "$ROOT_DIR" == "$INTERNAL_RESTRICTED_WORKER_ROOT" ]] \
     || { printf 'error: restricted-worker internal root is ambiguous\n' >&2; exit 1; }
   RECEIPT_INPUT_FD=3
+elif [[ "$INTERNAL_CONTROL_STREAM_MARKER" == "assemblywright.mac-windows-control-event-streaming-live.v1" ]]; then
+  [[ -z "${BASH_SOURCE[0]-}" && "$0" == "bash" && "$#" -eq 1 \
+    && "${1:-}" == "--run-relay" \
+    && -z "$INTERNAL_RESTRICTED_WORKER_MARKER$INTERNAL_RESTRICTED_WORKER_ROOT$INTERNAL_RESTRICTED_WORKER_RECEIPT_FD" ]] \
+    || { printf 'error: control-stream internal mode requires the fixed live relay mode\n' >&2; exit 1; }
+  [[ "$INTERNAL_CONTROL_STREAM_ROOT" == /* \
+    && -d "$INTERNAL_CONTROL_STREAM_ROOT" \
+    && ! -L "$INTERNAL_CONTROL_STREAM_ROOT" ]] \
+    || { printf 'error: control-stream internal root is invalid\n' >&2; exit 1; }
+  ROOT_DIR="$(cd "$INTERNAL_CONTROL_STREAM_ROOT" && pwd -P)"
+  [[ "$ROOT_DIR" == "$INTERNAL_CONTROL_STREAM_ROOT" ]] \
+    || { printf 'error: control-stream internal root is ambiguous\n' >&2; exit 1; }
+  RECEIPT_INPUT_FD=0
 else
   ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
   RECEIPT_INPUT_FD=0
@@ -28,6 +46,8 @@ fi
 unset INTERNAL_RESTRICTED_WORKER_MARKER
 unset INTERNAL_RESTRICTED_WORKER_ROOT
 unset INTERNAL_RESTRICTED_WORKER_RECEIPT_FD
+unset INTERNAL_CONTROL_STREAM_MARKER
+unset INTERNAL_CONTROL_STREAM_ROOT
 MODE="${1:---run}"
 PACKAGE_PATH="$ROOT_DIR/apps/mac"
 PRODUCT="assemblywright-mac-bridge"
