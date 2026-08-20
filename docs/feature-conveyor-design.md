@@ -687,7 +687,9 @@ queue, activation, protocol, or schema authority. Its committed harness runs
 the existing real Rust-agent retained-workspace restart E2E; the separate
 Windows receipt proves one explicitly confirmed, serialized, idle
 `AssemblywrightMaster` recovery-and-restoration sequence. Windows binds exact
-clean source to the controller-reported HEAD, stops authority, hashes the full
+clean source to the controller-reported HEAD, binds SCM's `MIKE-PC\mike` and
+`.\mike` spellings to the same fixed local-account SID, requires consistent
+normal or extended-length executable/data paths, stops authority, hashes the full
 sidecar-free database, integrity-checks it and bounded migration backups, and
 offline-rebuilds that HEAD with fixed absolute tools. The ordinary single-link,
 owner/SYSTEM-only rebuilt image must match the installed digest. A bounded start

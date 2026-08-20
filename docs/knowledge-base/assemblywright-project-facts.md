@@ -1546,7 +1546,7 @@ an old one.
   agent recovery, not host-wide crash containment.
 - The Windows Feature 5 run is serialized and explicitly confirmed. It binds
   exact clean controller-reported source HEAD, fixed source/service/data paths,
-  exact `MIKE-PC\mike` service owner and release image, requires empty
+  the exact local `MIKE-PC\mike` service-owner SID and release image, requires empty
   distributed and Feature Conveyor state with Emergency Pause clear. It stops
   the service, requires no SQLite sidecar, hashes/integrity-checks the complete
   frozen database and bounded backups, then offline-rebuilds exact HEAD with the
@@ -1557,6 +1557,12 @@ an old one.
   exact image and proves a distinct final protocol-5/schema-19 healthy PID.
   Failure attempts exact healthy restoration and emits no receipt; tool, image,
   and frozen-database digests are bound in sanitized JSON.
+- Windows SCM may report the exact configured local account as `.\mike` even
+  when the service identity and process argument use `MIKE-PC\mike`; compare the
+  two allowed spellings through the fixed account SID. Installed service paths
+  may likewise use the `\\?\` extended namespace. Accept it only when both the
+  service executable and data-directory argument consistently resolve to the
+  fixed ordinary paths; a display-string comparison alone creates false drift.
 - Feature 5 removes its private transcript after hashing and atomically retains
   only owner-private path-free schema-v1 receipt/raw-digest files. Its self-test
   covers stale invalidation, dirty/wrong/stale/hidden Git state, hostile output,
