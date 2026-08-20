@@ -590,7 +590,7 @@ function Invoke-Check {
     [void](Get-ConveyorStatus)
     $database = Get-DatabaseSnapshot
     [ordered]@{
-        schema_version = 1
+        schema_version = 2
         status = "restart_recovery_windows_check_passed"
         source_head = $head
         protocol_version = [UInt64]$health.protocol_version
@@ -635,15 +635,12 @@ function Invoke-Run {
         $frozenDatabaseSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $databasePath).Hash.ToLowerInvariant()
 
         $build = Invoke-ExactOfflineMasterBuild
-        if ($build.ExecutableSha256 -cne $serviceSha) {
-            throw "The exact-source rebuilt service did not match the installed service executable."
-        }
         if ((Get-ExactSourceHead) -cne $head) { throw "The Windows source identity changed during the fixed build." }
         Copy-Item -LiteralPath $build.Executable -Destination $service.Executable -Force
         Set-OwnerSystemAcl -Path $service.Executable
         Assert-OwnerSystemFileIdentity $service.Executable
-        if ((Get-FileHash -Algorithm SHA256 -LiteralPath $service.Executable).Hash.ToLowerInvariant() -cne $serviceSha) {
-            throw "The rebuilt service installation was not exact."
+        if ((Get-FileHash -Algorithm SHA256 -LiteralPath $service.Executable).Hash.ToLowerInvariant() -cne $build.ExecutableSha256) {
+            throw "The exact-source rebuilt service installation was not exact."
         }
 
         $recovered = Start-ExactServiceHealthy
@@ -653,6 +650,10 @@ function Invoke-Run {
             throw "The rebuilt service did not produce one new healthy process."
         }
         Stop-ExactService
+        Assert-OwnerSystemFileIdentity $service.Executable
+        if ((Get-FileHash -Algorithm SHA256 -LiteralPath $service.Executable).Hash.ToLowerInvariant() -cne $build.ExecutableSha256) {
+            throw "The stopped exact-source rebuilt service identity drifted."
+        }
         Assert-NoSQLiteSidecars
         $postDatabase = Get-DatabaseSnapshot
         $postFrozenDatabaseSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $databasePath).Hash.ToLowerInvariant()
@@ -686,12 +687,13 @@ function Invoke-Run {
         $restorationComplete = $true
         $observed = [UInt64][DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         [ordered]@{
-            schema_version = 1
+            schema_version = 2
             status = "restart_recovery_windows_live_passed"
             source_head = $head
             protocol_version = [UInt64]$final.Health.protocol_version
             master_schema_version = [UInt64]$final.Health.schema_version
             service_executable_sha256 = $serviceSha
+            rebuilt_service_executable_sha256 = $build.ExecutableSha256
             windows_cargo_executable_sha256 = $build.CargoSha256
             windows_rustc_executable_sha256 = $build.RustcSha256
             windows_msvc_environment_sha256 = $build.MsvcEnvironmentSha256

@@ -357,6 +357,11 @@ control treats that as valid compiler output but not as an eligible service
 image: it hashes the ordinary Cargo output, copies those bytes into a new
 proof-owned single-link file, applies the owner/SYSTEM-only ACL, and requires
 the materialized digest to match before installation.
+The fixed Windows link step is not treated as byte-reproducible across builds.
+The schema-v2 live receipt therefore binds the transient exact-source rebuild
+digest separately from the original/restored installed-service digest; neither
+digest may substitute for the other, and the proof makes no installed-image
+source-provenance claim.
 
 When it prints the single action marker, copy its `expected_source_head` into
 the authenticated Windows Administrator session and return only the sanitized
@@ -371,8 +376,9 @@ The Windows run is a real stopped-state recovery-and-restoration sequence for
 the fixed `AssemblywrightMaster` service. It freezes/hashes the sidecar-free
 database, rebuilds exact HEAD offline with the fixed absolute toolchain,
 materializes Cargo's output as a rebuilt owner/SYSTEM-only single-link image,
-requires it to match both the Cargo output and installed digest, proves a
-healthy changed PID, stops and requires the exact same full
+requires it to match the Cargo output and binds that transient digest separately
+from the original/restored service digest, proves a healthy changed PID, stops
+and requires the exact same full
 database SHA plus logical/migration continuity, restores the original image,
 then proves a distinct final healthy PID and empty state. Failure attempts exact
 healthy restoration and emits no receipt. The Mac controller likewise uses

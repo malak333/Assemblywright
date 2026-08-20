@@ -328,6 +328,18 @@ require_text "restart-recovery Windows materialized single-link identity" "$WIND
   'Assert-OwnerSystemFileIdentity $built'
 require_text "restart-recovery Windows materialized digest preservation" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
   '$builtSha -cne $cargoOutputSha'
+require_text "restart-recovery Windows transient rebuild installation digest" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
+  '$build.ExecutableSha256'
+require_text "restart-recovery Windows dual image receipt" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
+  'rebuilt_service_executable_sha256 = $build.ExecutableSha256'
+require_text "restart-recovery Windows stopped rebuild recheck" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
+  'The stopped exact-source rebuilt service identity drifted.'
+require_text "restart-recovery Mac dual image receipt binding" "$RESTART_RECOVERY_PROOF_CONTROLLER" \
+  '"rebuilt_service_executable_sha256":"%s"'
+require_text "restart-recovery schema v2" "$RESTART_RECOVERY_PROOF_CONTROLLER" \
+  'assemblywright.restart-recovery-live-proof.v2'
+forbid_text "restart-recovery reproducible-build assumption" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
+  'The exact-source rebuilt service did not match the installed service executable.'
 require_text "restart-recovery Windows frozen database continuity" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
   '$postFrozenDatabaseSha -cne $frozenDatabaseSha'
 require_text "restart-recovery Windows exact executable restoration" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \

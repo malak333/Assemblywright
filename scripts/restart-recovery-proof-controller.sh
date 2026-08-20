@@ -7,10 +7,10 @@ export PATH
 OUTPUT_RELATIVE="target/restart-recovery-live-proof"
 RECEIPT_NAME="restart-recovery-live-proof.json"
 DIGEST_NAME="restart-recovery-live-proof.sha256"
-SCHEMA="assemblywright.restart-recovery-live-proof.v1"
+SCHEMA="assemblywright.restart-recovery-live-proof.v2"
 CATEGORY="restart_recovery_live"
 ORIGIN="restart_recovery_proof_controller"
-PROOF_IDENTITY="assemblywright.restart-recovery-live.v1"
+PROOF_IDENTITY="assemblywright.restart-recovery-live.v2"
 HARNESS_PATH="scripts/restart-recovery-live-e2e.sh"
 WINDOWS_PATH="scripts/windows-restart-recovery-live-control.ps1"
 CONTROLLER_PATH="scripts/restart-recovery-proof-controller.sh"
@@ -22,8 +22,8 @@ FIXED_CARGO_HOME="/Users/michaelnobile/.cargo"
 FIXED_LIVE_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
 FIXED_GIT_PATH="/usr/bin/git"
 FIXED_GIT_SHA256="179301dcb41ea78accc3fa0048a7e6f6710d891945a751a34addd622020c1818"
-PROOF_BOUNDARY="Exact clean published main used the committed controller, harness, and Windows-control definitions to prove real Rust-agent retained-workspace functional recovery plus idle schema-v19 authoritative Windows-master stopped-state recovery and exact restoration. It binds pinned Mac Git and Cargo plus Windows Cargo, rustc, MSVC, service, frozen-database, migration, and continuity digests and proves distinct healthy PIDs. Repository native focused tests separately cover master startup quarantine. This is not active-effect crash recovery, SCM retry-policy, signed-helper, control-streaming, admission, activation, signing, notarization, or production-readiness proof."
-unset ASSEMBLYWRIGHT_RESTART_RECOVERY_INTERNAL_STDIN_V1
+PROOF_BOUNDARY="Exact clean published main used the committed controller, harness, and Windows-control definitions to prove real Rust-agent retained-workspace functional recovery plus idle schema-v19 authoritative Windows-master stopped-state recovery and exact restoration. It separately binds the original/restored service digest and the transient pinned-toolchain exact-source rebuild digest, plus pinned Mac Git and Cargo, Windows Cargo, rustc, MSVC, frozen-database, migration, and continuity digests, and proves distinct healthy PIDs. Repository native focused tests separately cover master startup quarantine. This is not reproducible-build, installed-image source provenance, active-effect crash recovery, SCM retry-policy, signed-helper, control-streaming, admission, activation, signing, notarization, or production-readiness proof."
+unset ASSEMBLYWRIGHT_RESTART_RECOVERY_INTERNAL_STDIN_V2
 unset ASSEMBLYWRIGHT_RESTART_RECOVERY_RECEIPT_FD
 unset ASSEMBLYWRIGHT_RESTART_RECOVERY_EXPECTED_HEAD
 unset ASSEMBLYWRIGHT_RESTART_RECOVERY_CARGO_PATH
@@ -269,7 +269,7 @@ run_committed_harness() {
     set +m
     git_safe "$root" show "$head:$HARNESS_PATH" | (
       exec 9<&0; exec 0</dev/null; cd "$root"; clear_live_environment
-      export ASSEMBLYWRIGHT_RESTART_RECOVERY_INTERNAL_STDIN_V1="$SCHEMA"
+      export ASSEMBLYWRIGHT_RESTART_RECOVERY_INTERNAL_STDIN_V2="$SCHEMA"
       export ASSEMBLYWRIGHT_RESTART_RECOVERY_RECEIPT_FD=3
       export ASSEMBLYWRIGHT_RESTART_RECOVERY_EXPECTED_HEAD="$head"
       export ASSEMBLYWRIGHT_RESTART_RECOVERY_CARGO_PATH="$FIXED_CARGO_PATH"
@@ -309,7 +309,7 @@ validate_transcript() {
   TRANSCRIPT_LINE="$line" EXPECTED_HEAD="$source_head" python3 - <<'PY' || fail "live success bindings were invalid"
 import os, re, sys
 parts=os.environ["TRANSCRIPT_LINE"].split(" ")
-names=["cargo_executable_sha256","source_head","protocol_version","master_schema_version","service_executable_sha256","windows_cargo_executable_sha256","windows_rustc_executable_sha256","windows_msvc_environment_sha256","frozen_database_sha256","pre_process_id","post_process_id","queue_revision","emergency_pause_revision","owner_control_designation_revision","activation_status","activation_evidence_sha256","migration_backup_count","migration_backups_sha256","continuity_sha256","observed_at_ms"]
+names=["cargo_executable_sha256","source_head","protocol_version","master_schema_version","service_executable_sha256","rebuilt_service_executable_sha256","windows_cargo_executable_sha256","windows_rustc_executable_sha256","windows_msvc_environment_sha256","frozen_database_sha256","pre_process_id","post_process_id","queue_revision","emergency_pause_revision","owner_control_designation_revision","activation_status","activation_evidence_sha256","migration_backup_count","migration_backups_sha256","continuity_sha256","observed_at_ms"]
 if len(parts)!=len(names)+1 or parts[0]!="assemblywright_restart_recovery_live_e2e_ok": sys.exit(1)
 values={}
 for name,part in zip(names,parts[1:]):
@@ -322,7 +322,7 @@ if values["windows_rustc_executable_sha256"]!="e3ebbd547ea7b73c034d588ba569602b3
 if values["windows_msvc_environment_sha256"]!="6b516d8fcf543c14b2d861e1f45661e0029230fe0dc48e86ce78522801822209": sys.exit(1)
 if values["activation_status"] not in ("inactive","active"): sys.exit(1)
 if not re.fullmatch(r"[0-9a-f]{40}",values["source_head"]): sys.exit(1)
-for key in ("service_executable_sha256","windows_cargo_executable_sha256","windows_rustc_executable_sha256","windows_msvc_environment_sha256","frozen_database_sha256","activation_evidence_sha256","migration_backups_sha256","continuity_sha256"):
+for key in ("service_executable_sha256","rebuilt_service_executable_sha256","windows_cargo_executable_sha256","windows_rustc_executable_sha256","windows_msvc_environment_sha256","frozen_database_sha256","activation_evidence_sha256","migration_backups_sha256","continuity_sha256"):
     if not re.fullmatch(r"[0-9a-f]{64}",values[key]): sys.exit(1)
 for key in ("pre_process_id","post_process_id"):
     if not re.fullmatch(r"[1-9][0-9]*",values[key]): sys.exit(1)
@@ -332,6 +332,7 @@ for key in ("queue_revision","emergency_pause_revision","owner_control_designati
 if int(values["migration_backup_count"])>32 or not re.fullmatch(r"[0-9]{13}",values["observed_at_ms"]): sys.exit(1)
 PY
   service_executable_digest="$(TRANSCRIPT_LINE="$line" python3 -c 'import os; print(dict(x.split("=",1) for x in os.environ["TRANSCRIPT_LINE"].split()[1:])["service_executable_sha256"])')"
+  rebuilt_service_executable_digest="$(TRANSCRIPT_LINE="$line" python3 -c 'import os; print(dict(x.split("=",1) for x in os.environ["TRANSCRIPT_LINE"].split()[1:])["rebuilt_service_executable_sha256"])')"
   windows_cargo_executable_digest="$(TRANSCRIPT_LINE="$line" python3 -c 'import os; print(dict(x.split("=",1) for x in os.environ["TRANSCRIPT_LINE"].split()[1:])["windows_cargo_executable_sha256"])')"
   windows_rustc_executable_digest="$(TRANSCRIPT_LINE="$line" python3 -c 'import os; print(dict(x.split("=",1) for x in os.environ["TRANSCRIPT_LINE"].split()[1:])["windows_rustc_executable_sha256"])')"
   windows_msvc_environment_digest="$(TRANSCRIPT_LINE="$line" python3 -c 'import os; print(dict(x.split("=",1) for x in os.environ["TRANSCRIPT_LINE"].split()[1:])["windows_msvc_environment_sha256"])')"
@@ -375,6 +376,7 @@ required=(
   'windows_cargo_executable_sha256 = $build.CargoSha256',
   'windows_rustc_executable_sha256 = $build.RustcSha256',
   'windows_msvc_environment_sha256 = $build.MsvcEnvironmentSha256',
+  'rebuilt_service_executable_sha256 = $build.ExecutableSha256',
   'frozen_database_sha256 = $frozenDatabaseSha',
   'migration_backups_sha256 = $postDatabase.BackupsSha256',
 )
@@ -400,8 +402,8 @@ write_receipt() {
   local receipt_tmp digest_tmp digest bytes
   receipt_tmp="$(mktemp .restart-recovery-live-proof.json.XXXXXX)"; digest_tmp="$(mktemp .restart-recovery-live-proof.sha256.XXXXXX)"
   chmod 600 "$receipt_tmp" "$digest_tmp"
-  printf '{"schema":"%s","category":"%s","origin":"%s","source_head_commit":"%s","source_tree_id":"%s","cargo_executable_sha256":"%s","windows_cargo_executable_sha256":"%s","windows_rustc_executable_sha256":"%s","windows_msvc_environment_sha256":"%s","service_executable_sha256":"%s","frozen_database_sha256":"%s","continuity_sha256":"%s","activation_evidence_sha256":"%s","migration_backups_sha256":"%s","controller_definition_sha256":"%s","harness_definition_sha256":"%s","windows_control_definition_sha256":"%s","proof_transcript_sha256":"%s","proof_identity":"%s","observed_at_ms":%s,"status":"passed","proof_boundary":"%s"}\n' \
-    "$SCHEMA" "$CATEGORY" "$ORIGIN" "$source" "$tree" "$cargo_executable_digest" "$windows_cargo_executable_digest" "$windows_rustc_executable_digest" "$windows_msvc_environment_digest" "$service_executable_digest" "$frozen_database_digest" "$continuity_digest" "$activation_evidence_digest" "$migration_backups_digest" "$controller" "$harness" "$windows" "$transcript" "$PROOF_IDENTITY" "$observed" "$PROOF_BOUNDARY" >"$receipt_tmp"
+  printf '{"schema":"%s","category":"%s","origin":"%s","source_head_commit":"%s","source_tree_id":"%s","cargo_executable_sha256":"%s","windows_cargo_executable_sha256":"%s","windows_rustc_executable_sha256":"%s","windows_msvc_environment_sha256":"%s","service_executable_sha256":"%s","rebuilt_service_executable_sha256":"%s","frozen_database_sha256":"%s","continuity_sha256":"%s","activation_evidence_sha256":"%s","migration_backups_sha256":"%s","controller_definition_sha256":"%s","harness_definition_sha256":"%s","windows_control_definition_sha256":"%s","proof_transcript_sha256":"%s","proof_identity":"%s","observed_at_ms":%s,"status":"passed","proof_boundary":"%s"}\n' \
+    "$SCHEMA" "$CATEGORY" "$ORIGIN" "$source" "$tree" "$cargo_executable_digest" "$windows_cargo_executable_digest" "$windows_rustc_executable_digest" "$windows_msvc_environment_digest" "$service_executable_digest" "$rebuilt_service_executable_digest" "$frozen_database_digest" "$continuity_digest" "$activation_evidence_digest" "$migration_backups_digest" "$controller" "$harness" "$windows" "$transcript" "$PROOF_IDENTITY" "$observed" "$PROOF_BOUNDARY" >"$receipt_tmp"
   bytes="$(wc -c <"$receipt_tmp" | tr -d '[:space:]')"; [[ "$bytes" -le 4096 ]] || fail "proof receipt was oversized"
   digest="$(sha256_file "$receipt_tmp")"; valid_sha "$digest" || fail "receipt digest was invalid"
   printf '%s\n' "$digest" >"$digest_tmp"
@@ -411,7 +413,7 @@ write_receipt() {
 run_controller() (
   PATH="/usr/bin:/bin:/usr/sbin:/sbin"; export PATH
   local root="$(cd "$1" && pwd -P)" transcript fifo transcript_digest observed published=0
-  local cargo_executable_digest="" windows_cargo_executable_digest="" windows_rustc_executable_digest="" windows_msvc_environment_digest="" service_executable_digest="" frozen_database_digest="" continuity_digest="" activation_evidence_digest="" migration_backups_digest=""
+  local cargo_executable_digest="" windows_cargo_executable_digest="" windows_rustc_executable_digest="" windows_msvc_environment_digest="" service_executable_digest="" rebuilt_service_executable_digest="" frozen_database_digest="" continuity_digest="" activation_evidence_digest="" migration_backups_digest=""
   local output_prepared=0 target_identity="" output_identity="" live_pid="" receipt_writer_open=0
   local before_branch before_head before_origin before_tree before_status before_controller_digest before_harness_digest before_windows_digest
   local after_branch after_head after_origin after_tree after_status after_controller_digest after_harness_digest after_windows_digest
@@ -488,7 +490,7 @@ set -euo pipefail
 printf 'test authenticated_uds_local_coding_snapshot_admission_cancellation_and_restart_cleanup ... ok\n'
 printf 'assemblywright_restart_recovery_windows_run_required action=Run confirm=true expected_source_head=%s receipt_fd=3\n' "$ASSEMBLYWRIGHT_RESTART_RECOVERY_EXPECTED_HEAD"
 IFS= read -r -u 3 receipt
-printf 'assemblywright_restart_recovery_live_e2e_ok cargo_executable_sha256=%s source_head=%s protocol_version=5 master_schema_version=19 service_executable_sha256=%064d windows_cargo_executable_sha256=dc19c8e6d66802d120bf0696b1924b748bd90f3ca16f21391e54a290ff12b7c5 windows_rustc_executable_sha256=e3ebbd547ea7b73c034d588ba569602b379f3b05ad1a3b5f8dcfab9d4478d74a windows_msvc_environment_sha256=6b516d8fcf543c14b2d861e1f45661e0029230fe0dc48e86ce78522801822209 frozen_database_sha256=%064d pre_process_id=10 post_process_id=11 queue_revision=0 emergency_pause_revision=0 owner_control_designation_revision=0 activation_status=inactive activation_evidence_sha256=%064d migration_backup_count=1 migration_backups_sha256=%064d continuity_sha256=%064d observed_at_ms=%s\n' "$ASSEMBLYWRIGHT_RESTART_RECOVERY_CARGO_SHA256" "$ASSEMBLYWRIGHT_RESTART_RECOVERY_EXPECTED_HEAD" 1 2 3 4 5 "$(date -u +%s)000"
+printf 'assemblywright_restart_recovery_live_e2e_ok cargo_executable_sha256=%s source_head=%s protocol_version=5 master_schema_version=19 service_executable_sha256=%064d rebuilt_service_executable_sha256=%064d windows_cargo_executable_sha256=dc19c8e6d66802d120bf0696b1924b748bd90f3ca16f21391e54a290ff12b7c5 windows_rustc_executable_sha256=e3ebbd547ea7b73c034d588ba569602b379f3b05ad1a3b5f8dcfab9d4478d74a windows_msvc_environment_sha256=6b516d8fcf543c14b2d861e1f45661e0029230fe0dc48e86ce78522801822209 frozen_database_sha256=%064d pre_process_id=10 post_process_id=11 queue_revision=0 emergency_pause_revision=0 owner_control_designation_revision=0 activation_status=inactive activation_evidence_sha256=%064d migration_backup_count=1 migration_backups_sha256=%064d continuity_sha256=%064d observed_at_ms=%s\n' "$ASSEMBLYWRIGHT_RESTART_RECOVERY_CARGO_SHA256" "$ASSEMBLYWRIGHT_RESTART_RECOVERY_EXPECTED_HEAD" 1 6 2 3 4 5 "$(date -u +%s)000"
 FIXTURE
 }
 
@@ -498,7 +500,7 @@ assert_no_proof() {
 
 self_test_controller() {
   local scratch success configured harness_config dirty wrong hidden hostile stale receipt digest bare cancellation cancellation_ready cancellation_survived controller_pid controller_status wait_count
-  local fake_bin valid_windows_receipt harness_output oversized_windows_receipt
+  local fake_bin valid_windows_receipt legacy_windows_receipt missing_rebuilt_receipt harness_output oversized_windows_receipt
   local pty_reader pty_expect long_receipt long_receipt_digest oversized_receipt
   fixture_mode=1
   export ASSEMBLYWRIGHT_RESTART_RECOVERY_RUSTC_PATH="$FIXED_RUSTC_PATH"
@@ -610,15 +612,15 @@ FAKE_SYSTEM_TOOL
     /bin/bash "$ROOT_DIR/$HARNESS_PATH" --check >/dev/null \
     || fail "strict harness check failed under a hostile caller PATH"
   [[ ! -e "$scratch/hostile-harness-system-tool-ran" ]] || fail "hostile caller PATH replaced a fixed harness system tool"
-  valid_windows_receipt='{"schema_version":1,"status":"restart_recovery_windows_live_passed","source_head":"0000000000000000000000000000000000000000","protocol_version":5,"master_schema_version":19,"service_executable_sha256":"1111111111111111111111111111111111111111111111111111111111111111","windows_cargo_executable_sha256":"dc19c8e6d66802d120bf0696b1924b748bd90f3ca16f21391e54a290ff12b7c5","windows_rustc_executable_sha256":"e3ebbd547ea7b73c034d588ba569602b379f3b05ad1a3b5f8dcfab9d4478d74a","windows_msvc_environment_sha256":"6b516d8fcf543c14b2d861e1f45661e0029230fe0dc48e86ce78522801822209","frozen_database_sha256":"6666666666666666666666666666666666666666666666666666666666666666","pre_process_id":10,"post_process_id":11,"queue_revision":0,"emergency_pause_revision":0,"owner_control_designation_revision":0,"activation_status":"inactive","activation_evidence_sha256":"2222222222222222222222222222222222222222222222222222222222222222","migration_backup_count":0,"migration_backups_sha256":"3333333333333333333333333333333333333333333333333333333333333333","continuity_sha256":"4444444444444444444444444444444444444444444444444444444444444444","observed_at_ms":'"$(date -u +%s)"'000}'
+  valid_windows_receipt='{"schema_version":2,"status":"restart_recovery_windows_live_passed","source_head":"0000000000000000000000000000000000000000","protocol_version":5,"master_schema_version":19,"service_executable_sha256":"1111111111111111111111111111111111111111111111111111111111111111","rebuilt_service_executable_sha256":"5555555555555555555555555555555555555555555555555555555555555555","windows_cargo_executable_sha256":"dc19c8e6d66802d120bf0696b1924b748bd90f3ca16f21391e54a290ff12b7c5","windows_rustc_executable_sha256":"e3ebbd547ea7b73c034d588ba569602b379f3b05ad1a3b5f8dcfab9d4478d74a","windows_msvc_environment_sha256":"6b516d8fcf543c14b2d861e1f45661e0029230fe0dc48e86ce78522801822209","frozen_database_sha256":"6666666666666666666666666666666666666666666666666666666666666666","pre_process_id":10,"post_process_id":11,"queue_revision":0,"emergency_pause_revision":0,"owner_control_designation_revision":0,"activation_status":"inactive","activation_evidence_sha256":"2222222222222222222222222222222222222222222222222222222222222222","migration_backup_count":0,"migration_backups_sha256":"3333333333333333333333333333333333333333333333333333333333333333","continuity_sha256":"4444444444444444444444444444444444444444444444444444444444444444","observed_at_ms":'"$(date -u +%s)"'000}'
   harness_config="$scratch/harness-config"; mkdir -p "$harness_config/.cargo"; printf '[build]\nrustc-wrapper="forged"\n' >"$harness_config/.cargo/config.toml"
-  if (cd "$harness_config" && ASSEMBLYWRIGHT_RESTART_RECOVERY_INTERNAL_STDIN_V1="$SCHEMA" ASSEMBLYWRIGHT_RESTART_RECOVERY_VALIDATION_SELF_TEST_V1="$SCHEMA" \
+  if (cd "$harness_config" && ASSEMBLYWRIGHT_RESTART_RECOVERY_INTERNAL_STDIN_V2="$SCHEMA" ASSEMBLYWRIGHT_RESTART_RECOVERY_VALIDATION_SELF_TEST_V2="$SCHEMA" \
     ASSEMBLYWRIGHT_RESTART_RECOVERY_RECEIPT_FD=3 ASSEMBLYWRIGHT_RESTART_RECOVERY_EXPECTED_HEAD=0000000000000000000000000000000000000000 \
     ASSEMBLYWRIGHT_RESTART_RECOVERY_CARGO_PATH="$FIXED_CARGO_PATH" ASSEMBLYWRIGHT_RESTART_RECOVERY_CARGO_SHA256="$FIXED_CARGO_SHA256" \
     /bin/bash "$ROOT_DIR/$HARNESS_PATH" --run 3<<<"$valid_windows_receipt" >/dev/null 2>&1); then
     fail "strict harness accepted an ancestor Cargo configuration"
   fi
-  if ASSEMBLYWRIGHT_RESTART_RECOVERY_INTERNAL_STDIN_V1="$SCHEMA" ASSEMBLYWRIGHT_RESTART_RECOVERY_VALIDATION_SELF_TEST_V1="$SCHEMA" \
+  if ASSEMBLYWRIGHT_RESTART_RECOVERY_INTERNAL_STDIN_V2="$SCHEMA" ASSEMBLYWRIGHT_RESTART_RECOVERY_VALIDATION_SELF_TEST_V2="$SCHEMA" \
     ASSEMBLYWRIGHT_RESTART_RECOVERY_RECEIPT_FD=3 ASSEMBLYWRIGHT_RESTART_RECOVERY_EXPECTED_HEAD=0000000000000000000000000000000000000000 \
     ASSEMBLYWRIGHT_RESTART_RECOVERY_CARGO_PATH=/Users/runner/forbidden-owner-cargo ASSEMBLYWRIGHT_RESTART_RECOVERY_CARGO_SHA256="$FIXED_CARGO_SHA256" \
     /bin/bash "$ROOT_DIR/$HARNESS_PATH" --run 3<<<"$valid_windows_receipt" >/dev/null 2>&1; then
@@ -626,21 +628,35 @@ FAKE_SYSTEM_TOOL
   fi
   if fixed_cargo_available; then
   harness_output="$(PATH="$fake_bin:$PATH" ASSEMBLYWRIGHT_HOSTILE_CARGO_SENTINEL="$scratch/hostile-cargo-ran" \
-    ASSEMBLYWRIGHT_RESTART_RECOVERY_INTERNAL_STDIN_V1="$SCHEMA" ASSEMBLYWRIGHT_RESTART_RECOVERY_VALIDATION_SELF_TEST_V1="$SCHEMA" \
+    ASSEMBLYWRIGHT_RESTART_RECOVERY_INTERNAL_STDIN_V2="$SCHEMA" ASSEMBLYWRIGHT_RESTART_RECOVERY_VALIDATION_SELF_TEST_V2="$SCHEMA" \
     ASSEMBLYWRIGHT_RESTART_RECOVERY_RECEIPT_FD=3 ASSEMBLYWRIGHT_RESTART_RECOVERY_EXPECTED_HEAD=0000000000000000000000000000000000000000 \
     ASSEMBLYWRIGHT_RESTART_RECOVERY_CARGO_PATH="$FIXED_CARGO_PATH" ASSEMBLYWRIGHT_RESTART_RECOVERY_CARGO_SHA256="$FIXED_CARGO_SHA256" \
     /bin/bash "$ROOT_DIR/$HARNESS_PATH" --run 3<<<"$valid_windows_receipt")" \
     || fail "strict harness rejected its exact valid receipt fixture"
   [[ "$harness_output" == *'assemblywright_restart_recovery_live_e2e_ok '* ]] || fail "strict harness omitted success"
   [[ ! -e "$scratch/hostile-cargo-ran" ]] || fail "hostile caller PATH forged the native Cargo result"
-  if PATH="$fake_bin:$PATH" ASSEMBLYWRIGHT_RESTART_RECOVERY_INTERNAL_STDIN_V1="$SCHEMA" ASSEMBLYWRIGHT_RESTART_RECOVERY_VALIDATION_SELF_TEST_V1="$SCHEMA" \
+  legacy_windows_receipt="${valid_windows_receipt/\"schema_version\":2/\"schema_version\":1}"
+  if ASSEMBLYWRIGHT_RESTART_RECOVERY_INTERNAL_STDIN_V2="$SCHEMA" ASSEMBLYWRIGHT_RESTART_RECOVERY_VALIDATION_SELF_TEST_V2="$SCHEMA" \
+    ASSEMBLYWRIGHT_RESTART_RECOVERY_RECEIPT_FD=3 ASSEMBLYWRIGHT_RESTART_RECOVERY_EXPECTED_HEAD=0000000000000000000000000000000000000000 \
+    ASSEMBLYWRIGHT_RESTART_RECOVERY_CARGO_PATH="$FIXED_CARGO_PATH" ASSEMBLYWRIGHT_RESTART_RECOVERY_CARGO_SHA256="$FIXED_CARGO_SHA256" \
+    /bin/bash "$ROOT_DIR/$HARNESS_PATH" --run 3<<<"$legacy_windows_receipt" >/dev/null 2>&1; then
+    fail "strict harness accepted a schema-v1 Windows receipt"
+  fi
+  missing_rebuilt_receipt="${valid_windows_receipt/,\"rebuilt_service_executable_sha256\":\"5555555555555555555555555555555555555555555555555555555555555555\"/}"
+  if ASSEMBLYWRIGHT_RESTART_RECOVERY_INTERNAL_STDIN_V2="$SCHEMA" ASSEMBLYWRIGHT_RESTART_RECOVERY_VALIDATION_SELF_TEST_V2="$SCHEMA" \
+    ASSEMBLYWRIGHT_RESTART_RECOVERY_RECEIPT_FD=3 ASSEMBLYWRIGHT_RESTART_RECOVERY_EXPECTED_HEAD=0000000000000000000000000000000000000000 \
+    ASSEMBLYWRIGHT_RESTART_RECOVERY_CARGO_PATH="$FIXED_CARGO_PATH" ASSEMBLYWRIGHT_RESTART_RECOVERY_CARGO_SHA256="$FIXED_CARGO_SHA256" \
+    /bin/bash "$ROOT_DIR/$HARNESS_PATH" --run 3<<<"$missing_rebuilt_receipt" >/dev/null 2>&1; then
+    fail "strict harness accepted Windows evidence without the transient rebuild digest"
+  fi
+  if PATH="$fake_bin:$PATH" ASSEMBLYWRIGHT_RESTART_RECOVERY_INTERNAL_STDIN_V2="$SCHEMA" ASSEMBLYWRIGHT_RESTART_RECOVERY_VALIDATION_SELF_TEST_V2="$SCHEMA" \
     ASSEMBLYWRIGHT_RESTART_RECOVERY_RECEIPT_FD=3 ASSEMBLYWRIGHT_RESTART_RECOVERY_EXPECTED_HEAD=0000000000000000000000000000000000000000 \
     ASSEMBLYWRIGHT_RESTART_RECOVERY_CARGO_PATH="$FIXED_CARGO_PATH" ASSEMBLYWRIGHT_RESTART_RECOVERY_CARGO_SHA256="$FIXED_CARGO_SHA256" \
     /bin/bash "$ROOT_DIR/$HARNESS_PATH" --run 3<<<"${valid_windows_receipt%\}},\"source_head\":\"/private/leak\"}" >/dev/null 2>&1; then
     fail "strict harness accepted duplicate/path-bearing Windows evidence"
   fi
   oversized_windows_receipt="$(/usr/bin/python3 -c 'print("x" * 9000, end="")')"
-  if PATH="$fake_bin:$PATH" ASSEMBLYWRIGHT_RESTART_RECOVERY_INTERNAL_STDIN_V1="$SCHEMA" ASSEMBLYWRIGHT_RESTART_RECOVERY_VALIDATION_SELF_TEST_V1="$SCHEMA" \
+  if PATH="$fake_bin:$PATH" ASSEMBLYWRIGHT_RESTART_RECOVERY_INTERNAL_STDIN_V2="$SCHEMA" ASSEMBLYWRIGHT_RESTART_RECOVERY_VALIDATION_SELF_TEST_V2="$SCHEMA" \
     ASSEMBLYWRIGHT_RESTART_RECOVERY_RECEIPT_FD=3 ASSEMBLYWRIGHT_RESTART_RECOVERY_EXPECTED_HEAD=0000000000000000000000000000000000000000 \
     ASSEMBLYWRIGHT_RESTART_RECOVERY_CARGO_PATH="$FIXED_CARGO_PATH" ASSEMBLYWRIGHT_RESTART_RECOVERY_CARGO_SHA256="$FIXED_CARGO_SHA256" \
     /bin/bash "$ROOT_DIR/$HARNESS_PATH" --run 3<<<"$oversized_windows_receipt" >/dev/null 2>&1; then
@@ -648,7 +664,7 @@ FAKE_SYSTEM_TOOL
   fi
   else
     if PATH="$fake_bin:$PATH" ASSEMBLYWRIGHT_HOSTILE_CARGO_SENTINEL="$scratch/hostile-cargo-ran" \
-      ASSEMBLYWRIGHT_RESTART_RECOVERY_INTERNAL_STDIN_V1="$SCHEMA" ASSEMBLYWRIGHT_RESTART_RECOVERY_VALIDATION_SELF_TEST_V1="$SCHEMA" \
+      ASSEMBLYWRIGHT_RESTART_RECOVERY_INTERNAL_STDIN_V2="$SCHEMA" ASSEMBLYWRIGHT_RESTART_RECOVERY_VALIDATION_SELF_TEST_V2="$SCHEMA" \
       ASSEMBLYWRIGHT_RESTART_RECOVERY_RECEIPT_FD=3 ASSEMBLYWRIGHT_RESTART_RECOVERY_EXPECTED_HEAD=0000000000000000000000000000000000000000 \
       ASSEMBLYWRIGHT_RESTART_RECOVERY_CARGO_PATH="$FIXED_CARGO_PATH" ASSEMBLYWRIGHT_RESTART_RECOVERY_CARGO_SHA256="$FIXED_CARGO_SHA256" \
       /bin/bash "$ROOT_DIR/$HARNESS_PATH" --run 3<<<"$valid_windows_receipt" >/dev/null 2>&1; then
@@ -696,7 +712,7 @@ FAKE_SYSTEM_TOOL
   while [[ ! -e "$cancellation_ready" ]]; do wait_count=$((wait_count + 1)); [[ "$wait_count" -lt 50 ]] || { kill -TERM "$controller_pid" >/dev/null 2>&1 || true; fail "cancellation fixture did not start"; }; sleep 0.1; done
   kill -TERM "$controller_pid"; set +e; wait "$controller_pid" >/dev/null 2>&1; controller_status="$?"; set -e
   [[ "$controller_status" -ne 0 ]]; sleep 1; [[ ! -e "$cancellation_survived" ]] || fail "cancellation left a live descendant"; assert_no_proof "$cancellation"
-  printf 'Assemblywright restart-recovery proof controller self-test: ok\nCovered: portable owner-Cargo absence, Cargo-home/ancestor-config and wrapper rejection, strict CLI and valid/malformed/path-bearing/oversized Windows receipts, fixed Cargo/rustc and hostile Git/Cargo/Bash/Python/grep PATH rejection, real-PTY success/oversize/signal restoration, raw digest pairing, private transcript removal, stale invalidation, dirty/wrong/stale/hidden source rejection, hostile output rejection, cancellation process-group cleanup, and path-free receipt boundaries.\n'
+  printf 'Assemblywright restart-recovery proof controller self-test: ok\nCovered: portable owner-Cargo absence, Cargo-home/ancestor-config and wrapper rejection, strict CLI and valid/malformed/path-bearing/oversized Windows receipts, schema-v1 and missing-rebuild-digest rejection, fixed Cargo/rustc and hostile Git/Cargo/Bash/Python/grep PATH rejection, real-PTY success/oversize/signal restoration, raw digest pairing, private transcript removal, stale invalidation, dirty/wrong/stale/hidden source rejection, hostile output rejection, cancellation process-group cleanup, and path-free receipt boundaries.\n'
 }
 
 [[ "$#" -eq 1 ]] || { usage >&2; exit 2; }

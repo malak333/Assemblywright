@@ -1551,12 +1551,13 @@ an old one.
   the service, requires no SQLite sidecar, hashes/integrity-checks the complete
   frozen database and bounded backups, then offline-rebuilds exact HEAD with the
   fixed absolute Cargo/Rust/MSVC toolchain. The rebuilt image must be an owner/
-  SYSTEM-only ordinary single-link file and byte-match the installed digest. A
+  SYSTEM-only ordinary single-link file and byte-match its exact Cargo output. A
   bounded healthy start changes PID; a second stop must yield the identical full
   database SHA and logical/migration continuity. It then restores the original
   exact image and proves a distinct final protocol-5/schema-19 healthy PID.
-  Failure attempts exact healthy restoration and emits no receipt; tool, image,
-  and frozen-database digests are bound in sanitized JSON.
+  Failure attempts exact healthy restoration and emits no receipt; schema-v2
+  sanitized JSON separately binds tool, original/restored image, transient
+  exact-source rebuild, and frozen-database digests.
 - Windows SCM may report the exact configured local account as `.\mike` even
   when the service identity and process argument use `MIKE-PC\mike`; compare the
   two allowed spellings through the fixed account SID. Installed service paths
@@ -1578,6 +1579,15 @@ an old one.
   then compare/install that materialized image. A rejection at this boundary
   must restore the original healthy service, retain no Mac receipt, and leave
   the private recovery directory for explicit owner reconciliation.
+- Repeated fixed-toolchain, exact-source Windows links can produce different PE
+  byte digests; Feature 5 observed this directly and must not turn an
+  unestablished reproducible-build property into a recovery prerequisite. Bind
+  the verified materialized exact-source rebuild digest separately, require the
+  service-path bytes to equal it during the transient start, then restore and
+  re-hash the original installed image. This proves the exact-source image ran
+  across idle authoritative recovery while preserving the original service; it
+  does not prove that the original image came from that source or that Windows
+  builds are reproducible.
 - The fixed Windows service's loopback foundation health route reports
   `developer_foundation`; the enrolled mTLS route separately reports
   `developer_remote_master`. `developer_local_master` is not a supported mode
@@ -1599,7 +1609,7 @@ an old one.
   `$LASTEXITCODE`, and restore the global fail-closed preference by leaving the
   child scope. Only the captured zero exit code can authorize the next step.
 - Feature 5 removes its private transcript after hashing and atomically retains
-  only owner-private path-free schema-v1 receipt/raw-digest files. Its self-test
+  only owner-private path-free schema-v2 receipt/raw-digest files. Its self-test
   covers stale invalidation, dirty/wrong/stale/hidden Git state, hostile output,
   path redaction, and cancellation process-group cleanup. The exact master
   startup-quarantine and audit-rollback tests remain separate repository

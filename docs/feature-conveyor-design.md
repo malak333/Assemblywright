@@ -692,12 +692,14 @@ clean source to the controller-reported HEAD, binds SCM's `MIKE-PC\mike` and
 normal or extended-length executable/data paths, stops authority, hashes the full
 sidecar-free database, integrity-checks it and bounded migration backups, and
 offline-rebuilds that HEAD with fixed absolute tools. The ordinary single-link,
-owner/SYSTEM-only rebuilt image must match the installed digest. A bounded start
-must change PID; a second stop must reproduce the exact frozen database SHA and
+owner/SYSTEM-only rebuilt image must preserve the Cargo-output digest, which is
+bound separately from the original/restored installed-image digest because
+Windows link output is not treated as reproducible. A bounded start must change
+PID; a second stop must reproduce the exact frozen database SHA and
 logical continuity; then the exact original image is restored and a distinct
 final healthy PID is required. Protocol 5/schema 19, Emergency Pause clear, and
 empty distributed/Feature Conveyor state remain exact. Only bounded path-free
-JSON with tool, image, and frozen-state digests crosses to the Mac. The Mac
+schema-v2 JSON with tool, both image, and frozen-state digests crosses to the Mac. The Mac
 controller pins/digests system Git plus its fixed Cargo and rustc, validates a
 fixed Cargo home, rejects Cargo configuration throughout the checkout ancestry,
 clears build/PATH overrides, and executes exact committed bytes with absolute

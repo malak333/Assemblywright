@@ -204,11 +204,13 @@ Before starting a release pass, confirm the claim you intend to make.
   creates no proof receipt.
   Observe a stopped, full-database-SHA freeze; exact-HEAD offline rebuild with
   fixed absolute Cargo/Rust/MSVC tools; owner/SYSTEM-only ordinary single-link
-  service-image digest equality; a healthy changed PID; a second stopped freeze
-  with identical database SHA and logical/migration continuity; exact original-
-  image restoration; and a distinct final protocol-5/schema-19 healthy PID.
-  Confirm the Mac Git/Cargo/rustc digests, Cargo-config rejection, and system-
-  only PATH; confirm the Windows Cargo/rustc/MSVC/image/database digests.
+  rebuild-to-Cargo-output digest equality; a healthy changed PID; a second
+  stopped freeze with identical database SHA and logical/migration continuity;
+  exact original-image restoration; and a distinct final protocol-5/schema-19
+  healthy PID. Confirm the Mac Git/Cargo/rustc digests, Cargo-config rejection,
+  and system-only PATH; confirm the Windows Cargo/rustc/MSVC, original/restored
+  image, transient exact-source rebuild, and database digests. Do not infer
+  reproducible builds or installed-image source provenance from this proof.
   Admit nothing automatically. Record this only as retained-agent functional
   recovery and idle authoritative-service continuity—not active-effect crash
   recovery, SCM retry-policy proof, signed-helper, Feature 6 streaming,
