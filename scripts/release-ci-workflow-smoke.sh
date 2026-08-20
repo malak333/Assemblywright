@@ -81,6 +81,8 @@ expected_local_gate_commands=(
   "run ./scripts/restart-recovery-live-e2e.sh --check"
   "run ./scripts/restart-recovery-proof-controller.sh --check"
   "run ./scripts/restart-recovery-proof-controller.sh --self-test"
+  "run ./scripts/mac-windows-control-streaming-proof-controller.sh --check"
+  "run ./scripts/mac-windows-control-streaming-proof-controller.sh --self-test"
   "run ./scripts/release-naming-contract-smoke.sh --check"
   "run ./scripts/release-naming-contract-smoke.sh --self-test"
   "run ./scripts/release-shell-portability-smoke.sh --check"

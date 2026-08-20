@@ -220,6 +220,19 @@ Before starting a release pass, confirm the claim you intend to make.
   process-group cancellation, Windows SCM/PID, SQLite integrity, and strict
   PowerShell receipt. Browser Playwright, visual regression, and cross-browser
   coverage do not apply because there is no browser surface.
+- Run `mac-windows-control-streaming-proof-controller.sh --check` and
+  `--self-test`; require strict CLI, raw receipt digest, stale invalidation,
+  dirty/wrong/stale/hidden Git rejection, malformed/extra/reordered/oversized
+  output denial, endpoint/stream/path redaction, definition/binary drift denial,
+  and process-group cancellation/descendant cleanup. For live Feature 6, require
+  exact clean published source, stable fixed helper/agent signatures and bytes,
+  enrolled exporter-bound mTLS, and the committed native `--run-relay` harness.
+  Observe one same-stream durable cursor strictly advancing after a fresh signed
+  helper and Rust-agent chain. Hash/delete the private transcript; retain only
+  the owner-private path-free receipt/raw-digest pair. Admit nothing and do not
+  activate. Record no protocol/schema/runtime-authority, built-binary source-
+  linkage, Developer ID, notarization, installation, unattended, or production
+  claim. Native Swift/process/mTLS/SQLite E2E applies; Playwright does not.
 - Confirm protocol-v5/schema-v13 result-artifact admission uses only an exact
   immutable packet with sorted normalized relative paths and deterministic
   write/delete schemas; SHA-256 covers the complete packet and exact canonical

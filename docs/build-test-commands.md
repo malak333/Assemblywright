@@ -392,6 +392,34 @@ activation, signing/notarization, installation, or production readiness.
 Playwright is inapplicable because this is a native Rust/process/SQLite/SCM/
 PowerShell boundary with no browser surface.
 
+## Feature 6 Mac/Windows Control-Streaming Proof
+
+Static and disposable negative-path coverage run in the canonical local gate:
+
+```sh
+./scripts/mac-windows-control-streaming-proof-controller.sh --check
+./scripts/mac-windows-control-streaming-proof-controller.sh --self-test
+```
+
+The live owner-run command is deliberately separate and requires exact clean
+published `main`, the fixed signed helper and agent, the enrolled Keychain mTLS
+identity, Tailscale reachability, and the authoritative Windows master:
+
+```sh
+./scripts/mac-windows-control-streaming-proof-controller.sh --run
+```
+
+The controller executes only committed `mac-windows-bridge-live-e2e.sh` bytes
+through fixed Bash stdin in `--run-relay` mode. The native E2E proves the signed
+Swift helper's exporter-bound owner-control projection and a durable same-stream
+event cursor advancing after helper/agent restart. It hashes and deletes the
+private transcript and retains no endpoint or stream ID. The resulting
+owner-private schema-v1 receipt is proof material only: do not admit it or infer
+activation, protocol/schema/runtime authority, built-binary source linkage,
+Developer ID distribution, notarization, installation, unattended operation,
+or production readiness. Playwright is inapplicable because no browser surface
+participates.
+
 ## Windows Distributed Gate
 
 The schema-v9 snapshot-claim, schema-v10 coding-dispatch, schema-v11 owner-resolution,

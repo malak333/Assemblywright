@@ -400,6 +400,25 @@ release requirements, not optional UX guidance.
   new single-link service-path file protected to the fixed owner and SYSTEM,
   must preserve the digest, and must restore verified health before proof. The
   read-only `Check` action never performs this preparation implicitly.
+- The owner-run Mac/Windows control-streaming proof controller is a proof
+  producer, not an admission, approval, or activation client. It may run only
+  the exact committed `mac-windows-bridge-live-e2e.sh` bytes through fixed Bash
+  stdin in `--run-relay` mode from exact clean published `main`, with normal
+  tracked-index state and fixed system/owner tools. Caller bridge, agent,
+  Tailscale, build-tool, PATH, exported shell-function, relay, model, Git, and
+  internal overrides must be cleared before a minimal fixed environment is
+  created. The fixed signed helper and agent ordinary-file/signature identities,
+  source, tree, and committed definitions must be stable before and after.
+  Accept only one exact ordered terminal relay/bridge marker pair with a
+  strictly advancing same-stream cursor already validated by the harness. Malformed, extra,
+  reordered, oversized, or trailing output; drift; cancellation; or a surviving
+  process-group member must fail closed. Hash then delete the private transcript;
+  endpoint and stream identifiers must never enter the retained path-free
+  receipt. Hold a canonically stable owner-only output directory and publish the
+  raw digest first and `0600` receipt last. The controller must not admit its
+  digest, activate, mutate protocol/schema/runtime authority, or claim signing
+  distribution, notarization, installation, unattended operation, current-source
+  binary linkage, or production readiness.
 - Feature orchestration owner pause/resume is separate from Emergency Pause and
   is available only to the exact current designated non-fixture MacBridge after
   an accepted exporter-bound session. It compare-and-sets feature lifecycle,
