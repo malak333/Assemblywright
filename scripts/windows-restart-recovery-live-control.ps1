@@ -404,7 +404,7 @@ function Invoke-MasterHealth {
         "startup_reconciliation", "state", "boundary"
     ) "Windows master health"
     if ([UInt64]$health.protocol_version -ne $protocolVersion -or [UInt64]$health.schema_version -ne $masterSchemaVersion -or
-        $health.status -cne "ok" -or $health.mode -cne "developer_local_master" -or
+        $health.status -cne "ok" -or $health.mode -cne "developer_foundation" -or
         $health.host_mode -cne "windows_service" -or $health.service_identity -cne $serviceOwner -or
         $health.emergency_paused -ne $false -or $health.maintenance_active -ne $false -or
         [UInt64]$health.state.queued_steps -ne 0 -or [UInt64]$health.state.leased_steps -ne 0 -or

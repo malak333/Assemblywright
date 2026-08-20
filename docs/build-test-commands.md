@@ -336,6 +336,12 @@ materialize those same bytes into a new single-link service-path file, apply the
 owner/SYSTEM-only ACL, verify the digest is unchanged, restart, and recheck
 health. This is explicit deployment preparation, creates no proof receipt, and
 must not be confused with the subsequent recovery proof.
+The fixed loopback foundation health route must report mode
+`developer_foundation`; `developer_remote_master` belongs to the enrolled mTLS
+route, and the nonexistent `developer_local_master` string is not an alias for
+either boundary. The pinned Cargo and rustc files must likewise already be
+ordinary single-link files with protected ACLs limited to the fixed owner and
+SYSTEM; `Check` validates but never rewrites that tool trust state.
 
 When it prints the single action marker, copy its `expected_source_head` into
 the authenticated Windows Administrator session and return only the sanitized

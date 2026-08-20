@@ -318,6 +318,10 @@ require_text "restart-recovery Windows exact executable restoration" "$WINDOWS_R
   'Copy-Item -LiteralPath $originalBackup -Destination $service.Executable -Force'
 require_text "restart-recovery Windows SQLite integrity" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
   "PRAGMA integrity_check"
+require_text "restart-recovery Windows foundation health mode" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
+  '$health.mode -cne "developer_foundation"'
+forbid_text "restart-recovery nonexistent local-master mode" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
+  'developer_local_master'
 require_text "build docs restart-recovery proof controller" "$BUILD_DOCS" \
   "./scripts/restart-recovery-proof-controller.sh --run"
 require_text "design restart-recovery controller boundary" "$DESIGN" \

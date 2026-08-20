@@ -1570,6 +1570,13 @@ an old one.
   materialize the same bytes as a new single-link service-path file, protect it
   to the fixed owner and SYSTEM, verify unchanged bytes, and restore health.
   `Check` remains read-only and rejects an unprepared image.
+- The fixed Windows service's loopback foundation health route reports
+  `developer_foundation`; the enrolled mTLS route separately reports
+  `developer_remote_master`. `developer_local_master` is not a supported mode
+  and must not be accepted as an alias. The pinned Cargo and rustc executables
+  can also inherit broad toolchain-directory ACLs even when their paths and
+  digests are exact; restart-proof setup must preserve their bytes while making
+  each ordinary single-link file owner/SYSTEM-only before the read-only `Check`.
 - Feature 5 removes its private transcript after hashing and atomically retains
   only owner-private path-free schema-v1 receipt/raw-digest files. Its self-test
   covers stale invalidation, dirty/wrong/stale/hidden Git state, hostile output,
