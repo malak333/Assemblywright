@@ -61,8 +61,8 @@ fi
 
 [[ "$#" -eq 1 && "$1" == "--run" ]] \
   || fail "the restart-recovery harness accepts only --check or internal --run"
-[[ "${ASSEMBLYWRIGHT_RESTART_RECOVERY_INTERNAL_STDIN_V1:-}" == \
-  "assemblywright.restart-recovery-live-proof.v1" ]] \
+[[ "${ASSEMBLYWRIGHT_RESTART_RECOVERY_INTERNAL_STDIN_V2:-}" == \
+  "assemblywright.restart-recovery-live-proof.v2" ]] \
   || fail "live execution requires the fixed proof controller"
 [[ "${ASSEMBLYWRIGHT_RESTART_RECOVERY_RECEIPT_FD:-}" == "3" ]] \
   || fail "live execution requires the isolated receipt descriptor"
@@ -110,11 +110,11 @@ rustc_sha256="$(/usr/bin/shasum -a 256 "$FIXED_RUSTC_PATH" | /usr/bin/awk '{prin
   || fail "the fixed Cargo home is group or world writable"
 
 test_name="authenticated_uds_local_coding_snapshot_admission_cancellation_and_restart_cleanup"
-if [[ "${ASSEMBLYWRIGHT_RESTART_RECOVERY_VALIDATION_SELF_TEST_V1:-}" == \
-  "assemblywright.restart-recovery-live-proof.v1" ]]; then
+if [[ "${ASSEMBLYWRIGHT_RESTART_RECOVERY_VALIDATION_SELF_TEST_V2:-}" == \
+  "assemblywright.restart-recovery-live-proof.v2" ]]; then
   native_output="test ${test_name} ... ok"
 else
-  [[ -z "${ASSEMBLYWRIGHT_RESTART_RECOVERY_VALIDATION_SELF_TEST_V1:-}" ]] \
+  [[ -z "${ASSEMBLYWRIGHT_RESTART_RECOVERY_VALIDATION_SELF_TEST_V2:-}" ]] \
     || fail "the internal validation self-test marker was invalid"
   native_output="$("$FIXED_CARGO_PATH" test -p assemblywright-agent --test local_relay_e2e \
     "$test_name" -- --exact --nocapture 2>&1)" \
@@ -153,6 +153,7 @@ except Exception:
 expected = {
     "schema_version", "status", "source_head", "protocol_version",
     "master_schema_version", "service_executable_sha256",
+    "rebuilt_service_executable_sha256",
     "windows_cargo_executable_sha256", "windows_rustc_executable_sha256",
     "windows_msvc_environment_sha256", "frozen_database_sha256", "pre_process_id",
     "post_process_id", "queue_revision", "emergency_pause_revision",
@@ -165,7 +166,7 @@ commit = re.compile(r"^[0-9a-f]{40}$")
 now = int(time.time() * 1000)
 if not isinstance(value, dict) or set(value) != expected:
     raise SystemExit(1)
-if (type(value["schema_version"]) is not int or value["schema_version"] != 1 or
+if (type(value["schema_version"]) is not int or value["schema_version"] != 2 or
     value["status"] != "restart_recovery_windows_live_passed" or
     value["source_head"] != os.environ["ASSEMBLYWRIGHT_RESTART_RECOVERY_EXPECTED_HEAD"] or
     not commit.fullmatch(value["source_head"]) or
@@ -186,7 +187,8 @@ if (value["windows_cargo_executable_sha256"] != "dc19c8e6d66802d120bf0696b1924b7
     value["windows_rustc_executable_sha256"] != "e3ebbd547ea7b73c034d588ba569602b379f3b05ad1a3b5f8dcfab9d4478d74a" or
     value["windows_msvc_environment_sha256"] != "6b516d8fcf543c14b2d861e1f45661e0029230fe0dc48e86ce78522801822209"):
     raise SystemExit(1)
-for key in ("service_executable_sha256", "windows_cargo_executable_sha256",
+for key in ("service_executable_sha256", "rebuilt_service_executable_sha256",
+            "windows_cargo_executable_sha256",
             "windows_rustc_executable_sha256", "windows_msvc_environment_sha256",
             "frozen_database_sha256", "activation_evidence_sha256",
             "migration_backups_sha256", "continuity_sha256"):
@@ -195,7 +197,8 @@ for key in ("service_executable_sha256", "windows_cargo_executable_sha256",
 print("assemblywright_restart_recovery_live_e2e_ok", end="")
 print(" cargo_executable_sha256={}".format(os.environ["ASSEMBLYWRIGHT_RESTART_RECOVERY_CARGO_SHA256"]), end="")
 for key in ("source_head", "protocol_version", "master_schema_version",
-            "service_executable_sha256", "windows_cargo_executable_sha256",
+            "service_executable_sha256", "rebuilt_service_executable_sha256",
+            "windows_cargo_executable_sha256",
             "windows_rustc_executable_sha256", "windows_msvc_environment_sha256",
             "frozen_database_sha256", "pre_process_id", "post_process_id",
             "queue_revision", "emergency_pause_revision",

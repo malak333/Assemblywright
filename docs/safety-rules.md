@@ -378,9 +378,12 @@ release requirements, not optional UX guidance.
   service to freeze authority, validate the complete database SHA/no sidecars
   and migration backups, rebuild the expected HEAD offline with fixed absolute
   tools, require an owner/SYSTEM-only ordinary single-link service executable
-  whose digest matches the installed image, prove a bounded healthy PID change,
-  stop and require an identical frozen database, restore the original exact
-  image, and prove a distinct final healthy PID. Failure must attempt exact
+  whose digest matches the exact Cargo output, bind that transient exact-source
+  rebuild separately from the original/restored installed-image digest, prove a
+  bounded healthy PID change, stop and require an identical frozen database,
+  restore the original exact image, and prove a distinct final healthy PID.
+  Byte reproducibility and installed-image source provenance are outside this
+  proof. Failure must attempt exact
   healthy restoration and emit no JSON. Any ambiguity fails closed. The Mac controller must
   boundedly TERM-to-KILL and reap its complete harness process group, restore
   terminal state, hash and remove the private transcript, invalidate a prior

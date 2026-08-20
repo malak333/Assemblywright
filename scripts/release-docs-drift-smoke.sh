@@ -300,6 +300,8 @@ forbid_text "local gate restart-recovery controller live recursion" "$LOCAL_GATE
   "restart-recovery-proof-controller.sh --run"
 require_text "restart-recovery controller exact native agent E2E" "$RESTART_RECOVERY_LIVE_E2E" \
   "authenticated_uds_local_coding_snapshot_admission_cancellation_and_restart_cleanup"
+require_text "agent shutdown marker honors peer identity bound" "$AGENT_E2E" \
+  'let marker_deadline = Instant::now() + Duration::from_secs(12);'
 require_text "restart-recovery controller committed harness" "$RESTART_RECOVERY_PROOF_CONTROLLER" \
   'git_safe "$root" show "$head:$HARNESS_PATH"'
 require_text "restart-recovery controller receipt descriptor" "$RESTART_RECOVERY_PROOF_CONTROLLER" \
@@ -328,6 +330,18 @@ require_text "restart-recovery Windows materialized single-link identity" "$WIND
   'Assert-OwnerSystemFileIdentity $built'
 require_text "restart-recovery Windows materialized digest preservation" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
   '$builtSha -cne $cargoOutputSha'
+require_text "restart-recovery Windows transient rebuild installation digest" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
+  '$build.ExecutableSha256'
+require_text "restart-recovery Windows dual image receipt" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
+  'rebuilt_service_executable_sha256 = $build.ExecutableSha256'
+require_text "restart-recovery Windows stopped rebuild recheck" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
+  'The stopped exact-source rebuilt service identity drifted.'
+require_text "restart-recovery Mac dual image receipt binding" "$RESTART_RECOVERY_PROOF_CONTROLLER" \
+  '"rebuilt_service_executable_sha256":"%s"'
+require_text "restart-recovery schema v2" "$RESTART_RECOVERY_PROOF_CONTROLLER" \
+  'assemblywright.restart-recovery-live-proof.v2'
+forbid_text "restart-recovery reproducible-build assumption" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
+  'The exact-source rebuilt service did not match the installed service executable.'
 require_text "restart-recovery Windows frozen database continuity" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
   '$postFrozenDatabaseSha -cne $frozenDatabaseSha'
 require_text "restart-recovery Windows exact executable restoration" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \

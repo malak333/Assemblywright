@@ -647,7 +647,9 @@ fn agent_sigterm_reaps_active_mlx_process_group_before_exit() {
             )
         })
     });
-    let marker_deadline = Instant::now() + Duration::from_secs(5);
+    // The authenticated peer-code-identity boundary is allowed ten seconds;
+    // parallel workspace load must not make this pre-shutdown marker race it.
+    let marker_deadline = Instant::now() + Duration::from_secs(12);
     while !backend_pid_path.exists() && Instant::now() < marker_deadline {
         thread::sleep(Duration::from_millis(20));
     }

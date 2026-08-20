@@ -277,14 +277,17 @@ the service to freeze authority,
 requires no SQLite sidecar, hashes and integrity-checks the complete database
 and bounded migration backups, then rebuilds the exact expected HEAD offline
 with the fixed absolute Cargo/Rust/MSVC toolchain into owner/SYSTEM-private
-state. The rebuilt ordinary single-link executable must exactly match the
-installed digest. It performs a bounded healthy start with PID turnover, stops
-again, requires the complete frozen database SHA and logical continuity to be
-unchanged, restores the original exact executable, and proves a distinct final
-healthy PID with protocol 5, schema 19, Emergency Pause clear, and empty
-distributed and Feature Conveyor state. Failure attempts exact healthy service
-restoration and emits no receipt. The JSON binds the pinned Cargo, rustc, MSVC,
-service-image, and frozen-database digests without paths.
+state. The rebuilt ordinary single-link executable must preserve the Cargo
+output digest; that exact-source rebuild digest is bound separately because the
+Windows link output is not asserted reproducible against the installed image.
+It performs a bounded healthy start with PID turnover, stops again, requires
+the complete frozen database SHA and logical continuity to be unchanged,
+restores the original exact executable, and proves a distinct final healthy PID
+with protocol 5, schema 19, Emergency Pause clear, and empty distributed and
+Feature Conveyor state. Failure attempts exact healthy service restoration and
+emits no receipt. The schema-v2 JSON binds the pinned Cargo, rustc, MSVC,
+original/restored service-image, transient exact-source rebuild, and frozen-
+database digests without paths.
 
 The installed image is a deployment prerequisite, not controller-created
 trust. A direct Cargo release output may share an inode with its `deps` artifact
@@ -301,7 +304,8 @@ source and committed definitions, and atomically publishes one owner-private
 drift, malformed evidence, unsafe output identity, cancellation, or a surviving
 process-group member invalidates prior output and leaves no current pair. This
 proves retained-agent functional recovery plus idle authoritative-service
-continuity. Active master startup ambiguity remains fail-closed and is covered
+continuity. It does not prove reproducible builds or the original installed
+image's source provenance. Active master startup ambiguity remains fail-closed and is covered
 by exact native quarantine tests; this slice does not prove recovery of an
 active published effect, SCM retry policy, the signed helper, Feature 6
 streaming, evidence admission, activation, signing, notarization, live-device
