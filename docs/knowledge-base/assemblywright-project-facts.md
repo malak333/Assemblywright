@@ -1583,6 +1583,13 @@ an old one.
   filename/directory syntax error before Cargo runs. That pre-build failure must
   restore the exact healthy service, retain no Mac receipt, and leave the private
   recovery directory for explicit owner reconciliation.
+- Windows PowerShell 5.1 represents a native process's ordinary stderr as
+  `NativeCommandError`; Cargo uses stderr for normal compile progress. Under a
+  global `ErrorActionPreference=Stop`, a direct redirected Cargo call therefore
+  aborts a successful build on its first progress line. Scope only that native
+  call to `Continue`, redirect all streams to the private bounded log, capture
+  `$LASTEXITCODE`, and restore the global fail-closed preference by leaving the
+  child scope. Only the captured zero exit code can authorize the next step.
 - Feature 5 removes its private transcript after hashing and atomically retains
   only owner-private path-free schema-v1 receipt/raw-digest files. Its self-test
   covers stale invalidation, dirty/wrong/stale/hidden Git state, hostile output,

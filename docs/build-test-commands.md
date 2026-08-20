@@ -346,6 +346,12 @@ The Windows control passes the fixed quoted `vcvars64.bat` call to
 `cmd.exe /d /s /c` as one PowerShell argument; embedding an additional outer
 quote pair makes `cmd.exe` reject the fixed path before Cargo runs and must fail
 closed with exact healthy service restoration and no receipt.
+On Windows PowerShell 5.1, Cargo writes normal progress to stderr; with the
+control's global `ErrorActionPreference=Stop`, a direct native invocation turns
+that progress into a terminating `NativeCommandError`. The fixed build runs
+Cargo in a child scope with `ErrorActionPreference=Continue`, redirects every
+stream to the bounded private build log, and accepts success only from Cargo's
+captured native exit code. The global fail-closed preference remains unchanged.
 
 When it prints the single action marker, copy its `expected_source_head` into
 the authenticated Windows Administrator session and return only the sanitized
