@@ -376,8 +376,15 @@ function Invoke-ExactOfflineMasterBuild {
     $buildLog = Join-Path $recoveryRoot "cargo-build.log"
     Push-Location -LiteralPath $sourceRepository
     try {
-        & $cargoExecutable build --manifest-path $manifestPath --locked --offline --release -p assemblywright-master --bin assemblywright-master --target-dir $target *> $buildLog
-        if ($LASTEXITCODE -ne 0) { throw "The fixed exact-source offline master build failed." }
+        $cargoExitCode = & {
+            # Windows PowerShell 5.1 promotes a native process's ordinary stderr
+            # into NativeCommandError records. Keep those records in the private
+            # build log and decide success only from the native exit code.
+            $ErrorActionPreference = "Continue"
+            & $cargoExecutable build --manifest-path $manifestPath --locked --offline --release -p assemblywright-master --bin assemblywright-master --target-dir $target *> $buildLog
+            $LASTEXITCODE
+        }
+        if ($cargoExitCode -ne 0) { throw "The fixed exact-source offline master build failed." }
     } finally { Pop-Location }
     Set-OwnerSystemAcl -Path $buildLog
     if ((Get-Item -LiteralPath $buildLog).Length -gt 1048576) { throw "The fixed build log exceeded its private bound." }

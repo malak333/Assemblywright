@@ -316,6 +316,12 @@ require_text "restart-recovery Windows fixed MSVC command argument" "$WINDOWS_RE
   '$msvcEnvironmentCommand = '\''call "{0}" >nul && set'\'' -f $msvcEnvironmentScript'
 require_text "restart-recovery Windows fixed MSVC command invocation" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
   '/d /s /c $msvcEnvironmentCommand'
+require_text "restart-recovery Windows native Cargo error scope" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
+  '$cargoExitCode = & {'
+require_text "restart-recovery Windows native Cargo stderr handling" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
+  '$ErrorActionPreference = "Continue"'
+require_text "restart-recovery Windows native Cargo exit authority" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
+  'if ($cargoExitCode -ne 0)'
 require_text "restart-recovery Windows frozen database continuity" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
   '$postFrozenDatabaseSha -cne $frozenDatabaseSha'
 require_text "restart-recovery Windows exact executable restoration" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
