@@ -164,7 +164,13 @@ Before starting a release pass, confirm the claim you intend to make.
   without retry. Keep the route owner-loopback-only and prove authenticated
   remote mTLS still returns 404.
 - Run `github-publication-proof-controller.sh --check` and `--self-test` in the
-  canonical gate. For live proof, require exact clean published source on both
+  canonical gate, plus the focused `github_publication_adapter`, publication-
+  filtered `feature_conveyor_kernel`, and `publication_coordinator_contract`
+  suites. Treat these as the `unit-testing-test-generate` coverage for strict
+  configuration, policy/provenance, cancellation/deadline, idempotence,
+  restart/recovery, redaction, maximum-input, and malformed-state cases; do not
+  claim a numeric percentage when `cargo llvm-cov` is unavailable. For live
+  proof, require exact clean published source on both
   hosts, valid fixed Windows GitHub authentication, a quiescent protocol-5/
   schema-19 master, and one bounded metadata-only proof-marker candidate merged through protected
   `main`. Bind the exact starting source and resulting remote-main commit,
@@ -173,6 +179,12 @@ Before starting a release pass, confirm the claim you intend to make.
   checkout itself must remain unchanged during the proof. Do not admit the
   receipt automatically or treat it as a queued feature, general repository,
   signing, notarization, clean-profile, or production-readiness proof.
+- Apply `e2e-testing` at the native boundary for Feature 4: controlled bare-Git
+  remote, committed Mac controller/harness, fixed Windows service and
+  credential-owning GitHub adapter, protected public pull request, hosted
+  checks, normal merge, cleanup, and final reconciliation. Browser Playwright,
+  visual-regression, and cross-browser lanes are not applicable because there
+  is no browser product surface.
 - Confirm protocol-v5/schema-v13 result-artifact admission uses only an exact
   immutable packet with sorted normalized relative paths and deterministic
   write/delete schemas; SHA-256 covers the complete packet and exact canonical

@@ -75,6 +75,7 @@ expected_local_gate_commands=(
   "run ./scripts/restricted-worker-proof-controller.sh --self-test"
   "run ./scripts/review-provider-proof-controller.sh --check"
   "run ./scripts/review-provider-proof-controller.sh --self-test"
+  "run ./scripts/github-publication-live-e2e.sh --check"
   "run ./scripts/github-publication-proof-controller.sh --check"
   "run ./scripts/github-publication-proof-controller.sh --self-test"
   "run ./scripts/release-naming-contract-smoke.sh --check"
