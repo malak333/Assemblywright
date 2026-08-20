@@ -267,6 +267,19 @@ fixed repository, protected `main`, and exact hosted-check mapping validate.
 The loopback runtime releases its state lock during external work and accepts
 adapter evidence only after cancellation and authority rechecks; enrolled mTLS
 still exposes no publication route.
+Feature 5 adds no runtime authority. Its fixed Mac proof controller executes the
+committed real-agent retained-workspace restart E2E using one digest-pinned
+Cargo with caller overrides cleared, then accepts one sanitized Windows receipt
+on an isolated descriptor. Windows serializes an explicitly confirmed idle
+`AssemblywrightMaster` stopped-state recovery/restoration, offline-rebuilds
+exact source with fixed absolute tools, requires an owner/SYSTEM-only single-
+link image digest match, proves PID turnover and exact full-database SHA
+continuity between stopped freezes, restores the original image, and proves
+final bounded protocol-v5/schema-v19 health and empty state. Only a path-free
+tool/image/database-digest-bound
+receipt pair is retained. Active-effect ambiguity continues to quarantine under
+the native master kernel; the controller adds no retry, admission, activation,
+streaming, or release authority.
 Two additional owner-token loopback-only resolution routes compare-and-set the
 exact feature, lifecycle, queue, and Emergency Pause revisions inside the
 authoritative transaction. Cancellation cancels bound coding work, retains the

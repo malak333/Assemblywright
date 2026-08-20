@@ -252,6 +252,51 @@ it does not prove a queued feature publication, general repository support,
 signing, notarization, clean-profile installation, or production readiness.
 Protocol v5 and schema v19 are unchanged.
 
+The fifth slice is the fixed restart-recovery proof controller. The owner-run
+`scripts/restart-recovery-proof-controller.sh --run` has no repository,
+service, data-directory, executable, test, Windows-control, or harness selector.
+It starts only from exact clean `main == refs/remotes/origin/main`, verifies
+normal tracked-index state and the committed controller, harness, and Windows-
+control blobs, pins the system Git plus owner-host Cargo and rustc paths with
+exact ordinary-file identities and digests, validates the fixed Cargo home,
+rejects Cargo configuration throughout the checkout ancestry, and clears
+caller tool/PATH/build overrides. It then executes only the committed harness
+bytes through the absolute system Bash with a system-only PATH. The harness
+runs those exact Rust tools and the existing real-process Rust-agent E2E for a
+retained workspace/record pair, agent termination and restart, exact
+cancellation cleanup, and partial-state restart cleanup. One strict sanitized
+Windows receipt arrives on a separate descriptor, never as executable input.
+
+The fixed Windows control requires deliberate `Run` confirmation and serializes
+operations. It binds the controller-reported commit to exact clean Windows
+source, the literal service/data paths, exact `MIKE-PC\mike` service owner, and
+the source-checkout release image. It stops the service to freeze authority,
+requires no SQLite sidecar, hashes and integrity-checks the complete database
+and bounded migration backups, then rebuilds the exact expected HEAD offline
+with the fixed absolute Cargo/Rust/MSVC toolchain into owner/SYSTEM-private
+state. The rebuilt ordinary single-link executable must exactly match the
+installed digest. It performs a bounded healthy start with PID turnover, stops
+again, requires the complete frozen database SHA and logical continuity to be
+unchanged, restores the original exact executable, and proves a distinct final
+healthy PID with protocol 5, schema 19, Emergency Pause clear, and empty
+distributed and Feature Conveyor state. Failure attempts exact healthy service
+restoration and emits no receipt. The JSON binds the pinned Cargo, rustc, MSVC,
+service-image, and frozen-database digests without paths.
+
+The Mac controller hashes and deletes its private transcript, rechecks the
+source and committed definitions, and atomically publishes one owner-private
+`0600` receipt plus raw SHA-256 sidecar under
+`target/restart-recovery-live-proof`. The receipt binds category
+`restart_recovery_live` to origin `restart_recovery_proof_controller`. Failure,
+drift, malformed evidence, unsafe output identity, cancellation, or a surviving
+process-group member invalidates prior output and leaves no current pair. This
+proves retained-agent functional recovery plus idle authoritative-service
+continuity. Active master startup ambiguity remains fail-closed and is covered
+by exact native quarantine tests; this slice does not prove recovery of an
+active published effect, SCM retry policy, the signed helper, Feature 6
+streaming, evidence admission, activation, signing, notarization, live-device
+installation, or production readiness. Protocol v5 and schema v19 are unchanged.
+
 The designated bridge may explicitly owner-pause or resume only an exact
 active, effect-free orchestration checkpoint using lifecycle, orchestration,
 queue, designation, and Emergency Pause revisions. Owner pause stops the active

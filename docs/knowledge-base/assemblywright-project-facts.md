@@ -1524,3 +1524,63 @@ an old one.
   emulation, and cross-browser matrices are inapplicable because this feature
   exposes no browser product surface; installing a browser harness would not
   exercise the credential-owning publication boundary.
+- Feature 5 is `scripts/restart-recovery-proof-controller.sh` plus the committed
+  `restart-recovery-live-e2e.sh` and fixed Windows control. It has no selector
+  for repository, service, data directory, executable, test, receipt, or
+  harness and accepts Windows JSON only on the isolated descriptor. The output
+  category/origin are exactly `restart_recovery_live` and
+  `restart_recovery_proof_controller`.
+- The committed Feature 5 harness runs the exact real-process Rust-agent test
+  `authenticated_uds_local_coding_snapshot_admission_cancellation_and_restart_cleanup`.
+  The Mac controller admits only pinned canonical system Git and owner-host
+  Cargo/rustc ordinary single-link executables, validates the fixed Cargo home,
+  rejects `config`/`config.toml` throughout the checkout ancestry and Cargo
+  home, clears caller build/PATH overrides, and executes committed bytes with
+  absolute system tools under a system-only PATH. Its self-test proves hostile
+  Git, Cargo, Bash, Python, grep, Cargo-runner, and rustc-wrapper paths cannot
+  forge the native result and exercises
+  accepted, oversized, and signalled receipt handling through a real PTY with
+  exact terminal restoration.
+  That test proves retained workspace/record recovery, exact cancellation
+  cleanup after restart, and partial-state restart cleanup. It is functional
+  agent recovery, not host-wide crash containment.
+- The Windows Feature 5 run is serialized and explicitly confirmed. It binds
+  exact clean controller-reported source HEAD, fixed source/service/data paths,
+  exact `MIKE-PC\mike` service owner and release image, requires empty
+  distributed and Feature Conveyor state with Emergency Pause clear. It stops
+  the service, requires no SQLite sidecar, hashes/integrity-checks the complete
+  frozen database and bounded backups, then offline-rebuilds exact HEAD with the
+  fixed absolute Cargo/Rust/MSVC toolchain. The rebuilt image must be an owner/
+  SYSTEM-only ordinary single-link file and byte-match the installed digest. A
+  bounded healthy start changes PID; a second stop must yield the identical full
+  database SHA and logical/migration continuity. It then restores the original
+  exact image and proves a distinct final protocol-5/schema-19 healthy PID.
+  Failure attempts exact healthy restoration and emits no receipt; tool, image,
+  and frozen-database digests are bound in sanitized JSON.
+- Feature 5 removes its private transcript after hashing and atomically retains
+  only owner-private path-free schema-v1 receipt/raw-digest files. Its self-test
+  covers stale invalidation, dirty/wrong/stale/hidden Git state, hostile output,
+  path redaction, and cancellation process-group cleanup. The exact master
+  startup-quarantine and audit-rollback tests remain separate repository
+  evidence. Neither controller nor tests prove active published-effect crash
+  recovery, SCM retry policy, signed-helper behavior, Feature 6 streaming,
+  admission/activation, signing/notarization, installation, or production.
+- Native Mac relay tests must keep their client read timeout above the server's
+  ten-second peer-code-identity validation bound. A five-second client timeout
+  can surface Security.framework latency as `WouldBlock` before the server's
+  bounded identity decision; the test client uses twelve seconds so the
+  recovery assertion observes the actual transport contract.
+- A committed-byte proof is not contained merely because its primary executable
+  is digest-pinned. Every interpreter and result parser must resolve through a
+  fixed validated system identity, and build tools must reject configuration
+  discovery that can redirect runners or wrappers. Feature 5 therefore treats
+  hostile PATH entries and Cargo configuration ancestry as unit/self-test
+  boundaries, not as operator assumptions.
+- For Feature 5, the `unit-testing-test-generate` workflow maps to the controller
+  self-test's disposable Git/process/PTY fixtures: success, absent prerequisites,
+  strict CLI, malformed/duplicate/oversized evidence, boundary sizes, redaction,
+  stale-output invalidation, hostile paths/configuration, cancellation, process-
+  group cleanup, and terminal restoration. The `e2e-testing` workflow maps to
+  the real Rust agent restart plus Windows SCM/SQLite recovery path. Playwright,
+  visual regression, and cross-browser testing are inapplicable because no
+  browser surface participates in this authority boundary.

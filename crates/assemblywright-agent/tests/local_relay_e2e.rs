@@ -1068,7 +1068,10 @@ fn request(method: &str, path: &str, authorization: Option<String>, body: Option
 fn send(socket_path: &Path, request: Value) -> Value {
     let mut stream = UnixStream::connect(socket_path).expect("connect agent relay");
     stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
+        // The server permits up to ten seconds for macOS peer-code validation.
+        // Keep the client bound above that contract so a slow Security.framework
+        // lookup cannot mask the response as an unrelated socket WouldBlock.
+        .set_read_timeout(Some(Duration::from_secs(12)))
         .expect("set read timeout");
     stream
         .set_write_timeout(Some(Duration::from_secs(5)))
