@@ -412,6 +412,9 @@ release requirements, not optional UX guidance.
   with restricted-worker stdin mode, and must be unset before the live boundary.
   The fixed signed helper and agent ordinary-file/signature identities,
   source, tree, and committed definitions must be stable before and after.
+  The minimal child environment must bind `ASSEMBLYWRIGHT_MAC_AGENT_BIN` to
+  that already captured exact agent path so the shared harness cannot rebuild
+  and replace the executable between the controller's identity snapshots.
   Accept only one exact ordered terminal relay/bridge marker pair with a
   strictly advancing same-stream cursor already validated by the harness. Malformed, extra,
   reordered, oversized, or trailing output; drift; cancellation; or a surviving

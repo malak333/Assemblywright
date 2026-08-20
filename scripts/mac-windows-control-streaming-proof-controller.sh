@@ -268,6 +268,7 @@ run_committed_harness() {
       clear_live_environment
       exec /usr/bin/env -i HOME="$FIXED_HOME" USER="$FIXED_USER" LOGNAME="$FIXED_USER" \
         PATH="$LIVE_PATH" LC_ALL=C \
+        ASSEMBLYWRIGHT_MAC_AGENT_BIN="$root/$AGENT_RELATIVE" \
         ASSEMBLYWRIGHT_CONTROL_STREAMING_INTERNAL_STDIN_V1="$PROOF_IDENTITY" \
         ASSEMBLYWRIGHT_CONTROL_STREAMING_INTERNAL_ROOT="$root" \
         "$FIXED_BASH" -c 'exec -a bash /bin/bash -s -- "$@"' bash --run-relay
@@ -442,6 +443,7 @@ write_fixture_files() {
     '[[ "$internal_marker" == assemblywright.mac-windows-control-event-streaming-live.v1 ]] || exit 92' \
     '[[ "$internal_root" == /* && -d "$internal_root" && ! -L "$internal_root" ]] || exit 93' \
     '[[ "$(cd "$internal_root" && pwd -P)" == "$internal_root" ]] || exit 94' \
+    '[[ "${ASSEMBLYWRIGHT_MAC_AGENT_BIN:-}" == "$internal_root/target/debug/assemblywright-agent" ]] || exit 95' \
     "$body" >"$fixture/$HARNESS_PATH"
   printf '#!/bin/bash\nexit 0\n' >"$fixture/$CONTROLLER_PATH"
   printf '#!/bin/bash\nexit 0\n' >"$fixture/$HELPER_RELATIVE"
@@ -528,7 +530,7 @@ self_test_controller() {
   oversize="$scratch/oversize"; initialize_fixture "$oversize" "awk 'BEGIN { for(i=0;i<1100000;i++) printf \"x\"; print \"\" }'"; expect_failure "$oversize"
   path_leak="$scratch/path-leak"; initialize_fixture "$path_leak" "printf '/Users/owner/private endpoint detail\\n'"$'\n'"$(fixture_terminal)"; run_controller "$path_leak" >/dev/null
   ! /usr/bin/grep -Eq '/Users/|endpoint|stream_id' "$path_leak/$OUTPUT_RELATIVE/$RECEIPT_NAME" || fail "receipt retained hostile private output"
-  env_hardening="$scratch/env"; initialize_fixture "$env_hardening" '[[ "$PATH" == "'"$LIVE_PATH"'" && "${HOME:-}" == "'"$FIXED_HOME"'" && "$(type -t swift)" == file && -z "${ASSEMBLYWRIGHT_MAC_BRIDGE_BIN:-}${ASSEMBLYWRIGHT_MAC_AGENT_BIN:-}${ASSEMBLYWRIGHT_TAILSCALE_BIN:-}${ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_MODEL_DIR:-}${GIT_DIR:-}" ]]'$'\n'"$(fixture_terminal)"
+  env_hardening="$scratch/env"; initialize_fixture "$env_hardening" '[[ "$PATH" == "'"$LIVE_PATH"'" && "${HOME:-}" == "'"$FIXED_HOME"'" && "$(type -t swift)" == file && "${ASSEMBLYWRIGHT_MAC_AGENT_BIN:-}" == "$internal_root/target/debug/assemblywright-agent" && -z "${ASSEMBLYWRIGHT_MAC_BRIDGE_BIN:-}${ASSEMBLYWRIGHT_TAILSCALE_BIN:-}${ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_MODEL_DIR:-}${GIT_DIR:-}" ]]'$'\n'"$(fixture_terminal)"
   swift() { return 97; }
   export -f swift
   PATH="$scratch/evil:$PATH" GIT_DIR="$scratch/git" ASSEMBLYWRIGHT_MAC_BRIDGE_BIN=x ASSEMBLYWRIGHT_MAC_AGENT_BIN=y ASSEMBLYWRIGHT_TAILSCALE_BIN=z ASSEMBLYWRIGHT_MAC_DEVELOPER_MLX_MODEL_DIR=q run_controller "$env_hardening" >/dev/null
@@ -548,7 +550,7 @@ self_test_controller() {
   hostile="$scratch/hostile"; external="$scratch/external"; initialize_fixture "$hostile" "$(fixture_terminal)"; /bin/mkdir -m 700 "$external"; printf preserve >"$external/sentinel"; /bin/mv "$hostile/target" "$hostile/target-real"; ln -s "$external" "$hostile/target"; expect_failure "$hostile"
   [[ "$(<"$external/sentinel")" == preserve ]] || fail "hostile output path changed external state"
   printf 'Assemblywright Mac/Windows control-streaming proof controller self-test: ok\n'
-  printf 'Proof boundary: disposable fixtures cover strict CLI, success, raw digest, permissions, complete-transcript hashing/deletion, path/endpoint/stream redaction, stale invalidation, dirty/wrong/stale/hidden Git, empty/malformed/duplicate/reordered/oversized/hostile output, marker endpoint/cursor binding, variable and exported-function environment clearing, source/binary drift, surviving descendants, cancellation cleanup, and hostile output paths.\n'
+  printf 'Proof boundary: disposable fixtures cover strict CLI, success, raw digest, permissions, complete-transcript hashing/deletion, path/endpoint/stream redaction, stale invalidation, dirty/wrong/stale/hidden Git, empty/malformed/duplicate/reordered/oversized/hostile output, marker endpoint/cursor binding, captured-agent child binding, variable and exported-function environment clearing, source/binary drift, surviving descendants, cancellation cleanup, and hostile output paths.\n'
 }
 
 MODE="${1:---check}"
