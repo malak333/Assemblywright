@@ -1501,3 +1501,26 @@ an old one.
   committed harness bytes separate from the sanitized Windows receipt, removes
   its private transcript, and publishes only the fixed ignored owner-private
   `target/github-publication-live-proof` receipt/digest pair.
+- Feature 4's portable focused coverage is split deliberately: the adapter
+  suite exercises default-unavailable provisioning, hostile configuration and
+  plaintext-token rejection, pinned executable drift, exact branch policy,
+  check/workflow provenance, explicit cancellation, deadlines, remote-base and
+  cleanup drift, credential-process isolation, and strict live-receipt shape;
+  the coordinator suites cover strict wire bindings, idempotence, durable
+  intent ordering, pause/cancellation races, restart ambiguity, quarantine,
+  migration, and a controlled bare-Git remote. The controller self-test adds
+  maximum-size PTY input, hostile output, process-group reaping, dirty/wrong-
+  branch/hidden-index rejection, remote advancement with unchanged checkout,
+  merge reconciliation, and private receipt publication. The controller check
+  statically enforces the Windows global-mutex, staging-ownership, and
+  transactional rollback source contract; the publication-kernel tests execute
+  concurrent cancellation/pause races, and only the live Windows lane executes
+  the PowerShell provisioning/recovery path. `cargo llvm-cov` is not installed
+  in the pinned workspace toolchain, so no numeric coverage percentage is
+  claimed.
+- The requested `e2e-testing` workflow maps Feature 4 to native Rust, Git,
+  GitHub API, PowerShell, process-containment, Windows-service, and Mac/Windows
+  proof boundaries. Playwright, screenshots, visual regression, mobile
+  emulation, and cross-browser matrices are inapplicable because this feature
+  exposes no browser product surface; installing a browser harness would not
+  exercise the credential-owning publication boundary.

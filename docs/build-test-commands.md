@@ -243,10 +243,26 @@ Static validation and disposable controller regressions run in the canonical
 local gate:
 
 ```sh
+cargo test -p assemblywright-master --test github_publication_adapter -- --nocapture
+cargo test -p assemblywright-master --test feature_conveyor_kernel publication_ -- --nocapture
+cargo test -p assemblywright-protocol --test publication_coordinator_contract -- --nocapture
 ./scripts/github-publication-live-e2e.sh --check
 ./scripts/github-publication-proof-controller.sh --check
 ./scripts/github-publication-proof-controller.sh --self-test
 ```
+
+These focused Rust suites cover the smallest portable adapter and coordinator
+units, including unavailable configuration, strict request/evidence binding,
+policy and workflow provenance, cancellation/deadlines, restart ambiguity,
+idempotence, remote-base drift, cleanup failure, command-path isolation, and
+sanitized receipt rejection. The controller self-test supplies the applicable
+maximum-input, hostile-output, process-reaping, Git-reconciliation, and private-
+receipt fixtures; coordinator tests exercise concurrent cancellation and pause
+races. The controller check statically enforces the committed Windows mutex,
+staging-ownership, and transactional rollback contract, while only the live
+Windows lane executes that PowerShell path. `cargo llvm-cov` is not part of the
+pinned toolchain, so closeout must not claim a numeric coverage percentage
+unless an independently provisioned coverage run is recorded.
 
 On exact clean protected GitHub `main`, validate or provision the fixed Windows
 GitHub CLI/Git identities and owner-private authentication boundary from the

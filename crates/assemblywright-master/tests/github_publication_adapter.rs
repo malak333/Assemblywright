@@ -228,6 +228,17 @@ fn execution_control_and_proof_receipt_fail_closed() {
     authority.store(false, Ordering::Release);
     assert_eq!(control.poll(), Err(PublicationAdapterError::Cancelled));
 
+    let explicitly_cancelled = Arc::new(AtomicBool::new(true));
+    let cancelled_control = PublicationExecutionControl::new(
+        explicitly_cancelled,
+        Instant::now() + Duration::from_secs(1),
+        Arc::new(|| true),
+    );
+    assert_eq!(
+        cancelled_control.poll(),
+        Err(PublicationAdapterError::Cancelled)
+    );
+
     let expired = PublicationExecutionControl::new(
         Arc::new(AtomicBool::new(false)),
         Instant::now() - Duration::from_millis(1),
@@ -238,13 +249,28 @@ fn execution_control_and_proof_receipt_fail_closed() {
         Err(PublicationAdapterError::DeadlineExceeded)
     );
 
-    let mut receipt = valid_receipt();
+    let receipt = valid_receipt();
     assert_eq!(receipt.validate(), Ok(()));
-    receipt.repository = "/private/master/path".to_string();
-    assert_eq!(
-        receipt.validate(),
-        Err(PublicationAdapterError::MissingEvidence)
-    );
+
+    for mutate in [
+        Box::new(|value: &mut GithubPublicationLiveProofReceipt| value.schema_version = 0)
+            as Box<dyn Fn(&mut GithubPublicationLiveProofReceipt)>,
+        Box::new(|value| value.status = "failed".to_string()),
+        Box::new(|value| value.repository = "/private/master/path".to_string()),
+        Box::new(|value| value.base_branch = "owner-selected".to_string()),
+        Box::new(|value| value.publication_commit = value.source_head.clone()),
+        Box::new(|value| value.pull_request_number = 0),
+        Box::new(|value| value.pull_request_url_sha256 = "AA".repeat(32)),
+        Box::new(|value| value.master_executable_sha256 = "00".repeat(31)),
+        Box::new(|value| value.observed_at_ms = 0),
+    ] {
+        let mut malformed = receipt.clone();
+        mutate(&mut malformed);
+        assert_eq!(
+            malformed.validate(),
+            Err(PublicationAdapterError::MissingEvidence)
+        );
+    }
 }
 
 #[test]
