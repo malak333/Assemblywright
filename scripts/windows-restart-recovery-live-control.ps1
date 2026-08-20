@@ -353,7 +353,8 @@ function Invoke-ExactOfflineMasterBuild {
     if ($LASTEXITCODE -ne 0 -or $cargoVersion -cne "cargo 1.95.0 (f2d3ce0bd 2026-03-21)") {
         throw "The fixed Windows Cargo version was not exact."
     }
-    $environmentLines = @(& $commandExecutable /d /s /c "`"call `"$msvcEnvironmentScript`" >nul && set`"" 2>&1)
+    $msvcEnvironmentCommand = 'call "{0}" >nul && set' -f $msvcEnvironmentScript
+    $environmentLines = @(& $commandExecutable /d /s /c $msvcEnvironmentCommand 2>&1)
     if ($LASTEXITCODE -ne 0) { throw "The fixed MSVC environment setup failed." }
     $buildEnvironment = @{}
     foreach ($line in $environmentLines) {
