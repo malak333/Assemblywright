@@ -1638,3 +1638,29 @@ an old one.
   the real Rust agent restart plus Windows SCM/SQLite recovery path. Playwright,
   visual regression, and cross-browser testing are inapplicable because no
   browser surface participates in this authority boundary.
+- Feature 5 live closeout passed on exact published implementation merge
+  `44e912ef8b6e4f499d89107cf6414887b8957f3d`. The owner-run controller proved
+  the real Rust-agent retained-workspace restart path and the fixed Windows
+  SCM/schema-v19 idle-authority recovery path. Windows changed from healthy PID
+  `20896` to distinct restored healthy PID `38380`, preserved queue revision 27,
+  inactive activation, and 14 migration backups, and revalidated protocol 5,
+  schema 19, Emergency Pause clear, and no queued, leased, or active work. The
+  original/restored service digest was
+  `a9cc70507cf972dd2a62484ad2573e609bed1cef1692148bdf67fa07938ca36c`;
+  the separately bound transient exact-source rebuild digest was
+  `6ef271b79a6f1f6d3e61129845bc7015cba7000d45dd4c319878ac83ea05552c`.
+  The frozen database, migration-backup set, and logical-continuity digests were
+  `96c5adafdf82854dabcee2f78052de36b2d1e1da8feb9a61623ad1be98ec753b`,
+  `67dd190058fa8bd537477004400ffafd6b4e5b8309faaf3a6a90e1b1dde66dce`,
+  and `f5de3884b7a1266961b3550b49c34742fac674d421c7d11e763fec41c33f8a3c`.
+  The retained owner-private receipt SHA-256 is
+  `9ba39dc9b9663e0fd7783b46b760848b13572f5e19e7a85b47c7b8cbab7333b0`.
+- Documentation, design, safety rules, the conversation-derived hardening facts
+  above, focused unit/self-test coverage, native E2E coverage, canonical local
+  release verification, and independent high-risk review were all completed.
+  Exact published-merge hosted runs `32400583370` (Release Local) and
+  `32400583357` (Windows Distributed) passed. No evidence was admitted, no
+  activation was attempted, and Feature 5 does not prove reproducible Windows
+  builds, installed-image source provenance, active-effect crash recovery, SCM
+  retry policy, Feature 6 control streaming, signing, notarization, or
+  production readiness.
