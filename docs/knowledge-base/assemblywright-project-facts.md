@@ -1570,6 +1570,14 @@ an old one.
   materialize the same bytes as a new single-link service-path file, protect it
   to the fixed owner and SYSTEM, verify unchanged bytes, and restore health.
   `Check` remains read-only and rejects an unprepared image.
+- The same Cargo hard-link behavior occurs inside the Feature 5 isolated offline
+  rebuild. Do not reject an otherwise exact Cargo output merely because it has
+  the expected `deps` hard link, and do not install it directly. Hash the
+  ordinary output, byte-copy it into a fresh recovery-root file, apply the exact
+  owner/SYSTEM-only ACL, require one link and the unchanged digest, and only
+  then compare/install that materialized image. A rejection at this boundary
+  must restore the original healthy service, retain no Mac receipt, and leave
+  the private recovery directory for explicit owner reconciliation.
 - The fixed Windows service's loopback foundation health route reports
   `developer_foundation`; the enrolled mTLS route separately reports
   `developer_remote_master`. `developer_local_master` is not a supported mode

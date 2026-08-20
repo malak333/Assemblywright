@@ -322,6 +322,12 @@ require_text "restart-recovery Windows native Cargo stderr handling" "$WINDOWS_R
   '$ErrorActionPreference = "Continue"'
 require_text "restart-recovery Windows native Cargo exit authority" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
   'if ($cargoExitCode -ne 0)'
+require_text "restart-recovery Windows Cargo output materialization" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
+  '[IO.File]::Copy($cargoOutput, $built, $false)'
+require_text "restart-recovery Windows materialized single-link identity" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
+  'Assert-OwnerSystemFileIdentity $built'
+require_text "restart-recovery Windows materialized digest preservation" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
+  '$builtSha -cne $cargoOutputSha'
 require_text "restart-recovery Windows frozen database continuity" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
   '$postFrozenDatabaseSha -cne $frozenDatabaseSha'
 require_text "restart-recovery Windows exact executable restoration" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
