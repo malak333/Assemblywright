@@ -1620,7 +1620,10 @@ an old one.
   ten-second peer-code-identity validation bound. A five-second client timeout
   can surface Security.framework latency as `WouldBlock` before the server's
   bounded identity decision; the test client uses twelve seconds so the
-  recovery assertion observes the actual transport contract.
+  recovery assertion observes the actual transport contract. The agent SIGTERM
+  E2E's backend-start marker must use the same twelve-second bound: five seconds
+  passes alone but races the valid identity decision under parallel workspace
+  load, creating a false missing-marker failure before shutdown is exercised.
 - A committed-byte proof is not contained merely because its primary executable
   is digest-pinned. Every interpreter and result parser must resolve through a
   fixed validated system identity, and build tools must reject configuration

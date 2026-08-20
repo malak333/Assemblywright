@@ -300,6 +300,8 @@ forbid_text "local gate restart-recovery controller live recursion" "$LOCAL_GATE
   "restart-recovery-proof-controller.sh --run"
 require_text "restart-recovery controller exact native agent E2E" "$RESTART_RECOVERY_LIVE_E2E" \
   "authenticated_uds_local_coding_snapshot_admission_cancellation_and_restart_cleanup"
+require_text "agent shutdown marker honors peer identity bound" "$AGENT_E2E" \
+  'let marker_deadline = Instant::now() + Duration::from_secs(12);'
 require_text "restart-recovery controller committed harness" "$RESTART_RECOVERY_PROOF_CONTROLLER" \
   'git_safe "$root" show "$head:$HARNESS_PATH"'
 require_text "restart-recovery controller receipt descriptor" "$RESTART_RECOVERY_PROOF_CONTROLLER" \
