@@ -680,6 +680,39 @@ not enqueue or mutate Feature Conveyor state, admit its own receipt, or claim
 general publication, signing, notarization, clean-profile, or production
 readiness.
 
+#### Restart-Recovery Live Proof
+
+Feature 5 adds one fixed restart-recovery proof controller without changing
+queue, activation, protocol, or schema authority. Its committed harness runs
+the existing real Rust-agent retained-workspace restart E2E; the separate
+Windows receipt proves one explicitly confirmed, serialized, idle
+`AssemblywrightMaster` recovery-and-restoration sequence. Windows binds exact
+clean source to the controller-reported HEAD, stops authority, hashes the full
+sidecar-free database, integrity-checks it and bounded migration backups, and
+offline-rebuilds that HEAD with fixed absolute tools. The ordinary single-link,
+owner/SYSTEM-only rebuilt image must match the installed digest. A bounded start
+must change PID; a second stop must reproduce the exact frozen database SHA and
+logical continuity; then the exact original image is restored and a distinct
+final healthy PID is required. Protocol 5/schema 19, Emergency Pause clear, and
+empty distributed/Feature Conveyor state remain exact. Only bounded path-free
+JSON with tool, image, and frozen-state digests crosses to the Mac. The Mac
+controller pins/digests system Git plus its fixed Cargo and rustc, validates a
+fixed Cargo home, rejects Cargo configuration throughout the checkout ancestry,
+clears build/PATH overrides, and executes exact committed bytes with absolute
+system tools and a system-only PATH. It separates executable stdin from the
+receipt descriptor, reaps its process group on cancellation,
+hashes then deletes the private transcript, and atomically writes the ignored
+owner-private receipt pair. That pair uses `restart_recovery_live` /
+`restart_recovery_proof_controller` and is not self-admitted.
+
+The Feature 5 claim is intentionally narrower than orchestration recovery: it
+proves agent retained-state functional recovery and idle authoritative-service
+continuity. Exact repository-native master tests remain the evidence for
+startup quarantine and audit rollback. It does not prove crash recovery of an
+active published effect, SCM retry policy, signed-helper behavior, Feature 6
+streaming, evidence admission or activation, signing/notarization, installation,
+or production readiness.
+
 Prepare is resumable without adding master authority. The Windows disposable
 checkout marker is byte-validated and published by same-directory atomic rename
 before grants, durably binding the generated repository/feature IDs and exact

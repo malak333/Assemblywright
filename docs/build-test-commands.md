@@ -300,6 +300,60 @@ actual queued-feature publication, signing/notarization, clean-profile, or
 production-readiness claim. Playwright does not apply to this native
 Rust/Git/GitHub/PowerShell boundary.
 
+## Restart-recovery Live Proof Controller
+
+Portable controller and exact native restart coverage:
+
+```sh
+./scripts/restart-recovery-live-e2e.sh --check
+./scripts/restart-recovery-proof-controller.sh --check
+./scripts/restart-recovery-proof-controller.sh --self-test
+cargo test -p assemblywright-agent --test local_relay_e2e authenticated_uds_local_coding_snapshot_admission_cancellation_and_restart_cleanup -- --exact --nocapture
+cargo test -p assemblywright-master --test feature_conveyor_kernel restart_quarantines_ambiguous_active_feature_without_retry -- --exact --nocapture
+cargo test -p assemblywright-master --test feature_conveyor_kernel startup_quarantine_audit_failure_rolls_back_and_blocks_open -- --exact --nocapture
+cargo test -p assemblywright-master --test feature_conveyor_kernel publication_restart_with_unresolved_external_intent_quarantines_without_retry -- --exact --nocapture
+cargo test -p assemblywright-master --test feature_conveyor_kernel restart_quarantines_an_indeterminate_review_call_without_retry -- --exact --nocapture
+```
+
+The agent E2E starts the real Rust process, retains the exact workspace/record
+pair, restarts, and proves exact cleanup. The master tests remain repository
+evidence for effect-possible startup quarantine and audit rollback; the live
+controller does not manufacture active work to exercise that boundary.
+
+After Mac and Windows both equal the exact clean published implementation SHA,
+start the fixed Mac controller:
+
+```sh
+./scripts/restart-recovery-proof-controller.sh --run
+```
+
+When it prints the single action marker, copy its `expected_source_head` into
+the authenticated Windows Administrator session and return only the sanitized
+JSON line:
+
+```powershell
+& .\scripts\windows-restart-recovery-live-control.ps1 -Action Check
+& .\scripts\windows-restart-recovery-live-control.ps1 -Action Run -ExpectedSourceHead <CONTROLLER_HEAD> -ConfirmAction
+```
+
+The Windows run is a real stopped-state recovery-and-restoration sequence for
+the fixed `AssemblywrightMaster` service. It freezes/hashes the sidecar-free
+database, rebuilds exact HEAD offline with the fixed absolute toolchain,
+requires the rebuilt owner/SYSTEM-only single-link image to match the installed
+digest, proves a healthy changed PID, stops and requires the exact same full
+database SHA plus logical/migration continuity, restores the original image,
+then proves a distinct final healthy PID and empty state. Failure attempts exact
+healthy restoration and emits no receipt. The Mac controller likewise uses
+digest-pinned Git, Cargo, and rustc with a validated fixed Cargo home, rejects
+checkout/ancestor Cargo configuration, and executes through absolute system
+tools under a system-only PATH. A pass writes the ignored owner-private
+`target/restart-recovery-live-proof/restart-recovery-live-proof.json` and raw
+SHA-256 sidecar. It does not admit the digest or prove active-effect crash
+recovery, SCM retry policy, signed-helper behavior, Feature 6 streaming,
+activation, signing/notarization, installation, or production readiness.
+Playwright is inapplicable because this is a native Rust/process/SQLite/SCM/
+PowerShell boundary with no browser surface.
+
 ## Windows Distributed Gate
 
 The schema-v9 snapshot-claim, schema-v10 coding-dispatch, schema-v11 owner-resolution,

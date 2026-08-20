@@ -87,6 +87,9 @@ WINDOWS_REVIEW_PROVIDER_LIVE_CONTROL="scripts/windows-review-provider-live-contr
 GITHUB_PUBLICATION_PROOF_CONTROLLER="scripts/github-publication-proof-controller.sh"
 GITHUB_PUBLICATION_LIVE_E2E="scripts/github-publication-live-e2e.sh"
 WINDOWS_GITHUB_PUBLICATION_LIVE_CONTROL="scripts/windows-github-publication-live-control.ps1"
+RESTART_RECOVERY_PROOF_CONTROLLER="scripts/restart-recovery-proof-controller.sh"
+RESTART_RECOVERY_LIVE_E2E="scripts/restart-recovery-live-e2e.sh"
+WINDOWS_RESTART_RECOVERY_LIVE_CONTROL="scripts/windows-restart-recovery-live-control.ps1"
 WINDOWS_FIXTURE_LIVE_CONTROL="scripts/windows-fixture-live-control.ps1"
 WINDOWS_MLX_LIVE_CONTROL="scripts/windows-mlx-live-control.ps1"
 WINDOWS_LOCAL_CODING_LIVE_CONTROL="scripts/windows-local-coding-live-control.ps1"
@@ -154,6 +157,10 @@ for file in \
   "$REPOSITORY_GATE_PROOF_CONTROLLER" "$RESTRICTED_WORKER_PROOF_CONTROLLER" \
   "$REVIEW_PROVIDER_PROOF_CONTROLLER" "$REVIEW_PROVIDER_LIVE_E2E" \
   "$WINDOWS_REVIEW_PROVIDER_LIVE_CONTROL" \
+  "$GITHUB_PUBLICATION_PROOF_CONTROLLER" "$GITHUB_PUBLICATION_LIVE_E2E" \
+  "$WINDOWS_GITHUB_PUBLICATION_LIVE_CONTROL" \
+  "$RESTART_RECOVERY_PROOF_CONTROLLER" "$RESTART_RECOVERY_LIVE_E2E" \
+  "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
   "$WINDOWS_FIXTURE_LIVE_CONTROL" \
   "$WINDOWS_MLX_LIVE_CONTROL" "$WINDOWS_LOCAL_CODING_LIVE_CONTROL" \
   "$WINDOWS_LOCAL_CODING_LIVE_CONTROL_SELF_CHECK" "$WINDOWS_PROTOCOL_WORKFLOW" \
@@ -285,6 +292,38 @@ require_text "GitHub-publication proof controller local gate check" "$LOCAL_GATE
   "github-publication-proof-controller.sh --check"
 require_text "GitHub-publication proof controller local gate self-test" "$LOCAL_GATE" \
   "github-publication-proof-controller.sh --self-test"
+require_text "restart-recovery proof controller local gate check" "$LOCAL_GATE" \
+  "restart-recovery-proof-controller.sh --check"
+require_text "restart-recovery proof controller local gate self-test" "$LOCAL_GATE" \
+  "restart-recovery-proof-controller.sh --self-test"
+forbid_text "local gate restart-recovery controller live recursion" "$LOCAL_GATE" \
+  "restart-recovery-proof-controller.sh --run"
+require_text "restart-recovery controller exact native agent E2E" "$RESTART_RECOVERY_LIVE_E2E" \
+  "authenticated_uds_local_coding_snapshot_admission_cancellation_and_restart_cleanup"
+require_text "restart-recovery controller committed harness" "$RESTART_RECOVERY_PROOF_CONTROLLER" \
+  'git_safe "$root" show "$head:$HARNESS_PATH"'
+require_text "restart-recovery controller receipt descriptor" "$RESTART_RECOVERY_PROOF_CONTROLLER" \
+  'ASSEMBLYWRIGHT_RESTART_RECOVERY_RECEIPT_FD=3'
+require_text "restart-recovery controller process-group cancellation" "$RESTART_RECOVERY_PROOF_CONTROLLER" \
+  "terminate_live_group"
+require_text "restart-recovery controller atomic receipt" "$RESTART_RECOVERY_PROOF_CONTROLLER" \
+  'mv -f -- "$receipt_tmp" "$RECEIPT_NAME"'
+require_text "restart-recovery Windows stopped-state serialization" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
+  'Stop-ExactService'
+require_text "restart-recovery Windows exact offline rebuild" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
+  'Invoke-ExactOfflineMasterBuild'
+require_text "restart-recovery Windows frozen database continuity" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
+  '$postFrozenDatabaseSha -cne $frozenDatabaseSha'
+require_text "restart-recovery Windows exact executable restoration" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
+  'Copy-Item -LiteralPath $originalBackup -Destination $service.Executable -Force'
+require_text "restart-recovery Windows SQLite integrity" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
+  "PRAGMA integrity_check"
+require_text "build docs restart-recovery proof controller" "$BUILD_DOCS" \
+  "./scripts/restart-recovery-proof-controller.sh --run"
+require_text "design restart-recovery controller boundary" "$DESIGN" \
+  "restart_recovery_proof_controller"
+require_text "knowledge base restart-recovery controller" "$KB" \
+  "restart-recovery-proof-controller.sh"
 forbid_text "local gate GitHub-publication controller live recursion" "$LOCAL_GATE" \
   "github-publication-proof-controller.sh --run"
 require_text "GitHub-publication controller fixed repository" "$WINDOWS_GITHUB_PUBLICATION_LIVE_CONTROL" \

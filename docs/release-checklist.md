@@ -185,6 +185,31 @@ Before starting a release pass, confirm the claim you intend to make.
   checks, normal merge, cleanup, and final reconciliation. Browser Playwright,
   visual-regression, and cross-browser lanes are not applicable because there
   is no browser product surface.
+- Run `restart-recovery-proof-controller.sh --check` and `--self-test`, the
+  exact real-agent retained-workspace restart E2E, and the exact master startup-
+  quarantine, audit-rollback, publication-intent, and indeterminate-review
+  focused tests. Treat dirty/wrong/stale/hidden source, hostile output paths,
+  malformed/oversized Windows evidence, stale receipt invalidation, transcript
+  deletion, and process-group cancellation as required negative coverage.
+- For live Feature 5 proof, require exact clean published source on both hosts,
+  explicit Windows `Run` confirmation, the fixed owner/image/service/data paths,
+  Emergency Pause clear, and empty distributed plus Feature Conveyor state.
+  Observe a stopped, full-database-SHA freeze; exact-HEAD offline rebuild with
+  fixed absolute Cargo/Rust/MSVC tools; owner/SYSTEM-only ordinary single-link
+  service-image digest equality; a healthy changed PID; a second stopped freeze
+  with identical database SHA and logical/migration continuity; exact original-
+  image restoration; and a distinct final protocol-5/schema-19 healthy PID.
+  Confirm the Mac Git/Cargo/rustc digests, Cargo-config rejection, and system-
+  only PATH; confirm the Windows Cargo/rustc/MSVC/image/database digests.
+  Admit nothing automatically. Record this only as retained-agent functional
+  recovery and idle authoritative-service continuity—not active-effect crash
+  recovery, SCM retry-policy proof, signed-helper, Feature 6 streaming,
+  activation, signing/notarization, installation, or production readiness.
+- Apply `e2e-testing` at the native Feature 5 boundary: committed Bash
+  controller/harness, real Rust agent process restart, isolated receipt FD,
+  process-group cancellation, Windows SCM/PID, SQLite integrity, and strict
+  PowerShell receipt. Browser Playwright, visual regression, and cross-browser
+  coverage do not apply because there is no browser surface.
 - Confirm protocol-v5/schema-v13 result-artifact admission uses only an exact
   immutable packet with sorted normalized relative paths and deterministic
   write/delete schemas; SHA-256 covers the complete packet and exact canonical

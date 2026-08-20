@@ -362,6 +362,35 @@ release requirements, not optional UX guidance.
   owner-private path-free receipt/digest pair. It never POSTs admission,
   activates, enqueues, or claims general repository support, signing,
   notarization, clean-profile, or production-readiness proof.
+- `restart-recovery-proof-controller.sh --run` is separate from evidence
+  admission and activation. It accepts no repository, service, data-directory,
+  executable, test, receipt, Windows-control, or alternate harness argument;
+  requires exact clean published `main` with normal tracked-index state; and
+  runs only the committed harness bytes with sanitized Windows evidence on a
+  distinct descriptor. The harness must run the exact real Rust-agent retained-
+  workspace restart E2E. The fixed Windows control requires explicit `Run`
+  confirmation, one owner/SYSTEM-restricted mutex, exact clean source bound to
+  the controller-reported HEAD, the literal service/data paths, exact service
+  owner/image, and empty protocol-v5/schema-v19 distributed and Feature
+  Conveyor state with Emergency Pause clear. The Mac must pin and digest fixed
+  Git, Cargo, and rustc identities, reject build-affecting Cargo configuration,
+  and use absolute system tools under a system-only PATH. Windows must stop the
+  service to freeze authority, validate the complete database SHA/no sidecars
+  and migration backups, rebuild the expected HEAD offline with fixed absolute
+  tools, require an owner/SYSTEM-only ordinary single-link service executable
+  whose digest matches the installed image, prove a bounded healthy PID change,
+  stop and require an identical frozen database, restore the original exact
+  image, and prove a distinct final healthy PID. Failure must attempt exact
+  healthy restoration and emit no JSON. Any ambiguity fails closed. The Mac controller must
+  boundedly TERM-to-KILL and reap its complete harness process group, restore
+  terminal state, hash and remove the private transcript, invalidate a prior
+  fixed pair before a new attempt, and atomically publish only owner-private
+  `0600` receipt and raw-digest files. This proves retained-agent functional
+  recovery and idle authoritative-service continuity only. Active-effect crash
+  recovery, SCM retry policy, signed-helper behavior, Feature 6 streaming,
+  evidence admission, activation, signing, notarization, installation, and
+  production readiness remain outside the claim. Master startup ambiguity must
+  continue to quarantine without retry under the native focused tests.
 - Feature orchestration owner pause/resume is separate from Emergency Pause and
   is available only to the exact current designated non-fixture MacBridge after
   an accepted exporter-bound session. It compare-and-sets feature lifecycle,
