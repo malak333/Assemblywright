@@ -1577,6 +1577,12 @@ an old one.
   can also inherit broad toolchain-directory ACLs even when their paths and
   digests are exact; restart-proof setup must preserve their bytes while making
   each ordinary single-link file owner/SYSTEM-only before the read-only `Check`.
+- For the fixed MSVC environment capture, construct `call "<vcvars64.bat>"
+  >nul && set` as one PowerShell string argument to `cmd.exe /d /s /c`.
+  Wrapping that whole string in another escaped quote pair produces a Windows
+  filename/directory syntax error before Cargo runs. That pre-build failure must
+  restore the exact healthy service, retain no Mac receipt, and leave the private
+  recovery directory for explicit owner reconciliation.
 - Feature 5 removes its private transcript after hashing and atomically retains
   only owner-private path-free schema-v1 receipt/raw-digest files. Its self-test
   covers stale invalidation, dirty/wrong/stale/hidden Git state, hostile output,

@@ -342,6 +342,10 @@ route, and the nonexistent `developer_local_master` string is not an alias for
 either boundary. The pinned Cargo and rustc files must likewise already be
 ordinary single-link files with protected ACLs limited to the fixed owner and
 SYSTEM; `Check` validates but never rewrites that tool trust state.
+The Windows control passes the fixed quoted `vcvars64.bat` call to
+`cmd.exe /d /s /c` as one PowerShell argument; embedding an additional outer
+quote pair makes `cmd.exe` reject the fixed path before Cargo runs and must fail
+closed with exact healthy service restoration and no receipt.
 
 When it prints the single action marker, copy its `expected_source_head` into
 the authenticated Windows Administrator session and return only the sanitized

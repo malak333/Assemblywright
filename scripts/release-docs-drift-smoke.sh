@@ -312,6 +312,10 @@ require_text "restart-recovery Windows stopped-state serialization" "$WINDOWS_RE
   'Stop-ExactService'
 require_text "restart-recovery Windows exact offline rebuild" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
   'Invoke-ExactOfflineMasterBuild'
+require_text "restart-recovery Windows fixed MSVC command argument" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
+  '$msvcEnvironmentCommand = '\''call "{0}" >nul && set'\'' -f $msvcEnvironmentScript'
+require_text "restart-recovery Windows fixed MSVC command invocation" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
+  '/d /s /c $msvcEnvironmentCommand'
 require_text "restart-recovery Windows frozen database continuity" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
   '$postFrozenDatabaseSha -cne $frozenDatabaseSha'
 require_text "restart-recovery Windows exact executable restoration" "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" \
