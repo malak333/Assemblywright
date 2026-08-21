@@ -568,6 +568,14 @@ an old one.
   whenever possible; shell proof harnesses must lowercase both sides before a
   textual identity comparison. Case normalization changes presentation only,
   never the UUID bytes used by protocol digest transcripts.
+- A signed-helper snapshot is different from an internal parsed-UUID
+  comparison: its JSON is a strict app wire boundary. Every nested
+  owner-control type containing a UUID must custom-encode lowercase canonical
+  text. Regression data must include alphabetic hexadecimal digits and pass the
+  complete production `JSONEncoder` snapshot through
+  `AssemblywrightDeveloperBridgeProcessLifecycle.status`; digit-only UUIDs can
+  hide Foundation's uppercase re-encoding and previously produced
+  `invalid_helper_snapshot` only after live evidence admission.
 - Interactive SSH pseudo-terminals can impose canonical input-line limits on
   long pasted JSON or controller commands. Keep authority documents in bounded
   files or stdin and pass only their validated paths/IDs on the command line.

@@ -821,8 +821,11 @@ is not bundled inside the app. After health succeeds, the helper fetches the
   exact schema-v9 Feature Conveyor projection on the same authenticated session,
 strictly validates and bounds it, and includes it only in authenticated app
 snapshots. The SwiftUI app renders queue state and guidance as compact read-only
-text; a malformed or drifted projection cancels the session and no stale status
-is retained. Feature authoring is a separate explicit owner action: a typed
+text. Every UUID-bearing nested owner-control value is encoded as canonical
+lowercase text before the signed helper emits a snapshot; the app's strict
+decoder does not relax this wire rule. A malformed or drifted projection
+cancels the session and no stale status is retained. Feature authoring is a
+separate explicit owner action: a typed
 SwiftUI form accepts only the fixed review-safe manifest fields, digest metadata,
 grant revisions, provider/model binding, and dependencies. It constructs the
 existing strict request without arbitrary JSON, binds the current authenticated

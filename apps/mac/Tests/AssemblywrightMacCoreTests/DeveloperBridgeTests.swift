@@ -1699,6 +1699,44 @@ struct DeveloperBridgeTests {
         #expect(await session.cancelled)
     }
 
+    @Test("Signed-helper snapshot with admitted evidence reaches the production app lifecycle")
+    func admittedEvidenceSnapshotReachesAppLifecycle() throws {
+        let featureConveyor = try JSONDecoder().decode(
+            AssemblywrightMacFeatureConveyorStatus.self,
+            from: validFeatureConveyorData()
+        )
+        let ownerControl = try AssemblywrightMacFeatureConveyorOwnerControlProjection.decodeStrict(
+            ownerControlDataWithCanonicalAlphabeticEvidence(queueRevision: 0)
+        )
+        let snapshot = AssemblywrightMacBridgeSupervisorSnapshot(
+            phase: .authenticated,
+            deviceID: "33333333-3333-4333-8333-333333333333",
+            masterEndpoint: "100.64.23.14:7792",
+            connectionEpoch: 42,
+            consecutiveFailures: 0,
+            nextDelayMilliseconds: 5_000,
+            masterStatus: "ok",
+            maintenanceActive: false,
+            emergencyPaused: false,
+            protocolVersion: 5,
+            schemaVersion: 19,
+            featureConveyor: featureConveyor,
+            ownerControl: ownerControl,
+            errorCode: nil
+        )
+
+        let helperLine = try JSONEncoder().encode(snapshot)
+        let appStatus = try AssemblywrightDeveloperBridgeProcessLifecycle.status(from: helperLine)
+        let helperText = try #require(String(data: helperLine, encoding: .utf8))
+
+        #expect(appStatus.phase == .connected)
+        #expect(appStatus.connectionEpoch == 42)
+        #expect(appStatus.featureConveyor?.ownerGuidance.nextOwnerAction == .prepareApprovedFeature)
+        #expect(appStatus.ownerControl?.evidence.readyCount == 6)
+        #expect(helperText.contains("abcdef01-abcd-4abc-8abc-abcdefabcdef"))
+        #expect(!helperText.contains("ABCDEF01-ABCD-4ABC-8ABC-ABCDEFABCDEF"))
+    }
+
     @Test("Fixture MacBridge keeps strict Feature Conveyor observation")
     func fixtureSupervisorKeepsFeatureConveyorObservation() async {
         let session = FakeSupervisorSession(
@@ -2430,22 +2468,11 @@ struct DeveloperBridgeTests {
 
     @Test("Owner-control projection preserves canonical UUID text through signed-helper encoding")
     func ownerControlProjectionCanonicalEncodingRoundTrip() throws {
-        var liveEvidenceObject = try #require(
-            JSONSerialization.jsonObject(
-                with: ownerControlData(queueRevision: 7, completeEvidence: true)
-            ) as? [String: Any]
-        )
-        var liveEvidence = try #require(liveEvidenceObject["evidence"] as? [String: Any])
-        var repositoryEvidence = try #require(
-            liveEvidence["repository_gate_proof"] as? [String: Any]
-        )
-        repositoryEvidence["evidence_id"] = "abcdef01-abcd-4abc-8abc-abcdefabcdef"
-        liveEvidence["repository_gate_proof"] = repositoryEvidence
-        liveEvidenceObject["evidence"] = liveEvidence
-        let liveEvidenceData = try JSONSerialization.data(withJSONObject: liveEvidenceObject)
-
         for (source, expectedEvidenceID) in [
-            (liveEvidenceData, "abcdef01-abcd-4abc-8abc-abcdefabcdef"),
+            (
+                ownerControlDataWithCanonicalAlphabeticEvidence(queueRevision: 7),
+                "abcdef01-abcd-4abc-8abc-abcdefabcdef"
+            ),
             (ownerControlData(queueRevision: 7, completeEvidence: true, active: true), nil),
             (ownerControlDataWithActiveFeature(stage: "paused", ownerPaused: false), nil)
         ] {
@@ -2458,6 +2485,45 @@ struct DeveloperBridgeTests {
             #expect(!text.contains("ABCDEF01-ABCD-4ABC-8ABC-ABCDEFABCDEF"))
             #expect(!text.contains("AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"))
             #expect(!text.contains("BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB"))
+        }
+    }
+
+    @Test("Owner-control projection rejects noncanonical UUID text")
+    func ownerControlProjectionRejectsNoncanonicalUUIDText() throws {
+        var evidenceObject = try #require(
+            JSONSerialization.jsonObject(
+                with: ownerControlDataWithCanonicalAlphabeticEvidence(queueRevision: 7)
+            ) as? [String: Any]
+        )
+        var evidence = try #require(evidenceObject["evidence"] as? [String: Any])
+        var repositoryEvidence = try #require(
+            evidence["repository_gate_proof"] as? [String: Any]
+        )
+        repositoryEvidence["evidence_id"] = "ABCDEF01-ABCD-4ABC-8ABC-ABCDEFABCDEF"
+        evidence["repository_gate_proof"] = repositoryEvidence
+        evidenceObject["evidence"] = evidence
+
+        var activationObject = try #require(
+            JSONSerialization.jsonObject(
+                with: ownerControlData(queueRevision: 7, completeEvidence: true, active: true)
+            ) as? [String: Any]
+        )
+        activationObject["activation_id"] = "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"
+
+        var activeFeatureObject = try #require(
+            JSONSerialization.jsonObject(
+                with: ownerControlDataWithActiveFeature(stage: "paused", ownerPaused: false)
+            ) as? [String: Any]
+        )
+        var activeFeature = try #require(activeFeatureObject["active_feature"] as? [String: Any])
+        activeFeature["feature_id"] = "BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB"
+        activeFeatureObject["active_feature"] = activeFeature
+
+        for object in [evidenceObject, activationObject, activeFeatureObject] {
+            let data = try JSONSerialization.data(withJSONObject: object)
+            #expect(throws: ControlError.invalidProjection) {
+                try AssemblywrightMacFeatureConveyorOwnerControlProjection.decodeStrict(data)
+            }
         }
     }
 
@@ -6333,6 +6399,20 @@ private func ownerControlData(
         "active_feature": NSNull(),
         "evidence": evidence
     ]
+    return try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+}
+
+private func ownerControlDataWithCanonicalAlphabeticEvidence(
+    queueRevision: UInt64
+) -> Data {
+    var object = try! JSONSerialization.jsonObject(
+        with: ownerControlData(queueRevision: queueRevision, completeEvidence: true)
+    ) as! [String: Any]
+    var evidence = object["evidence"] as! [String: Any]
+    var repositoryEvidence = evidence["repository_gate_proof"] as! [String: Any]
+    repositoryEvidence["evidence_id"] = "abcdef01-abcd-4abc-8abc-abcdefabcdef"
+    evidence["repository_gate_proof"] = repositoryEvidence
+    object["evidence"] = evidence
     return try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
 }
 
