@@ -704,7 +704,7 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
     nonisolated public static let maximumLineBytes = 96 * 1_024
     nonisolated public static let maximumBufferedBytes = maximumLineBytes + 1
     nonisolated public static let proofBoundary =
-        "Read-only app preview observes bounded Windows-authoritative Feature Conveyor and activation readiness. Owner actions require separate explicit confirmation in the signed helper; the preview does not enable authority and stores no token, command, path, raw evidence, credential, or provider output."
+        "Read-only observation shows bounded Windows-authoritative Feature Conveyor and activation readiness. Authoring and owner actions are separate, explicitly confirmed signed-helper operations; observation does not enable authority and stores no token, command, path, raw evidence, credential, or provider output."
 
     @Published public private(set) var status: AssemblywrightDeveloperBridgeAppStatus
     @Published public private(set) var ownerActionInProgress = false
