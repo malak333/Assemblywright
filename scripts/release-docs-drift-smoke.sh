@@ -956,6 +956,16 @@ require_text "safety Windows owner evidence boundary" "$SAFETY_RULES" \
   "Windows evidence admission is a separate owner action"
 require_text "knowledge base Windows owner evidence boundary" "$KB" \
   "Feature 7 is"
+require_text "knowledge base Feature 7 unit workflow" "$KB" \
+  'Feature 7, the `unit-testing-test-generate` workflow'
+require_text "knowledge base Feature 7 native E2E workflow" "$KB" \
+  "workflow follows the real native boundary"
+require_text "knowledge base Feature 7 live onboarding" "$KB" \
+  "The Feature 7 live onboarding at implementation SHA"
+require_text "knowledge base Feature 7 secure credential boundary" "$KB" \
+  "otherwise valid Windows GitHub CLI account"
+require_text "knowledge base Windows native exit-code pitfall" "$KB" \
+  "When validating native Windows tools"
 require_text "build docs Windows package-scoped clippy boundary" "$BUILD_DOCS" \
   "Do not substitute the macOS/Linux workspace-wide clippy command"
 require_text "safety snapshot blocking timeout boundary" "$SAFETY_RULES" \
