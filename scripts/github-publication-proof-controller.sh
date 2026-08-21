@@ -271,6 +271,8 @@ required = (
     "Get-SourceHead $false",
     "refs/heads/main:refs/remotes/origin/main",
     "github-publication-proof --confirm --expected-source-head $head",
+    "$ghLines = @(& $Gh version)",
+    "$ghExitCode = $LASTEXITCODE",
 )
 if any(token not in text for token in required):
     raise SystemExit(1)
@@ -278,8 +280,15 @@ if "finally { Start-Service -Name $serviceName" in text:
     raise SystemExit(1)
 if "if (Test-Path -LiteralPath $staging) { Remove-Item" in text:
     raise SystemExit(1)
+if "& $Gh version | Select-Object -First 1" in text:
+    raise SystemExit(1)
 helper = text.index("function Restore-PreviousPublicationDeployment")
 provision = text.index("function Invoke-Provision")
+tool_versions = text.index("function Assert-ToolVersions")
+gh_lines = text.index("$ghLines = @(& $Gh version)", tool_versions)
+gh_exit = text.index("$ghExitCode = $LASTEXITCODE", gh_lines)
+gh_output = text.index("$ghOutput = if ($ghLines.Count -gt 0)", gh_exit)
+gh_check = text.index("if ($ghExitCode -ne 0 -or", gh_output)
 original_master = text.index("$originalMasterSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $master)", provision)
 first_mutation = text.index("Copy-Item -LiteralPath $master -Destination $masterBackup", provision)
 restore_call = text.index("Restore-PreviousPublicationDeployment -Master $master", provision)
@@ -289,6 +298,8 @@ refresh = text.index("refs/heads/main:refs/remotes/origin/main", run)
 effect = text.index("github-publication-proof --confirm", run)
 lock_wrapper = text.rindex("Invoke-WithGitHubPublicationControlLock {")
 if not helper < provision < original_master < first_mutation < restore_call < rollback_failure:
+    raise SystemExit(1)
+if not tool_versions < gh_lines < gh_exit < gh_output < gh_check < helper:
     raise SystemExit(1)
 if not run < refresh < effect < lock_wrapper:
     raise SystemExit(1)
