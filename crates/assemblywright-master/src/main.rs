@@ -27,7 +27,8 @@ use assemblywright_protocol::{
     CapabilityDescriptor, DeviceId, DeviceRole, DistributedEventBatch,
     DistributedEventBatchRequest, EnrollmentCsrReply, EnrollmentInvitation,
     FeatureConveyorAbandonAndAdvanceReceipt, FeatureConveyorAbandonAndAdvanceRequest,
-    FeatureConveyorAbandonAndAdvanceStatus, FeatureConveyorActivationEvidenceAdmissionReceipt,
+    FeatureConveyorAbandonAndAdvanceStatus, FeatureConveyorActivationEvidenceAdmissionProjection,
+    FeatureConveyorActivationEvidenceAdmissionReceipt,
     FeatureConveyorActivationEvidenceAdmissionRequest, FeatureConveyorActivationReceipt,
     FeatureConveyorActivationRequest, FeatureConveyorApprovedFeatureReceipt,
     FeatureConveyorApprovedFeatureRequest, FeatureConveyorApprovedFeatureStatus,
@@ -1607,9 +1608,11 @@ async fn serve_runtime(
         )
         .route(
             "/v1/feature-conveyor/activation-evidence",
-            post(admit_feature_activation_evidence).layer(DefaultBodyLimit::max(
-                MAX_FEATURE_CONVEYOR_OWNER_ACTIVATION_FRAME_BYTES,
-            )),
+            get(get_feature_activation_evidence_admission_projection)
+                .post(admit_feature_activation_evidence)
+                .layer(DefaultBodyLimit::max(
+                    MAX_FEATURE_CONVEYOR_OWNER_ACTIVATION_FRAME_BYTES,
+                )),
         )
         .route(
             "/v1/feature-conveyor/repository-grants",
@@ -2820,6 +2823,18 @@ async fn designate_owner_control_bridge(
         designation_revision: designation.designation_revision,
         status: FeatureConveyorOwnerBridgeDesignationStatus::Designated,
     }))
+}
+
+async fn get_feature_activation_evidence_admission_projection(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<FeatureConveyorActivationEvidenceAdmissionProjection> {
+    authorize(&headers, &state)?;
+    let projection = lock_process(&state)?
+        .kernel_mut()
+        .feature_conveyor_activation_evidence_admission_projection()
+        .map_err(api_error)?;
+    Ok(Json(projection))
 }
 
 async fn admit_feature_activation_evidence(

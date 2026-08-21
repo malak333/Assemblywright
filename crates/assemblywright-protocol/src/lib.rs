@@ -1446,6 +1446,43 @@ impl FeatureConveyorActivationEvidenceAdmissionReceipt {
     }
 }
 
+/// Owner-token loopback-only preflight for deliberate evidence admission. It
+/// exposes only the pause/activation CAS state and current digest references;
+/// it carries no report body, path, command, credential, or provider output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureConveyorActivationEvidenceAdmissionProjection {
+    pub schema_version: u16,
+    pub emergency_paused: bool,
+    pub emergency_pause_revision: u64,
+    pub activation_status: FeatureConveyorActivationStatus,
+    pub activation_id: Option<Uuid>,
+    pub evidence: FeatureConveyorActivationEvidenceProjection,
+}
+
+impl FeatureConveyorActivationEvidenceAdmissionProjection {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_fixed_value(
+            "schema_version",
+            self.schema_version.to_string(),
+            FEATURE_CONVEYOR_OWNER_ACTIVATION_SCHEMA_VERSION.to_string(),
+        )?;
+        self.evidence.validate()?;
+        let active = self.activation_status == FeatureConveyorActivationStatus::Active;
+        if active != self.activation_id.is_some()
+            || self.activation_id.is_some_and(|id| id.is_nil())
+            || (active && self.evidence.complete().is_none())
+        {
+            return Err(ProtocolError::InvalidFeatureConveyorOwnerControl);
+        }
+        validate_serialized_limit(
+            "feature_conveyor_activation_evidence_admission_projection",
+            self,
+            MAX_FEATURE_CONVEYOR_OWNER_ACTIVATION_FRAME_BYTES,
+        )
+    }
+}
+
 /// Windows-authoritative owner-control projection. It is deliberately limited
 /// to revision bindings, fixed enums, IDs, and digests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

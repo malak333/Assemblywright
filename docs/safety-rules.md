@@ -425,6 +425,24 @@ release requirements, not optional UX guidance.
   digest, activate, mutate protocol/schema/runtime authority, or claim signing
   distribution, notarization, installation, unattended operation, current-source
   binary linkage, or production readiness.
+- Windows evidence admission is a separate owner action. The PowerShell 5.1
+  onboarding tool may read only a bounded, ordinary, single-link,
+  owner/SYSTEM-protected canonical receipt and its fixed raw SHA-256 sidecar.
+  Both files must remain open without write/delete sharing while canonical
+  paths, stable handle identities, ACLs, raw bytes, and path-to-handle bindings
+  are checked before and after reads and validation. It must reject wrong
+  filename pairs, duplicate, reordered, whitespace-rewritten, unknown, or extra
+  JSON fields, a rewritten fixed proof boundary, malformed
+  commit/digest/signature identities, mismatched category/origin/schema,
+  anything other than `passed`, and future observation time. It may send only
+  digest metadata to the fixed owner-token loopback route. `Admit` requires
+  explicit `-Confirm`; status/check are read-only. Every attempt must preflight
+  the exact current category and Emergency Pause revisions, reconcile an exact
+  current digest before pause/activation denial as an idempotent retry, and
+  issue at most one POST. Otherwise pause, activation, CAS drift, ambiguous evidence, or interruption fails closed; a
+  later retry starts with a new preflight. The token must never enter argv,
+  environment, output, receipt data, or an enrolled-device route. Admission is
+  not activation, self-approval, release proof, or authorization to execute.
 - Feature orchestration owner pause/resume is separate from Emergency Pause and
   is available only to the exact current designated non-fixture MacBridge after
   an accepted exporter-bound session. It compare-and-sets feature lifecycle,

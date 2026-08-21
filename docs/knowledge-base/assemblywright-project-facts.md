@@ -1666,6 +1666,32 @@ an old one.
   environment, forcing the shared harness to use those stable bytes. Its
   production-shaped disposable fixture requires that exact internal binding so
   unit coverage cannot silently exercise the harness's rebuild fallback.
+- Feature 7 is `scripts/windows-owner-evidence-admission.ps1`, a PowerShell 5.1
+  Windows-owner onboarding client for the existing schema-v19 admission
+  transaction. `Status` and `Check` use the bounded owner-token loopback GET;
+  `Admit` additionally requires one exact receipt/sidecar pair and explicit
+  `-Confirm`. The token stays in protected master state and an in-process
+  Authorization header, never argv, environment, output, receipt, or mTLS.
+- The Feature 7 client accepts only the six fixed proof-controller contracts.
+  It requires canonical filenames, ordinary non-reparse single-link files,
+  protected current-owner/SYSTEM-only ACLs, held no-write/no-delete-share
+  handles with pre/post canonical path and stable-identity revalidation,
+  controller-specific byte bounds,
+  a 64-lowercase-hex plus LF raw sidecar, exact raw receipt SHA-256, one UTF-8
+  JSON line with exact controller field order and bytes, no duplicate/reordered/
+  whitespace-rewritten keys, exact fixed proof boundary,
+  category/origin/schema/controller identity, `passed`,
+  a non-future millisecond time, nonzero lowercase commit/tree/digest fields,
+  and the fixed review/helper identities. It sends only digest metadata.
+- Feature 7 preflights the current per-category revision and Emergency Pause
+  revision. An exact current digest returns `evidence_already_admitted` before
+  pause or activation rejection; a new
+  digest sends at most one contiguous CAS POST. Stale state, pause, activation,
+  unsafe evidence, or an ambiguous response fails closed. A retry starts with
+  a fresh GET and cannot activate. This adds no schema migration or protocol
+  version change and is not approval, execution, release evidence, or external
+  proof. Native Rust tests own API/CAS/pause/idempotence/remote-route coverage;
+  the PowerShell self-test owns handle/pair/canonical-byte/digest negative coverage.
 - Native Mac relay tests must keep their client read timeout above the server's
   ten-second peer-code-identity validation bound. A five-second client timeout
   can surface Security.framework latency as `WouldBlock` before the server's

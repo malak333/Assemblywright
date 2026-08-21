@@ -91,6 +91,7 @@ RESTART_RECOVERY_PROOF_CONTROLLER="scripts/restart-recovery-proof-controller.sh"
 RESTART_RECOVERY_LIVE_E2E="scripts/restart-recovery-live-e2e.sh"
 WINDOWS_RESTART_RECOVERY_LIVE_CONTROL="scripts/windows-restart-recovery-live-control.ps1"
 MAC_WINDOWS_CONTROL_STREAMING_PROOF_CONTROLLER="scripts/mac-windows-control-streaming-proof-controller.sh"
+WINDOWS_OWNER_EVIDENCE_ADMISSION="scripts/windows-owner-evidence-admission.ps1"
 WINDOWS_FIXTURE_LIVE_CONTROL="scripts/windows-fixture-live-control.ps1"
 WINDOWS_MLX_LIVE_CONTROL="scripts/windows-mlx-live-control.ps1"
 WINDOWS_LOCAL_CODING_LIVE_CONTROL="scripts/windows-local-coding-live-control.ps1"
@@ -269,6 +270,22 @@ require_text "conveyor abandonment implementation" "$MASTER_PROCESS" \
   '"/v1/feature-conveyor/abandon-and-advance"'
 require_text "conveyor activation evidence implementation" "$MASTER_PROCESS" \
   '"/v1/feature-conveyor/activation-evidence"'
+require_text "conveyor activation evidence loopback preflight" "$MASTER_PROCESS" \
+  "get_feature_activation_evidence_admission_projection"
+require_text "Windows owner evidence explicit confirmation" "$WINDOWS_OWNER_EVIDENCE_ADMISSION" \
+  'Evidence admission requires explicit -Confirm.'
+require_text "Windows owner evidence fixed loopback" "$WINDOWS_OWNER_EVIDENCE_ADMISSION" \
+  '$endpoint = "127.0.0.1:7791"'
+require_text "Windows owner evidence pair digest validation" "$WINDOWS_OWNER_EVIDENCE_ADMISSION" \
+  'The raw receipt SHA-256 does not match its sidecar.'
+require_text "Windows owner evidence held-handle validation" "$WINDOWS_OWNER_EVIDENCE_ADMISSION" \
+  "HeldEvidenceFile"
+require_text "Windows owner evidence canonical-byte validation" "$WINDOWS_OWNER_EVIDENCE_ADMISSION" \
+  "exact canonical controller encoding"
+require_text "Windows owner evidence response identity binding" "$WINDOWS_OWNER_EVIDENCE_ADMISSION" \
+  '$admittedEvidenceId -ne $submittedEvidenceId'
+require_text "Windows owner evidence no activation route" "$WINDOWS_OWNER_EVIDENCE_ADMISSION" \
+  '/v1/feature-conveyor/activation-evidence'
 require_text "conveyor remote owner projection implementation" "$MASTER_PROCESS" \
   '"/v1/distributed/feature-conveyor/owner-control"'
 require_text "conveyor remote activation implementation" "$MASTER_PROCESS" \
@@ -925,6 +942,14 @@ require_text "build docs Windows live-controller unit regression" "$BUILD_DOCS" 
   "windows-local-coding-live-control.ps1 -Action Check"
 require_text "hosted Windows live-controller unit regression" "$WINDOWS_PROTOCOL_WORKFLOW" \
   "windows-local-coding-live-control.ps1 -Action Check"
+require_text "build docs Windows owner evidence self-test" "$BUILD_DOCS" \
+  "windows-owner-evidence-admission.ps1 -Action SelfTest"
+require_text "hosted Windows owner evidence self-test" "$WINDOWS_PROTOCOL_WORKFLOW" \
+  "windows-owner-evidence-admission.ps1 -Action SelfTest"
+require_text "safety Windows owner evidence boundary" "$SAFETY_RULES" \
+  "Windows evidence admission is a separate owner action"
+require_text "knowledge base Windows owner evidence boundary" "$KB" \
+  "Feature 7 is"
 require_text "build docs Windows package-scoped clippy boundary" "$BUILD_DOCS" \
   "Do not substitute the macOS/Linux workspace-wide clippy command"
 require_text "safety snapshot blocking timeout boundary" "$SAFETY_RULES" \

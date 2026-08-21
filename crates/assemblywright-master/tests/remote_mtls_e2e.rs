@@ -288,6 +288,18 @@ async fn remote_listener_requires_enrollment_tls13_and_channel_bound_identity() 
         local_evidence_over_remote.starts_with("HTTP/1.1 404 Not Found"),
         "owner-local evidence admission leaked remotely: {local_evidence_over_remote}"
     );
+    let (_, local_evidence_preflight_over_remote) = authenticated_application_request(
+        remote_endpoint,
+        &owner_control,
+        "GET",
+        "/v1/feature-conveyor/activation-evidence",
+        &serde_json::json!({}),
+    )
+    .await;
+    assert!(
+        local_evidence_preflight_over_remote.starts_with("HTTP/1.1 404 Not Found"),
+        "owner-local evidence preflight leaked remotely: {local_evidence_preflight_over_remote}"
+    );
     let (_, malformed_activation) = authenticated_application_request(
         remote_endpoint,
         &owner_control,

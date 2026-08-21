@@ -233,6 +233,24 @@ Before starting a release pass, confirm the claim you intend to make.
   activate. Record no protocol/schema/runtime-authority, built-binary source-
   linkage, Developer ID, notarization, installation, unattended, or production
   claim. Native Swift/process/mTLS/SQLite E2E applies; Playwright does not.
+- Run `windows-owner-evidence-admission.ps1 -Action SelfTest` on Windows
+  PowerShell 5.1 and require success plus wrong-digest, wrong-pair, malformed,
+  oversize, duplicate-key, reordered-field, whitespace-rewritten,
+  wrong-boundary, wrong-status, wrong-schema, and wrong-fixed-identity rejection.
+  Prove Status/Check are owner-token-authenticated read-only loopback GETs and
+  the exact GET/POST path is absent from the enrolled-device mTLS router. For
+  each actual admission, retain the controller-produced raw pair unchanged,
+  apply protected owner/SYSTEM-only ACLs, run Check, inspect the category and
+  digest, then run Admit with explicit `-Confirm`. Require ordinary single-link
+  bounded files, exact pair names/sidecar, strict JSON/category/origin/schema/
+  identity/time validation, pause/current-revision preflight, one POST, and a
+  matching digest-only receipt including the submitted evidence ID and observed
+  time. Prove held no-write/no-delete-share handles bind and revalidate canonical
+  paths, stable identities, ACLs, and raw bytes. Prove exact-digest retry is
+  idempotent before pause/activation rejection and stale CAS, Emergency Pause,
+  activation, unsafe ACL/link/reparse state, and
+  interruption reject without automatic retry. Do not activate, self-approve,
+  expose the token, or treat local/controller/hosted checks as external proof.
 - Confirm protocol-v5/schema-v13 result-artifact admission uses only an exact
   immutable packet with sorted normalized relative paths and deterministic
   write/delete schemas; SHA-256 covers the complete packet and exact canonical

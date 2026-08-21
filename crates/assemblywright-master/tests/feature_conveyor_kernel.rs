@@ -693,6 +693,15 @@ fn activation_requires_six_owner_admitted_receipts_is_global_idempotent_and_immu
     assert!(kernel
         .feature_conveyor_owner_control_projection(&other)
         .is_err());
+    let local_preflight = kernel
+        .feature_conveyor_activation_evidence_admission_projection()
+        .unwrap();
+    assert_eq!(
+        local_preflight.activation_status,
+        FeatureConveyorActivationStatus::Inactive
+    );
+    assert_eq!(local_preflight.emergency_pause_revision, 0);
+    assert!(local_preflight.evidence.complete().is_none());
 
     let categories = [
         (
@@ -741,6 +750,24 @@ fn activation_requires_six_owner_admitted_receipts_is_global_idempotent_and_immu
         }
     }
     kernel.set_emergency_paused_at(true, 30).unwrap();
+    let paused_preflight = kernel
+        .feature_conveyor_activation_evidence_admission_projection()
+        .unwrap();
+    assert!(paused_preflight.emergency_paused);
+    assert_eq!(paused_preflight.emergency_pause_revision, 1);
+    let paused_new_admission = FeatureConveyorActivationEvidenceAdmissionRequest {
+        evidence_id: Uuid::new_v4(),
+        revision: 2,
+        expected_current_revision: 1,
+        receipt_sha256: [77; 32],
+        observed_at_ms: 30,
+        expected_emergency_pause_revision: paused_preflight.emergency_pause_revision,
+        ..first_request.unwrap()
+    };
+    assert!(matches!(
+        kernel.admit_feature_activation_evidence(&paused_new_admission, 31),
+        Err(MasterError::EmergencyPaused)
+    ));
     assert_eq!(
         kernel
             .admit_feature_activation_evidence(&first_request.unwrap(), 31)
@@ -750,6 +777,19 @@ fn activation_requires_six_owner_admitted_receipts_is_global_idempotent_and_immu
         "exact retry must return the original receipt after pause revision drift"
     );
     kernel.set_emergency_paused_at(false, 32).unwrap();
+    let stale_category_admission = FeatureConveyorActivationEvidenceAdmissionRequest {
+        evidence_id: Uuid::new_v4(),
+        revision: 1,
+        expected_current_revision: 0,
+        receipt_sha256: [78; 32],
+        observed_at_ms: 31,
+        expected_emergency_pause_revision: 2,
+        ..first_request.unwrap()
+    };
+    assert!(matches!(
+        kernel.admit_feature_activation_evidence(&stale_category_admission, 33),
+        Err(MasterError::FeatureActivationEvidenceUnavailable)
+    ));
     let ready = kernel
         .feature_conveyor_owner_control_projection(&bridge)
         .unwrap();

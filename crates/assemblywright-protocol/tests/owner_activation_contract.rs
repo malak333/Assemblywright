@@ -1,11 +1,11 @@
 use assemblywright_protocol::{
-    FeatureConveyorActivationBlocker, FeatureConveyorActivationEvidenceAdmissionRequest,
-    FeatureConveyorActivationEvidenceCategory, FeatureConveyorActivationEvidenceOrigin,
-    FeatureConveyorActivationEvidenceProjection, FeatureConveyorActivationEvidenceReference,
-    FeatureConveyorActivationRequest, FeatureConveyorActivationStatus,
-    FeatureConveyorOrchestrationStage, FeatureConveyorOwnerActiveFeature,
-    FeatureConveyorOwnerControlProjection, FeatureConveyorOwnerLifecycleStatus,
-    FEATURE_CONVEYOR_OWNER_ACTIVATION_SCHEMA_VERSION,
+    FeatureConveyorActivationBlocker, FeatureConveyorActivationEvidenceAdmissionProjection,
+    FeatureConveyorActivationEvidenceAdmissionRequest, FeatureConveyorActivationEvidenceCategory,
+    FeatureConveyorActivationEvidenceOrigin, FeatureConveyorActivationEvidenceProjection,
+    FeatureConveyorActivationEvidenceReference, FeatureConveyorActivationRequest,
+    FeatureConveyorActivationStatus, FeatureConveyorOrchestrationStage,
+    FeatureConveyorOwnerActiveFeature, FeatureConveyorOwnerControlProjection,
+    FeatureConveyorOwnerLifecycleStatus, FEATURE_CONVEYOR_OWNER_ACTIVATION_SCHEMA_VERSION,
 };
 use serde_json::json;
 use uuid::Uuid;
@@ -26,6 +26,17 @@ fn complete_evidence() -> FeatureConveyorActivationEvidenceProjection {
         github_publication_live: Some(reference(4, 1)),
         restart_recovery_live: Some(reference(5, 1)),
         mac_windows_control_event_streaming_live: Some(reference(6, 1)),
+    }
+}
+
+fn empty_evidence() -> FeatureConveyorActivationEvidenceProjection {
+    FeatureConveyorActivationEvidenceProjection {
+        repository_gate_proof: None,
+        restricted_worker_live: None,
+        review_provider_live: None,
+        github_publication_live: None,
+        restart_recovery_live: None,
+        mac_windows_control_event_streaming_live: None,
     }
 }
 
@@ -121,6 +132,26 @@ fn activation_evidence_admission_is_strict_contiguous_category_bound_and_nonzero
         )
         .is_err()
     );
+}
+
+#[test]
+fn activation_evidence_admission_projection_is_bounded_and_activation_consistent() {
+    let mut projection = FeatureConveyorActivationEvidenceAdmissionProjection {
+        schema_version: FEATURE_CONVEYOR_OWNER_ACTIVATION_SCHEMA_VERSION,
+        emergency_paused: false,
+        emergency_pause_revision: 3,
+        activation_status: FeatureConveyorActivationStatus::Inactive,
+        activation_id: None,
+        evidence: empty_evidence(),
+    };
+    projection.validate().unwrap();
+
+    projection.activation_id = Some(Uuid::new_v4());
+    assert!(projection.validate().is_err());
+    projection.activation_status = FeatureConveyorActivationStatus::Active;
+    assert!(projection.validate().is_err());
+    projection.activation_id = Some(Uuid::nil());
+    assert!(projection.validate().is_err());
 }
 
 #[test]

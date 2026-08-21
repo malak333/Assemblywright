@@ -6,6 +6,7 @@ use assemblywright_protocol::{
     CancellationId, CancellationInstruction, CapabilityDescriptor, ContextHandlingPolicy, DeviceId,
     DeviceRole, DistributedEvent, DistributedEventBatch, DistributedEventBatchRequest,
     DistributedEventCursor, DistributedEventKind, FeatureConveyorActivationBlocker,
+    FeatureConveyorActivationEvidenceAdmissionProjection,
     FeatureConveyorActivationEvidenceAdmissionReceipt,
     FeatureConveyorActivationEvidenceAdmissionRequest, FeatureConveyorActivationEvidenceCategory,
     FeatureConveyorActivationEvidenceOrigin, FeatureConveyorActivationEvidenceProjection,
@@ -3271,6 +3272,32 @@ impl MasterKernel {
             activation_ready,
             activation_blocker,
             active_feature,
+            evidence,
+        };
+        projection.validate()?;
+        tx.commit()?;
+        Ok(projection)
+    }
+
+    /// Returns the bounded owner-token loopback preflight needed to construct
+    /// one pause-bound, contiguous activation-evidence admission. This has no
+    /// enrolled-device route and grants no mutation authority by itself.
+    pub fn feature_conveyor_activation_evidence_admission_projection(
+        &mut self,
+    ) -> Result<FeatureConveyorActivationEvidenceAdmissionProjection, MasterError> {
+        let tx = self.connection.transaction()?;
+        let evidence = activation_evidence_projection_tx(&tx)?;
+        let activation = load_feature_activation_tx(&tx)?;
+        let projection = FeatureConveyorActivationEvidenceAdmissionProjection {
+            schema_version: FEATURE_CONVEYOR_OWNER_ACTIVATION_SCHEMA_VERSION,
+            emergency_paused: emergency_paused_tx(&tx)?,
+            emergency_pause_revision: emergency_pause_revision_tx(&tx)?,
+            activation_status: if activation.is_some() {
+                FeatureConveyorActivationStatus::Active
+            } else {
+                FeatureConveyorActivationStatus::Inactive
+            },
+            activation_id: activation.as_ref().map(|receipt| receipt.activation_id),
             evidence,
         };
         projection.validate()?;
