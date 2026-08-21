@@ -2428,6 +2428,39 @@ struct DeveloperBridgeTests {
         #expect(!active.activationReady)
     }
 
+    @Test("Owner-control projection preserves canonical UUID text through signed-helper encoding")
+    func ownerControlProjectionCanonicalEncodingRoundTrip() throws {
+        var liveEvidenceObject = try #require(
+            JSONSerialization.jsonObject(
+                with: ownerControlData(queueRevision: 7, completeEvidence: true)
+            ) as? [String: Any]
+        )
+        var liveEvidence = try #require(liveEvidenceObject["evidence"] as? [String: Any])
+        var repositoryEvidence = try #require(
+            liveEvidence["repository_gate_proof"] as? [String: Any]
+        )
+        repositoryEvidence["evidence_id"] = "abcdef01-abcd-4abc-8abc-abcdefabcdef"
+        liveEvidence["repository_gate_proof"] = repositoryEvidence
+        liveEvidenceObject["evidence"] = liveEvidence
+        let liveEvidenceData = try JSONSerialization.data(withJSONObject: liveEvidenceObject)
+
+        for (source, expectedEvidenceID) in [
+            (liveEvidenceData, "abcdef01-abcd-4abc-8abc-abcdefabcdef"),
+            (ownerControlData(queueRevision: 7, completeEvidence: true, active: true), nil),
+            (ownerControlDataWithActiveFeature(stage: "paused", ownerPaused: false), nil)
+        ] {
+            let projection = try AssemblywrightMacFeatureConveyorOwnerControlProjection
+                .decodeStrict(source)
+            let encoded = try JSONEncoder().encode(projection)
+            _ = try AssemblywrightMacFeatureConveyorOwnerControlProjection.decodeStrict(encoded)
+            let text = try #require(String(data: encoded, encoding: .utf8))
+            if let expectedEvidenceID { #expect(text.contains(expectedEvidenceID)) }
+            #expect(!text.contains("ABCDEF01-ABCD-4ABC-8ABC-ABCDEFABCDEF"))
+            #expect(!text.contains("AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"))
+            #expect(!text.contains("BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB"))
+        }
+    }
+
     @Test("Owner-control projection distinguishes non-owner pauses from owner pauses")
     func ownerControlProjectionAcceptsNonOwnerPausedCheckpoint() throws {
         let providerPaused = try AssemblywrightMacFeatureConveyorOwnerControlProjection.decodeStrict(

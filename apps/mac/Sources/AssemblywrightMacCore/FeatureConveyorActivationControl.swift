@@ -29,6 +29,13 @@ public struct AssemblywrightMacFeatureConveyorEvidenceReference: Codable, Equata
         case revision
         case receiptSHA256 = "receipt_sha256"
     }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(evidenceID.uuidString.lowercased(), forKey: .evidenceID)
+        try container.encode(revision, forKey: .revision)
+        try container.encode(receiptSHA256, forKey: .receiptSHA256)
+    }
 }
 
 public struct AssemblywrightMacFeatureConveyorActivationEvidenceProjection: Codable, Equatable, Sendable {
@@ -83,6 +90,17 @@ public struct AssemblywrightMacFeatureConveyorOwnerActiveFeature: Codable, Equat
         case stage
         case ownerPaused = "owner_paused"
     }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(featureID.uuidString.lowercased(), forKey: .featureID)
+        try container.encode(specificationRevision, forKey: .specificationRevision)
+        try container.encode(lifecycleRevision, forKey: .lifecycleRevision)
+        try container.encode(lifecycleStatus, forKey: .lifecycleStatus)
+        try container.encode(orchestrationRevision, forKey: .orchestrationRevision)
+        try container.encode(stage, forKey: .stage)
+        try container.encode(ownerPaused, forKey: .ownerPaused)
+    }
 }
 
 public struct AssemblywrightMacFeatureConveyorOwnerControlProjection: Codable, Equatable, Sendable {
@@ -121,7 +139,9 @@ public struct AssemblywrightMacFeatureConveyorOwnerControlProjection: Codable, E
         try container.encode(emergencyPauseRevision, forKey: .emergencyPauseRevision)
         try container.encode(ownerControlDesignationRevision, forKey: .ownerControlDesignationRevision)
         try container.encode(activationStatus, forKey: .activationStatus)
-        if let activationID { try container.encode(activationID, forKey: .activationID) }
+        if let activationID {
+            try container.encode(activationID.uuidString.lowercased(), forKey: .activationID)
+        }
         else { try container.encodeNil(forKey: .activationID) }
         try container.encode(activationReady, forKey: .activationReady)
         try container.encode(activationBlocker, forKey: .activationBlocker)
