@@ -1692,6 +1692,57 @@ an old one.
   version change and is not approval, execution, release evidence, or external
   proof. Native Rust tests own API/CAS/pause/idempotence/remote-route coverage;
   the PowerShell self-test owns handle/pair/canonical-byte/digest negative coverage.
+- For Feature 7, the `unit-testing-test-generate` workflow maps to the strict
+  protocol contract, kernel projection/CAS/pause/idempotence/immutability tests,
+  owner-token process authentication/redaction tests, and the disposable
+  PowerShell 5.1 self-test. Those suites cover valid input, missing and malformed
+  state, exact-size and shape bounds, duplicate/reordered/whitespace-rewritten
+  JSON, wrong digest/pair/schema/status/fixed identity/boundary, held-handle
+  write/delete denial, exact retry reconciliation, stale revisions, Emergency
+  Pause, activation, remote-route absence, and redacted errors. Meaningless mocks
+  and browser assertions are intentionally absent; no numeric coverage percentage
+  is claimed because the pinned workspace does not provide a cross-language
+  Rust/PowerShell coverage instrument.
+- Feature 7's `e2e-testing` workflow follows the real native boundary rather
+  than Playwright: the Rust process E2E starts the actual master binary and proves
+  owner-token GET/POST authentication, strict bounded admission, exact retry,
+  durable projection, and remote-route absence; the hosted Windows gate runs the
+  actual PowerShell 5.1 handle path; and live Windows onboarding runs unchanged
+  controller-produced receipt/sidecar bytes through `Check`, confirmed `Admit`,
+  and `Status` against the installed schema-v19 service. There is no browser
+  surface, so browser automation, screenshots, visual regression, mobile
+  emulation, and cross-browser matrices are inapplicable.
+- The Feature 7 live onboarding at implementation SHA
+  `84f05dec7a48d6c4b3ce595902854df6f9819125` passed the PowerShell self-test and
+  admitted five genuine revision-1 references: repository gate
+  `a29153a67a27d55eb038d2d6f254300dc33dfe41456513dbc67497e65c5c4ba1`,
+  restricted worker
+  `c00398461382c21e25da8622507f5562a646ec0bd8c64f5165137fde2c03e963`,
+  review provider
+  `6cf78b8777d7b8fee5a64f9eba81e09fde2c51a5a97f9fec8f07751ba624d9c8`,
+  restart recovery
+  `704815efb50939ad123d9ad0d6985af2b0d8b6ac0ffbff068eb5b119921b5670`,
+  and Mac/Windows control streaming
+  `4a0152f0ec26fee7056622071485842ad9b66105b8ac4d428e9970be36fd1c71`.
+  The authoritative projection remained inactive, unpaused, and 5/6; no
+  activation was attempted. The sixth GitHub-publication proof remained absent
+  because the otherwise valid Windows GitHub CLI account used plaintext fallback
+  storage. The publication controller correctly requires OS credential-store
+  protection and must not accept, migrate, print, or reuse that plaintext token;
+  interactive secure reauthentication remains an owner identity action.
+- Copying proof pairs onto Windows is not sufficient onboarding. Preserve the
+  controller bytes exactly, then explicitly set each ordinary single-link file's
+  owner to the current Windows owner and replace inherited access with exactly
+  owner and SYSTEM FullControl before `Check`. An elevated process can otherwise
+  leave Administrators as owner. Apply the same narrow reconciliation to a
+  legacy `development.token` ACL without reading or printing its contents; do
+  not broaden this into recursive data-directory permission rewriting.
+- When validating native Windows tools, fully consume `gh version`, capture
+  `$LASTEXITCODE` immediately after that native invocation, and only then inspect
+  the first output line. Piping the native command through
+  `Select-Object -First 1` can terminate the producer early and turn a valid
+  executable into a false failure. The fixed version check changes no credential,
+  publication, or repository authority.
 - Native Mac relay tests must keep their client read timeout above the server's
   ten-second peer-code-identity validation bound. A five-second client timeout
   can surface Security.framework latency as `WouldBlock` before the server's
