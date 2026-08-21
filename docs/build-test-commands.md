@@ -420,6 +420,45 @@ Developer ID distribution, notarization, installation, unattended operation,
 or production readiness. Playwright is inapplicable because no browser surface
 participates.
 
+## Feature 7 Windows Owner Evidence Admission
+
+The PowerShell 5.1 onboarding client has a mutation-free disposable self-test
+and an authenticated redacted status/check surface:
+
+```powershell
+.\scripts\windows-owner-evidence-admission.ps1 -Action SelfTest
+.\scripts\windows-owner-evidence-admission.ps1 -Action Status
+.\scripts\windows-owner-evidence-admission.ps1 -Action Check
+.\scripts\windows-owner-evidence-admission.ps1 -Action Check -ReceiptPath <FIXED_RECEIPT_PATH> -DigestPath <FIXED_SIDECAR_PATH>
+```
+
+After copying one canonical proof-controller pair to an ordinary single-link
+Windows file pair, protect both files to only the current owner and SYSTEM with
+inheritance disabled. Admission is one separate deliberate action:
+
+```powershell
+.\scripts\windows-owner-evidence-admission.ps1 -Action Admit -ReceiptPath <FIXED_RECEIPT_PATH> -DigestPath <FIXED_SIDECAR_PATH> -Confirm
+```
+
+The endpoint is fixed to owner-authenticated loopback. The tool reads the token
+from protected master state, validates canonical controller bytes through held,
+non-reparse, no-write/no-delete-share file handles before preflight, sends digest
+metadata only, and never activates. If the POST response is ambiguous, rerun
+`Status` or the same confirmed command: the fresh GET preflight recognizes an
+exact current digest before pause/activation denial and without a second POST.
+Do not reorder, whitespace-rewrite, reserialize, or change the fixed boundary
+of a receipt, relax
+its ACL, manufacture a digest, or describe admission as release proof.
+
+Focused portable/native coverage:
+
+```sh
+cargo test -p assemblywright-protocol --test owner_activation_contract
+cargo test -p assemblywright-master --test feature_conveyor_kernel activation_ -- --nocapture
+cargo test -p assemblywright-master --test master_process_e2e artifact_integration_routes_are_owner_loopback_only_strict_and_redacted -- --nocapture
+cargo test -p assemblywright-master --test remote_mtls_e2e remote_listener_requires_enrollment_tls13_and_channel_bound_identity -- --nocapture
+```
+
 ## Windows Distributed Gate
 
 The schema-v9 snapshot-claim, schema-v10 coding-dispatch, schema-v11 owner-resolution,

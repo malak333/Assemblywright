@@ -39,6 +39,10 @@ jobs:
         shell: powershell
         run: ./scripts/windows-local-coding-live-control.ps1 -Action Check
 
+      - name: Test Windows owner evidence admission validation
+        shell: powershell
+        run: ./scripts/windows-owner-evidence-admission.ps1 -Action SelfTest
+
       - name: Check formatting
         run: cargo fmt --all --check
 

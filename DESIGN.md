@@ -338,6 +338,29 @@ runtime authority. Built-binary current-source linkage, Developer ID
 distribution, notarization, clean-profile installation, unattended operation,
 and production readiness remain separate claims.
 
+The seventh slice is the Windows owner evidence-admission/onboarding tool.
+`scripts/windows-owner-evidence-admission.ps1` reads only an owner/SYSTEM-
+protected ordinary receipt and its exact raw SHA-256 sidecar. It holds both
+non-reparse files without write/delete sharing, binds their canonical paths and
+stable identities, and revalidates those paths, identities, and ACLs before and
+after handle-based reads and validation. It strictly binds the fixed filename
+pair, exact controller field order and one-line bytes, category/origin/schema,
+controller identity, pass status, non-future observation time, commit/tree and
+digest fields, then sends only category, origin, a fresh evidence ID, contiguous
+revision, receipt digest, observation time, and the current Emergency Pause
+revision. Its authenticated preflight is the owner-token loopback-only
+`GET /v1/feature-conveyor/activation-evidence`; the same path's existing POST
+remains the sole mutation. The token is read from protected Windows master
+state and never enters argv, environment, output, or a receipt. Exact current-
+digest preflight makes a retry idempotent even if pause or activation followed
+an ambiguous committed POST; otherwise stale revision, pause, activation,
+unsafe files, malformed evidence, or digest drift fail closed. `Admit` requires
+explicit `-Confirm`, never retries a POST automatically, and never activates.
+There is no enrolled-device route, protocol-v5 change, schema-v19 migration, or
+new cancellation authority; interruption before the atomic POST commits
+nothing, while an ambiguous response is reconciled by a fresh read-only
+preflight.
+
 The designated bridge may explicitly owner-pause or resume only an exact
 active, effect-free orchestration checkpoint using lifecycle, orchestration,
 queue, designation, and Emergency Pause revisions. Owner pause stops the active

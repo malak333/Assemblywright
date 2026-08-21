@@ -56,6 +56,8 @@ flowchart LR
   OwnerAction --> Helper
   Helper --> ControlStreamProof["Feature 6 owner-run proof: committed native relay, signed helper and agent, same-stream advancing durable cursor"]
   ControlStreamProof --> ProofReceipt["Path-free private receipt only; no admission or activation authority"]
+  ProofReceipt --> OwnerAdmission["Feature 7 Windows owner tool: strict local pair validation, loopback preflight, confirmed digest-only admission"]
+  OwnerAdmission --> Conveyor
   Protocol --> Feature["Dormant assemblywright-core distributed-development feature"]
   Protocol --> Windows["Windows distributed format, clippy, protocol, and master-process gate"]
   Process --> Windows
@@ -80,6 +82,13 @@ source, verifies stable signed helper/agent identities and durable same-stream
 cursor advance after restart, then retains only a path-free transcript-digest-
 bound receipt. Windows evidence admission and designated-bridge activation stay
 separate authoritative actions; protocol v5 and schema v19 are unchanged.
+
+Feature 7 adds only a Windows-owner edge to the already implemented schema-v19
+admission transaction. An owner-token-authenticated loopback GET projects the
+current pause/activation state and category digest references needed for CAS.
+The PowerShell 5.1 tool validates protected local proof pairs and requires
+explicit confirmation before one digest-only POST. Neither endpoint exists on
+the enrolled-device router, and the tool cannot activate or execute work.
 
 The repository now owns a portable contract seam, a durable master kernel, and
 a headless master executable. The contract seam provides the current protocol

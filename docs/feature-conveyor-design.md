@@ -753,14 +753,33 @@ window is recoverable only by deleting an exact clean, normal-index clone whose
 exact remote-name set is `{origin}` and whose sole origin URL still equals the
 fixed source while the queue remains empty.
 
-The concrete authority endpoints are loopback-only
-`POST /v1/feature-conveyor/activation-evidence` and exporter-bound designated-
+The concrete authority endpoints include owner-token loopback-only `GET`
+preflight plus `POST` admission at
+`/v1/feature-conveyor/activation-evidence` and exporter-bound designated-
 bridge `GET /v1/distributed/feature-conveyor/owner-control`, plus remote POSTs
 for `activation`, `orchestration/pause`, `orchestration/resume`,
 `cancel-active-feature`, and `abandon-and-advance`. The signed helper exposes
 each mutation only as an explicit bounded `--confirm` command. The SwiftUI app
 stops and reaps monitoring, revalidates that same helper, owns one command child,
 strictly validates its receipt, and restores observation.
+
+Feature 7 turns the existing Windows-authoritative admission primitive into a
+deliberate owner workflow without widening it. The bounded GET returns only
+schema, Emergency Pause state/revision, activation state/ID, and current
+digest references. It is absent from the enrolled-device router. The Windows
+PowerShell 5.1 client holds both non-reparse files without write/delete sharing
+while revalidating canonical paths, stable handle identities, protected ACLs,
+and path bindings before and after reads. It verifies exact ordinary-file,
+single-link, size, filename-pair, raw-sidecar, canonical one-line controller
+bytes and field order, category/origin/schema and fixed proof boundary,
+controller identity, pass-status, observed-time, commit/tree, SHA-256, and
+signature fields before forming a contiguous pause-bound request. It never
+sends proof bytes or the owner token outside the fixed loopback header, never
+activates, and sends at most one POST per confirmed invocation. An exact
+current digest is successful idempotent reconciliation before pause or
+activation denial; any other stale, paused, or active state rejects. A new POST
+response must bind the submitted nonnil evidence ID, receipt observation time,
+digest, revision, and pause revision. Schema v19 and protocol v5 remain unchanged.
 
 #### Evidence Gate
 

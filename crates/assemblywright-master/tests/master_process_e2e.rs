@@ -179,6 +179,29 @@ fn artifact_integration_routes_are_owner_loopback_only_strict_and_redacted() {
         "{}",
     );
     assert!(activation_evidence_unauthorized.starts_with("HTTP/1.1 401 Unauthorized"));
+    let activation_preflight_unauthorized =
+        get_request(endpoint, "/v1/feature-conveyor/activation-evidence", None);
+    assert!(activation_preflight_unauthorized.starts_with("HTTP/1.1 401 Unauthorized"));
+    let activation_preflight = get_request(
+        endpoint,
+        "/v1/feature-conveyor/activation-evidence",
+        Some(token.trim()),
+    );
+    assert!(activation_preflight.starts_with("HTTP/1.1 200 OK"));
+    let activation_preflight = response_json(&activation_preflight);
+    assert_exact_object_keys(
+        &activation_preflight,
+        &[
+            "schema_version",
+            "emergency_paused",
+            "emergency_pause_revision",
+            "activation_status",
+            "activation_id",
+            "evidence",
+        ],
+    );
+    assert_eq!(activation_preflight["activation_status"], "inactive");
+    assert_eq!(activation_preflight["emergency_paused"], false);
     let activation_evidence_malformed = post_request(
         endpoint,
         "/v1/feature-conveyor/activation-evidence",
@@ -191,6 +214,17 @@ fn artifact_integration_routes_are_owner_loopback_only_strict_and_redacted() {
         serde_json::json!({"error":"feature_activation_evidence_request_rejected"})
     );
     assert!(!activation_evidence_malformed.contains("must-not-leak"));
+    let activation_evidence_oversized = post_request(
+        endpoint,
+        "/v1/feature-conveyor/activation-evidence",
+        Some(token.trim()),
+        &format!(r#"{{"padding":"{}"}}"#, "x".repeat(8_192)),
+    );
+    assert!(activation_evidence_oversized.starts_with("HTTP/1.1 422 Unprocessable Entity"));
+    assert_eq!(
+        response_json(&activation_evidence_oversized),
+        serde_json::json!({"error":"feature_activation_evidence_request_rejected"})
+    );
     let admission = FeatureConveyorActivationEvidenceAdmissionRequest {
         schema_version: FEATURE_CONVEYOR_OWNER_ACTIVATION_SCHEMA_VERSION,
         category: FeatureConveyorActivationEvidenceCategory::RepositoryGateProof,
@@ -217,11 +251,31 @@ fn artifact_integration_routes_are_owner_loopback_only_strict_and_redacted() {
         &admission_body,
     );
     assert_eq!(response_json(&exact_retry), response_json(&admitted));
+    let post_admission_preflight = get_request(
+        endpoint,
+        "/v1/feature-conveyor/activation-evidence",
+        Some(token.trim()),
+    );
+    let post_admission_preflight = response_json(&post_admission_preflight);
+    assert_eq!(
+        post_admission_preflight["evidence"]["repository_gate_proof"],
+        response_json(&admitted)["evidence"]
+    );
+    assert!(!post_admission_preflight.to_string().contains("path"));
+    assert!(!post_admission_preflight
+        .to_string()
+        .contains("provider_output"));
     assert!(post_request(
         endpoint,
         "/v1/distributed/feature-conveyor/activation",
         Some(token.trim()),
         "{}",
+    )
+    .starts_with("HTTP/1.1 404 Not Found"));
+    assert!(get_request(
+        endpoint,
+        "/v1/distributed/feature-conveyor/activation-evidence",
+        Some(token.trim()),
     )
     .starts_with("HTTP/1.1 404 Not Found"));
 }
