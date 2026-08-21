@@ -57,6 +57,7 @@ MASTER_REVIEW_PROVIDER_ADAPTER="crates/assemblywright-master/src/review_provider
 MASTER_REVIEW_PROVIDER_ADAPTER_E2E="crates/assemblywright-master/tests/review_provider_adapter_e2e.rs"
 MASTER_REVIEW_OUTPUT_SCHEMA="crates/assemblywright-master/resources/review-output-schema.json"
 MASTER_PUBLICATION="crates/assemblywright-master/src/publication.rs"
+MASTER_GITHUB_PUBLICATION="crates/assemblywright-master/src/github_publication.rs"
 MASTER_SERVICE_E2E="crates/assemblywright-master/tests/windows_service_lifecycle_e2e.rs"
 AGENT_E2E="crates/assemblywright-agent/tests/local_relay_e2e.rs"
 AGENT_LOCAL_CODING_E2E="crates/assemblywright-agent/tests/local_coding_admission.rs"
@@ -424,6 +425,11 @@ require_text "GitHub-publication controller exact release workflow id" "$WINDOWS
   'workflow_id = 282605278'
 require_text "GitHub-publication controller exact Windows workflow id" "$WINDOWS_GITHUB_PUBLICATION_LIVE_CONTROL" \
   'workflow_id = 314849303'
+windows_workflow_sha256="$(shasum -a 256 "$WINDOWS_PROTOCOL_WORKFLOW" | awk '{print $1}')"
+require_text "GitHub-publication controller current Windows workflow digest" "$WINDOWS_GITHUB_PUBLICATION_LIVE_CONTROL" \
+  "workflow_sha256 = \"$windows_workflow_sha256\""
+require_text "GitHub-publication adapter current Windows workflow digest" "$MASTER_GITHUB_PUBLICATION" \
+  "\"$windows_workflow_sha256\""
 require_text "GitHub-publication controller service digest binding" "$WINDOWS_GITHUB_PUBLICATION_LIVE_CONTROL" \
   'master_executable_sha256 = $proof.master_executable_sha256'
 require_text "GitHub-publication provisioning rollback" "$WINDOWS_GITHUB_PUBLICATION_LIVE_CONTROL" \
