@@ -189,8 +189,10 @@ function Assert-ToolVersions {
     if ($LASTEXITCODE -ne 0 -or $gitOutput -cne "git version $gitVersion") {
         throw "The fixed Git version was not exact."
     }
-    $ghOutput = (& $Gh version | Select-Object -First 1).Trim()
-    if ($LASTEXITCODE -ne 0 -or $ghOutput -cnotmatch "^gh version $([regex]::Escape($ghVersion)) ") {
+    $ghLines = @(& $Gh version)
+    $ghExitCode = $LASTEXITCODE
+    $ghOutput = if ($ghLines.Count -gt 0) { ([string]$ghLines[0]).Trim() } else { "" }
+    if ($ghExitCode -ne 0 -or $ghOutput -cnotmatch "^gh version $([regex]::Escape($ghVersion)) ") {
         throw "The fixed GitHub CLI version was not exact."
     }
 }
