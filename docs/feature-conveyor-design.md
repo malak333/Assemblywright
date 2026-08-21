@@ -138,9 +138,29 @@ The one-shot signed Mac helper requires `--confirm`, reads the bounded request
 from stdin, strictly validates the redacted receipt, and closes the session.
 It does not create grants or brainstorming proof, claim or dispatch the queue,
 invoke a worker or provider, access a repository, or grant Git/publication or
-autonomous activation. That schema-v8 enqueue slice left the SwiftUI app
-observation-only; schema v19 adds the separate confirmed owner-action surface
-described under `Implementation Boundary`.
+autonomous activation. Feature 8 adds only a typed SwiftUI authoring layer in
+front of that unchanged helper and route. The form exposes the fixed review-safe
+manifest fields and explicit proof/grant/provider/dependency bindings, inserts
+the exact validation plan, uses the authenticated queue/designation/pause
+snapshot, and requires a second owner confirmation. It accepts no arbitrary
+manifest JSON. The app stops observation, revalidates the exact signed helper,
+runs the one-shot command, validates its revision-bound receipt, then resumes
+observation. Windows recomputes the canonical manifest digest and remains the
+sole enqueue authority. The first production form fixes the selected
+`openai.codex` / `gpt-5.6-sol` binding, rejects embedded secret-shaped strings,
+and renders the frozen manifest digest plus IDs, evidence digests, grants,
+provider/model, dependencies, title, outcome, device/connection identity,
+queue/designation/pause revisions, and exact request SHA-256 before confirmation.
+A failed
+one-shot with possible committed effect retains the exact request bytes only in
+app memory and exposes a second confirmed reconciliation action. Windows treats
+that request as an exact replay only while the original queue-revision-plus-one,
+queued lifecycle, immutable specification/dependencies, current grants,
+designated device and registry revision, designation revision, Emergency Pause
+revision, and original enqueue audit remain exact. Replay
+returns the original receipt without another queue mutation or audit; drift
+rejects, and the app never automatically retries or rebuilds the request from a
+new snapshot.
 
 The following paragraph records the historical protocol-v4/schema-v12 worker.
 Master schema v10 added the first separate metadata-only coding-dispatch

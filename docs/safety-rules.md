@@ -832,7 +832,15 @@ release requirements, not optional UX guidance.
   Success may only append the immutable specification and queued lifecycle in
   the same transaction as redacted audit. It never claims or leases the queue
   and grants no brainstorming, grant creation, worker, repository, provider,
-  review, Git, publication, or activation authority.
+  review, Git, publication, or activation authority. An identical replay after
+  a possibly lost receipt may return the original queued snapshot without
+  mutation only when the current queue revision is exactly the request's
+  original expected revision plus one and every immutable specification,
+  dependency, queued lifecycle, current grant, designated device and registry
+  revision, designation revision, Emergency Pause revision, and original
+  enqueue-audit binding matches. Later queue/lifecycle/authority
+  drift, a current-revision duplicate, or any content change rejects. Replay
+  must not append another audit event.
 - Feature Conveyor state mutation and its redacted audit evidence must commit
   in the same immediate SQLite transaction. Manifest content, repository
   identity/path, brainstorming content, and owner reason must not enter audit
@@ -966,8 +974,26 @@ release requirements, not optional UX guidance.
   validates the canonical manifest digest so Foundation and Rust number
   serialization cannot create a second approval authority. The fixture profile
   and the supervised app
-  monitor/relay modes must not invoke this action; the SwiftUI app remains
-  read-only.
+  monitor/relay modes must not invoke this action. The SwiftUI app may construct
+  the request only from typed review-safe manifest fields, explicit digest and
+  grant revisions, provider/model, dependencies, and the current authenticated
+  queue/designation/Emergency Pause snapshot. It must accept no arbitrary
+  manifest JSON, require a second explicit owner confirmation, stop and reap
+  observation, revalidate the exact helper signature and running identity,
+  invoke only the standard-profile one-shot command with an empty environment,
+  strictly bind the single redacted receipt, and restart observation. Invalid,
+  stale, oversized, duplicate, self-dependent, embedded secret-shaped,
+  helper-drifted,
+  cancelled, timed-out, or malformed state fails closed. The form creates no
+  grant or proof and grants no claim, dispatch, repository, provider, Git,
+  publication, or activation authority. The current provider/model binding is
+  fixed to the provisioned production pair and rendered read-only. Confirmation
+  must summarize the exact frozen IDs, manifest/evidence digests, grants,
+  provider/model, dependencies, title, outcome, device/connection identity,
+  queue/designation/Emergency Pause revisions, and request SHA-256. A possibly committed failure
+  may retain exact request bytes only in process memory, block new submissions,
+  and offer one separately confirmed reconciliation using those identical
+  bytes. It must never automatically retry or silently bind a newer snapshot.
 - Signed release provenance must record the exact app executable path and
   SHA-256 plus its code Identifier, ten-character TeamIdentifier, and CDHash.
   Live-device QA must revalidate the installed executable and bind its report

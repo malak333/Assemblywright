@@ -15,6 +15,7 @@ public enum AssemblywrightDeveloperBridgeAppPhase: String, Equatable, Sendable {
 
 public struct AssemblywrightDeveloperBridgeAppStatus: Equatable, Sendable {
     public let phase: AssemblywrightDeveloperBridgeAppPhase
+    public let deviceID: String?
     public let masterEndpoint: String?
     public let connectionEpoch: UInt64?
     public let featureConveyor: AssemblywrightMacFeatureConveyorStatus?
@@ -23,6 +24,7 @@ public struct AssemblywrightDeveloperBridgeAppStatus: Equatable, Sendable {
 
     public init(
         phase: AssemblywrightDeveloperBridgeAppPhase,
+        deviceID: String? = nil,
         masterEndpoint: String? = nil,
         connectionEpoch: UInt64? = nil,
         featureConveyor: AssemblywrightMacFeatureConveyorStatus? = nil,
@@ -30,6 +32,7 @@ public struct AssemblywrightDeveloperBridgeAppStatus: Equatable, Sendable {
         errorCode: String? = nil
     ) {
         self.phase = phase
+        self.deviceID = deviceID
         self.masterEndpoint = masterEndpoint
         self.connectionEpoch = connectionEpoch
         self.featureConveyor = featureConveyor
@@ -413,10 +416,20 @@ public struct FoundationAssemblywrightDeveloperBridgeProcessLauncher:
         arguments: [String],
         input: Data
     ) async throws -> Data {
-        let allowed = AssemblywrightMacOwnerControlAction.allCases.map(
+        let ownerActions = AssemblywrightMacOwnerControlAction.allCases.map(
             AssemblywrightDeveloperBridgeProcessLifecycle.helperArguments(for:)
         )
-        guard allowed.contains(arguments), input.count <= 8 * 1_024 else {
+        let approvedFeatureEnqueue =
+            arguments == AssemblywrightDeveloperBridgeProcessLifecycle
+                .approvedFeatureEnqueueArguments
+        let inputLimit = approvedFeatureEnqueue
+            ? AssemblywrightMacFeatureConveyorApprovedFeatureDraft.maximumRequestBytes
+            : 8 * 1_024
+        let outputLimit = approvedFeatureEnqueue
+            ? AssemblywrightMacFeatureConveyorOwnerControl.maximumReceiptBytes
+            : 8 * 1_024
+        guard (ownerActions.contains(arguments) || approvedFeatureEnqueue),
+              !input.isEmpty, input.count <= inputLimit else {
             throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
         }
         let process = Process()
@@ -447,7 +460,7 @@ public struct FoundationAssemblywrightDeveloperBridgeProcessLauncher:
             let output = try await withTaskCancellationHandler {
                 var result = Data()
                 while true {
-                    let remaining = 8 * 1_024 + 2 - result.count
+                    let remaining = outputLimit + 2 - result.count
                     guard remaining > 0 else { throw AssemblywrightDeveloperBridgeProcessError.outputTooLarge }
                     let chunk = try outputPipe.fileHandleForReading.read(upToCount: min(4 * 1_024, remaining)) ?? Data()
                     if chunk.isEmpty { break }
@@ -473,7 +486,8 @@ public struct FoundationAssemblywrightDeveloperBridgeProcessLauncher:
                 throw AssemblywrightDeveloperBridgeProcessError.teardownFailed
             }
             try Task.checkCancellation()
-            guard process.terminationStatus == 0, !output.isEmpty, output.count <= 8 * 1_024 + 1,
+            guard process.terminationStatus == 0, !output.isEmpty,
+                  output.count <= outputLimit + 1,
                   output.last == 0x0a else { throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot }
             let line = output.dropLast()
             guard !line.isEmpty, !line.contains(0x0a) else { throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot }
@@ -695,6 +709,10 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
     @Published public private(set) var status: AssemblywrightDeveloperBridgeAppStatus
     @Published public private(set) var ownerActionInProgress = false
     @Published public private(set) var ownerActionErrorCode: String?
+    @Published public private(set) var approvedFeatureReceipt:
+        AssemblywrightMacFeatureConveyorApprovedFeatureReceipt?
+    @Published public private(set) var pendingApprovedFeatureRecovery:
+        AssemblywrightMacApprovedFeaturePendingRecovery?
 
     private let configuration: AssemblywrightDeveloperBridgeProcessConfiguration
     private let validator: any AssemblywrightDeveloperBridgeExecutableValidating
@@ -844,6 +862,68 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
         }
     }
 
+    public func performApprovedFeatureEnqueue(
+        _ preparedRequest: AssemblywrightMacApprovedFeaturePreparedRequest
+    ) async {
+        guard !ownerActionInProgress else { return }
+        guard pendingApprovedFeatureRecovery == nil else {
+            ownerActionErrorCode = "approved_feature_reconciliation_required"
+            return
+        }
+        guard approvedFeatureCommandConfiguration() != nil else {
+            approvedFeatureReceipt = nil
+            ownerActionErrorCode = "approved_feature_enqueue_rejected"
+            return
+        }
+        ownerActionInProgress = true
+        ownerActionErrorCode = nil
+        approvedFeatureReceipt = nil
+        defer { ownerActionInProgress = false }
+        do {
+            let recovery = AssemblywrightMacApprovedFeaturePendingRecovery(
+                preparedRequest: preparedRequest
+            )
+            pendingApprovedFeatureRecovery = recovery
+            approvedFeatureReceipt = try await executeApprovedFeatureRequest(recovery)
+            pendingApprovedFeatureRecovery = nil
+            status = .init(phase: .starting)
+            start()
+        } catch {
+            ownerActionErrorCode = pendingApprovedFeatureRecovery == nil
+                ? "approved_feature_enqueue_rejected"
+                : "approved_feature_reconciliation_required"
+            status = .init(phase: .masterOffline, errorCode: ownerActionErrorCode)
+            start()
+        }
+    }
+
+    public func reconcilePendingApprovedFeatureEnqueue() async {
+        guard !ownerActionInProgress,
+              let recovery = pendingApprovedFeatureRecovery else { return }
+        guard approvedFeatureCommandConfiguration() != nil else {
+            ownerActionErrorCode = "approved_feature_reconciliation_required"
+            return
+        }
+        ownerActionInProgress = true
+        ownerActionErrorCode = nil
+        approvedFeatureReceipt = nil
+        defer { ownerActionInProgress = false }
+        do {
+            approvedFeatureReceipt = try await executeApprovedFeatureRequest(recovery)
+            pendingApprovedFeatureRecovery = nil
+            status = .init(phase: .starting)
+            start()
+        } catch {
+            ownerActionErrorCode = "approved_feature_reconciliation_required"
+            status = .init(phase: .masterOffline, errorCode: ownerActionErrorCode)
+            start()
+        }
+    }
+
+    nonisolated public static let approvedFeatureEnqueueArguments = [
+        "feature-conveyor", "approve-and-enqueue", "--confirm"
+    ]
+
     nonisolated public static func helperArguments(for action: AssemblywrightMacOwnerControlAction) -> [String] {
         switch action {
         case .activation: ["feature-conveyor", "activation", "--confirm"]
@@ -874,6 +954,7 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
             }
             return AssemblywrightDeveloperBridgeAppStatus(
                 phase: phase,
+                deviceID: snapshot.deviceID.lowercased(),
                 masterEndpoint: snapshot.masterEndpoint,
                 connectionEpoch: snapshot.connectionEpoch,
                 featureConveyor: snapshot.featureConveyor,
@@ -893,6 +974,40 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
         guard let launched = session else { return }
         try await launched.stop()
         session = nil
+    }
+
+    private func approvedFeatureCommandConfiguration() -> (URL, String)? {
+        guard configuration.eventRelayConfiguration.map({
+            !$0.fixtureJobsEnabled && !$0.mlxJobsEnabled
+                && !$0.localCodingSnapshotsEnabled
+        }) ?? true,
+        let executableURL = configuration.executableURL,
+        let expectedTeamIdentifier = configuration.expectedTeamIdentifier else { return nil }
+        return (executableURL, expectedTeamIdentifier)
+    }
+
+    private func executeApprovedFeatureRequest(
+        _ recovery: AssemblywrightMacApprovedFeaturePendingRecovery
+    ) async throws -> AssemblywrightMacFeatureConveyorApprovedFeatureReceipt {
+        guard let (executableURL, expectedTeamIdentifier) =
+            approvedFeatureCommandConfiguration() else {
+            throw AssemblywrightMacApprovedFeatureAuthoringError.invalidAuthenticatedStatus
+        }
+        await stop()
+        guard status.errorCode == nil else {
+            throw AssemblywrightDeveloperBridgeProcessError.teardownFailed
+        }
+        let validated = try validator.validate(
+            executableURL: executableURL,
+            expectedTeamIdentifier: expectedTeamIdentifier
+        )
+        let receiptData = try await launcher.runCommand(
+            executable: validated,
+            arguments: Self.approvedFeatureEnqueueArguments,
+            input: recovery.requestData
+        )
+        return try AssemblywrightMacFeatureConveyorApprovedFeatureDraft
+            .validateCommandReceipt(receiptData, requestData: recovery.requestData)
     }
 
     private static func errorCode(for error: Error) -> String {

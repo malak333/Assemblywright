@@ -215,11 +215,19 @@ Keychain identity and the outbound mTLS session, directly supervises the pinned
 agent, and forwards authenticated metadata pages into a durable cursor. The
 enrolled key and mTLS session never leave the helper. The helper also strictly
   decodes the bounded schema-v9 Feature Conveyor projection and the app renders
-  its queue/guidance summary as read-only text only in authenticated state. A
-  separate one-shot signed-helper command,
+  its queue/guidance summary as read-only text only in authenticated state. Its
+  approved-feature form creates the fixed review-safe manifest and strict
+  request from typed fields, current authenticated revisions, and explicit
+  digest/grant bindings, then requires owner confirmation before a separate
+  one-shot signed-helper command,
   `feature-conveyor approve-and-enqueue --confirm`, reads one bounded approved
   request from stdin, uses the standard Keychain identity without forwarding an
-  owner token, and emits only a revision-bound redacted receipt.
+  owner token, and emits only a revision-bound redacted receipt. Windows
+  recomputes the canonical manifest digest and remains queue authority. The
+  current form pins the provisioned `openai.codex` / `gpt-5.6-sol` reviewer,
+  displays the frozen approval bindings before confirmation, rejects embedded
+  secret-shaped text, and preserves exact request bytes in memory for an
+  explicit lost-receipt reconciliation; it never automatically retries.
 
 ## Current Scope
 
@@ -246,10 +254,11 @@ Not yet implemented, and not claimed:
 - Worker execution against the registered source checkout, live selected-
   provider deployment or reviewer-quality proof, or GitHub branch/PR/merge
   authority.
-- Mac Feature Conveyor UI controls or hosted brainstorming. The app remains
-  observation only. The implemented one-shot signed-helper action can enqueue
-  only an already-approved specification after separate Windows owner-bridge
-  designation and three current repository-grant revisions.
+- Hosted brainstorming or automatic approval. The Mac app can author and
+  explicitly enqueue only an already-approved review-safe specification after
+  separate Windows owner-bridge designation and three current repository-grant
+  revisions. It cannot create those grants or proof digests, infer approval,
+  claim or dispatch work, access a repository, invoke a provider, or publish.
 - Developer ID signing, notarization, stapling, clean-profile installation, or
   Finder/LaunchServices validation.
 - Live cross-device reliability, host hardening, or unattended operation.

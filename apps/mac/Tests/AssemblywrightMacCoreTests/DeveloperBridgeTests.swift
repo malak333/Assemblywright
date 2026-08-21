@@ -758,14 +758,29 @@ private actor FakeBridgeProcessLauncher: AssemblywrightDeveloperBridgeProcessLau
     let session: FakeBridgeProcessSession
     let restartSession: FakeBridgeProcessSession?
     let commandSucceeds: Bool
+    private var commandDelays: [Duration]
+    private var commandFailuresRemaining: Int
+    private var commandResponses: [Data]
     private(set) var launchCount = 0
     private(set) var commands: [([String], Data)] = []
     private(set) var commandSawStoppedMonitor = false
 
-    init(session: FakeBridgeProcessSession, restartSession: FakeBridgeProcessSession? = nil, commandSucceeds: Bool = true) {
+    init(
+        session: FakeBridgeProcessSession,
+        restartSession: FakeBridgeProcessSession? = nil,
+        commandSucceeds: Bool = true,
+        commandResponse: Data? = nil,
+        commandResponses: [Data] = [],
+        commandFailures: Int = 0,
+        commandDelay: Duration = .zero,
+        commandDelays: [Duration] = []
+    ) {
         self.session = session
         self.restartSession = restartSession
         self.commandSucceeds = commandSucceeds
+        commandFailuresRemaining = commandFailures
+        self.commandResponses = commandResponse.map { [$0] } ?? commandResponses
+        self.commandDelays = commandDelay > .zero ? [commandDelay] : commandDelays
     }
 
     func launch(
@@ -782,7 +797,19 @@ private actor FakeBridgeProcessLauncher: AssemblywrightDeveloperBridgeProcessLau
     ) async throws -> Data {
         commandSawStoppedMonitor = await session.stopped
         commands.append((arguments, input))
+        if !commandDelays.isEmpty {
+            let delay = commandDelays.removeFirst()
+            if delay > .zero { try await Task.sleep(for: delay) }
+        }
+        if commandFailuresRemaining > 0 {
+            commandFailuresRemaining -= 1
+            throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
+        }
         guard commandSucceeds else { throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot }
+        if !commandResponses.isEmpty { return commandResponses.removeFirst() }
+        if arguments == AssemblywrightDeveloperBridgeProcessLifecycle.approvedFeatureEnqueueArguments {
+            return approvedFeatureAuthoringReceiptData(request: input)
+        }
         return activationReceiptData(request: input)
     }
 }
@@ -2142,6 +2169,241 @@ struct DeveloperBridgeTests {
         }
     }
 
+    @Test("Approved-feature authoring emits deterministic canonical typed request bytes")
+    func approvedFeatureAuthoringCanonicalRequestFixture() throws {
+        let draft = sampleApprovedFeatureDraft()
+        let status = try approvedFeatureAuthoringStatus()
+        let canonical = try draft.canonicalManifestData()
+        let request = try draft.encodeRequest(from: status)
+        let requestAgain = try draft.encodeRequest(from: status)
+
+        #expect(request == requestAgain)
+        #expect(String(data: canonical, encoding: .utf8) ==
+            #"{"acceptance":["acceptance_1"],"allowed_paths":["Sources/App.swift"],"assumptions":[],"decisions":[],"documentation_obligations":[],"e2e_scenarios":[],"knowledge_base_obligations":[],"non_goals":[],"outcome":"Ship bounded owner feature","prohibited_data":[],"publication_checks":[],"required_capabilities":[],"risks":[],"unit_test_obligations":[],"validation_gate":{"command_ids":["requirements_binding","coverage","focused_unit_tests","native_e2e","documentation","knowledge_base","formatting","lint","build","safety","changed_paths","secret_scan","repository_validation"],"schema_version":1}}"#)
+        let object = try #require(
+            JSONSerialization.jsonObject(with: request) as? [String: Any]
+        )
+        let specification = try #require(object["specification"] as? [String: Any])
+        #expect(object["expected_queue_revision"] as? Int == 0)
+        #expect(object["owner_control_designation_revision"] as? Int == 1)
+        #expect(object["emergency_pause_revision"] as? Int == 0)
+        #expect(specification["feature_id"] as? String
+            == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+        #expect(specification["repository_id"] as? String
+            == "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+        #expect((specification["manifest_sha256"] as? [NSNumber])?.map(\.uint8Value)
+            == Array(SHA256.hash(data: canonical)))
+        #expect(request.count <= AssemblywrightMacFeatureConveyorApprovedFeatureDraft.maximumRequestBytes)
+    }
+
+    @Test("Approved-feature authoring enforces empty and exact field boundaries")
+    func approvedFeatureAuthoringRejectsEmptyAndOutOfBoundsFields() throws {
+        let status = try approvedFeatureAuthoringStatus()
+        let validBoundary = sampleApprovedFeatureDraft(manifest: .init(
+            acceptance: [String(repeating: "a", count: 128)],
+            outcome: String(repeating: "o", count: 4_096)
+        ))
+        _ = try validBoundary.encodeRequest(from: status)
+
+        let invalid = [
+            sampleApprovedFeatureDraft(manifest: .init(acceptance: [], outcome: "outcome")),
+            sampleApprovedFeatureDraft(manifest: .init(
+                acceptance: [String(repeating: "a", count: 129)], outcome: "outcome"
+            )),
+            sampleApprovedFeatureDraft(manifest: .init(
+                acceptance: ["acceptance"], outcome: String(repeating: "o", count: 4_097)
+            )),
+            sampleApprovedFeatureDraft(designSHA256: Array(repeating: 0, count: 32))
+        ]
+        for draft in invalid {
+            #expect(throws: AssemblywrightMacApprovedFeatureAuthoringError.invalidDraft) {
+                try draft.encodeRequest(from: status)
+            }
+        }
+    }
+
+    @Test("Approved-feature authoring rejects secret-shaped disclosure and dependency ambiguity")
+    func approvedFeatureAuthoringRejectsSensitiveAndInvalidDependencies() throws {
+        let status = try approvedFeatureAuthoringStatus()
+        let featureID = UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")!
+        let dependency = UUID(uuidString: "cccccccc-cccc-4ccc-8ccc-cccccccccccc")!
+        let invalid = [
+            sampleApprovedFeatureDraft(manifest: .init(
+                acceptance: ["acceptance"], outcome: "Bearer forbidden-owner-token"
+            )),
+            sampleApprovedFeatureDraft(manifest: .init(
+                acceptance: ["acceptance"], outcome: "ghp_12345678901234567890"
+            )),
+            sampleApprovedFeatureDraft(manifest: .init(
+                acceptance: ["ghp_12345678901234567890"], outcome: "outcome"
+            )),
+            sampleApprovedFeatureDraft(manifest: .init(
+                acceptance: ["acceptance"],
+                outcome: "Never include prefix ghp_12345678901234567890 in evidence"
+            )),
+            sampleApprovedFeatureDraft(manifest: .init(
+                acceptance: ["acceptance"],
+                outcome: "redacted value was bearer embedded-secret-value"
+            )),
+            sampleApprovedFeatureDraft(manifest: .init(
+                acceptance: ["acceptance"],
+                outcome: "authorization used BaSiC dXNlcjpwYXNzd29yZA=="
+            )),
+            sampleApprovedFeatureDraft(manifest: .init(
+                acceptance: ["acceptance"],
+                outcome: "credential is sk-12345678901234567 inside text"
+            )),
+            sampleApprovedFeatureDraft(manifest: .init(
+                acceptance: ["acceptance"],
+                outcome: "prefix -----begin private key----- suffix"
+            )),
+            sampleApprovedFeatureDraft(manifest: .init(
+                acceptance: ["acceptance"],
+                outcome: "embedded github_pat_11AA22BB33CC44DD55EE66FF token"
+            )),
+            sampleApprovedFeatureDraft(manifest: .init(
+                acceptance: ["acceptance"],
+                outcome: "access key AKIA1234567890ABCDEF12 here"
+            )),
+            sampleApprovedFeatureDraft(manifest: .init(
+                acceptance: ["acceptance"],
+                outcome: "jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.signature1234 here"
+            )),
+            sampleApprovedFeatureDraft(manifest: .init(
+                acceptance: ["acceptance"],
+                outcome: "endpoint https://owner:password@example.invalid/path"
+            )),
+            sampleApprovedFeatureDraft(providerID: "local.review"),
+            sampleApprovedFeatureDraft(modelID: "gpt-5.5"),
+            sampleApprovedFeatureDraft(dependencies: [featureID]),
+            sampleApprovedFeatureDraft(dependencies: [dependency, dependency])
+        ]
+        for draft in invalid {
+            #expect(throws: AssemblywrightMacApprovedFeatureAuthoringError.invalidDraft) {
+                try draft.encodeRequest(from: status)
+            }
+        }
+    }
+
+    @Test("Approved-feature authoring permits noncredential security prose")
+    func approvedFeatureAuthoringAllowsNoncredentialSecurityProse() throws {
+        let status = try approvedFeatureAuthoringStatus()
+        for outcome in [
+            "Use token-free authorization metadata",
+            "The basic-authentication lane remains disabled",
+            "The bearer-token header must be redacted",
+            "Reject the literal short example sk-example",
+            "Reject AWS access-key identifiers without including one"
+        ] {
+            _ = try sampleApprovedFeatureDraft(manifest: .init(
+                acceptance: ["acceptance"], outcome: outcome
+            )).encodeRequest(from: status)
+        }
+    }
+
+    @Test("Approved-feature request binds authenticated revisions and rejects unavailable state")
+    func approvedFeatureAuthoringBindsAuthenticatedCurrentState() throws {
+        let draft = sampleApprovedFeatureDraft()
+        let status = try approvedFeatureAuthoringStatus()
+        let request = try draft.encodeRequest(from: status)
+        let object = try #require(
+            JSONSerialization.jsonObject(with: request) as? [String: Any]
+        )
+        #expect((object["expected_queue_revision"] as? NSNumber)?.uint64Value
+            == status.ownerControl?.queueRevision)
+        #expect((object["owner_control_designation_revision"] as? NSNumber)?.uint64Value
+            == status.ownerControl?.ownerControlDesignationRevision)
+        #expect((object["emergency_pause_revision"] as? NSNumber)?.uint64Value
+            == status.ownerControl?.emergencyPauseRevision)
+
+        let paused = try approvedFeatureAuthoringStatus(emergencyPaused: true)
+        #expect(throws: AssemblywrightMacApprovedFeatureAuthoringError.invalidAuthenticatedStatus) {
+            try draft.encodeRequest(from: paused)
+        }
+        #expect(throws: AssemblywrightMacApprovedFeatureAuthoringError.invalidAuthenticatedStatus) {
+            try draft.encodeRequest(from: .init(phase: .masterOffline))
+        }
+    }
+
+    @Test("Approved-feature review freezes exact authenticated request and rejects incomplete or stale snapshots")
+    func approvedFeaturePreparationFreezesExactAuthenticatedRequest() throws {
+        let draft = sampleApprovedFeatureDraft()
+        let status = try approvedFeatureAuthoringStatus()
+        let prepared = try draft.prepareRequest(from: status)
+
+        #expect(prepared.draft == draft)
+        #expect(prepared.deviceID == "22222222-2222-4222-8222-222222222222")
+        #expect(prepared.connectionEpoch == 91)
+        #expect(prepared.expectedQueueRevision == 0)
+        #expect(prepared.ownerControlDesignationRevision == 1)
+        #expect(!prepared.emergencyPaused)
+        #expect(prepared.emergencyPauseRevision == 0)
+        let independentlyEncoded = try draft.encodeRequest(from: status)
+        #expect(prepared.requestData == independentlyEncoded)
+        #expect(prepared.exactRequestSHA256 == Array(SHA256.hash(data: prepared.requestData)))
+
+        let missingDevice = AssemblywrightDeveloperBridgeAppStatus(
+            phase: .connected,
+            connectionEpoch: status.connectionEpoch,
+            featureConveyor: status.featureConveyor,
+            ownerControl: status.ownerControl
+        )
+        #expect(throws: AssemblywrightMacApprovedFeatureAuthoringError.invalidAuthenticatedStatus) {
+            try draft.prepareRequest(from: missingDevice)
+        }
+
+        let staleOwnerControl = try AssemblywrightMacFeatureConveyorOwnerControlProjection
+            .decodeStrict(ownerControlData(queueRevision: 1, completeEvidence: true, active: true))
+        let staleSnapshot = AssemblywrightDeveloperBridgeAppStatus(
+            phase: .connected,
+            deviceID: status.deviceID,
+            masterEndpoint: status.masterEndpoint,
+            connectionEpoch: status.connectionEpoch,
+            featureConveyor: status.featureConveyor,
+            ownerControl: staleOwnerControl
+        )
+        #expect(throws: AssemblywrightMacApprovedFeatureAuthoringError.invalidAuthenticatedStatus) {
+            try draft.prepareRequest(from: staleSnapshot)
+        }
+    }
+
+    @Test("Approved-feature command receipt rejects every current-revision drift")
+    func approvedFeatureAuthoringReceiptRejectsDrift() throws {
+        let request = try sampleApprovedFeatureDraft().encodeRequest(
+            from: approvedFeatureAuthoringStatus()
+        )
+        let receipt = approvedFeatureAuthoringReceiptData(request: request)
+        _ = try AssemblywrightMacFeatureConveyorApprovedFeatureDraft.validateCommandReceipt(
+            receipt, requestData: request
+        )
+        for key in [
+            "specification_revision", "lifecycle_revision", "queue_revision",
+            "owner_control_designation_revision", "emergency_pause_revision"
+        ] {
+            var object = try #require(
+                JSONSerialization.jsonObject(with: receipt) as? [String: Any]
+            )
+            object[key] = (object[key] as! NSNumber).uint64Value + 1
+            let drifted = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+            #expect(throws: AssemblywrightMacApprovedFeatureAuthoringError.invalidReceipt) {
+                try AssemblywrightMacFeatureConveyorApprovedFeatureDraft.validateCommandReceipt(
+                    drifted, requestData: request
+                )
+            }
+        }
+        let duplicate = Data(
+            String(data: receipt, encoding: .utf8)!.replacingOccurrences(
+                of: "\"schema_version\":1",
+                with: "\"schema_version\":1,\"schema_version\":1"
+            ).utf8
+        )
+        #expect(throws: AssemblywrightMacApprovedFeatureAuthoringError.invalidReceipt) {
+            try AssemblywrightMacFeatureConveyorApprovedFeatureDraft.validateCommandReceipt(
+                duplicate, requestData: request
+            )
+        }
+    }
+
     @Test("Activation projection strictly accepts all-six, partial, and active evidence states")
     func activationProjectionStrictStates() throws {
         let ready = try AssemblywrightMacFeatureConveyorOwnerControlProjection.decodeStrict(
@@ -2285,6 +2547,80 @@ struct DeveloperBridgeTests {
         try AssemblywrightMacFeatureConveyorActivationControl.validateCommandReceipt(
             output, requestData: request, action: .activation
         )
+    }
+
+    @Test("Foundation one-shot helper routes exact approved-feature argv, stdin, and receipt")
+    func foundationApprovedFeatureOneShotUsesExactProcessBoundary() async throws {
+        let request = try sampleApprovedFeatureDraft().encodeRequest(
+            from: approvedFeatureAuthoringStatus()
+        )
+        let receipt = approvedFeatureAuthoringReceiptData(request: request)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "assemblywright-approved-feature-command-\(UUID().uuidString)", isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let executable = directory.appendingPathComponent("bridge-fixture")
+        let capturedInput = directory.appendingPathComponent("captured-input")
+        let receiptText = try #require(String(data: receipt, encoding: .utf8))
+        let script = """
+        #!/bin/sh
+        test "$#" -eq 3 && test "$1" = feature-conveyor \
+          && test "$2" = approve-and-enqueue && test "$3" = --confirm || exit 64
+        /bin/cat > '\(capturedInput.path)'
+        printf '%s\\n' '\(receiptText)'
+        """
+        try Data(script.utf8).write(to: executable, options: .atomic)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700], ofItemAtPath: executable.path
+        )
+        let validated = AssemblywrightDeveloperBridgeValidatedExecutable(
+            executableURL: executable,
+            teamIdentifier: "ABCDEFGHIJ",
+            codeRequirement: "anchor apple generic",
+            cdHash: Data(repeating: 0x11, count: 20)
+        )
+        let output = try await FoundationAssemblywrightDeveloperBridgeProcessLauncher(
+            runningProcessValidator: FakeBridgeRunningProcessValidator()
+        ).runCommand(
+            executable: validated,
+            arguments: AssemblywrightDeveloperBridgeProcessLifecycle
+                .approvedFeatureEnqueueArguments,
+            input: request
+        )
+
+        #expect(try Data(contentsOf: capturedInput) == request)
+        #expect(output == receipt)
+        _ = try AssemblywrightMacFeatureConveyorApprovedFeatureDraft.validateCommandReceipt(
+            output, requestData: request
+        )
+    }
+
+    @Test("Foundation one-shot helper rejects near-miss approved-feature commands locally")
+    func foundationApprovedFeatureOneShotAllowlistIsExact() async throws {
+        let request = try sampleApprovedFeatureDraft().encodeRequest(
+            from: approvedFeatureAuthoringStatus()
+        )
+        let validated = AssemblywrightDeveloperBridgeValidatedExecutable(
+            executableURL: URL(fileURLWithPath: "/tmp/should-not-launch"),
+            teamIdentifier: "ABCDEFGHIJ",
+            codeRequirement: "anchor apple generic",
+            cdHash: Data(repeating: 0x11, count: 20)
+        )
+        let launcher = FoundationAssemblywrightDeveloperBridgeProcessLauncher(
+            runningProcessValidator: FakeBridgeRunningProcessValidator()
+        )
+        for arguments in [
+            ["feature-conveyor", "approve-and-enqueue"],
+            ["feature-conveyor", "approve-and-enqueue", "--confirm", "extra"],
+            ["feature-conveyor", "enqueue", "--confirm"]
+        ] {
+            await #expect(throws: AssemblywrightDeveloperBridgeProcessError.invalidSnapshot) {
+                _ = try await launcher.runCommand(
+                    executable: validated, arguments: arguments, input: request
+                )
+            }
+        }
     }
 
     @Test("One-shot helper reaps a child that closes stdout and hangs")
@@ -3827,6 +4163,334 @@ struct DeveloperBridgeTests {
         #expect(await launcher.commandSawStoppedMonitor)
         #expect(lifecycle.ownerActionErrorCode == "invalid_helper_snapshot")
         #expect(await launcher.launchCount == 2)
+        await lifecycle.stop()
+    }
+
+    @MainActor
+    @Test("Approved-feature enqueue reaps observation, validates one receipt, and restarts")
+    func approvedFeatureLifecycleSerializesOneShotAndRestarts() async {
+        let line = authenticatedSnapshotData(
+            connectionEpoch: 44,
+            ownerControl: ownerControlData(completeEvidence: true, active: true)
+        )
+        let first = FakeBridgeProcessSession(lines: [line])
+        let restarted = FakeBridgeProcessSession(lines: [line])
+        let launcher = FakeBridgeProcessLauncher(session: first, restartSession: restarted)
+        let lifecycle = AssemblywrightDeveloperBridgeProcessLifecycle(
+            configuration: .init(environment: [
+                AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
+                    "/tmp/assemblywright-mac-bridge",
+                AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
+                    "ABCDEFGHIJ"
+            ]),
+            validator: FakeBridgeExecutableValidator(),
+            launcher: launcher
+        )
+        lifecycle.start()
+        for _ in 0 ..< 100 where lifecycle.status.ownerControl == nil { await Task.yield() }
+
+        let prepared = try! sampleApprovedFeatureDraft().prepareRequest(from: lifecycle.status)
+        await lifecycle.performApprovedFeatureEnqueue(prepared)
+        for _ in 0 ..< 100 where await launcher.launchCount < 2 { await Task.yield() }
+
+        #expect(await launcher.commandSawStoppedMonitor)
+        #expect(await launcher.commands.count == 1)
+        #expect(await launcher.commands.first?.0
+            == AssemblywrightDeveloperBridgeProcessLifecycle.approvedFeatureEnqueueArguments)
+        #expect(lifecycle.approvedFeatureReceipt?.status == "queued")
+        #expect(lifecycle.pendingApprovedFeatureRecovery == nil)
+        #expect(lifecycle.ownerActionErrorCode == nil)
+        #expect(await launcher.launchCount == 2)
+        await lifecycle.stop()
+    }
+
+    @MainActor
+    @Test("Monitor update between review and confirmation cannot change frozen enqueue bytes")
+    func approvedFeatureLifecycleUsesReviewFrozenBytesAfterMonitorUpdate() async throws {
+        let draft = sampleApprovedFeatureDraft()
+        let reviewStatus = try approvedFeatureAuthoringStatus()
+        let prepared = try draft.prepareRequest(from: reviewStatus)
+        let updatedLine = authenticatedSnapshotData(
+            connectionEpoch: 92,
+            featureConveyor: readyFeatureConveyorData(),
+            ownerControl: ownerControlData(
+                queueRevision: 1, completeEvidence: true, active: true
+            )
+        )
+        let launcher = FakeBridgeProcessLauncher(
+            session: FakeBridgeProcessSession(lines: [updatedLine]),
+            restartSession: FakeBridgeProcessSession(lines: [updatedLine])
+        )
+        let lifecycle = approvedFeatureLifecycle(launcher: launcher)
+        lifecycle.start()
+        for _ in 0 ..< 100 where lifecycle.status.ownerControl?.queueRevision != 1 {
+            await Task.yield()
+        }
+        #expect(lifecycle.status.connectionEpoch == 92)
+
+        await lifecycle.performApprovedFeatureEnqueue(prepared)
+        for _ in 0 ..< 100 where await launcher.launchCount < 2 { await Task.yield() }
+        let commands = await launcher.commands
+        let sent = try #require(commands.first?.1)
+        let sentObject = try #require(
+            JSONSerialization.jsonObject(with: sent) as? [String: Any]
+        )
+
+        #expect(commands.count == 1)
+        #expect(sent == prepared.requestData)
+        #expect(Array(SHA256.hash(data: sent)) == prepared.exactRequestSHA256)
+        #expect((sentObject["expected_queue_revision"] as? NSNumber)?.uint64Value == 0)
+        #expect(lifecycle.status.ownerControl?.queueRevision == 1)
+        #expect(lifecycle.approvedFeatureReceipt?.queueRevision == 1)
+        #expect(lifecycle.ownerActionErrorCode == nil)
+        await lifecycle.stop()
+    }
+
+    @MainActor
+    @Test("Approved-feature receipt rejection fails closed and still restarts observation")
+    func approvedFeatureLifecycleRejectsReceiptDriftAndRestarts() async {
+        let line = authenticatedSnapshotData(
+            connectionEpoch: 44,
+            ownerControl: ownerControlData(completeEvidence: true, active: true)
+        )
+        let first = FakeBridgeProcessSession(lines: [line])
+        let restarted = FakeBridgeProcessSession(lines: [line])
+        let launcher = FakeBridgeProcessLauncher(
+            session: first,
+            restartSession: restarted,
+            commandResponse: approvedFeatureOwnerControlReceiptData(queueRevision: 2)
+        )
+        let lifecycle = AssemblywrightDeveloperBridgeProcessLifecycle(
+            configuration: .init(environment: [
+                AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
+                    "/tmp/assemblywright-mac-bridge",
+                AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
+                    "ABCDEFGHIJ"
+            ]),
+            validator: FakeBridgeExecutableValidator(),
+            launcher: launcher
+        )
+        lifecycle.start()
+        for _ in 0 ..< 100 where lifecycle.status.ownerControl == nil { await Task.yield() }
+
+        let prepared = try! sampleApprovedFeatureDraft().prepareRequest(from: lifecycle.status)
+        await lifecycle.performApprovedFeatureEnqueue(prepared)
+        for _ in 0 ..< 100 where await launcher.launchCount < 2 { await Task.yield() }
+
+        #expect(lifecycle.approvedFeatureReceipt == nil)
+        #expect(lifecycle.ownerActionErrorCode == "approved_feature_reconciliation_required")
+        #expect(lifecycle.pendingApprovedFeatureRecovery?.draft == sampleApprovedFeatureDraft())
+        #expect(await launcher.launchCount == 2)
+        await lifecycle.stop()
+    }
+
+    @MainActor
+    @Test("Approved-feature command cancellation reaps and restores observation")
+    func approvedFeatureLifecycleCancellationRestartsObservation() async {
+        let line = authenticatedSnapshotData(
+            connectionEpoch: 44,
+            ownerControl: ownerControlData(completeEvidence: true, active: true)
+        )
+        let first = FakeBridgeProcessSession(lines: [line])
+        let restarted = FakeBridgeProcessSession(lines: [line])
+        let launcher = FakeBridgeProcessLauncher(
+            session: first,
+            restartSession: restarted,
+            commandDelay: .seconds(30)
+        )
+        let lifecycle = AssemblywrightDeveloperBridgeProcessLifecycle(
+            configuration: .init(environment: [
+                AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
+                    "/tmp/assemblywright-mac-bridge",
+                AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
+                    "ABCDEFGHIJ"
+            ]),
+            validator: FakeBridgeExecutableValidator(),
+            launcher: launcher
+        )
+        lifecycle.start()
+        for _ in 0 ..< 100 where lifecycle.status.ownerControl == nil { await Task.yield() }
+        let prepared = try! sampleApprovedFeatureDraft().prepareRequest(from: lifecycle.status)
+        let action = Task { await lifecycle.performApprovedFeatureEnqueue(prepared) }
+        for _ in 0 ..< 100 where await launcher.commands.isEmpty { await Task.yield() }
+        action.cancel()
+        await action.value
+        for _ in 0 ..< 100 where await launcher.launchCount < 2 { await Task.yield() }
+
+        #expect(lifecycle.approvedFeatureReceipt == nil)
+        #expect(lifecycle.ownerActionErrorCode == "approved_feature_reconciliation_required")
+        #expect(lifecycle.pendingApprovedFeatureRecovery?.draft == sampleApprovedFeatureDraft())
+        #expect(await launcher.launchCount == 2)
+        await lifecycle.stop()
+    }
+
+    @MainActor
+    @Test("Approved-feature enqueue is unavailable to fixture and local-coding identities")
+    func approvedFeatureLifecycleRejectsNonstandardIdentity() async {
+        let launcher = FakeBridgeProcessLauncher(
+            session: FakeBridgeProcessSession(lines: [])
+        )
+        let lifecycle = AssemblywrightDeveloperBridgeProcessLifecycle(
+            configuration: .init(environment: [
+                AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
+                    "/tmp/assemblywright-mac-bridge",
+                AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
+                    "ABCDEFGHIJ",
+                AssemblywrightDeveloperBridgeProcessConfiguration.agentExecutableEnvironmentKey:
+                    "/tmp/assemblywright-agent",
+                AssemblywrightDeveloperBridgeProcessConfiguration.agentDataDirectoryEnvironmentKey:
+                    "/tmp/assemblywright-agent-data",
+                AssemblywrightDeveloperBridgeProcessConfiguration
+                    .localCodingSnapshotsEnabledEnvironmentKey: "true"
+            ]),
+            validator: FakeBridgeExecutableValidator(),
+            launcher: launcher
+        )
+
+        let prepared = try! sampleApprovedFeatureDraft().prepareRequest(
+            from: approvedFeatureAuthoringStatus()
+        )
+        await lifecycle.performApprovedFeatureEnqueue(prepared)
+
+        #expect(lifecycle.ownerActionErrorCode == "approved_feature_enqueue_rejected")
+        #expect(await launcher.commands.isEmpty)
+        #expect(await launcher.launchCount == 0)
+    }
+
+    @MainActor
+    @Test("Exact enqueue reconciliation reuses frozen bytes and clears only on strict success")
+    func approvedFeatureLifecycleReconcilesExactFrozenRequest() async {
+        let line = authenticatedSnapshotData(
+            connectionEpoch: 44,
+            ownerControl: ownerControlData(completeEvidence: true, active: true)
+        )
+        let first = FakeBridgeProcessSession(lines: [line])
+        let restarted = FakeBridgeProcessSession(lines: [line])
+        let launcher = FakeBridgeProcessLauncher(
+            session: first,
+            restartSession: restarted,
+            commandFailures: 1
+        )
+        let lifecycle = approvedFeatureLifecycle(launcher: launcher)
+        lifecycle.start()
+        for _ in 0 ..< 100 where lifecycle.status.ownerControl == nil { await Task.yield() }
+        let draft = sampleApprovedFeatureDraft()
+
+        let prepared = try! draft.prepareRequest(from: lifecycle.status)
+        await lifecycle.performApprovedFeatureEnqueue(prepared)
+        let frozen = lifecycle.pendingApprovedFeatureRecovery
+        #expect(frozen?.draft == draft)
+        #expect(frozen?.exactRequestSHA256.count == 32)
+
+        await lifecycle.reconcilePendingApprovedFeatureEnqueue()
+        for _ in 0 ..< 100 where await launcher.launchCount < 3 { await Task.yield() }
+        let commands = await launcher.commands
+
+        #expect(commands.count == 2)
+        #expect(commands[0].0 == AssemblywrightDeveloperBridgeProcessLifecycle
+            .approvedFeatureEnqueueArguments)
+        #expect(commands[0].1 == commands[1].1)
+        #expect(lifecycle.approvedFeatureReceipt?.featureID == draft.featureID)
+        #expect(lifecycle.pendingApprovedFeatureRecovery == nil)
+        #expect(lifecycle.ownerActionErrorCode == nil)
+        await lifecycle.stop()
+    }
+
+    @MainActor
+    @Test("Failed exact enqueue reconciliation retains frozen bytes")
+    func approvedFeatureLifecycleRetainsRecoveryAfterReconciliationFailure() async {
+        let line = authenticatedSnapshotData(
+            connectionEpoch: 44,
+            ownerControl: ownerControlData(completeEvidence: true, active: true)
+        )
+        let launcher = FakeBridgeProcessLauncher(
+            session: FakeBridgeProcessSession(lines: [line]),
+            restartSession: FakeBridgeProcessSession(lines: [line]),
+            commandFailures: 2
+        )
+        let lifecycle = approvedFeatureLifecycle(launcher: launcher)
+        lifecycle.start()
+        for _ in 0 ..< 100 where lifecycle.status.ownerControl == nil { await Task.yield() }
+
+        let prepared = try! sampleApprovedFeatureDraft().prepareRequest(from: lifecycle.status)
+        await lifecycle.performApprovedFeatureEnqueue(prepared)
+        let original = lifecycle.pendingApprovedFeatureRecovery
+        await lifecycle.reconcilePendingApprovedFeatureEnqueue()
+        let commands = await launcher.commands
+
+        #expect(commands.count == 2)
+        #expect(commands[0].1 == commands[1].1)
+        #expect(lifecycle.pendingApprovedFeatureRecovery == original)
+        #expect(lifecycle.approvedFeatureReceipt == nil)
+        #expect(lifecycle.ownerActionErrorCode == "approved_feature_reconciliation_required")
+        await lifecycle.stop()
+    }
+
+    @MainActor
+    @Test("Cancelled exact enqueue reconciliation retains frozen bytes")
+    func approvedFeatureLifecycleRetainsRecoveryAfterReconciliationCancellation() async {
+        let line = authenticatedSnapshotData(
+            connectionEpoch: 44,
+            ownerControl: ownerControlData(completeEvidence: true, active: true)
+        )
+        let launcher = FakeBridgeProcessLauncher(
+            session: FakeBridgeProcessSession(lines: [line]),
+            restartSession: FakeBridgeProcessSession(lines: [line]),
+            commandFailures: 1,
+            commandDelays: [.zero, .seconds(30)]
+        )
+        let lifecycle = approvedFeatureLifecycle(launcher: launcher)
+        lifecycle.start()
+        for _ in 0 ..< 100 where lifecycle.status.ownerControl == nil { await Task.yield() }
+        let prepared = try! sampleApprovedFeatureDraft().prepareRequest(from: lifecycle.status)
+        await lifecycle.performApprovedFeatureEnqueue(prepared)
+        let original = lifecycle.pendingApprovedFeatureRecovery
+
+        let reconciliation = Task {
+            await lifecycle.reconcilePendingApprovedFeatureEnqueue()
+        }
+        for _ in 0 ..< 100 where await launcher.commands.count < 2 { await Task.yield() }
+        reconciliation.cancel()
+        await reconciliation.value
+
+        #expect(lifecycle.pendingApprovedFeatureRecovery == original)
+        #expect(lifecycle.approvedFeatureReceipt == nil)
+        #expect(lifecycle.ownerActionErrorCode == "approved_feature_reconciliation_required")
+        await lifecycle.stop()
+    }
+
+    @MainActor
+    @Test("Pending exact enqueue recovery blocks every new draft")
+    func approvedFeatureLifecycleBlocksNewSubmissionDuringRecovery() async {
+        let line = authenticatedSnapshotData(
+            connectionEpoch: 44,
+            ownerControl: ownerControlData(completeEvidence: true, active: true)
+        )
+        let launcher = FakeBridgeProcessLauncher(
+            session: FakeBridgeProcessSession(lines: [line]),
+            restartSession: FakeBridgeProcessSession(lines: [line]),
+            commandFailures: 1
+        )
+        let lifecycle = approvedFeatureLifecycle(launcher: launcher)
+        lifecycle.start()
+        for _ in 0 ..< 100 where lifecycle.status.ownerControl == nil { await Task.yield() }
+        let original = sampleApprovedFeatureDraft()
+        let originalPrepared = try! original.prepareRequest(from: lifecycle.status)
+        await lifecycle.performApprovedFeatureEnqueue(originalPrepared)
+        let frozen = lifecycle.pendingApprovedFeatureRecovery
+        let different = sampleApprovedFeatureDraft(
+            featureID: UUID(uuidString: "dddddddd-dddd-4ddd-8ddd-dddddddddddd")!
+        )
+
+        let differentPrepared = try! different.prepareRequest(
+            from: approvedFeatureAuthoringStatus()
+        )
+        await lifecycle.performApprovedFeatureEnqueue(differentPrepared)
+
+        #expect(await launcher.commands.count == 1)
+        #expect(lifecycle.pendingApprovedFeatureRecovery == frozen)
+        #expect(lifecycle.pendingApprovedFeatureRecovery?.draft == original)
+        #expect(lifecycle.ownerActionErrorCode == "approved_feature_reconciliation_required")
         await lifecycle.stop()
     }
 
@@ -5795,6 +6459,91 @@ private func approvedFeatureOwnerControlReceiptData(queueRevision: UInt64 = 1) -
         "status": "queued"
     ]
     return try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+}
+
+private func approvedFeatureAuthoringStatus(
+    queueRevision: UInt64 = 0,
+    emergencyPaused: Bool = false,
+    active: Bool = true
+) throws -> AssemblywrightDeveloperBridgeAppStatus {
+    let featureConveyor = emergencyPaused ? pausedFeatureConveyorData() : validFeatureConveyorData()
+    return try AssemblywrightDeveloperBridgeProcessLifecycle.status(
+        from: authenticatedSnapshotData(
+            connectionEpoch: 91,
+            emergencyPaused: emergencyPaused,
+            featureConveyor: featureConveyor,
+            ownerControl: ownerControlData(
+                queueRevision: queueRevision,
+                emergencyPaused: emergencyPaused,
+                emergencyPauseRevision: emergencyPaused ? 1 : 0,
+                completeEvidence: true,
+                active: active
+            )
+        )
+    )
+}
+
+@MainActor
+private func approvedFeatureLifecycle(
+    launcher: FakeBridgeProcessLauncher
+) -> AssemblywrightDeveloperBridgeProcessLifecycle {
+    AssemblywrightDeveloperBridgeProcessLifecycle(
+        configuration: .init(environment: [
+            AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
+                "/tmp/assemblywright-mac-bridge",
+            AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
+                "ABCDEFGHIJ"
+        ]),
+        validator: FakeBridgeExecutableValidator(),
+        launcher: launcher
+    )
+}
+
+private func sampleApprovedFeatureDraft(
+    featureID: UUID = UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")!,
+    manifest: AssemblywrightMacApprovedFeatureManifest = .init(
+        acceptance: ["acceptance_1"],
+        outcome: "Ship bounded owner feature",
+        allowedPaths: ["Sources/App.swift"]
+    ),
+    designSHA256: [UInt8] = Array(repeating: 0x22, count: 32),
+    providerID: String = "openai.codex",
+    modelID: String = "gpt-5.6-sol",
+    dependencies: [UUID] = []
+) -> AssemblywrightMacFeatureConveyorApprovedFeatureDraft {
+    AssemblywrightMacFeatureConveyorApprovedFeatureDraft(
+        featureID: featureID,
+        repositoryID: UUID(uuidString: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")!,
+        specificationRevision: 1,
+        manifest: manifest,
+        designSHA256: designSHA256,
+        brainstormingSHA256: Array(repeating: 0x33, count: 32),
+        ownerApprovalSHA256: Array(repeating: 0x44, count: 32),
+        grants: .init(registration: 1, cloudDisclosure: 2, autonomousPublication: 3),
+        providerID: providerID,
+        modelID: modelID,
+        dependencies: dependencies
+    )
+}
+
+private func approvedFeatureAuthoringReceiptData(
+    request: Data,
+    queueRevisionOffset: UInt64 = 1
+) -> Data {
+    let object = try! JSONSerialization.jsonObject(with: request) as! [String: Any]
+    let specification = object["specification"] as! [String: Any]
+    let queueRevision = (object["expected_queue_revision"] as! NSNumber).uint64Value
+    let receipt: [String: Any] = [
+        "schema_version": 1,
+        "feature_id": specification["feature_id"]!,
+        "specification_revision": specification["revision"]!,
+        "lifecycle_revision": 1,
+        "queue_revision": queueRevision + queueRevisionOffset,
+        "owner_control_designation_revision": object["owner_control_designation_revision"]!,
+        "emergency_pause_revision": object["emergency_pause_revision"]!,
+        "status": "queued"
+    ]
+    return try! JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys])
 }
 
 private func activationReceiptData(request: Data) -> Data {

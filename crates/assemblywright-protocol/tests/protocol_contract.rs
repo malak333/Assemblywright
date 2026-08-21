@@ -252,6 +252,27 @@ fn feature_conveyor_owner_control_dtos_are_strict_bounded_and_independently_vers
 }
 
 #[test]
+fn swift_approved_feature_authoring_fixture_strictly_decodes_in_rust() {
+    let bytes = include_bytes!("fixtures/approved_feature_authoring_request.json");
+    let request = FeatureConveyorApprovedFeatureRequest::decode_frame(bytes)
+        .expect("production Swift authoring request must strict-decode in Rust");
+
+    assert_eq!(request.expected_queue_revision, 0);
+    assert_eq!(request.owner_control_designation_revision, 1);
+    assert_eq!(request.emergency_pause_revision, 0);
+    assert_eq!(
+        request.specification.feature_id,
+        fixed_uuid("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+    );
+    assert_eq!(request.specification.provider_id, "openai.codex");
+    assert_eq!(request.specification.model_id, "gpt-5.6-sol");
+    assert_eq!(
+        request.specification.manifest_sha256,
+        canonical_digest(&request.specification.manifest)
+    );
+}
+
+#[test]
 fn repository_grant_requests_are_strict_revision_bound_and_digest_only() {
     let repository_id = fixed_uuid("88888888-8888-4888-8888-888888888888");
     let valid = FeatureConveyorRepositoryGrantRequest {

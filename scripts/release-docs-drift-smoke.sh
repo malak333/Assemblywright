@@ -71,10 +71,12 @@ MAC_BRIDGE_KEYCHAIN="apps/mac/Sources/AssemblywrightMacCore/KeychainDeveloperIde
 MAC_BRIDGE_NETWORK="apps/mac/Sources/AssemblywrightMacCore/NetworkMTLSBridge.swift"
 MAC_BRIDGE_SUPERVISOR="apps/mac/Sources/AssemblywrightMacCore/DeveloperBridgeSupervisor.swift"
 MAC_OWNER_CONTROL="apps/mac/Sources/AssemblywrightMacCore/FeatureConveyorOwnerControl.swift"
+MAC_APPROVED_FEATURE_AUTHORING="apps/mac/Sources/AssemblywrightMacCore/FeatureConveyorApprovedFeatureAuthoring.swift"
 MAC_ACTIVATION_CONTROL="apps/mac/Sources/AssemblywrightMacCore/FeatureConveyorActivationControl.swift"
 MAC_BRIDGE_PROCESS="apps/mac/Sources/AssemblywrightMacCore/DeveloperBridgeProcessLifecycle.swift"
 MAC_EVENT_RELAY="apps/mac/Sources/AssemblywrightMacCore/DeveloperEventRelay.swift"
 MAC_APP="apps/mac/Sources/AssemblywrightMacApp/AssemblywrightMacApp.swift"
+MAC_APPROVED_FEATURE_VIEW="apps/mac/Sources/AssemblywrightMacApp/ApprovedFeatureAuthoringView.swift"
 MAC_BRIDGE_TESTS="apps/mac/Tests/AssemblywrightMacCoreTests/DeveloperBridgeTests.swift"
 MAC_APP_TESTS="apps/mac/Tests/AssemblywrightMacAppTests/AssemblywrightMacAppTests.swift"
 
@@ -595,6 +597,30 @@ require_text "conveyor read-only Mac presentation" "$MAC_APP" \
   "Guidance is not an approval or callable action"
 require_text "conveyor explicit signed-helper action" "$MAC_BRIDGE_CLI" \
   '"feature-conveyor", "approve-and-enqueue", "--confirm"'
+require_text "conveyor typed approved-feature authoring" "$MAC_APPROVED_FEATURE_AUTHORING" \
+  "AssemblywrightMacFeatureConveyorApprovedFeatureDraft"
+require_text "conveyor frozen prepared approved-feature request" "$MAC_APPROVED_FEATURE_AUTHORING" \
+  "AssemblywrightMacApprovedFeaturePreparedRequest"
+require_text "conveyor fixed authoring validation gate" "$MAC_APPROVED_FEATURE_AUTHORING" \
+  '"requirements_binding", "coverage", "focused_unit_tests", "native_e2e"'
+require_text "conveyor fixed supported review provider" "$MAC_APPROVED_FEATURE_AUTHORING" \
+  'expectedProviderID = "openai.codex"'
+require_text "conveyor fixed supported review model" "$MAC_APPROVED_FEATURE_AUTHORING" \
+  'expectedModelID = "gpt-5.6-sol"'
+require_text "conveyor app enqueue confirmation" "$MAC_APPROVED_FEATURE_VIEW" \
+  "Approve and enqueue this feature?"
+require_text "conveyor app no handwritten JSON" "$MAC_APPROVED_FEATURE_VIEW" \
+  "Author an approved feature"
+require_text "conveyor app immutable confirmation summary" "$MAC_APPROVED_FEATURE_VIEW" \
+  "ApprovedFeatureConfirmationSummary"
+require_text "conveyor lifecycle exact enqueue helper" "$MAC_BRIDGE_PROCESS" \
+  "approvedFeatureEnqueueArguments"
+require_text "conveyor lifecycle retained ambiguous-effect recovery" "$MAC_BRIDGE_PROCESS" \
+  "pendingApprovedFeatureRecovery"
+require_text "conveyor lifecycle explicit identical-request reconciliation" "$MAC_BRIDGE_PROCESS" \
+  "reconcilePendingApprovedFeatureEnqueue"
+require_text "conveyor authoritative exact enqueue replay" "$MASTER_CRATE" \
+  "exact_owner_bridge_enqueue_replay_tx"
 require_text "conveyor explicit signed-helper activation" "$MAC_BRIDGE_CLI" \
   '"feature-conveyor", "activation", "--confirm"'
 require_text "conveyor strict activation evidence" "$MAC_ACTIVATION_CONTROL" \

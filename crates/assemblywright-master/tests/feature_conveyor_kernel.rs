@@ -3825,6 +3825,333 @@ fn owner_bridge_enqueue_binds_designation_queue_pause_and_existing_approval_mech
     assert_eq!(kernel.feature_queue_revision().unwrap(), 1);
 }
 
+fn owner_bridge_replay_fixture(
+    database: &std::path::Path,
+) -> (
+    MasterKernel,
+    DeviceRegistration,
+    ApprovedFeatureSpecification,
+) {
+    let mut kernel = MasterKernel::open(database).unwrap();
+    let owner = bridge_registration("owner-bridge-replay");
+    kernel.register_device(&owner).unwrap();
+    kernel
+        .designate_owner_control_bridge(owner.device_id, 0, 10)
+        .unwrap();
+    let repository_id = Uuid::new_v4();
+    install_grants(&mut kernel, repository_id);
+    let feature = specification(Uuid::new_v4(), repository_id, vec![]);
+    kernel
+        .enqueue_approved_feature_from_owner_bridge(&feature, 0, 1, 0, &owner, 20)
+        .unwrap();
+    (kernel, owner, feature)
+}
+
+fn feature_enqueue_audit_count(database: &std::path::Path, feature_id: Uuid) -> i64 {
+    Connection::open(database)
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM feature_conveyor_audit
+             WHERE event_kind = 'feature_enqueued' AND feature_id = ?1",
+            [feature_id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap()
+}
+
+#[test]
+fn owner_bridge_enqueue_exact_lost_receipt_replay_returns_original_without_mutation() {
+    let directory = tempdir().unwrap();
+    let database = directory.path().join("master.sqlite3");
+    let (mut kernel, owner, feature) = owner_bridge_replay_fixture(&database);
+    let original = kernel.feature_snapshot(feature.feature_id).unwrap();
+    assert_eq!(
+        feature_enqueue_audit_count(&database, feature.feature_id),
+        1
+    );
+    let audit: String = Connection::open(&database)
+        .unwrap()
+        .query_row(
+            "SELECT redacted_metadata_json FROM feature_conveyor_audit
+             WHERE event_kind = 'feature_enqueued' AND feature_id = ?1",
+            [feature.feature_id.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(audit.contains("\"owner_control_registry_revision\":1"));
+    assert!(audit.contains("\"owner_control_designation_revision\":1"));
+    assert!(audit.contains("\"emergency_pause_revision\":0"));
+    assert!(audit.contains("\"owner_control_device_sha256\""));
+    assert!(audit.contains("\"owner_bridge_enqueue_request_sha256\""));
+    assert!(!audit.contains(&owner.device_id.0.to_string()));
+
+    let replayed = kernel
+        .enqueue_approved_feature_from_owner_bridge(&feature, 0, 1, 0, &owner, 999)
+        .unwrap();
+    assert_eq!(replayed, original);
+    assert_eq!(kernel.feature_queue_revision().unwrap(), 1);
+    assert_eq!(
+        feature_enqueue_audit_count(&database, feature.feature_id),
+        1
+    );
+
+    assert!(matches!(
+        kernel
+            .enqueue_approved_feature_from_owner_bridge(&feature, 1, 1, 0, &owner, 1_000)
+            .unwrap_err(),
+        MasterError::FeatureSpecificationImmutable
+    ));
+    assert_eq!(kernel.feature_queue_revision().unwrap(), 1);
+    assert_eq!(
+        feature_enqueue_audit_count(&database, feature.feature_id),
+        1
+    );
+}
+
+#[test]
+fn owner_bridge_enqueue_exact_lost_receipt_replay_preserves_dependency_binding() {
+    let directory = tempdir().unwrap();
+    let database = directory.path().join("master.sqlite3");
+    let mut kernel = MasterKernel::open(&database).unwrap();
+    let owner = bridge_registration("owner-bridge-dependent-replay");
+    kernel.register_device(&owner).unwrap();
+    kernel
+        .designate_owner_control_bridge(owner.device_id, 0, 10)
+        .unwrap();
+    let repository_id = Uuid::new_v4();
+    install_grants(&mut kernel, repository_id);
+    let dependency = specification(Uuid::new_v4(), repository_id, vec![]);
+    kernel.enqueue_approved_feature(&dependency, 0, 20).unwrap();
+    let feature = specification(Uuid::new_v4(), repository_id, vec![dependency.feature_id]);
+    let original = kernel
+        .enqueue_approved_feature_from_owner_bridge(&feature, 1, 1, 0, &owner, 21)
+        .unwrap();
+
+    let replayed = kernel
+        .enqueue_approved_feature_from_owner_bridge(&feature, 1, 1, 0, &owner, 999)
+        .unwrap();
+    assert_eq!(replayed, original);
+    assert_eq!(kernel.feature_queue_revision().unwrap(), 2);
+    assert_eq!(
+        feature_enqueue_audit_count(&database, feature.feature_id),
+        1
+    );
+}
+
+#[test]
+fn owner_bridge_enqueue_lost_receipt_replay_rejects_request_and_stored_binding_drift() {
+    type RequestMutation = Box<dyn Fn(&mut ApprovedFeatureSpecification)>;
+    let request_mutations: Vec<RequestMutation> = vec![
+        Box::new(|feature| feature.feature_id = Uuid::new_v4()),
+        Box::new(|feature| feature.revision += 1),
+        Box::new(|feature| feature.repository_id = Uuid::new_v4()),
+        Box::new(|feature| feature.manifest_sha256 = digest("different-manifest")),
+        Box::new(|feature| feature.design_sha256 = digest("different-design")),
+        Box::new(|feature| feature.brainstorming_sha256 = digest("different-brainstorming")),
+        Box::new(|feature| feature.owner_approval_sha256 = digest("different-approval")),
+        Box::new(|feature| feature.dependencies.push(Uuid::new_v4())),
+        Box::new(|feature| feature.provider_id = "different.review".to_string()),
+        Box::new(|feature| feature.model_id = "different-model".to_string()),
+        Box::new(|feature| {
+            feature.manifest["outcome"] = json!("different but valid outcome");
+            feature.manifest_sha256 =
+                Sha256::digest(canonical_manifest(&feature.manifest).as_bytes()).into();
+        }),
+    ];
+    for mutate in request_mutations {
+        let directory = tempdir().unwrap();
+        let database = directory.path().join("master.sqlite3");
+        let (mut kernel, owner, feature) = owner_bridge_replay_fixture(&database);
+        let mut drift = feature.clone();
+        mutate(&mut drift);
+        assert!(kernel
+            .enqueue_approved_feature_from_owner_bridge(&drift, 0, 1, 0, &owner, 30)
+            .is_err());
+        assert_eq!(kernel.feature_queue_revision().unwrap(), 1);
+        assert_eq!(
+            feature_enqueue_audit_count(&database, feature.feature_id),
+            1
+        );
+    }
+
+    for corrupt in [
+        "UPDATE feature_conveyor_features SET lifecycle_revision = 2 WHERE status = 'queued'",
+        "DELETE FROM feature_conveyor_queue",
+        "INSERT INTO feature_specification_revisions (
+           feature_id,revision,repository_id,canonical_manifest_json,manifest_sha256,
+           design_sha256,brainstorming_sha256,owner_approval_sha256,
+           registration_grant_revision,cloud_disclosure_grant_revision,
+           publication_grant_revision,provider_id,model_id,approved_at_ms
+         ) SELECT feature_id,2,repository_id,canonical_manifest_json,manifest_sha256,
+                  design_sha256,brainstorming_sha256,owner_approval_sha256,
+                  registration_grant_revision,cloud_disclosure_grant_revision,
+                  publication_grant_revision,provider_id,model_id,approved_at_ms
+           FROM feature_specification_revisions",
+        "INSERT INTO feature_conveyor_audit
+           (event_kind,feature_id,occurred_at_ms,redacted_metadata_json)
+         SELECT 'feature_enqueued',feature_id,21,'{}' FROM feature_conveyor_features",
+    ] {
+        let directory = tempdir().unwrap();
+        let database = directory.path().join("master.sqlite3");
+        let (mut kernel, owner, feature) = owner_bridge_replay_fixture(&database);
+        Connection::open(&database)
+            .unwrap()
+            .execute(corrupt, [])
+            .unwrap();
+        assert!(kernel
+            .enqueue_approved_feature_from_owner_bridge(&feature, 0, 1, 0, &owner, 30)
+            .is_err());
+        assert_eq!(kernel.feature_queue_revision().unwrap(), 1);
+    }
+}
+
+#[test]
+fn owner_bridge_enqueue_lost_receipt_replay_rejects_authority_and_queue_drift() {
+    {
+        let directory = tempdir().unwrap();
+        let database = directory.path().join("master.sqlite3");
+        let (mut kernel, owner, feature) = owner_bridge_replay_fixture(&database);
+        kernel.set_emergency_paused_at(true, 21).unwrap();
+        assert!(kernel
+            .enqueue_approved_feature_from_owner_bridge(&feature, 0, 1, 0, &owner, 30)
+            .is_err());
+        assert_eq!(
+            feature_enqueue_audit_count(&database, feature.feature_id),
+            1
+        );
+    }
+    {
+        let directory = tempdir().unwrap();
+        let database = directory.path().join("master.sqlite3");
+        let (mut kernel, owner, feature) = owner_bridge_replay_fixture(&database);
+        kernel.set_emergency_paused_at(true, 21).unwrap();
+        kernel.set_emergency_paused_at(false, 22).unwrap();
+        assert!(matches!(
+            kernel
+                .enqueue_approved_feature_from_owner_bridge(&feature, 0, 1, 2, &owner, 30)
+                .unwrap_err(),
+            MasterError::FeatureSpecificationImmutable
+        ));
+        assert_eq!(kernel.feature_queue_revision().unwrap(), 1);
+        assert_eq!(
+            feature_enqueue_audit_count(&database, feature.feature_id),
+            1
+        );
+    }
+    {
+        let directory = tempdir().unwrap();
+        let database = directory.path().join("master.sqlite3");
+        let (mut kernel, owner, feature) = owner_bridge_replay_fixture(&database);
+        let rebound = kernel
+            .designate_owner_control_bridge(owner.device_id, 1, 21)
+            .unwrap();
+        assert_eq!(rebound.designation_revision, 2);
+        assert!(matches!(
+            kernel
+                .enqueue_approved_feature_from_owner_bridge(&feature, 0, 2, 0, &owner, 30)
+                .unwrap_err(),
+            MasterError::FeatureSpecificationImmutable
+        ));
+        assert_eq!(kernel.feature_queue_revision().unwrap(), 1);
+        assert_eq!(
+            feature_enqueue_audit_count(&database, feature.feature_id),
+            1
+        );
+    }
+    {
+        let directory = tempdir().unwrap();
+        let database = directory.path().join("master.sqlite3");
+        let (mut kernel, owner, feature) = owner_bridge_replay_fixture(&database);
+        let other = bridge_registration("replacement-owner-bridge");
+        kernel.register_device(&other).unwrap();
+        kernel
+            .designate_owner_control_bridge(other.device_id, 1, 21)
+            .unwrap();
+        assert!(kernel
+            .enqueue_approved_feature_from_owner_bridge(&feature, 0, 1, 0, &owner, 30)
+            .is_err());
+        assert!(matches!(
+            kernel
+                .enqueue_approved_feature_from_owner_bridge(&feature, 0, 2, 0, &other, 31)
+                .unwrap_err(),
+            MasterError::FeatureSpecificationImmutable
+        ));
+        assert_eq!(kernel.feature_queue_revision().unwrap(), 1);
+        assert_eq!(
+            feature_enqueue_audit_count(&database, feature.feature_id),
+            1
+        );
+    }
+    {
+        let directory = tempdir().unwrap();
+        let database = directory.path().join("master.sqlite3");
+        let (mut kernel, owner, feature) = owner_bridge_replay_fixture(&database);
+        kernel
+            .record_repository_grant_revision(
+                &RepositoryGrantRevision {
+                    repository_id: feature.repository_id,
+                    kind: RepositoryGrantKind::Registration,
+                    revision: 2,
+                    scope_sha256: digest("replacement-scope"),
+                    owner_approval_sha256: digest("replacement-grant-approval"),
+                    expires_at_ms: None,
+                    revoked: false,
+                },
+                1,
+                0,
+                21,
+            )
+            .unwrap();
+        assert!(kernel
+            .enqueue_approved_feature_from_owner_bridge(&feature, 0, 1, 0, &owner, 30)
+            .is_err());
+        assert_eq!(
+            feature_enqueue_audit_count(&database, feature.feature_id),
+            1
+        );
+    }
+    {
+        let directory = tempdir().unwrap();
+        let database = directory.path().join("master.sqlite3");
+        let (mut kernel, owner, feature) = owner_bridge_replay_fixture(&database);
+        let later = specification(Uuid::new_v4(), feature.repository_id, vec![]);
+        kernel.enqueue_approved_feature(&later, 1, 21).unwrap();
+        assert!(matches!(
+            kernel
+                .enqueue_approved_feature_from_owner_bridge(&feature, 0, 1, 0, &owner, 30)
+                .unwrap_err(),
+            MasterError::StaleFeatureQueueRevision {
+                expected: 0,
+                found: 2
+            }
+        ));
+        assert_eq!(
+            feature_enqueue_audit_count(&database, feature.feature_id),
+            1
+        );
+    }
+}
+
+#[test]
+fn owner_bridge_enqueue_lost_receipt_replay_rejects_cancelled_lifecycle() {
+    let directory = tempdir().unwrap();
+    let database = directory.path().join("master.sqlite3");
+    let (mut kernel, owner, feature) = owner_bridge_replay_fixture(&database);
+    let claim = claim_feature(&mut kernel, &feature, 1, 21).unwrap();
+    let cancelled = kernel
+        .cancel_active_feature(feature.feature_id, claim.lifecycle_revision, 2, 0, 22)
+        .unwrap();
+    assert_eq!(cancelled.status, FeatureLifecycleStatus::Cancelled);
+    assert!(kernel
+        .enqueue_approved_feature_from_owner_bridge(&feature, 0, 1, 0, &owner, 30)
+        .is_err());
+    assert_eq!(kernel.feature_queue_revision().unwrap(), 2);
+    assert_eq!(
+        feature_enqueue_audit_count(&database, feature.feature_id),
+        1
+    );
+}
+
 fn assert_exact_object_keys(value: &Value, expected: &[&str]) {
     let object = value.as_object().expect("JSON object");
     let mut actual = object.keys().map(String::as_str).collect::<Vec<_>>();
