@@ -822,11 +822,30 @@ is not bundled inside the app. After health succeeds, the helper fetches the
 strictly validates and bounds it, and includes it only in authenticated app
 snapshots. The SwiftUI app renders queue state and guidance as compact read-only
 text; a malformed or drifted projection cancels the session and no stale status
-is retained. The app remains read-only. A separate explicit one-shot signed
-helper command accepts one bounded already-approved document on stdin only with
-`--confirm`, uses the standard Keychain identity to invoke the designated-owner
-route, strictly binds the redacted receipt, and closes the authenticated
-session on success or failure.
+is retained. Feature authoring is a separate explicit owner action: a typed
+SwiftUI form accepts only the fixed review-safe manifest fields, digest metadata,
+grant revisions, provider/model binding, and dependencies. It constructs the
+existing strict request without arbitrary JSON, binds the current authenticated
+queue, designation, and Emergency Pause revisions, and requires a second
+confirmation. The app then stops observation, revalidates the exact independently
+signed helper, and invokes only the one-shot
+`feature-conveyor approve-and-enqueue --confirm` command with bounded stdin.
+The helper uses the standard Keychain identity, strictly binds the redacted
+receipt, and closes the authenticated session on success or failure. Windows
+remains the sole canonical manifest-digest and queue authority. The form does
+not create grants or proof, access a repository, claim work, dispatch a worker,
+invoke a provider, publish, or activate orchestration. The first production
+authoring surface fixes the only provisioned review binding to `openai.codex` /
+`gpt-5.6-sol`, rejects embedded secret-shaped content before helper launch, and
+shows the frozen IDs, digest prefixes, grants, provider/model, dependencies,
+title, outcome, device/connection identity, queue/designation/pause revisions,
+and exact request SHA-256 at confirmation. If a response is lost and the enqueue may
+have committed, the app retains the exact request bytes only in memory and
+offers a separately confirmed reconciliation attempt; it never silently
+re-encodes or retries. Windows returns the original receipt without mutation
+only when the original queue revision plus every stored specification,
+dependency, lifecycle, designated device and registry revision, designation,
+pause, grant, and enqueue-audit binding remain exact.
 
 ### Shared local foundation
 

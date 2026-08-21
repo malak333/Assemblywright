@@ -639,7 +639,8 @@ executable changes as release evidence.
 | Feature Conveyor kernel, grant CAS/projection, owner designation, enqueue, snapshot claim, coding dispatch, and status | `cargo test -p assemblywright-master --test feature_conveyor_kernel` |
 | Master process E2E, including authenticated loopback grant/preflight/snapshot/dispatch/status/designation routes | `cargo test -p assemblywright-master --test master_process_e2e` |
 | Windows remote mTLS observer, designated-owner enqueue, owner-control projection, activation, and denial/success | `cargo test -p assemblywright-master --test remote_mtls_e2e remote_listener_requires_enrollment_tls13_and_channel_bound_identity -- --nocapture` |
-| Swift strict Feature Conveyor observer, one-shot owner action, and helper lifecycle | `swift test --disable-sandbox --package-path apps/mac --filter DeveloperBridgeTests` |
+| Swift strict Feature Conveyor observer, typed approved-feature authoring/enqueue, one-shot owner actions, and helper lifecycle | `swift test --disable-sandbox --package-path apps/mac --filter DeveloperBridgeTests` |
+| SwiftUI approved-feature form and production-Swift-to-strict-Rust authoring fixture | `swift test --disable-sandbox --package-path apps/mac --filter AssemblywrightMacAppTests` and `cargo test -p assemblywright-protocol swift_approved_feature_authoring_fixture_strictly_decodes_in_rust` |
 | Enrollment, two-phase capability rebind, and identity | `cargo test -p assemblywright-master --test enrollment_identity_e2e` |
 | Remote mTLS | `cargo test -p assemblywright-master --test remote_mtls_e2e` |
 | Windows snapshot-bound coding dispatch and bounded transfer mTLS/process E2E | `cargo test -p assemblywright-master --test remote_mtls_e2e remote_local_coding_dispatch_is_exporter_bound_exact_and_pause_dominant -- --nocapture` |
@@ -820,11 +821,19 @@ Deterministic cross-process coverage proves:
   The designated-owner POST is bound to the exact queue, designation, and pause
   revisions and reuses the manifest, grants, dependency, capacity, immutable-
   specification, and atomic-enqueue checks without claiming a lease. Swift tests
-  prove strict schema-v9 decoding, request ordering, exact digest shapes,
-  self-dependency rejection, server-authoritative canonical-digest handling,
-  redacted-receipt validation, fail-closed cancellation, authenticated snapshot
-  propagation, and read-only app presentation. The display labels do not
-  establish claimability or callable owner authority.
+  prove strict schema-v9 decoding, typed review-safe authoring, exact validation-
+  gate insertion, current-revision request binding, exact digest shapes,
+  duplicate/self-dependency/secret-shaped rejection, deterministic client
+  bytes, redacted-receipt validation, bounded real-process one-shot execution,
+  fail-closed cancellation, authenticated snapshot propagation, explicit UI
+  confirmation with frozen request bytes, authenticated revision tuple, and
+  request SHA-256, fixed provisioned provider/model,
+  identical-byte lost-receipt reconciliation, replay drift rejection, one-audit
+  idempotence, and observation restart. A shared fixture proves those exact
+  production Swift request bytes strict-decode and canonical-digest-validate in
+  Rust. Windows remains canonical-digest and queue authority; the app form does
+  not establish grant, claim, dispatch, repository, provider, publication, or
+  activation authority.
 - Enrollment identity: digest-only grants, signed-CSR issuance, expiry and
   replay denial, rotation, revocation, schema migration, two-phase pending
   capability rebind with replacement-key acknowledgement verification,

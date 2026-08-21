@@ -4427,7 +4427,41 @@ impl MasterKernel {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        require_queue_revision_tx(&tx, expected_queue_revision)?;
+        let current_queue_revision = feature_queue_revision_tx(&tx)?;
+        if current_queue_revision != expected_queue_revision {
+            let replay_queue_revision = expected_queue_revision.checked_add(1);
+            if let (
+                Some((registration, designation_revision, emergency_pause_revision)),
+                Some(replay_queue_revision),
+            ) = (owner_binding, replay_queue_revision)
+            {
+                if current_queue_revision == replay_queue_revision {
+                    require_owner_control_bridge_tx(&tx, registration, designation_revision)?;
+                    require_unpaused_revision_tx(&tx, emergency_pause_revision)?;
+                    require_grants_tx(
+                        &tx,
+                        specification.repository_id,
+                        specification.grants,
+                        now_ms,
+                    )?;
+                    if let Some(snapshot) = exact_owner_bridge_enqueue_replay_tx(
+                        &tx,
+                        specification,
+                        &canonical_manifest,
+                        expected_queue_revision,
+                        replay_queue_revision,
+                        (registration, designation_revision, emergency_pause_revision),
+                    )? {
+                        return Ok(snapshot);
+                    }
+                    return Err(MasterError::FeatureSpecificationImmutable);
+                }
+            }
+            return Err(MasterError::StaleFeatureQueueRevision {
+                expected: expected_queue_revision,
+                found: current_queue_revision,
+            });
+        }
         if let Some((registration, designation_revision, emergency_pause_revision)) = owner_binding
         {
             require_owner_control_bridge_tx(&tx, registration, designation_revision)?;
@@ -4533,26 +4567,19 @@ impl MasterKernel {
             )?;
         }
         let next_queue_revision = increment_queue_revision_tx(&tx, expected_queue_revision)?;
+        let audit_metadata = feature_enqueue_audit_metadata(
+            specification,
+            expected_queue_revision,
+            next_queue_revision,
+            i64_to_u64(position)?,
+            owner_binding,
+        )?;
         append_feature_audit_tx(
             &tx,
             "feature_enqueued",
             Some(specification.feature_id),
             now_ms,
-            serde_json::json!({
-                "specification_revision": specification.revision,
-                "queue_revision": next_queue_revision,
-                "queue_position": position,
-                "dependency_count": specification.dependencies.len(),
-                "manifest_digest_present": true,
-                "design_digest_present": true,
-                "brainstorming_digest_present": true,
-                "owner_approval_digest_present": true,
-                "registration_grant_revision": specification.grants.registration,
-                "cloud_disclosure_grant_revision": specification.grants.cloud_disclosure,
-                "publication_grant_revision": specification.grants.autonomous_publication,
-                "provider_snapshot_present": true,
-                "side_effect_executed": false
-            }),
+            audit_metadata,
         )?;
         tx.commit()?;
         self.feature_snapshot(specification.feature_id)
@@ -9697,24 +9724,7 @@ fn validate_review_disclosure_value(value: &Value) -> Result<(), MasterError> {
             }
         }
         Value::String(string) => {
-            let trimmed = string.trim();
-            let secret_shaped = trimmed.contains("-----BEGIN ")
-                || trimmed.to_ascii_lowercase().starts_with("bearer ")
-                || trimmed.to_ascii_lowercase().starts_with("basic ")
-                || trimmed.starts_with("ghp_")
-                || trimmed.starts_with("github_pat_")
-                || (trimmed.starts_with("sk-") && trimmed.len() >= 20)
-                || (trimmed.starts_with("AKIA") && trimmed.len() == 20)
-                || (trimmed.starts_with("eyJ")
-                    && trimmed.split('.').count() == 3
-                    && trimmed.len() >= 32)
-                || trimmed.split_once("://").is_some_and(|(_, authority)| {
-                    authority
-                        .split('/')
-                        .next()
-                        .is_some_and(|part| part.contains('@'))
-                });
-            if secret_shaped {
+            if contains_embedded_secret_shape(string.trim()) {
                 return Err(MasterError::InvalidFeatureConveyorInput(
                     "approved specification contains review-forbidden secret-shaped content"
                         .to_string(),
@@ -9724,6 +9734,324 @@ fn validate_review_disclosure_value(value: &Value) -> Result<(), MasterError> {
         Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
     Ok(())
+}
+
+fn contains_embedded_secret_shape(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    if lower.contains("-----begin ")
+        || lower.contains("bearer ")
+        || lower.contains("basic ")
+        || value.contains("ghp_")
+        || value.contains("github_pat_")
+        || contains_prefixed_token(value, "sk-", 17)
+        || contains_aws_access_key(value)
+        || contains_embedded_jwt(value)
+    {
+        return true;
+    }
+    value.match_indices("://").any(|(offset, _)| {
+        let authority = &value[offset + 3..];
+        let authority = authority
+            .split(|character: char| {
+                character.is_ascii_whitespace() || matches!(character, '/' | '?' | '#')
+            })
+            .next()
+            .unwrap_or_default();
+        authority.contains('@')
+    })
+}
+
+fn contains_prefixed_token(value: &str, prefix: &str, minimum_suffix: usize) -> bool {
+    value.match_indices(prefix).any(|(offset, _)| {
+        value[offset + prefix.len()..]
+            .bytes()
+            .take_while(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+            .count()
+            >= minimum_suffix
+    })
+}
+
+fn contains_aws_access_key(value: &str) -> bool {
+    value.match_indices("AKIA").any(|(offset, _)| {
+        value.as_bytes()[offset + 4..]
+            .iter()
+            .take(16)
+            .copied()
+            .filter(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
+            .count()
+            == 16
+    })
+}
+
+fn contains_embedded_jwt(value: &str) -> bool {
+    value.match_indices("eyJ").any(|(offset, _)| {
+        let candidate = &value[offset..];
+        let mut segments = candidate.splitn(3, '.');
+        let Some(header) = segments.next() else {
+            return false;
+        };
+        let Some(payload) = segments.next() else {
+            return false;
+        };
+        let Some(signature_and_suffix) = segments.next() else {
+            return false;
+        };
+        if !header
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+            || payload.is_empty()
+            || !payload
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        {
+            return false;
+        }
+        let signature_len = signature_and_suffix
+            .bytes()
+            .take_while(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+            .count();
+        signature_len > 0 && header.len() + payload.len() + signature_len + 2 >= 32
+    })
+}
+
+fn exact_owner_bridge_enqueue_replay_tx(
+    tx: &Transaction<'_>,
+    specification: &ApprovedFeatureSpecification,
+    canonical_manifest: &str,
+    original_expected_queue_revision: u64,
+    replay_queue_revision: u64,
+    owner_binding: (&DeviceRegistration, u64, u64),
+) -> Result<Option<FeatureSnapshot>, MasterError> {
+    let (registration, designation_revision, emergency_pause_revision) = owner_binding;
+    let specification_count: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM feature_specification_revisions WHERE feature_id = ?1",
+        [specification.feature_id.to_string()],
+        |row| row.get(0),
+    )?;
+    if specification_count != 1 {
+        return Ok(None);
+    }
+    let stored_specification = tx
+        .query_row(
+            "SELECT repository_id,canonical_manifest_json,manifest_sha256,design_sha256,
+                    brainstorming_sha256,owner_approval_sha256,
+                    registration_grant_revision,cloud_disclosure_grant_revision,
+                    publication_grant_revision,provider_id,model_id,approved_at_ms
+             FROM feature_specification_revisions
+             WHERE feature_id = ?1 AND revision = ?2",
+            params![
+                specification.feature_id.to_string(),
+                u64_to_i64(specification.revision)?
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                    row.get::<_, Vec<u8>>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                    row.get::<_, Vec<u8>>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, i64>(8)?,
+                    row.get::<_, String>(9)?,
+                    row.get::<_, String>(10)?,
+                    row.get::<_, i64>(11)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some(stored_specification) = stored_specification else {
+        return Ok(None);
+    };
+    if parse_uuid(&stored_specification.0)? != specification.repository_id
+        || stored_specification.1 != canonical_manifest
+        || stored_specification.2.as_slice() != specification.manifest_sha256
+        || stored_specification.3.as_slice() != specification.design_sha256
+        || stored_specification.4.as_slice() != specification.brainstorming_sha256
+        || stored_specification.5.as_slice() != specification.owner_approval_sha256
+        || i64_to_u64(stored_specification.6)? != specification.grants.registration
+        || i64_to_u64(stored_specification.7)? != specification.grants.cloud_disclosure
+        || i64_to_u64(stored_specification.8)? != specification.grants.autonomous_publication
+        || stored_specification.9 != specification.provider_id
+        || stored_specification.10 != specification.model_id
+    {
+        return Ok(None);
+    }
+    let approved_at_ms = i64_to_u64(stored_specification.11)?;
+
+    let stored_feature = tx
+        .query_row(
+            "SELECT f.current_specification_revision,f.status,f.lifecycle_revision,
+                    f.queue_position,f.effect_possible,f.created_at_ms,f.updated_at_ms,
+                    q.queue_position,l.lease_id
+             FROM feature_conveyor_features f
+             LEFT JOIN feature_conveyor_queue q ON q.feature_id = f.feature_id
+             LEFT JOIN feature_active_lease l ON l.feature_id = f.feature_id
+             WHERE f.feature_id = ?1",
+            [specification.feature_id.to_string()],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, Option<i64>>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some(stored_feature) = stored_feature else {
+        return Ok(None);
+    };
+    let queue_position = i64_to_u64(stored_feature.3)?;
+    let queue_row_position = stored_feature.7.map(i64_to_u64).transpose()?;
+    let maximum_queue_position: i64 = tx.query_row(
+        "SELECT COALESCE(MAX(queue_position),0) FROM feature_conveyor_queue",
+        [],
+        |row| row.get(0),
+    )?;
+    if i64_to_u64(stored_feature.0)? != specification.revision
+        || stored_feature.1 != FeatureLifecycleStatus::Queued.as_str()
+        || i64_to_u64(stored_feature.2)? != 1
+        || parse_stored_boolean(stored_feature.4, "feature effect_possible")?
+        || i64_to_u64(stored_feature.5)? != approved_at_ms
+        || i64_to_u64(stored_feature.6)? != approved_at_ms
+        || queue_row_position != Some(queue_position)
+        || i64_to_u64(maximum_queue_position)? != queue_position
+        || stored_feature.8.is_some()
+    {
+        return Ok(None);
+    }
+
+    let mut dependency_statement = tx.prepare(
+        "SELECT dependency_feature_id FROM feature_dependencies
+         WHERE feature_id = ?1 ORDER BY dependency_feature_id",
+    )?;
+    let stored_dependencies = dependency_statement
+        .query_map([specification.feature_id.to_string()], |row| {
+            row.get::<_, String>(0)
+        })?
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .map(|dependency| parse_uuid(&dependency))
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(dependency_statement);
+    let mut expected_dependencies = specification.dependencies.clone();
+    expected_dependencies.sort_unstable();
+    if stored_dependencies != expected_dependencies {
+        return Ok(None);
+    }
+
+    let mut audit_statement = tx.prepare(
+        "SELECT event_kind,occurred_at_ms,redacted_metadata_json
+         FROM feature_conveyor_audit WHERE feature_id = ?1 ORDER BY audit_id",
+    )?;
+    let audit_rows = audit_statement
+        .query_map([specification.feature_id.to_string()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(audit_statement);
+    let expected_audit = canonical_json(&feature_enqueue_audit_metadata(
+        specification,
+        original_expected_queue_revision,
+        replay_queue_revision,
+        queue_position,
+        Some((registration, designation_revision, emergency_pause_revision)),
+    )?)?;
+    if audit_rows.len() != 1
+        || audit_rows[0].0 != "feature_enqueued"
+        || i64_to_u64(audit_rows[0].1)? != approved_at_ms
+        || audit_rows[0].2 != expected_audit
+    {
+        return Ok(None);
+    }
+
+    Ok(Some(FeatureSnapshot {
+        feature_id: specification.feature_id,
+        specification_revision: specification.revision,
+        status: FeatureLifecycleStatus::Queued,
+        lifecycle_revision: 1,
+        queue_position,
+        active_lease_id: None,
+        effect_possible: false,
+    }))
+}
+
+fn feature_enqueue_audit_metadata(
+    specification: &ApprovedFeatureSpecification,
+    expected_queue_revision: u64,
+    queue_revision: u64,
+    queue_position: u64,
+    owner_binding: Option<(&DeviceRegistration, u64, u64)>,
+) -> Result<Value, MasterError> {
+    let mut metadata = serde_json::json!({
+        "specification_revision": specification.revision,
+        "queue_revision": queue_revision,
+        "queue_position": queue_position,
+        "dependency_count": specification.dependencies.len(),
+        "manifest_digest_present": true,
+        "design_digest_present": true,
+        "brainstorming_digest_present": true,
+        "owner_approval_digest_present": true,
+        "registration_grant_revision": specification.grants.registration,
+        "cloud_disclosure_grant_revision": specification.grants.cloud_disclosure,
+        "publication_grant_revision": specification.grants.autonomous_publication,
+        "provider_snapshot_present": true,
+        "side_effect_executed": false
+    });
+    if let Some((registration, designation_revision, emergency_pause_revision)) = owner_binding {
+        let device_id = registration.device_id.0.to_string();
+        let device_sha256 = lower_hex(&Sha256::digest(device_id.as_bytes()));
+        let request_binding = serde_json::json!({
+            "schema_version": 1,
+            "operation": "owner_bridge_enqueue",
+            "expected_queue_revision": expected_queue_revision,
+            "owner_control_device_id": device_id,
+            "owner_control_registry_revision": registration.registry_revision,
+            "owner_control_designation_revision": designation_revision,
+            "emergency_pause_revision": emergency_pause_revision,
+            "specification": specification
+        });
+        let request_sha256 = lower_hex(&Sha256::digest(
+            canonical_json(&request_binding)?.as_bytes(),
+        ));
+        let object = metadata.as_object_mut().ok_or_else(|| {
+            MasterError::InvalidStoredState(
+                "feature enqueue audit metadata was not an object".to_string(),
+            )
+        })?;
+        object.insert(
+            "owner_control_device_sha256".to_string(),
+            Value::String(device_sha256),
+        );
+        object.insert(
+            "owner_control_registry_revision".to_string(),
+            Value::from(registration.registry_revision),
+        );
+        object.insert(
+            "owner_control_designation_revision".to_string(),
+            Value::from(designation_revision),
+        );
+        object.insert(
+            "emergency_pause_revision".to_string(),
+            Value::from(emergency_pause_revision),
+        );
+        object.insert(
+            "owner_bridge_enqueue_request_sha256".to_string(),
+            Value::String(request_sha256),
+        );
+    }
+    Ok(metadata)
 }
 
 #[derive(Deserialize)]
@@ -13763,6 +14091,53 @@ mod feature_conveyor_unit_tests {
         invalid.manifest_sha256 =
             Sha256::digest(canonical_json(&invalid.manifest).unwrap().as_bytes()).into();
         assert_invalid_specification(&invalid);
+    }
+
+    #[test]
+    fn feature_conveyor_unit_specification_rejects_embedded_secret_shapes() {
+        let valid = valid_specification();
+        let forbidden = [
+            "prefix -----BEGIN PRIVATE KEY----- suffix",
+            "authorization: bEaReR abcdefghijklmnop",
+            "authorization: BaSiC dXNlcjpwYXNzd29yZA==",
+            "embedded ghp_123456789012345678901234567890123456 token",
+            "embedded github_pat_11AA22BB33CC44DD55EE66FF token",
+            "embedded sk-1234567890abcdefg secret",
+            "access key AKIA1234567890ABCDEF12 here",
+            "jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.signature1234 here",
+            "endpoint https://owner:password@example.invalid/path",
+        ];
+        for disclosure in forbidden {
+            let mut invalid = valid.clone();
+            invalid.manifest = json!({"acceptance": ["a"], "outcome": disclosure});
+            invalid.manifest_sha256 =
+                Sha256::digest(canonical_json(&invalid.manifest).unwrap().as_bytes()).into();
+            assert_invalid_specification(&invalid);
+        }
+    }
+
+    #[test]
+    fn feature_conveyor_unit_specification_allows_noncredential_prose() {
+        let valid = valid_specification();
+        for disclosure in [
+            "Use token-free authorization metadata",
+            "The basic-authentication lane remains disabled",
+            "The bearer-token header must be redacted",
+            "Reject the literal short example sk-example",
+            "Reject AWS access-key identifiers without including one",
+            "Semantic version 1.2.3 is not a JWT",
+            "Browse https://example.invalid/path for public documentation",
+            "A GitHub personal access token is prohibited",
+        ] {
+            let mut allowed = valid.clone();
+            allowed.manifest = json!({"acceptance": ["a"], "outcome": disclosure});
+            allowed.manifest_sha256 =
+                Sha256::digest(canonical_json(&allowed.manifest).unwrap().as_bytes()).into();
+            assert!(
+                validate_approved_specification(&allowed).is_ok(),
+                "{disclosure}"
+            );
+        }
     }
 
     #[test]

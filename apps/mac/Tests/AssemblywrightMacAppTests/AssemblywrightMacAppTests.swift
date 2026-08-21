@@ -102,6 +102,165 @@ struct AssemblywrightMacAppTests {
         #expect(blocked.evidenceDigests.allSatisfy { $0.contains("missing") })
     }
 
+    @Test("Approved-feature form creates a typed draft without handwritten JSON")
+    func approvedFeatureFormCreatesTypedDraft() throws {
+        let featureID = UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")!
+        let repositoryID = UUID(uuidString: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")!
+        var form = ApprovedFeatureAuthoringForm()
+        form.featureID = featureID.uuidString.uppercased()
+        form.repositoryID = repositoryID.uuidString.lowercased()
+        form.title = "Bounded authoring"
+        form.outcome = "Submit one owner-approved feature"
+        form.scope = "Mac owner interface only"
+        form.acceptance = "typed-request\nexplicit-confirmation"
+        form.allowedPaths = "apps/mac/Sources\napps/mac/Tests"
+        form.designSHA256 = String(repeating: "A1", count: 32)
+        form.brainstormingSHA256 = String(repeating: "b2", count: 32)
+        form.ownerApprovalSHA256 = String(repeating: "c3", count: 32)
+        form.assumptions = "Windows remains authoritative"
+        form.prohibitedData = "credentials\nraw brainstorming transcript"
+
+        let draft = try #require(form.draft())
+
+        #expect(draft.featureID == featureID)
+        #expect(draft.repositoryID == repositoryID)
+        #expect(draft.manifest.acceptance == ["typed-request", "explicit-confirmation"])
+        #expect(draft.manifest.allowedPaths == ["apps/mac/Sources", "apps/mac/Tests"])
+        #expect(draft.manifest.publicationChecks == ["release-local", "protocol-windows"])
+        #expect(draft.providerID == "openai.codex")
+        #expect(draft.modelID == "gpt-5.6-sol")
+        #expect(draft.designSHA256 == Array(repeating: 0xa1, count: 32))
+        #expect(try draft.canonicalManifestData().count > 0)
+    }
+
+    @Test("Production Swift authoring bytes match the Rust strict-decode fixture")
+    func approvedFeatureAuthoringMatchesRustFixture() throws {
+        let draft = try #require(validApprovedFeatureForm().draft())
+        let status = AssemblywrightDeveloperBridgeAppStatus(
+            phase: .connected,
+            featureConveyor: featureConveyorStatus(),
+            ownerControl: try ownerControlProjection()
+        )
+        let encoded = try draft.encodeRequest(from: status)
+        let fixtureURL = repositoryRootURL()
+            .appendingPathComponent(
+                "crates/assemblywright-protocol/tests/fixtures/approved_feature_authoring_request.json"
+            )
+        var fixture = try Data(contentsOf: fixtureURL)
+        if fixture.last == 0x0a { fixture.removeLast() }
+
+        #expect(encoded == fixture)
+    }
+
+    @Test("Approved-feature form rejects incomplete, duplicate, self-dependent, and secret-shaped input")
+    func approvedFeatureFormRejectsUnsafeInput() {
+        var form = validApprovedFeatureForm()
+        form.repositoryID = ""
+        #expect(form.draft() == nil)
+
+        form = validApprovedFeatureForm()
+        form.acceptance = "same\nsame"
+        #expect(form.draft() == nil)
+
+        form = validApprovedFeatureForm()
+        form.dependencies = form.featureID
+        #expect(form.draft() == nil)
+
+        form = validApprovedFeatureForm()
+        form.outcome = "Bearer this-is-secret-shaped"
+        #expect(form.draft() == nil)
+
+        form = validApprovedFeatureForm()
+        form.outcome = "Never include embedded ghp_12345678901234567890 here"
+        #expect(form.draft() == nil)
+
+        form = validApprovedFeatureForm()
+        form.outcome = "The redacted field contained bearer embedded-value"
+        #expect(form.draft() == nil)
+
+        form = validApprovedFeatureForm()
+        form.designSHA256 = String(repeating: "0", count: 64)
+        #expect(form.draft() == nil)
+    }
+
+    @Test("Approved-feature confirmation summarizes the exact bounded frozen draft")
+    func approvedFeatureConfirmationSummaryIsExactAndBounded() throws {
+        var form = validApprovedFeatureForm()
+        form.dependencies = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+        let draft = try #require(form.draft())
+        let prepared = try draft.prepareRequest(from: approvedFeatureReviewStatus())
+        let summary = try #require(
+            ApprovedFeatureConfirmationSummary(preparedRequest: prepared)
+        )
+
+        #expect(summary.featureID == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+        #expect(summary.repositoryID == "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+        #expect(summary.title == "Bounded authoring")
+        #expect(summary.outcome == "Submit one owner-approved feature")
+        #expect(summary.manifestSHA256.count == 64)
+        #expect(summary.grants.contains("registration r1"))
+        #expect(summary.providerModel == "openai.codex / gpt-5.6-sol")
+        #expect(summary.dependencyIDs == ["cccccccc-cccc-4ccc-8ccc-cccccccccccc"])
+        #expect(summary.designDigestPrefix == "111111111111")
+        #expect(summary.brainstormingDigestPrefix == "222222222222")
+        #expect(summary.ownerApprovalDigestPrefix == "333333333333")
+        #expect(summary.queueRevision == 0)
+        #expect(summary.ownerControlDesignationRevision == 1)
+        #expect(summary.deviceID == "22222222-2222-4222-8222-222222222222")
+        #expect(summary.connectionEpoch == 44)
+        #expect(!summary.emergencyPaused)
+        #expect(summary.emergencyPauseRevision == 0)
+        #expect(summary.exactRequestSHA256.count == 64)
+        #expect(summary.message.contains("Queue revision: 0"))
+        #expect(summary.message.contains("connection epoch 44"))
+        #expect(summary.message.utf8.count <= ApprovedFeatureConfirmationSummary.maximumMessageBytes)
+    }
+
+    @Test("Approved-feature review cannot open from incomplete paused or stale status")
+    func approvedFeatureReviewRequiresExactAuthenticatedSnapshot() throws {
+        let form = validApprovedFeatureForm()
+        let valid = try approvedFeatureReviewStatus()
+        #expect(form.preparedRequest(from: valid) != nil)
+        #expect(form.preparedRequest(from: .init(phase: .masterOffline)) == nil)
+
+        let missingDevice = AssemblywrightDeveloperBridgeAppStatus(
+            phase: .connected,
+            connectionEpoch: 44,
+            featureConveyor: featureConveyorStatus(),
+            ownerControl: try ownerControlProjection()
+        )
+        #expect(form.preparedRequest(from: missingDevice) == nil)
+        let paused = try approvedFeatureReviewStatus(emergencyPaused: true)
+        #expect(form.preparedRequest(from: paused) == nil)
+
+        let stale = AssemblywrightDeveloperBridgeAppStatus(
+            phase: .connected,
+            deviceID: "22222222-2222-4222-8222-222222222222",
+            connectionEpoch: 44,
+            featureConveyor: featureConveyorStatus(),
+            ownerControl: try ownerControlProjection(queueRevision: 1)
+        )
+        #expect(form.preparedRequest(from: stale) == nil)
+    }
+
+    @Test("Successful enqueue reset preserves repository routing but clears feature approval content")
+    func approvedFeatureFormResetPreservesRepositoryRoutingOnly() {
+        var form = validApprovedFeatureForm()
+        let previousFeatureID = form.featureID
+        let repositoryID = form.repositoryID
+
+        form.resetAfterSuccessfulEnqueue()
+
+        #expect(form.featureID != previousFeatureID)
+        #expect(form.repositoryID == repositoryID)
+        #expect(form.providerID == "openai.codex")
+        #expect(form.registrationGrantRevision == "1")
+        #expect(form.outcome.isEmpty)
+        #expect(form.acceptance.isEmpty)
+        #expect(form.designSHA256.isEmpty)
+        #expect(form.draft() == nil)
+    }
+
     @Test("Menu bar presentation maps every bridge lifecycle state")
     func menuBarPresentationMapsBridgeLifecycle() {
         let cases: [(AssemblywrightDeveloperBridgeAppPhase, String, String)] = [
@@ -161,9 +320,42 @@ struct AssemblywrightMacAppTests {
     }
 }
 
+private func validApprovedFeatureForm() -> ApprovedFeatureAuthoringForm {
+    var form = ApprovedFeatureAuthoringForm()
+    form.featureID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    form.repositoryID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+    form.title = "Bounded authoring"
+    form.outcome = "Submit one owner-approved feature"
+    form.acceptance = "typed-request"
+    form.designSHA256 = String(repeating: "11", count: 32)
+    form.brainstormingSHA256 = String(repeating: "22", count: 32)
+    form.ownerApprovalSHA256 = String(repeating: "33", count: 32)
+    return form
+}
+
+private func approvedFeatureReviewStatus(
+    emergencyPaused: Bool = false
+) throws -> AssemblywrightDeveloperBridgeAppStatus {
+    AssemblywrightDeveloperBridgeAppStatus(
+        phase: .connected,
+        deviceID: "22222222-2222-4222-8222-222222222222",
+        masterEndpoint: "100.64.23.14:7792",
+        connectionEpoch: 44,
+        featureConveyor: featureConveyorStatus(),
+        ownerControl: try ownerControlProjection(emergencyPaused: emergencyPaused)
+    )
+}
+
+private func repositoryRootURL() -> URL {
+    var url = URL(fileURLWithPath: #filePath)
+    for _ in 0 ..< 5 { url.deleteLastPathComponent() }
+    return url
+}
+
 private func ownerControlProjection(
     emergencyPaused: Bool = false,
-    completeEvidence: Bool = false
+    completeEvidence: Bool = false,
+    queueRevision: UInt64 = 0
 ) throws -> AssemblywrightMacFeatureConveyorOwnerControlProjection {
     let names = ["repository_gate_proof", "restricted_worker_live", "review_provider_live",
                  "github_publication_live", "restart_recovery_live", "mac_windows_control_event_streaming_live"]
@@ -177,7 +369,7 @@ private func ownerControlProjection(
     }
     let ready = !emergencyPaused && completeEvidence
     let object: [String: Any] = [
-        "schema_version": 1, "queue_revision": 0,
+        "schema_version": 1, "queue_revision": queueRevision,
         "emergency_paused": emergencyPaused, "emergency_pause_revision": emergencyPaused ? 1 : 0,
         "owner_control_designation_revision": 1, "activation_status": "inactive",
         "activation_id": NSNull(), "activation_ready": ready,

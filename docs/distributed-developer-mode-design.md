@@ -186,8 +186,18 @@ other roles, and is decoded into authenticated read-only Mac app state. It
   Emergency Pause revisions. The action appends an immutable queued feature
   with atomic redacted audit and does not claim, dispatch, execute, review,
   publish, or activate it. The signed Mac helper exposes this only through a
-  one-shot standard-profile `approve-and-enqueue --confirm` stdin command; the
-  app remains read-only. Separately, an owner-token loopback-only repository
+  one-shot standard-profile `approve-and-enqueue --confirm` stdin command. The
+  app's typed approved-feature form can construct that exact request and invoke
+  it only after explicit confirmation, signed-helper revalidation, and an
+  authenticated current revision snapshot; it creates no grant, proof, claim,
+  dispatch, provider, repository, publication, or activation authority.
+  The provisioned provider/model is fixed and displayed, embedded secret-shaped
+  text is rejected, and the confirmation summarizes the frozen bindings. An
+  ambiguous helper outcome may be reconciled only by a second confirmation that
+  resends identical in-memory request bytes; the Windows kernel returns the
+  original receipt only for an exact no-drift replay and never appends a second
+  enqueue audit.
+  Separately, an owner-token loopback-only repository
   preflight binds one canonical path/branch/HEAD scope to the exact current
   active registration grant and Emergency Pause revision. It runs only bounded
   filesystem-only identity observation of a standard local `.git` directory,

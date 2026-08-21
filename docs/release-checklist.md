@@ -30,7 +30,18 @@ Before starting a release pass, confirm the claim you intend to make.
   route, and that only its accepted, revalidated session can enqueue one strict,
   already-approved, queue/designation/pause-revision-bound specification. The
   signed helper action requires `--confirm`, bounded stdin, a strict redacted
-  receipt, and session close; the app remains read-only. Separately confirm the
+  receipt, and session close. Confirm the typed app authoring form accepts only
+  review-safe fields and explicit digest/grant/provider/dependency bindings,
+  inserts the exact validation gate, uses the current authenticated revisions,
+  requires a second confirmation, revalidates the helper after stopping
+  observation, and resumes observation only after strict receipt validation.
+  Confirm the frozen summary includes IDs, digest bindings, grants, fixed
+  provisioned provider/model, dependencies, title, and outcome; embedded token
+  patterns reject. Prove a lost receipt leaves an explicit in-memory recovery
+  action that resends identical bytes only after another confirmation, and that
+  Windows exact replay returns one original receipt with no second queue/audit
+  mutation while every drift case rejects. Windows must still recompute the
+  canonical manifest digest. Separately confirm the
   owner-token loopback repository-grant routes enforce contiguous compare-and-
   set and Emergency-Pause-revision binding, allow revocation while paused,
   expose only current digest metadata, and remain absent from enrolled-device

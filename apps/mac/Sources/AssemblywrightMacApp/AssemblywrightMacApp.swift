@@ -143,6 +143,8 @@ struct DeveloperBridgeStatusView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+
+            ApprovedFeatureAuthoringSection(model: model)
         }
         .formStyle(.grouped)
         .disabled(model.ownerActionInProgress)

@@ -29,6 +29,7 @@ flowchart LR
   Conveyor --> ConveyorSafety["Immutable approved specs and grants, strict CAS queue, one active lease, atomic redacted audit, and startup quarantine"]
   Conveyor --> Observer["Exact bounded status projection: local owner route plus accepted-session MacBridge-only remote GET"]
   Observer --> Helper
+  Observer --> Authoring["Feature 8 typed review-safe authoring plus explicit confirmation; no arbitrary JSON"]
   Conveyor --> OwnerDesignation["Nullable CAS owner-control bridge designation with atomic redacted audit"]
   Conveyor --> GrantControl["Loopback-only contiguous CAS repository-grant revisions and current digest projection"]
   GrantControl --> RepositoryPreflight["Owner-local filesystem-only identity preflight; path-free digest receipt and redacted audit"]
@@ -53,6 +54,8 @@ flowchart LR
   ReviewGateway --> Publishing["Strict approval only: reviewing to publishing"]
   ValidationGate --> ValidatorBoundary["Provisioned Windows runner: disposable candidate, deterministic checks, fixed offline commands"]
   OwnerDesignation --> OwnerAction["Exact designated non-fixture MacBridge-only approved-feature POST; queue insertion only"]
+  OwnerDesignation --> Authoring
+  Authoring --> Helper
   OwnerAction --> Helper
   Helper --> ControlStreamProof["Feature 6 owner-run proof: committed native relay, signed helper and agent, same-stream advancing durable cursor"]
   ControlStreamProof --> ProofReceipt["Path-free private receipt only; no admission or activation authority"]
@@ -154,7 +157,20 @@ one display-only next owner action. It does not determine claimability or
 `GET /v1/distributed/feature-conveyor/status` reuses the exact projection only
 after an accepted exporter-bound MacBridge session, denies other roles, and
 forwards no owner token. The Swift helper validates the exact schema-v9
-allowlist and the app displays it only while authenticated. A separate
+allowlist and the app displays it only while authenticated. Feature 8 adds a
+typed review-safe authoring form that binds that authenticated queue,
+designation, and pause snapshot to owner-entered proof/grant/provider/dependency
+metadata, inserts the fixed validation gate, and requires explicit confirmation.
+It accepts no arbitrary JSON and reaches only the pre-existing one-shot signed
+helper action after stopping observation and revalidating the helper. Windows
+recomputes the canonical manifest digest and remains the sole queue authority.
+The form adds no grant, proof, claim, dispatch, repository, provider,
+publication, or activation authority. The current reviewer binding is fixed,
+the confirmation displays the frozen bindings, and embedded secret patterns
+reject. A possibly lost receipt leaves only an in-memory exact request and a
+second confirmed reconciliation action; Windows returns the original receipt
+without mutation or another audit only while every original enqueue binding is
+unchanged. A separate
 owner-token-authenticated loopback grant surface records one strict contiguous
 compare-and-set digest-only revision and inspects current grant metadata for a
 repository. It is Emergency-Pause-revision bound, blocks active grants while

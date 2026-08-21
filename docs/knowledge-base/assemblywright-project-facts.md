@@ -262,8 +262,23 @@ an old one.
   dispatches, accesses a repository, invokes a provider/reviewer, uses Git, or
   publishes. The standard-profile signed helper exposes the action only as
   `feature-conveyor approve-and-enqueue --confirm` with bounded stdin, strict
-  recursive duplicate rejection, and a redacted bound receipt. The app remains
-  read-only.
+  recursive duplicate rejection, and a redacted bound receipt. Feature 8 adds a
+  typed SwiftUI authoring form rather than another authority path: it builds the
+  fixed review-safe manifest and exact request from owner-entered fields,
+  inserts the 13-command validation gate, binds the current authenticated
+  queue/designation/pause snapshot, then stops observation and revalidates the
+  independently signed helper before the explicit one-shot action. Swift emits
+  deterministic string-only manifest JSON for usability, but Windows still
+  recomputes the canonical digest and alone accepts the enqueue. The form
+  creates no grants or proof and has no claim, dispatch, repository, provider,
+  Git, publication, or activation authority. The first production form pins
+  `openai.codex` / `gpt-5.6-sol`, rejects embedded secret-shaped strings, and
+  displays the frozen approval bindings. If the helper loses a response, the
+  app blocks new submissions and retains identical request bytes only in memory
+  for another explicit confirmation. The Windows kernel replays the original
+  receipt without mutation or a second audit only under exact original
+  queue/specification/dependency/lifecycle/grant/designation/pause/audit state;
+  any drift rejects.
 - Repository-grant preparation is now supported only through the owner-token-
   authenticated Windows loopback `POST /v1/feature-conveyor/repository-grants`;
   current grant inspection uses
