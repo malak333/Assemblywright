@@ -972,10 +972,13 @@ release requirements, not optional UX guidance.
   nonzero digest shapes, accept only an exact redacted revision-bound receipt,
   and close the session after success or failure. Windows alone recomputes and
   validates the canonical manifest digest so Foundation and Rust number
-  serialization cannot create a second approval authority. The fixture profile
-  and the supervised app
-  monitor/relay modes must not invoke this action. The SwiftUI app may construct
-  the request only from typed review-safe manifest fields, explicit digest and
+  serialization cannot create a second approval authority. Every UUID-bearing
+  owner-control value re-encoded into the signed-helper snapshot must use
+  canonical lowercase text, and the app must continue to reject noncanonical
+  UUID text rather than weakening strict projection validation. The fixture
+  profile and the supervised app monitor/relay modes must not invoke this
+  action. The SwiftUI app may construct the request only from typed review-safe
+  manifest fields, explicit digest and
   grant revisions, provider/model, dependencies, and the current authenticated
   queue/designation/Emergency Pause snapshot. It must accept no arbitrary
   manifest JSON, require a second explicit owner confirmation, stop and reap

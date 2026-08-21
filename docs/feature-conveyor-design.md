@@ -162,6 +162,14 @@ returns the original receipt without another queue mutation or audit; drift
 rejects, and the app never automatically retries or rebuilds the request from a
 new snapshot.
 
+The observation path also has one exact serialization seam: Foundation's UUID
+encoder may emit uppercase hexadecimal even after strict Windows projection
+decoding. Every UUID-bearing owner-control type therefore custom-encodes
+lowercase canonical text before the signed helper emits its snapshot. Native
+coverage must pass an admitted-evidence projection containing alphabetic UUID
+digits through production snapshot encoding and the app lifecycle's strict
+decoder; testing digit-only UUIDs does not exercise this boundary.
+
 The following paragraph records the historical protocol-v4/schema-v12 worker.
 Master schema v10 added the first separate metadata-only coding-dispatch
 admission kernel. The owner-token loopback-only

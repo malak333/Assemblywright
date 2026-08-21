@@ -829,11 +829,14 @@ Deterministic cross-process coverage proves:
   confirmation with frozen request bytes, authenticated revision tuple, and
   request SHA-256, fixed provisioned provider/model,
   identical-byte lost-receipt reconciliation, replay drift rejection, one-audit
-  idempotence, and observation restart. A shared fixture proves those exact
-  production Swift request bytes strict-decode and canonical-digest-validate in
-  Rust. Windows remains canonical-digest and queue authority; the app form does
-  not establish grant, claim, dispatch, repository, provider, publication, or
-  activation authority.
+  idempotence, and observation restart. The signed-helper snapshot test carries
+  alphabetic admitted-evidence UUIDs through production snapshot encoding and
+  the app lifecycle's strict decoder, while unit cases reject uppercase
+  evidence, activation, and active-feature UUID text. A shared fixture proves
+  those exact production Swift request bytes strict-decode and
+  canonical-digest-validate in Rust. Windows remains canonical-digest and queue
+  authority; the app form does not establish grant, claim, dispatch,
+  repository, provider, publication, or activation authority.
 - Enrollment identity: digest-only grants, signed-CSR issuance, expiry and
   replay denial, rotation, revocation, schema migration, two-phase pending
   capability rebind with replacement-key acknowledgement verification,
