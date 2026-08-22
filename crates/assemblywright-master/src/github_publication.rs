@@ -1751,11 +1751,11 @@ pub fn credential_git_process_boundary(
     let work_tree = repository.to_path_buf();
     #[cfg(windows)]
     {
-        return Ok((
+        Ok((
             windows_git_process_path(&credential_cwd)?,
             windows_git_process_path(&git_dir)?,
             windows_git_process_path(&work_tree)?,
-        ));
+        ))
     }
     #[cfg(not(windows))]
     Ok((credential_cwd, git_dir, work_tree))
