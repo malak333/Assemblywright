@@ -181,7 +181,11 @@ Before starting a release pass, confirm the claim you intend to make.
   canonical gate, plus the focused `github_publication_adapter`, publication-
   filtered `feature_conveyor_kernel`, and `publication_coordinator_contract`
   suites. Treat these as the `unit-testing-test-generate` coverage for strict
-  configuration, policy/provenance, cancellation/deadline, idempotence,
+  configuration, policy/provenance, cancellation/deadline, idempotence, and
+  the bounded exact-service stop/start process-ID waits that protect executable
+  replacement and rollback. Treat the live Windows `Provision` plus `Run` as
+  the native E2E for those service-state boundaries. Together, these cover
+  strict configuration, policy/provenance, cancellation/deadline, idempotence,
   restart/recovery, redaction, maximum-input, and malformed-state cases; do not
   claim a numeric percentage when `cargo llvm-cov` is unavailable. For live
   proof, require exact clean published source on both

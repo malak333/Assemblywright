@@ -255,7 +255,7 @@ required = (
     "GitHub-publication provisioning rollback failed.",
     "the previous deployment and service state were restored.",
     "Start-Service -Name $serviceName -ErrorAction Stop",
-    "[void](Invoke-MasterHealth $Master)",
+    "[void](Start-ExactMasterServiceHealthy -Master $Master)",
     "github-publication-master.previous",
     "Copy-Item -LiteralPath $MasterBackup -Destination $Master -Force -ErrorAction Stop",
     "$restoredMasterSha -cne $OriginalMasterSha256",
@@ -282,6 +282,11 @@ required = (
     '-Executable $Gh -Arguments @("auth", "status", "--hostname", "github.com")',
     "if ($null -eq $ghAuthExitCode -or $ghAuthExitCode -ne 0)",
     '"SelfTest" { Invoke-SelfTest }',
+    "function Get-ExactMasterService",
+    '$service = Get-ExactMasterService -AllowMissingExecutable:($State -ceq "Stopped")',
+    "function Wait-ExactMasterServiceState",
+    '$service.ProcessId -eq 0',
+    "function Start-ExactMasterServiceHealthy",
 )
 if any(token not in text for token in required):
     raise SystemExit(1)
@@ -293,6 +298,11 @@ if "& $Gh version | Select-Object -First 1" in text:
     raise SystemExit(1)
 helper = text.index("function Restore-PreviousPublicationDeployment")
 provision = text.index("function Invoke-Provision")
+exact_service = text.index("function Get-ExactMasterService")
+service_wait = text.index("function Wait-ExactMasterServiceState", exact_service)
+service_missing_leaf = text.index('$service = Get-ExactMasterService -AllowMissingExecutable:($State -ceq "Stopped")', service_wait)
+service_stopped = text.index('$service.ProcessId -eq 0', service_wait)
+service_start = text.index("function Start-ExactMasterServiceHealthy", service_stopped)
 tool_versions = text.index("function Assert-ToolVersions")
 gh_lines = text.index("$ghLines = @(& $Gh version)", tool_versions)
 gh_exit = text.index("$ghExitCode = $LASTEXITCODE", gh_lines)
@@ -323,6 +333,18 @@ refresh = text.index("refs/heads/main:refs/remotes/origin/main", run)
 effect = text.index("github-publication-proof --confirm", run)
 lock_wrapper = text.rindex("Invoke-WithGitHubPublicationControlLock {")
 if not helper < provision < original_master < first_mutation < restore_call < rollback_failure:
+    raise SystemExit(1)
+rollback_stop = text.index("Stop-Service -Name $serviceName -Force -ErrorAction Stop", helper)
+rollback_stopped = text.index("Wait-ExactMasterServiceState -State Stopped", rollback_stop)
+rollback_restore = text.index("Copy-Item -LiteralPath $MasterBackup -Destination $Master", rollback_stopped)
+provision_stop = text.index("Stop-Service -Name $serviceName -Force -ErrorAction Stop", provision)
+provision_stopped = text.index("Wait-ExactMasterServiceState -State Stopped", provision_stop)
+provision_build = text.index("& cargo build --locked --release", provision_stopped)
+if not exact_service < service_wait < service_missing_leaf < service_stopped < service_start < helper:
+    raise SystemExit(1)
+if not helper < rollback_stop < rollback_stopped < rollback_restore < provision:
+    raise SystemExit(1)
+if not provision < provision_stop < provision_stopped < provision_build:
     raise SystemExit(1)
 if not tool_versions < gh_lines < gh_exit < gh_output < gh_check < native_exit_helper < helper:
     raise SystemExit(1)
