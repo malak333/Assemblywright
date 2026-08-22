@@ -368,9 +368,12 @@ release requirements, not optional UX guidance.
   the exact committed native harness bytes; and receives sanitized Windows
   evidence on a distinct descriptor. The live fixture may advance protected
   `main` only with one bounded metadata-only proof-marker commit created in
-  disposable private state. The source checkout must remain unchanged while fetched `origin/main`
-  advances exactly to the reported protected merge. The controller hashes and
-  removes its bounded private transcript and publishes only the fixed
+  disposable private state. The receipt read is bounded to one hour so the
+  required pull-request and post-merge hosted gates can both complete; the
+  receipt remains freshness-checked and exact-source-bound. The source checkout
+  must remain unchanged while fetched `origin/main` advances exactly to the
+  reported protected merge. The controller hashes and removes its bounded
+  private transcript and publishes only the fixed
   owner-private path-free receipt/digest pair. It never POSTs admission,
   activates, enqueues, or claims general repository support, signing,
   notarization, clean-profile, or production-readiness proof.

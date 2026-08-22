@@ -288,6 +288,12 @@ JSON line:
 & .\scripts\windows-github-publication-live-control.ps1 -Action Run -ConfirmAction
 ```
 
+The controller keeps a bounded one-hour receipt-input window because the live
+action must complete both the pull-request checks and the resulting protected-
+main post-merge checks before Windows may emit the sanitized receipt. The
+window does not relax receipt freshness or any source, tool, check, merge, or
+cleanup binding.
+
 The fixed live lane uses GitHub CLI secure storage for `malak333`, repository
 `malak333/Assemblywright`, protected `main`, normal merge, and the exact
 `Release local gate` plus `Protocol, master, identity, mTLS, and SCM` contexts.

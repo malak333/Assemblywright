@@ -9,6 +9,7 @@ SCHEMA="assemblywright.github-publication-live-proof.v1"
 CATEGORY="github_publication_live"
 ORIGIN="github_publication_proof_controller"
 PROOF_IDENTITY="assemblywright.github-publication-live.v1"
+RECEIPT_WAIT_SECONDS=3600
 HARNESS_PATH="scripts/github-publication-live-e2e.sh"
 WINDOWS_PATH="scripts/windows-github-publication-live-control.ps1"
 CONTROLLER_PATH="scripts/github-publication-proof-controller.sh"
@@ -68,7 +69,7 @@ read_live_receipt() {
       || { receipt_read_error=terminal_mode_unavailable; restore_receipt_terminal || true; return 1; }
   fi
   [[ -z "$ready_marker" ]] || printf '%s\n' "$ready_marker"
-  deadline=$((SECONDS + 1200))
+  deadline=$((SECONDS + RECEIPT_WAIT_SECONDS))
   while :; do
     remaining=$((deadline - SECONDS))
     if [[ "$remaining" -le 0 ]] || ! IFS= read -r -t "$remaining" -n 1 character; then
@@ -492,7 +493,8 @@ self_test_controller() {
   validate_windows_rollback_contract
   pty_reader="$scratch/pty-reader.sh"
   {
-    printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' 'receipt_terminal_state=""' 'receipt_read_error=""'
+    printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' \
+      "RECEIPT_WAIT_SECONDS=$RECEIPT_WAIT_SECONDS" 'receipt_terminal_state=""' 'receipt_read_error=""'
     declare -f restore_receipt_terminal read_live_receipt
     cat <<'PTY_READER'
 before="$(stty -g <&0)"; receipt=""
