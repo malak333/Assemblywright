@@ -269,6 +269,7 @@ GitHub CLI/Git identities and owner-private authentication boundary from the
 authenticated Administrator session:
 
 ```powershell
+& .\scripts\windows-github-publication-live-control.ps1 -Action SelfTest
 & .\scripts\windows-github-publication-live-control.ps1 -Action Check
 & .\scripts\windows-github-publication-live-control.ps1 -Action Provision -ConfirmAction
 ```
@@ -290,6 +291,14 @@ JSON line:
 The fixed live lane uses GitHub CLI secure storage for `malak333`, repository
 `malak333/Assemblywright`, protected `main`, normal merge, and the exact
 `Release local gate` plus `Protocol, master, identity, mTLS, and SCM` contexts.
+Windows PowerShell 5.1 represents GitHub CLI's successful `auth status` stderr
+as `NativeCommandError` under the control's global fail-closed preference. The
+control scopes only that native status call to `SilentlyContinue`, discards its output,
+captures its exit code immediately, and still accepts authentication only on
+zero; a null sentinel rejects process-launch failure instead of reusing a stale
+native exit code. The Windows-hosted self-test exercises successful stderr,
+nonzero exit, and launch failure. All surrounding validation remains
+`Stop`-dominant.
 It creates a disposable bounded metadata-only proof-marker commit and
 intentionally advances `main` through one non-admin protected pull request,
 then verifies the exact merge and

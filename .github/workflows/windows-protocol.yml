@@ -43,6 +43,10 @@ jobs:
         shell: powershell
         run: ./scripts/windows-owner-evidence-admission.ps1 -Action SelfTest
 
+      - name: Test Windows GitHub authentication exit-code handling
+        shell: powershell
+        run: ./scripts/windows-github-publication-live-control.ps1 -Action SelfTest
+
       - name: Check formatting
         run: cargo fmt --all --check
 

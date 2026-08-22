@@ -1766,6 +1766,17 @@ an old one.
   `Select-Object -First 1` can terminate the producer early and turn a valid
   executable into a false failure. The fixed version check changes no credential,
   publication, or repository authority.
+- GitHub CLI `2.96.0` writes a successful `auth status` projection to native
+  stderr. Windows PowerShell 5.1 converts that stream into
+  `NativeCommandError`, so the publication control's global
+  `ErrorActionPreference=Stop` must not wrap the call directly. Scope only the
+  fixed `auth status` invocation to `SilentlyContinue`, discard all of its output,
+  preserve whether global `$LASTEXITCODE` was initially absent or present, clear
+  and capture it inside that child scope, reject a null sentinel when launch
+  never occurred, and accept only zero. The Windows-hosted self-test starts with
+  an absent global exit-code variable and covers successful stderr, nonzero exit,
+  launch failure, and restoration of that absence. This does not relax the
+  plaintext-token scan or any surrounding fail-closed check.
 - Native Mac relay tests must keep their client read timeout above the server's
   ten-second peer-code-identity validation bound. A five-second client timeout
   can surface Security.framework latency as `WouldBlock` before the server's

@@ -978,6 +978,10 @@ require_text "build docs Windows owner evidence self-test" "$BUILD_DOCS" \
   "windows-owner-evidence-admission.ps1 -Action SelfTest"
 require_text "hosted Windows owner evidence self-test" "$WINDOWS_PROTOCOL_WORKFLOW" \
   "windows-owner-evidence-admission.ps1 -Action SelfTest"
+require_text "build docs Windows GitHub authentication self-test" "$BUILD_DOCS" \
+  "windows-github-publication-live-control.ps1 -Action SelfTest"
+require_text "hosted Windows GitHub authentication self-test" "$WINDOWS_PROTOCOL_WORKFLOW" \
+  "windows-github-publication-live-control.ps1 -Action SelfTest"
 require_text "safety Windows owner evidence boundary" "$SAFETY_RULES" \
   "Windows evidence admission is a separate owner action"
 require_text "knowledge base Windows owner evidence boundary" "$KB" \
