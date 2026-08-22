@@ -297,7 +297,8 @@ function Get-SourceHead {
     return $head
 }
 
-function Get-MasterExecutable {
+function Get-ExactMasterService {
+    param([bool]$AllowMissingExecutable = $false)
     $service = Get-CimInstance Win32_Service -Filter "Name='$serviceName'"
     if ($null -eq $service -or $service.StartName -notmatch "(^|\\)mike$") {
         throw "The fixed Windows master service identity is unavailable."
@@ -309,8 +310,46 @@ function Get-MasterExecutable {
     if ($actual.StartsWith("\\?\", [StringComparison]::Ordinal)) { $actual = $actual.Substring(4) }
     $expected = [IO.Path]::GetFullPath((Join-Path $sourceRepository "target\release\assemblywright-master.exe"))
     if ($actual -cne $expected) { throw "The Windows master is not the exact source-checkout release executable." }
-    Assert-NoReparseComponents $expected $false
-    return $expected
+    Assert-NoReparseComponents $expected $AllowMissingExecutable
+    return [ordered]@{
+        Executable = $expected
+        ProcessId = [UInt32]$service.ProcessId
+        State = [string]$service.State
+    }
+}
+
+function Get-MasterExecutable {
+    return [string](Get-ExactMasterService).Executable
+}
+
+function Wait-ExactMasterServiceState {
+    param([Parameter(Mandatory = $true)][ValidateSet("Running", "Stopped")][string]$State)
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds(45)
+    do {
+        $service = Get-ExactMasterService -AllowMissingExecutable:($State -ceq "Stopped")
+        if ($service.State -ceq $State -and (($State -ceq "Stopped" -and [UInt64]$service.ProcessId -eq 0) -or
+            ($State -ceq "Running" -and [UInt64]$service.ProcessId -ne 0))) {
+            return $service
+        }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+    throw "The fixed Windows master service did not reach its bounded expected state."
+}
+
+function Start-ExactMasterServiceHealthy {
+    param([Parameter(Mandatory = $true)][string]$Master)
+    Start-Service -Name $serviceName -ErrorAction Stop
+    $service = Wait-ExactMasterServiceState -State Running
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds(45)
+    do {
+        try {
+            $health = Invoke-MasterHealth $Master
+            if ([UInt64]$health.process_id -eq [UInt64]$service.ProcessId) { return $health }
+        } catch { }
+        Start-Sleep -Milliseconds 250
+        $service = Get-ExactMasterService
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+    throw "The fixed Windows master service did not become healthy within the bounded readiness window."
 }
 
 function Invoke-MasterHealth {
@@ -412,6 +451,7 @@ function Restore-PreviousPublicationDeployment {
         if ($service.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Stopped) {
             Stop-Service -Name $serviceName -Force -ErrorAction Stop
         }
+        [void](Wait-ExactMasterServiceState -State Stopped)
         if ($SwapAttempted) {
             if (Test-Path -LiteralPath $publicationRoot) {
                 Assert-NoReparseComponents $publicationRoot $false
@@ -439,8 +479,7 @@ function Restore-PreviousPublicationDeployment {
             }
         }
         if ($ServiceWasRunning) {
-            Start-Service -Name $serviceName -ErrorAction Stop
-            [void](Invoke-MasterHealth $Master)
+            [void](Start-ExactMasterServiceHealthy -Master $Master)
             if ($HadPrevious) { [void](Get-DeployedAssets) }
         } else {
             $service = Get-Service -Name $serviceName
@@ -514,6 +553,7 @@ function Invoke-Provision {
             Copy-Item -LiteralPath $master -Destination $masterBackup -ErrorAction Stop
             Set-PrivateFileAcl $masterBackup
             Stop-Service -Name $serviceName -Force -ErrorAction Stop
+            [void](Wait-ExactMasterServiceState -State Stopped)
             Push-Location -LiteralPath $sourceRepository
             $buildAttempted = $true
             try { & cargo build --locked --release -p assemblywright-master --bin assemblywright-master; if ($LASTEXITCODE -ne 0) { throw "The pinned Windows master build failed." } }
@@ -536,8 +576,7 @@ function Invoke-Provision {
             $swapAttempted = $true
             Move-Item -LiteralPath $staging -Destination $publicationRoot -ErrorAction Stop
             $stagingOwned = $false
-            Start-Service -Name $serviceName -ErrorAction Stop
-            [void](Invoke-MasterHealth $master)
+            [void](Start-ExactMasterServiceHealthy -Master $master)
             [void](Get-DeployedAssets)
         } catch {
             try {

@@ -1777,6 +1777,16 @@ an old one.
   an absent global exit-code variable and covers successful stderr, nonzero exit,
   launch failure, and restoration of that absence. This does not relax the
   plaintext-token scan or any surrounding fail-closed check.
+- `Stop-Service` returning is not sufficient authority to replace the Windows
+  master executable. A GitHub-publication provision or rollback must poll the
+  exact service identity for `State=Stopped` and `ProcessId=0` within the bounded
+  window before Cargo or file restoration writes that executable. The stopped
+  query may allow only the configured executable leaf to be missing so a verified
+  backup remains recoverable; every parent and the service image path stay exact.
+  Startup still requires the leaf and binds the healthy process ID to the exact
+  running service before accepting the deployment. This prevents a transient
+  executable handle from turning a safe provision into an access-denied rebuild
+  or ambiguous rollback.
 - Native Mac relay tests must keep their client read timeout above the server's
   ten-second peer-code-identity validation bound. A five-second client timeout
   can surface Security.framework latency as `WouldBlock` before the server's
