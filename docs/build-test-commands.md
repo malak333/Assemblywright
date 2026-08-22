@@ -299,6 +299,12 @@ zero; a null sentinel rejects process-launch failure instead of reusing a stale
 native exit code. The Windows-hosted self-test exercises successful stderr,
 nonzero exit, and launch failure. All surrounding validation remains
 `Stop`-dominant.
+The adapter retains canonical Windows paths for containment and identity checks,
+but removes only a recognized `\\?\` or `\\?\UNC\` prefix when constructing
+Git's `--git-dir`, `--work-tree`, and credential-helper process arguments. Git
+for Windows rejects the verbatim form even though the same directory is valid;
+normalization must remain confined to this child-process boundary and must
+still produce an absolute DOS or UNC path.
 It creates a disposable bounded metadata-only proof-marker commit and
 intentionally advances `main` through one non-admin protected pull request,
 then verifies the exact merge and

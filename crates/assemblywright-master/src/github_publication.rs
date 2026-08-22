@@ -751,7 +751,8 @@ impl ProcessGithubPublication {
     ) -> Result<(), PublicationAdapterError> {
         self.verify_assets()?;
         let mut command = self.command(&self.git);
-        let (credential_cwd, git_dir) = credential_git_process_boundary(&self.root, repository)?;
+        let (credential_cwd, git_dir, _work_tree) =
+            credential_git_process_boundary(&self.root, repository)?;
         command
             .current_dir(credential_cwd)
             .arg("--no-optional-locks")
@@ -860,13 +861,14 @@ impl ProcessGithubPublication {
         self.verify_assets()?;
         let mut command = self.command(&self.git);
         if credential {
-            let (credential_cwd, git_dir) = credential_git_process_boundary(&self.root, directory)?;
+            let (credential_cwd, git_dir, work_tree) =
+                credential_git_process_boundary(&self.root, directory)?;
             command
                 .current_dir(credential_cwd)
                 .arg("--git-dir")
                 .arg(git_dir)
                 .arg("--work-tree")
-                .arg(directory);
+                .arg(work_tree);
         } else {
             command.current_dir(directory);
         }
@@ -1732,7 +1734,7 @@ pub fn sanitized_publication_command_path(
 pub fn credential_git_process_boundary(
     publication_root: &Path,
     repository: &Path,
-) -> Result<(PathBuf, PathBuf), PublicationAdapterError> {
+) -> Result<(PathBuf, PathBuf, PathBuf), PublicationAdapterError> {
     let data_dir = publication_root
         .parent()
         .ok_or(PublicationAdapterError::Unavailable)?;
@@ -1744,7 +1746,48 @@ pub fn credential_git_process_boundary(
     {
         return Err(PublicationAdapterError::Unavailable);
     }
-    Ok((publication_root.to_path_buf(), repository.join(".git")))
+    let credential_cwd = publication_root.to_path_buf();
+    let git_dir = repository.join(".git");
+    let work_tree = repository.to_path_buf();
+    #[cfg(windows)]
+    {
+        return Ok((
+            windows_git_process_path(&credential_cwd)?,
+            windows_git_process_path(&git_dir)?,
+            windows_git_process_path(&work_tree)?,
+        ));
+    }
+    #[cfg(not(windows))]
+    Ok((credential_cwd, git_dir, work_tree))
+}
+
+#[cfg(windows)]
+fn windows_git_process_path(path: &Path) -> Result<PathBuf, PublicationAdapterError> {
+    use std::path::{Component, Prefix};
+
+    let value = path.to_str().ok_or(PublicationAdapterError::Unavailable)?;
+    let normalized = if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
+        let mut components = rest.split('\\');
+        if components.next().is_none_or(str::is_empty)
+            || components.next().is_none_or(str::is_empty)
+        {
+            return Err(PublicationAdapterError::Unavailable);
+        }
+        PathBuf::from(format!(r"\\{rest}"))
+    } else if let Some(rest) = value.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        path.to_path_buf()
+    };
+    let permitted_prefix = matches!(
+        normalized.components().next(),
+        Some(Component::Prefix(prefix))
+            if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::UNC(_, _))
+    );
+    if !normalized.is_absolute() || !permitted_prefix {
+        return Err(PublicationAdapterError::Unavailable);
+    }
+    Ok(normalized)
 }
 
 fn parse_workflow_run_id(value: &str) -> Option<u64> {

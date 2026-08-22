@@ -1796,6 +1796,14 @@ an old one.
   running service before accepting the deployment. This prevents a transient
   executable handle from turning a safe provision into an access-denied rebuild
   or ambiguous rollback.
+- `std::fs::canonicalize` returns `\\?\`-prefixed paths on Windows, while Git
+  for Windows rejects that verbatim form when it is supplied to `--git-dir` or
+  `--work-tree` (the live fetch exits 128 with “not a git repository”). Keep the
+  canonical path for ancestry, containment, and executable-identity validation,
+  then remove only a recognized local `\\?\` prefix or convert
+  `\\?\UNC\server\share` to `\\server\share` at the fixed Git child-process
+  argument boundary. Reject non-absolute results and do not broaden the
+  normalization to caller-selected paths or stored authority.
 - Native Mac relay tests must keep their client read timeout above the server's
   ten-second peer-code-identity validation bound. A five-second client timeout
   can surface Security.framework latency as `WouldBlock` before the server's
