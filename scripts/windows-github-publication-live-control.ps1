@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("Check", "Provision", "Run")]
+    [ValidateSet("SelfTest", "Check", "Provision", "Run")]
     [string]$Action,
     [switch]$ConfirmAction
 )
@@ -37,7 +37,7 @@ $requiredChecks = @(
     [ordered]@{
         id = "protocol-windows"; workflow = "Assemblywright Windows Distributed Gate"; context = "Protocol, master, identity, mTLS, and SCM"; app_id = 15368
         workflow_id = 314849303; workflow_path = ".github/workflows/windows-protocol.yml"
-        workflow_sha256 = "2bacd6cb625d3a48bc2930fb6556069c4c145c2273a96be89e89be9a87804040"
+        workflow_sha256 = "da1ebe295c34f3442ff2a3537ca617642c436b019cf5009843546fefb9f914a0"
     }
 )
 
@@ -197,6 +197,24 @@ function Assert-ToolVersions {
     }
 }
 
+function Invoke-NativeExitCodeSilently {
+    param(
+        [Parameter(Mandatory = $true)][string]$Executable,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Arguments
+    )
+    $ErrorActionPreference = "SilentlyContinue"
+    $priorExitCode = $global:LASTEXITCODE
+    try {
+        $global:LASTEXITCODE = $null
+        & $Executable @Arguments *> $null
+        $observedExitCode = $global:LASTEXITCODE
+    } finally {
+        $global:LASTEXITCODE = $priorExitCode
+    }
+    if ($null -eq $observedExitCode) { return $null }
+    return [int]$observedExitCode
+}
+
 function Assert-GhAuthentication {
     param([string]$Gh, [string]$ConfigDirectory)
     Assert-NoReparseComponents $ConfigDirectory $false
@@ -210,11 +228,33 @@ function Assert-GhAuthentication {
     $prior = $env:GH_CONFIG_DIR
     try {
         $env:GH_CONFIG_DIR = $ConfigDirectory
-        & $Gh auth status --hostname github.com *> $null
-        if ($LASTEXITCODE -ne 0) { throw "GitHub CLI reauthentication is required." }
+        $ghAuthExitCode = Invoke-NativeExitCodeSilently `
+            -Executable $Gh -Arguments @("auth", "status", "--hostname", "github.com")
+        if ($null -eq $ghAuthExitCode -or $ghAuthExitCode -ne 0) {
+            throw "GitHub CLI reauthentication is required."
+        }
     } finally {
         if ($null -eq $prior) { Remove-Item Env:GH_CONFIG_DIR -ErrorAction SilentlyContinue } else { $env:GH_CONFIG_DIR = $prior }
     }
+}
+
+function Invoke-SelfTest {
+    $cmd = Join-Path $env:SystemRoot "System32\cmd.exe"
+    $where = Join-Path $env:SystemRoot "System32\where.exe"
+    $success = Invoke-NativeExitCodeSilently -Executable $cmd `
+        -Arguments @("/d", "/c", "echo expected 1>&2")
+    $rejected = Invoke-NativeExitCodeSilently -Executable $where `
+        -Arguments @("assemblywright-definitely-missing-executable.exe")
+    $missing = Join-Path ([IO.Path]::GetTempPath()) "assemblywright-missing-gh-auth-status.exe"
+    if (Test-Path -LiteralPath $missing) { throw "GitHub-auth self-test fixture already existed." }
+    $notLaunched = Invoke-NativeExitCodeSilently -Executable $missing -Arguments @()
+    if ($success -ne 0 -or $rejected -ne 1 -or $null -ne $notLaunched) {
+        throw "GitHub-auth native exit-code self-test failed."
+    }
+    [ordered]@{
+        schema_version = 1
+        status = "github_publication_windows_self_test_passed"
+    } | ConvertTo-Json -Compress
 }
 
 function Get-SourceHead {
@@ -561,6 +601,7 @@ function Invoke-Run {
 
 Invoke-WithGitHubPublicationControlLock {
     switch ($Action) {
+        "SelfTest" { Invoke-SelfTest }
         "Check" { Invoke-Check }
         "Provision" { Invoke-Provision }
         "Run" { Invoke-Run }

@@ -174,7 +174,10 @@ Before starting a release pass, confirm the claim you intend to make.
   failed, stale, late, or ambiguous evidence after intent must quarantine
   without retry. Keep the route owner-loopback-only and prove authenticated
   remote mTLS still returns 404.
-- Run `github-publication-proof-controller.sh --check` and `--self-test` in the
+- Run `windows-github-publication-live-control.ps1 -Action SelfTest` on Windows
+  PowerShell 5.1 and require successful-stderr, nonzero-exit, and launch-failure
+  handling to remain exact and fail closed. Run
+  `github-publication-proof-controller.sh --check` and `--self-test` in the
   canonical gate, plus the focused `github_publication_adapter`, publication-
   filtered `feature_conveyor_kernel`, and `publication_coordinator_contract`
   suites. Treat these as the `unit-testing-test-generate` coverage for strict
