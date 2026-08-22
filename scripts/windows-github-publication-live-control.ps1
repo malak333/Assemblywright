@@ -211,6 +211,8 @@ function Invoke-NativeExitCodeSilently {
         $global:LASTEXITCODE = $null
         & $Executable @Arguments *> $null
         $observedExitCode = $global:LASTEXITCODE
+    } catch {
+        $observedExitCode = $null
     } finally {
         if ($hadPriorExitCode) {
             $global:LASTEXITCODE = $priorExitCode
