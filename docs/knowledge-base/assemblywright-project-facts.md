@@ -1771,10 +1771,12 @@ an old one.
   `NativeCommandError`, so the publication control's global
   `ErrorActionPreference=Stop` must not wrap the call directly. Scope only the
   fixed `auth status` invocation to `SilentlyContinue`, discard all of its output,
-  clear and capture `$LASTEXITCODE` inside that child scope, reject a null
-  sentinel when launch never occurred, and accept only zero. The Windows-hosted
-  self-test covers successful stderr, nonzero exit, and launch failure. This does
-  not relax the plaintext-token scan or any surrounding fail-closed check.
+  preserve whether global `$LASTEXITCODE` was initially absent or present, clear
+  and capture it inside that child scope, reject a null sentinel when launch
+  never occurred, and accept only zero. The Windows-hosted self-test starts with
+  an absent global exit-code variable and covers successful stderr, nonzero exit,
+  launch failure, and restoration of that absence. This does not relax the
+  plaintext-token scan or any surrounding fail-closed check.
 - Native Mac relay tests must keep their client read timeout above the server's
   ten-second peer-code-identity validation bound. A five-second client timeout
   can surface Security.framework latency as `WouldBlock` before the server's

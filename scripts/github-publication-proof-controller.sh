@@ -274,7 +274,9 @@ required = (
     "$ghLines = @(& $Gh version)",
     "$ghExitCode = $LASTEXITCODE",
     "function Invoke-NativeExitCodeSilently",
+    '$priorExitCodeVariable = Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue',
     "$global:LASTEXITCODE = $null",
+    'Remove-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue',
     "$ghAuthExitCode = Invoke-NativeExitCodeSilently",
     '-Executable $Gh -Arguments @("auth", "status", "--hostname", "github.com")',
     "if ($null -eq $ghAuthExitCode -or $ghAuthExitCode -ne 0)",
@@ -298,8 +300,10 @@ gh_check = text.index("if ($ghExitCode -ne 0 -or", gh_output)
 gh_authentication = text.index("function Assert-GhAuthentication")
 native_exit_helper = text.index("function Invoke-NativeExitCodeSilently", tool_versions)
 native_exit_continue = text.index('$ErrorActionPreference = "SilentlyContinue"', native_exit_helper)
+native_exit_prior = text.index("$priorExitCodeVariable = Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue", native_exit_continue)
 native_exit_sentinel = text.index("$global:LASTEXITCODE = $null", native_exit_continue)
 native_exit_operation = text.index("& $Executable @Arguments *> $null", native_exit_sentinel)
+native_exit_restore_absent = text.index("Remove-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue", native_exit_operation)
 native_exit_observed = text.index("if ($null -eq $observedExitCode)", native_exit_operation)
 gh_auth_scope = text.index("$ghAuthExitCode = Invoke-NativeExitCodeSilently", gh_authentication)
 gh_auth_command = text.index('-Executable $Gh -Arguments @("auth", "status", "--hostname", "github.com")', gh_auth_scope)
@@ -320,7 +324,7 @@ if not helper < provision < original_master < first_mutation < restore_call < ro
     raise SystemExit(1)
 if not tool_versions < gh_lines < gh_exit < gh_output < gh_check < native_exit_helper < helper:
     raise SystemExit(1)
-if not native_exit_helper < native_exit_continue < native_exit_sentinel < native_exit_operation < native_exit_observed < gh_authentication:
+if not native_exit_helper < native_exit_continue < native_exit_prior < native_exit_sentinel < native_exit_operation < native_exit_restore_absent < native_exit_observed < gh_authentication:
     raise SystemExit(1)
 if not gh_authentication < gh_auth_scope < gh_auth_command < gh_auth_check < self_test < self_test_success < self_test_rejected < self_test_missing < helper:
     raise SystemExit(1)

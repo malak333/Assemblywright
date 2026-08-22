@@ -203,13 +203,20 @@ function Invoke-NativeExitCodeSilently {
         [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Arguments
     )
     $ErrorActionPreference = "SilentlyContinue"
-    $priorExitCode = $global:LASTEXITCODE
+    $priorExitCodeVariable = Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
+    $hadPriorExitCode = $null -ne $priorExitCodeVariable
+    $priorExitCode = if ($hadPriorExitCode) { $priorExitCodeVariable.Value } else { $null }
+    $observedExitCode = $null
     try {
         $global:LASTEXITCODE = $null
         & $Executable @Arguments *> $null
         $observedExitCode = $global:LASTEXITCODE
     } finally {
-        $global:LASTEXITCODE = $priorExitCode
+        if ($hadPriorExitCode) {
+            $global:LASTEXITCODE = $priorExitCode
+        } else {
+            Remove-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
+        }
     }
     if ($null -eq $observedExitCode) { return $null }
     return [int]$observedExitCode
@@ -241,14 +248,25 @@ function Assert-GhAuthentication {
 function Invoke-SelfTest {
     $cmd = Join-Path $env:SystemRoot "System32\cmd.exe"
     $where = Join-Path $env:SystemRoot "System32\where.exe"
-    $success = Invoke-NativeExitCodeSilently -Executable $cmd `
-        -Arguments @("/d", "/c", "echo expected 1>&2")
-    $rejected = Invoke-NativeExitCodeSilently -Executable $where `
-        -Arguments @("assemblywright-definitely-missing-executable.exe")
-    $missing = Join-Path ([IO.Path]::GetTempPath()) "assemblywright-missing-gh-auth-status.exe"
-    if (Test-Path -LiteralPath $missing) { throw "GitHub-auth self-test fixture already existed." }
-    $notLaunched = Invoke-NativeExitCodeSilently -Executable $missing -Arguments @()
-    if ($success -ne 0 -or $rejected -ne 1 -or $null -ne $notLaunched) {
+    $priorExitCodeVariable = Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
+    try {
+        Remove-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
+        $success = Invoke-NativeExitCodeSilently -Executable $cmd `
+            -Arguments @("/d", "/c", "echo expected 1>&2")
+        $absentStatePreserved = $null -eq (Get-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue)
+        $rejected = Invoke-NativeExitCodeSilently -Executable $where `
+            -Arguments @("assemblywright-definitely-missing-executable.exe")
+        $missing = Join-Path ([IO.Path]::GetTempPath()) "assemblywright-missing-gh-auth-status.exe"
+        if (Test-Path -LiteralPath $missing) { throw "GitHub-auth self-test fixture already existed." }
+        $notLaunched = Invoke-NativeExitCodeSilently -Executable $missing -Arguments @()
+    } finally {
+        if ($null -ne $priorExitCodeVariable) {
+            $global:LASTEXITCODE = $priorExitCodeVariable.Value
+        } else {
+            Remove-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
+        }
+    }
+    if (-not $absentStatePreserved -or $success -ne 0 -or $rejected -ne 1 -or $null -ne $notLaunched) {
         throw "GitHub-auth native exit-code self-test failed."
     }
     [ordered]@{
