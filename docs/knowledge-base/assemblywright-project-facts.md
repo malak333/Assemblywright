@@ -1532,7 +1532,10 @@ an old one.
   repository, remote, branch, tool, credential, context, or harness. It keeps
   committed harness bytes separate from the sanitized Windows receipt, removes
   its private transcript, and publishes only the fixed ignored owner-private
-  `target/github-publication-live-proof` receipt/digest pair.
+  `target/github-publication-live-proof` receipt/digest pair. Its receipt read
+  remains bounded to one hour so both required pull-request checks and the same
+  two post-merge checks can finish before Windows emits the receipt; that wait
+  does not weaken the receipt's one-hour freshness validation or exact binding.
 - Feature 4's portable focused coverage is split deliberately: the adapter
   suite exercises default-unavailable provisioning, hostile configuration and
   plaintext-token rejection, pinned executable drift, exact branch policy,
