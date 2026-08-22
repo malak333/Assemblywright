@@ -174,6 +174,12 @@ Before starting a release pass, confirm the claim you intend to make.
   failed, stale, late, or ambiguous evidence after intent must quarantine
   without retry. Keep the route owner-loopback-only and prove authenticated
   remote mTLS still returns 404.
+- Confirm GitHub-publication provisioning waits for the exact Windows service
+  process to stop, byte-materializes Cargo output into a new owner/SYSTEM-only
+  single-link service image, preserves its digest, and uses the same protected
+  single-link boundary for rollback before restoring verified health. Verify
+  the recovery copy's owner, exact two-principal ACL, link count, and digest
+  before the stop.
 - Run `windows-github-publication-live-control.ps1 -Action SelfTest` on Windows
   PowerShell 5.1 and require absent-global-state restoration, successful-stderr,
   nonzero-exit, and launch-failure handling to remain exact and fail closed. Run

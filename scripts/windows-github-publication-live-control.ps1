@@ -91,9 +91,11 @@ function Assert-ExactKeys {
 
 function Set-PrivateDirectoryAcl {
     param([string]$Path)
-    $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $current = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $identity = $current.Name
     $acl = New-Object Security.AccessControl.DirectorySecurity
     $acl.SetAccessRuleProtection($true, $false)
+    $acl.SetOwner($current.User)
     foreach ($principal in @($identity, "NT AUTHORITY\SYSTEM")) {
         $rule = New-Object Security.AccessControl.FileSystemAccessRule(
             $principal, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow"
@@ -105,13 +107,53 @@ function Set-PrivateDirectoryAcl {
 
 function Set-PrivateFileAcl {
     param([string]$Path)
-    $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $current = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $identity = $current.Name
     $acl = New-Object Security.AccessControl.FileSecurity
     $acl.SetAccessRuleProtection($true, $false)
+    $acl.SetOwner($current.User)
     foreach ($principal in @($identity, "NT AUTHORITY\SYSTEM")) {
         [void]$acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($principal, "FullControl", "Allow")))
     }
     Set-Acl -LiteralPath $Path -AclObject $acl
+}
+
+function Assert-OrdinarySingleLinkFile {
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)][string]$Label)
+    Assert-NoReparseComponents $Path $false
+    $item = Get-Item -LiteralPath $Path -Force
+    if ($item.PSIsContainer -or $item.Length -eq 0) { throw "$Label was not an ordinary nonempty file." }
+    $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User
+    $systemSid = New-Object Security.Principal.SecurityIdentifier(
+        [Security.Principal.WellKnownSidType]::LocalSystemSid,
+        $null
+    )
+    $acl = Get-Acl -LiteralPath $Path
+    $ownerSid = (New-Object Security.Principal.NTAccount($acl.Owner)).Translate([Security.Principal.SecurityIdentifier])
+    if (-not $acl.AreAccessRulesProtected -or $ownerSid.Value -cne $currentSid.Value) {
+        throw "$Label did not have the exact private owner."
+    }
+    $rules = @($acl.Access)
+    if ($rules.Count -ne 2) { throw "$Label did not have the exact private ACL." }
+    $observedSids = @()
+    foreach ($rule in $rules) {
+        $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier])
+        if ($rule.IsInherited -or
+            $rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or
+            $rule.FileSystemRights -ne [Security.AccessControl.FileSystemRights]::FullControl -or
+            ($sid.Value -cne $currentSid.Value -and $sid.Value -cne $systemSid.Value) -or
+            $observedSids -ccontains $sid.Value) {
+            throw "$Label did not have the exact private ACL."
+        }
+        $observedSids += $sid.Value
+    }
+    if ($observedSids -cnotcontains $currentSid.Value -or $observedSids -cnotcontains $systemSid.Value) {
+        throw "$Label did not have the exact private ACL."
+    }
+    $fsutil = Join-Path $env:SystemRoot "System32\fsutil.exe"
+    Assert-NoReparseComponents $fsutil $false
+    $links = @(& $fsutil hardlink list $Path 2>$null | Where-Object { $_.Trim().Length -gt 0 })
+    if ($LASTEXITCODE -ne 0 -or $links.Count -ne 1) { throw "$Label was not single-link." }
 }
 
 function Invoke-WithGitHubPublicationControlLock {
@@ -393,6 +435,7 @@ function Get-DeployedAssets {
     $configuration = Get-Content -LiteralPath $configurationPath -Raw | ConvertFrom-Json
     Assert-ExactKeys $configuration @("schema_version", "enabled", "repository", "base_branch", "merge_strategy", "post_merge_gate", "required_checks", "master_executable_sha256", "gh_executable_sha256", "git_executable_sha256") "GitHub-publication configuration"
     $master = Get-MasterExecutable
+    Assert-OrdinarySingleLinkFile $master "The deployed Windows master executable"
     $masterSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $master).Hash.ToLowerInvariant()
     if ([UInt64]$configuration.schema_version -ne 1 -or $configuration.enabled -ne $true -or
         $configuration.repository -cne $repository -or $configuration.base_branch -cne $baseBranch -or
@@ -472,7 +515,13 @@ function Restore-PreviousPublicationDeployment {
                 throw "The prior Windows master executable was unavailable during rollback."
             }
             Assert-NoReparseComponents $MasterBackup $false
-            Copy-Item -LiteralPath $MasterBackup -Destination $Master -Force -ErrorAction Stop
+            if (Test-Path -LiteralPath $Master) {
+                Assert-NoReparseComponents $Master $false
+                Remove-Item -LiteralPath $Master -Force -ErrorAction Stop
+            }
+            Copy-Item -LiteralPath $MasterBackup -Destination $Master -ErrorAction Stop
+            Set-PrivateFileAcl $Master
+            Assert-OrdinarySingleLinkFile $Master "The restored Windows master executable"
             $restoredMasterSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $Master).Hash.ToLowerInvariant()
             if ($restoredMasterSha -cne $OriginalMasterSha256) {
                 throw "The prior Windows master executable digest was not restored."
@@ -508,6 +557,7 @@ function Invoke-Provision {
     if (-not $ConfirmAction) { throw "Provision requires -ConfirmAction." }
     $head = Get-SourceHead $false
     $master = Get-MasterExecutable
+    Assert-OrdinarySingleLinkFile $master "The original Windows master executable"
     $originalMasterSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $master).Hash.ToLowerInvariant()
     if ($originalMasterSha256 -notmatch $shaPattern) { throw "The Windows master executable digest was malformed." }
     $gh = Get-ExactTool $ghSource $ghExecutableSha256 "GitHub CLI"
@@ -552,14 +602,31 @@ function Invoke-Provision {
         try {
             Copy-Item -LiteralPath $master -Destination $masterBackup -ErrorAction Stop
             Set-PrivateFileAcl $masterBackup
+            Assert-OrdinarySingleLinkFile $masterBackup "The Windows master recovery copy"
+            if ((Get-FileHash -Algorithm SHA256 -LiteralPath $masterBackup).Hash.ToLowerInvariant() -cne $originalMasterSha256) {
+                throw "The Windows master recovery copy digest was not exact."
+            }
             Stop-Service -Name $serviceName -Force -ErrorAction Stop
             [void](Wait-ExactMasterServiceState -State Stopped)
             Push-Location -LiteralPath $sourceRepository
             $buildAttempted = $true
             try { & cargo build --locked --release -p assemblywright-master --bin assemblywright-master; if ($LASTEXITCODE -ne 0) { throw "The pinned Windows master build failed." } }
             finally { Pop-Location }
+            $cargoMasterSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $master).Hash.ToLowerInvariant()
+            if ($cargoMasterSha256 -notmatch $shaPattern) { throw "The built Windows master executable digest was malformed." }
+            $materializedMaster = Join-Path $staging "assemblywright-master.exe"
+            [IO.File]::Copy($master, $materializedMaster, $false)
+            Set-PrivateFileAcl $materializedMaster
+            Assert-OrdinarySingleLinkFile $materializedMaster "The materialized Windows master executable"
+            if ((Get-FileHash -Algorithm SHA256 -LiteralPath $materializedMaster).Hash.ToLowerInvariant() -cne $cargoMasterSha256) {
+                throw "The materialized Windows master executable did not preserve the Cargo output digest."
+            }
+            Remove-Item -LiteralPath $master -Force -ErrorAction Stop
+            Move-Item -LiteralPath $materializedMaster -Destination $master -ErrorAction Stop
+            Set-PrivateFileAcl $master
+            Assert-OrdinarySingleLinkFile $master "The installed Windows master executable"
             $masterExecutableSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $master).Hash.ToLowerInvariant()
-            if ($masterExecutableSha256 -notmatch $shaPattern) { throw "The built Windows master executable digest was malformed." }
+            if ($masterExecutableSha256 -cne $cargoMasterSha256) { throw "The installed Windows master executable digest changed." }
             $configuration = [ordered]@{
                 schema_version = 1; enabled = $true; repository = $repository; base_branch = $baseBranch
                 merge_strategy = "merge"; post_merge_gate = "release-local"; required_checks = $requiredChecks

@@ -231,6 +231,13 @@ never request, argv, environment, file, audit, log, or receipt data. The master
 persists an immutable intent before each possible effect, releases its process
 lock during external work, monitors current authority and cancellation, and
 quarantines every ambiguous or late result without retry.
+Provisioning stops the exact service and waits for its process to exit before
+building. Because Cargo may hard-link the release output into `deps` and leave
+checkout ACLs on it, the control copies those exact bytes into a fresh
+single-link file, protects it to the owner and SYSTEM, verifies the unchanged
+digest, and only then installs and health-checks it. Rollback applies the same
+single-link/private-ACL boundary while restoring the prior bytes. The recovery
+copy is link/owner/ACL/digest-verified before the service is stopped.
 
 The owner-run `scripts/github-publication-proof-controller.sh --run` starts
 only from exact clean published `main`, executes only the committed native
