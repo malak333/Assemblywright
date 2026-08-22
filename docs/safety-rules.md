@@ -355,6 +355,12 @@ release requirements, not optional UX guidance.
   Missing, failed, stale, cancelled, deadline-expired, late, or ambiguous
   evidence after intent creation quarantines with effect possible and is never
   automatically retried.
+- Retain canonical Windows publication paths for authority, ancestry, and
+  containment checks. At the fixed Git process boundary only, translate a
+  recognized canonical `\\?\C:\...` path to `C:\...` or
+  `\\?\UNC\server\share\...` to `\\server\share\...` because Git for Windows
+  rejects verbatim `--git-dir` and `--work-tree` arguments. The translated path
+  must remain absolute; never accept a caller-selected or relative replacement.
 - `github-publication-proof-controller.sh --run` is separate from evidence
   admission and activation. It accepts no repository, remote, executable,
   credential, branch, check, or alternate harness argument; requires exact

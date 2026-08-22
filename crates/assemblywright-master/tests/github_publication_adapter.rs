@@ -321,10 +321,55 @@ fn source_base_and_sanitized_path_bindings_reject_drift() {
         vec![git.parent().unwrap(), gh.parent().unwrap(), root]
     );
     assert!(!entries.iter().any(|entry| entry == candidate));
-    let (credential_cwd, git_dir) = credential_git_process_boundary(root, candidate).unwrap();
+    let (credential_cwd, git_dir, work_tree) =
+        credential_git_process_boundary(root, candidate).unwrap();
     assert_eq!(credential_cwd, root);
     assert_ne!(credential_cwd, candidate);
     assert_eq!(git_dir, candidate.join(".git"));
+    assert_eq!(work_tree, candidate);
+    assert_eq!(
+        credential_git_process_boundary(Path::new("relative"), Path::new("relative/candidate")),
+        Err(PublicationAdapterError::Unavailable)
+    );
+
+    #[cfg(windows)]
+    {
+        let verbatim_root = Path::new(r"\\?\C:\fixed\publication");
+        let verbatim_candidate = Path::new(r"\\?\C:\fixed\feature-conveyor-candidates\candidate");
+        let (credential_cwd, git_dir, work_tree) =
+            credential_git_process_boundary(verbatim_root, verbatim_candidate).unwrap();
+        assert_eq!(credential_cwd, Path::new(r"C:\fixed\publication"));
+        assert_eq!(
+            git_dir,
+            Path::new(r"C:\fixed\feature-conveyor-candidates\candidate\.git")
+        );
+        assert_eq!(
+            work_tree,
+            Path::new(r"C:\fixed\feature-conveyor-candidates\candidate")
+        );
+
+        let verbatim_unc_root = Path::new(r"\\?\UNC\server\share\publication");
+        let verbatim_unc_candidate =
+            Path::new(r"\\?\UNC\server\share\feature-conveyor-candidates\candidate");
+        let (credential_cwd, git_dir, work_tree) =
+            credential_git_process_boundary(verbatim_unc_root, verbatim_unc_candidate).unwrap();
+        assert_eq!(credential_cwd, Path::new(r"\\server\share\publication"));
+        assert_eq!(
+            git_dir,
+            Path::new(r"\\server\share\feature-conveyor-candidates\candidate\.git")
+        );
+        assert_eq!(
+            work_tree,
+            Path::new(r"\\server\share\feature-conveyor-candidates\candidate")
+        );
+
+        let device_root = Path::new(r"\\.\C:\fixed\publication");
+        let device_candidate = Path::new(r"\\.\C:\fixed\candidate");
+        assert_eq!(
+            credential_git_process_boundary(device_root, device_candidate),
+            Err(PublicationAdapterError::Unavailable)
+        );
+    }
 }
 
 fn normalized_lf(bytes: &[u8]) -> Vec<u8> {
