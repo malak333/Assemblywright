@@ -337,6 +337,12 @@ release requirements, not optional UX guidance.
   durable effect intent. Credential-owning processes must start only from the
   owner-private publication root with a sanitized path; worker candidate paths
   may be derived Git arguments but never process search paths or working directories.
+  Provisioning must wait for the exact service process to stop, materialize the
+  Cargo output as a new owner/SYSTEM-only single-link service image with the
+  same digest, and restore the previous image through that same boundary on
+  failure. Verify the recovery copy's exact owner, ACL, link count, and digest
+  before stopping the service. A hard-linked or broader-ACL Cargo output is
+  never started directly.
 - Every GitHub adapter action must derive from the immutable master plan and
   poll deadline, cancellation, and current authority before, during, and after
   external work. Push only the exact frozen candidate to the derived feature

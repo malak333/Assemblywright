@@ -257,7 +257,7 @@ required = (
     "Start-Service -Name $serviceName -ErrorAction Stop",
     "[void](Start-ExactMasterServiceHealthy -Master $Master)",
     "github-publication-master.previous",
-    "Copy-Item -LiteralPath $MasterBackup -Destination $Master -Force -ErrorAction Stop",
+    "Copy-Item -LiteralPath $MasterBackup -Destination $Master -ErrorAction Stop",
     "$restoredMasterSha -cne $OriginalMasterSha256",
     "master_executable_sha256 = $masterExecutableSha256",
     "$proof.master_executable_sha256 -cne [string]$assets.MasterSha256",
@@ -283,6 +283,18 @@ required = (
     "if ($null -eq $ghAuthExitCode -or $ghAuthExitCode -ne 0)",
     '"SelfTest" { Invoke-SelfTest }',
     "function Get-ExactMasterService",
+    "function Assert-OrdinarySingleLinkFile",
+    '$acl.SetOwner($current.User)',
+    '$ownerSid.Value -cne $currentSid.Value',
+    '$rules.Count -ne 2',
+    '$rule.FileSystemRights -ne [Security.AccessControl.FileSystemRights]::FullControl',
+    'Assert-OrdinarySingleLinkFile $master "The original Windows master executable"',
+    'Assert-OrdinarySingleLinkFile $materializedMaster "The materialized Windows master executable"',
+    'Assert-OrdinarySingleLinkFile $master "The installed Windows master executable"',
+    'Assert-OrdinarySingleLinkFile $Master "The restored Windows master executable"',
+    '$materializedMaster = Join-Path $staging "assemblywright-master.exe"',
+    "The materialized Windows master executable did not preserve the Cargo output digest.",
+    "The Windows master recovery copy digest was not exact.",
     '$service = Get-ExactMasterService -AllowMissingExecutable:($State -ceq "Stopped")',
     "function Wait-ExactMasterServiceState",
     '$service.ProcessId -eq 0',
@@ -326,13 +338,15 @@ self_test_rejected = text.index("$rejected = Invoke-NativeExitCodeSilently", sel
 self_test_missing = text.index("$notLaunched = Invoke-NativeExitCodeSilently", self_test_rejected)
 original_master = text.index("$originalMasterSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $master)", provision)
 first_mutation = text.index("Copy-Item -LiteralPath $master -Destination $masterBackup", provision)
+backup_link = text.index('Assert-OrdinarySingleLinkFile $masterBackup "The Windows master recovery copy"', first_mutation)
+backup_digest = text.index("Get-FileHash -Algorithm SHA256 -LiteralPath $masterBackup", backup_link)
 restore_call = text.index("Restore-PreviousPublicationDeployment -Master $master", provision)
 rollback_failure = text.index("GitHub-publication provisioning rollback failed.", restore_call)
 run = text.index("function Invoke-Run")
 refresh = text.index("refs/heads/main:refs/remotes/origin/main", run)
 effect = text.index("github-publication-proof --confirm", run)
 lock_wrapper = text.rindex("Invoke-WithGitHubPublicationControlLock {")
-if not helper < provision < original_master < first_mutation < restore_call < rollback_failure:
+if not helper < provision < original_master < first_mutation < backup_link < backup_digest < restore_call < rollback_failure:
     raise SystemExit(1)
 rollback_stop = text.index("Stop-Service -Name $serviceName -Force -ErrorAction Stop", helper)
 rollback_stopped = text.index("Wait-ExactMasterServiceState -State Stopped", rollback_stop)
@@ -340,11 +354,16 @@ rollback_restore = text.index("Copy-Item -LiteralPath $MasterBackup -Destination
 provision_stop = text.index("Stop-Service -Name $serviceName -Force -ErrorAction Stop", provision)
 provision_stopped = text.index("Wait-ExactMasterServiceState -State Stopped", provision_stop)
 provision_build = text.index("& cargo build --locked --release", provision_stopped)
+materialized_copy = text.index("[IO.File]::Copy($master, $materializedMaster, $false)", provision_build)
+materialized_link = text.index('Assert-OrdinarySingleLinkFile $materializedMaster', materialized_copy)
+remove_cargo_master = text.index("Remove-Item -LiteralPath $master -Force -ErrorAction Stop", materialized_link)
+install_materialized = text.index("Move-Item -LiteralPath $materializedMaster -Destination $master", remove_cargo_master)
+installed_link = text.index('Assert-OrdinarySingleLinkFile $master "The installed Windows master executable"', install_materialized)
 if not exact_service < service_wait < service_missing_leaf < service_stopped < service_start < helper:
     raise SystemExit(1)
 if not helper < rollback_stop < rollback_stopped < rollback_restore < provision:
     raise SystemExit(1)
-if not provision < provision_stop < provision_stopped < provision_build:
+if not provision < backup_digest < provision_stop < provision_stopped < provision_build < materialized_copy < materialized_link < remove_cargo_master < install_materialized < installed_link:
     raise SystemExit(1)
 if not tool_versions < gh_lines < gh_exit < gh_output < gh_check < native_exit_helper < helper:
     raise SystemExit(1)

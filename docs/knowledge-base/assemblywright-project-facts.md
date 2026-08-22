@@ -1509,6 +1509,15 @@ an old one.
   only from the successful `Release local gate` check on that commit. Any
   missing, stale, failed, late, or ambiguous result after durable intent
   quarantines without automatic retry.
+- Feature 4 Windows provisioning must not start Cargo's release output in place:
+  Cargo may hard-link it to `target\release\deps` and leave checkout ACLs that
+  the provisioned adapter rejects at service startup. After the exact service
+  process reaches stopped/PID-zero state, copy the exact Cargo bytes into a
+  fresh single-link file, apply the owner/SYSTEM-only ACL, verify the digest,
+  and move that materialized file into the service path. Rollback must likewise
+  recreate the prior image as a protected single-link file before restart. Set
+  and verify the current-owner SID plus exactly owner and SYSTEM FullControl,
+  and verify the recovery copy digest before the service stop.
 - The Feature 4 live proof uses the production adapter with one disposable
   bounded metadata-only proof-marker commit. Its protected pull request
   advances `main` with that durable public marker and no product-code change,
