@@ -6,8 +6,16 @@
   Windows RTX not provisioned, and production review fixed.
 - `LocalModelSelection.swift` owns canonical path validation, strict intent,
   receipt, terminal-rejection, and projection validation, the mode-0600
-  active/pending store with file-plus-directory fsync, and exact
-  select/reconcile behavior. Invalid store state blocks supervision.
+  active/pending store with recursive exact-shape/request binding plus
+  file-and-directory fsync, and exact select/reconcile behavior. Invalid store
+  state blocks supervision. A target-profile session makes the old profile
+  ineligible for fallback; pause keeps pending inert, while later unpaused
+  monotonic authority revisions can reconcile only the exact committed target.
+- `NetworkMTLSBridge.swift` binds ordinary connections to the exact installed
+  Keychain profile. A separate reconciliation-only factory operation rechecks
+  the frozen old profile/material and admits only its exact derived
+  revision-plus-one/requested-model target before the Windows application
+  handshake; there is no general transition mode.
 - `assemblywright-mac-bridge local-model select|reconcile --confirm` is the
   signed one-shot boundary. The app never loads the bridge private key.
 - `GET|POST /v1/distributed/local-model/selection` is mTLS application-session

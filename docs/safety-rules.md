@@ -201,8 +201,23 @@ release requirements, not optional UX guidance.
   after Windows proves the exact old unpaused binding. No provider/model
   fallback or automatic retry is allowed. The app's local paths remain only in
   its mode-0600 owner-private store; the pending file and parent directory are
-  fsynced before POST. Unsafe, malformed, oversized, or path-invalid store
-  state blocks startup. The selected relay configuration must validate before
+  fsynced before POST. The store is recursively duplicate-free and exact-shape
+  validated; pending configuration must have revision zero and its model ID
+  must match the canonical frozen request bytes exactly. Unsafe, malformed,
+  oversized, path-invalid, or request/configuration-mismatched state blocks
+  startup. A target-profile session accepted after an ambiguous POST proves the
+  old profile stale: Emergency Pause leaves pending untouched and forbids local
+  identity install, promotion, retry, or old-profile authentication. After
+  unpause, reconciliation accepts only the exact target registry/device/name/
+  model with nondecreasing designation and pause revisions; all other drift
+  remains fail-closed. Ordinary TLS remains exact-installed-profile-only. A
+  separate internal reconciliation transport reloads the frozen old Keychain
+  profile, admits only its recomputed exact revision-plus-one/requested-model
+  target with every immutable field preserved, loads the old TLS material, and
+  rechecks the old profile before setup. It accepts no broad transition flag or
+  arbitrary target override; Windows application-handshake acceptance and
+  exact projection proof remain mandatory. The
+  selected relay configuration must validate before
   active state replaces pending. Model IDs must be bounded printable ASCII
   bytes `0x21...0x7e` and retain the path-like ID exclusions. The executable must be canonical,
   owner-matched, non-symlink, non-group/world-writable, executable, and named

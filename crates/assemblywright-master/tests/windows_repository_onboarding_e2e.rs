@@ -746,6 +746,10 @@ fn run_onboarding(
     confirmations: &[&str],
 ) -> Output {
     let mut command = Command::new("powershell.exe");
+    // GitHub's pwsh runner exports a PowerShell 7 module path that omits the
+    // Windows PowerShell inbox modules. Let powershell.exe rebuild its native
+    // default so security cmdlets such as Get-Acl and Set-Acl remain available.
+    command.env_remove("PSModulePath");
     command
         .args([
             "-NoLogo",

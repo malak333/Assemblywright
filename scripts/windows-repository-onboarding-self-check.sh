@@ -103,8 +103,10 @@ if grep -Eiq -- 'repository_path|plan_id|owner_approval|token|endpoint' <<<"$rec
 fi
 
 if command -v pwsh >/dev/null 2>&1; then
+  self_test_data_dir="$(mktemp -d "${TMPDIR:-/tmp}/assemblywright-repository-onboarding-self-test.XXXXXX")"
+  trap 'rm -rf -- "$self_test_data_dir"' EXIT
   pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass \
-    -File "$CONTROLLER" -Action SelfTest >/dev/null
+    -File "$CONTROLLER" -Action SelfTest -DataDir "$self_test_data_dir" >/dev/null
 fi
 
 printf 'Assemblywright Windows repository-onboarding self-check: ok\n'

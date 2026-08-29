@@ -95,6 +95,28 @@ malformed, oversized, or path-invalid stores block startup. A promoted relay
 configuration is validated before active state replaces pending on disk. There
 is no provider or model fallback.
 
+The pending store is recursively duplicate-free and exact-shape validated.
+Its configuration model ID and zero pre-selection registry revision must bind
+the canonical frozen request bytes exactly, so a stored request for one model
+cannot be promoted with another model's local directory. After a lost committed
+POST, acceptance of the target-profile application session proves the old
+profile stale. Emergency Pause therefore leaves pending untouched and permits
+no local identity install, relay promotion, POST, or old-profile probe. Once
+unpaused, exact target registry/device/name/model evidence may reconcile across
+monotonically newer designation and Emergency Pause revisions; any lower,
+paused, malformed, or otherwise drifted target remains fail-closed. Protocol v5
+and schema v19 remain unchanged.
+
+The ordinary Keychain-backed TLS factory remains exact-installed-profile-only.
+Reconciliation uses a separate internal transport operation: the factory
+reloads and matches the frozen old profile, recomputes and compares the sole
+legal target (registry revision exactly plus one, exact requested model, and
+otherwise identical identity/name/role/endpoint/certificate and capability
+identity/kind/provider/bounds), loads the old TLS material, then rechecks the
+old profile before connection setup. There is no caller-controlled transition
+flag or arbitrary override, and target identity is not installed before exact
+Windows application-handshake and projection proof.
+
 ### Windows master
 
 `assemblywright-master` owns durable state and every authority decision. Its schema-v19

@@ -10,6 +10,21 @@ extension AssemblywrightMacAuthenticatedBridgeSession: AssemblywrightMacBridgeSe
 
 public protocol AssemblywrightMacBridgeConnecting: Sendable {
     func connect(profile: AssemblywrightMacBridgeProfile) async throws -> any AssemblywrightMacBridgeSession
+    func connectForLocalModelReconciliation(
+        profile: AssemblywrightMacBridgeProfile,
+        installedProfile: AssemblywrightMacBridgeProfile,
+        requestedModelID: String
+    ) async throws -> any AssemblywrightMacBridgeSession
+}
+
+public extension AssemblywrightMacBridgeConnecting {
+    func connectForLocalModelReconciliation(
+        profile _: AssemblywrightMacBridgeProfile,
+        installedProfile _: AssemblywrightMacBridgeProfile,
+        requestedModelID _: String
+    ) async throws -> any AssemblywrightMacBridgeSession {
+        throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+    }
 }
 
 public struct AssemblywrightMacDefaultBridgeConnector: AssemblywrightMacBridgeConnecting, Sendable {
@@ -21,6 +36,18 @@ public struct AssemblywrightMacDefaultBridgeConnector: AssemblywrightMacBridgeCo
 
     public func connect(profile: AssemblywrightMacBridgeProfile) async throws -> any AssemblywrightMacBridgeSession {
         try await transport.connect(profile: profile)
+    }
+
+    public func connectForLocalModelReconciliation(
+        profile: AssemblywrightMacBridgeProfile,
+        installedProfile: AssemblywrightMacBridgeProfile,
+        requestedModelID: String
+    ) async throws -> any AssemblywrightMacBridgeSession {
+        try await transport.connectForLocalModelReconciliation(
+            profile: profile,
+            installedProfile: installedProfile,
+            requestedModelID: requestedModelID
+        )
     }
 }
 

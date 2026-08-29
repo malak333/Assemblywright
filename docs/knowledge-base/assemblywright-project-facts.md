@@ -13,13 +13,25 @@ These notes capture durable facts for future agents working on this repository.
   `local-model-selection-v1.json` at mode 0600. Windows request, projection,
   receipt, status, and audit are path-free.
 - Model IDs are printable non-whitespace ASCII only. Pending persistence fsyncs
-  both file and parent directory; invalid store state blocks supervision.
+  both file and parent directory. The store recursively rejects duplicate or
+  unknown nested fields and requires the pending model identity to match the
+  canonical frozen request bytes; invalid store state blocks supervision.
 - Only strict known pre-mutation HTTP error pairs clear pending as terminal.
   Unknown responses, including every 5xx, remain reconciliation cases, and a
   selected relay validates before active state is persisted.
 - A pending selection intentionally stops ordinary supervision. Use the
   separately confirmed exact Resume action; never delete or hand-edit the
   pending file to infer success.
+- If a target-profile session is accepted after an ambiguous POST, never probe
+  the stale old profile. Emergency Pause keeps pending and local identity inert;
+  after unpause, only exact target registry/device/name/model evidence with
+  monotonic designation and pause revisions may complete reconciliation.
+- The production TLS factory ordinarily accepts only the installed Keychain
+  profile. Reconciliation uses a distinct internal factory operation that
+  rechecks the frozen old profile/material and permits only its exact derived
+  revision-plus-one/requested-model target; never add a broad transition-mode
+  flag. Windows must still accept the target application handshake and exact
+  projection.
 - Repository tests prove strict contracts and native process/mTLS behavior;
   they do not prove signed distribution, notarization, clean-profile install,
   or live-device model execution.

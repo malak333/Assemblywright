@@ -766,6 +766,21 @@ public protocol AssemblywrightMacAuthenticatedTLSChannel: Sendable {
 
 public protocol AssemblywrightMacAuthenticatedTLSChannelFactory: Sendable {
     func connect(profile: AssemblywrightMacBridgeProfile) async throws -> any AssemblywrightMacAuthenticatedTLSChannel
+    func connectForLocalModelReconciliation(
+        profile: AssemblywrightMacBridgeProfile,
+        installedProfile: AssemblywrightMacBridgeProfile,
+        requestedModelID: String
+    ) async throws -> any AssemblywrightMacAuthenticatedTLSChannel
+}
+
+public extension AssemblywrightMacAuthenticatedTLSChannelFactory {
+    func connectForLocalModelReconciliation(
+        profile _: AssemblywrightMacBridgeProfile,
+        installedProfile _: AssemblywrightMacBridgeProfile,
+        requestedModelID _: String
+    ) async throws -> any AssemblywrightMacAuthenticatedTLSChannel {
+        throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+    }
 }
 
 public struct AssemblywrightMacAuthenticatedBridgeSession: Sendable {
@@ -830,6 +845,26 @@ public struct AssemblywrightMacMTLSBridgeTransport: Sendable {
 
     public func connect(profile: AssemblywrightMacBridgeProfile) async throws -> AssemblywrightMacAuthenticatedBridgeSession {
         let channel = try await factory.connect(profile: profile)
+        return try await authenticate(profile: profile, channel: channel)
+    }
+
+    public func connectForLocalModelReconciliation(
+        profile: AssemblywrightMacBridgeProfile,
+        installedProfile: AssemblywrightMacBridgeProfile,
+        requestedModelID: String
+    ) async throws -> AssemblywrightMacAuthenticatedBridgeSession {
+        let channel = try await factory.connectForLocalModelReconciliation(
+            profile: profile,
+            installedProfile: installedProfile,
+            requestedModelID: requestedModelID
+        )
+        return try await authenticate(profile: profile, channel: channel)
+    }
+
+    private func authenticate(
+        profile: AssemblywrightMacBridgeProfile,
+        channel: any AssemblywrightMacAuthenticatedTLSChannel
+    ) async throws -> AssemblywrightMacAuthenticatedBridgeSession {
         do {
             try Task.checkCancellation()
             let exporter = try await channel.tlsExporter(label: Self.exporterLabel, length: 32)

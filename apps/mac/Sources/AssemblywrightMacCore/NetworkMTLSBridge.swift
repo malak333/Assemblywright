@@ -13,11 +13,70 @@ public struct NetworkAssemblywrightMacTLSChannelFactory: AssemblywrightMacAuthen
     }
 
     public func connect(profile: AssemblywrightMacBridgeProfile) async throws -> any AssemblywrightMacAuthenticatedTLSChannel {
+        let validated = try Self.validatedOrdinaryProfile(
+            profile,
+            keychainProfile: identityStore.loadInstalledProfile()
+        )
+        let material = try loadIdentityMaterial(matching: validated)
+        return try await connectValidated(profile: validated, material: material)
+    }
+
+    public func connectForLocalModelReconciliation(
+        profile: AssemblywrightMacBridgeProfile,
+        installedProfile: AssemblywrightMacBridgeProfile,
+        requestedModelID: String
+    ) async throws -> any AssemblywrightMacAuthenticatedTLSChannel {
+        let validated = try Self.validatedLocalModelReconciliationTarget(
+            profile,
+            installedProfile: installedProfile,
+            keychainProfile: identityStore.loadInstalledProfile(),
+            requestedModelID: requestedModelID
+        )
+        let material = try loadIdentityMaterial(matching: installedProfile)
+        return try await connectValidated(profile: validated, material: material)
+    }
+
+    static func validatedOrdinaryProfile(
+        _ profile: AssemblywrightMacBridgeProfile,
+        keychainProfile: AssemblywrightMacBridgeProfile?
+    ) throws -> AssemblywrightMacBridgeProfile {
+        guard keychainProfile == profile else {
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+        }
+        return profile
+    }
+
+    static func validatedLocalModelReconciliationTarget(
+        _ profile: AssemblywrightMacBridgeProfile,
+        installedProfile: AssemblywrightMacBridgeProfile,
+        keychainProfile: AssemblywrightMacBridgeProfile?,
+        requestedModelID: String
+    ) throws -> AssemblywrightMacBridgeProfile {
+        guard keychainProfile == installedProfile,
+              profile == (try AssemblywrightMacLocalModelSelectionControl.reconciliationTarget(
+                installedProfile: installedProfile,
+                requestedModelID: requestedModelID
+              )) else {
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+        }
+        return profile
+    }
+
+    private func loadIdentityMaterial(
+        matching profile: AssemblywrightMacBridgeProfile
+    ) throws -> AssemblywrightMacTLSIdentityMaterial {
+        let material = try identityStore.loadTLSIdentityMaterial()
         guard try identityStore.loadInstalledProfile() == profile else {
             throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
         }
+        return material
+    }
+
+    private func connectValidated(
+        profile: AssemblywrightMacBridgeProfile,
+        material: AssemblywrightMacTLSIdentityMaterial
+    ) async throws -> any AssemblywrightMacAuthenticatedTLSChannel {
         let endpoint = try ParsedMasterEndpoint(profile.masterEndpoint)
-        let material = try identityStore.loadTLSIdentityMaterial()
         let tls = NWProtocolTLS.Options()
         let options = tls.securityProtocolOptions
         sec_protocol_options_set_min_tls_protocol_version(options, .TLSv13)

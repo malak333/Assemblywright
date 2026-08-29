@@ -109,6 +109,128 @@ struct LocalModelSelectionTests {
         #expect(await oldProofThenRetry.connectCount() == 2)
     }
 
+    @Test("Pause and revision churn never fall back to the stale profile")
+    func pausedCommittedSelectionReconcilesOnlyAfterUnpause() async throws {
+        let identity = TestModelIdentity(profile: oldModelProfile())
+        let pausedTarget = TestModelConnector(outcomes: [
+            .session([.response(.init(
+                status: 200,
+                body: targetProjectionData(
+                    designationRevision: 2,
+                    emergencyPauseRevision: 1,
+                    emergencyPaused: true
+                )
+            ))])
+        ])
+
+        await #expect(throws: AssemblywrightMacLocalModelSelectionError.reconciliationRequired) {
+            try await AssemblywrightMacLocalModelSelectionControl.reconcileIntent(
+                intentData: modelIntentData(),
+                identityStore: identity,
+                connector: pausedTarget
+            )
+        }
+        #expect(identity.installCount == 0)
+        #expect(await pausedTarget.connectCount() == 1)
+        #expect(await pausedTarget.reconciliationConnectCount() == 1)
+        #expect(await pausedTarget.connectedProfiles().map(\.registryRevision) == [2])
+
+        let acceptedTargetThenTransportLoss = TestModelConnector(outcomes: [
+            .session([.failure])
+        ])
+        await #expect(throws: AssemblywrightMacLocalModelSelectionError.reconciliationRequired) {
+            try await AssemblywrightMacLocalModelSelectionControl.reconcileIntent(
+                intentData: modelIntentData(),
+                identityStore: identity,
+                connector: acceptedTargetThenTransportLoss
+            )
+        }
+        #expect(await acceptedTargetThenTransportLoss.connectCount() == 1)
+        #expect(
+            await acceptedTargetThenTransportLoss.connectedProfiles().map(\.registryRevision)
+                == [2]
+        )
+
+        let unpausedTarget = TestModelConnector(outcomes: [
+            .session([.response(.init(
+                status: 200,
+                body: targetProjectionData(
+                    designationRevision: 3,
+                    emergencyPauseRevision: 2,
+                    emergencyPaused: false
+                )
+            ))])
+        ])
+        let outcome = try await AssemblywrightMacLocalModelSelectionControl.reconcileIntent(
+            intentData: modelIntentData(),
+            identityStore: identity,
+            connector: unpausedTarget
+        )
+        #expect(outcome == .reconciledProjection(
+            try AssemblywrightMacLocalModelSelectionProjection.decodeStrict(
+                targetProjectionData(
+                    designationRevision: 3,
+                    emergencyPauseRevision: 2,
+                    emergencyPaused: false
+                )
+            )
+        ))
+        #expect(identity.installCount == 1)
+        #expect(await unpausedTarget.reconciliationConnectCount() == 1)
+        #expect(await unpausedTarget.connectedProfiles().map(\.registryRevision) == [2])
+    }
+
+    @Test("Production TLS factory admits only the exact derived reconciliation target")
+    func productionFactoryReconciliationValidation() throws {
+        let installed = oldModelProfile()
+        let target = try AssemblywrightMacLocalModelSelectionControl.reconciliationTarget(
+            installedProfile: installed,
+            requestedModelID: "target-model"
+        )
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.bindingMismatch) {
+            try NetworkAssemblywrightMacTLSChannelFactory.validatedOrdinaryProfile(
+                target,
+                keychainProfile: installed
+            )
+        }
+        #expect(
+            try NetworkAssemblywrightMacTLSChannelFactory
+                .validatedLocalModelReconciliationTarget(
+                    target,
+                    installedProfile: installed,
+                    keychainProfile: installed,
+                    requestedModelID: "target-model"
+                ) == target
+        )
+
+        for drifted in [
+            modelProfile(from: installed, modelID: "target-model", revision: 3),
+            modelProfile(from: installed, modelID: "old-model"),
+            modelProfile(from: installed, modelID: "target-model", provider: "other"),
+            modelProfile(from: installed, modelID: "target-model", maxContextBytes: 1),
+            modelProfile(from: installed, modelID: "/private/model")
+        ] {
+            #expect(throws: AssemblywrightMacDeveloperBridgeError.bindingMismatch) {
+                try NetworkAssemblywrightMacTLSChannelFactory
+                    .validatedLocalModelReconciliationTarget(
+                        drifted,
+                        installedProfile: installed,
+                        keychainProfile: installed,
+                        requestedModelID: "target-model"
+                    )
+            }
+        }
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.bindingMismatch) {
+            try NetworkAssemblywrightMacTLSChannelFactory
+                .validatedLocalModelReconciliationTarget(
+                    target,
+                    installedProfile: installed,
+                    keychainProfile: target,
+                    requestedModelID: "target-model"
+                )
+        }
+    }
+
     @Test("Swift model ID validation matches the Rust path-free contract")
     func modelIDParity() throws {
         for valid in ["Qwen3-8B", "mlx-community/Qwen3-8B-4bit", "org//model"] {
@@ -161,6 +283,40 @@ struct LocalModelSelectionTests {
         }())
         #expect(binding.reconciled)
         #expect(binding.registryRevision == 8)
+
+        let churnedUnpaused = Data(
+            #"{"schema_version":1,"device_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","device_name":"owner-bridge","registry_revision":8,"designation_revision":6,"emergency_pause_revision":3,"emergency_paused":false,"model_id":"target-model"}"#.utf8
+        )
+        let churnedResult = try AssemblywrightMacLocalModelSelectionControl.validateCommandData(
+            churnedUnpaused,
+            intentData: intentData
+        )
+        let churnedBinding = try #require({
+            if case let .selected(binding) = churnedResult { return binding }
+            return nil
+        }())
+        #expect(churnedBinding.designationRevision == 6)
+        #expect(churnedBinding.emergencyPauseRevision == 3)
+
+        let churnedPaused = Data(
+            #"{"schema_version":1,"device_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","device_name":"owner-bridge","registry_revision":8,"designation_revision":6,"emergency_pause_revision":3,"emergency_paused":true,"model_id":"target-model"}"#.utf8
+        )
+        #expect(throws: AssemblywrightMacLocalModelSelectionError.reconciliationRequired) {
+            try AssemblywrightMacLocalModelSelectionControl.validateCommandData(
+                churnedPaused,
+                intentData: intentData
+            )
+        }
+
+        let regressedAuthority = Data(
+            #"{"schema_version":1,"device_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","device_name":"owner-bridge","registry_revision":8,"designation_revision":4,"emergency_pause_revision":1,"emergency_paused":false,"model_id":"target-model"}"#.utf8
+        )
+        #expect(throws: AssemblywrightMacLocalModelSelectionError.reconciliationRequired) {
+            try AssemblywrightMacLocalModelSelectionControl.validateCommandData(
+                regressedAuthority,
+                intentData: intentData
+            )
+        }
 
         let extra = Data(
             #"{"schema_version":1,"device_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","device_name":"owner-bridge","registry_revision":8,"designation_revision":5,"emergency_pause_revision":2,"emergency_paused":false,"model_id":"target-model","path":"/private/model"}"#.utf8
@@ -265,6 +421,88 @@ struct LocalModelSelectionTests {
         try FileManager.default.setAttributes([.posixPermissions: 0o722], ofItemAtPath: models.path)
         #expect(throws: AssemblywrightMacLocalModelSelectionError.self) {
             try configuration.validateLocalPaths()
+        }
+    }
+
+    @Test("Pending store is nested-strict and binds configuration to canonical request bytes")
+    func pendingStoreStrictBinding() throws {
+        let root = URL(fileURLWithPath: try temporaryDirectory())
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executable = root.appendingPathComponent("mlx_lm.generate")
+        FileManager.default.createFile(atPath: executable.path, contents: Data("#!/bin/sh\n".utf8))
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        let models = root.appendingPathComponent("models", isDirectory: true)
+        try FileManager.default.createDirectory(at: models, withIntermediateDirectories: false)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: models.path)
+        let store = AssemblywrightMacLocalModelSelectionStore(
+            fileURL: root.appendingPathComponent("private/state.json")
+        )
+        let configuration = AssemblywrightMacLocalModelConfiguration(
+            modelID: "different-model",
+            executablePath: executable.path,
+            modelDirectoryPath: models.path,
+            registryRevision: 0
+        )
+        #expect(throws: AssemblywrightMacLocalModelSelectionError.unsafeStore) {
+            try store.save(.init(
+                active: nil,
+                pending: .init(configuration: configuration, requestData: modelIntentData())
+            ))
+        }
+
+        let matching = AssemblywrightMacPendingLocalModelSelection(
+            configuration: .init(
+                modelID: "target-model",
+                executablePath: executable.path,
+                modelDirectoryPath: models.path,
+                registryRevision: 0
+            ),
+            requestData: try modelIntentData()
+        )
+        try store.save(.init(active: nil, pending: matching))
+        var object = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: store.fileURL))
+                as? [String: Any]
+        )
+        var pending = try #require(object["pending"] as? [String: Any])
+        var nestedConfiguration = try #require(pending["configuration"] as? [String: Any])
+        nestedConfiguration["unexpected"] = true
+        pending["configuration"] = nestedConfiguration
+        object["pending"] = pending
+        try overwriteStore(
+            store.fileURL,
+            data: JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        )
+        #expect(throws: AssemblywrightMacLocalModelSelectionError.unsafeStore) {
+            try store.load()
+        }
+
+        try store.save(.init(active: nil, pending: matching))
+        object = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: store.fileURL))
+                as? [String: Any]
+        )
+        pending = try #require(object["pending"] as? [String: Any])
+        pending["unexpected"] = true
+        object["pending"] = pending
+        try overwriteStore(
+            store.fileURL,
+            data: JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        )
+        #expect(throws: AssemblywrightMacLocalModelSelectionError.unsafeStore) {
+            try store.load()
+        }
+
+        try store.save(.init(active: nil, pending: matching))
+        let canonicalStore = try String(contentsOf: store.fileURL, encoding: .utf8)
+        let duplicateModelIDStore = canonicalStore.replacingOccurrences(
+            of: #""modelID":"target-model""#,
+            with: #""modelID":"target-model","modelID":"target-model""#
+        )
+        #expect(duplicateModelIDStore != canonicalStore)
+        try overwriteStore(store.fileURL, data: Data(duplicateModelIDStore.utf8))
+        #expect(throws: AssemblywrightMacLocalModelSelectionError.unsafeStore) {
+            try store.load()
         }
     }
 }
@@ -523,10 +761,25 @@ private enum TestSessionOutcome: Sendable {
 private actor TestModelConnector: AssemblywrightMacBridgeConnecting {
     private var outcomes: [TestConnectOutcome]
     private var profiles: [AssemblywrightMacBridgeProfile] = []
+    private var reconciliationConnections = 0
 
     init(outcomes: [TestConnectOutcome]) { self.outcomes = outcomes }
 
     func connect(profile: AssemblywrightMacBridgeProfile) async throws
+        -> any AssemblywrightMacBridgeSession {
+        try nextConnection(profile: profile)
+    }
+
+    func connectForLocalModelReconciliation(
+        profile: AssemblywrightMacBridgeProfile,
+        installedProfile _: AssemblywrightMacBridgeProfile,
+        requestedModelID _: String
+    ) async throws -> any AssemblywrightMacBridgeSession {
+        reconciliationConnections += 1
+        return try nextConnection(profile: profile)
+    }
+
+    private func nextConnection(profile: AssemblywrightMacBridgeProfile) throws
         -> any AssemblywrightMacBridgeSession {
         profiles.append(profile)
         guard !outcomes.isEmpty else { throw TestModelError.injected }
@@ -537,6 +790,8 @@ private actor TestModelConnector: AssemblywrightMacBridgeConnecting {
     }
 
     func connectCount() -> Int { profiles.count }
+    func reconciliationConnectCount() -> Int { reconciliationConnections }
+    func connectedProfiles() -> [AssemblywrightMacBridgeProfile] { profiles }
 }
 
 private actor TestModelSession: AssemblywrightMacBridgeSession {
@@ -567,6 +822,32 @@ private func oldModelProfile() -> AssemblywrightMacBridgeProfile {
         )],
         masterEndpoint: "100.64.0.1:7792",
         certificateNotAfterMilliseconds: 4_102_444_800_000
+    )
+}
+
+private func modelProfile(
+    from installed: AssemblywrightMacBridgeProfile,
+    modelID: String,
+    revision: UInt64? = nil,
+    provider: String? = nil,
+    maxContextBytes: UInt32? = nil
+) -> AssemblywrightMacBridgeProfile {
+    let old = installed.capabilities[0]
+    return .init(
+        deviceID: installed.deviceID,
+        deviceName: installed.deviceName,
+        role: installed.role,
+        registryRevision: revision ?? installed.registryRevision + 1,
+        capabilities: [.init(
+            id: old.id,
+            kind: old.kind,
+            provider: provider ?? old.provider,
+            model: modelID,
+            maxContextBytes: maxContextBytes ?? old.maxContextBytes,
+            maxResultBytes: old.maxResultBytes
+        )],
+        masterEndpoint: installed.masterEndpoint,
+        certificateNotAfterMilliseconds: installed.certificateNotAfterMilliseconds
     )
 }
 
@@ -602,8 +883,22 @@ private func terminalRejectionData(
     return try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
 }
 
-private func targetProjectionData() -> Data {
-    Data(#"{"schema_version":1,"device_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","device_name":"owner-bridge","registry_revision":2,"designation_revision":2,"emergency_pause_revision":0,"emergency_paused":false,"model_id":"target-model"}"#.utf8)
+private func targetProjectionData(
+    designationRevision: UInt64 = 2,
+    emergencyPauseRevision: UInt64 = 0,
+    emergencyPaused: Bool = false
+) -> Data {
+    let object: [String: Any] = [
+        "schema_version": 1,
+        "device_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "device_name": "owner-bridge",
+        "registry_revision": 2,
+        "designation_revision": designationRevision,
+        "emergency_pause_revision": emergencyPauseRevision,
+        "emergency_paused": emergencyPaused,
+        "model_id": "target-model"
+    ]
+    return try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
 }
 
 private func oldProjectionData() -> Data {
@@ -669,4 +964,9 @@ private func temporaryDirectory() throws -> String {
     let value = String(cString: path)
     try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: value)
     return URL(fileURLWithPath: value).resolvingSymlinksInPath().path
+}
+
+private func overwriteStore(_ url: URL, data: Data) throws {
+    try data.write(to: url, options: .atomic)
+    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
 }

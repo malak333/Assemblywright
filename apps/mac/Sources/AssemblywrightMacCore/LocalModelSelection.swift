@@ -97,6 +97,24 @@ public struct AssemblywrightMacPendingLocalModelSelection: Codable, Equatable, S
         self.configuration = configuration
         self.requestData = requestData
     }
+
+    fileprivate func validatePersistedBinding() throws {
+        let intent: AssemblywrightMacLocalModelSelectionIntent
+        let canonicalRequest: Data
+        do {
+            intent = try AssemblywrightMacLocalModelSelectionIntent.decodeStrict(requestData)
+            try intent.validate()
+            canonicalRequest = try intent.encodeStrict()
+            try configuration.validateLocalPaths()
+        } catch {
+            throw AssemblywrightMacLocalModelSelectionError.unsafeStore
+        }
+        guard configuration.registryRevision == 0,
+              configuration.modelID == intent.modelID,
+              requestData == canonicalRequest else {
+            throw AssemblywrightMacLocalModelSelectionError.unsafeStore
+        }
+    }
 }
 
 public struct AssemblywrightMacLocalModelSelectionState: Codable, Equatable, Sendable {
@@ -149,23 +167,24 @@ public struct AssemblywrightMacLocalModelSelectionStore: Sendable {
             throw AssemblywrightMacLocalModelSelectionError.unsafeStore
         }
         let data = try Data(contentsOf: fileURL, options: [.mappedIfSafe])
+        var duplicateScanner = AssemblywrightStrictJSONObjectKeyScanner(data: data)
         guard data.count <= 16 * 1_024,
+              (try? duplicateScanner.validateNoDuplicateObjectKeysRecursively()) != nil,
               let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(object.keys) == ["schema_version", "active", "pending"],
+              Self.hasExactNestedShape(object),
               let state = try? JSONDecoder().decode(
                 AssemblywrightMacLocalModelSelectionState.self,
                 from: data
               ), state.schemaVersion == 1 else {
             throw AssemblywrightMacLocalModelSelectionError.unsafeStore
         }
-        try state.active?.validateLocalPaths()
-        try state.pending?.configuration.validateLocalPaths()
+        try Self.validate(state)
         return state
     }
 
     public func save(_ state: AssemblywrightMacLocalModelSelectionState) throws {
-        try state.active?.validateLocalPaths()
-        try state.pending?.configuration.validateLocalPaths()
+        try Self.validate(state)
         let directory = fileURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(
             at: directory,
@@ -216,6 +235,40 @@ public struct AssemblywrightMacLocalModelSelectionStore: Sendable {
             throw AssemblywrightMacLocalModelSelectionError.unsafeStore
         }
         published = true
+    }
+
+    private static func validate(_ state: AssemblywrightMacLocalModelSelectionState) throws {
+        guard state.schemaVersion == 1 else {
+            throw AssemblywrightMacLocalModelSelectionError.unsafeStore
+        }
+        if let active = state.active {
+            guard active.registryRevision > 0 else {
+                throw AssemblywrightMacLocalModelSelectionError.unsafeStore
+            }
+            do {
+                try active.validateLocalPaths()
+            } catch {
+                throw AssemblywrightMacLocalModelSelectionError.unsafeStore
+            }
+        }
+        try state.pending?.validatePersistedBinding()
+    }
+
+    private static func hasExactNestedShape(_ object: [String: Any]) -> Bool {
+        let configurationKeys: Set<String> = [
+            "modelID", "executablePath", "modelDirectoryPath", "registryRevision"
+        ]
+        if !(object["active"] is NSNull) {
+            guard let active = object["active"] as? [String: Any],
+                  Set(active.keys) == configurationKeys else { return false }
+        }
+        if !(object["pending"] is NSNull) {
+            guard let pending = object["pending"] as? [String: Any],
+                  Set(pending.keys) == ["configuration", "requestData"],
+                  let configuration = pending["configuration"] as? [String: Any],
+                  Set(configuration.keys) == configurationKeys else { return false }
+        }
+        return true
     }
 }
 
@@ -527,6 +580,31 @@ public enum AssemblywrightMacLocalModelSelectionControl {
     public static let path = "/v1/distributed/local-model/selection"
     public static let maximumFrameBytes = 8 * 1_024
 
+    static func reconciliationTarget(
+        installedProfile: AssemblywrightMacBridgeProfile,
+        requestedModelID: String
+    ) throws -> AssemblywrightMacBridgeProfile {
+        try validateMLX(installedProfile)
+        guard installedProfile.registryRevision < UInt64.max,
+              validLocalModelID(requestedModelID),
+              installedProfile.capabilities[0].model != requestedModelID else {
+            throw AssemblywrightMacLocalModelSelectionError.reconciliationRequired
+        }
+        let old = installedProfile.capabilities[0]
+        return AssemblywrightMacBridgeProfile(
+            deviceID: installedProfile.deviceID,
+            deviceName: installedProfile.deviceName,
+            role: installedProfile.role,
+            registryRevision: installedProfile.registryRevision + 1,
+            capabilities: [AssemblywrightMacBridgeCapability(
+                id: old.id, kind: old.kind, provider: old.provider, model: requestedModelID,
+                maxContextBytes: old.maxContextBytes, maxResultBytes: old.maxResultBytes
+            )],
+            masterEndpoint: installedProfile.masterEndpoint,
+            certificateNotAfterMilliseconds: installedProfile.certificateNotAfterMilliseconds
+        )
+    }
+
     public static func request(
         profile: AssemblywrightMacBridgeProfile,
         designationRevision: UInt64,
@@ -670,12 +748,17 @@ public enum AssemblywrightMacLocalModelSelectionControl {
             modelID: intent.modelID
         )
         do {
-            return try await reconcile(
+            return try await reconcileTarget(
                 request: request,
                 profile: installed,
                 identityStore: identityStore,
                 connector: connector
             )
+        } catch is AssemblywrightMacAuthoritativeTargetReconciliationError {
+            // A target-profile application session proves that the old
+            // registration is stale. Pause or authority churn must remain
+            // pending and must never trigger an old-profile authentication.
+            throw AssemblywrightMacLocalModelSelectionError.reconciliationRequired
         } catch {
             // Separately confirmed recovery may retry the original POST once,
             // but only after Windows proves it still has the exact old binding.
@@ -797,8 +880,8 @@ public enum AssemblywrightMacLocalModelSelectionControl {
         guard projection.schemaVersion == 1,
               projection.deviceID.lowercased() == intent.deviceID.lowercased(),
               projection.registryRevision == intent.expectedRegistryRevision + 1,
-              projection.designationRevision == intent.expectedDesignationRevision + 1,
-              projection.emergencyPauseRevision == intent.expectedEmergencyPauseRevision,
+              projection.designationRevision >= intent.expectedDesignationRevision + 1,
+              projection.emergencyPauseRevision >= intent.expectedEmergencyPauseRevision,
               !projection.emergencyPaused, projection.modelID == intent.modelID else {
             throw AssemblywrightMacLocalModelSelectionError.reconciliationRequired
         }
@@ -817,47 +900,72 @@ public enum AssemblywrightMacLocalModelSelectionControl {
         identityStore: any AssemblywrightMacLocalModelIdentityStoring,
         connector: any AssemblywrightMacBridgeConnecting
     ) async throws -> AssemblywrightMacLocalModelSelectionOutcome {
+        do {
+            return try await reconcileTarget(
+                request: request,
+                profile: profile,
+                identityStore: identityStore,
+                connector: connector
+            )
+        } catch is AssemblywrightMacAuthoritativeTargetReconciliationError {
+            throw AssemblywrightMacLocalModelSelectionError.reconciliationRequired
+        }
+    }
+
+    private static func reconcileTarget(
+        request: AssemblywrightMacLocalModelSelectionRequest,
+        profile: AssemblywrightMacBridgeProfile,
+        identityStore: any AssemblywrightMacLocalModelIdentityStoring,
+        connector: any AssemblywrightMacBridgeConnecting
+    ) async throws -> AssemblywrightMacLocalModelSelectionOutcome {
         guard request.expectedRegistryRevision < UInt64.max,
               request.expectedDesignationRevision < UInt64.max else {
             throw AssemblywrightMacLocalModelSelectionError.reconciliationRequired
         }
-        let old = profile.capabilities[0]
-        let target = AssemblywrightMacBridgeProfile(
-            deviceID: profile.deviceID,
-            deviceName: profile.deviceName,
-            role: profile.role,
-            registryRevision: request.expectedRegistryRevision + 1,
-            capabilities: [AssemblywrightMacBridgeCapability(
-                id: old.id, kind: old.kind, provider: old.provider, model: request.modelID,
-                maxContextBytes: old.maxContextBytes, maxResultBytes: old.maxResultBytes
-            )],
-            masterEndpoint: profile.masterEndpoint,
-            certificateNotAfterMilliseconds: profile.certificateNotAfterMilliseconds
+        let target = try reconciliationTarget(
+            installedProfile: profile,
+            requestedModelID: request.modelID
         )
-        let session = try await connector.connect(profile: target)
-        let response = try await session.send(
-            AssemblywrightMacBridgeHTTPRequest(method: "GET", path: path)
+        let session = try await connector.connectForLocalModelReconciliation(
+            profile: target,
+            installedProfile: profile,
+            requestedModelID: request.modelID
         )
-        guard response.status == 200, response.body.count <= maximumFrameBytes else {
-            throw AssemblywrightMacLocalModelSelectionError.reconciliationRequired
+        do {
+            let response = try await session.send(
+                AssemblywrightMacBridgeHTTPRequest(method: "GET", path: path)
+            )
+            guard response.status == 200, response.body.count <= maximumFrameBytes else {
+                throw AssemblywrightMacAuthoritativeTargetReconciliationError.unsafeState
+            }
+            let projection = try AssemblywrightMacLocalModelSelectionProjection.decodeStrict(
+                response.body
+            )
+            guard projection.schemaVersion == 1,
+                  projection.deviceID.lowercased() == request.deviceID.lowercased(),
+                  projection.deviceName == profile.deviceName,
+                  projection.registryRevision == request.expectedRegistryRevision + 1,
+                  projection.designationRevision >= request.expectedDesignationRevision + 1,
+                  projection.emergencyPauseRevision
+                    >= request.expectedEmergencyPauseRevision,
+                  !projection.emergencyPaused,
+                  projection.modelID == request.modelID else {
+                throw AssemblywrightMacAuthoritativeTargetReconciliationError.unsafeState
+            }
+            _ = try identityStore.installLocalModelSelection(
+                modelID: request.modelID,
+                expectedRegistryRevision: request.expectedRegistryRevision,
+                registryRevision: projection.registryRevision
+            )
+            return .reconciledProjection(projection)
+        } catch is AssemblywrightMacAuthoritativeTargetReconciliationError {
+            throw AssemblywrightMacAuthoritativeTargetReconciliationError.unsafeState
+        } catch {
+            // Successful target-profile connection means Windows accepted the
+            // committed target registration. Never probe the stale old profile
+            // after any later response, pause, validation, or install failure.
+            throw AssemblywrightMacAuthoritativeTargetReconciliationError.unsafeState
         }
-        let projection = try AssemblywrightMacLocalModelSelectionProjection.decodeStrict(response.body)
-        guard projection.schemaVersion == 1,
-              projection.deviceID.lowercased() == request.deviceID.lowercased(),
-              projection.deviceName == profile.deviceName,
-              projection.registryRevision == request.expectedRegistryRevision + 1,
-              projection.designationRevision == request.expectedDesignationRevision + 1,
-              projection.emergencyPauseRevision == request.expectedEmergencyPauseRevision,
-              !projection.emergencyPaused,
-              projection.modelID == request.modelID else {
-            throw AssemblywrightMacLocalModelSelectionError.reconciliationRequired
-        }
-        _ = try identityStore.installLocalModelSelection(
-            modelID: request.modelID,
-            expectedRegistryRevision: request.expectedRegistryRevision,
-            registryRevision: projection.registryRevision
-        )
-        return .reconciledProjection(projection)
     }
 
     private static func validateProjection(
@@ -871,8 +979,8 @@ public enum AssemblywrightMacLocalModelSelectionControl {
               projection.deviceID.lowercased() == intent.deviceID.lowercased(),
               projection.deviceName == deviceName,
               projection.registryRevision == intent.expectedRegistryRevision + 1,
-              projection.designationRevision == intent.expectedDesignationRevision + 1,
-              projection.emergencyPauseRevision == intent.expectedEmergencyPauseRevision,
+              projection.designationRevision >= intent.expectedDesignationRevision + 1,
+              projection.emergencyPauseRevision >= intent.expectedEmergencyPauseRevision,
               !projection.emergencyPaused, projection.modelID == intent.modelID else {
             throw AssemblywrightMacLocalModelSelectionError.reconciliationRequired
         }
@@ -923,6 +1031,10 @@ public enum AssemblywrightMacLocalModelSelectionControl {
     }
 }
 
+private enum AssemblywrightMacAuthoritativeTargetReconciliationError: Error {
+    case unsafeState
+}
+
 private struct AssemblywrightMacLocalModelSelectionHTTPError: Decodable {
     let error: String
 
@@ -931,7 +1043,7 @@ private struct AssemblywrightMacLocalModelSelectionHTTPError: Decodable {
     }
 }
 
-private func validLocalModelID(_ value: String) -> Bool {
+func validLocalModelID(_ value: String) -> Bool {
     !value.isEmpty
         && value.utf8.count <= 128
         && value.utf8.allSatisfy { (0x21 ... 0x7e).contains($0) }
