@@ -37,7 +37,7 @@ $requiredChecks = @(
     [ordered]@{
         id = "protocol-windows"; workflow = "Assemblywright Windows Distributed Gate"; context = "Protocol, master, identity, mTLS, and SCM"; app_id = 15368
         workflow_id = 314849303; workflow_path = ".github/workflows/windows-protocol.yml"
-        workflow_sha256 = "da1ebe295c34f3442ff2a3537ca617642c436b019cf5009843546fefb9f914a0"
+        workflow_sha256 = "03f40d5a264ddd4cd818d8cff8b6acb2cc00188249448f4aa17ed2257255e3a8"
     }
 )
 

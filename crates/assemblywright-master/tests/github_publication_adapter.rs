@@ -399,7 +399,7 @@ fn valid_config(gh: &[u8], git: &[u8]) -> serde_json::Value {
         "post_merge_gate": "release-local",
         "required_checks": [
             {"id":"release-local","workflow":"Assemblywright Release Local Gate","context":"Release local gate","app_id":15368,"workflow_id":282605278,"workflow_path":".github/workflows/release-local.yml","workflow_sha256":"51e809a94f59193e213bdff6e49f3a86e612643f094e366055f42f8745026fd7"},
-            {"id":"protocol-windows","workflow":"Assemblywright Windows Distributed Gate","context":"Protocol, master, identity, mTLS, and SCM","app_id":15368,"workflow_id":314849303,"workflow_path":".github/workflows/windows-protocol.yml","workflow_sha256":"da1ebe295c34f3442ff2a3537ca617642c436b019cf5009843546fefb9f914a0"}
+            {"id":"protocol-windows","workflow":"Assemblywright Windows Distributed Gate","context":"Protocol, master, identity, mTLS, and SCM","app_id":15368,"workflow_id":314849303,"workflow_path":".github/workflows/windows-protocol.yml","workflow_sha256":"03f40d5a264ddd4cd818d8cff8b6acb2cc00188249448f4aa17ed2257255e3a8"}
         ],
         "gh_executable_sha256": hex(&Sha256::digest(gh)),
         "git_executable_sha256": hex(&Sha256::digest(git)),

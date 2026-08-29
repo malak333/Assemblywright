@@ -1,7 +1,7 @@
 use crate::{i64_to_u64, parse_uuid, u64_to_i64, DeviceRegistration, MasterError, MasterKernel};
 use assemblywright_protocol::{
-    CapabilityDescriptor, DeviceId, DeviceRole, HandshakeRequest, MAX_ENROLLMENT_CSR_PEM_BYTES,
-    PROTOCOL_VERSION,
+    CapabilityDescriptor, CapabilityKind, DeviceId, DeviceRole, HandshakeRequest,
+    MAX_ENROLLMENT_CSR_PEM_BYTES, PROTOCOL_VERSION,
 };
 use base64::Engine as _;
 use p256::ecdsa::{signature::Verifier as _, Signature, VerifyingKey};
@@ -252,6 +252,8 @@ pub struct EnrollmentRequest {
 pub struct IssuedDeviceCertificate {
     pub status: String,
     pub operation: EnrollmentOperation,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grant_id: Option<Uuid>,
     pub device_id: DeviceId,
     pub device_name: String,
     pub role: DeviceRole,
@@ -740,6 +742,41 @@ impl MasterKernel {
         Ok(receipt)
     }
 
+    /// Creates one rotation grant and returns the transaction-consistent current
+    /// registration needed to build the secret-free interactive invitation.
+    pub fn create_rotation_pairing_grant(
+        &mut self,
+        device_id: DeviceId,
+        now_ms: u64,
+    ) -> Result<(EnrollmentGrantReceipt, DeviceRegistration), MasterError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let registration = load_registration(&tx, device_id, false)?;
+        if registration.role != DeviceRole::MacBridge
+            || registration.capabilities.iter().any(|capability| {
+                capability.id == assemblywright_protocol::FIXTURE_REASONING_CAPABILITY_ID
+                    || capability.provider == "assemblywright-fixture"
+                    || capability.id == assemblywright_protocol::LOCAL_CODING_CAPABILITY_ID
+                    || capability.kind == CapabilityKind::LocalCoding
+            })
+        {
+            return Err(MasterError::InvalidEnrollmentGrant(
+                "interactive certificate rotation requires a current non-fixture MacBridge registration"
+                    .to_string(),
+            ));
+        }
+        let receipt = insert_grant(
+            &tx,
+            EnrollmentOperation::Rotate,
+            registration.clone(),
+            None,
+            now_ms,
+        )?;
+        tx.commit()?;
+        Ok((receipt, registration))
+    }
+
     pub fn create_capability_rebind_grant(
         &mut self,
         device_id: DeviceId,
@@ -1114,6 +1151,19 @@ impl MasterKernel {
         request: &EnrollmentRequest,
         now_ms: u64,
     ) -> Result<IssuedDeviceCertificate, MasterError> {
+        self.issue_device_certificate_with_precommit(authority, request, now_ms, |_| Ok(()))
+    }
+
+    pub fn issue_device_certificate_with_precommit<F>(
+        &mut self,
+        authority: &IdentityAuthority,
+        request: &EnrollmentRequest,
+        now_ms: u64,
+        precommit: F,
+    ) -> Result<IssuedDeviceCertificate, MasterError>
+    where
+        F: FnOnce(&IssuedDeviceCertificate) -> Result<(), MasterError>,
+    {
         if request.grant_id.is_nil() || !valid_grant_secret(&request.grant_secret) {
             return Err(MasterError::InvalidEnrollmentGrantSecret);
         }
@@ -1188,10 +1238,10 @@ impl MasterKernel {
         if consumed != 1 {
             return Err(MasterError::EnrollmentGrantConsumed);
         }
-        tx.commit()?;
-        Ok(IssuedDeviceCertificate {
+        let certificate = IssuedDeviceCertificate {
             status: "device_certificate_issued".to_string(),
             operation: grant.operation,
+            grant_id: (grant.operation == EnrollmentOperation::Rotate).then_some(request.grant_id),
             device_id: grant.registration.device_id,
             device_name: grant.registration.device_name,
             role: grant.registration.role,
@@ -1202,7 +1252,93 @@ impl MasterKernel {
             certificate_sha256: hex(&material.certificate_sha256),
             certificate_pem: material.certificate_pem,
             ca_certificate_pem: authority.ca_certificate_pem.clone(),
-        })
+        };
+        precommit(&certificate)?;
+        tx.commit()?;
+        Ok(certificate)
+    }
+
+    pub fn validate_rotation_recovery_receipt(
+        &mut self,
+        receipt: &IssuedDeviceCertificate,
+        now_ms: u64,
+    ) -> Result<(), MasterError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Deferred)?;
+        let grant_id = receipt.grant_id.ok_or_else(|| {
+            MasterError::InvalidEnrollmentGrant(
+                "rotation recovery receipt omitted grant_id".to_string(),
+            )
+        })?;
+        if receipt.status != "device_certificate_issued"
+            || receipt.operation != EnrollmentOperation::Rotate
+        {
+            return Err(MasterError::InvalidEnrollmentGrant(
+                "rotation recovery receipt has the wrong operation".to_string(),
+            ));
+        }
+        let grant = load_grant(&tx, grant_id)?;
+        if grant.operation != EnrollmentOperation::Rotate || grant.consumed_at_ms.is_none() {
+            return Err(MasterError::InvalidEnrollmentGrant(
+                "rotation recovery grant is not durably consumed".to_string(),
+            ));
+        }
+        let registration = load_registration(&tx, receipt.device_id, false)?;
+        if registration != grant.registration
+            || receipt.device_id != registration.device_id
+            || receipt.device_name != registration.device_name
+            || receipt.role != registration.role
+            || receipt.registry_revision != registration.registry_revision
+        {
+            return Err(MasterError::InvalidEnrollmentGrant(
+                "rotation recovery registration binding changed".to_string(),
+            ));
+        }
+        let digest = decode_hex_digest(&receipt.certificate_sha256)?;
+        let certificate_der = pem_certificate_der(&receipt.certificate_pem)?;
+        let certificate_pem_digest: [u8; 32] = Sha256::digest(&certificate_der).into();
+        if certificate_pem_digest != digest {
+            return Err(MasterError::InvalidEnrollmentGrant(
+                "rotation recovery certificate PEM digest changed".to_string(),
+            ));
+        }
+        let ca_der = pem_certificate_der(&receipt.ca_certificate_pem)?;
+        let ca_digest: [u8; 32] = Sha256::digest(&ca_der).into();
+        let recorded_ca: Vec<u8> = tx.query_row(
+            "SELECT ca_fingerprint_sha256 FROM master_identity_authority WHERE authority_id = 1",
+            [],
+            |row| row.get(0),
+        )?;
+        if recorded_ca.as_slice() != ca_digest {
+            return Err(MasterError::InvalidEnrollmentGrant(
+                "rotation recovery CA binding changed".to_string(),
+            ));
+        }
+        let exact: bool = tx.query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM master_device_certificates
+               WHERE device_id = ?1 AND serial_hex = ?2 AND certificate_sha256 = ?3
+                 AND issued_at_ms = ?4 AND not_after_ms = ?5
+                 AND revoked_at_ms IS NULL AND not_after_ms > ?6
+             )",
+            params![
+                receipt.device_id.0.to_string(),
+                receipt.serial_hex,
+                digest.as_slice(),
+                u64_to_i64(receipt.issued_at_ms)?,
+                u64_to_i64(receipt.not_after_ms)?,
+                u64_to_i64(now_ms)?,
+            ],
+            |row| row.get(0),
+        )?;
+        if !exact {
+            return Err(MasterError::InvalidEnrollmentGrant(
+                "rotation recovery certificate is not the exact active certificate".to_string(),
+            ));
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn certificate_is_active(

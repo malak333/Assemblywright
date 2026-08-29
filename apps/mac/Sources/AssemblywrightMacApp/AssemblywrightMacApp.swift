@@ -1,6 +1,7 @@
 import AssemblywrightMacCore
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 @main
 struct AssemblywrightMacApp: App {
@@ -58,6 +59,14 @@ struct DeveloperBridgeStatusView: View {
     @State private var reconciliationDigest = ""
     @State private var mergedBeforeAbandon = false
     @State private var healthyMainDigest = ""
+    @State private var localModelID = ""
+    @State private var localModelExecutablePath = ""
+    @State private var localModelDirectoryPath = ""
+    @State private var pendingModelConfirmation: LocalModelConfirmation?
+    @State private var choosingModelExecutable = false
+    @State private var choosingModelDirectory = false
+
+    private enum LocalModelConfirmation { case select, resume }
 
     private var presentation: DeveloperBridgeStatusPresentation {
         DeveloperBridgeStatusPresentation(status: model.status)
@@ -144,6 +153,58 @@ struct DeveloperBridgeStatusView: View {
                 }
             }
 
+            let models = LocalModelSelectionPresentation(
+                state: model.localModelSelectionState
+            )
+            Section("Models") {
+                GroupBox("Mac MLX") {
+                    LabeledContent("Status", value: models.macStatus)
+                    if let active = model.localModelSelectionState.active {
+                        LabeledContent("Active model", value: active.modelID)
+                    }
+                    if model.localModelSelectionState.pending == nil {
+                        TextField("Model ID", text: $localModelID)
+                        HStack {
+                            TextField("mlx_lm.generate executable", text: $localModelExecutablePath)
+                            Button("Browse…") { choosingModelExecutable = true }
+                        }
+                        HStack {
+                            TextField("Canonical model directory", text: $localModelDirectoryPath)
+                            Button("Browse…") { choosingModelDirectory = true }
+                        }
+                        Button("Apply model…") { pendingModelConfirmation = .select }
+                            .disabled(
+                                model.status.phase != .connected
+                                    || localModelID.isEmpty
+                                    || localModelExecutablePath.isEmpty
+                                    || localModelDirectoryPath.isEmpty
+                            )
+                    } else {
+                        Text("An ambiguous prior command blocks supervision until exact Windows reconciliation is separately confirmed.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Button("Resume exact selection…") {
+                            pendingModelConfirmation = .resume
+                        }
+                    }
+                }
+                GroupBox("Local coding") {
+                    LabeledContent("Model", value: models.localCoding)
+                }
+                GroupBox("Windows RTX") {
+                    LabeledContent("Status", value: models.windowsRTX)
+                }
+                GroupBox("Production review") {
+                    LabeledContent("Provider", value: models.productionReview)
+                }
+                Text("Only the Mac MLX model is selectable. Local paths remain in the owner-private Mac store and never enter Windows status or audit.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if let error = model.localModelSelectionErrorCode {
+                    LabeledContent("Model selection code", value: error)
+                }
+            }
+
             ApprovedFeatureAuthoringSection(model: model)
         }
         .formStyle(.grouped)
@@ -169,6 +230,52 @@ struct DeveloperBridgeStatusView: View {
         } message: {
             Text("The current queue, designation, lifecycle, orchestration, and Emergency Pause revisions are included. This cannot resume Emergency Pause.")
         }
+        .confirmationDialog(
+            "Confirm local model selection",
+            isPresented: Binding(
+                get: { pendingModelConfirmation != nil },
+                set: { if !$0 { pendingModelConfirmation = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Confirm") {
+                guard let confirmation = pendingModelConfirmation else { return }
+                pendingModelConfirmation = nil
+                Task {
+                    switch confirmation {
+                    case .select:
+                        await model.selectLocalModel(
+                            modelID: localModelID,
+                            executablePath: localModelExecutablePath,
+                            modelDirectoryPath: localModelDirectoryPath
+                        )
+                    case .resume:
+                        await model.resumePendingLocalModelSelection()
+                    }
+                }
+            }
+            Button("Cancel", role: .cancel) { pendingModelConfirmation = nil }
+        } message: {
+            Text("Change \(model.status.localModelSelection?.modelID ?? "current model") to \(localModelID.isEmpty ? model.localModelSelectionState.pending?.configuration.modelID ?? "pending model" : localModelID). Windows will advance registry and designation revisions and disconnect the old session.")
+        }
+        .fileImporter(
+            isPresented: $choosingModelExecutable,
+            allowedContentTypes: [.item],
+            allowsMultipleSelection: false
+        ) { result in
+            if case let .success(urls) = result, let url = urls.first {
+                localModelExecutablePath = url.path
+            }
+        }
+        .fileImporter(
+            isPresented: $choosingModelDirectory,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: false
+        ) { result in
+            if case let .success(urls) = result, let url = urls.first {
+                localModelDirectoryPath = url.path
+            }
+        }
     }
 
     private static func digest(_ text: String) -> [UInt8]? {
@@ -177,6 +284,26 @@ struct DeveloperBridgeStatusView: View {
         return stride(from: 0, to: 64, by: 2).compactMap { offset in
             UInt8(normalized.dropFirst(offset).prefix(2), radix: 16)
         }
+    }
+}
+
+struct LocalModelSelectionPresentation: Equatable {
+    let macStatus: String
+    let localCoding: String
+    let windowsRTX: String
+    let productionReview: String
+
+    init(state: AssemblywrightMacLocalModelSelectionState) {
+        if let pending = state.pending {
+            macStatus = "Pending reconciliation: \(pending.configuration.modelID)"
+        } else if let active = state.active {
+            macStatus = "Active: \(active.modelID)"
+        } else {
+            macStatus = "Uses installed MLX profile"
+        }
+        localCoding = "assemblywright-local-coding-v1 (fixed)"
+        windowsRTX = "Not provisioned"
+        productionReview = "openai.codex / gpt-5.6-sol (fixed)"
     }
 }
 

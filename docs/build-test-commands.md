@@ -1,5 +1,26 @@
 # Build And Test Commands
 
+## Local Model Selection Focused Validation
+
+```bash
+cargo test -p assemblywright-protocol --test local_model_selection_contract -- --nocapture
+cargo test -p assemblywright-master --test feature_conveyor_kernel local_model_selection -- --nocapture
+swift test --disable-sandbox --package-path apps/mac --filter LocalModelSelection
+swift test --disable-sandbox --package-path apps/mac --filter localModelTerminalRejectionCannotResume
+swift test --disable-sandbox --package-path apps/mac --filter modelsPresentationIsBounded
+```
+
+Windows-only native mTLS coverage is:
+
+```powershell
+cargo test -p assemblywright-master --test remote_mtls_e2e remote_model_selection_rejects_old_profile_and_reconciles_exact_target_profile -- --nocapture
+```
+
+It proves the real TLS/application-session route, same-session old-profile
+rejection, and exact target-profile reconciliation on Windows. Mac source
+validation cannot substitute for that Windows execution, signed-helper
+packaging, notarization, clean-profile installation, or live MLX model launch.
+
 Run commands from the repository root unless noted otherwise.
 
 ## Required Local Gate
@@ -40,6 +61,7 @@ The gate runs, in order:
 ./scripts/release-protocol-version-contract-smoke.sh --check
 ./scripts/release-protocol-version-contract-smoke.sh --self-test
 ./scripts/mac-windows-bridge-live-e2e.sh --check
+./scripts/windows-repository-onboarding-self-check.sh
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
@@ -67,6 +89,68 @@ cargo run -p assemblywright-cli -- release live-device-runbook
 swift test --disable-sandbox --package-path apps/mac
 swift build --disable-sandbox --package-path apps/mac
 ```
+
+## Windows Repository Onboarding
+
+Onboard one existing, clean, standalone Windows repository in two deliberate
+steps. Planning performs no owner-control mutation and returns a path-free
+summary containing the plan ID:
+
+```powershell
+.\scripts\windows-repository-onboarding.ps1 -Action SelfTest
+.\scripts\windows-repository-onboarding.ps1 -Action Plan -RepositoryPath C:\absolute\project
+.\scripts\windows-repository-onboarding.ps1 -Action Check -PlanId <PLAN_UUID>
+```
+
+After reviewing the plan, record the three independent revision-1 grants and
+run repository preflight with one explicit approval command:
+
+```powershell
+.\scripts\windows-repository-onboarding.ps1 -Action Approve -PlanId <PLAN_UUID> -ConfirmRegistration -ConfirmCloudDisclosure -ConfirmAutonomousPublication
+```
+
+`Check` is read-only and remains available after the plan expires. An expired
+plan cannot create fresh grants. The same three confirmations may only resume
+its exact partial or complete revision-1 grant set through preflight and receipt
+publication, or replay its exact stored receipt when all three exact grants
+remain current. If no grants exist, or any grant is foreign, drifted, inactive,
+or revoked, create and review a new plan instead.
+
+Paste the resulting compact `repository_onboarding_ready` JSON into **Author
+an approved feature > Import repository onboarding receipt** in the Mac app.
+Import fills only the repository ID and three grant revisions; the form still
+requires approval evidence, a current authenticated snapshot, review, and the
+second enqueue confirmation. The script does not create a repository, enqueue,
+dispatch, mutate source, publish, or activate the conveyor. For a new project,
+create and commit the empty standalone `main` repository first. There is not yet
+a general owner-control dispatcher for arbitrary newly onboarded repositories.
+
+The portable contract regression is:
+
+```sh
+./scripts/windows-repository-onboarding-self-check.sh
+```
+
+The Windows-hosted native process E2E is:
+
+```powershell
+cargo test -p assemblywright-master --test windows_repository_onboarding_e2e --locked -- --nocapture
+```
+
+It launches the real master on a disposable loopback endpoint and runs real
+PowerShell `Plan`, `Approve`, and `Check` processes against a disposable clean
+standalone `main` repository. It verifies separate approval switches, rejects
+post-plan repository drift and expired fresh approval without recording grants
+or audit evidence, proves read-only expired-state inspection and exact partial
+and complete-without-receipt revision-1 forward recovery, requires three exact
+active revision-1 grants and a preflight-bound path-free receipt, and proves that an exact expired completed-plan
+replay returns the immutable receipt without advancing authority or duplicating
+redacted audit evidence. It does not
+touch the installed service, any real repository, external network, activation,
+queueing, publication, signing, notarization, or live-device readiness.
+Normal test teardown kills and reaps the spawned master, then removes the
+temporary repository, master data, owner token, private plan, and receipt. The
+fixture creates no remote and uses no external credentials.
 
 ## Repository-Gate Proof Controller
 
@@ -659,6 +743,7 @@ executable changes as release evidence.
 | Master kernel | `cargo test -p assemblywright-master` |
 | Feature Conveyor kernel, grant CAS/projection, owner designation, enqueue, snapshot claim, coding dispatch, and status | `cargo test -p assemblywright-master --test feature_conveyor_kernel` |
 | Master process E2E, including authenticated loopback grant/preflight/snapshot/dispatch/status/designation routes | `cargo test -p assemblywright-master --test master_process_e2e` |
+| Windows repository onboarding across disposable Git, PowerShell, and the real owner-loopback master | `cargo test -p assemblywright-master --test windows_repository_onboarding_e2e --locked -- --nocapture` |
 | Windows remote mTLS observer, designated-owner enqueue, owner-control projection, activation, and denial/success | `cargo test -p assemblywright-master --test remote_mtls_e2e remote_listener_requires_enrollment_tls13_and_channel_bound_identity -- --nocapture` |
 | Swift strict Feature Conveyor observer, typed approved-feature authoring/enqueue, one-shot owner actions, and helper lifecycle | `swift test --disable-sandbox --package-path apps/mac --filter DeveloperBridgeTests` |
 | SwiftUI approved-feature form and production-Swift-to-strict-Rust authoring fixture | `swift test --disable-sandbox --package-path apps/mac --filter AssemblywrightMacAppTests` and `cargo test -p assemblywright-protocol swift_approved_feature_authoring_fixture_strictly_decodes_in_rust` |
@@ -912,6 +997,55 @@ cancellation recognizes the installed replacement generation and cannot delete
 its selected key or certificate. Repository tests
 do not prove the Xcode-provisioned Secure Enclave path, live Windows DPAPI CLI,
 cross-device promotion, reconnect under the higher revision, or MLX execution.
+
+## Owner-Confirmed Standard Certificate Rotation
+
+Use the two-document rotation ceremony before certificate expiry or to recover
+an already-expired standard MacBridge identity. Stop the Windows service first;
+the pairing process owns the authority while it retains and zeroizes the raw
+grant. Pass only the public invitation, CSR reply, and issued certificate
+receipt through stdin. Never place any ceremony document or raw grant in argv
+or shell history, and never persist the raw grant. The master alone persists
+the exact public issued-certificate receipt in its protected recovery journal
+before the authority commit.
+
+```text
+Windows: assemblywright-master ... enrollment rotate-pair --device-id UUID \
+  --master-endpoint IP:PORT --confirm
+Mac:     assemblywright-mac-bridge enrollment rotate prepare --confirm
+Mac:     assemblywright-mac-bridge enrollment rotate install --confirm
+Windows: assemblywright-master ... enrollment rotate-recover-acknowledge \
+  --grant-id UUID --confirm
+```
+
+If the issued receipt is lost after CSR submission, do not create another
+rotation grant. With the service still stopped, re-emit the byte-identical
+grant-bound receipt as often as necessary:
+
+```text
+Windows: assemblywright-master ... enrollment rotate-recover \
+  --grant-id UUID --confirm
+Mac:     assemblywright-mac-bridge enrollment rotate install --confirm
+```
+
+Run `rotate-recover-acknowledge` only after Mac installation and authenticated
+reconnect are verified. Until that explicit acknowledgement, recovery remains
+idempotent and the owner-private journal remains available. Acknowledgement
+removes only that exact validated public receipt journal.
+
+The rotation preserves the exact device ID, name, role, registry revision,
+capabilities, endpoint, pinned CA, and owner-control designation. Windows
+revokes the prior certificate serials when issuance commits; Mac installation
+validates the new leaf against the currently selected Secure Enclave key before
+forward-resumably replacing only its certificate and installed record.
+Interruption before CSR acceptance issues nothing. Missing output after CSR
+submission is resolved only through the exact confirmed recovery command above.
+Focused native coverage is:
+
+```sh
+cargo test -p assemblywright-master --test enrollment_identity_e2e -- --nocapture
+swift test --disable-sandbox --package-path apps/mac --filter DeveloperBridge
+```
 
 ## Protocol v5 general-worker validation
 

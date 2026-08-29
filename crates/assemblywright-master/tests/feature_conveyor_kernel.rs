@@ -27,6 +27,7 @@ use assemblywright_protocol::{
     FeatureConveyorValidationCommandId, FeatureConveyorValidationGateRequest, HandshakeRequest,
     JobEnvelope, JobResultEnvelope, JobResultStatus, LocalCodingJobResult,
     LocalCodingResultArtifact, LocalCodingResultArtifactAdmission, LocalCodingSnapshotChunkRequest,
+    LocalModelSelectionRequest, LocalModelSelectionStatus,
     FEATURE_CONVEYOR_OWNER_ACTIVATION_SCHEMA_VERSION,
     FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
     FEATURE_CONVEYOR_PUBLICATION_COORDINATOR_SCHEMA_VERSION,
@@ -3390,6 +3391,280 @@ fn owner_control_designation_is_explicit_cas_bound_role_checked_and_audited() {
         assert!(!audit.contains("owner-control-mlx"));
         assert!(!audit.contains("owner-bridge"));
     }
+}
+
+#[test]
+fn local_model_selection_is_model_only_revisioned_disconnecting_and_redacted() {
+    let directory = tempdir().unwrap();
+    let database = directory.path().join("master.sqlite3");
+    let mut kernel = MasterKernel::open(&database).unwrap();
+    let bridge = bridge_registration("owner-model-bridge");
+    kernel.register_device(&bridge).unwrap();
+    kernel
+        .designate_owner_control_bridge(bridge.device_id, 0, 10)
+        .unwrap();
+    let epoch = kernel
+        .accept_handshake(
+            &HandshakeRequest {
+                protocol_version: PROTOCOL_VERSION,
+                device_id: bridge.device_id,
+                device_name: bridge.device_name.clone(),
+                role: bridge.role,
+                registry_revision: bridge.registry_revision,
+                capabilities: bridge.capabilities.clone(),
+            },
+            11,
+        )
+        .unwrap()
+        .connection_epoch;
+    let initial = kernel.local_model_selection_projection(&bridge).unwrap();
+    assert_eq!(initial.model_id, "owner-control-mlx");
+    assert_eq!(initial.registry_revision, 1);
+    assert_eq!(initial.designation_revision, 1);
+
+    let request = LocalModelSelectionRequest {
+        schema_version: 1,
+        device_id: bridge.device_id,
+        expected_registry_revision: 1,
+        expected_designation_revision: 1,
+        expected_emergency_pause_revision: 0,
+        model_id: "mlx-community/Qwen3-8B-4bit".to_string(),
+    };
+    let receipt = kernel
+        .select_local_model_from_owner_bridge(&request, &bridge, epoch, 12)
+        .unwrap();
+    assert_eq!(receipt.status, LocalModelSelectionStatus::Selected);
+    assert_eq!(receipt.registry_revision, 2);
+    assert_eq!(receipt.designation_revision, 2);
+    assert_eq!(
+        kernel
+            .owner_control_bridge_designation()
+            .unwrap()
+            .unwrap()
+            .registry_revision,
+        2
+    );
+    assert!(kernel.local_model_selection_projection(&bridge).is_err());
+
+    let target = DeviceRegistration {
+        registry_revision: 2,
+        capabilities: vec![CapabilityDescriptor::mlx_reasoning(
+            request.model_id.clone(),
+            32 * 1024,
+            32 * 1024,
+        )],
+        ..bridge.clone()
+    };
+    let target_projection = kernel.local_model_selection_projection(&target).unwrap();
+    assert_eq!(target_projection.model_id, request.model_id);
+    assert_eq!(target_projection.designation_revision, 2);
+
+    let connection = Connection::open(database).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT active FROM master_connections WHERE device_id=?1 AND connection_epoch=?2",
+                params![bridge.device_id.0.to_string(), epoch as i64],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+    let audit: String = connection
+        .query_row(
+            "SELECT redacted_metadata_json FROM feature_conveyor_audit
+             WHERE event_kind='local_model_selected'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(!audit.contains("Qwen"));
+    assert!(!audit.contains('/'));
+    assert!(!audit.contains(&bridge.device_id.0.to_string()));
+}
+
+#[test]
+fn local_model_selection_receipt_validation_precedes_authority_commit() {
+    let directory = tempdir().unwrap();
+    let database = directory.path().join("master.sqlite3");
+    let mut kernel = MasterKernel::open(&database).unwrap();
+    let bridge = bridge_registration("model-receipt-ordering-bridge");
+    kernel.register_device(&bridge).unwrap();
+    kernel
+        .designate_owner_control_bridge(bridge.device_id, 0, 10)
+        .unwrap();
+    let epoch = kernel
+        .accept_handshake(
+            &HandshakeRequest {
+                protocol_version: PROTOCOL_VERSION,
+                device_id: bridge.device_id,
+                device_name: bridge.device_name.clone(),
+                role: bridge.role,
+                registry_revision: bridge.registry_revision,
+                capabilities: bridge.capabilities.clone(),
+            },
+            11,
+        )
+        .unwrap()
+        .connection_epoch;
+    let request = LocalModelSelectionRequest {
+        schema_version: 1,
+        device_id: bridge.device_id,
+        expected_registry_revision: 1,
+        expected_designation_revision: 1,
+        expected_emergency_pause_revision: 0,
+        model_id: "target-model".to_string(),
+    };
+
+    // Zero is invalid receipt evidence. Validation must roll back every staged
+    // authority mutation rather than discovering the failure after commit.
+    assert!(kernel
+        .select_local_model_from_owner_bridge(&request, &bridge, epoch, 0)
+        .is_err());
+    assert_eq!(
+        kernel
+            .owner_control_bridge_designation()
+            .unwrap()
+            .unwrap()
+            .registry_revision,
+        1
+    );
+    let connection = Connection::open(&database).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT registry_revision FROM master_devices WHERE device_id=?1",
+                [bridge.device_id.0.to_string()],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT active FROM master_connections WHERE device_id=?1 AND connection_epoch=?2",
+                params![bridge.device_id.0.to_string(), epoch as i64],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM feature_conveyor_audit WHERE event_kind='local_model_selected'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn local_model_selection_rejects_pause_stale_binding_and_non_mlx_without_mutation() {
+    let directory = tempdir().unwrap();
+    let database = directory.path().join("master.sqlite3");
+    let mut kernel = MasterKernel::open(&database).unwrap();
+    let bridge = bridge_registration("model-rejection-bridge");
+    kernel.register_device(&bridge).unwrap();
+    kernel
+        .designate_owner_control_bridge(bridge.device_id, 0, 10)
+        .unwrap();
+    kernel
+        .accept_handshake(
+            &HandshakeRequest {
+                protocol_version: PROTOCOL_VERSION,
+                device_id: bridge.device_id,
+                device_name: bridge.device_name.clone(),
+                role: bridge.role,
+                registry_revision: 1,
+                capabilities: bridge.capabilities.clone(),
+            },
+            11,
+        )
+        .unwrap();
+    let mut request = LocalModelSelectionRequest {
+        schema_version: 1,
+        device_id: bridge.device_id,
+        expected_registry_revision: 1,
+        expected_designation_revision: 1,
+        expected_emergency_pause_revision: 0,
+        model_id: "target-model".to_string(),
+    };
+    request.expected_designation_revision = 2;
+    assert!(kernel
+        .select_local_model_from_owner_bridge(&request, &bridge, 1, 12)
+        .is_err());
+    request.expected_designation_revision = 1;
+    kernel.set_emergency_paused_at(true, 13).unwrap();
+    request.expected_emergency_pause_revision = 1;
+    assert!(kernel
+        .select_local_model_from_owner_bridge(&request, &bridge, 1, 14)
+        .is_err());
+    kernel.set_emergency_paused_at(false, 15).unwrap();
+    request.expected_emergency_pause_revision = 2;
+    for invalid_model in ["target model", "target-model-é", "target\tmodel"] {
+        request.model_id = invalid_model.to_string();
+        assert!(kernel
+            .select_local_model_from_owner_bridge(&request, &bridge, 1, 16)
+            .is_err());
+    }
+    request.model_id = "target-model".to_string();
+    let step_id = Uuid::new_v4();
+    let connection = Connection::open(&database).unwrap();
+    connection
+        .execute(
+            "INSERT INTO master_steps
+         (task_id,step_id,status,capability_id,sensitivity_json,context_json,
+          context_sha256,lease_duration_ms,deadline_after_ms,created_at_ms)
+         VALUES (?1,?2,'leased','mlx.reasoning','\"public\"','{}',?3,1000,1000,1)",
+            params![
+                Uuid::new_v4().to_string(),
+                step_id.to_string(),
+                [1_u8; 32].as_slice()
+            ],
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO master_attempts
+         (attempt_id,step_id,device_id,connection_epoch,lease_id,cancellation_id,
+          status,job_json,leased_at_ms,lease_expires_at_ms)
+         VALUES (?1,?2,?3,1,?4,?5,'leased','{}',1,1000)",
+            params![
+                Uuid::new_v4().to_string(),
+                step_id.to_string(),
+                bridge.device_id.0.to_string(),
+                Uuid::new_v4().to_string(),
+                Uuid::new_v4().to_string()
+            ],
+        )
+        .unwrap();
+    assert!(kernel
+        .select_local_model_from_owner_bridge(&request, &bridge, 1, 16)
+        .is_err());
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT registry_revision FROM master_devices WHERE device_id=?1",
+                [bridge.device_id.0.to_string()],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM feature_conveyor_audit WHERE event_kind='local_model_selected'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        0
+    );
 }
 
 #[test]

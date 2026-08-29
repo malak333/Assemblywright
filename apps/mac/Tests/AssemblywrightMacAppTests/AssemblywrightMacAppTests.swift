@@ -6,6 +6,31 @@ import Testing
 @MainActor
 @Suite("Assemblywright Mac app presentation")
 struct AssemblywrightMacAppTests {
+    @Test("Models presentation exposes one selectable lane and three fixed states")
+    func modelsPresentationIsBounded() {
+        let active = AssemblywrightMacLocalModelConfiguration(
+            modelID: "Qwen3-8B",
+            executablePath: "/private/owner/mlx_lm.generate",
+            modelDirectoryPath: "/private/owner/models/qwen",
+            registryRevision: 4
+        )
+        let presentation = LocalModelSelectionPresentation(
+            state: .init(active: active, pending: nil)
+        )
+        #expect(presentation.macStatus == "Active: Qwen3-8B")
+        #expect(presentation.localCoding.contains("fixed"))
+        #expect(presentation.windowsRTX == "Not provisioned")
+        #expect(presentation.productionReview.contains("gpt-5.6-sol"))
+
+        let pending = AssemblywrightMacPendingLocalModelSelection(
+            configuration: active,
+            requestData: Data("{}".utf8)
+        )
+        #expect(LocalModelSelectionPresentation(
+            state: .init(active: nil, pending: pending)
+        ).macStatus == "Pending reconciliation: Qwen3-8B")
+    }
+
     @Test("Developer bridge presentation maps every read-only lifecycle state")
     func developerBridgePresentationMapsEveryLifecycleState() {
         let cases: [(AssemblywrightDeveloperBridgeAppPhase, String)] = [
@@ -131,6 +156,64 @@ struct AssemblywrightMacAppTests {
         #expect(draft.modelID == "gpt-5.6-sol")
         #expect(draft.designSHA256 == Array(repeating: 0xa1, count: 32))
         #expect(try draft.canonicalManifestData().count > 0)
+    }
+
+    @Test("Production review binding is clearly separate from Codex development agents")
+    func productionReviewBindingPresentationIsExplicit() {
+        let form = ApprovedFeatureAuthoringForm()
+
+        #expect(
+            ApprovedFeatureReviewBindingPresentation.groupTitle
+                == "Identity and production review binding"
+        )
+        #expect(
+            ApprovedFeatureReviewBindingPresentation.providerLabel
+                == "Production review provider"
+        )
+        #expect(
+            ApprovedFeatureReviewBindingPresentation.modelLabel
+                == "Production review model"
+        )
+        #expect(ApprovedFeatureReviewBindingPresentation.lockLabel == "Fixed by Windows master")
+        #expect(
+            ApprovedFeatureReviewBindingPresentation.accessibilityIdentifier
+                == "approved-feature-production-review-binding"
+        )
+        #expect(
+            ApprovedFeatureReviewBindingPresentation.explanation
+                == "This Feature Conveyor binding is separate from repository-scoped Codex development reviewer agents."
+        )
+        #expect(form.providerID == "openai.codex")
+        #expect(form.modelID == "gpt-5.6-sol")
+    }
+
+    @Test("Onboarding receipt import atomically prefills repository routing only")
+    func onboardingReceiptImportPrefillsRepositoryRoutingOnly() throws {
+        var form = validApprovedFeatureForm()
+        form.repositoryID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+        form.registrationGrantRevision = "8"
+        form.cloudDisclosureGrantRevision = "9"
+        form.autonomousPublicationGrantRevision = "10"
+        form.baseBranch = "release-candidate"
+        let originalOutcome = form.outcome
+        let receipt = """
+        {"schema_version":1,"status":"repository_onboarding_ready","repository_id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","registration_grant_revision":1,"cloud_disclosure_grant_revision":1,"autonomous_publication_grant_revision":1,"base_branch":"main","head_commit":"\(String(repeating: "a", count: 40))","scope_sha256":"\(String(repeating: "b", count: 64))","approval_plan_sha256":"\(String(repeating: "c", count: 64))","preflight_fingerprint_sha256":"\(String(repeating: "d", count: 64))"}
+        """
+
+        try form.importRepositoryOnboardingReceipt(receipt)
+
+        #expect(form.repositoryID == "cccccccc-cccc-4ccc-8ccc-cccccccccccc")
+        #expect(form.registrationGrantRevision == "1")
+        #expect(form.cloudDisclosureGrantRevision == "1")
+        #expect(form.autonomousPublicationGrantRevision == "1")
+        #expect(form.baseBranch == "release-candidate")
+        #expect(form.outcome == originalOutcome)
+
+        let imported = form
+        #expect(throws: AssemblywrightMacRepositoryOnboardingReceiptError.invalid) {
+            try form.importRepositoryOnboardingReceipt("{}")
+        }
+        #expect(form == imported)
     }
 
     @Test("Production Swift authoring bytes match the Rust strict-decode fixture")

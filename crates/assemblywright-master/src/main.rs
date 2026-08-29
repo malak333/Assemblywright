@@ -10,14 +10,15 @@ use assemblywright_master::{
     ApprovedFeatureSpecification, ArtifactIntegrationAuthorization, ArtifactIntegrationError,
     CapabilityRebindAcknowledgement, DeviceRegistration, EnrollmentGrantSpec, EnrollmentRequest,
     EphemeralServerIdentity, FeatureAbandonmentEvidence, FeatureConveyorStatus,
-    FeatureGrantRevisions, FeatureSnapshotClaimPlan, IdentityAuthority, MasterHealthSnapshot,
-    MasterProcess, NewStep, PlatformSecretProtector, ProcessGithubPublication,
-    ProcessReviewProvider, PublicationAdapter, PublicationExecutionControl, RemoteWorkContract,
-    RepositoryGrantKind, RepositoryGrantRevision, RepositorySnapshotEvidence,
-    RepositorySnapshotStore, ResultArtifactReference, ReviewGatewayAuthorization, ReviewProvider,
-    ReviewProviderInvocationError, ReviewTransportFailure, StartupReconciliation,
-    UnavailableReviewProvider, ValidationCommandEvidence, ValidationGateAuthorization,
-    ValidationGateEvidence, ValidationGateExecutionPlan,
+    FeatureGrantRevisions, FeatureSnapshotClaimPlan, IdentityAuthority, IssuedDeviceCertificate,
+    MasterError, MasterHealthSnapshot, MasterProcess, NewStep, PlatformSecretProtector,
+    ProcessGithubPublication, ProcessReviewProvider, PublicationAdapter,
+    PublicationExecutionControl, RemoteWorkContract, RepositoryGrantKind, RepositoryGrantRevision,
+    RepositorySnapshotEvidence, RepositorySnapshotStore, ResultArtifactReference,
+    ReviewGatewayAuthorization, ReviewProvider, ReviewProviderInvocationError,
+    ReviewTransportFailure, StartupReconciliation, UnavailableReviewProvider,
+    ValidationCommandEvidence, ValidationGateAuthorization, ValidationGateEvidence,
+    ValidationGateExecutionPlan,
 };
 #[cfg(test)]
 use assemblywright_protocol::CapabilityKind;
@@ -50,6 +51,7 @@ use assemblywright_protocol::{
     HandshakeRequest, HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope,
     JobResultStatus, LocalCodingJobResult, LocalCodingResultArtifactAdmission,
     LocalCodingResultArtifactReceipt, LocalCodingSnapshotChunk, LocalCodingSnapshotChunkRequest,
+    LocalModelSelectionProjection, LocalModelSelectionReceipt, LocalModelSelectionRequest,
     Sensitivity, StepId, TaskId, ENROLLMENT_INVITATION_READY_STATUS,
     ENROLLMENT_PAIRING_SCHEMA_VERSION, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
     MAX_ENROLLMENT_PAIRING_FRAME_BYTES, MAX_FEATURE_CONVEYOR_CODING_DISPATCH_REQUEST_BYTES,
@@ -57,7 +59,7 @@ use assemblywright_protocol::{
     MAX_FEATURE_CONVEYOR_OWNER_RESOLUTION_REQUEST_BYTES,
     MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES,
     MAX_FEATURE_CONVEYOR_SNAPSHOT_CLAIM_REQUEST_BYTES, MAX_LOCAL_CODING_SNAPSHOT_CHUNK_BYTES,
-    MAX_WIRE_FRAME_BYTES, PROTOCOL_VERSION,
+    MAX_LOCAL_MODEL_SELECTION_FRAME_BYTES, MAX_WIRE_FRAME_BYTES, PROTOCOL_VERSION,
 };
 use axum::body::Bytes;
 use axum::extract::rejection::BytesRejection;
@@ -109,6 +111,8 @@ const MASTER_STATE_NAMESPACE: &str = "Assemblywright";
 /// already-enrolled host keeps its durable kernel. Never written.
 const LEGACY_MASTER_STATE_NAMESPACE: &str = "Jarvis";
 const MAINTENANCE_MARKER_FILE: &str = "maintenance-mode.json";
+const ROTATION_RECOVERY_DIRECTORY: &str = "rotation-recovery-v1";
+const MAX_ROTATION_RECOVERY_RECEIPT_BYTES: usize = 64 * 1_024;
 const REPOSITORY_FILESYSTEM_OBSERVATION_TIMEOUT: Duration = Duration::from_secs(5);
 // This bounds API wait, not OS-thread execution: spawn_blocking cannot be
 // forcibly cancelled safely. The singleton reservation remains owned by a
@@ -347,6 +351,33 @@ enum EnrollmentCommand {
         #[arg(long)]
         master_endpoint: SocketAddr,
         /// Confirm this local operator capability-rebind staging action.
+        #[arg(long)]
+        confirm: bool,
+    },
+    /// Rotate one standard MacBridge certificate without changing its registration.
+    RotatePair {
+        #[arg(long)]
+        device_id: Uuid,
+        /// Existing concrete local or private-overlay master endpoint.
+        #[arg(long)]
+        master_endpoint: SocketAddr,
+        /// Confirm this local operator certificate-rotation action.
+        #[arg(long)]
+        confirm: bool,
+    },
+    /// Re-emit one exact committed rotation receipt from its owner-private journal.
+    RotateRecover {
+        #[arg(long)]
+        grant_id: Uuid,
+        /// Confirm this local operator recovery action.
+        #[arg(long)]
+        confirm: bool,
+    },
+    /// Acknowledge delivery and remove one exact committed rotation recovery journal.
+    RotateRecoverAcknowledge {
+        #[arg(long)]
+        grant_id: Uuid,
+        /// Confirm removal of the exact validated recovery journal.
         #[arg(long)]
         confirm: bool,
     },
@@ -1158,6 +1189,24 @@ fn enrollment(data_dir: &Path, command: EnrollmentCommand) -> anyhow::Result<()>
                 confirm,
             );
         }
+        EnrollmentCommand::RotatePair {
+            device_id,
+            master_endpoint,
+            confirm,
+        } => {
+            return enrollment_rotate_pair(
+                data_dir,
+                DeviceId::new(device_id),
+                master_endpoint,
+                confirm,
+            );
+        }
+        EnrollmentCommand::RotateRecover { grant_id, confirm } => {
+            return enrollment_rotate_recover(data_dir, grant_id, confirm);
+        }
+        EnrollmentCommand::RotateRecoverAcknowledge { grant_id, confirm } => {
+            return enrollment_rotate_recover_acknowledge(data_dir, grant_id, confirm);
+        }
         command => command,
     };
     let now_ms = current_time_ms()?;
@@ -1255,7 +1304,11 @@ fn enrollment(data_dir: &Path, command: EnrollmentCommand) -> anyhow::Result<()>
                 }))?
             );
         }
-        EnrollmentCommand::Pair { .. } | EnrollmentCommand::RebindPair { .. } => {
+        EnrollmentCommand::Pair { .. }
+        | EnrollmentCommand::RebindPair { .. }
+        | EnrollmentCommand::RotatePair { .. }
+        | EnrollmentCommand::RotateRecover { .. }
+        | EnrollmentCommand::RotateRecoverAcknowledge { .. } => {
             unreachable!("pairing commands are handled before authority acquisition")
         }
         EnrollmentCommand::Revoke {
@@ -1280,6 +1333,600 @@ fn enrollment(data_dir: &Path, command: EnrollmentCommand) -> anyhow::Result<()>
             );
         }
     }
+    Ok(())
+}
+
+fn enrollment_rotate_pair(
+    data_dir: &Path,
+    device_id: DeviceId,
+    master_endpoint: SocketAddr,
+    confirm: bool,
+) -> anyhow::Result<()> {
+    require_operator_confirmation(confirm, "same-device Mac certificate rotation")?;
+    require_concrete_remote_bind(master_endpoint)
+        .context("validate the existing master endpoint before certificate rotation")?;
+
+    // Holding the single-owner process lease proves the durable Windows authority
+    // is stopped for the entire grant, invitation, CSR, and issuance ceremony.
+    let started_at_ms = current_time_ms()?;
+    let mut process = MasterProcess::acquire(data_dir)
+        .context("acquire the stopped Windows master authority for certificate rotation")?;
+    let protector = PlatformSecretProtector;
+    let authority = IdentityAuthority::open_existing(process.data_dir(), &protector, started_at_ms)
+        .context("open the existing Windows enrollment authority for certificate rotation")?;
+    process
+        .kernel_mut()
+        .record_identity_authority(authority.receipt())?;
+
+    let (mut grant, registration) = process
+        .kernel_mut()
+        .create_rotation_pairing_grant(device_id, started_at_ms)
+        .context("validate the current non-revoked device registration for rotation")?;
+    let mut grant_secret = Zeroizing::new(std::mem::take(&mut grant.grant_secret));
+    let invitation = EnrollmentInvitation {
+        schema_version: ENROLLMENT_PAIRING_SCHEMA_VERSION,
+        status: ENROLLMENT_INVITATION_READY_STATUS.to_string(),
+        grant_id: grant.grant_id,
+        device_id: registration.device_id,
+        device_name: registration.device_name,
+        role: registration.role,
+        registry_revision: registration.registry_revision,
+        expires_at_ms: grant.expires_at_ms,
+        capabilities: registration.capabilities,
+        master_endpoint,
+        ca_fingerprint_sha256: authority.receipt().ca_fingerprint_sha256.clone(),
+    };
+    invitation.validate_at(started_at_ms)?;
+
+    write_json_line(std::io::stdout().lock(), &invitation)?;
+    eprintln!(
+        "rotation invitation ready: interruption before CSR acceptance issues no certificate; after CSR submission, a missing receipt is ambiguous and requires device-registry inspection before recovery"
+    );
+    let reply_bytes = read_bounded_stdin_with_limit(
+        MAX_ENROLLMENT_PAIRING_FRAME_BYTES,
+        "certificate rotation CSR reply",
+    )?;
+    let reply = EnrollmentCsrReply::decode_frame(&reply_bytes)
+        .context("decode strict certificate rotation CSR reply from stdin")?;
+    let issue_at_ms = current_time_ms()?;
+    validate_pairing_reply(&invitation, &reply, issue_at_ms)?;
+
+    let mut request = EnrollmentRequest {
+        grant_id: reply.grant_id,
+        grant_secret: std::mem::take(&mut *grant_secret),
+        csr_pem: reply.csr_pem,
+    };
+    let recovery_path = rotation_recovery_receipt_path(process.data_dir(), request.grant_id)?;
+    let certificate = process
+        .kernel_mut()
+        .issue_device_certificate_with_precommit(&authority, &request, issue_at_ms, |receipt| {
+            write_rotation_recovery_receipt(&recovery_path, receipt)
+        });
+    request.grant_secret.zeroize();
+    let certificate = certificate?;
+    write_json_line(std::io::stdout().lock(), &certificate).context(
+        "certificate rotation committed but stdout failed; preserve the Mac stage and run confirmed rotate-recover for this grant",
+    )?;
+    eprintln!(
+        "rotation receipt delivered; after the Mac installs this exact receipt, run confirmed rotate-recover-acknowledge for the grant"
+    );
+    Ok(())
+}
+
+fn enrollment_rotate_recover(data_dir: &Path, grant_id: Uuid, confirm: bool) -> anyhow::Result<()> {
+    require_operator_confirmation(confirm, "committed certificate rotation receipt recovery")?;
+    let now_ms = current_time_ms()?;
+    let mut process = MasterProcess::acquire(data_dir)
+        .context("acquire the stopped Windows master authority for rotation recovery")?;
+    let recovery_path = rotation_recovery_receipt_path(process.data_dir(), grant_id)?;
+    let temporary_path = recovery_path.with_extension("json.tmp");
+    if !recovery_path.exists() && temporary_path.exists() {
+        fs::remove_file(&temporary_path).with_context(|| {
+            format!(
+                "remove stale precommit journal {}",
+                temporary_path.display()
+            )
+        })?;
+        bail!("rotation recovery found only a stale precommit journal; stale journal removed");
+    }
+    let receipt = read_rotation_recovery_receipt(&recovery_path)?;
+    if receipt.grant_id != Some(grant_id) {
+        let _ = fs::remove_file(&recovery_path);
+        bail!("rotation recovery journal grant_id mismatch; stale journal removed");
+    }
+    if let Err(error) = process
+        .kernel_mut()
+        .validate_rotation_recovery_receipt(&receipt, now_ms)
+    {
+        let _ = fs::remove_file(&recovery_path);
+        bail!("rotation recovery journal is not an exact committed active rotation; stale journal removed: {error}");
+    }
+    write_json_line(std::io::stdout().lock(), &receipt)
+        .context("write exact recovered rotation receipt")?;
+    Ok(())
+}
+
+fn enrollment_rotate_recover_acknowledge(
+    data_dir: &Path,
+    grant_id: Uuid,
+    confirm: bool,
+) -> anyhow::Result<()> {
+    require_operator_confirmation(
+        confirm,
+        "acknowledge delivery of a committed certificate rotation receipt",
+    )?;
+    let now_ms = current_time_ms()?;
+    let mut process = MasterProcess::acquire(data_dir)
+        .context("acquire the stopped Windows master authority for rotation acknowledgement")?;
+    let recovery_path = rotation_recovery_receipt_path(process.data_dir(), grant_id)?;
+    let receipt = read_rotation_recovery_receipt(&recovery_path)?;
+    if receipt.grant_id != Some(grant_id) {
+        bail!("rotation recovery acknowledgement grant_id mismatch");
+    }
+    process
+        .kernel_mut()
+        .validate_rotation_recovery_receipt(&receipt, now_ms)
+        .context("validate the exact committed active rotation before acknowledgement")?;
+    write_json_line(
+        std::io::stdout().lock(),
+        &json!({
+            "status": "rotation_recovery_acknowledged",
+            "grant_id": grant_id,
+            "device_id": receipt.device_id,
+            "serial_hex": receipt.serial_hex,
+        }),
+    )
+    .context("write rotation recovery acknowledgement before cleanup")?;
+    fs::remove_file(&recovery_path).with_context(|| {
+        format!(
+            "remove acknowledged rotation recovery journal {}",
+            recovery_path.display()
+        )
+    })?;
+    sync_rotation_recovery_directory(
+        recovery_path
+            .parent()
+            .expect("rotation recovery receipt has parent"),
+    )?;
+    Ok(())
+}
+
+fn rotation_recovery_receipt_path(data_dir: &Path, grant_id: Uuid) -> anyhow::Result<PathBuf> {
+    if grant_id.is_nil() {
+        bail!("rotation recovery grant_id must not be nil");
+    }
+    let directory = data_dir.join(ROTATION_RECOVERY_DIRECTORY);
+    ensure_rotation_recovery_directory(&directory)?;
+    Ok(directory.join(format!("{grant_id}.json")))
+}
+
+fn ensure_rotation_recovery_directory(directory: &Path) -> anyhow::Result<()> {
+    if !directory.exists() {
+        fs::create_dir(directory).with_context(|| {
+            format!("create rotation recovery directory {}", directory.display())
+        })?;
+        restrict_rotation_recovery_directory(directory)?;
+    }
+    let metadata = fs::symlink_metadata(directory)?;
+    if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+        bail!("rotation recovery path must be an ordinary directory");
+    }
+    validate_rotation_recovery_not_reparse(&metadata)?;
+    validate_rotation_recovery_directory_permissions(directory, &metadata)?;
+    Ok(())
+}
+
+fn write_rotation_recovery_receipt(
+    path: &Path,
+    receipt: &IssuedDeviceCertificate,
+) -> Result<(), assemblywright_master::MasterError> {
+    let bytes = serde_json::to_vec(receipt)?;
+    if bytes.len() > MAX_ROTATION_RECOVERY_RECEIPT_BYTES {
+        return Err(assemblywright_master::MasterError::InvalidStoredState(
+            "rotation recovery receipt exceeds its fixed bound".to_string(),
+        ));
+    }
+    let temporary = path.with_extension("json.tmp");
+    if path.exists() || temporary.exists() {
+        return Err(assemblywright_master::MasterError::InvalidStoredState(
+            "rotation recovery journal already exists".to_string(),
+        ));
+    }
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?;
+    restrict_rotation_recovery_file(&temporary).map_err(|error| {
+        assemblywright_master::MasterError::InvalidStoredState(error.to_string())
+    })?;
+    file.write_all(&bytes)?;
+    file.write_all(b"\n")?;
+    file.sync_all()?;
+    fs::rename(&temporary, path)?;
+    sync_rotation_recovery_directory(path.parent().expect("recovery receipt has parent"))?;
+    Ok(())
+}
+
+fn read_rotation_recovery_receipt(path: &Path) -> anyhow::Result<IssuedDeviceCertificate> {
+    let metadata = fs::symlink_metadata(path).with_context(|| {
+        format!(
+            "read rotation recovery journal metadata at {}",
+            path.display()
+        )
+    })?;
+    if !metadata.file_type().is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.len() > MAX_ROTATION_RECOVERY_RECEIPT_BYTES as u64
+    {
+        bail!("rotation recovery journal is not one bounded ordinary file");
+    }
+    validate_rotation_recovery_not_reparse(&metadata)?;
+    validate_rotation_recovery_file_permissions(path, &metadata)?;
+    let bytes = fs::read(path)?;
+    serde_json::from_slice(&bytes).context("decode strict rotation recovery receipt")
+}
+
+#[cfg(unix)]
+fn validate_rotation_recovery_file_permissions(
+    _path: &Path,
+    metadata: &fs::Metadata,
+) -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    if metadata.permissions().mode() & 0o077 != 0 {
+        bail!("rotation recovery journal must be owner-private");
+    }
+    Ok(())
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn validate_rotation_recovery_file_permissions(
+    _path: &Path,
+    _metadata: &fs::Metadata,
+) -> anyhow::Result<()> {
+    Ok(())
+}
+
+#[cfg(windows)]
+fn validate_rotation_recovery_file_permissions(
+    path: &Path,
+    _metadata: &fs::Metadata,
+) -> anyhow::Result<()> {
+    validate_private_windows_rotation_acl(path)
+}
+
+#[cfg(unix)]
+fn restrict_rotation_recovery_file(path: &Path) -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn validate_rotation_recovery_not_reparse(metadata: &fs::Metadata) -> anyhow::Result<()> {
+    use std::os::windows::fs::MetadataExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+    if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        bail!("rotation recovery path must not be a Windows reparse point");
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn validate_rotation_recovery_not_reparse(_metadata: &fs::Metadata) -> anyhow::Result<()> {
+    Ok(())
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn restrict_rotation_recovery_file(_path: &Path) -> anyhow::Result<()> {
+    Ok(())
+}
+
+#[cfg(windows)]
+fn restrict_rotation_recovery_file(path: &Path) -> anyhow::Result<()> {
+    restrict_private_windows_rotation_acl(path, false)
+}
+
+#[cfg(unix)]
+fn restrict_rotation_recovery_directory(path: &Path) -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    Ok(())
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn restrict_rotation_recovery_directory(_path: &Path) -> anyhow::Result<()> {
+    Ok(())
+}
+
+#[cfg(windows)]
+fn restrict_rotation_recovery_directory(path: &Path) -> anyhow::Result<()> {
+    restrict_private_windows_rotation_acl(path, true)
+}
+
+#[cfg(unix)]
+fn validate_rotation_recovery_directory_permissions(
+    _path: &Path,
+    metadata: &fs::Metadata,
+) -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    if metadata.permissions().mode() & 0o077 != 0 {
+        bail!("rotation recovery directory must be owner-private");
+    }
+    Ok(())
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn validate_rotation_recovery_directory_permissions(
+    _path: &Path,
+    _metadata: &fs::Metadata,
+) -> anyhow::Result<()> {
+    Ok(())
+}
+
+#[cfg(windows)]
+fn validate_rotation_recovery_directory_permissions(
+    path: &Path,
+    _metadata: &fs::Metadata,
+) -> anyhow::Result<()> {
+    validate_private_windows_rotation_acl(path)
+}
+
+#[cfg(windows)]
+fn restrict_private_windows_rotation_acl(path: &Path, directory: bool) -> anyhow::Result<()> {
+    use std::mem::{size_of, zeroed};
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr::null_mut;
+    use windows_sys::Win32::Foundation::{CloseHandle, LocalFree};
+    use windows_sys::Win32::Security::Authorization::{
+        SetEntriesInAclW, SetNamedSecurityInfoW, EXPLICIT_ACCESS_W, SET_ACCESS, SE_FILE_OBJECT,
+        TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_IS_WELL_KNOWN_GROUP,
+    };
+    use windows_sys::Win32::Security::{
+        CreateWellKnownSid, GetTokenInformation, TokenUser, WinLocalSystemSid,
+        CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, OBJECT_INHERIT_ACE,
+        OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, SECURITY_MAX_SID_SIZE,
+        TOKEN_QUERY, TOKEN_USER,
+    };
+    use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    let mut token = null_mut();
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        bail!("open current-user token for rotation recovery ACL");
+    }
+    let result = (|| {
+        let mut token_bytes = 0_u32;
+        unsafe { GetTokenInformation(token, TokenUser, null_mut(), 0, &mut token_bytes) };
+        if token_bytes < size_of::<TOKEN_USER>() as u32 {
+            bail!("read current-user SID size for rotation recovery ACL");
+        }
+        let mut token_buffer = vec![0_usize; (token_bytes as usize).div_ceil(size_of::<usize>())];
+        if unsafe {
+            GetTokenInformation(
+                token,
+                TokenUser,
+                token_buffer.as_mut_ptr().cast(),
+                token_bytes,
+                &mut token_bytes,
+            )
+        } == 0
+        {
+            bail!("read current-user SID for rotation recovery ACL");
+        }
+        let user = unsafe { &*(token_buffer.as_ptr().cast::<TOKEN_USER>()) };
+        let mut system_sid = [0_u8; SECURITY_MAX_SID_SIZE as usize];
+        let mut system_sid_bytes = SECURITY_MAX_SID_SIZE;
+        if unsafe {
+            CreateWellKnownSid(
+                WinLocalSystemSid,
+                null_mut(),
+                system_sid.as_mut_ptr().cast(),
+                &mut system_sid_bytes,
+            )
+        } == 0
+        {
+            bail!("create LocalSystem SID for rotation recovery ACL");
+        }
+        let inheritance = if directory {
+            CONTAINER_INHERIT_ACE | OBJECT_INHERIT_ACE
+        } else {
+            0
+        };
+        let mut entries: [EXPLICIT_ACCESS_W; 2] = unsafe { zeroed() };
+        entries[0].grfAccessPermissions = FILE_ALL_ACCESS;
+        entries[0].grfAccessMode = SET_ACCESS;
+        entries[0].grfInheritance = inheritance;
+        entries[0].Trustee.TrusteeForm = TRUSTEE_IS_SID;
+        entries[0].Trustee.TrusteeType = TRUSTEE_IS_USER;
+        entries[0].Trustee.ptstrName = user.User.Sid.cast();
+        entries[1].grfAccessPermissions = FILE_ALL_ACCESS;
+        entries[1].grfAccessMode = SET_ACCESS;
+        entries[1].grfInheritance = inheritance;
+        entries[1].Trustee.TrusteeForm = TRUSTEE_IS_SID;
+        entries[1].Trustee.TrusteeType = TRUSTEE_IS_WELL_KNOWN_GROUP;
+        entries[1].Trustee.ptstrName = system_sid.as_mut_ptr().cast();
+        let mut dacl = null_mut();
+        let status = unsafe { SetEntriesInAclW(2, entries.as_ptr(), null_mut(), &mut dacl) };
+        if status != 0 || dacl.is_null() {
+            bail!("construct protected rotation recovery ACL");
+        }
+        let mut wide = path.as_os_str().encode_wide().collect::<Vec<_>>();
+        wide.push(0);
+        let status = unsafe {
+            SetNamedSecurityInfoW(
+                wide.as_ptr(),
+                SE_FILE_OBJECT,
+                OWNER_SECURITY_INFORMATION
+                    | DACL_SECURITY_INFORMATION
+                    | PROTECTED_DACL_SECURITY_INFORMATION,
+                user.User.Sid,
+                null_mut(),
+                dacl,
+                null_mut(),
+            )
+        };
+        unsafe { LocalFree(dacl.cast()) };
+        if status != 0 {
+            bail!("install protected rotation recovery ACL");
+        }
+        Ok(())
+    })();
+    unsafe { CloseHandle(token) };
+    result?;
+    validate_private_windows_rotation_acl(path)
+}
+
+#[cfg(windows)]
+fn validate_private_windows_rotation_acl(path: &Path) -> anyhow::Result<()> {
+    use std::ffi::c_void;
+    use std::mem::{size_of, zeroed};
+    use std::os::windows::ffi::OsStrExt;
+    use std::ptr::{addr_of, null_mut};
+    use windows_sys::Win32::Foundation::{CloseHandle, LocalFree};
+    use windows_sys::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT};
+    use windows_sys::Win32::Security::{
+        AclSizeInformation, CreateWellKnownSid, EqualSid, GetAce, GetAclInformation,
+        GetSecurityDescriptorControl, GetTokenInformation, TokenUser, WinLocalSystemSid,
+        ACCESS_ALLOWED_ACE, ACL_SIZE_INFORMATION, DACL_SECURITY_INFORMATION, INHERITED_ACE,
+        OWNER_SECURITY_INFORMATION, PSID, SECURITY_MAX_SID_SIZE, SE_DACL_PROTECTED, TOKEN_QUERY,
+        TOKEN_USER,
+    };
+    use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+    use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    let mut wide = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    wide.push(0);
+    let mut owner: PSID = null_mut();
+    let mut dacl = null_mut();
+    let mut descriptor = null_mut();
+    let status = unsafe {
+        GetNamedSecurityInfoW(
+            wide.as_ptr(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            &mut owner,
+            null_mut(),
+            &mut dacl,
+            null_mut(),
+            &mut descriptor,
+        )
+    };
+    if status != 0 || owner.is_null() || dacl.is_null() || descriptor.is_null() {
+        if !descriptor.is_null() {
+            unsafe { LocalFree(descriptor) };
+        }
+        bail!("rotation recovery ACL is unavailable");
+    }
+    let result = (|| {
+        let mut token = null_mut();
+        if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+            bail!("open current-user token while validating rotation recovery ACL");
+        }
+        let token_result = (|| {
+            let mut token_bytes = 0_u32;
+            unsafe { GetTokenInformation(token, TokenUser, null_mut(), 0, &mut token_bytes) };
+            if token_bytes < size_of::<TOKEN_USER>() as u32 {
+                bail!("read current-user SID size while validating rotation recovery ACL");
+            }
+            let mut token_buffer =
+                vec![0_usize; (token_bytes as usize).div_ceil(size_of::<usize>())];
+            if unsafe {
+                GetTokenInformation(
+                    token,
+                    TokenUser,
+                    token_buffer.as_mut_ptr().cast(),
+                    token_bytes,
+                    &mut token_bytes,
+                )
+            } == 0
+            {
+                bail!("read current-user SID while validating rotation recovery ACL");
+            }
+            let user = unsafe { &*(token_buffer.as_ptr().cast::<TOKEN_USER>()) };
+            if unsafe { EqualSid(owner, user.User.Sid) } == 0 {
+                bail!("rotation recovery ACL owner is not the current Windows user");
+            }
+            let mut control = 0_u16;
+            let mut revision = 0_u32;
+            if unsafe { GetSecurityDescriptorControl(descriptor, &mut control, &mut revision) } == 0
+                || control & SE_DACL_PROTECTED == 0
+            {
+                bail!("rotation recovery DACL is not protected");
+            }
+            let mut acl_info: ACL_SIZE_INFORMATION = unsafe { zeroed() };
+            if unsafe {
+                GetAclInformation(
+                    dacl,
+                    (&mut acl_info as *mut ACL_SIZE_INFORMATION).cast(),
+                    size_of::<ACL_SIZE_INFORMATION>() as u32,
+                    AclSizeInformation,
+                )
+            } == 0
+                || acl_info.AceCount != 2
+            {
+                bail!("rotation recovery DACL must contain exactly owner and LocalSystem");
+            }
+            let mut system_sid = [0_u8; SECURITY_MAX_SID_SIZE as usize];
+            let mut system_sid_bytes = SECURITY_MAX_SID_SIZE;
+            if unsafe {
+                CreateWellKnownSid(
+                    WinLocalSystemSid,
+                    null_mut(),
+                    system_sid.as_mut_ptr().cast(),
+                    &mut system_sid_bytes,
+                )
+            } == 0
+            {
+                bail!("create LocalSystem SID while validating rotation recovery ACL");
+            }
+            let mut saw_user = false;
+            let mut saw_system = false;
+            for index in 0..acl_info.AceCount {
+                let mut raw_ace: *mut c_void = null_mut();
+                if unsafe { GetAce(dacl, index, &mut raw_ace) } == 0 || raw_ace.is_null() {
+                    bail!("read rotation recovery DACL entry");
+                }
+                let ace = unsafe { &*(raw_ace.cast::<ACCESS_ALLOWED_ACE>()) };
+                if u32::from(ace.Header.AceType) != ACCESS_ALLOWED_ACE_TYPE
+                    || u32::from(ace.Header.AceFlags) & INHERITED_ACE != 0
+                    || ace.Mask & FILE_ALL_ACCESS != FILE_ALL_ACCESS
+                {
+                    bail!("rotation recovery DACL entry is not explicit full control");
+                }
+                let sid = addr_of!(ace.SidStart) as PSID;
+                if unsafe { EqualSid(sid, user.User.Sid) } != 0 && !saw_user {
+                    saw_user = true;
+                } else if unsafe { EqualSid(sid, system_sid.as_mut_ptr().cast()) } != 0
+                    && !saw_system
+                {
+                    saw_system = true;
+                } else {
+                    bail!("rotation recovery DACL contains an unexpected principal");
+                }
+            }
+            if !saw_user || !saw_system {
+                bail!("rotation recovery DACL omitted owner or LocalSystem");
+            }
+            Ok(())
+        })();
+        unsafe { CloseHandle(token) };
+        token_result
+    })();
+    unsafe { LocalFree(descriptor) };
+    result
+}
+
+#[cfg(unix)]
+fn sync_rotation_recovery_directory(path: &Path) -> Result<(), assemblywright_master::MasterError> {
+    fs::File::open(path)?.sync_all()?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn sync_rotation_recovery_directory(
+    _path: &Path,
+) -> Result<(), assemblywright_master::MasterError> {
     Ok(())
 }
 
@@ -1928,6 +2575,12 @@ fn remote_router(state: AppState) -> Router {
             post(remote_enqueue_approved_feature),
         )
         .route(
+            "/v1/distributed/local-model/selection",
+            get(remote_local_model_selection)
+                .post(remote_select_local_model)
+                .layer(DefaultBodyLimit::max(MAX_LOCAL_MODEL_SELECTION_FRAME_BYTES)),
+        )
+        .route(
             "/v1/distributed/connections/accept",
             post(remote_accept_handshake),
         )
@@ -2269,6 +2922,64 @@ async fn remote_enqueue_approved_feature(
         emergency_pause_revision: request.emergency_pause_revision,
         status: FeatureConveyorApprovedFeatureStatus::Queued,
     }))
+}
+
+async fn remote_local_model_selection(
+    State(state): State<AppState>,
+    Extension(session): Extension<RemoteSession>,
+) -> ApiResult<LocalModelSelectionProjection> {
+    let registration = require_remote_application_session(&state, &session, None)?;
+    let projection = lock_process(&state)?
+        .kernel()
+        .local_model_selection_projection(&registration)
+        .map_err(|_| unauthorized())?;
+    Ok(Json(projection))
+}
+
+async fn remote_select_local_model(
+    State(state): State<AppState>,
+    Extension(session): Extension<RemoteSession>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<LocalModelSelectionReceipt> {
+    if state.lifecycle.maintenance_active.load(Ordering::SeqCst) {
+        return Err(fixed_error(
+            StatusCode::CONFLICT,
+            "local_model_selection_rejected",
+        ));
+    }
+    let registration = require_remote_application_session(&state, &session, None)?;
+    let accepted_epoch = session
+        .accepted_epoch
+        .lock()
+        .map_err(|_| local_model_selection_internal_error())?
+        .ok_or_else(unauthorized)?;
+    let body = body.map_err(|_| {
+        fixed_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "local_model_selection_request_rejected",
+        )
+    })?;
+    let request = LocalModelSelectionRequest::decode_frame(&body).map_err(|_| {
+        fixed_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "local_model_selection_request_rejected",
+        )
+    })?;
+    let receipt = lock_process(&state)
+        .map_err(|_| local_model_selection_internal_error())?
+        .kernel_mut()
+        .select_local_model_from_owner_bridge(
+            &request,
+            &registration,
+            accepted_epoch,
+            current_time_ms().map_err(|_| local_model_selection_internal_error())?,
+        )
+        .map_err(local_model_selection_api_error)?;
+    *session
+        .accepted_epoch
+        .lock()
+        .map_err(|_| local_model_selection_internal_error())? = None;
+    Ok(Json(receipt))
 }
 
 async fn remote_accept_handshake(
@@ -2713,7 +3424,7 @@ fn revalidate_remote_session(
     session: &RemoteSession,
 ) -> Result<DeviceRegistration, ApiError> {
     let process = lock_process(state)?;
-    process
+    let registration = process
         .kernel()
         .authenticate_device_certificate(
             session.registration.device_id,
@@ -2721,7 +3432,11 @@ fn revalidate_remote_session(
             &session.certificate_sha256,
             current_time_ms().map_err(api_error)?,
         )
-        .map_err(|_| unauthorized())
+        .map_err(|_| unauthorized())?;
+    if registration != session.registration {
+        return Err(unauthorized());
+    }
+    Ok(registration)
 }
 
 fn require_remote_application_session(
@@ -5014,6 +5729,30 @@ fn fixed_error(status: StatusCode, code: &'static str) -> ApiError {
     )
 }
 
+fn local_model_selection_api_error(error: MasterError) -> ApiError {
+    match error {
+        MasterError::LocalModelSelectionRejected
+        | MasterError::StaleOwnerControlDesignationRevision { .. }
+        | MasterError::StaleEmergencyPauseRevision { .. }
+        | MasterError::OwnerControlBridgeNotDesignated
+        | MasterError::OwnerControlBridgeUnauthorized
+        | MasterError::EmergencyPaused
+        | MasterError::ConnectionNotActive
+        | MasterError::ConnectionEpochMismatch
+        | MasterError::InvalidRemoteWorkContract => {
+            fixed_error(StatusCode::CONFLICT, "local_model_selection_rejected")
+        }
+        _ => local_model_selection_internal_error(),
+    }
+}
+
+fn local_model_selection_internal_error() -> ApiError {
+    fixed_error(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "local_model_selection_internal_error",
+    )
+}
+
 fn api_error(error: impl std::fmt::Display) -> ApiError {
     (
         StatusCode::CONFLICT,
@@ -5352,10 +6091,108 @@ mod tests {
         }
     }
 
+    fn rotation_receipt() -> IssuedDeviceCertificate {
+        serde_json::from_value(json!({
+            "status": "device_certificate_issued",
+            "operation": "rotate",
+            "grant_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "device_id": "11111111-1111-4111-8111-111111111111",
+            "device_name": "owner-mac-bridge",
+            "role": "mac_bridge",
+            "registry_revision": 1,
+            "serial_hex": "01",
+            "issued_at_ms": 1_000,
+            "not_after_ms": 2_000,
+            "certificate_sha256": "ab".repeat(32),
+            "certificate_pem": "-----BEGIN CERTIFICATE-----\nZmFrZQ==\n-----END CERTIFICATE-----\n",
+            "ca_certificate_pem": "-----BEGIN CERTIFICATE-----\nZmFrZQ==\n-----END CERTIFICATE-----\n"
+        }))
+        .unwrap()
+    }
+
     #[test]
     fn constant_time_token_comparison_requires_exact_digest() {
         assert!(constant_time_equal(&[7; 32], &[7; 32]));
         assert!(!constant_time_equal(&[7; 32], &[8; 32]));
+    }
+
+    #[test]
+    fn local_model_selection_route_classifies_only_deterministic_rejections_as_terminal() {
+        for error in [
+            MasterError::LocalModelSelectionRejected,
+            MasterError::StaleOwnerControlDesignationRevision {
+                expected: 1,
+                found: 2,
+            },
+            MasterError::StaleEmergencyPauseRevision {
+                expected: 1,
+                found: 2,
+            },
+            MasterError::OwnerControlBridgeNotDesignated,
+            MasterError::OwnerControlBridgeUnauthorized,
+            MasterError::EmergencyPaused,
+            MasterError::ConnectionNotActive,
+            MasterError::ConnectionEpochMismatch,
+            MasterError::InvalidRemoteWorkContract,
+        ] {
+            let (status, Json(body)) = local_model_selection_api_error(error);
+            assert_eq!(status, StatusCode::CONFLICT);
+            assert_eq!(body.error, "local_model_selection_rejected");
+        }
+
+        for error in [
+            MasterError::IntegerOutOfRange,
+            MasterError::InvalidStoredState("corrupt".to_string()),
+            MasterError::InvalidSystemClock,
+            MasterError::Storage(rusqlite::Error::InvalidQuery),
+            MasterError::Json(serde_json::from_str::<Value>("{").unwrap_err()),
+            MasterError::InvalidFeatureConveyorInput("audit".to_string()),
+        ] {
+            let (status, Json(body)) = local_model_selection_api_error(error);
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+            assert_eq!(body.error, "local_model_selection_internal_error");
+        }
+    }
+
+    #[test]
+    fn rotation_recovery_journal_is_bounded_private_strict_and_secret_free() {
+        let directory = tempfile::tempdir().unwrap();
+        let receipt = rotation_receipt();
+        let grant_id = receipt.grant_id.unwrap();
+        let path = rotation_recovery_receipt_path(directory.path(), grant_id).unwrap();
+        write_rotation_recovery_receipt(&path, &receipt).unwrap();
+        let bytes = fs::read(&path).unwrap();
+        assert!(!bytes.windows(12).any(|window| window == b"grant_secret"));
+        let first = read_rotation_recovery_receipt(&path).unwrap();
+        let second = read_rotation_recovery_receipt(&path).unwrap();
+        assert_eq!(first, receipt);
+        assert_eq!(second, first);
+        let mut first_emission = Vec::new();
+        let mut second_emission = Vec::new();
+        write_json_line(&mut first_emission, &first).unwrap();
+        write_json_line(&mut second_emission, &second).unwrap();
+        assert_eq!(second_emission, first_emission);
+        assert!(
+            path.exists(),
+            "recovery emission must not acknowledge cleanup"
+        );
+        assert!(write_rotation_recovery_receipt(&path, &receipt).is_err());
+
+        let mut unknown: Value = serde_json::from_slice(&bytes).unwrap();
+        unknown["unexpected"] = json!(true);
+        fs::remove_file(&path).unwrap();
+        fs::write(&path, serde_json::to_vec(&unknown).unwrap()).unwrap();
+        restrict_rotation_recovery_file(&path).unwrap();
+        assert!(read_rotation_recovery_receipt(&path).is_err());
+
+        #[cfg(windows)]
+        {
+            validate_private_windows_rotation_acl(path.parent().unwrap()).unwrap();
+            validate_private_windows_rotation_acl(&path).unwrap();
+            let inherited = directory.path().join("not-owner-private.json");
+            fs::write(&inherited, b"{}\n").unwrap();
+            assert!(validate_private_windows_rotation_acl(&inherited).is_err());
+        }
     }
 
     #[test]

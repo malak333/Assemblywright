@@ -13,6 +13,9 @@ private final class FakeBridgeIdentityStore: AssemblywrightMacBridgeIdentityStor
     var installedProfile: AssemblywrightMacBridgeProfile?
     var stagedReplacement: AssemblywrightMacEnrollmentInvitation?
     var stagedReplacementReceipt: AssemblywrightMacPendingCapabilityRebindCertificate?
+    var stagedRotation: AssemblywrightMacEnrollmentInvitation?
+    var installedRotation: AssemblywrightMacIssuedDeviceCertificate?
+    var rotationInstallCount = 0
     var replacementCancelled = false
     var replacementPromoted = false
 
@@ -48,6 +51,51 @@ private final class FakeBridgeIdentityStore: AssemblywrightMacBridgeIdentityStor
     }
 
     func loadInstalledProfile() throws -> AssemblywrightMacBridgeProfile? { installedProfile }
+
+    func stageRotationIdentity(
+        for invitation: AssemblywrightMacEnrollmentInvitation
+    ) throws -> AssemblywrightMacEnrollmentCSR {
+        stagedRotation = invitation
+        return AssemblywrightMacEnrollmentCSR(
+            schemaVersion: 1,
+            status: "enrollment_csr_ready",
+            grantID: invitation.grantID,
+            deviceID: invitation.deviceID,
+            csrPEM: csrPEM
+        )
+    }
+
+    func loadStagedRotationInvitation() throws -> AssemblywrightMacEnrollmentInvitation? {
+        stagedRotation
+    }
+
+    func installRotation(
+        _ receipt: AssemblywrightMacIssuedDeviceCertificate
+    ) throws -> AssemblywrightMacBridgeProfile {
+        if stagedRotation == nil {
+            guard installedRotation == receipt, let installedProfile else {
+                throw AssemblywrightMacDeveloperBridgeError.noStagedEnrollment
+            }
+            return installedProfile
+        }
+        guard let invitation = stagedRotation else {
+            throw AssemblywrightMacDeveloperBridgeError.noStagedEnrollment
+        }
+        let profile = AssemblywrightMacBridgeProfile(
+            deviceID: receipt.deviceID,
+            deviceName: receipt.deviceName,
+            role: receipt.role,
+            registryRevision: receipt.registryRevision,
+            capabilities: invitation.capabilities,
+            masterEndpoint: invitation.masterEndpoint,
+            certificateNotAfterMilliseconds: receipt.notAfterMilliseconds
+        )
+        installedRotation = receipt
+        installedProfile = profile
+        stagedRotation = nil
+        rotationInstallCount += 1
+        return profile
+    }
 
     func stageReplacementIdentity(
         for invitation: AssemblywrightMacEnrollmentInvitation
@@ -970,6 +1018,182 @@ struct DeveloperBridgeTests {
         #expect(store.staged?.masterEndpoint == "100.64.23.14:7792")
     }
 
+    @Test("Certificate rotation preserves the exact standard registration and is retry safe")
+    func certificateRotationPreservesRegistrationAndRetriesExactly() throws {
+        let store = FakeBridgeIdentityStore()
+        store.installedProfile = sampleProfile()
+        let coordinator = AssemblywrightMacEnrollmentCoordinator(identityStore: store)
+
+        let reply = try coordinator.prepareRotation(invitationData: validInvitationData())
+        let replyText = try #require(String(data: reply, encoding: .utf8))
+        #expect(!replyText.contains("grant_secret"))
+        #expect(store.stagedRotation?.deviceID == sampleProfile().deviceID)
+        #expect(store.stagedRotation?.capabilities == sampleProfile().capabilities)
+
+        let receipt = try rotationIssuedReceiptData()
+        let rotated = try coordinator.installRotation(issuedReceiptData: receipt)
+        #expect(rotated.deviceID == sampleProfile().deviceID)
+        #expect(rotated.deviceName == sampleProfile().deviceName)
+        #expect(rotated.registryRevision == sampleProfile().registryRevision)
+        #expect(rotated.capabilities == sampleProfile().capabilities)
+        #expect(rotated.masterEndpoint == sampleProfile().masterEndpoint)
+        #expect(store.stagedRotation == nil)
+        #expect(store.rotationInstallCount == 1)
+
+        let exactRetry = try coordinator.installRotation(issuedReceiptData: receipt)
+        #expect(exactRetry == rotated)
+        #expect(store.rotationInstallCount == 1)
+    }
+
+    @Test("Certificate rotation rejects fixture, drift, cross-profile, and non-rotation receipts")
+    func certificateRotationRejectsUnsafeBindings() throws {
+        let store = FakeBridgeIdentityStore()
+        store.installedProfile = sampleProfile()
+        let coordinator = AssemblywrightMacEnrollmentCoordinator(identityStore: store)
+
+        var drifted = try #require(
+            JSONSerialization.jsonObject(with: validInvitationData()) as? [String: Any]
+        )
+        drifted["registry_revision"] = 4
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.bindingMismatch) {
+            _ = try coordinator.prepareRotation(
+                invitationData: try JSONSerialization.data(withJSONObject: drifted)
+            )
+        }
+        #expect(store.stagedRotation == nil)
+
+        var fixture = try #require(
+            JSONSerialization.jsonObject(with: validInvitationData()) as? [String: Any]
+        )
+        fixture["capabilities"] = [[
+            "id": "fixture.reasoning", "kind": "local_inference",
+            "provider": "assemblywright-fixture", "model": "assemblywright-fixture-v1",
+            "max_context_bytes": 8_192, "max_result_bytes": 8_192
+        ]]
+        store.installedProfile = staleFixtureProfile()
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.bindingMismatch) {
+            _ = try coordinator.prepareRotation(
+                invitationData: try JSONSerialization.data(withJSONObject: fixture)
+            )
+        }
+
+        let fixtureCoordinator = AssemblywrightMacEnrollmentCoordinator(
+            identityStore: store,
+            identityProfile: .fixtureReasoning
+        )
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.bindingMismatch) {
+            _ = try fixtureCoordinator.prepareRotation(
+                invitationData: try JSONSerialization.data(withJSONObject: fixture)
+            )
+        }
+
+        store.installedProfile = sampleProfile()
+        _ = try coordinator.prepareRotation(invitationData: validInvitationData())
+        var historical = try #require(
+            JSONSerialization.jsonObject(with: rotationIssuedReceiptData()) as? [String: Any]
+        )
+        historical["grant_id"] = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.bindingMismatch) {
+            _ = try coordinator.installRotation(
+                issuedReceiptData: try JSONSerialization.data(withJSONObject: historical)
+            )
+        }
+        #expect(store.installedRotation == nil)
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.invalidDocument) {
+            _ = try coordinator.installRotation(issuedReceiptData: validIssuedReceiptData())
+        }
+        #expect(store.installedRotation == nil)
+        #expect(store.stagedRotation != nil)
+    }
+
+    @Test("Certificate rotation follows only the installed legacy or promoted replacement slot")
+    func certificateRotationSelectsCurrentKeyGeneration() throws {
+        #expect(try !assemblywrightRotationUsesReplacementSlot(nil))
+        #expect(try assemblywrightRotationUsesReplacementSlot("replacement_v1"))
+        #expect(throws: AssemblywrightMacDeveloperBridgeError.identityUnavailable) {
+            _ = try assemblywrightRotationUsesReplacementSlot("unknown")
+        }
+        #expect(!assemblywrightRotationStageMayBeReplaced(
+            expiresAtMilliseconds: 2_001,
+            nowMilliseconds: 2_000
+        ))
+        #expect(assemblywrightRotationStageMayBeReplaced(
+            expiresAtMilliseconds: 2_000,
+            nowMilliseconds: 2_000
+        ))
+    }
+
+    @Test("Every certificate rotation mutation boundary retains exact forward recovery")
+    func certificateRotationMutationBoundariesRemainRecoverable() throws {
+        for boundary in AssemblywrightRotationMutationBoundary.allCases {
+            #expect(throws: AssemblywrightMacDeveloperBridgeError.identityUnavailable) {
+                try assemblywrightRotationCheckpoint(boundary) { reached in
+                    return reached == boundary
+                }
+            }
+
+            let state = assemblywrightRotationRecoveryState(after: boundary)
+            #expect(
+                state.selectedOldPresent || state.selectedNewPresent || state.candidatePresent,
+                "rotation boundary \(boundary) lost every certificate copy"
+            )
+            if !state.selectedOldPresent && !state.installedRecordRotated {
+                #expect(state.candidatePresent || state.selectedNewPresent)
+                #expect(state.stagedReceiptPresent)
+                #expect(state.stagePresent)
+            }
+            if state.installedRecordRotated {
+                #expect(state.selectedNewPresent)
+            }
+            #expect(
+                !(state.candidatePresent && state.selectedNewPresent),
+                "rotation boundary \(boundary) modeled duplicate certificate DER items"
+            )
+            #expect(
+                state.candidatePresent || state.selectedNewPresent,
+                "rotation boundary \(boundary) lost the new certificate DER item"
+            )
+        }
+        let missingOldWithCandidate = assemblywrightRotationRecoveryState(
+            after: .selectedOldDeleted
+        )
+        #expect(!missingOldWithCandidate.selectedOldPresent)
+        #expect(missingOldWithCandidate.candidatePresent)
+        #expect(missingOldWithCandidate.stagedReceiptPresent)
+        #expect(!assemblywrightRotationMayDeleteSelectedOld(candidatePresent: false))
+        #expect(assemblywrightRotationMayDeleteSelectedOld(candidatePresent: true))
+        let promoted = assemblywrightRotationRecoveryState(after: .candidatePromoted)
+        #expect(!promoted.candidatePresent)
+        #expect(promoted.selectedNewPresent)
+    }
+
+    @Test("Certificate rotation queries enumerate labels and mutate only one persistent item")
+    func certificateRotationQueriesAreExact() {
+        let lookup = assemblywrightCertificateLabelLookupQuery(label: "rotation-candidate")
+        #expect(lookup[kSecAttrLabel as String] as? String == "rotation-candidate")
+        #expect(lookup[kSecReturnRef as String] as? Bool == true)
+        #expect(CFEqual(
+            lookup[kSecMatchLimit as String] as CFTypeRef?,
+            kSecMatchLimitAll
+        ))
+        #expect(assemblywrightCertificateLabelMultiplicityIsValid(1))
+        #expect(!assemblywrightCertificateLabelMultiplicityIsValid(0))
+        #expect(!assemblywrightCertificateLabelMultiplicityIsValid(2))
+
+        let persistentReference = Data([0x01, 0x02, 0x03])
+        let mutation = assemblywrightCertificateMutationQuery(
+            persistentReference: persistentReference
+        )
+        #expect(mutation[kSecValuePersistentRef as String] as? Data == persistentReference)
+        #expect(mutation[kSecAttrLabel as String] == nil)
+        #expect(mutation[kSecMatchLimit as String] == nil)
+        #expect(Set(mutation.keys) == Set([
+            kSecClass as String,
+            kSecValuePersistentRef as String,
+            kSecUseDataProtectionKeychain as String
+        ]))
+    }
+
     @Test("Capability rebind stages and promotes a separate standard replacement only after activation")
     func capabilityRebindPreservesWorkingIdentityUntilActivation() throws {
         let store = FakeBridgeIdentityStore()
@@ -1722,6 +1946,7 @@ struct DeveloperBridgeTests {
             schemaVersion: 19,
             featureConveyor: featureConveyor,
             ownerControl: ownerControl,
+            localModelSelection: nil,
             errorCode: nil
         )
 
@@ -1735,6 +1960,42 @@ struct DeveloperBridgeTests {
         #expect(appStatus.ownerControl?.evidence.readyCount == 6)
         #expect(helperText.contains("abcdef01-abcd-4abc-8abc-abcdefabcdef"))
         #expect(!helperText.contains("ABCDEF01-ABCD-4ABC-8ABC-ABCDEFABCDEF"))
+    }
+
+    @Test("Signed-helper snapshots canonicalize queued feature UUIDs to lowercase")
+    func signedHelperCanonicalizesQueuedFeatureUUIDs() throws {
+        let featureConveyor = try JSONDecoder().decode(
+            AssemblywrightMacFeatureConveyorStatus.self,
+            from: readyFeatureConveyorData()
+        )
+        let ownerControl = try AssemblywrightMacFeatureConveyorOwnerControlProjection.decodeStrict(
+            ownerControlData(queueRevision: 1, completeEvidence: true)
+        )
+        let snapshot = AssemblywrightMacBridgeSupervisorSnapshot(
+            phase: .authenticated,
+            deviceID: "33333333-3333-4333-8333-333333333333",
+            masterEndpoint: "100.64.23.14:7792",
+            connectionEpoch: 43,
+            consecutiveFailures: 0,
+            nextDelayMilliseconds: 5_000,
+            masterStatus: "ok",
+            maintenanceActive: false,
+            emergencyPaused: false,
+            protocolVersion: 5,
+            schemaVersion: 19,
+            featureConveyor: featureConveyor,
+            ownerControl: ownerControl,
+            localModelSelection: nil,
+            errorCode: nil
+        )
+
+        let helperLine = try JSONEncoder().encode(snapshot)
+        let decoded = try AssemblywrightMacBridgeSupervisorSnapshot.decodeStrict(helperLine)
+        let helperText = try #require(String(data: helperLine, encoding: .utf8))
+
+        #expect(decoded == snapshot)
+        #expect(helperText.contains("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"))
+        #expect(!helperText.contains("AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"))
     }
 
     @Test("Fixture MacBridge keeps strict Feature Conveyor observation")
@@ -2732,7 +2993,7 @@ struct DeveloperBridgeTests {
     @Test("One-shot helper escalates to KILL when a hung child ignores TERM")
     func oneShotOwnerCommandKillsTermIgnoringHang() async throws {
         try await assertHostileOneShotHelperIsReaped(
-            script: "#!/usr/bin/perl\n$SIG{TERM} = 'IGNORE';\nclose STDOUT;\nwhile (1) {}\n",
+            script: "#!/usr/bin/perl\n$SIG{TERM} = 'IGNORE';\nselect undef, undef, undef, 0.1;\nclose STDOUT;\nwhile (1) {}\n",
             minimumDuration: .milliseconds(700),
             commandTimeout: .milliseconds(300)
         )
@@ -4457,6 +4718,97 @@ struct DeveloperBridgeTests {
     }
 
     @MainActor
+    @Test("Explicit local-model rejection clears recovery and restarts the old relay")
+    func localModelTerminalRejectionCannotResume() async throws {
+        let root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath()
+            .appendingPathComponent(UUID().uuidString.lowercased(), isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700]
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executable = root.appendingPathComponent("mlx_lm.generate")
+        FileManager.default.createFile(
+            atPath: executable.path,
+            contents: Data("#!/bin/sh\n".utf8)
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: executable.path
+        )
+        let models = root.appendingPathComponent("models", isDirectory: true)
+        try FileManager.default.createDirectory(at: models, withIntermediateDirectories: false)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: models.path
+        )
+        let projection = Data(
+            #"{"schema_version":1,"device_id":"22222222-2222-4222-8222-222222222222","device_name":"owner-bridge","registry_revision":1,"designation_revision":1,"emergency_pause_revision":0,"emergency_paused":false,"model_id":"old-model"}"#.utf8
+        )
+        let line = authenticatedSnapshotData(
+            connectionEpoch: 44,
+            localModelSelection: projection
+        )
+        let terminal = Data(
+            #"{"schema_version":1,"device_id":"22222222-2222-4222-8222-222222222222","expected_registry_revision":1,"expected_designation_revision":1,"expected_emergency_pause_revision":0,"model_id":"target-model","status":"rejected","error_code":"local_model_selection_rejected"}"#.utf8
+        )
+        let launcher = FakeBridgeProcessLauncher(
+            session: FakeBridgeProcessSession(lines: [line]),
+            restartSession: FakeBridgeProcessSession(lines: [line]),
+            commandResponse: terminal
+        )
+        let store = AssemblywrightMacLocalModelSelectionStore(
+            fileURL: root.appendingPathComponent("private/state.json")
+        )
+        let lifecycle = AssemblywrightDeveloperBridgeProcessLifecycle(
+            configuration: .init(environment: [
+                AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
+                    "/tmp/assemblywright-mac-bridge",
+                AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
+                    "ABCDEFGHIJ",
+                AssemblywrightDeveloperBridgeProcessConfiguration.agentExecutableEnvironmentKey:
+                    executable.path,
+                AssemblywrightDeveloperBridgeProcessConfiguration.agentDataDirectoryEnvironmentKey:
+                    root.path,
+                AssemblywrightDeveloperBridgeProcessConfiguration.mlxJobsEnabledEnvironmentKey:
+                    "true",
+                AssemblywrightDeveloperBridgeProcessConfiguration.mlxExecutableEnvironmentKey:
+                    executable.path,
+                AssemblywrightDeveloperBridgeProcessConfiguration.mlxModelDirectoryEnvironmentKey:
+                    models.path,
+                AssemblywrightDeveloperBridgeProcessConfiguration.mlxModelIDEnvironmentKey:
+                    "old-model"
+            ]),
+            validator: FakeBridgeExecutableValidator(),
+            launcher: launcher,
+            localModelSelectionStore: store
+        )
+        lifecycle.start()
+        for _ in 0 ..< 100 where lifecycle.status.localModelSelection == nil {
+            await Task.yield()
+        }
+
+        await lifecycle.selectLocalModel(
+            modelID: "target-model",
+            executablePath: executable.path,
+            modelDirectoryPath: models.path
+        )
+        for _ in 0 ..< 100 where await launcher.launchCount < 2 { await Task.yield() }
+        #expect(lifecycle.localModelSelectionState.pending == nil)
+        #expect(lifecycle.localModelSelectionErrorCode == "local_model_selection_rejected")
+        #expect(try store.load()?.pending == nil)
+        #expect(await launcher.commands.count == 1)
+        #expect(await launcher.commands.first?.0
+            == AssemblywrightDeveloperBridgeProcessLifecycle.localModelSelectionArguments)
+
+        await lifecycle.resumePendingLocalModelSelection()
+        #expect(await launcher.commands.count == 1)
+        #expect(await launcher.launchCount == 2)
+        await lifecycle.stop()
+    }
+
+    @MainActor
     @Test("Exact enqueue reconciliation reuses frozen bytes and clears only on strict success")
     func approvedFeatureLifecycleReconcilesExactFrozenRequest() async {
         let line = authenticatedSnapshotData(
@@ -6085,6 +6437,17 @@ private func validIssuedReceiptData() throws -> Data {
     )
 }
 
+private func rotationIssuedReceiptData() throws -> Data {
+    var receipt = try #require(
+        JSONSerialization.jsonObject(with: validIssuedReceiptData()) as? [String: Any]
+    )
+    receipt["operation"] = "rotate"
+    receipt["grant_id"] = "11111111-1111-4111-8111-111111111111"
+    receipt["serial_hex"] = "02"
+    receipt["certificate_sha256"] = String(repeating: "c", count: 64)
+    return try JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys])
+}
+
 private func localCodingIssuedReceiptData() throws -> Data {
     var receipt = try #require(
         JSONSerialization.jsonObject(with: validIssuedReceiptData()) as? [String: Any]
@@ -6327,7 +6690,8 @@ private func authenticatedSnapshotData(
     emergencyPaused: Bool = false,
     masterStatus: String? = nil,
     featureConveyor: Data = validFeatureConveyorData(),
-    ownerControl: Data? = nil
+    ownerControl: Data? = nil,
+    localModelSelection: Data? = nil
 ) -> Data {
     let featureObject = try! JSONSerialization.jsonObject(with: featureConveyor)
     let guidance = (featureObject as? [String: Any])?["owner_guidance"] as? [String: Any]
@@ -6336,7 +6700,7 @@ private func authenticatedSnapshotData(
         emergencyPaused: emergencyPaused,
         emergencyPauseRevision: guidance?["emergency_pause_revision"] as? UInt64 ?? 0
     ))
-    let object: [String: Any] = [
+    var object: [String: Any] = [
         "phase": "authenticated",
         "device_id": "22222222-2222-4222-8222-222222222222",
         "master_endpoint": "100.64.23.14:7792",
@@ -6352,6 +6716,11 @@ private func authenticatedSnapshotData(
         "feature_conveyor": featureObject,
         "owner_control": ownerObject
     ]
+    if let localModelSelection {
+        object["local_model_selection"] = try! JSONSerialization.jsonObject(
+            with: localModelSelection
+        )
+    }
     return try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
 }
 

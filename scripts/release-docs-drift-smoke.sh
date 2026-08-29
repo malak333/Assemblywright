@@ -36,6 +36,7 @@ PROTOCOL_E2E="crates/assemblywright-protocol/tests/distributed_protocol_contract
 PROTOCOL_EVENT_E2E="crates/assemblywright-protocol/tests/distributed_event_cursor_contract.rs"
 PROTOCOL_MLX_E2E="crates/assemblywright-protocol/tests/mlx_job_contract.rs"
 PROTOCOL_LOCAL_CODING_E2E="crates/assemblywright-protocol/tests/local_coding_contract.rs"
+PROTOCOL_LOCAL_MODEL_SELECTION_E2E="crates/assemblywright-protocol/tests/local_model_selection_contract.rs"
 PROTOCOL_ARTIFACT_INTEGRATION_E2E="crates/assemblywright-protocol/tests/artifact_integration_contract.rs"
 PROTOCOL_VALIDATION_GATE_E2E="crates/assemblywright-protocol/tests/validation_gate_contract.rs"
 PROTOCOL_REVIEW_GATEWAY_E2E="crates/assemblywright-protocol/tests/review_gateway_contract.rs"
@@ -74,10 +75,12 @@ MAC_OWNER_CONTROL="apps/mac/Sources/AssemblywrightMacCore/FeatureConveyorOwnerCo
 MAC_APPROVED_FEATURE_AUTHORING="apps/mac/Sources/AssemblywrightMacCore/FeatureConveyorApprovedFeatureAuthoring.swift"
 MAC_ACTIVATION_CONTROL="apps/mac/Sources/AssemblywrightMacCore/FeatureConveyorActivationControl.swift"
 MAC_BRIDGE_PROCESS="apps/mac/Sources/AssemblywrightMacCore/DeveloperBridgeProcessLifecycle.swift"
+MAC_LOCAL_MODEL_SELECTION="apps/mac/Sources/AssemblywrightMacCore/LocalModelSelection.swift"
 MAC_EVENT_RELAY="apps/mac/Sources/AssemblywrightMacCore/DeveloperEventRelay.swift"
 MAC_APP="apps/mac/Sources/AssemblywrightMacApp/AssemblywrightMacApp.swift"
 MAC_APPROVED_FEATURE_VIEW="apps/mac/Sources/AssemblywrightMacApp/ApprovedFeatureAuthoringView.swift"
 MAC_BRIDGE_TESTS="apps/mac/Tests/AssemblywrightMacCoreTests/DeveloperBridgeTests.swift"
+MAC_LOCAL_MODEL_SELECTION_TESTS="apps/mac/Tests/AssemblywrightMacCoreTests/LocalModelSelectionTests.swift"
 MAC_APP_TESTS="apps/mac/Tests/AssemblywrightMacAppTests/AssemblywrightMacAppTests.swift"
 
 MAC_BRIDGE_LIVE_E2E="scripts/mac-windows-bridge-live-e2e.sh"
@@ -99,6 +102,9 @@ WINDOWS_FIXTURE_LIVE_CONTROL="scripts/windows-fixture-live-control.ps1"
 WINDOWS_MLX_LIVE_CONTROL="scripts/windows-mlx-live-control.ps1"
 WINDOWS_LOCAL_CODING_LIVE_CONTROL="scripts/windows-local-coding-live-control.ps1"
 WINDOWS_LOCAL_CODING_LIVE_CONTROL_SELF_CHECK="scripts/windows-local-coding-live-control-self-check.sh"
+WINDOWS_REPOSITORY_ONBOARDING="scripts/windows-repository-onboarding.ps1"
+WINDOWS_REPOSITORY_ONBOARDING_SELF_CHECK="scripts/windows-repository-onboarding-self-check.sh"
+WINDOWS_REPOSITORY_ONBOARDING_E2E="crates/assemblywright-master/tests/windows_repository_onboarding_e2e.rs"
 WINDOWS_PROTOCOL_WORKFLOW=".github/workflows/windows-protocol.yml"
 RELEASE_VERSION_SCRIPT="scripts/release-version.sh"
 NAMING_CONTRACT_SMOKE="scripts/release-naming-contract-smoke.sh"
@@ -168,7 +174,9 @@ for file in \
   "$WINDOWS_RESTART_RECOVERY_LIVE_CONTROL" "$MAC_WINDOWS_CONTROL_STREAMING_PROOF_CONTROLLER" \
   "$WINDOWS_FIXTURE_LIVE_CONTROL" \
   "$WINDOWS_MLX_LIVE_CONTROL" "$WINDOWS_LOCAL_CODING_LIVE_CONTROL" \
-  "$WINDOWS_LOCAL_CODING_LIVE_CONTROL_SELF_CHECK" "$WINDOWS_PROTOCOL_WORKFLOW" \
+  "$WINDOWS_LOCAL_CODING_LIVE_CONTROL_SELF_CHECK" \
+  "$WINDOWS_REPOSITORY_ONBOARDING" "$WINDOWS_REPOSITORY_ONBOARDING_SELF_CHECK" \
+  "$WINDOWS_REPOSITORY_ONBOARDING_E2E" "$WINDOWS_PROTOCOL_WORKFLOW" \
   "$RELEASE_VERSION_SCRIPT" "$NAMING_CONTRACT_SMOKE"; do
   require_file "$file"
 done
@@ -492,8 +500,70 @@ require_text "conveyor live controller self-check portable scanner" \
   "$WINDOWS_LOCAL_CODING_LIVE_CONTROL_SELF_CHECK" "grep -Fq --"
 forbid_text "conveyor live controller self-check ripgrep dependency" \
   "$WINDOWS_LOCAL_CODING_LIVE_CONTROL_SELF_CHECK" "rg -Fq --"
+require_text "repository onboarding portable self-check" \
+  "$WINDOWS_REPOSITORY_ONBOARDING_SELF_CHECK" "grep -Fq --"
+require_text "repository onboarding native process E2E" \
+  "$WINDOWS_REPOSITORY_ONBOARDING_E2E" "run_onboarding"
+require_text "repository onboarding native repository-drift rejection" \
+  "$WINDOWS_REPOSITORY_ONBOARDING_E2E" "onboarding accepted repository drift after planning"
+require_text "repository onboarding native replay boundary" \
+  "$WINDOWS_REPOSITORY_ONBOARDING_E2E" "replay exact completed onboarding"
+require_text "repository onboarding native audit redaction" \
+  "$WINDOWS_REPOSITORY_ONBOARDING_E2E" "assert_exact_redacted_onboarding_audit"
+require_text "repository onboarding explicit grant confirmations" \
+  "$WINDOWS_REPOSITORY_ONBOARDING" \
+  "-ConfirmRegistration, -ConfirmCloudDisclosure, and -ConfirmAutonomousPublication"
+require_text "repository onboarding build runbook" "$BUILD_DOCS" \
+  "## Windows Repository Onboarding"
+require_text "repository onboarding native E2E build command" "$BUILD_DOCS" \
+  "cargo test -p assemblywright-master --test windows_repository_onboarding_e2e --locked -- --nocapture"
+require_text "repository onboarding safety boundary" "$SAFETY_RULES" \
+  "Repository onboarding must remain a two-phase Windows-owner operation"
+require_text "repository onboarding knowledge boundary" "$KB" \
+  "windows-repository-onboarding.ps1"
+require_text "repository onboarding native E2E knowledge boundary" "$KB" \
+  "windows_repository_onboarding_e2e.rs"
+require_text "local model selection protocol contract" "$PROTOCOL_LOCAL_MODEL_SELECTION_E2E" \
+  "LocalModelSelection"
+require_text "local model selection durable parent fsync" "$MAC_LOCAL_MODEL_SELECTION" \
+  "fsync(directoryDescriptor)"
+require_text "local model selection Swift coverage" "$MAC_LOCAL_MODEL_SELECTION_TESTS" \
+  "Local model selection"
+require_text "local model selection design boundary" "$DESIGN" \
+  "Owner-confirmed local model selection"
+require_text "local model selection safety boundary" "$SAFETY_RULES" \
+  "Local MLX model selection is a separate Confirm operation"
+require_text "local model selection build commands" "$BUILD_DOCS" \
+  "Local Model Selection Focused Validation"
+require_text "local model selection knowledge boundary" "$KB" \
+  "## Local Model Selection"
+require_text "certificate rotation design recovery boundary" "$DESIGN" \
+  "Standard-profile certificate rotation is a confirmed, same-device recovery"
+require_text "certificate rotation safety boundary" "$SAFETY_RULES" \
+  "Standard-profile certificate rotation is a separate confirmed same-device"
+require_text "certificate rotation build runbook" "$BUILD_DOCS" \
+  "Owner-Confirmed Standard Certificate Rotation"
+require_text "certificate rotation knowledge boundary" "$KB" \
+  "rotate-recover-acknowledge"
 require_text "conveyor remote owner action implementation" "$MASTER_PROCESS" \
   '"/v1/distributed/feature-conveyor/approved-features"'
+require_text "Mac authoring production review binding label" "$MAC_APPROVED_FEATURE_VIEW" \
+  'static let groupTitle = "Identity and production review binding"'
+require_text "Mac authoring Windows-fixed review binding label" "$MAC_APPROVED_FEATURE_VIEW" \
+  'static let lockLabel = "Fixed by Windows master"'
+require_text "Mac authoring production review accessibility contract" \
+  "$MAC_APPROVED_FEATURE_VIEW" \
+  '.accessibilityIdentifier('
+require_text "Mac authoring production review accessibility binding" \
+  "$MAC_APPROVED_FEATURE_VIEW" \
+  'ApprovedFeatureReviewBindingPresentation.accessibilityIdentifier'
+require_text "Mac authoring separates development reviewer agents" "$MAC_APPROVED_FEATURE_VIEW" \
+  'separate from repository-scoped Codex development reviewer agents'
+require_text "feature design separates production and development reviewers" \
+  "$FEATURE_CONVEYOR_DESIGN" \
+  'repository-scoped Codex development reviewer agents'
+require_text "knowledge base separates production and development reviewers" "$KB" \
+  '.codex/agents/assemblywright-reviewer.toml'
 require_text "conveyor owner guidance implementation" "$MASTER_CRATE" \
   "owner_guidance"
 require_text "conveyor pause revision implementation" "$MASTER_CRATE" \
@@ -974,6 +1044,10 @@ require_text "build docs Windows live-controller unit regression" "$BUILD_DOCS" 
   "windows-local-coding-live-control.ps1 -Action Check"
 require_text "hosted Windows live-controller unit regression" "$WINDOWS_PROTOCOL_WORKFLOW" \
   "windows-local-coding-live-control.ps1 -Action Check"
+require_text "hosted Windows repository onboarding self-test" "$WINDOWS_PROTOCOL_WORKFLOW" \
+  "windows-repository-onboarding.ps1 -Action SelfTest"
+require_text "hosted Windows repository onboarding native E2E" "$WINDOWS_PROTOCOL_WORKFLOW" \
+  "cargo test -p assemblywright-master --test windows_repository_onboarding_e2e --locked -- --nocapture"
 require_text "build docs Windows owner evidence self-test" "$BUILD_DOCS" \
   "windows-owner-evidence-admission.ps1 -Action SelfTest"
 require_text "hosted Windows owner evidence self-test" "$WINDOWS_PROTOCOL_WORKFLOW" \

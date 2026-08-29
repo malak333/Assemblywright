@@ -39,6 +39,13 @@ jobs:
         shell: powershell
         run: ./scripts/windows-local-coding-live-control.ps1 -Action Check
 
+      - name: Test Windows repository onboarding contract
+        shell: powershell
+        run: ./scripts/windows-repository-onboarding.ps1 -Action SelfTest
+
+      - name: Test real Windows repository onboarding boundary
+        run: cargo test -p assemblywright-master --test windows_repository_onboarding_e2e --locked -- --nocapture
+
       - name: Test Windows owner evidence admission validation
         shell: powershell
         run: ./scripts/windows-owner-evidence-admission.ps1 -Action SelfTest

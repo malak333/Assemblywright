@@ -1,5 +1,25 @@
 # Distributed Developer Mode Design
 
+## Bounded local model picker
+
+The already-enrolled designated MLX MacBridge may change only its model ID
+through the Models screen. Browsing and canonical path checks stay on the Mac.
+Windows receives no local path and retains all durable authority. The
+transition preserves device identity, role, name, certificate/key, endpoint,
+capability ID/kind/provider, and fixed bounds; it advances registry and
+designation bindings exactly once and disconnects the old session in the same
+transaction. Maintenance, Emergency Pause, active attempts, stale revisions,
+and all binding drift reject before mutation.
+
+Pending state is file-and-parent-directory-fsynced before submission. Strict
+known pre-mutation HTTP errors clear it and restart the unchanged relay;
+malformed/unknown errors and 5xx responses remain ambiguous. The ordinary relay
+remains stopped until a separately confirmed reconciliation proves the exact
+target profile or proves the exact old profile and performs one frozen retry.
+Invalid stores block startup, printable-ASCII model IDs are required, and a
+target relay validates before promotion is persisted. This is model selection
+only and does not reopen the general capability-rebind ceremony.
+
 Status: APPROVED by owner and structured multi-agent design review; implementation planning permitted
 
 Date: 2026-07-16
@@ -353,6 +373,24 @@ enrollment CA.
    rotation plus re-enrollment.
 8. Unknown, expired, revoked, duplicate-active, role-changing, replaying, or
    incompatible devices fail closed.
+
+Certificate rotation uses a confirmed secret-free same-device pairing lane.
+The stopped Windows process creates and retains the short-lived rotation grant,
+emits only a strict invitation for the current registration, accepts one public
+CSR reply on stdin, and issues the replacement certificate while revoking prior
+serials. The standard Mac profile stages only that exact public binding, signs
+with its currently selected non-exportable Keychain key, and installs only a
+matching `rotate` receipt after validating the certificate, endpoint, pinned
+CA, registration, capabilities, and key. Rotation changes no device identity,
+registry revision, capability, or owner-control designation and is unavailable
+to fixture and local-coding profiles. The Windows process journals the exact
+public grant-bound issued receipt under a protected owner-and-LocalSystem ACL
+before committing issuance. Confirmed recovery is byte-identical and
+idempotent until a separate confirmed acknowledgement, made only after Mac
+installation and authenticated reconnect, removes the validated journal. The
+Mac retains a staged public receipt and candidate certificate so installation
+can resume forward after every Keychain mutation boundary without deleting all
+recovery material.
 
 Each dispatched job contains bounded, versioned fields:
 
