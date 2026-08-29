@@ -818,7 +818,9 @@ private func oldModelProfile() -> AssemblywrightMacBridgeProfile {
         registryRevision: 1,
         capabilities: [.init(
             id: "mlx.reasoning", kind: "local_inference", provider: "mlx",
-            model: "old-model", maxContextBytes: 32 * 1_024, maxResultBytes: 32 * 1_024
+            model: "old-model",
+            maxContextBytes: UInt32(32 * 1_024),
+            maxResultBytes: UInt32(32 * 1_024)
         )],
         masterEndpoint: "100.64.0.1:7792",
         certificateNotAfterMilliseconds: 4_102_444_800_000
