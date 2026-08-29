@@ -37,6 +37,27 @@ release requirements, not optional UX guidance.
   stdin, and issues only when the grant, device, expiry, role, registry
   revision, endpoint, and CSR match. Interruption leaves no transferable
   secret and the digest-only grant expires without automatic retry.
+- Standard-profile certificate rotation is a separate confirmed same-device
+  ceremony. The stopped Windows pairing process must retain and zeroize the raw
+  rotation grant in memory, emit only a strict public invitation for the exact
+  current non-revoked MacBridge registration, and accept one public CSR reply
+  on stdin. The Mac may prepare rotation only for its exact installed device,
+  name, role, registry revision, capabilities, endpoint, and pinned CA, using
+  the currently selected non-exportable Keychain key. Installation must accept
+  only the matching `rotate` certificate receipt, validate the new leaf against
+  that key and every staged binding, forward-resumably replace only the selected
+  certificate and installed record, and clear the public stage. Issuance
+  revokes the prior serials without changing registration, capabilities, owner
+  designation, or device identity. Before the authority commit, Windows must
+  durably journal only the exact public issued-certificate receipt under an
+  explicitly protected owner-and-LocalSystem ACL; the raw grant must never
+  enter it. Recovery is confirmed, grant-bound, byte-identical, and idempotent
+  until a separate confirmed acknowledgement removes that exact validated
+  journal. Mac promotion must retain enough staged public receipt and candidate
+  material to resume forward after every Keychain mutation boundary.
+  Fixture/local-coding profiles, destructive standard-profile removal,
+  raw-secret transfer, automatic regeneration, and any binding drift fail
+  closed.
 - The Mac Developer Mode identity must use a distinct device-only Keychain
   namespace. Its P-256 private key is generated as a permanent non-exported
   Keychain key and must never enter SQLite, files, argv, environment, logs,
@@ -156,6 +177,54 @@ release requirements, not optional UX guidance.
   a simultaneous or late result is suppressed. This lane grants no tool, file,
   repository, credential, network, Codex, Git, publication, or unattended
   authority.
+- Local MLX model selection is a separate Confirm operation, not capability
+  rebind. It is permitted only for the exact current designated singleton
+  `MacBridge` with the existing singleton `mlx.reasoning` /
+  `local_inference` / `mlx` descriptor. The request and reconciliation
+  projection are strict, bounded, path-free, and bind the exact device,
+  registry revision, designation revision, Emergency Pause revision, and model
+  ID. Windows must reject maintenance, Emergency Pause, an active attempt, a
+  stale or different accepted epoch, any identity/role/name/provider/bounds/
+  certificate drift, a same-model request, or any fixture, local-coding,
+  mixed, non-designated, or revoked registration. Success atomically advances
+  device registry and designation registry/revision by one, disconnects the
+  old accepted session, and appends redacted metadata-only audit.
+- Only a strict authenticated `401 unauthorized`, `409
+  local_model_selection_rejected`, or `422
+  local_model_selection_request_rejected` response is terminal. The helper
+  emits one path-free rejection bound to the frozen request, and the app
+  durably clears pending and restarts only the unchanged relay. Unknown or
+  malformed error bodies, unexpected status pairs, all 5xx responses, and
+  post-submission transport loss remain ambiguous and may try exact
+  target-profile reconciliation;
+  separately confirmed resume may submit the frozen original POST once only
+  after Windows proves the exact old unpaused binding. No provider/model
+  fallback or automatic retry is allowed. The app's local paths remain only in
+  its mode-0600 owner-private store; the pending file and parent directory are
+  fsynced before POST. The store is recursively duplicate-free and exact-shape
+  validated; pending configuration must have revision zero and its model ID
+  must match the canonical frozen request bytes exactly. Unsafe, malformed,
+  oversized, path-invalid, or request/configuration-mismatched state blocks
+  startup. A target-profile session accepted after an ambiguous POST proves the
+  old profile stale: Emergency Pause leaves pending untouched and forbids local
+  identity install, promotion, retry, or old-profile authentication. After
+  unpause, reconciliation accepts only the exact target registry/device/name/
+  model with nondecreasing designation and pause revisions; all other drift
+  remains fail-closed. Ordinary TLS remains exact-installed-profile-only. A
+  separate internal reconciliation transport reloads the frozen old Keychain
+  profile, admits only its recomputed exact revision-plus-one/requested-model
+  target with every immutable field preserved, loads the old TLS material, and
+  rechecks the old profile before setup. It accepts no broad transition flag or
+  arbitrary target override; Windows application-handshake acceptance and
+  exact projection proof remain mandatory. The
+  selected relay configuration must validate before
+  active state replaces pending. Model IDs must be bounded printable ASCII
+  bytes `0x21...0x7e` and retain the path-like ID exclusions. The executable must be canonical,
+  owner-matched, non-symlink, non-group/world-writable, executable, and named
+  exactly `mlx_lm.generate`; the model directory has the same canonical,
+  owner, symlink, and writable-target restrictions. Pending or corrupt state
+  blocks ordinary supervision. Paths never enter Windows routes, audit,
+  status, helper result, or protocol evidence.
 - The Windows `assemblywright-master` schema-v19 database retains the schema-v5
   Durable Feature Conveyor kernel and is
   default-inert. The owner-token-authenticated loopback
@@ -1012,6 +1081,24 @@ release requirements, not optional UX guidance.
   may retain exact request bytes only in process memory, block new submissions,
   and offer one separately confirmed reconciliation using those identical
   bytes. It must never automatically retry or silently bind a newer snapshot.
+- Repository onboarding must remain a two-phase Windows-owner operation over
+  the existing owner-token grant and preflight routes. Planning accepts one
+  existing clean standalone fixed-volume `main` repository, stores its expiring
+  canonical plan only in an owner/SYSTEM-private ordinary file, and exposes no
+  path in its summary. Approval requires three separate confirmation switches,
+  may resume only the exact revision-1 plan bindings, revalidates the repository
+  before and after preflight, and emits only the strict path-free authoring
+  receipt. Expiry must not hide exact current state from read-only `Check`, but
+  an expired plan must never create a fresh grant set: with all three confirmations
+  it may only resume an already-present exact partial or complete revision-1 set
+  through preflight and receipt publication, or replay an exact stored receipt
+  when all three exact grants remain current. An absent, foreign, drifted,
+  inactive, or revoked state fails closed after expiry. The Mac receipt importer
+  may atomically prefill only repository ID
+  and grant revisions; invalid, duplicate-key, extra-field, noncanonical,
+  oversized, zero-revision, or path-bearing input must leave the form unchanged.
+  Neither phase creates a repository, feature, claim, worker, mutation,
+  publication, deployment, or activation authority.
 - Signed release provenance must record the exact app executable path and
   SHA-256 plus its code Identifier, ten-character TeamIdentifier, and CDHash.
   Live-device QA must revalidate the installed executable and bind its report

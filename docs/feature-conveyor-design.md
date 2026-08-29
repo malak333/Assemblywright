@@ -101,6 +101,24 @@ This is admission evidence for the observed instant only: it creates no durable
 snapshot, claim, lease, mutation, worker, review, publication, or activation
 authority.
 
+The Windows repository-onboarding client composes the existing grant and
+preflight primitives without adding a new authority route. `Plan` first
+validates one existing clean standalone `main` checkout, stores an expiring
+owner/SYSTEM-private plan, and emits only a path-free summary. `Approve` accepts
+only that canonical plan plus three separate confirmation switches, records or
+resumes only its exact revision-1 grant set, reruns repository eligibility,
+requests preflight, revalidates authority, and emits a compact path-free receipt.
+`Check` remains read-only and reports exact current grant/receipt state after
+plan expiry. Expired `Approve` cannot create a fresh grant set; with all three
+confirmations it may only finish exact plan-bound partial or complete
+revision-1 grants through preflight and receipt publication, or re-emit an exact
+stored receipt while its three exact grants remain current. Foreign, drifted,
+inactive, revoked, or absent state fails closed after expiry.
+The Mac authoring form may strictly import that receipt to prefill repository
+identity and revisions, but import itself performs no Windows action. Repository
+creation, approval evidence, enqueue, dispatch, source mutation, validation,
+review, publication, and activation remain separate boundaries.
+
 Master schema v9 adds the separate owner-token loopback-only
 `POST /v1/feature-conveyor/repository-snapshot-claims`. Its strict request binds
 the exact preflight scope, queue head and specification revision, provider/model,
@@ -652,6 +670,10 @@ the system-directory-only `PATH` directly from OS APIs so native DNS can operate
 without ambient user environment. Codex uses strict configuration parsing, is
 ephemeral and read-only, and is configured with
 shell, snapshot, subagent, skill-install, image, and web surfaces disabled.
+The Mac approved-feature form labels these values as the production review
+binding, marks them as fixed by the Windows master, and explicitly distinguishes
+them from repository-scoped Codex development reviewer agents. It exposes no
+provider or model selector.
 
 After exact published Mac/Windows parity, the owner runs
 `./scripts/review-provider-proof-controller.sh --run` and supplies the one

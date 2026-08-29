@@ -34,15 +34,18 @@ use assemblywright_protocol::{
     FeatureConveyorValidationGateRequest, FeatureConveyorValidationGateStatus, HandshakeRequest,
     HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope, JobResultStatus, LeaseId,
     LocalCodingJobRequest, LocalCodingJobResult, LocalCodingResultArtifactAdmission,
-    LocalCodingResultArtifactReceipt, LocalCodingSnapshotChunkRequest, ProtocolError, Sensitivity,
-    StepId, TaskId, CANCELLATION_ACK_DEADLINE_MS, FEATURE_CONVEYOR_ORCHESTRATION_SCHEMA_VERSION,
+    LocalCodingResultArtifactReceipt, LocalCodingSnapshotChunkRequest,
+    LocalModelSelectionProjection, LocalModelSelectionReceipt, LocalModelSelectionRequest,
+    LocalModelSelectionStatus, ProtocolError, Sensitivity, StepId, TaskId,
+    CANCELLATION_ACK_DEADLINE_MS, FEATURE_CONVEYOR_ORCHESTRATION_SCHEMA_VERSION,
     FEATURE_CONVEYOR_OWNER_ACTIVATION_SCHEMA_VERSION,
     FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
     FEATURE_CONVEYOR_PUBLICATION_COORDINATOR_SCHEMA_VERSION, FEATURE_CONVEYOR_REVIEW_BACKOFF_MS,
     FEATURE_CONVEYOR_REVIEW_GATEWAY_SCHEMA_VERSION,
     FEATURE_CONVEYOR_VALIDATION_GATE_SCHEMA_VERSION, FIXTURE_REASONING_CAPABILITY_ID,
-    LOCAL_CODING_CAPABILITY_ID, MAX_CAPABILITY_ID_BYTES, MAX_FEATURE_CONVEYOR_ACTIVE_PROCESSING_MS,
-    MAX_FEATURE_CONVEYOR_REPLACEMENT_CANDIDATES, MAX_FEATURE_CONVEYOR_REVIEW_CALLS_PER_FEATURE,
+    LOCAL_CODING_CAPABILITY_ID, LOCAL_MODEL_SELECTION_SCHEMA_VERSION, MAX_CAPABILITY_ID_BYTES,
+    MAX_FEATURE_CONVEYOR_ACTIVE_PROCESSING_MS, MAX_FEATURE_CONVEYOR_REPLACEMENT_CANDIDATES,
+    MAX_FEATURE_CONVEYOR_REVIEW_CALLS_PER_FEATURE,
     MAX_FEATURE_CONVEYOR_REVIEW_REQUIREMENT_COVERAGE,
     MAX_FEATURE_CONVEYOR_REVIEW_TRANSPORT_ATTEMPTS_PER_CANDIDATE, MAX_JOB_CONTEXT_BYTES,
     MAX_LEASE_DURATION_MS, MAX_STEP_DEADLINE_MS, MLX_REASONING_CAPABILITY_ID, PROTOCOL_VERSION,
@@ -295,6 +298,8 @@ pub enum MasterError {
     OwnerControlBridgeNotDesignated,
     #[error("the authenticated device is not the exact designated owner-control Mac bridge")]
     OwnerControlBridgeUnauthorized,
+    #[error("the local model selection is stale, unsafe, or outside the model-only boundary")]
+    LocalModelSelectionRejected,
     #[error("feature lifecycle revision is stale: expected {expected}, found {found}")]
     StaleFeatureLifecycleRevision { expected: u64, found: u64 },
     #[error("feature was not found")]
@@ -3071,6 +3076,150 @@ impl MasterKernel {
             registry_revision: registration.registry_revision,
             designation_revision: next_revision,
         })
+    }
+
+    /// Pure-SELECT exact current MLX selection for the authenticated designated
+    /// bridge. This is the only reconciliation projection and contains no Mac
+    /// executable or model-directory paths.
+    pub fn local_model_selection_projection(
+        &self,
+        registration: &DeviceRegistration,
+    ) -> Result<LocalModelSelectionProjection, MasterError> {
+        let tx = self.connection.unchecked_transaction()?;
+        let designation = owner_control_bridge_designation_connection(&tx)?
+            .ok_or(MasterError::OwnerControlBridgeNotDesignated)?;
+        require_owner_control_bridge_tx(&tx, registration, designation.designation_revision)?;
+        let capability = match RemoteWorkContract::from_registration(registration)? {
+            RemoteWorkContract::Mlx(capability) => capability,
+            _ => return Err(MasterError::LocalModelSelectionRejected),
+        };
+        let projection = LocalModelSelectionProjection {
+            schema_version: LOCAL_MODEL_SELECTION_SCHEMA_VERSION,
+            device_id: registration.device_id,
+            device_name: registration.device_name.clone(),
+            registry_revision: registration.registry_revision,
+            designation_revision: designation.designation_revision,
+            emergency_pause_revision: emergency_pause_revision_tx(&tx)?,
+            emergency_paused: emergency_paused_tx(&tx)?,
+            model_id: capability.model,
+        };
+        projection.validate()?;
+        Ok(projection)
+    }
+
+    /// Atomically performs the sole permitted model-only capability mutation.
+    /// Identity, role, capability kind/provider/bounds, certificate material,
+    /// and device/designation identity are copied unchanged from durable state.
+    pub fn select_local_model_from_owner_bridge(
+        &mut self,
+        request: &LocalModelSelectionRequest,
+        registration: &DeviceRegistration,
+        expected_connection_epoch: u64,
+        now_ms: u64,
+    ) -> Result<LocalModelSelectionReceipt, MasterError> {
+        request.validate()?;
+        if request.device_id != registration.device_id
+            || request.expected_registry_revision != registration.registry_revision
+        {
+            return Err(MasterError::LocalModelSelectionRejected);
+        }
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_owner_control_bridge_tx(&tx, registration, request.expected_designation_revision)?;
+        require_unpaused_revision_tx(&tx, request.expected_emergency_pause_revision)?;
+        let capability = match RemoteWorkContract::from_registration(registration)? {
+            RemoteWorkContract::Mlx(capability) => capability,
+            _ => return Err(MasterError::LocalModelSelectionRejected),
+        };
+        if capability.model == request.model_id {
+            return Err(MasterError::LocalModelSelectionRejected);
+        }
+        let active_attempts: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM master_attempts
+             WHERE device_id=?1 AND status IN ('leased','cancellation_pending')",
+            [registration.device_id.0.to_string()],
+            |row| row.get(0),
+        )?;
+        if active_attempts != 0 {
+            return Err(MasterError::LocalModelSelectionRejected);
+        }
+        let connection_epoch = active_connection_epoch(&tx, registration.device_id)?
+            .ok_or(MasterError::ConnectionNotActive)?;
+        if connection_epoch != expected_connection_epoch {
+            return Err(MasterError::ConnectionEpochMismatch);
+        }
+        let next_registry_revision = registration
+            .registry_revision
+            .checked_add(1)
+            .ok_or(MasterError::IntegerOutOfRange)?;
+        let next_designation_revision = request
+            .expected_designation_revision
+            .checked_add(1)
+            .ok_or(MasterError::IntegerOutOfRange)?;
+        let mut target_capability = capability;
+        target_capability.model = request.model_id.clone();
+        target_capability.validate()?;
+        let capabilities_json = serde_json::to_string(&vec![target_capability])?;
+        let device_changed = tx.execute(
+            "UPDATE master_devices SET registry_revision=?1, capabilities_json=?2
+             WHERE device_id=?3 AND device_name=?4 AND role_json=?5
+               AND registry_revision=?6 AND capabilities_json=?7 AND revoked=0",
+            params![
+                u64_to_i64(next_registry_revision)?,
+                capabilities_json,
+                registration.device_id.0.to_string(),
+                registration.device_name.as_str(),
+                serde_json::to_string(&registration.role)?,
+                u64_to_i64(registration.registry_revision)?,
+                serde_json::to_string(&registration.capabilities)?,
+            ],
+        )?;
+        let designation_changed = tx.execute(
+            "UPDATE feature_owner_control_state
+             SET owner_bridge_registry_revision=?1, designation_revision=?2
+             WHERE singleton=1 AND owner_bridge_device_id=?3
+               AND owner_bridge_registry_revision=?4 AND designation_revision=?5",
+            params![
+                u64_to_i64(next_registry_revision)?,
+                u64_to_i64(next_designation_revision)?,
+                registration.device_id.0.to_string(),
+                u64_to_i64(registration.registry_revision)?,
+                u64_to_i64(request.expected_designation_revision)?,
+            ],
+        )?;
+        if device_changed != 1 || designation_changed != 1 {
+            return Err(MasterError::LocalModelSelectionRejected);
+        }
+        disconnect_device_tx(&tx, registration.device_id, connection_epoch, now_ms)?;
+        append_feature_audit_tx(
+            &tx,
+            "local_model_selected",
+            None,
+            now_ms,
+            serde_json::json!({
+                "registry_revision": next_registry_revision,
+                "designation_revision": next_designation_revision,
+                "emergency_pause_revision": request.expected_emergency_pause_revision,
+                "model_changed": true,
+                "identity_changed": false,
+                "capability_bounds_changed": false,
+                "side_effect_executed": true
+            }),
+        )?;
+        let receipt = LocalModelSelectionReceipt {
+            schema_version: LOCAL_MODEL_SELECTION_SCHEMA_VERSION,
+            device_id: registration.device_id,
+            registry_revision: next_registry_revision,
+            designation_revision: next_designation_revision,
+            emergency_pause_revision: request.expected_emergency_pause_revision,
+            model_id: request.model_id.clone(),
+            selected_at_ms: now_ms,
+            status: LocalModelSelectionStatus::Selected,
+        };
+        receipt.validate()?;
+        tx.commit()?;
+        Ok(receipt)
     }
 
     pub fn feature_conveyor_status(&self) -> Result<FeatureConveyorStatus, MasterError> {

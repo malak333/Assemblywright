@@ -58,17 +58,20 @@ fn csr(common_name: &str) -> String {
 
 fn csr_and_key(common_name: &str) -> (String, KeyPair) {
     let key = KeyPair::generate().expect("generate client key");
+    (csr_with_key(common_name, &key), key)
+}
+
+fn csr_with_key(common_name: &str, key: &KeyPair) -> String {
     let mut params = CertificateParams::default();
     let mut name = DistinguishedName::new();
     name.push(DnType::CommonName, common_name);
     params.distinguished_name = name;
     params.is_ca = IsCa::NoCa;
-    let csr = params
+    params
         .serialize_request(&key)
         .expect("serialize signed CSR")
         .pem()
-        .expect("encode CSR PEM");
-    (csr, key)
+        .expect("encode CSR PEM")
 }
 
 fn sign_rebind_acknowledgement(
@@ -129,6 +132,10 @@ fn enrollment_grants_issue_rotate_and_revoke_exact_device_identity() {
     let first = master
         .issue_device_certificate(&authority, &request, 2_000_002)
         .expect("issue first device certificate");
+    assert_eq!(
+        first.grant_id, None,
+        "normal enrollment receipt shape stays grant-free"
+    );
     assert_eq!(first.device_id, grant.device_id);
     assert_eq!(first.device_name, "owner-mac-bridge");
     assert_eq!(first.role, DeviceRole::MacBridge);
@@ -183,9 +190,17 @@ fn enrollment_grants_issue_rotate_and_revoke_exact_device_identity() {
         Err(MasterError::EnrollmentGrantConsumed)
     ));
 
-    let rotation = master
-        .create_rotation_grant(first.device_id, 3_000_000)
-        .expect("create rotation grant");
+    let (rotation, rotation_registration) = master
+        .create_rotation_pairing_grant(first.device_id, 3_000_000)
+        .expect("create interactive rotation grant");
+    assert_eq!(rotation_registration.device_id, first.device_id);
+    assert_eq!(rotation_registration.device_name, first.device_name);
+    assert_eq!(rotation_registration.role, first.role);
+    assert_eq!(
+        rotation_registration.registry_revision,
+        first.registry_revision
+    );
+    assert_eq!(rotation_registration.capabilities, spec().capabilities);
     let rotated = master
         .issue_device_certificate(
             &authority,
@@ -197,6 +212,7 @@ fn enrollment_grants_issue_rotate_and_revoke_exact_device_identity() {
             3_000_001,
         )
         .expect("rotate device certificate");
+    assert_eq!(rotated.grant_id, Some(rotation.grant_id));
     assert_eq!(rotated.device_id, first.device_id);
     assert_ne!(rotated.serial_hex, first.serial_hex);
     assert!(!master
@@ -224,6 +240,75 @@ fn enrollment_grants_issue_rotate_and_revoke_exact_device_identity() {
             .any(|window| window == grant.grant_secret.as_bytes()),
         "raw enrollment secret persisted in SQLite"
     );
+}
+
+#[test]
+fn rotation_precommit_failure_rolls_back_and_recovery_validation_is_exact() {
+    let directory = tempfile::tempdir().expect("rotation precommit directory");
+    let authority =
+        IdentityAuthority::open_or_initialize(directory.path(), &TestProtector, 1_000_000)
+            .expect("initialize authority");
+    let mut master = MasterKernel::in_memory().expect("in-memory master");
+    master
+        .record_identity_authority(authority.receipt())
+        .expect("record authority");
+    let enrollment = master
+        .create_enrollment_grant(spec(), 2_000_000)
+        .expect("enrollment grant");
+    let active = master
+        .issue_device_certificate(
+            &authority,
+            &EnrollmentRequest {
+                grant_id: enrollment.grant_id,
+                grant_secret: enrollment.grant_secret,
+                csr_pem: csr("rotation-precommit"),
+            },
+            2_000_001,
+        )
+        .expect("active certificate");
+    let rotation = master
+        .create_rotation_grant(active.device_id, 2_000_002)
+        .expect("rotation grant");
+    let request = EnrollmentRequest {
+        grant_id: rotation.grant_id,
+        grant_secret: rotation.grant_secret,
+        csr_pem: csr("rotation-precommit"),
+    };
+    let rejected = master.issue_device_certificate_with_precommit(
+        &authority,
+        &request,
+        2_000_003,
+        |receipt| {
+            assert_eq!(receipt.grant_id, Some(rotation.grant_id));
+            Err(MasterError::InvalidStoredState(
+                "injected journal failure".to_string(),
+            ))
+        },
+    );
+    assert!(matches!(rejected, Err(MasterError::InvalidStoredState(_))));
+    assert!(master
+        .certificate_is_active(active.device_id, &active.serial_hex, 2_000_004)
+        .expect("old certificate remains active"));
+
+    let rotated = master
+        .issue_device_certificate(&authority, &request, 2_000_005)
+        .expect("grant remained retryable after precommit rollback");
+    master
+        .validate_rotation_recovery_receipt(&rotated, 2_000_006)
+        .expect("exact committed receipt validates");
+    let mut wrong_grant = rotated.clone();
+    wrong_grant.grant_id = Some(uuid::Uuid::new_v4());
+    assert!(master
+        .validate_rotation_recovery_receipt(&wrong_grant, 2_000_006)
+        .is_err());
+    let mut wrong_pem = rotated.clone();
+    wrong_pem.certificate_pem = active.certificate_pem;
+    assert!(master
+        .validate_rotation_recovery_receipt(&wrong_pem, 2_000_006)
+        .is_err());
+    assert!(master
+        .validate_rotation_recovery_receipt(&rotated, rotated.not_after_ms)
+        .is_err());
 }
 
 #[test]
@@ -279,6 +364,45 @@ fn expired_grant_and_invalid_csr_fail_without_consuming_the_grant() {
         ),
         Err(MasterError::EnrollmentGrantExpired)
     ));
+}
+
+#[test]
+fn interactive_rotation_rejects_fixture_registration_before_creating_a_grant() {
+    let directory = tempfile::tempdir().expect("fixture rotation identity directory");
+    let authority =
+        IdentityAuthority::open_or_initialize(directory.path(), &TestProtector, 1_000_000)
+            .expect("initialize authority");
+    let mut master = MasterKernel::in_memory().expect("in-memory master");
+    master
+        .record_identity_authority(authority.receipt())
+        .expect("record authority");
+    let grant = master
+        .create_enrollment_grant(fixture_spec(), 2_000_000)
+        .expect("create fixture grant");
+    let device_id = grant.device_id;
+    master
+        .issue_device_certificate(
+            &authority,
+            &EnrollmentRequest {
+                grant_id: grant.grant_id,
+                grant_secret: grant.grant_secret,
+                csr_pem: csr("fixture-device"),
+            },
+            2_000_001,
+        )
+        .expect("issue fixture certificate");
+    let before = master.health_snapshot().expect("health before rejection");
+
+    assert!(matches!(
+        master.create_rotation_pairing_grant(device_id, 2_000_002),
+        Err(MasterError::InvalidEnrollmentGrant(message))
+            if message.contains("non-fixture MacBridge")
+    ));
+    let after = master.health_snapshot().expect("health after rejection");
+    assert_eq!(
+        after.unconsumed_enrollment_grants, before.unconsumed_enrollment_grants,
+        "rejected fixture rotation must not leave a digest-only grant"
+    );
 }
 
 #[test]
@@ -1152,6 +1276,24 @@ fn windows_pair_and_rebind_cli_keep_secrets_on_stdin_and_activate_exact_replacem
     assert_eq!(health.unconsumed_enrollment_grants, 1);
     drop(master);
 
+    let fixture_rotation = Command::new(binary)
+        .args([
+            "--data-dir",
+            &data_dir,
+            "enrollment",
+            "rotate-pair",
+            "--device-id",
+            issued["device_id"].as_str().expect("paired device id"),
+            "--master-endpoint",
+            "100.64.23.14:7792",
+            "--confirm",
+        ])
+        .output()
+        .expect("reject fixture rotation");
+    assert!(!fixture_rotation.status.success());
+    assert!(fixture_rotation.stdout.is_empty());
+    assert!(!String::from_utf8_lossy(&fixture_rotation.stderr).contains("grant_secret"));
+
     let target_path = directory.path().join("mlx-capabilities.json");
     std::fs::write(
         &target_path,
@@ -1306,4 +1448,321 @@ fn windows_pair_and_rebind_cli_keep_secrets_on_stdin_and_activate_exact_replacem
             activated_at + 1,
         )
         .expect("replacement certificate active"));
+    drop(master);
+
+    let mut rotate = Command::new(binary)
+        .args([
+            "--data-dir",
+            &data_dir,
+            "enrollment",
+            "rotate-pair",
+            "--device-id",
+            device_id,
+            "--master-endpoint",
+            "100.64.23.14:7792",
+            "--confirm",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn same-device rotation pair");
+    let mut rotate_stdout = BufReader::new(rotate.stdout.take().expect("rotation stdout"));
+    let mut rotation_invitation_line = String::new();
+    rotate_stdout
+        .read_line(&mut rotation_invitation_line)
+        .expect("read rotation invitation");
+    assert!(!rotation_invitation_line.contains("grant_secret"));
+    let rotation_invitation =
+        EnrollmentInvitation::decode_frame(rotation_invitation_line.as_bytes())
+            .expect("decode rotation invitation");
+    assert_eq!(rotation_invitation.device_id, pending_device);
+    assert_eq!(rotation_invitation.registry_revision, 2);
+    assert_eq!(rotation_invitation.capabilities, spec().capabilities);
+    rotate
+        .stdin
+        .take()
+        .expect("rotation stdin")
+        .write_all(
+            &serde_json::to_vec(&EnrollmentCsrReply {
+                schema_version: 1,
+                status: "enrollment_csr_ready".to_string(),
+                grant_id: rotation_invitation.grant_id,
+                device_id: rotation_invitation.device_id,
+                csr_pem: csr_with_key("rotation-current-key", &rebind_key),
+            })
+            .expect("rotation CSR"),
+        )
+        .expect("write rotation CSR");
+    let mut rotation_receipt_line = String::new();
+    rotate_stdout
+        .read_to_string(&mut rotation_receipt_line)
+        .expect("read rotation receipt");
+    let rotation_status = rotate.wait().expect("wait for rotation");
+    let mut rotation_stderr = String::new();
+    rotate
+        .stderr
+        .take()
+        .expect("rotation stderr")
+        .read_to_string(&mut rotation_stderr)
+        .expect("read rotation stderr");
+    assert!(
+        rotation_status.success(),
+        "rotation failed: {rotation_stderr}"
+    );
+    assert!(!rotation_receipt_line.contains("grant_secret"));
+    let rotation: serde_json::Value =
+        serde_json::from_str(&rotation_receipt_line).expect("rotation receipt");
+    assert_eq!(rotation["operation"], "rotate");
+    assert_eq!(
+        rotation["grant_id"],
+        rotation_invitation.grant_id.to_string()
+    );
+    assert_eq!(rotation["device_id"], device_id);
+    assert_eq!(rotation["registry_revision"], 2);
+    let rotation_probe_at = rotation["issued_at_ms"]
+        .as_u64()
+        .expect("rotation issued time")
+        + 1;
+    let master =
+        MasterKernel::open(directory.path().join("master.sqlite3")).expect("open rotated registry");
+    assert!(!master
+        .certificate_is_active(
+            pending_device,
+            pending["serial_hex"].as_str().expect("pre-rotation serial"),
+            rotation_probe_at,
+        )
+        .expect("pre-rotation certificate inactive"));
+    assert!(master
+        .certificate_is_active(
+            pending_device,
+            rotation["serial_hex"].as_str().expect("rotation serial"),
+            rotation_probe_at,
+        )
+        .expect("rotated certificate active"));
+    drop(master);
+
+    let direct_recovery = Command::new(binary)
+        .args([
+            "--data-dir",
+            &data_dir,
+            "enrollment",
+            "rotate-recover",
+            "--grant-id",
+            &rotation_invitation.grant_id.to_string(),
+            "--confirm",
+        ])
+        .output()
+        .expect("recover directly delivered rotation receipt");
+    assert!(direct_recovery.status.success());
+    assert_eq!(direct_recovery.stdout, rotation_receipt_line.as_bytes());
+    let direct_acknowledgement = Command::new(binary)
+        .args([
+            "--data-dir",
+            &data_dir,
+            "enrollment",
+            "rotate-recover-acknowledge",
+            "--grant-id",
+            &rotation_invitation.grant_id.to_string(),
+            "--confirm",
+        ])
+        .output()
+        .expect("acknowledge directly delivered rotation receipt");
+    assert!(direct_acknowledgement.status.success());
+
+    // Closing the receipt pipe after accepting the public invitation simulates
+    // the ambiguous post-commit failure boundary. The owner-private journal is
+    // the only supported way to recover the exact committed receipt.
+    let mut interrupted = Command::new(binary)
+        .args([
+            "--data-dir",
+            &data_dir,
+            "enrollment",
+            "rotate-pair",
+            "--device-id",
+            device_id,
+            "--master-endpoint",
+            "100.64.23.14:7792",
+            "--confirm",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn interrupted same-device rotation pair");
+    let mut interrupted_stdout =
+        BufReader::new(interrupted.stdout.take().expect("interrupted stdout"));
+    let mut interrupted_invitation_line = String::new();
+    interrupted_stdout
+        .read_line(&mut interrupted_invitation_line)
+        .expect("read interrupted rotation invitation");
+    assert!(!interrupted_invitation_line.contains("grant_secret"));
+    let interrupted_invitation =
+        EnrollmentInvitation::decode_frame(interrupted_invitation_line.as_bytes())
+            .expect("decode interrupted rotation invitation");
+    drop(interrupted_stdout);
+    interrupted
+        .stdin
+        .take()
+        .expect("interrupted rotation stdin")
+        .write_all(
+            &serde_json::to_vec(&EnrollmentCsrReply {
+                schema_version: 1,
+                status: "enrollment_csr_ready".to_string(),
+                grant_id: interrupted_invitation.grant_id,
+                device_id: interrupted_invitation.device_id,
+                csr_pem: csr_with_key("rotation-recovery-current-key", &rebind_key),
+            })
+            .expect("interrupted rotation CSR"),
+        )
+        .expect("write interrupted rotation CSR");
+    let interrupted_output = interrupted
+        .wait_with_output()
+        .expect("wait for interrupted rotation");
+    assert!(!interrupted_output.status.success());
+    assert!(
+        String::from_utf8_lossy(&interrupted_output.stderr).contains("confirmed rotate-recover")
+    );
+    assert!(!String::from_utf8_lossy(&interrupted_output.stderr).contains("grant_secret"));
+
+    let unconfirmed_recovery = Command::new(binary)
+        .args([
+            "--data-dir",
+            &data_dir,
+            "enrollment",
+            "rotate-recover",
+            "--grant-id",
+            &interrupted_invitation.grant_id.to_string(),
+        ])
+        .output()
+        .expect("run unconfirmed rotation recovery");
+    assert!(!unconfirmed_recovery.status.success());
+    assert!(unconfirmed_recovery.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&unconfirmed_recovery.stderr).contains("--confirm"));
+
+    let recovered = Command::new(binary)
+        .args([
+            "--data-dir",
+            &data_dir,
+            "enrollment",
+            "rotate-recover",
+            "--grant-id",
+            &interrupted_invitation.grant_id.to_string(),
+            "--confirm",
+        ])
+        .output()
+        .expect("recover committed rotation receipt");
+    assert!(
+        recovered.status.success(),
+        "rotation recovery failed: {}",
+        String::from_utf8_lossy(&recovered.stderr)
+    );
+    assert!(!String::from_utf8_lossy(&recovered.stdout).contains("grant_secret"));
+    let recovered_receipt: serde_json::Value =
+        serde_json::from_slice(&recovered.stdout).expect("recovered rotation receipt");
+    assert_eq!(recovered_receipt["operation"], "rotate");
+    assert_eq!(
+        recovered_receipt["grant_id"],
+        interrupted_invitation.grant_id.to_string()
+    );
+    assert_eq!(recovered_receipt["device_id"], device_id);
+
+    let recovered_again = Command::new(binary)
+        .args([
+            "--data-dir",
+            &data_dir,
+            "enrollment",
+            "rotate-recover",
+            "--grant-id",
+            &interrupted_invitation.grant_id.to_string(),
+            "--confirm",
+        ])
+        .output()
+        .expect("repeat committed rotation receipt recovery");
+    assert!(recovered_again.status.success());
+    assert_eq!(
+        recovered_again.stdout, recovered.stdout,
+        "recovery remains byte-identical until explicit acknowledgement"
+    );
+
+    let recovered_at = recovered_receipt["issued_at_ms"]
+        .as_u64()
+        .expect("recovered issued time")
+        + 1;
+    let master = MasterKernel::open(directory.path().join("master.sqlite3"))
+        .expect("open recovered registry");
+    assert!(!master
+        .certificate_is_active(
+            pending_device,
+            rotation["serial_hex"]
+                .as_str()
+                .expect("previous rotation serial"),
+            recovered_at,
+        )
+        .expect("previous rotation certificate inactive"));
+    assert!(master
+        .certificate_is_active(
+            pending_device,
+            recovered_receipt["serial_hex"]
+                .as_str()
+                .expect("recovered rotation serial"),
+            recovered_at,
+        )
+        .expect("recovered rotation certificate active"));
+    drop(master);
+
+    let unconfirmed_acknowledgement = Command::new(binary)
+        .args([
+            "--data-dir",
+            &data_dir,
+            "enrollment",
+            "rotate-recover-acknowledge",
+            "--grant-id",
+            &interrupted_invitation.grant_id.to_string(),
+        ])
+        .output()
+        .expect("run unconfirmed recovery acknowledgement");
+    assert!(!unconfirmed_acknowledgement.status.success());
+    assert!(unconfirmed_acknowledgement.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&unconfirmed_acknowledgement.stderr).contains("--confirm"));
+
+    let acknowledged = Command::new(binary)
+        .args([
+            "--data-dir",
+            &data_dir,
+            "enrollment",
+            "rotate-recover-acknowledge",
+            "--grant-id",
+            &interrupted_invitation.grant_id.to_string(),
+            "--confirm",
+        ])
+        .output()
+        .expect("acknowledge recovered rotation receipt");
+    assert!(
+        acknowledged.status.success(),
+        "rotation recovery acknowledgement failed: {}",
+        String::from_utf8_lossy(&acknowledged.stderr)
+    );
+    let acknowledgement: serde_json::Value =
+        serde_json::from_slice(&acknowledged.stdout).expect("recovery acknowledgement receipt");
+    assert_eq!(acknowledgement["status"], "rotation_recovery_acknowledged");
+    assert_eq!(
+        acknowledgement["grant_id"],
+        interrupted_invitation.grant_id.to_string()
+    );
+
+    let consumed_recovery = Command::new(binary)
+        .args([
+            "--data-dir",
+            &data_dir,
+            "enrollment",
+            "rotate-recover",
+            "--grant-id",
+            &interrupted_invitation.grant_id.to_string(),
+            "--confirm",
+        ])
+        .output()
+        .expect("retry consumed rotation recovery");
+    assert!(!consumed_recovery.status.success());
+    assert!(consumed_recovery.stdout.is_empty());
 }

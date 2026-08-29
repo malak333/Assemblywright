@@ -47,6 +47,9 @@ accepted designs and take precedence within their scope:
 - No more than one active feature, even across repositories.
 - No silent interpretation of ambiguous or contradictory specifications.
 - No automatic provider fallback or automatic active-feature rebinding.
+- No general capability rebind from the model picker. The only selectable lane
+  is the exact designated singleton MLX MacBridge, and only its model ID may
+  change.
 - No automatic advancement after cancellation, failure, attention, quarantine,
   or abandonment.
 - No peer-to-peer worker authority, shared writable worker checkouts, or worker
@@ -56,6 +59,63 @@ accepted designs and take precedence within their scope:
   Developer Mode and are not planned.
 
 ## Architecture
+
+### Owner-confirmed local model selection
+
+Developer Mode exposes one bounded Models surface. Mac MLX is selectable;
+`assemblywright-local-coding-v1` and the production `openai.codex` /
+`gpt-5.6-sol` reviewer remain fixed, while Windows RTX is reported as not
+provisioned. One explicit Mac confirmation freezes the exact device, current
+device-registry revision, owner-control designation revision, Emergency Pause
+revision, and target model. Local `mlx_lm.generate` and model-directory paths
+remain only in a mode-0600 owner-private Mac configuration file and never enter
+the protocol, Windows database, status, or audit. Selectable model IDs are
+bounded printable ASCII without whitespace or control bytes so the picker
+cannot create a registration that the relay cannot safely reproduce.
+
+Windows accepts the model-only POST only from the exact current accepted epoch
+of the designated non-fixture MLX MacBridge, outside maintenance and Emergency
+Pause, with no active attempt. The transaction copies device/name/role,
+capability ID/kind/provider/bounds, certificate and key identity unchanged;
+advances the device registry, designation registry, and designation revisions
+by exactly one; disconnects the accepted epoch; and appends one metadata-only
+redacted audit row. Protocol v5 and schema v19 remain compatible because no
+certificate, capability shape, database table, or general rebind contract
+changes.
+
+The signed helper has only `local-model select --confirm` and the separately
+confirmed `local-model reconcile --confirm`. Only strict known pre-mutation
+HTTP status/error pairs become a path-free terminal-rejection result bound to
+the frozen intent; the app durably clears pending and restarts the unchanged
+relay for that result. Unknown bodies/statuses and all 5xx responses remain
+ambiguous. Resume first proves the target; if Windows instead proves the
+byte-exact old unpaused binding, it may submit the frozen original POST once.
+The Mac fsyncs the pending file and its parent directory before POST. Unsafe,
+malformed, oversized, or path-invalid stores block startup. A promoted relay
+configuration is validated before active state replaces pending on disk. There
+is no provider or model fallback.
+
+The pending store is recursively duplicate-free and exact-shape validated.
+Its configuration model ID and zero pre-selection registry revision must bind
+the canonical frozen request bytes exactly, so a stored request for one model
+cannot be promoted with another model's local directory. After a lost committed
+POST, acceptance of the target-profile application session proves the old
+profile stale. Emergency Pause therefore leaves pending untouched and permits
+no local identity install, relay promotion, POST, or old-profile probe. Once
+unpaused, exact target registry/device/name/model evidence may reconcile across
+monotonically newer designation and Emergency Pause revisions; any lower,
+paused, malformed, or otherwise drifted target remains fail-closed. Protocol v5
+and schema v19 remain unchanged.
+
+The ordinary Keychain-backed TLS factory remains exact-installed-profile-only.
+Reconciliation uses a separate internal transport operation: the factory
+reloads and matches the frozen old profile, recomputes and compares the sole
+legal target (registry revision exactly plus one, exact requested model, and
+otherwise identical identity/name/role/endpoint/certificate and capability
+identity/kind/provider/bounds), loads the old TLS material, then rechecks the
+old profile before connection setup. There is no caller-controlled transition
+flag or arbitrary override, and target identity is not installed before exact
+Windows application-handshake and projection proof.
 
 ### Windows master
 
@@ -786,6 +846,18 @@ digest-only single-use grants, verified client CSRs, short-lived device
 certificates, rotation, and revocation. Remote access is an explicit opt-in
 TLS 1.3 mTLS listener bound to a concrete IP, with per-request revocation
 recheck and TLS-exporter handshake binding.
+
+Standard-profile certificate rotation is a confirmed, same-device recovery
+ceremony rather than enrollment or capability rebind. The stopped Windows
+process retains and zeroizes the raw grant, accepts the CSR only on stdin,
+revokes prior serials, and durably journals the exact public issued receipt
+before committing authority. The Mac reuses its selected non-exportable key and
+may replace only the certificate and installed record after validating the
+exact device, registration, capability, endpoint, CA, and `rotate` receipt.
+Confirmed Windows recovery re-emits that byte-identical grant-bound receipt;
+only a separate confirmation after Mac installation and authenticated reconnect
+removes the protected journal. Device identity, registry revision, capability,
+and owner-control designation remain unchanged throughout.
 
 Capability repair for the installed standard Mac identity is an explicit,
 owner-confirmed two-phase rebind, not enrollment or rotation. A ten-minute

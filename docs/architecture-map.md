@@ -1,5 +1,29 @@
 # Architecture Map
 
+## Local model selection boundary
+
+- SwiftUI `Models` presents four cards: Mac MLX selectable, local coding fixed,
+  Windows RTX not provisioned, and production review fixed.
+- `LocalModelSelection.swift` owns canonical path validation, strict intent,
+  receipt, terminal-rejection, and projection validation, the mode-0600
+  active/pending store with recursive exact-shape/request binding plus
+  file-and-directory fsync, and exact select/reconcile behavior. Invalid store
+  state blocks supervision. A target-profile session makes the old profile
+  ineligible for fallback; pause keeps pending inert, while later unpaused
+  monotonic authority revisions can reconcile only the exact committed target.
+- `NetworkMTLSBridge.swift` binds ordinary connections to the exact installed
+  Keychain profile. A separate reconciliation-only factory operation rechecks
+  the frozen old profile/material and admits only its exact derived
+  revision-plus-one/requested-model target before the Windows application
+  handshake; there is no general transition mode.
+- `assemblywright-mac-bridge local-model select|reconcile --confirm` is the
+  signed one-shot boundary. The app never loads the bridge private key.
+- `GET|POST /v1/distributed/local-model/selection` is mTLS application-session
+  only. `assemblywright-master` owns the atomic model-only registry,
+  designation, disconnect, and redacted-audit transition.
+- `assemblywright-protocol` owns the path-free schema-v1 selection request,
+  projection, and receipt. Protocol v5 and master schema v19 are unchanged.
+
 ## Distributed development portable foundation
 
 Current implementation:
@@ -400,6 +424,19 @@ generation and cannot delete promoted replacement material; once a certificate
 acknowledgement exists it also preserves the entire pre-promotion recovery
 record because Windows activation may already be terminal. There is no general destructive
 standard-profile remove command.
+The standard profile also has a same-device certificate-only recovery path.
+Confirmed Windows `rotate-pair` keeps the short-lived raw grant only in the
+stopped process and exchanges a public invitation and CSR over stdin. Confirmed
+Mac rotation prepare/install reuses the currently selected non-exportable key,
+requires the exact installed device, registration, capabilities, endpoint, and
+pinned CA, and replaces only the selected certificate after validating the
+strict `rotate` receipt. Windows revokes prior serials at issuance; the device
+ID, registry revision, capabilities, and owner-control designation do not move.
+Before commit, Windows stores the exact public grant-bound receipt in a
+protected owner-and-LocalSystem recovery journal. Confirmed recovery re-emits
+the same receipt idempotently; only a separate confirmed acknowledgement after
+Mac installation and authenticated reconnect removes it. Mac certificate
+promotion is forward-resumable across every Keychain mutation boundary.
 The standard profile can separately enable an exact singleton
 `mlx.reasoning` / `local_inference` / `mlx` lane. Its absolute runtime and model
 paths arrive through bounded startup stdin; one Public, no-retention request

@@ -11,6 +11,8 @@ struct AssemblywrightMacBridgeKeychainNamespace: Equatable, Sendable {
     let replacementStagedAccount: String
     let replacementCertificateLabel: String
     let replacementKeyTag: Data
+    let rotationStagedAccount: String
+    let rotationCandidateCertificateLabel: String
 
     static func identityProfile(_ profile: AssemblywrightMacBridgeIdentityProfile) -> Self {
         switch profile {
@@ -26,7 +28,10 @@ struct AssemblywrightMacBridgeKeychainNamespace: Equatable, Sendable {
                     "com.nobiletechnology.assemblywright.developer-bridge.identity-replacement-v1",
                 replacementKeyTag: Data(
                     "com.nobiletechnology.assemblywright.developer-bridge.p256-replacement-v1".utf8
-                )
+                ),
+                rotationStagedAccount: "certificate-rotation-staged-v1",
+                rotationCandidateCertificateLabel:
+                    "com.nobiletechnology.assemblywright.developer-bridge.rotation-candidate-v1"
             )
         case .fixtureReasoning:
             Self(
@@ -43,7 +48,10 @@ struct AssemblywrightMacBridgeKeychainNamespace: Equatable, Sendable {
                     "com.nobiletechnology.assemblywright.developer-bridge.fixture.rebind-forbidden",
                 replacementKeyTag: Data(
                     "com.nobiletechnology.assemblywright.developer-bridge.fixture.rebind-forbidden".utf8
-                )
+                ),
+                rotationStagedAccount: "certificate-rotation-forbidden",
+                rotationCandidateCertificateLabel:
+                    "com.nobiletechnology.assemblywright.developer-bridge.fixture.rotation-forbidden"
             )
         case .localCoding:
             Self(
@@ -60,7 +68,10 @@ struct AssemblywrightMacBridgeKeychainNamespace: Equatable, Sendable {
                     "com.nobiletechnology.assemblywright.developer-bridge.local-coding.rebind-forbidden",
                 replacementKeyTag: Data(
                     "com.nobiletechnology.assemblywright.developer-bridge.local-coding.rebind-forbidden".utf8
-                )
+                ),
+                rotationStagedAccount: "certificate-rotation-forbidden",
+                rotationCandidateCertificateLabel:
+                    "com.nobiletechnology.assemblywright.developer-bridge.local-coding.rotation-forbidden"
             )
         }
     }
@@ -70,10 +81,21 @@ public struct KeychainAssemblywrightMacBridgeIdentityStore: AssemblywrightMacBri
     private static let lock = NSLock()
     private let identityProfile: AssemblywrightMacBridgeIdentityProfile
     private let namespace: AssemblywrightMacBridgeKeychainNamespace
+    private let rotationFault: @Sendable (AssemblywrightRotationMutationBoundary) -> Bool
 
     public init(identityProfile: AssemblywrightMacBridgeIdentityProfile = .standard) {
         self.identityProfile = identityProfile
         namespace = .identityProfile(identityProfile)
+        rotationFault = { _ in false }
+    }
+
+    init(
+        identityProfile: AssemblywrightMacBridgeIdentityProfile = .standard,
+        rotationFault: @escaping @Sendable (AssemblywrightRotationMutationBoundary) -> Bool
+    ) {
+        self.identityProfile = identityProfile
+        namespace = .identityProfile(identityProfile)
+        self.rotationFault = rotationFault
     }
 
     public func stageIdentity(for invitation: AssemblywrightMacEnrollmentInvitation) throws -> AssemblywrightMacEnrollmentCSR {
@@ -189,6 +211,319 @@ public struct KeychainAssemblywrightMacBridgeIdentityStore: AssemblywrightMacBri
                 try identityProfile.validate(profile: profile)
             }
             return record?.profile
+        }
+    }
+
+    /// Applies only a Windows-authorized model/revision change to the installed
+    /// standard profile. Certificate, key generation, endpoint, role, device,
+    /// capability identity/provider, and fixed bounds are preserved byte for
+    /// byte from the selected record.
+    public func installLocalModelSelection(
+        modelID: String,
+        expectedRegistryRevision: UInt64,
+        registryRevision: UInt64
+    ) throws -> AssemblywrightMacBridgeProfile {
+        guard identityProfile == .standard,
+              !modelID.isEmpty, modelID.utf8.count <= 128,
+              !modelID.hasPrefix("/"), !modelID.contains("\\"),
+              expectedRegistryRevision < UInt64.max,
+              registryRevision == expectedRegistryRevision + 1 else {
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+        }
+        return try Self.lock.withLock {
+            guard let installed: InstalledRecord = try readRecord(
+                account: namespace.installedAccount
+            ), installed.profile.registryRevision == expectedRegistryRevision,
+            installed.profile.role == "mac_bridge",
+            installed.profile.capabilities.count == 1,
+            let capability = installed.profile.capabilities.first,
+            capability.id == "mlx.reasoning",
+            capability.kind == "local_inference",
+            capability.provider == "mlx",
+            capability.model != modelID else {
+                throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+            }
+            let selectedCapability = AssemblywrightMacBridgeCapability(
+                id: capability.id,
+                kind: capability.kind,
+                provider: capability.provider,
+                model: modelID,
+                maxContextBytes: capability.maxContextBytes,
+                maxResultBytes: capability.maxResultBytes
+            )
+            try selectedCapability.validate()
+            let profile = AssemblywrightMacBridgeProfile(
+                deviceID: installed.profile.deviceID,
+                deviceName: installed.profile.deviceName,
+                role: installed.profile.role,
+                registryRevision: registryRevision,
+                capabilities: [selectedCapability],
+                masterEndpoint: installed.profile.masterEndpoint,
+                certificateNotAfterMilliseconds:
+                    installed.profile.certificateNotAfterMilliseconds
+            )
+            try identityProfile.validate(profile: profile)
+            try saveRecord(
+                InstalledRecord(
+                    profile: profile,
+                    certificatePEM: installed.certificatePEM,
+                    caCertificatePEM: installed.caCertificatePEM,
+                    caFingerprintSHA256: installed.caFingerprintSHA256,
+                    keyGeneration: installed.keyGeneration,
+                    rotationGrantID: installed.rotationGrantID
+                ),
+                account: namespace.installedAccount
+            )
+            return profile
+        }
+    }
+
+    public func stageRotationIdentity(
+        for invitation: AssemblywrightMacEnrollmentInvitation
+    ) throws -> AssemblywrightMacEnrollmentCSR {
+        guard identityProfile == .standard else {
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+        }
+        return try Self.lock.withLock {
+            guard let installed: InstalledRecord = try readRecord(
+                account: namespace.installedAccount
+            ), installed.profile.deviceID == invitation.deviceID,
+            installed.profile.deviceName == invitation.deviceName,
+            installed.profile.role == invitation.role,
+            installed.profile.registryRevision == invitation.registryRevision,
+            installed.profile.capabilities == invitation.capabilities,
+            installed.profile.masterEndpoint == invitation.masterEndpoint,
+            installed.caFingerprintSHA256 == invitation.caFingerprintSHA256.lowercased()
+            else {
+                throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+            }
+            let keyTag = try selectedKeyTag(installed)
+            let selectedLabel = try selectedCertificateLabel(installed)
+            let privateKey = try loadPrivateKey(keyTag: keyTag)
+            let installedLeafDER = try decodePEM(
+                installed.certificatePEM,
+                label: "CERTIFICATE"
+            )
+            guard let installedLeaf = SecCertificateCreateWithData(
+                nil,
+                installedLeafDER as CFData
+            ), let selectedCertificate = try findInstalledCertificate(label: selectedLabel),
+            SecCertificateCopyData(selectedCertificate) as Data == installedLeafDER,
+            certificate(installedLeaf, matches: privateKey) else {
+                throw AssemblywrightMacDeveloperBridgeError.identityUnavailable
+            }
+            if let staged: RotationStagedRecord = try readRecord(
+                account: namespace.rotationStagedAccount
+            ) {
+                if staged.invitation == invitation, staged.receipt == nil {
+                    return try makeCSR(
+                        invitation: invitation,
+                        privateKey: privateKey
+                    )
+                }
+                let nowMilliseconds = UInt64(max(Date().timeIntervalSince1970 * 1_000, 0))
+                guard staged.receipt == nil, assemblywrightRotationStageMayBeReplaced(
+                    expiresAtMilliseconds: staged.invitation.expiresAtMilliseconds,
+                    nowMilliseconds: nowMilliseconds
+                ) else {
+                    throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+                }
+                try deleteRecord(account: namespace.rotationStagedAccount)
+            }
+            let reply = try makeCSR(
+                invitation: invitation,
+                privateKey: privateKey
+            )
+            try saveRecord(
+                RotationStagedRecord(invitation: invitation, receipt: nil),
+                account: namespace.rotationStagedAccount
+            )
+            return reply
+        }
+    }
+
+    public func loadStagedRotationInvitation() throws -> AssemblywrightMacEnrollmentInvitation? {
+        guard identityProfile == .standard else {
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+        }
+        return try Self.lock.withLock {
+            let staged: RotationStagedRecord? = try readRecord(
+                account: namespace.rotationStagedAccount
+            )
+            return staged?.invitation
+        }
+    }
+
+    public func installRotation(
+        _ receipt: AssemblywrightMacIssuedDeviceCertificate
+    ) throws -> AssemblywrightMacBridgeProfile {
+        guard identityProfile == .standard else {
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+        }
+        return try Self.lock.withLock {
+            guard let installed: InstalledRecord = try readRecord(
+                account: namespace.installedAccount
+            ) else {
+                throw AssemblywrightMacDeveloperBridgeError.noStagedEnrollment
+            }
+            try identityProfile.validate(profile: installed.profile)
+            if rotationReceipt(receipt, exactlyMatches: installed) {
+                let keyTag = try selectedKeyTag(installed)
+                let selectedLabel = try selectedCertificateLabel(installed)
+                let privateKey = try loadPrivateKey(keyTag: keyTag)
+                let leafDER = try decodePEM(receipt.certificatePEM, label: "CERTIFICATE")
+                let caDER = try decodePEM(receipt.caCertificatePEM, label: "CERTIFICATE")
+                guard hex(SHA256.hash(data: caDER)) == installed.caFingerprintSHA256,
+                      let leaf = SecCertificateCreateWithData(nil, leafDER as CFData),
+                      let ca = SecCertificateCreateWithData(nil, caDER as CFData),
+                      let selectedCertificate = try findInstalledCertificate(label: selectedLabel),
+                      SecCertificateCopyData(selectedCertificate) as Data == leafDER else {
+                    throw AssemblywrightMacDeveloperBridgeError.certificateInvalid
+                }
+                try validateCertificate(
+                    leaf: leaf,
+                    leafDER: leafDER,
+                    ca: ca,
+                    privateKey: privateKey,
+                    expectedDeviceID: receipt.deviceID,
+                    expectedDeviceName: receipt.deviceName,
+                    expectedSerialHex: receipt.serialHex,
+                    expectedNotAfterMilliseconds: receipt.notAfterMilliseconds
+                )
+                _ = try loadIdentity(certificate: leaf)
+                try deleteInstalledCertificate(label: namespace.rotationCandidateCertificateLabel)
+                try deleteRecord(account: namespace.rotationStagedAccount)
+                return installed.profile
+            }
+            guard let staged: RotationStagedRecord = try readRecord(
+                account: namespace.rotationStagedAccount
+            ), receipt.grantID == staged.invitation.grantID,
+            receipt.deviceID == staged.invitation.deviceID,
+            receipt.deviceName == staged.invitation.deviceName,
+            receipt.role == staged.invitation.role,
+            receipt.registryRevision == staged.invitation.registryRevision,
+            installed.profile.deviceID == staged.invitation.deviceID,
+            installed.profile.deviceName == staged.invitation.deviceName,
+            installed.profile.role == staged.invitation.role,
+            installed.profile.registryRevision == staged.invitation.registryRevision,
+            installed.profile.capabilities == staged.invitation.capabilities,
+            installed.profile.masterEndpoint == staged.invitation.masterEndpoint,
+            installed.caFingerprintSHA256 == staged.invitation.caFingerprintSHA256.lowercased()
+            else {
+                throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+            }
+
+            let keyTag = try selectedKeyTag(installed)
+            let selectedLabel = try selectedCertificateLabel(installed)
+            let privateKey = try loadPrivateKey(keyTag: keyTag)
+            let leafDER = try decodePEM(receipt.certificatePEM, label: "CERTIFICATE")
+            let caDER = try decodePEM(receipt.caCertificatePEM, label: "CERTIFICATE")
+            guard hex(SHA256.hash(data: leafDER)) == receipt.certificateSHA256.lowercased(),
+                  hex(SHA256.hash(data: caDER))
+                    == staged.invitation.caFingerprintSHA256.lowercased(),
+                  let leaf = SecCertificateCreateWithData(nil, leafDER as CFData),
+                  let ca = SecCertificateCreateWithData(nil, caDER as CFData) else {
+                throw AssemblywrightMacDeveloperBridgeError.certificateInvalid
+            }
+            try validateCertificate(
+                leaf: leaf,
+                leafDER: leafDER,
+                ca: ca,
+                privateKey: privateKey,
+                expectedDeviceID: receipt.deviceID,
+                expectedDeviceName: receipt.deviceName,
+                expectedSerialHex: receipt.serialHex,
+                expectedNotAfterMilliseconds: receipt.notAfterMilliseconds
+            )
+            let oldLeafDER = try decodePEM(installed.certificatePEM, label: "CERTIFICATE")
+            if let stagedReceipt = staged.receipt {
+                guard stagedReceipt == receipt else {
+                    throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+                }
+            } else {
+                guard let selectedCertificate = try findInstalledCertificate(label: selectedLabel),
+                      SecCertificateCopyData(selectedCertificate) as Data == oldLeafDER else {
+                    throw AssemblywrightMacDeveloperBridgeError.identityUnavailable
+                }
+                _ = try installCertificate(
+                    leaf,
+                    leafDER: leafDER,
+                    label: namespace.rotationCandidateCertificateLabel
+                )
+                _ = try loadIdentity(certificate: leaf)
+                try rotationCheckpoint(.candidateInstalled)
+                try saveRecord(
+                    RotationStagedRecord(invitation: staged.invitation, receipt: receipt),
+                    account: namespace.rotationStagedAccount
+                )
+                try rotationCheckpoint(.stagedReceiptSaved)
+            }
+            let candidate = try findInstalledCertificate(
+                label: namespace.rotationCandidateCertificateLabel
+            )
+            if let candidate,
+               SecCertificateCopyData(candidate) as Data != leafDER {
+                throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+            }
+            let profile = AssemblywrightMacBridgeProfile(
+                deviceID: receipt.deviceID,
+                deviceName: receipt.deviceName,
+                role: receipt.role,
+                registryRevision: receipt.registryRevision,
+                capabilities: staged.invitation.capabilities,
+                masterEndpoint: staged.invitation.masterEndpoint,
+                certificateNotAfterMilliseconds: receipt.notAfterMilliseconds
+            )
+            let rotated = InstalledRecord(
+                profile: profile,
+                certificatePEM: receipt.certificatePEM,
+                caCertificatePEM: receipt.caCertificatePEM,
+                caFingerprintSHA256: staged.invitation.caFingerprintSHA256.lowercased(),
+                keyGeneration: installed.keyGeneration,
+                rotationGrantID: receipt.grantID
+            )
+
+            var selected = try findInstalledCertificate(label: selectedLabel)
+            if let selectedCertificate = selected {
+                let selectedDER = SecCertificateCopyData(selectedCertificate) as Data
+                if selectedDER == oldLeafDER {
+                    guard assemblywrightRotationMayDeleteSelectedOld(
+                        candidatePresent: candidate != nil
+                    ) else {
+                        // Never remove the working item unless the exact staged
+                        // replacement is present for the atomic label promotion.
+                        throw AssemblywrightMacDeveloperBridgeError.identityUnavailable
+                    }
+                    try deleteInstalledCertificate(label: selectedLabel)
+                    try rotationCheckpoint(.selectedOldDeleted)
+                    selected = nil
+                } else if selectedDER != leafDER {
+                    throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+                }
+            }
+            if selected == nil {
+                guard candidate != nil else {
+                    throw AssemblywrightMacDeveloperBridgeError.identityUnavailable
+                }
+                try promoteInstalledCertificate(
+                    fromLabel: namespace.rotationCandidateCertificateLabel,
+                    toLabel: selectedLabel,
+                    leafDER: leafDER
+                )
+                try rotationCheckpoint(.candidatePromoted)
+            } else if candidate != nil {
+                // Keychain certificate uniqueness permits one item for this DER.
+                // Seeing both labels is inconsistent state rather than a cleanup opportunity.
+                throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+            }
+            _ = try loadIdentity(certificate: leaf)
+            try saveRecord(rotated, account: namespace.installedAccount)
+            try rotationCheckpoint(.installedRecordSaved)
+            try deleteInstalledCertificate(label: namespace.rotationCandidateCertificateLabel)
+            try rotationCheckpoint(.candidateDeleted)
+            try deleteRecord(account: namespace.rotationStagedAccount)
+            try rotationCheckpoint(.stageDeleted)
+            return profile
         }
     }
 
@@ -476,6 +811,29 @@ public struct KeychainAssemblywrightMacBridgeIdentityStore: AssemblywrightMacBri
         }
     }
 
+    private func selectedKeyTag(_ record: InstalledRecord) throws -> Data {
+        try assemblywrightRotationUsesReplacementSlot(record.keyGeneration)
+            ? namespace.replacementKeyTag : namespace.keyTag
+    }
+
+    private func selectedCertificateLabel(_ record: InstalledRecord) throws -> String {
+        try assemblywrightRotationUsesReplacementSlot(record.keyGeneration)
+            ? namespace.replacementCertificateLabel : namespace.certificateLabel
+    }
+
+    private func certificate(_ certificate: SecCertificate, matches privateKey: SecKey) -> Bool {
+        guard let leafPublicKey = SecCertificateCopyKey(certificate),
+              let privatePublicKey = SecKeyCopyPublicKey(privateKey),
+              let leafBytes = SecKeyCopyExternalRepresentation(leafPublicKey, nil) as Data?,
+              let keyBytes = SecKeyCopyExternalRepresentation(privatePublicKey, nil) as Data?
+        else { return false }
+        return leafBytes == keyBytes
+    }
+
+    private func rotationCheckpoint(_ boundary: AssemblywrightRotationMutationBoundary) throws {
+        try assemblywrightRotationCheckpoint(boundary, fault: rotationFault)
+    }
+
     private func createSecureEnclaveKey(keyTag: Data? = nil) throws -> SecKey {
         var accessError: Unmanaged<CFError>?
         guard let access = SecAccessControlCreateWithFlags(
@@ -547,8 +905,8 @@ public struct KeychainAssemblywrightMacBridgeIdentityStore: AssemblywrightMacBri
         leafDER: Data,
         label: String? = nil
     ) throws -> Bool {
-        if let existing = try findInstalledCertificate(label: label) {
-            guard SecCertificateCopyData(existing) as Data == leafDER else {
+        if let existing = try findInstalledCertificateItem(label: label) {
+            guard SecCertificateCopyData(existing.certificate) as Data == leafDER else {
                 throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
             }
             return false
@@ -563,22 +921,78 @@ public struct KeychainAssemblywrightMacBridgeIdentityStore: AssemblywrightMacBri
     }
 
     private func findInstalledCertificate(label: String? = nil) throws -> SecCertificate? {
-        var query = installedCertificateQuery(label: label)
-        query[kSecReturnRef as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        try findInstalledCertificateItem(label: label)?.certificate
+    }
+
+    private func findInstalledCertificateItem(
+        label: String? = nil
+    ) throws -> InstalledCertificateItem? {
+        let resolvedLabel = label ?? namespace.certificateLabel
+        let query = assemblywrightCertificateLabelLookupQuery(label: resolvedLabel)
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let certificate = result as! SecCertificate? else {
+        guard status == errSecSuccess, let certificates = result as? [SecCertificate] else {
             throw AssemblywrightMacDeveloperBridgeError.keychainFailure(status)
         }
-        return certificate
+        guard assemblywrightCertificateLabelMultiplicityIsValid(certificates.count),
+              let certificate = certificates.first else {
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+        }
+        let persistentQuery = assemblywrightCertificatePersistentReferenceQuery(
+            certificate: certificate
+        )
+        var persistentResult: CFTypeRef?
+        let persistentStatus = SecItemCopyMatching(
+            persistentQuery as CFDictionary,
+            &persistentResult
+        )
+        guard persistentStatus == errSecSuccess,
+              let persistentReference = persistentResult as? Data,
+              !persistentReference.isEmpty else {
+            throw AssemblywrightMacDeveloperBridgeError.keychainFailure(persistentStatus)
+        }
+        return InstalledCertificateItem(
+            certificate: certificate,
+            persistentReference: persistentReference
+        )
     }
 
     private func deleteInstalledCertificate(label: String? = nil) throws {
-        let status = SecItemDelete(installedCertificateQuery(label: label) as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else {
+        guard let item = try findInstalledCertificateItem(label: label) else { return }
+        let status = SecItemDelete(
+            assemblywrightCertificateMutationQuery(
+                persistentReference: item.persistentReference
+            ) as CFDictionary
+        )
+        guard status == errSecSuccess else {
             throw AssemblywrightMacDeveloperBridgeError.keychainFailure(status)
+        }
+    }
+
+    private func promoteInstalledCertificate(
+        fromLabel: String,
+        toLabel: String,
+        leafDER: Data
+    ) throws {
+        guard let candidate = try findInstalledCertificateItem(label: fromLabel),
+              SecCertificateCopyData(candidate.certificate) as Data == leafDER,
+              try findInstalledCertificate(label: toLabel) == nil else {
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+        }
+        let status = SecItemUpdate(
+            assemblywrightCertificateMutationQuery(
+                persistentReference: candidate.persistentReference
+            ) as CFDictionary,
+            [kSecAttrLabel as String: toLabel] as CFDictionary
+        )
+        guard status == errSecSuccess else {
+            throw AssemblywrightMacDeveloperBridgeError.keychainFailure(status)
+        }
+        guard try findInstalledCertificate(label: fromLabel) == nil,
+              let promoted = try findInstalledCertificate(label: toLabel),
+              SecCertificateCopyData(promoted) as Data == leafDER else {
+            throw AssemblywrightMacDeveloperBridgeError.identityUnavailable
         }
     }
 
@@ -756,6 +1170,118 @@ public struct KeychainAssemblywrightMacBridgeIdentityStore: AssemblywrightMacBri
     }
 }
 
+func assemblywrightRotationUsesReplacementSlot(_ keyGeneration: String?) throws -> Bool {
+    switch keyGeneration {
+    case nil: false
+    case "replacement_v1": true
+    default: throw AssemblywrightMacDeveloperBridgeError.identityUnavailable
+    }
+}
+
+enum AssemblywrightRotationMutationBoundary: CaseIterable, Sendable {
+    case candidateInstalled
+    case stagedReceiptSaved
+    case selectedOldDeleted
+    case candidatePromoted
+    case installedRecordSaved
+    case candidateDeleted
+    case stageDeleted
+}
+
+func assemblywrightRotationCheckpoint(
+    _ boundary: AssemblywrightRotationMutationBoundary,
+    fault: @Sendable (AssemblywrightRotationMutationBoundary) -> Bool
+) throws {
+    if fault(boundary) {
+        throw AssemblywrightMacDeveloperBridgeError.identityUnavailable
+    }
+}
+
+func assemblywrightRotationMayDeleteSelectedOld(candidatePresent: Bool) -> Bool {
+    candidatePresent
+}
+
+func assemblywrightCertificateLabelLookupQuery(label: String) -> [String: Any] {
+    [
+        kSecClass as String: kSecClassCertificate,
+        kSecAttrLabel as String: label,
+        kSecUseDataProtectionKeychain as String: true,
+        kSecReturnRef as String: true,
+        kSecMatchLimit as String: kSecMatchLimitAll
+    ]
+}
+
+func assemblywrightCertificatePersistentReferenceQuery(
+    certificate: SecCertificate
+) -> [String: Any] {
+    [
+        kSecClass as String: kSecClassCertificate,
+        kSecValueRef as String: certificate,
+        kSecUseDataProtectionKeychain as String: true,
+        kSecReturnPersistentRef as String: true,
+        kSecMatchLimit as String: kSecMatchLimitOne
+    ]
+}
+
+func assemblywrightCertificateMutationQuery(
+    persistentReference: Data
+) -> [String: Any] {
+    [
+        kSecClass as String: kSecClassCertificate,
+        kSecValuePersistentRef as String: persistentReference,
+        kSecUseDataProtectionKeychain as String: true
+    ]
+}
+
+func assemblywrightCertificateLabelMultiplicityIsValid(_ count: Int) -> Bool {
+    count == 1
+}
+
+struct AssemblywrightRotationRecoveryState: Equatable, Sendable {
+    var candidatePresent: Bool
+    var stagedReceiptPresent: Bool
+    var selectedOldPresent: Bool
+    var selectedNewPresent: Bool
+    var installedRecordRotated: Bool
+    var stagePresent: Bool
+}
+
+func assemblywrightRotationRecoveryState(
+    after boundary: AssemblywrightRotationMutationBoundary
+) -> AssemblywrightRotationRecoveryState {
+    var state = AssemblywrightRotationRecoveryState(
+        candidatePresent: false,
+        stagedReceiptPresent: false,
+        selectedOldPresent: true,
+        selectedNewPresent: false,
+        installedRecordRotated: false,
+        stagePresent: true
+    )
+    state.candidatePresent = true
+    if boundary == .candidateInstalled { return state }
+    state.stagedReceiptPresent = true
+    if boundary == .stagedReceiptSaved { return state }
+    state.selectedOldPresent = false
+    if boundary == .selectedOldDeleted { return state }
+    state.candidatePresent = false
+    state.selectedNewPresent = true
+    if boundary == .candidatePromoted { return state }
+    state.installedRecordRotated = true
+    if boundary == .installedRecordSaved { return state }
+    state.candidatePresent = false
+    if boundary == .candidateDeleted { return state }
+    state.stagedReceiptPresent = false
+    state.stagePresent = false
+    return state
+}
+
+func assemblywrightRotationStageMayBeReplaced(
+    expiresAtMilliseconds: UInt64,
+    nowMilliseconds: UInt64
+) -> Bool {
+    expiresAtMilliseconds <= nowMilliseconds
+}
+
 func assemblywrightReplacementCancellationDeletesMaterial(
     installedRecordPresent: Bool,
     installedKeyGeneration: String?,
@@ -814,26 +1340,57 @@ private struct ReplacementStagedRecord: Codable {
     let receipt: AssemblywrightMacPendingCapabilityRebindCertificate?
 }
 
+private struct RotationStagedRecord: Codable {
+    let invitation: AssemblywrightMacEnrollmentInvitation
+    let receipt: AssemblywrightMacIssuedDeviceCertificate?
+}
+
+private struct InstalledCertificateItem {
+    let certificate: SecCertificate
+    let persistentReference: Data
+}
+
 private struct InstalledRecord: Codable {
     let profile: AssemblywrightMacBridgeProfile
     let certificatePEM: String
     let caCertificatePEM: String
     let caFingerprintSHA256: String
     let keyGeneration: String?
+    let rotationGrantID: String?
 
     init(
         profile: AssemblywrightMacBridgeProfile,
         certificatePEM: String,
         caCertificatePEM: String,
         caFingerprintSHA256: String,
-        keyGeneration: String? = nil
+        keyGeneration: String? = nil,
+        rotationGrantID: String? = nil
     ) {
         self.profile = profile
         self.certificatePEM = certificatePEM
         self.caCertificatePEM = caCertificatePEM
         self.caFingerprintSHA256 = caFingerprintSHA256
         self.keyGeneration = keyGeneration
+        self.rotationGrantID = rotationGrantID
     }
+}
+
+private func rotationReceipt(
+    _ receipt: AssemblywrightMacIssuedDeviceCertificate,
+    exactlyMatches record: InstalledRecord
+) -> Bool {
+    receipt.operation == "rotate"
+        && record.rotationGrantID == receipt.grantID
+        && record.profile.deviceID == receipt.deviceID
+        && record.profile.deviceName == receipt.deviceName
+        && record.profile.role == receipt.role
+        && record.profile.registryRevision == receipt.registryRevision
+        && record.profile.certificateNotAfterMilliseconds == receipt.notAfterMilliseconds
+        && record.certificatePEM == receipt.certificatePEM
+        && record.caCertificatePEM == receipt.caCertificatePEM
+        && (try? decodePEM(receipt.certificatePEM, label: "CERTIFICATE")).map {
+            hex(SHA256.hash(data: $0)) == receipt.certificateSHA256.lowercased()
+        } == true
 }
 
 private func decodePEM(_ value: String, label: String) throws -> Data {

@@ -11,7 +11,7 @@ private enum BridgeCLIError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .usage:
-            "Usage: assemblywright-mac-bridge enrollment prepare|install [--identity-profile fixture|local-coding] | enrollment rebind prepare|stage|promote|cancel --confirm | enrollment remove --confirm --identity-profile fixture|local-coding | feature-conveyor approve-and-enqueue|activation|orchestration pause|orchestration resume|cancel-active-feature|abandon-and-advance --confirm | status|connect [--identity-profile fixture|local-coding] | monitor|relay [--identity-profile fixture|local-coding] [--samples COUNT] [--interval-ms MILLISECONDS] [--reconnect-between-samples]"
+            "Usage: assemblywright-mac-bridge enrollment prepare|install [--identity-profile fixture|local-coding] | enrollment rotate prepare|install --confirm | enrollment rebind prepare|stage|promote|cancel --confirm | enrollment remove --confirm --identity-profile fixture|local-coding | local-model select|reconcile --confirm | feature-conveyor approve-and-enqueue|activation|orchestration pause|orchestration resume|cancel-active-feature|abandon-and-advance --confirm | status|connect [--identity-profile fixture|local-coding] | monitor|relay [--identity-profile fixture|local-coding] [--samples COUNT] [--interval-ms MILLISECONDS] [--reconnect-between-samples]"
         case .inputTooLarge:
             "Input exceeds this command's fixed document limit."
         case .notEnrolled:
@@ -55,6 +55,26 @@ private struct AssemblywrightMacBridgeCLI {
             let profile = try coordinator.install(issuedReceiptData: receipt)
             try writeJSON([
                 "status": "enrollment_installed",
+                "device_id": profile.deviceID,
+                "device_name": profile.deviceName,
+                "master_endpoint": profile.masterEndpoint,
+                "registry_revision": profile.registryRevision,
+                "certificate_not_after_ms": profile.certificateNotAfterMilliseconds
+            ])
+        case ["enrollment", "rotate", "prepare", "--confirm"]
+            where parsed.profile == .standard:
+            let invitation = try readBoundedStdin(
+                maximum: AssemblywrightMacEnrollmentCoordinator.maximumDocumentBytes
+            )
+            try writeStdout(coordinator.prepareRotation(invitationData: invitation))
+        case ["enrollment", "rotate", "install", "--confirm"]
+            where parsed.profile == .standard:
+            let receipt = try readBoundedStdin(
+                maximum: AssemblywrightMacEnrollmentCoordinator.maximumDocumentBytes
+            )
+            let profile = try coordinator.installRotation(issuedReceiptData: receipt)
+            try writeJSON([
+                "status": "certificate_rotation_installed",
                 "device_id": profile.deviceID,
                 "device_name": profile.deviceName,
                 "master_endpoint": profile.masterEndpoint,
@@ -166,6 +186,38 @@ private struct AssemblywrightMacBridgeCLI {
             let receipt = try await AssemblywrightMacFeatureConveyorOwnerControl
                 .approveAndEnqueue(requestData: request, using: session)
             try writeEncodableJSON(receipt)
+        case ["local-model", "select", "--confirm"] where parsed.profile == .standard:
+            let request = try readBoundedStdin(
+                maximum: AssemblywrightMacLocalModelSelectionControl.maximumFrameBytes
+            )
+            let outcome = try await AssemblywrightMacLocalModelSelectionControl.performIntent(
+                intentData: request,
+                identityStore: identityStore,
+                connector: AssemblywrightMacDefaultBridgeConnector(
+                    transport: AssemblywrightMacMTLSBridgeTransport(
+                        factory: NetworkAssemblywrightMacTLSChannelFactory(
+                            identityStore: identityStore
+                        )
+                    )
+                )
+            )
+            try writeStdout(outcome.commandData)
+        case ["local-model", "reconcile", "--confirm"] where parsed.profile == .standard:
+            let intent = try readBoundedStdin(
+                maximum: AssemblywrightMacLocalModelSelectionControl.maximumFrameBytes
+            )
+            let outcome = try await AssemblywrightMacLocalModelSelectionControl.reconcileIntent(
+                intentData: intent,
+                identityStore: identityStore,
+                connector: AssemblywrightMacDefaultBridgeConnector(
+                    transport: AssemblywrightMacMTLSBridgeTransport(
+                        factory: NetworkAssemblywrightMacTLSChannelFactory(
+                            identityStore: identityStore
+                        )
+                    )
+                )
+            )
+            try writeStdout(outcome.commandData)
         case let arguments where parsed.profile == .standard && ownerControlAction(arguments) != nil:
             guard let action = ownerControlAction(arguments) else { throw BridgeCLIError.usage }
             guard let profile = try coordinator.status() else { throw BridgeCLIError.notEnrolled }

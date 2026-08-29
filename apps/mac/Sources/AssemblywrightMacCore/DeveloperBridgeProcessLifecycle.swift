@@ -20,6 +20,7 @@ public struct AssemblywrightDeveloperBridgeAppStatus: Equatable, Sendable {
     public let connectionEpoch: UInt64?
     public let featureConveyor: AssemblywrightMacFeatureConveyorStatus?
     public let ownerControl: AssemblywrightMacFeatureConveyorOwnerControlProjection?
+    public let localModelSelection: AssemblywrightMacLocalModelSelectionProjection?
     public let errorCode: String?
 
     public init(
@@ -29,6 +30,7 @@ public struct AssemblywrightDeveloperBridgeAppStatus: Equatable, Sendable {
         connectionEpoch: UInt64? = nil,
         featureConveyor: AssemblywrightMacFeatureConveyorStatus? = nil,
         ownerControl: AssemblywrightMacFeatureConveyorOwnerControlProjection? = nil,
+        localModelSelection: AssemblywrightMacLocalModelSelectionProjection? = nil,
         errorCode: String? = nil
     ) {
         self.phase = phase
@@ -37,6 +39,7 @@ public struct AssemblywrightDeveloperBridgeAppStatus: Equatable, Sendable {
         self.connectionEpoch = connectionEpoch
         self.featureConveyor = featureConveyor
         self.ownerControl = ownerControl
+        self.localModelSelection = localModelSelection
         self.errorCode = errorCode
     }
 
@@ -422,13 +425,20 @@ public struct FoundationAssemblywrightDeveloperBridgeProcessLauncher:
         let approvedFeatureEnqueue =
             arguments == AssemblywrightDeveloperBridgeProcessLifecycle
                 .approvedFeatureEnqueueArguments
+        let localModelSelection = arguments
+            == AssemblywrightDeveloperBridgeProcessLifecycle.localModelSelectionArguments
+            || arguments
+                == AssemblywrightDeveloperBridgeProcessLifecycle
+                    .localModelReconciliationArguments
         let inputLimit = approvedFeatureEnqueue
             ? AssemblywrightMacFeatureConveyorApprovedFeatureDraft.maximumRequestBytes
+            : localModelSelection
+                ? AssemblywrightMacLocalModelSelectionControl.maximumFrameBytes
             : 8 * 1_024
         let outputLimit = approvedFeatureEnqueue
             ? AssemblywrightMacFeatureConveyorOwnerControl.maximumReceiptBytes
             : 8 * 1_024
-        guard (ownerActions.contains(arguments) || approvedFeatureEnqueue),
+        guard (ownerActions.contains(arguments) || approvedFeatureEnqueue || localModelSelection),
               !input.isEmpty, input.count <= inputLimit else {
             throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
         }
@@ -713,10 +723,16 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
         AssemblywrightMacFeatureConveyorApprovedFeatureReceipt?
     @Published public private(set) var pendingApprovedFeatureRecovery:
         AssemblywrightMacApprovedFeaturePendingRecovery?
+    @Published public private(set) var localModelSelectionState:
+        AssemblywrightMacLocalModelSelectionState
+    @Published public private(set) var localModelSelectionErrorCode: String?
 
     private let configuration: AssemblywrightDeveloperBridgeProcessConfiguration
     private let validator: any AssemblywrightDeveloperBridgeExecutableValidating
     private let launcher: any AssemblywrightDeveloperBridgeProcessLaunching
+    private let localModelSelectionStore: AssemblywrightMacLocalModelSelectionStore
+    private let localModelSelectionStoreLoadFailed: Bool
+    private var activeEventRelayConfiguration: AssemblywrightMacDeveloperEventRelayConfiguration?
     private var task: Task<Void, Never>?
     private var session: (any AssemblywrightDeveloperBridgeProcessSession)?
 
@@ -725,16 +741,70 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
         validator: any AssemblywrightDeveloperBridgeExecutableValidating =
             SecurityAssemblywrightDeveloperBridgeExecutableValidator(),
         launcher: any AssemblywrightDeveloperBridgeProcessLaunching =
-            FoundationAssemblywrightDeveloperBridgeProcessLauncher()
+            FoundationAssemblywrightDeveloperBridgeProcessLauncher(),
+        localModelSelectionStore: AssemblywrightMacLocalModelSelectionStore = .init()
     ) {
         self.configuration = configuration
         self.validator = validator
         self.launcher = launcher
-        status = configuration.executableURL == nil ? .disabled : .init(phase: .starting)
+        self.localModelSelectionStore = localModelSelectionStore
+        let loadedSelection: AssemblywrightMacLocalModelSelectionState
+        var selectionStoreLoadFailed = false
+        do {
+            loadedSelection = try localModelSelectionStore.load()
+                ?? AssemblywrightMacLocalModelSelectionState(active: nil, pending: nil)
+        } catch {
+            loadedSelection = AssemblywrightMacLocalModelSelectionState(active: nil, pending: nil)
+            selectionStoreLoadFailed = true
+        }
+        localModelSelectionState = loadedSelection
+        var relayConfiguration = configuration.eventRelayConfiguration
+        if !selectionStoreLoadFailed,
+           let active = loadedSelection.active, let current = relayConfiguration {
+            do {
+                relayConfiguration = try active.relayConfiguration(replacing: current)
+            } catch {
+                selectionStoreLoadFailed = true
+            }
+        }
+        activeEventRelayConfiguration = relayConfiguration
+        localModelSelectionStoreLoadFailed = selectionStoreLoadFailed
+        localModelSelectionErrorCode = selectionStoreLoadFailed
+            ? "local_model_selection_store_invalid"
+            : loadedSelection.pending == nil ? nil : "local_model_reconciliation_required"
+        if selectionStoreLoadFailed {
+            status = .init(
+                phase: .masterOffline,
+                errorCode: "local_model_selection_store_invalid"
+            )
+        } else if configuration.executableURL == nil {
+            status = .disabled
+        } else if loadedSelection.pending != nil {
+            status = .init(
+                phase: .masterOffline,
+                errorCode: "local_model_reconciliation_required"
+            )
+        } else {
+            status = .init(phase: .starting)
+        }
     }
 
     public func start() {
         guard task == nil, session == nil else { return }
+        guard !localModelSelectionStoreLoadFailed else {
+            status = .init(
+                phase: .masterOffline,
+                errorCode: "local_model_selection_store_invalid"
+            )
+            return
+        }
+        guard localModelSelectionState.pending == nil else {
+            status = .init(
+                phase: .masterOffline,
+                errorCode: "local_model_reconciliation_required"
+            )
+            return
+        }
         guard let executableURL = configuration.executableURL,
               let expectedTeamIdentifier = configuration.expectedTeamIdentifier else {
             status = .disabled
@@ -750,7 +820,7 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
                 )
                 let launched = try await launcher.launch(
                     executable: validated,
-                    eventRelayConfiguration: configuration.eventRelayConfiguration
+                    eventRelayConfiguration: activeEventRelayConfiguration
                 )
                 session = launched
                 for try await line in launched.outputLines {
@@ -759,6 +829,8 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
                         from: line,
                         localCodingSnapshotsEnabled:
                             configuration.eventRelayConfiguration?
+                                .localCodingSnapshotsEnabled == true
+                                || activeEventRelayConfiguration?
                                 .localCodingSnapshotsEnabled == true
                     )
                 }
@@ -897,6 +969,130 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
         }
     }
 
+    public func selectLocalModel(
+        modelID: String,
+        executablePath: String,
+        modelDirectoryPath: String
+    ) async {
+        guard !ownerActionInProgress,
+              localModelSelectionState.pending == nil,
+              status.phase == .connected,
+              let ownerControl = status.ownerControl,
+              let currentSelection = status.localModelSelection,
+              let currentRelay = activeEventRelayConfiguration,
+              currentRelay.mlxJobsEnabled else {
+            localModelSelectionErrorCode = "local_model_selection_unavailable"
+            return
+        }
+        let configuration = AssemblywrightMacLocalModelConfiguration(
+            modelID: modelID,
+            executablePath: executablePath,
+            modelDirectoryPath: modelDirectoryPath,
+            registryRevision: 0
+        )
+        do {
+            try configuration.validateLocalPaths()
+            guard currentSelection.modelID != modelID,
+                  currentSelection.designationRevision
+                    == ownerControl.ownerControlDesignationRevision,
+                  currentSelection.emergencyPauseRevision
+                    == ownerControl.emergencyPauseRevision else {
+                throw AssemblywrightMacLocalModelSelectionError.invalidSelection
+            }
+            let intentData = try AssemblywrightMacLocalModelSelectionIntent(
+                deviceID: currentSelection.deviceID,
+                expectedRegistryRevision: currentSelection.registryRevision,
+                expectedDesignationRevision: ownerControl.ownerControlDesignationRevision,
+                expectedEmergencyPauseRevision: ownerControl.emergencyPauseRevision,
+                modelID: modelID
+            ).encodeStrict()
+            let pending = AssemblywrightMacPendingLocalModelSelection(
+                configuration: configuration,
+                requestData: intentData
+            )
+            let state = AssemblywrightMacLocalModelSelectionState(
+                active: localModelSelectionState.active,
+                pending: pending
+            )
+            try localModelSelectionStore.save(state)
+            localModelSelectionState = state
+            await executePendingLocalModelSelection(pending, reconcileOnly: false)
+        } catch {
+            localModelSelectionErrorCode = "local_model_selection_rejected"
+        }
+    }
+
+    public func resumePendingLocalModelSelection() async {
+        guard !ownerActionInProgress,
+              let pending = localModelSelectionState.pending else { return }
+        await executePendingLocalModelSelection(pending, reconcileOnly: true)
+    }
+
+    private func executePendingLocalModelSelection(
+        _ pending: AssemblywrightMacPendingLocalModelSelection,
+        reconcileOnly: Bool
+    ) async {
+        guard let executableURL = configuration.executableURL,
+              let expectedTeamIdentifier = configuration.expectedTeamIdentifier,
+              let currentRelay = activeEventRelayConfiguration else {
+            localModelSelectionErrorCode = "local_model_reconciliation_required"
+            return
+        }
+        ownerActionInProgress = true
+        localModelSelectionErrorCode = nil
+        defer { ownerActionInProgress = false }
+        do {
+            await stop()
+            let validated = try validator.validate(
+                executableURL: executableURL,
+                expectedTeamIdentifier: expectedTeamIdentifier
+            )
+            let output = try await launcher.runCommand(
+                executable: validated,
+                arguments: reconcileOnly
+                    ? Self.localModelReconciliationArguments
+                    : Self.localModelSelectionArguments,
+                input: pending.requestData
+            )
+            let result = try AssemblywrightMacLocalModelSelectionControl.validateCommandData(
+                output,
+                intentData: pending.requestData
+            )
+            switch result {
+            case let .selected(binding):
+                let active = AssemblywrightMacLocalModelConfiguration(
+                    modelID: binding.modelID,
+                    executablePath: pending.configuration.executablePath,
+                    modelDirectoryPath: pending.configuration.modelDirectoryPath,
+                    registryRevision: binding.registryRevision
+                )
+                let nextRelay = try active.relayConfiguration(replacing: currentRelay)
+                let state = AssemblywrightMacLocalModelSelectionState(active: active, pending: nil)
+                try localModelSelectionStore.save(state)
+                activeEventRelayConfiguration = nextRelay
+                localModelSelectionState = state
+                status = .init(phase: .starting)
+                start()
+            case let .terminalRejection(errorCode):
+                let state = AssemblywrightMacLocalModelSelectionState(
+                    active: localModelSelectionState.active,
+                    pending: nil
+                )
+                try localModelSelectionStore.save(state)
+                localModelSelectionState = state
+                localModelSelectionErrorCode = errorCode
+                status = .init(phase: .starting)
+                start()
+            }
+        } catch {
+            localModelSelectionErrorCode = "local_model_reconciliation_required"
+            status = .init(
+                phase: .masterOffline,
+                errorCode: "local_model_reconciliation_required"
+            )
+        }
+    }
+
     public func reconcilePendingApprovedFeatureEnqueue() async {
         guard !ownerActionInProgress,
               let recovery = pendingApprovedFeatureRecovery else { return }
@@ -922,6 +1118,12 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
 
     nonisolated public static let approvedFeatureEnqueueArguments = [
         "feature-conveyor", "approve-and-enqueue", "--confirm"
+    ]
+    nonisolated public static let localModelSelectionArguments = [
+        "local-model", "select", "--confirm"
+    ]
+    nonisolated public static let localModelReconciliationArguments = [
+        "local-model", "reconcile", "--confirm"
     ]
 
     nonisolated public static func helperArguments(for action: AssemblywrightMacOwnerControlAction) -> [String] {
@@ -958,7 +1160,8 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
                 masterEndpoint: snapshot.masterEndpoint,
                 connectionEpoch: snapshot.connectionEpoch,
                 featureConveyor: snapshot.featureConveyor,
-                ownerControl: snapshot.ownerControl
+                ownerControl: snapshot.ownerControl,
+                localModelSelection: snapshot.localModelSelection
             )
         case .backingOff:
             return AssemblywrightDeveloperBridgeAppStatus(

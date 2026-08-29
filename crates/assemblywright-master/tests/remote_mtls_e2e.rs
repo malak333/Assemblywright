@@ -21,6 +21,7 @@ use assemblywright_protocol::{
     HandshakeRequest, HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope,
     JobResultStatus, LocalCodingJobResult, LocalCodingResultArtifact,
     LocalCodingResultArtifactAdmission, LocalCodingSnapshotChunk, LocalCodingSnapshotChunkRequest,
+    LocalModelSelectionProjection, LocalModelSelectionReceipt, LocalModelSelectionRequest,
     Sensitivity, StepId, TaskId, FEATURE_CONVEYOR_OWNER_ACTIVATION_SCHEMA_VERSION,
     FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION, LOCAL_CODING_COMPLETED_STATUS,
     LOCAL_CODING_FIXTURE_TEST_STATUS, PROTOCOL_VERSION,
@@ -59,6 +60,146 @@ struct EnrolledClient {
     tls12_config: Arc<ClientConfig>,
     handshake: HandshakeRequest,
     ca_certificate: CertificateDer<'static>,
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn remote_model_selection_rejects_old_profile_and_reconciles_exact_target_profile() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let directory = tempfile::tempdir().expect("model selection data directory");
+    let binary = env!("CARGO_BIN_EXE_assemblywright-master");
+    let setup = Command::new(binary)
+        .arg("--data-dir")
+        .arg(directory.path())
+        .arg("setup")
+        .output()
+        .expect("run setup");
+    assert_success(&setup, "setup");
+    let owner = enroll_client_with_capabilities(
+        directory.path(),
+        "model-selection-owner",
+        DeviceRole::MacBridge,
+        false,
+        vec![CapabilityDescriptor::mlx_reasoning(
+            "old-model",
+            32 * 1024,
+            32 * 1024,
+        )],
+    );
+    {
+        let mut process = MasterProcess::acquire(directory.path()).expect("seed designation");
+        process
+            .kernel_mut()
+            .designate_owner_control_bridge(owner.handshake.device_id, 0, 10)
+            .expect("designate model owner");
+    }
+    let local_endpoint = unused_loopback_addr();
+    let remote_endpoint = unused_loopback_addr();
+    let mut server = spawn_server(binary, directory.path(), local_endpoint, remote_endpoint);
+    read_ready(&mut server.child);
+
+    let request = LocalModelSelectionRequest {
+        schema_version: 1,
+        device_id: owner.handshake.device_id,
+        expected_registry_revision: 1,
+        expected_designation_revision: 1,
+        expected_emergency_pause_revision: 0,
+        model_id: "target-model".to_string(),
+    };
+    let tcp = tokio::net::TcpStream::connect(remote_endpoint)
+        .await
+        .expect("connect selection session");
+    let server_name = ServerName::IpAddress(remote_endpoint.ip().into());
+    let mut selection_stream = TlsConnector::from(owner.config.clone())
+        .connect(server_name, tcp)
+        .await
+        .expect("complete selection TLS handshake");
+    let handshake_body = serde_json::to_vec(&AuthenticatedHandshakeRequest {
+        handshake: owner.handshake.clone(),
+        tls_exporter_sha256: exporter_digest(selection_stream.get_ref().1),
+    })
+    .unwrap();
+    let accepted = send_http_keep_alive(
+        &mut selection_stream,
+        remote_endpoint,
+        "POST",
+        "/v1/distributed/connections/accept",
+        &handshake_body,
+    )
+    .await
+    .unwrap();
+    assert!(accepted.starts_with("HTTP/1.1 200 OK"), "{accepted}");
+    let selected = send_http_keep_alive(
+        &mut selection_stream,
+        remote_endpoint,
+        "POST",
+        "/v1/distributed/local-model/selection",
+        &serde_json::to_vec(&request).unwrap(),
+    )
+    .await
+    .unwrap();
+    assert!(selected.starts_with("HTTP/1.1 200 OK"), "{selected}");
+    let receipt: LocalModelSelectionReceipt = response_json(&selected);
+    assert_eq!(receipt.registry_revision, 2);
+    assert_eq!(receipt.designation_revision, 2);
+    let rejected_old_session = send_http(
+        &mut selection_stream,
+        remote_endpoint,
+        "GET",
+        "/v1/distributed/local-model/selection",
+        &[],
+    )
+    .await
+    .unwrap();
+    assert!(
+        rejected_old_session.starts_with("HTTP/1.1 401 Unauthorized"),
+        "{rejected_old_session}"
+    );
+
+    let (old_profile, _) = tls_request_with_body(
+        remote_endpoint,
+        owner.config.clone(),
+        "POST",
+        "/v1/distributed/connections/accept",
+        |tls_exporter_sha256| AuthenticatedHandshakeRequest {
+            handshake: owner.handshake.clone(),
+            tls_exporter_sha256,
+        },
+    )
+    .await;
+    assert!(
+        old_profile.starts_with("HTTP/1.1 401 Unauthorized"),
+        "{old_profile}"
+    );
+
+    let mut target_handshake = owner.handshake.clone();
+    target_handshake.registry_revision = 2;
+    target_handshake.capabilities = vec![CapabilityDescriptor::mlx_reasoning(
+        "target-model",
+        32 * 1024,
+        32 * 1024,
+    )];
+    let target = EnrolledClient {
+        config: owner.config.clone(),
+        tls12_config: owner.tls12_config.clone(),
+        handshake: target_handshake,
+        ca_certificate: owner.ca_certificate.clone(),
+    };
+    let (_, projection_response) = authenticated_application_request(
+        remote_endpoint,
+        &target,
+        "GET",
+        "/v1/distributed/local-model/selection",
+        &serde_json::json!({}),
+    )
+    .await;
+    assert!(
+        projection_response.starts_with("HTTP/1.1 200 OK"),
+        "{projection_response}"
+    );
+    let projection: LocalModelSelectionProjection = response_json(&projection_response);
+    assert_eq!(projection.model_id, "target-model");
+    assert_eq!(projection.registry_revision, 2);
+    assert_eq!(projection.designation_revision, 2);
 }
 
 #[tokio::test(flavor = "multi_thread")]

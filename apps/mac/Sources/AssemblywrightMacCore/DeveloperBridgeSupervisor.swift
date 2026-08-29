@@ -10,6 +10,21 @@ extension AssemblywrightMacAuthenticatedBridgeSession: AssemblywrightMacBridgeSe
 
 public protocol AssemblywrightMacBridgeConnecting: Sendable {
     func connect(profile: AssemblywrightMacBridgeProfile) async throws -> any AssemblywrightMacBridgeSession
+    func connectForLocalModelReconciliation(
+        profile: AssemblywrightMacBridgeProfile,
+        installedProfile: AssemblywrightMacBridgeProfile,
+        requestedModelID: String
+    ) async throws -> any AssemblywrightMacBridgeSession
+}
+
+public extension AssemblywrightMacBridgeConnecting {
+    func connectForLocalModelReconciliation(
+        profile _: AssemblywrightMacBridgeProfile,
+        installedProfile _: AssemblywrightMacBridgeProfile,
+        requestedModelID _: String
+    ) async throws -> any AssemblywrightMacBridgeSession {
+        throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+    }
 }
 
 public struct AssemblywrightMacDefaultBridgeConnector: AssemblywrightMacBridgeConnecting, Sendable {
@@ -21,6 +36,18 @@ public struct AssemblywrightMacDefaultBridgeConnector: AssemblywrightMacBridgeCo
 
     public func connect(profile: AssemblywrightMacBridgeProfile) async throws -> any AssemblywrightMacBridgeSession {
         try await transport.connect(profile: profile)
+    }
+
+    public func connectForLocalModelReconciliation(
+        profile: AssemblywrightMacBridgeProfile,
+        installedProfile: AssemblywrightMacBridgeProfile,
+        requestedModelID: String
+    ) async throws -> any AssemblywrightMacBridgeSession {
+        try await transport.connectForLocalModelReconciliation(
+            profile: profile,
+            installedProfile: installedProfile,
+            requestedModelID: requestedModelID
+        )
     }
 }
 
@@ -148,6 +175,17 @@ public struct AssemblywrightMacFeatureConveyorStatus: Codable, Equatable, Sendab
             case leasePresent = "lease_present"
             case effectPossible = "effect_possible"
         }
+
+        public func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(featureID.uuidString.lowercased(), forKey: .featureID)
+            try container.encode(specificationRevision, forKey: .specificationRevision)
+            try container.encode(lifecycleRevision, forKey: .lifecycleRevision)
+            try container.encode(queuePosition, forKey: .queuePosition)
+            try container.encode(status, forKey: .status)
+            try container.encode(leasePresent, forKey: .leasePresent)
+            try container.encode(effectPossible, forKey: .effectPossible)
+        }
     }
 
     public struct OwnerGuidance: Codable, Equatable, Sendable {
@@ -177,7 +215,7 @@ public struct AssemblywrightMacFeatureConveyorStatus: Codable, Equatable, Sendab
             try container.encode(reasonCode, forKey: .reasonCode)
             try container.encode(nextOwnerAction, forKey: .nextOwnerAction)
             if let featureID {
-                try container.encode(featureID, forKey: .featureID)
+                try container.encode(featureID.uuidString.lowercased(), forKey: .featureID)
             } else {
                 try container.encodeNil(forKey: .featureID)
             }
@@ -231,6 +269,7 @@ public struct AssemblywrightMacBridgeSupervisorSnapshot: Codable, Equatable, Sen
     public let schemaVersion: Int64?
     public let featureConveyor: AssemblywrightMacFeatureConveyorStatus?
     public let ownerControl: AssemblywrightMacFeatureConveyorOwnerControlProjection?
+    public let localModelSelection: AssemblywrightMacLocalModelSelectionProjection?
     public let errorCode: String?
 
     enum CodingKeys: String, CodingKey {
@@ -247,6 +286,7 @@ public struct AssemblywrightMacBridgeSupervisorSnapshot: Codable, Equatable, Sen
         case schemaVersion = "schema_version"
         case featureConveyor = "feature_conveyor"
         case ownerControl = "owner_control"
+        case localModelSelection = "local_model_selection"
         case errorCode = "error_code"
     }
 
@@ -276,6 +316,9 @@ public struct AssemblywrightMacBridgeSupervisorSnapshot: Codable, Equatable, Sen
             "maintenance_active", "emergency_paused", "protocol_version",
             "schema_version", "feature_conveyor", "owner_control"
         ])
+        let authenticatedObservationWithModel = authenticatedObservation.union([
+            "local_model_selection"
+        ])
         let authenticatedLocalCoding = authenticatedObservation.subtracting(["feature_conveyor", "owner_control"])
         let backingOff = Set([
             "phase", "device_id", "master_endpoint", "consecutive_failures",
@@ -288,9 +331,13 @@ public struct AssemblywrightMacBridgeSupervisorSnapshot: Codable, Equatable, Sen
         let expectedKeys: Set<String>
         switch phase {
         case .authenticated:
-            expectedKeys = localCodingSnapshotsEnabled
-                ? authenticatedLocalCoding
-                : authenticatedObservation
+            if localCodingSnapshotsEnabled {
+                expectedKeys = authenticatedLocalCoding
+            } else if object["local_model_selection"] == nil {
+                expectedKeys = authenticatedObservation
+            } else {
+                expectedKeys = authenticatedObservationWithModel
+            }
         case .backingOff: expectedKeys = backingOff
         case .stopped: expectedKeys = stopped
         }
@@ -346,6 +393,16 @@ public struct AssemblywrightMacBridgeSupervisorSnapshot: Codable, Equatable, Sen
                       ownerControl.emergencyPauseRevision == featureConveyor.ownerGuidance.emergencyPauseRevision,
                       ownerControl.emergencyPaused == snapshot.emergencyPaused else {
                     throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
+                }
+                if let model = snapshot.localModelSelection {
+                    guard (try? model.validate()) != nil,
+                          model.deviceID.lowercased() == snapshot.deviceID.lowercased(),
+                          model.designationRevision
+                            == ownerControl.ownerControlDesignationRevision,
+                          model.emergencyPauseRevision == ownerControl.emergencyPauseRevision,
+                          model.emergencyPaused == ownerControl.emergencyPaused else {
+                        throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
+                    }
                 }
                 try AssemblywrightMacRemoteFeatureConveyorStatus.validate(
                     featureConveyor,
@@ -954,6 +1011,18 @@ public actor AssemblywrightMacBridgeSupervisor {
                 schemaVersion: health.schemaVersion,
                 featureConveyor: featureConveyor,
                 ownerControl: ownerControl,
+                localModelSelection: ownerControl.map { owner in
+                    AssemblywrightMacLocalModelSelectionProjection(
+                        schemaVersion: 1,
+                        deviceID: profile.deviceID,
+                        deviceName: profile.deviceName,
+                        registryRevision: profile.registryRevision,
+                        designationRevision: owner.ownerControlDesignationRevision,
+                        emergencyPauseRevision: owner.emergencyPauseRevision,
+                        emergencyPaused: owner.emergencyPaused,
+                        modelID: profile.capabilities.first?.model ?? ""
+                    )
+                },
                 errorCode: nil
             )
         } catch is CancellationError {
@@ -977,6 +1046,7 @@ public actor AssemblywrightMacBridgeSupervisor {
                 schemaVersion: nil,
                 featureConveyor: nil,
                 ownerControl: nil,
+                localModelSelection: nil,
                 errorCode: Self.redactedErrorCode(for: error)
             )
         }
@@ -1017,6 +1087,7 @@ public actor AssemblywrightMacBridgeSupervisor {
             schemaVersion: nil,
             featureConveyor: nil,
             ownerControl: nil,
+            localModelSelection: nil,
             errorCode: nil
         )
     }

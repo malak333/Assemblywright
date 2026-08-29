@@ -124,6 +124,7 @@ run ./scripts/release-shell-portability-smoke.sh --self-test
 run ./scripts/release-protocol-version-contract-smoke.sh --check
 run ./scripts/release-protocol-version-contract-smoke.sh --self-test
 run ./scripts/mac-windows-bridge-live-e2e.sh --check
+run ./scripts/windows-repository-onboarding-self-check.sh
 run cargo fmt --check
 run cargo clippy --workspace --all-targets -- -D warnings
 run cargo test --workspace

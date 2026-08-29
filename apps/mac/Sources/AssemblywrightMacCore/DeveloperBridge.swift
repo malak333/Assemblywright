@@ -76,7 +76,7 @@ public struct AssemblywrightMacBridgeCapability: Codable, Equatable, Sendable {
         case maxResultBytes = "max_result_bytes"
     }
 
-    fileprivate func validate() throws {
+    func validate() throws {
         guard validIdentifier(id, maximum: 64),
               kind == "local_inference" || kind == "local_coding"
                 || kind == "apple_integration",
@@ -174,6 +174,7 @@ public struct AssemblywrightMacEnrollmentCSR: Codable, Equatable, Sendable {
 public struct AssemblywrightMacIssuedDeviceCertificate: Codable, Equatable, Sendable {
     public let status: String
     public let operation: String
+    public let grantID: String?
     public let deviceID: String
     public let deviceName: String
     public let role: String
@@ -187,6 +188,7 @@ public struct AssemblywrightMacIssuedDeviceCertificate: Codable, Equatable, Send
 
     enum CodingKeys: String, CodingKey {
         case status, operation, role
+        case grantID = "grant_id"
         case deviceID = "device_id"
         case deviceName = "device_name"
         case registryRevision = "registry_revision"
@@ -198,9 +200,10 @@ public struct AssemblywrightMacIssuedDeviceCertificate: Codable, Equatable, Send
         case caCertificatePEM = "ca_certificate_pem"
     }
 
-    fileprivate func validate() throws {
+    fileprivate func validate(operation expectedOperation: String = "enroll") throws {
         guard status == "device_certificate_issued",
-              operation == "enroll",
+              operation == expectedOperation,
+              (expectedOperation == "rotate" ? grantID.map(validUUID) == true : grantID == nil),
               validUUID(deviceID), !deviceName.isEmpty, deviceName.utf8.count <= 128,
               (role == "mac_bridge" || role == "inference_worker"),
               registryRevision > 0,
@@ -403,6 +406,13 @@ public protocol AssemblywrightMacBridgeIdentityStore: Sendable {
         for invitation: AssemblywrightMacEnrollmentInvitation
     ) throws -> AssemblywrightMacBridgeProfile
     func loadInstalledProfile() throws -> AssemblywrightMacBridgeProfile?
+    func stageRotationIdentity(
+        for invitation: AssemblywrightMacEnrollmentInvitation
+    ) throws -> AssemblywrightMacEnrollmentCSR
+    func loadStagedRotationInvitation() throws -> AssemblywrightMacEnrollmentInvitation?
+    func installRotation(
+        _ receipt: AssemblywrightMacIssuedDeviceCertificate
+    ) throws -> AssemblywrightMacBridgeProfile
     func stageReplacementIdentity(
         for invitation: AssemblywrightMacEnrollmentInvitation
     ) throws -> AssemblywrightMacEnrollmentCSR
@@ -491,6 +501,75 @@ public struct AssemblywrightMacEnrollmentCoordinator: Sendable {
             try identityProfile.validate(profile: profile)
         }
         return profile
+    }
+
+    /// Prepares a same-device rotation with the currently selected standard key.
+    /// Only the public invitation binding is staged; no secret or certificate is persisted.
+    public func prepareRotation(invitationData: Data) throws -> Data {
+        guard identityProfile == .standard else {
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+        }
+        let invitation: AssemblywrightMacEnrollmentInvitation = try decodeExact(
+            invitationData,
+            keys: [
+                "schema_version", "status", "grant_id", "device_id", "device_name", "role",
+                "registry_revision", "expires_at_ms", "capabilities", "master_endpoint",
+                "ca_fingerprint_sha256"
+            ]
+        )
+        try invitation.validate(nowMilliseconds: nowMilliseconds())
+        try identityProfile.validate(invitation: invitation)
+        guard let installed = try identityStore.loadInstalledProfile(),
+              installed.deviceID == invitation.deviceID,
+              installed.deviceName == invitation.deviceName,
+              installed.role == invitation.role,
+              installed.registryRevision == invitation.registryRevision,
+              installed.capabilities == invitation.capabilities,
+              installed.masterEndpoint == invitation.masterEndpoint,
+              !Self.isFixtureOrLocalCoding(invitation.capabilities) else {
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+        }
+        let reply = try identityStore.stageRotationIdentity(for: invitation)
+        guard reply.schemaVersion == 1,
+              reply.status == "enrollment_csr_ready",
+              reply.grantID == invitation.grantID,
+              reply.deviceID == invitation.deviceID,
+              validPEM(reply.csrPEM, label: "CERTIFICATE REQUEST") else {
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+        }
+        let data = try strictEncoder.encode(reply)
+        guard data.count <= Self.maximumDocumentBytes else {
+            throw AssemblywrightMacDeveloperBridgeError.documentTooLarge
+        }
+        return data
+    }
+
+    public func installRotation(
+        issuedReceiptData: Data
+    ) throws -> AssemblywrightMacBridgeProfile {
+        guard identityProfile == .standard else {
+            throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+        }
+        let receipt: AssemblywrightMacIssuedDeviceCertificate = try decodeExact(
+            issuedReceiptData,
+            keys: [
+                "status", "operation", "grant_id", "device_id", "device_name", "role",
+                "registry_revision", "serial_hex", "issued_at_ms", "not_after_ms",
+                "certificate_sha256", "certificate_pem", "ca_certificate_pem"
+            ]
+        )
+        try receipt.validate(operation: "rotate")
+        if let invitation = try identityStore.loadStagedRotationInvitation() {
+            try identityProfile.validate(invitation: invitation)
+            guard receipt.deviceID == invitation.deviceID,
+                  receipt.grantID == invitation.grantID,
+                  receipt.deviceName == invitation.deviceName,
+                  receipt.role == invitation.role,
+                  receipt.registryRevision == invitation.registryRevision else {
+                throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+            }
+        }
+        return try identityStore.installRotation(receipt)
     }
 
     public func prepareCapabilityRebind(invitationData: Data) throws -> Data {
@@ -613,6 +692,15 @@ public struct AssemblywrightMacEnrollmentCoordinator: Sendable {
             && capability.maxContextBytes == 256 * 1_024
             && capability.maxResultBytes == 768 * 1_024
     }
+
+    private static func isFixtureOrLocalCoding(
+        _ capabilities: [AssemblywrightMacBridgeCapability]
+    ) -> Bool {
+        capabilities.contains {
+            $0.id == "fixture.reasoning" || $0.provider == "assemblywright-fixture"
+                || $0.id == "local.coding.v1" || $0.kind == "local_coding"
+        }
+    }
 }
 
 let assemblywrightRebindSignatureAlgorithm = "ecdsa_p256_sha256_der"
@@ -678,6 +766,21 @@ public protocol AssemblywrightMacAuthenticatedTLSChannel: Sendable {
 
 public protocol AssemblywrightMacAuthenticatedTLSChannelFactory: Sendable {
     func connect(profile: AssemblywrightMacBridgeProfile) async throws -> any AssemblywrightMacAuthenticatedTLSChannel
+    func connectForLocalModelReconciliation(
+        profile: AssemblywrightMacBridgeProfile,
+        installedProfile: AssemblywrightMacBridgeProfile,
+        requestedModelID: String
+    ) async throws -> any AssemblywrightMacAuthenticatedTLSChannel
+}
+
+public extension AssemblywrightMacAuthenticatedTLSChannelFactory {
+    func connectForLocalModelReconciliation(
+        profile _: AssemblywrightMacBridgeProfile,
+        installedProfile _: AssemblywrightMacBridgeProfile,
+        requestedModelID _: String
+    ) async throws -> any AssemblywrightMacAuthenticatedTLSChannel {
+        throw AssemblywrightMacDeveloperBridgeError.bindingMismatch
+    }
 }
 
 public struct AssemblywrightMacAuthenticatedBridgeSession: Sendable {
@@ -742,6 +845,26 @@ public struct AssemblywrightMacMTLSBridgeTransport: Sendable {
 
     public func connect(profile: AssemblywrightMacBridgeProfile) async throws -> AssemblywrightMacAuthenticatedBridgeSession {
         let channel = try await factory.connect(profile: profile)
+        return try await authenticate(profile: profile, channel: channel)
+    }
+
+    public func connectForLocalModelReconciliation(
+        profile: AssemblywrightMacBridgeProfile,
+        installedProfile: AssemblywrightMacBridgeProfile,
+        requestedModelID: String
+    ) async throws -> AssemblywrightMacAuthenticatedBridgeSession {
+        let channel = try await factory.connectForLocalModelReconciliation(
+            profile: profile,
+            installedProfile: installedProfile,
+            requestedModelID: requestedModelID
+        )
+        return try await authenticate(profile: profile, channel: channel)
+    }
+
+    private func authenticate(
+        profile: AssemblywrightMacBridgeProfile,
+        channel: any AssemblywrightMacAuthenticatedTLSChannel
+    ) async throws -> AssemblywrightMacAuthenticatedBridgeSession {
         do {
             try Task.checkCancellation()
             let exporter = try await channel.tlsExporter(label: Self.exporterLabel, length: 32)

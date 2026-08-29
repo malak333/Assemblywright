@@ -2,6 +2,40 @@
 
 These notes capture durable facts for future agents working on this repository.
 
+## Local Model Selection
+
+- The only owner-selectable model is the designated standard-profile Mac MLX
+  model. Local coding and production review are fixed; Windows RTX is not yet
+  provisioned.
+- Selection changes only the MLX model ID. It does not rotate identity, alter
+  provider or bounds, grant capability, or rebind another device.
+- Local executable/model paths remain Mac-only in
+  `local-model-selection-v1.json` at mode 0600. Windows request, projection,
+  receipt, status, and audit are path-free.
+- Model IDs are printable non-whitespace ASCII only. Pending persistence fsyncs
+  both file and parent directory. The store recursively rejects duplicate or
+  unknown nested fields and requires the pending model identity to match the
+  canonical frozen request bytes; invalid store state blocks supervision.
+- Only strict known pre-mutation HTTP error pairs clear pending as terminal.
+  Unknown responses, including every 5xx, remain reconciliation cases, and a
+  selected relay validates before active state is persisted.
+- A pending selection intentionally stops ordinary supervision. Use the
+  separately confirmed exact Resume action; never delete or hand-edit the
+  pending file to infer success.
+- If a target-profile session is accepted after an ambiguous POST, never probe
+  the stale old profile. Emergency Pause keeps pending and local identity inert;
+  after unpause, only exact target registry/device/name/model evidence with
+  monotonic designation and pause revisions may complete reconciliation.
+- The production TLS factory ordinarily accepts only the installed Keychain
+  profile. Reconciliation uses a distinct internal factory operation that
+  rechecks the frozen old profile/material and permits only its exact derived
+  revision-plus-one/requested-model target; never add a broad transition-mode
+  flag. Windows must still accept the target application handshake and exact
+  projection.
+- Repository tests prove strict contracts and native process/mTLS behavior;
+  they do not prove signed distribution, notarization, clean-profile install,
+  or live-device model execution.
+
 ## Product Identity And Licensing
 
 - The product name is **Assemblywright**. The primary positioning line is
@@ -343,6 +377,31 @@ an old one.
   forms differently from `serde_json` (for example `1.0` versus `1`). Rust
   recomputes the digest before any mutation, and cross-language regressions must
   include a numeric manifest plus a self-dependency rejection case.
+- A human can onboard an existing standalone Windows repository with
+  `windows-repository-onboarding.ps1`: `Plan` returns a path-free plan ID,
+  `Approve` requires three explicit grant confirmations and returns a compact
+  `repository_onboarding_ready` receipt, and `Check` reports whether the exact
+  revision-1 grant set and receipt remain current. Pasting that receipt into the
+  Mac approved-feature form fills repository identity and grant revisions only.
+  This removes manual transcription but does not create the repository or grant
+  enqueue, dispatch, mutation, validation, publication, or activation. A new
+  repository must first have a committed clean `main`; general arbitrary-project
+  dispatch remains unimplemented.
+- Plan expiry narrows repository onboarding rather than making current state
+  unreadable. `Check` still reports the exact grant/receipt state. A fully
+  confirmed expired `Approve` may only finish an exact plan-bound partial or
+  complete revision-1 grant set through preflight and receipt publication, or
+  replay the exact stored receipt while all three exact grants remain current;
+  it cannot start from zero grants. Foreign, drifted, inactive, or revoked state
+  always fails closed.
+- `windows_repository_onboarding_e2e.rs` is the Windows-native real-boundary
+  regression for onboarding. It starts a disposable real master, invokes the
+  PowerShell client against an ordinary temporary Git `main`, proves that fewer
+  than three confirmations and post-plan drift create no grants or audit,
+  validates expired read-only inspection, fresh-expiry rejection without audit,
+  exact partial and complete-without-receipt forward recovery, the exact grant/preflight/path-free receipt
+  bindings, and exact expired replay without duplicate audit. It does not prove Mac receipt import,
+  feature enqueue, dispatch, source mutation, or a deployed Windows service.
 - A Windows-only remote mTLS proof can run from a disposable source checkout in
   `%TEMP%` without changing the clean service checkout or the deployed service.
   Remove that checkout after the test, and still treat a schema migration,
@@ -521,6 +580,21 @@ an old one.
 - `enrollment pair` reads the CSR to **EOF**, which an interactive terminal
   never sends. Send the CSR line, then a separate Ctrl-Z (`ASCII character 26`).
   Console line length is not the constraint — 541 characters round-trip intact.
+- An expired standard MacBridge certificate is repaired with the secret-free
+  same-device `enrollment rotate-pair` ceremony, not destructive Keychain
+  deletion or a new enrollment. Windows keeps the raw rotation grant only in
+  the stopped pairing process; Mac `enrollment rotate prepare|install
+  --confirm` reuses the currently selected non-exportable key and accepts only
+  the exact installed device, registration, capabilities, endpoint, pinned CA,
+  and `rotate` receipt. Successful issuance revokes old serials while preserving
+  the device ID, registry revision, capabilities, and owner-control designation.
+  Windows precommits the exact public receipt to an explicitly protected
+  owner-and-LocalSystem journal. If output is lost, use confirmed
+  `rotate-recover --grant-id UUID` repeatedly until Mac installation and
+  authenticated reconnect succeed; then use confirmed
+  `rotate-recover-acknowledge --grant-id UUID` to remove only that validated
+  journal. Do not generate a second grant to recover ambiguous output. Mac
+  installation is forward-resumable across Keychain mutation boundaries.
 - The fixture lane's separate `EnqueueCancellation` and `Pause` are an operator
   race the fixture job wins, because its synthetic delay is at most five
   seconds. The MLX lane has a combined `EnqueueCancellationAndPause` for exactly
@@ -1435,6 +1509,12 @@ an old one.
   uses strict-config ephemeral read-only Codex execution, disables shell,
   snapshot, agent, skill-install, image, and web surfaces, and rejects packet or
   output binding drift.
+- The Mac approved-feature UI calls `openai.codex` / `gpt-5.6-sol` the
+  **production review binding**, displays it as fixed by the Windows master, and
+  states that repository-scoped Codex development reviewer agents are separate.
+  The UI wording prevents the read-only production binding from being mistaken
+  for `.codex/agents/assemblywright-reviewer.toml`; it adds no provider selector
+  or provider-rebinding authority.
 - `scripts/review-provider-proof-controller.sh --run` accepts no repository,
   provider, model, executable, schema, or harness argument. Exact committed
   harness bytes and the sanitized Windows receipt use separate descriptors.

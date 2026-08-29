@@ -7,6 +7,8 @@ struct ApprovedFeatureAuthoringSection: View {
     @State private var form = ApprovedFeatureAuthoringForm()
     @State private var confirmationRequest: AssemblywrightMacApprovedFeaturePreparedRequest?
     @State private var reconciliationConfirmationPresented = false
+    @State private var onboardingReceiptText = ""
+    @State private var onboardingReceiptImportStatus: OnboardingReceiptImportStatus?
 
     private var draft: AssemblywrightMacFeatureConveyorApprovedFeatureDraft? {
         form.draft()
@@ -27,7 +29,7 @@ struct ApprovedFeatureAuthoringSection: View {
         Section("Approved feature authoring") {
             DisclosureGroup("Author an approved feature") {
                 VStack(alignment: .leading, spacing: 12) {
-                    GroupBox("Identity and review") {
+                    GroupBox(ApprovedFeatureReviewBindingPresentation.groupTitle) {
                         VStack(alignment: .leading, spacing: 8) {
                             LabeledContent("Feature ID") {
                                 TextField("UUID", text: $form.featureID)
@@ -37,18 +39,66 @@ struct ApprovedFeatureAuthoringSection: View {
                                 TextField("UUID", text: $form.repositoryID)
                                     .textFieldStyle(.roundedBorder)
                             }
+                            DisclosureGroup("Import repository onboarding receipt") {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    TextEditor(text: $onboardingReceiptText)
+                                        .font(.caption.monospaced())
+                                        .frame(minHeight: 72)
+                                        .overlay {
+                                            RoundedRectangle(cornerRadius: 5)
+                                                .stroke(.quaternary)
+                                        }
+                                        .onChange(of: onboardingReceiptText) {
+                                            onboardingReceiptImportStatus = nil
+                                        }
+                                    HStack {
+                                        Text(
+                                            "Paste the compact, path-free receipt emitted by the Windows onboarding flow."
+                                        )
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        Spacer()
+                                        Button("Import receipt") {
+                                            importOnboardingReceipt()
+                                        }
+                                    }
+                                    if let status = onboardingReceiptImportStatus {
+                                        Label(status.message, systemImage: status.systemImage)
+                                            .font(.caption)
+                                            .foregroundStyle(status.isSuccess ? .green : .red)
+                                    }
+                                    Text(
+                                        "Import only prefills this form. It creates no repository grant or authority; Windows rechecks current state during enqueue."
+                                    )
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                }
+                                .padding(.top, 4)
+                            }
                             LabeledContent("Specification revision") {
                                 TextField("1", text: $form.specificationRevision)
                                     .textFieldStyle(.roundedBorder)
                             }
-                            LabeledContent("Review provider") {
+                            LabeledContent(ApprovedFeatureReviewBindingPresentation.providerLabel) {
                                 Text(form.providerID).textSelection(.enabled)
                             }
-                            LabeledContent("Review model") {
+                            LabeledContent(ApprovedFeatureReviewBindingPresentation.modelLabel) {
                                 Text(form.modelID).textSelection(.enabled)
                             }
+                            Label(
+                                ApprovedFeatureReviewBindingPresentation.lockLabel,
+                                systemImage: "lock.fill"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            Text(ApprovedFeatureReviewBindingPresentation.explanation)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                     }
+                    .accessibilityIdentifier(
+                        ApprovedFeatureReviewBindingPresentation.accessibilityIdentifier
+                    )
 
                     GroupBox("Approved specification") {
                         VStack(alignment: .leading, spacing: 8) {
@@ -262,6 +312,54 @@ struct ApprovedFeatureAuthoringSection: View {
     private static func hex(_ bytes: [UInt8]) -> String {
         bytes.map { String(format: "%02x", $0) }.joined()
     }
+
+    private func importOnboardingReceipt() {
+        do {
+            try form.importRepositoryOnboardingReceipt(onboardingReceiptText)
+            onboardingReceiptImportStatus = .success
+        } catch AssemblywrightMacRepositoryOnboardingReceiptError.tooLarge {
+            onboardingReceiptImportStatus = .failure(
+                "Receipt is too large. Paste one compact Windows onboarding receipt."
+            )
+        } catch {
+            onboardingReceiptImportStatus = .failure(
+                "Receipt is invalid. Copy the complete onboarding receipt from Windows."
+            )
+        }
+    }
+}
+
+enum ApprovedFeatureReviewBindingPresentation {
+    static let groupTitle = "Identity and production review binding"
+    static let providerLabel = "Production review provider"
+    static let modelLabel = "Production review model"
+    static let lockLabel = "Fixed by Windows master"
+    static let accessibilityIdentifier = "approved-feature-production-review-binding"
+    static let explanation =
+        "This Feature Conveyor binding is separate from repository-scoped Codex development reviewer agents."
+}
+
+private enum OnboardingReceiptImportStatus: Equatable {
+    case success
+    case failure(String)
+
+    var isSuccess: Bool {
+        if case .success = self { return true }
+        return false
+    }
+
+    var message: String {
+        switch self {
+        case .success:
+            "Repository ID and current grant revisions imported."
+        case let .failure(message):
+            message
+        }
+    }
+
+    var systemImage: String {
+        isSuccess ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+    }
 }
 
 struct ApprovedFeatureConfirmationSummary: Equatable {
@@ -469,6 +567,14 @@ struct ApprovedFeatureAuthoringForm: Equatable {
     ) -> AssemblywrightMacApprovedFeaturePreparedRequest? {
         guard let draft = draft() else { return nil }
         return try? draft.prepareRequest(from: status)
+    }
+
+    mutating func importRepositoryOnboardingReceipt(_ text: String) throws {
+        let receipt = try AssemblywrightMacRepositoryOnboardingReceipt.decodeStrict(Data(text.utf8))
+        repositoryID = receipt.repositoryID.uuidString.lowercased()
+        registrationGrantRevision = String(receipt.registrationGrantRevision)
+        cloudDisclosureGrantRevision = String(receipt.cloudDisclosureGrantRevision)
+        autonomousPublicationGrantRevision = String(receipt.autonomousPublicationGrantRevision)
     }
 
     mutating func resetAfterSuccessfulEnqueue() {

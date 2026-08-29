@@ -11,6 +11,8 @@ pub const MAX_CAPABILITIES_PER_DEVICE: usize = 64;
 pub const MAX_CAPABILITY_ID_BYTES: usize = 64;
 pub const MAX_PROVIDER_NAME_BYTES: usize = 64;
 pub const MAX_MODEL_NAME_BYTES: usize = 128;
+pub const LOCAL_MODEL_SELECTION_SCHEMA_VERSION: u16 = 1;
+pub const MAX_LOCAL_MODEL_SELECTION_FRAME_BYTES: usize = 8 * 1024;
 pub const MAX_HANDSHAKE_FRAME_BYTES: usize = 64 * 1024;
 pub const MAX_JOB_CONTEXT_BYTES: usize = 256 * 1024;
 pub const MAX_JOB_RESULT_BYTES: usize = 768 * 1024;
@@ -441,6 +443,131 @@ impl CapabilityDescriptor {
             max_context_bytes: MAX_LOCAL_CODING_CONTEXT_BYTES as u32,
             max_result_bytes: MAX_LOCAL_CODING_RESULT_BYTES as u32,
         }
+    }
+}
+
+/// One explicit owner-confirmed, model-only mutation for the exact designated
+/// MLX MacBridge. Local executable and model-directory paths are intentionally
+/// absent from this wire contract.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalModelSelectionRequest {
+    pub schema_version: u16,
+    pub device_id: DeviceId,
+    pub expected_registry_revision: u64,
+    pub expected_designation_revision: u64,
+    pub expected_emergency_pause_revision: u64,
+    pub model_id: String,
+}
+
+impl LocalModelSelectionRequest {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "local_model_selection_request",
+            frame,
+            MAX_LOCAL_MODEL_SELECTION_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_fixed_value(
+            "schema_version",
+            self.schema_version.to_string(),
+            LOCAL_MODEL_SELECTION_SCHEMA_VERSION.to_string(),
+        )?;
+        validate_uuid("device_id", self.device_id.0)?;
+        validate_positive_limit(
+            "expected_registry_revision",
+            self.expected_registry_revision,
+            u64::MAX,
+        )?;
+        validate_positive_limit(
+            "expected_designation_revision",
+            self.expected_designation_revision,
+            u64::MAX,
+        )?;
+        validate_local_model_selection_id(&self.model_id)?;
+        validate_serialized_limit(
+            "local_model_selection_request",
+            self,
+            MAX_LOCAL_MODEL_SELECTION_FRAME_BYTES,
+        )
+    }
+}
+
+/// Exact Windows-authoritative selection projection used for both ordinary
+/// display and ambiguous-result reconciliation. It contains no local paths.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalModelSelectionProjection {
+    pub schema_version: u16,
+    pub device_id: DeviceId,
+    pub device_name: String,
+    pub registry_revision: u64,
+    pub designation_revision: u64,
+    pub emergency_pause_revision: u64,
+    pub emergency_paused: bool,
+    pub model_id: String,
+}
+
+impl LocalModelSelectionProjection {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_fixed_value(
+            "schema_version",
+            self.schema_version.to_string(),
+            LOCAL_MODEL_SELECTION_SCHEMA_VERSION.to_string(),
+        )?;
+        validate_uuid("device_id", self.device_id.0)?;
+        validate_identifier("device_name", &self.device_name, MAX_DEVICE_NAME_BYTES)?;
+        validate_positive_limit("registry_revision", self.registry_revision, u64::MAX)?;
+        validate_positive_limit("designation_revision", self.designation_revision, u64::MAX)?;
+        validate_local_model_selection_id(&self.model_id)?;
+        validate_serialized_limit(
+            "local_model_selection_projection",
+            self,
+            MAX_LOCAL_MODEL_SELECTION_FRAME_BYTES,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalModelSelectionStatus {
+    Selected,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalModelSelectionReceipt {
+    pub schema_version: u16,
+    pub device_id: DeviceId,
+    pub registry_revision: u64,
+    pub designation_revision: u64,
+    pub emergency_pause_revision: u64,
+    pub model_id: String,
+    pub selected_at_ms: u64,
+    pub status: LocalModelSelectionStatus,
+}
+
+impl LocalModelSelectionReceipt {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        let projection = LocalModelSelectionProjection {
+            schema_version: self.schema_version,
+            device_id: self.device_id,
+            device_name: "receipt-binding".to_string(),
+            registry_revision: self.registry_revision,
+            designation_revision: self.designation_revision,
+            emergency_pause_revision: self.emergency_pause_revision,
+            emergency_paused: false,
+            model_id: self.model_id.clone(),
+        };
+        projection.validate()?;
+        validate_positive_limit("selected_at_ms", self.selected_at_ms, u64::MAX)?;
+        if self.status != LocalModelSelectionStatus::Selected {
+            return Err(ProtocolError::InvalidMlxCapability);
+        }
+        Ok(())
     }
 }
 
@@ -4988,6 +5115,20 @@ fn validate_identifier(
             .all(|byte| byte.is_ascii_graphic() && !byte.is_ascii_control())
     {
         return Err(ProtocolError::InvalidIdentifier { field });
+    }
+    Ok(())
+}
+
+fn validate_local_model_selection_id(value: &str) -> Result<(), ProtocolError> {
+    validate_identifier("model_id", value, MAX_MODEL_NAME_BYTES)?;
+    if value.starts_with('/')
+        || value.contains('\\')
+        || value.starts_with("file:")
+        || value
+            .split('/')
+            .any(|component| component == "." || component == "..")
+    {
+        return Err(ProtocolError::InvalidMlxCapability);
     }
     Ok(())
 }
