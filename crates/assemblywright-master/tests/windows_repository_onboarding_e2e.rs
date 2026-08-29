@@ -106,7 +106,7 @@ fn exercise_windows_repository_onboarding() {
         "onboarding accepted fewer than all three owner confirmations"
     );
     assert!(
-        String::from_utf8_lossy(&missing_confirmation.stderr).contains(
+        normalized_stderr(&missing_confirmation).contains(
             "Approve requires separate -ConfirmRegistration, -ConfirmCloudDisclosure, and -ConfirmAutonomousPublication switches."
         ),
         "unexpected missing-confirmation rejection: {}",
@@ -151,7 +151,7 @@ fn exercise_windows_repository_onboarding() {
         "expired onboarding plan created fresh grants"
     );
     assert!(
-        String::from_utf8_lossy(&expired_fresh_approval.stderr).contains(
+        normalized_stderr(&expired_fresh_approval).contains(
             "The expired repository-onboarding plan may only resume existing exact revision-1 grants or replay its exact stored receipt and grants."
         ),
         "unexpected expired-plan rejection: {}",
@@ -184,7 +184,7 @@ fn exercise_windows_repository_onboarding() {
         "onboarding accepted repository drift after planning"
     );
     assert!(
-        String::from_utf8_lossy(&drifted_approval.stderr).contains(
+        normalized_stderr(&drifted_approval).contains(
             "The repository was not an exact clean standard main checkout with normal tracked-index state."
         ),
         "unexpected repository-drift rejection: {}",
@@ -790,6 +790,13 @@ fn decode_last_json_line(output: &Output) -> (String, Value) {
     let value = serde_json::from_str(&line)
         .unwrap_or_else(|error| panic!("invalid onboarding JSON {line:?}: {error}"));
     (line, value)
+}
+
+fn normalized_stderr(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stderr)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn assert_path_free_canonical_receipt(line: &str, receipt: &Value, repository: &Path) {
