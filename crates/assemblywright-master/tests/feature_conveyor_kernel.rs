@@ -45,6 +45,10 @@ use std::process::Command;
 use tempfile::tempdir;
 use uuid::Uuid;
 
+fn migration_backup_prefix() -> String {
+    format!("master.pre-v{}.", MASTER_SCHEMA_VERSION)
+}
+
 #[test]
 fn artifact_integration_and_validation_gate_freeze_candidate_advance_and_reject_drift() {
     let directory = tempdir().unwrap();
@@ -1383,6 +1387,7 @@ fn orchestration_schema_v17_migrates_backup_first_and_ledger_is_immutable() {
     let process = MasterProcess::acquire(directory.path()).unwrap();
     drop(process);
     let connection = Connection::open(&database).unwrap();
+    drop_assembly_line_schema_for_legacy_fixture(&connection);
     connection
         .execute_batch(
             "PRAGMA foreign_keys=OFF;
@@ -1396,7 +1401,10 @@ fn orchestration_schema_v17_migrates_backup_first_and_ledger_is_immutable() {
     drop(connection);
 
     let process = MasterProcess::acquire(directory.path()).unwrap();
-    assert_eq!(process.kernel().schema_version().unwrap(), 19);
+    assert_eq!(
+        process.kernel().schema_version().unwrap(),
+        MASTER_SCHEMA_VERSION
+    );
     assert!(process
         .migration_backup_path()
         .is_some_and(|path| path.exists()));
@@ -1420,6 +1428,7 @@ fn orchestration_schema_v17_migrates_backup_first_and_ledger_is_immutable() {
 
 fn downgrade_activation_tables_to_v18(database: &std::path::Path, with_legacy_row: bool) {
     let connection = Connection::open(database).unwrap();
+    drop_assembly_line_schema_for_legacy_fixture(&connection);
     connection
         .execute_batch(
             "PRAGMA foreign_keys=OFF;
@@ -1467,7 +1476,10 @@ fn activation_schema_v18_migrates_backup_first_to_v19() {
     downgrade_activation_tables_to_v18(&database, false);
 
     let process = MasterProcess::acquire(directory.path()).unwrap();
-    assert_eq!(process.kernel().schema_version().unwrap(), 19);
+    assert_eq!(
+        process.kernel().schema_version().unwrap(),
+        MASTER_SCHEMA_VERSION
+    );
     let backup = process.migration_backup_path().unwrap();
     assert!(backup.exists());
     assert_eq!(
@@ -2835,7 +2847,7 @@ fn review_gateway_schema_v15_migrates_backup_first_to_immutable_v16_tables() {
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v19."));
+        .starts_with(&migration_backup_prefix()));
     assert_eq!(
         Connection::open(backup)
             .unwrap()
@@ -2879,7 +2891,7 @@ fn publication_schema_v16_migrates_backup_first_to_immutable_v17_tables() {
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v19."));
+        .starts_with(&migration_backup_prefix()));
     assert_eq!(
         Connection::open(backup)
             .unwrap()
@@ -2923,7 +2935,7 @@ fn validation_gate_schema_v14_migrates_backup_first_to_immutable_v15_tables() {
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v19."));
+        .starts_with(&migration_backup_prefix()));
     assert_eq!(
         Connection::open(backup)
             .unwrap()
@@ -6828,6 +6840,7 @@ fn drop_review_gateway_schema_for_legacy_fixture(connection: &Connection) {
 }
 
 fn drop_publication_schema_for_legacy_fixture(connection: &Connection) {
+    drop_assembly_line_schema_for_legacy_fixture(connection);
     connection
         .execute_batch(
             "DROP TABLE feature_owner_orchestration_controls;
@@ -6845,6 +6858,34 @@ fn drop_publication_schema_for_legacy_fixture(connection: &Connection) {
              DROP TRIGGER feature_publications_no_update;
              DROP TRIGGER feature_publications_no_delete;
              DROP TABLE feature_publications;",
+        )
+        .unwrap();
+}
+
+fn drop_assembly_line_schema_for_legacy_fixture(connection: &Connection) {
+    connection
+        .execute_batch(
+            "DROP TRIGGER assembly_line_project_drafts_no_update;
+             DROP TRIGGER assembly_line_project_drafts_no_delete;
+             DROP TRIGGER assembly_line_feature_drafts_no_update;
+             DROP TRIGGER assembly_line_feature_drafts_no_delete;
+             DROP TRIGGER assembly_line_frozen_specs_no_update;
+             DROP TRIGGER assembly_line_frozen_specs_no_delete;
+             DROP TRIGGER assembly_line_approvals_no_update;
+             DROP TRIGGER assembly_line_approvals_no_delete;
+             DROP TRIGGER assembly_line_requests_no_update;
+             DROP TRIGGER assembly_line_requests_no_delete;
+             DROP TRIGGER assembly_line_audit_no_update;
+             DROP TRIGGER assembly_line_audit_no_delete;
+             DROP TABLE assembly_line_audit;
+             DROP TABLE assembly_line_requests;
+             DROP TABLE assembly_line_queue;
+             DROP TABLE assembly_line_repositories;
+             DROP TABLE assembly_line_owner_approvals;
+             DROP TABLE assembly_line_frozen_specifications;
+             DROP TABLE assembly_line_feature_drafts;
+             DROP TABLE assembly_line_project_drafts;
+             DROP TABLE assembly_line_state;",
         )
         .unwrap();
 }
@@ -7041,7 +7082,7 @@ fn master_process_v10_backfills_resolution_receipts_from_exact_immutable_audit()
             .file_name()
             .unwrap()
             .to_string_lossy()
-            .starts_with("master.pre-v19."));
+            .starts_with(&migration_backup_prefix()));
         assert_eq!(
             Connection::open(backup)
                 .unwrap()
@@ -7165,7 +7206,7 @@ fn master_process_v10_ambiguous_resolution_audit_fails_closed_and_restores_backu
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v19.")));
+            .starts_with(&migration_backup_prefix())));
 }
 
 #[test]
@@ -7333,7 +7374,7 @@ fn master_process_v4_backup_migration_reopen_and_restore_on_failure() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v19.")));
+            .starts_with(&migration_backup_prefix())));
 }
 
 #[test]
@@ -7399,7 +7440,7 @@ fn master_process_v12_backup_first_migration_adds_retained_workspace_binding() {
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v19."));
+        .starts_with(&migration_backup_prefix()));
     assert_eq!(
         Connection::open(backup)
             .unwrap()
@@ -7460,7 +7501,7 @@ fn master_process_v12_failed_migration_restores_verified_backup() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v19.")));
+            .starts_with(&migration_backup_prefix())));
 }
 
 #[test]
@@ -7527,7 +7568,7 @@ fn master_process_v6_backup_migration_binds_pause_and_default_inert_owner_contro
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("master.pre-v19."));
+        .starts_with(&migration_backup_prefix()));
     let backup = Connection::open(backup).unwrap();
     assert_eq!(
         backup
@@ -7636,5 +7677,5 @@ fn forward_schema_version_fails_closed_without_backup() {
         .any(|entry| entry
             .file_name()
             .to_string_lossy()
-            .starts_with("master.pre-v19.")));
+            .starts_with(&migration_backup_prefix())));
 }

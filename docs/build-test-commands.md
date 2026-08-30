@@ -23,6 +23,66 @@ packaging, notarization, clean-profile installation, or live MLX model launch.
 
 Run commands from the repository root unless noted otherwise.
 
+## Full-Machine Assembly Line Target Validation
+
+The approved target contract is documented in
+`docs/full-machine-assembly-line-design.md`. Protocol v5 now includes strict
+full-machine Assembly Line schema-v1 contracts, the Windows master is schema v20 with
+effect-free planning persistence/routes, and the Mac has strict projection/mutation
+transport plus restart-safe auto-run reconciliation in the simplified UI. A
+catalog-bound planning/GitHub coordinator is fake-adapter-only. None is eligible for
+execution activation.
+
+Full-machine target phase: partial implementation; protocol-v5/schema-v20 inert planning and presentation exist; execution runtime remains unavailable.
+
+```sh
+cargo test -p assemblywright-protocol --test full_machine_assembly_line_contract
+cargo test -p assemblywright-master --test assembly_line_planning
+cargo test -p assemblywright-master planning_effects::tests
+cargo test -p assemblywright-master --test assembly_line_planning_http
+swift test --disable-sandbox --package-path apps/mac --filter DeveloperBridgeTests
+swift test --disable-sandbox --package-path apps/mac --filter AssemblywrightMacAppTests
+./scripts/release-docs-drift-smoke.sh
+git diff --check
+```
+
+The schema-v19-to-v20 backup-first migration and legacy-table preservation test can be
+run directly with:
+
+```sh
+cargo test -p assemblywright-master --test assembly_line_planning \
+  schema_v19_file_upgrade_is_backup_first_and_preserves_legacy_tables -- --exact
+```
+
+On a native Windows toolchain, the designated-Mac mTLS planning boundary is:
+
+```powershell
+cargo test -p assemblywright-master --test assembly_line_planning_mtls
+```
+
+These checks prove strict contracts, inert persistence, authenticated/bounded routes,
+schema migration, strict Mac decoding/transport behavior, and presentation defaults at
+repository-test boundaries. The loopback process E2E drives one exact Private project
+through draft, frozen brainstorming specification, approval, exact replay, and
+authoritative projection, then proves New Feature remains rejected until GitHub
+creation evidence exists. They do not prove provider brainstorming, GitHub
+creation/reconciliation through production adapters, live Windows execution of the
+simplified UI action path, Start, Stop,
+Emergency Pause, executors, broker containment, process termination, full-machine
+effects, Windows deployment, signed/notarized Mac artifacts, or live two-host behavior.
+
+The current inert contract coverage includes strict GitHub URL and visibility handling,
+owner-bound drafts/specifications/approvals, Public default/Private option,
+`creation_pending` without external effect, Created-plus-evidence feature gating, FIFO,
+default-on compare-and-set auto-run, stale session/epoch contract rejection, and
+redacted planning audit. The Start/Stop/Emergency contract types are not routes.
+The planning-effects suite proves the injected coordinator's catalog binding,
+idempotent brainstorming reconciliation, pre-inspection GitHub intent, Public/Private
+mapping, cancellation fencing, and exact post-effect observation; it does not install
+or activate a credential-owning adapter.
+Executable phases must add native E2E for those routes, one-at-a-time execution,
+termination, reconciliation, and hostile protected-control-plane mutation denial.
+
 ## Required Local Gate
 
 Run the full local release gate with:
@@ -214,8 +274,9 @@ run inside the canonical local gate:
 ```
 
 After this feature is committed to clean published `main`, the Windows checkout
-is fast-forwarded to the same commit, schema-v19 service health is confirmed,
-and the signed Mac helper remains current, set the exact current owner-control
+is fast-forwarded to the same commit, schema-v20 service health and the preserved
+schema-v19 Feature Conveyor state are confirmed, and the signed Mac helper remains
+current, set the exact current owner-control
 designation revision and start the owner-supervised proof:
 
 ```sh

@@ -8,6 +8,40 @@ Scope: Approved target design plus the bounded repository-kernel implementation
 status below. This document does not claim that activation prerequisites have
 been satisfied, live-device proof, or production readiness.
 
+Superseding target: [`full-machine-assembly-line-design.md`](full-machine-assembly-line-design.md)
+is the approved replacement architecture for the simplified New Project, New
+Feature, and Assembly Line experience. It changes repository identity to a canonical
+GitHub URL, places schema-bound brainstorming before owner-approved creation/enqueue,
+and replaces restricted execution with brokered full-machine effects outside a
+protected Assemblywright control plane. Its strict protocol contracts, schema-v20
+Windows inert planning persistence/routes, catalog-bound private-test planning-effect
+coordinator, and simplified Mac projection/auto-run UI are implemented. Production
+provider, GitHub, execution-control, executor, and broker parts
+are not implemented or activated. The schema-v19 bounded Feature Conveyor behavior
+documented below retains its historical meaning under the current schema-v20 master.
+
+Full-machine target phase: partial implementation; protocol-v5/schema-v20 inert planning and presentation exist; execution runtime remains unavailable.
+
+The replacement is an atomic authority cutover, not an inference that existing grants
+have widened. Existing repository grants, activation evidence, queued specifications,
+and restricted-worker leases retain their current meanings. A migration must either
+map a record exactly to the new versioned contract or leave it inert for explicit
+owner reconciliation; old binaries must reject the forward schema, and new binaries
+must not interpret a legacy activation as a full-machine Assembly Line session.
+
+The schema-v20 Assembly Line foundation accepts strict planning records through
+owner-token loopback routes and the designated authenticated MacBridge routes. Project
+approval defaults to Public unless Private was frozen and produces only effect-free
+`creation_pending` intent. No GitHub adapter runs. Feature authoring/enqueue requires
+the exact repository to be `created` with creation evidence and appends FIFO without
+dispatching legacy or new work. Auto-run defaults on and has an exact replay-safe CAS
+toggle, but Start, Stop, and Emergency Pause effect routes are absent. The owner
+projection reports the brainstorming provider, GitHub creation, both executors, and
+protected brokers as `unavailable`. The current SwiftUI surface presents New Project,
+New Feature, and Assembly Line, consumes the authoritative projection, and wires only
+the restart-safe auto-run CAS/reconciliation action. Brainstorming and execution
+controls remain disabled.
+
 Implementation status: the default-inert protocol-v5/schema-v19 Windows
 `assemblywright-master` kernel is implemented through the owner-control and
 activation surface. The detailed implemented boundary is summarized under

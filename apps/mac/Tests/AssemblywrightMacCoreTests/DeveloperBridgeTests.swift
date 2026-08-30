@@ -215,6 +215,7 @@ private actor FakeSupervisorSession: AssemblywrightMacBridgeSession {
     nonisolated let connectionEpoch: UInt64
     private var outcomes: [FakeSupervisorOutcome]
     private let featureConveyorOutcome: FakeSupervisorOutcome
+    private let assemblyLineOutcome: FakeSupervisorOutcome?
     private(set) var requests: [AssemblywrightMacBridgeHTTPRequest] = []
     private(set) var cancelled = false
 
@@ -223,11 +224,13 @@ private actor FakeSupervisorSession: AssemblywrightMacBridgeSession {
         outcomes: [FakeSupervisorOutcome],
         featureConveyorOutcome: FakeSupervisorOutcome = .response(
             .init(status: 200, body: validFeatureConveyorData())
-        )
+        ),
+        assemblyLineOutcome: FakeSupervisorOutcome? = nil
     ) {
         self.connectionEpoch = connectionEpoch
         self.outcomes = outcomes
         self.featureConveyorOutcome = featureConveyorOutcome
+        self.assemblyLineOutcome = assemblyLineOutcome
     }
 
     func send(_ request: AssemblywrightMacBridgeHTTPRequest) async throws -> AssemblywrightMacBridgeHTTPResponse {
@@ -248,6 +251,27 @@ private actor FakeSupervisorSession: AssemblywrightMacBridgeSession {
                     emergencyPaused: guidance?["reason_code"] as? String == "emergency_paused",
                     emergencyPauseRevision: guidance?["emergency_pause_revision"] as? UInt64 ?? 0
                 ))
+            case .failure: throw FakeSupervisorError()
+            }
+        }
+        if request.path == AssemblywrightMacBridgeSupervisor.assemblyLinePath {
+            if let assemblyLineOutcome {
+                switch assemblyLineOutcome {
+                case let .response(response): return response
+                case .failure: throw FakeSupervisorError()
+                }
+            }
+            switch featureConveyorOutcome {
+            case let .response(response):
+                let feature = (try? JSONSerialization.jsonObject(with: response.body)) as? [String: Any]
+                let guidance = feature?["owner_guidance"] as? [String: Any]
+                return .init(
+                    status: 200,
+                    body: validAssemblyLineProjectionData(
+                        emergencyPaused: guidance?["reason_code"] as? String == "emergency_paused",
+                        emergencyPauseRevision: guidance?["emergency_pause_revision"] as? UInt64 ?? 0
+                    )
+                )
             case .failure: throw FakeSupervisorError()
             }
         }
@@ -276,6 +300,27 @@ private actor FakeSupervisorConnector: AssemblywrightMacBridgeConnecting {
         guard !sessions.isEmpty else { throw FakeSupervisorError() }
         return sessions.removeFirst()
     }
+}
+
+private actor FakeAssemblyLinePlanningSession: AssemblywrightMacBridgeSession {
+    nonisolated let connectionEpoch: UInt64 = 77
+    private var responses: [AssemblywrightMacBridgeHTTPResponse]
+    private(set) var requests: [AssemblywrightMacBridgeHTTPRequest] = []
+    private(set) var cancelled = false
+
+    init(responses: [AssemblywrightMacBridgeHTTPResponse]) {
+        self.responses = responses
+    }
+
+    func send(_ request: AssemblywrightMacBridgeHTTPRequest) async throws
+        -> AssemblywrightMacBridgeHTTPResponse
+    {
+        requests.append(request)
+        guard !responses.isEmpty else { throw FakeSupervisorError() }
+        return responses.removeFirst()
+    }
+
+    func cancel() async { cancelled = true }
 }
 
 private actor FakeFixtureBridgeSession: AssemblywrightMacBridgeSession {
@@ -808,6 +853,7 @@ private actor FakeBridgeProcessLauncher: AssemblywrightDeveloperBridgeProcessLau
     let commandSucceeds: Bool
     private var commandDelays: [Duration]
     private var commandFailuresRemaining: Int
+    private var commandErrors: [AssemblywrightDeveloperBridgeProcessError]
     private var commandResponses: [Data]
     private(set) var launchCount = 0
     private(set) var commands: [([String], Data)] = []
@@ -820,6 +866,7 @@ private actor FakeBridgeProcessLauncher: AssemblywrightDeveloperBridgeProcessLau
         commandResponse: Data? = nil,
         commandResponses: [Data] = [],
         commandFailures: Int = 0,
+        commandErrors: [AssemblywrightDeveloperBridgeProcessError] = [],
         commandDelay: Duration = .zero,
         commandDelays: [Duration] = []
     ) {
@@ -827,6 +874,7 @@ private actor FakeBridgeProcessLauncher: AssemblywrightDeveloperBridgeProcessLau
         self.restartSession = restartSession
         self.commandSucceeds = commandSucceeds
         commandFailuresRemaining = commandFailures
+        self.commandErrors = commandErrors
         self.commandResponses = commandResponse.map { [$0] } ?? commandResponses
         self.commandDelays = commandDelay > .zero ? [commandDelay] : commandDelays
     }
@@ -853,6 +901,7 @@ private actor FakeBridgeProcessLauncher: AssemblywrightDeveloperBridgeProcessLau
             commandFailuresRemaining -= 1
             throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
         }
+        if !commandErrors.isEmpty { throw commandErrors.removeFirst() }
         guard commandSucceeds else { throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot }
         if !commandResponses.isEmpty { return commandResponses.removeFirst() }
         if arguments == AssemblywrightDeveloperBridgeProcessLifecycle.approvedFeatureEnqueueArguments {
@@ -1914,9 +1963,11 @@ struct DeveloperBridgeTests {
             AssemblywrightMacBridgeSupervisor.healthPath,
             AssemblywrightMacBridgeSupervisor.featureConveyorPath,
             AssemblywrightMacBridgeSupervisor.ownerControlPath,
+            AssemblywrightMacBridgeSupervisor.assemblyLinePath,
             AssemblywrightMacBridgeSupervisor.healthPath,
             AssemblywrightMacBridgeSupervisor.featureConveyorPath,
-            AssemblywrightMacBridgeSupervisor.ownerControlPath
+            AssemblywrightMacBridgeSupervisor.ownerControlPath,
+            AssemblywrightMacBridgeSupervisor.assemblyLinePath
         ])
         #expect(await session.cancelled == false)
         await supervisor.stop()
@@ -1946,6 +1997,9 @@ struct DeveloperBridgeTests {
             schemaVersion: 19,
             featureConveyor: featureConveyor,
             ownerControl: ownerControl,
+            assemblyLine: try AssemblywrightMacAssemblyLineOwnerProjection.decodeStrict(
+                validAssemblyLineProjectionData()
+            ),
             localModelSelection: nil,
             errorCode: nil
         )
@@ -1985,6 +2039,9 @@ struct DeveloperBridgeTests {
             schemaVersion: 19,
             featureConveyor: featureConveyor,
             ownerControl: ownerControl,
+            assemblyLine: try AssemblywrightMacAssemblyLineOwnerProjection.decodeStrict(
+                validAssemblyLineProjectionData()
+            ),
             localModelSelection: nil,
             errorCode: nil
         )
@@ -2018,7 +2075,8 @@ struct DeveloperBridgeTests {
         #expect(await session.requests.map(\.path) == [
             AssemblywrightMacBridgeSupervisor.healthPath,
             AssemblywrightMacBridgeSupervisor.featureConveyorPath,
-            AssemblywrightMacBridgeSupervisor.ownerControlPath
+            AssemblywrightMacBridgeSupervisor.ownerControlPath,
+            AssemblywrightMacBridgeSupervisor.assemblyLinePath
         ])
         #expect(await relay.epochs == [141])
         await supervisor.stop()
@@ -4413,6 +4471,45 @@ struct DeveloperBridgeTests {
         }
     }
 
+    @Test("Signed-helper buffering reserves the strict Assembly Line projection bound")
+    func appHelperSnapshotAssemblyLineBufferBoundary() throws {
+        #expect(
+            AssemblywrightDeveloperBridgeProcessLifecycle.maximumAssemblyLineSnapshotBytes
+                == AssemblywrightMacAssemblyLineOwnerProjection.maximumBytes
+        )
+        #expect(
+            AssemblywrightDeveloperBridgeProcessLifecycle.maximumLineBytes
+                == AssemblywrightDeveloperBridgeProcessLifecycle.maximumLegacySnapshotBytes
+                    + AssemblywrightMacAssemblyLineOwnerProjection.maximumBytes
+        )
+        let valid = authenticatedSnapshotData(connectionEpoch: 24)
+        let paddingCount =
+            AssemblywrightDeveloperBridgeProcessLifecycle.maximumLineBytes - valid.count
+        let boundary = Data(repeating: 0x20, count: paddingCount) + valid
+        #expect(boundary.count == AssemblywrightDeveloperBridgeProcessLifecycle.maximumLineBytes)
+        #expect(
+            try AssemblywrightDeveloperBridgeProcessLifecycle.status(from: boundary).phase
+                == .connected
+        )
+        #expect(throws: AssemblywrightDeveloperBridgeProcessError.invalidSnapshot) {
+            try AssemblywrightDeveloperBridgeProcessLifecycle.status(
+                from: Data([0x20]) + boundary
+            )
+        }
+
+        let legacy = Data(
+            #"{"phase":"backing_off","device_id":"22222222-2222-4222-8222-222222222222","master_endpoint":"100.64.23.14:7792","consecutive_failures":1,"next_delay_ms":1000,"error_code":"connection_failed"}"#.utf8
+        )
+        let legacyOversized = Data(
+            repeating: 0x20,
+            count: AssemblywrightDeveloperBridgeProcessLifecycle.maximumLegacySnapshotBytes
+                + 1 - legacy.count
+        ) + legacy
+        #expect(throws: AssemblywrightDeveloperBridgeProcessError.invalidSnapshot) {
+            try AssemblywrightDeveloperBridgeProcessLifecycle.status(from: legacyOversized)
+        }
+    }
+
     @MainActor
     @Test("App helper lifecycle is default inert and owns at most one helper")
     func appHelperLifecycleIsDefaultInertAndSingleOwner() async {
@@ -5752,6 +5849,698 @@ struct DeveloperBridgeTests {
                 + "offline_error=\(evidence.offlineError)"
         )
     }
+
+    @Test("Assembly Line projection rejects malformed, duplicate, and oversized documents")
+    func assemblyLineProjectionStrictDecoding() throws {
+        let valid = validAssemblyLineProjectionData()
+        let decoded = try AssemblywrightMacAssemblyLineOwnerProjection.decodeStrict(valid)
+        #expect(decoded.assemblyLine.autoRun)
+        #expect(decoded.repositories.isEmpty)
+        #expect(decoded.queue.isEmpty)
+
+        var extra = try #require(JSONSerialization.jsonObject(with: valid) as? [String: Any])
+        extra["legacy_feature_conveyor"] = [:]
+        #expect(throws: AssemblywrightMacAssemblyLineError.invalidProjection) {
+            try AssemblywrightMacAssemblyLineOwnerProjection.decodeStrict(
+                JSONSerialization.data(withJSONObject: extra, options: [.sortedKeys])
+            )
+        }
+        #expect(throws: AssemblywrightMacAssemblyLineError.invalidProjection) {
+            try AssemblywrightMacAssemblyLineOwnerProjection.decodeStrict(
+                Data(#"{"schema_version":1,"schema_version":1}"#.utf8)
+            )
+        }
+        #expect(throws: AssemblywrightMacAssemblyLineError.invalidProjection) {
+            try AssemblywrightMacAssemblyLineOwnerProjection.decodeStrict(
+                valid + Data(repeating: 0x20, count: 256 * 1_024)
+            )
+        }
+    }
+
+    @Test("Nonempty Assembly Line helper projections preserve lowercase UUIDs on round trip")
+    func assemblyLineProjectionLowercaseUUIDRoundTrip() throws {
+        let source = validAssemblyLineProjectionData(
+            emergencyPaused: true,
+            emergencyPauseRevision: 2
+        )
+        let projection = try AssemblywrightMacAssemblyLineOwnerProjection.decodeStrict(source)
+        let encoded = try JSONEncoder().encode(projection)
+        let text = try #require(String(data: encoded, encoding: .utf8))
+
+        #expect(!text.contains("AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"))
+        #expect(!text.contains("BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB"))
+        #expect(!text.contains("CCCCCCCC-CCCC-4CCC-8CCC-CCCCCCCCCCCC"))
+        #expect(!text.contains("DDDDDDDD-DDDD-4DDD-8DDD-DDDDDDDDDDDD"))
+        #expect(try AssemblywrightMacAssemblyLineOwnerProjection.decodeStrict(encoded) == projection)
+        try AssemblywrightMacAssemblyLineOwnerControl.validateHelperOutput(
+            action: .projectDraft,
+            requestData: projectDraftRequestData(projection: source),
+            responseData: encoded
+        )
+    }
+
+    @Test("Emergency pause permits an authoritative stopped inert Assembly Line")
+    func assemblyLineEmergencyPauseAcceptsStoppedInertState() throws {
+        var object = try #require(
+            JSONSerialization.jsonObject(
+                with: validAssemblyLineProjectionData(
+                    emergencyPaused: true,
+                    emergencyPauseRevision: 2
+                )
+            ) as? [String: Any]
+        )
+        var state = try #require(object["assembly_line"] as? [String: Any])
+        state["lifecycle"] = "stopped"
+        state["session_id"] = NSNull()
+        state["active_child_epoch_id"] = NSNull()
+        state["active_feature_id"] = NSNull()
+        object["assembly_line"] = state
+        var queue = try #require(object["queue"] as? [[String: Any]])
+        queue[0]["lifecycle"] = "queued"
+        object["queue"] = queue
+
+        let projection = try AssemblywrightMacAssemblyLineOwnerProjection.decodeStrict(
+            JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        )
+        #expect(projection.emergencyPaused)
+        #expect(projection.assemblyLine.lifecycle == .stopped)
+        #expect(projection.assemblyLine.activeFeatureID == nil)
+        #expect(projection.queue.first?.lifecycle == .queued)
+    }
+
+    @Test("Planning mutation preflights, posts, and postflights one authenticated session")
+    func assemblyLinePlanningUsesOneSession() async throws {
+        let prior = validAssemblyLineProjectionData(ownerControlRevision: 1)
+        let post = validAssemblyLineProjectionData(ownerControlRevision: 2)
+        let request = projectDraftRequestData(projection: prior)
+        let session = FakeAssemblyLinePlanningSession(responses: [
+            .init(status: 200, body: prior),
+            .init(status: 200, body: post),
+            .init(status: 200, body: post)
+        ])
+
+        let output = try await AssemblywrightMacAssemblyLineOwnerControl.perform(
+            action: .projectDraft,
+            requestData: request,
+            using: session
+        )
+
+        #expect(output == post)
+        #expect(await session.requests.map(\.method) == ["GET", "POST", "GET"])
+        #expect(await session.requests.map(\.path) == [
+            AssemblywrightMacBridgeSupervisor.assemblyLinePath,
+            "/v1/distributed/assembly-line/project-drafts",
+            AssemblywrightMacBridgeSupervisor.assemblyLinePath
+        ])
+        #expect(await session.cancelled)
+    }
+
+    @Test("Planning rejects stale bindings and accepts only an exact replay")
+    func assemblyLinePlanningStaleAndReplay() async throws {
+        let prior = validAssemblyLineProjectionData(ownerControlRevision: 1)
+        var stale = try #require(
+            JSONSerialization.jsonObject(with: projectDraftRequestData(projection: prior))
+                as? [String: Any]
+        )
+        var catalog = try #require(stale["orchestrator_catalog"] as? [String: Any])
+        catalog["catalog_revision"] = 2
+        stale["orchestrator_catalog"] = catalog
+        let staleSession = FakeAssemblyLinePlanningSession(responses: [
+            .init(status: 200, body: prior)
+        ])
+        await #expect(throws: AssemblywrightMacAssemblyLineError.invalidRequest) {
+            _ = try await AssemblywrightMacAssemblyLineOwnerControl.perform(
+                action: .projectDraft,
+                requestData: JSONSerialization.data(withJSONObject: stale, options: [.sortedKeys]),
+                using: staleSession
+            )
+        }
+        #expect(await staleSession.requests.map(\.path) == [
+            AssemblywrightMacBridgeSupervisor.assemblyLinePath
+        ])
+        #expect(await staleSession.cancelled)
+
+        let replayProjection = validAssemblyLineProjectionData(ownerControlRevision: 2)
+        let exactRequest = projectDraftRequestData(projection: prior)
+        let replaySession = FakeAssemblyLinePlanningSession(responses: [
+            .init(status: 200, body: replayProjection),
+            .init(status: 200, body: replayProjection),
+            .init(status: 200, body: replayProjection)
+        ])
+        _ = try await AssemblywrightMacAssemblyLineOwnerControl.perform(
+            action: .projectDraft,
+            requestData: exactRequest,
+            using: replaySession
+        )
+        #expect(await replaySession.requests.count == 3)
+
+        let driftedResponse = validAssemblyLineProjectionData(ownerControlRevision: 3)
+        let driftSession = FakeAssemblyLinePlanningSession(responses: [
+            .init(status: 200, body: prior),
+            .init(status: 200, body: driftedResponse),
+            .init(status: 200, body: replayProjection)
+        ])
+        await #expect(throws: AssemblywrightMacAssemblyLineError.outcomeUnknown) {
+            _ = try await AssemblywrightMacAssemblyLineOwnerControl.perform(
+                action: .projectDraft,
+                requestData: exactRequest,
+                using: driftSession
+            )
+        }
+    }
+
+    @Test("Planning input failures reap the authenticated session before any request")
+    func assemblyLinePlanningInputFailureCancelsSession() async {
+        let duplicate = Data(
+            #"{"schema_version":1,"schema_version":1}"#.utf8
+        )
+        let oversized = Data(repeating: 0x61, count: 16 * 1_024 + 1)
+
+        for (input, expected) in [
+            (duplicate, AssemblywrightMacAssemblyLineError.invalidRequest),
+            (oversized, AssemblywrightMacAssemblyLineError.requestTooLarge)
+        ] {
+            let session = FakeAssemblyLinePlanningSession(responses: [])
+            await #expect(throws: expected) {
+                _ = try await AssemblywrightMacAssemblyLineOwnerControl.perform(
+                    action: .projectDraft,
+                    requestData: input,
+                    using: session
+                )
+            }
+            #expect(await session.requests.isEmpty)
+            #expect(await session.cancelled)
+        }
+    }
+
+    @Test("Assembly Line helper output binds the fixed request and exact response shape")
+    func assemblyLineHelperOutputExactBinding() throws {
+        let requestID = "11111111-1111-4111-8111-111111111111"
+        let request = try JSONSerialization.data(withJSONObject: [
+            "schema_version": 1,
+            "request_id": requestID,
+            "expected_state_revision": 1,
+            "auto_run": false
+        ], options: [.sortedKeys])
+        let projection = try #require(
+            JSONSerialization.jsonObject(with: validAssemblyLineProjectionData())
+                as? [String: Any]
+        )
+        var state = try #require(projection["assembly_line"] as? [String: Any])
+        state["state_revision"] = 2
+        state["auto_run"] = false
+        let response = try JSONSerialization.data(withJSONObject: [
+            "schema_version": 1,
+            "request_id": requestID,
+            "resulting_state": state
+        ], options: [.sortedKeys])
+        try AssemblywrightMacAssemblyLineOwnerControl.validateHelperOutput(
+            action: .autoRun,
+            requestData: request,
+            responseData: response
+        )
+
+        var drifted = try #require(
+            JSONSerialization.jsonObject(with: response) as? [String: Any]
+        )
+        drifted["request_id"] = "22222222-2222-4222-8222-222222222222"
+        #expect(throws: AssemblywrightMacAssemblyLineError.invalidReceipt) {
+            try AssemblywrightMacAssemblyLineOwnerControl.validateHelperOutput(
+                action: .autoRun,
+                requestData: request,
+                responseData: JSONSerialization.data(
+                    withJSONObject: drifted,
+                    options: [.sortedKeys]
+                )
+            )
+        }
+        #expect(throws: AssemblywrightMacAssemblyLineError.invalidReceipt) {
+            try AssemblywrightMacAssemblyLineOwnerControl.validateHelperOutput(
+                action: .autoRun,
+                requestData: request,
+                responseData: Data(
+                    String(data: response, encoding: .utf8)!.replacingOccurrences(
+                        of: "\"schema_version\":1",
+                        with: "\"schema_version\":1,\"schema_version\":1"
+                    ).utf8
+                )
+            )
+        }
+    }
+
+    @Test("Assembly Line auto-run request is built from the authoritative revision")
+    func assemblyLineAutoRunRequestUsesAuthoritativeRevision() throws {
+        let projection = try AssemblywrightMacAssemblyLineOwnerProjection.decodeStrict(
+            validAssemblyLineProjectionData()
+        )
+        let requestID = UUID(uuidString: "11111111-1111-4111-8111-111111111111")!
+        let data = try AssemblywrightMacAssemblyLineOwnerControl.autoRunRequest(
+            from: projection,
+            enabled: false,
+            requestID: requestID
+        )
+        let object = try #require(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+
+        #expect(Set(object.keys) == [
+            "schema_version", "request_id", "expected_state_revision", "auto_run"
+        ])
+        #expect(object["schema_version"] as? Int == 1)
+        #expect(object["request_id"] as? String == requestID.uuidString.lowercased())
+        #expect(object["expected_state_revision"] as? Int == 1)
+        #expect(object["auto_run"] as? Bool == false)
+    }
+
+    @Test("Pending Assembly Line store is owner-private, strict, hashed, and symlink-safe")
+    func assemblyLinePendingStoreRejectsHostileFiles() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString.lowercased(), isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = AssemblywrightMacAssemblyLinePendingMutationStore(
+            fileURL: root.appendingPathComponent("pending.json")
+        )
+        let projection = try AssemblywrightMacAssemblyLineOwnerProjection.decodeStrict(
+            validAssemblyLineProjectionData()
+        )
+        let request = try AssemblywrightMacAssemblyLineOwnerControl.autoRunRequest(
+            from: projection,
+            enabled: false
+        )
+        let mutation = try AssemblywrightMacPendingAssemblyLinePlanningMutation(
+            action: .autoRun,
+            requestData: request
+        )
+        try store.save(mutation)
+        #expect(try store.load() == mutation)
+        let attributes = try FileManager.default.attributesOfItem(atPath: store.fileURL.path)
+        #expect((attributes[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o644],
+            ofItemAtPath: store.fileURL.path
+        )
+        #expect(throws: AssemblywrightMacAssemblyLinePendingStoreError.unsafeStore) {
+            try store.load()
+        }
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: store.fileURL.path
+        )
+
+        var corrupt = try #require(
+            JSONSerialization.jsonObject(with: Data(contentsOf: store.fileURL))
+                as? [String: Any]
+        )
+        corrupt["request_sha256"] = Array(repeating: UInt8(0x44), count: 32)
+        try JSONSerialization.data(withJSONObject: corrupt, options: [.sortedKeys])
+            .write(to: store.fileURL)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: store.fileURL.path
+        )
+        #expect(throws: AssemblywrightMacAssemblyLinePendingStoreError.unsafeStore) {
+            try store.load()
+        }
+
+        try store.save(mutation)
+        let saved = try String(contentsOf: store.fileURL, encoding: .utf8)
+        let duplicate = saved.replacingOccurrences(
+            of: "\"schema_version\":1",
+            with: "\"schema_version\":1,\"schema_version\":1"
+        )
+        try Data(duplicate.utf8).write(to: store.fileURL)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: store.fileURL.path
+        )
+        #expect(throws: AssemblywrightMacAssemblyLinePendingStoreError.unsafeStore) {
+            try store.load()
+        }
+
+        let target = root.appendingPathComponent("target.json")
+        try store.save(mutation)
+        try FileManager.default.moveItem(at: store.fileURL, to: target)
+        try FileManager.default.createSymbolicLink(at: store.fileURL, withDestinationURL: target)
+        #expect(throws: AssemblywrightMacAssemblyLinePendingStoreError.unsafeStore) {
+            try store.load()
+        }
+        try FileManager.default.removeItem(at: target)
+        #expect(throws: AssemblywrightMacAssemblyLinePendingStoreError.unsafeStore) {
+            try store.load()
+        }
+    }
+
+    @Test("Pending Assembly Line validation rejects Rust-denied secret and path shapes")
+    func assemblyLinePendingStoreSecretParity() throws {
+        let projectionData = validAssemblyLineProjectionData()
+        let projection = try AssemblywrightMacAssemblyLineOwnerProjection.decodeStrict(
+            projectionData
+        )
+        let original = try #require(
+            JSONSerialization.jsonObject(
+                with: projectDraftRequestData(projection: projectionData)
+            ) as? [String: Any]
+        )
+        for idea in [
+            "token=github_pat_forbidden",
+            "embedded GHP_12345678901234567890123456789012",
+            "embedded SK-1234567890abcdefg",
+            "access AKIA1234567890ABCDEF12",
+            "jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.signature1234",
+            "endpoint https://owner:password@example.invalid/path",
+            "read FILE:///tmp/secret",
+            "clone SSH://github.com/owner/repo",
+            "clone git@github.com:owner/repo",
+            "read /private/owner/secret",
+            "client secret = forbidden",
+            "-----BEGIN PRIVATE KEY----- abc"
+        ] {
+            var request = original
+            request["idea"] = idea
+            let data = try JSONSerialization.data(
+                withJSONObject: request,
+                options: [.sortedKeys]
+            )
+            #expect(throws: AssemblywrightMacAssemblyLineError.invalidRequest) {
+                try AssemblywrightMacAssemblyLineOwnerControl.validateRequest(
+                    action: .projectDraft,
+                    requestData: data,
+                    against: projection
+                )
+            }
+            #expect(throws: AssemblywrightMacAssemblyLineError.invalidRequest) {
+                try AssemblywrightMacAssemblyLineOwnerControl.validateStoredRequest(
+                    action: .projectDraft,
+                    requestData: data
+                )
+            }
+        }
+    }
+
+    @MainActor
+    @Test("Ambiguous Assembly Line mutations persist and reconcile only exact bytes")
+    func assemblyLineLifecycleExactReconciliation() async throws {
+        let storeRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString.lowercased(), isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: storeRoot) }
+        let pendingStore = AssemblywrightMacAssemblyLinePendingMutationStore(
+            fileURL: storeRoot.appendingPathComponent("pending.json")
+        )
+        let line = authenticatedSnapshotData(connectionEpoch: 202)
+        let first = FakeBridgeProcessSession(lines: [line])
+        let restarted = FakeBridgeProcessSession(lines: [line])
+        let projection = try AssemblywrightMacAssemblyLineOwnerProjection.decodeStrict(
+            validAssemblyLineProjectionData()
+        )
+        let request = try AssemblywrightMacAssemblyLineOwnerControl.autoRunRequest(
+            from: projection,
+            enabled: false,
+            requestID: UUID(uuidString: "11111111-1111-4111-8111-111111111111")!
+        )
+        let launcher = FakeBridgeProcessLauncher(
+            session: first,
+            restartSession: restarted,
+            commandResponse: autoRunAssemblyLineReceiptData(request: request),
+            commandFailures: 1
+        )
+        let lifecycle = AssemblywrightDeveloperBridgeProcessLifecycle(
+            configuration: .init(environment: [
+                AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
+                    "/tmp/assemblywright-mac-bridge",
+                AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
+                    "ABCDEFGHIJ"
+            ]),
+            validator: FakeBridgeExecutableValidator(),
+            launcher: launcher,
+            assemblyLinePendingMutationStore: pendingStore
+        )
+        lifecycle.start()
+        for _ in 0 ..< 100 where lifecycle.status.assemblyLine == nil { await Task.yield() }
+
+        await lifecycle.performAssemblyLinePlanningAction(.autoRun, requestData: request)
+        for _ in 0 ..< 100 where await launcher.launchCount < 2 { await Task.yield() }
+        #expect(lifecycle.pendingAssemblyLinePlanningAction == .autoRun)
+        #expect(lifecycle.ownerActionErrorCode == "assembly_line_reconciliation_required")
+
+        let blocked = try AssemblywrightMacAssemblyLineOwnerControl.autoRunRequest(
+            from: projection,
+            enabled: false,
+            requestID: UUID(uuidString: "22222222-2222-4222-8222-222222222222")!
+        )
+        await lifecycle.performAssemblyLinePlanningAction(.autoRun, requestData: blocked)
+        #expect(await launcher.commands.count == 1)
+        #expect(lifecycle.ownerActionErrorCode == "assembly_line_reconciliation_required")
+
+        await lifecycle.reconcilePendingAssemblyLinePlanningMutation()
+        for _ in 0 ..< 100 where await launcher.launchCount < 3 { await Task.yield() }
+        let commands = await launcher.commands
+        #expect(commands.count == 2)
+        #expect(commands[0].0 == AssemblywrightMacAssemblyLinePlanningAction.autoRun.helperArguments)
+        #expect(commands[1].0 == commands[0].0)
+        #expect(commands[0].1 == request)
+        #expect(commands[1].1 == request)
+        #expect(lifecycle.pendingAssemblyLinePlanningAction == nil)
+        #expect(lifecycle.ownerActionErrorCode == nil)
+        await lifecycle.stop()
+    }
+
+    @MainActor
+    @Test("Proven pre-effect helper rejection clears pending and permits an edited retry")
+    func assemblyLineLifecyclePreEffectRejectionClearsRecovery() async throws {
+        let storeRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString.lowercased(), isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: storeRoot) }
+        let pendingStore = AssemblywrightMacAssemblyLinePendingMutationStore(
+            fileURL: storeRoot.appendingPathComponent("pending.json")
+        )
+        let line = authenticatedSnapshotData(connectionEpoch: 204)
+        let projection = try AssemblywrightMacAssemblyLineOwnerProjection.decodeStrict(
+            validAssemblyLineProjectionData()
+        )
+        let rejected = try AssemblywrightMacAssemblyLineOwnerControl.autoRunRequest(
+            from: projection,
+            enabled: false,
+            requestID: UUID(uuidString: "11111111-1111-4111-8111-111111111111")!
+        )
+        let edited = try AssemblywrightMacAssemblyLineOwnerControl.autoRunRequest(
+            from: projection,
+            enabled: false,
+            requestID: UUID(uuidString: "22222222-2222-4222-8222-222222222222")!
+        )
+        let launcher = FakeBridgeProcessLauncher(
+            session: FakeBridgeProcessSession(lines: [line]),
+            restartSession: FakeBridgeProcessSession(lines: [line]),
+            commandResponse: autoRunAssemblyLineReceiptData(request: edited),
+            commandErrors: [.commandRejectedBeforeEffect]
+        )
+        let lifecycle = AssemblywrightDeveloperBridgeProcessLifecycle(
+            configuration: .init(environment: [
+                AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
+                    "/tmp/assemblywright-mac-bridge",
+                AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
+                    "ABCDEFGHIJ"
+            ]),
+            validator: FakeBridgeExecutableValidator(),
+            launcher: launcher,
+            assemblyLinePendingMutationStore: pendingStore
+        )
+        lifecycle.start()
+        for _ in 0 ..< 100 where lifecycle.status.assemblyLine == nil { await Task.yield() }
+
+        await lifecycle.performAssemblyLinePlanningAction(.autoRun, requestData: rejected)
+        for _ in 0 ..< 100 where await launcher.launchCount < 2 { await Task.yield() }
+        #expect(lifecycle.pendingAssemblyLinePlanningAction == nil)
+        #expect(lifecycle.ownerActionErrorCode == "assembly_line_action_rejected")
+        #expect(!FileManager.default.fileExists(atPath: pendingStore.fileURL.path))
+
+        await lifecycle.performAssemblyLinePlanningAction(.autoRun, requestData: edited)
+        let commands = await launcher.commands
+        #expect(commands.count == 2)
+        #expect(commands[0].1 == rejected)
+        #expect(commands[1].1 == edited)
+        #expect(lifecycle.pendingAssemblyLinePlanningAction == nil)
+        #expect(lifecycle.ownerActionErrorCode == nil)
+        await lifecycle.stop()
+    }
+
+    @MainActor
+    @Test("Cancelled post-stdin Assembly Line command retains exact reconciliation action")
+    func assemblyLineLifecycleCancellationRetainsRecovery() async throws {
+        let storeRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString.lowercased(), isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: storeRoot) }
+        let pendingStore = AssemblywrightMacAssemblyLinePendingMutationStore(
+            fileURL: storeRoot.appendingPathComponent("pending.json")
+        )
+        let line = authenticatedSnapshotData(connectionEpoch: 203)
+        let projection = try AssemblywrightMacAssemblyLineOwnerProjection.decodeStrict(
+            validAssemblyLineProjectionData()
+        )
+        let request = try AssemblywrightMacAssemblyLineOwnerControl.autoRunRequest(
+            from: projection,
+            enabled: false
+        )
+        let launcher = FakeBridgeProcessLauncher(
+            session: FakeBridgeProcessSession(lines: [line]),
+            restartSession: FakeBridgeProcessSession(lines: [line]),
+            commandResponse: autoRunAssemblyLineReceiptData(request: request),
+            commandDelay: .seconds(30)
+        )
+        let lifecycle = AssemblywrightDeveloperBridgeProcessLifecycle(
+            configuration: .init(environment: [
+                AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
+                    "/tmp/assemblywright-mac-bridge",
+                AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
+                    "ABCDEFGHIJ"
+            ]),
+            validator: FakeBridgeExecutableValidator(),
+            launcher: launcher,
+            assemblyLinePendingMutationStore: pendingStore
+        )
+        lifecycle.start()
+        for _ in 0 ..< 100 where lifecycle.status.assemblyLine == nil { await Task.yield() }
+
+        let operation = Task {
+            await lifecycle.performAssemblyLinePlanningAction(.autoRun, requestData: request)
+        }
+        for _ in 0 ..< 100 where await launcher.commands.isEmpty { await Task.yield() }
+        operation.cancel()
+        await operation.value
+        for _ in 0 ..< 100 where await launcher.launchCount < 2 { await Task.yield() }
+
+        #expect(lifecycle.pendingAssemblyLinePlanningAction == .autoRun)
+        #expect(lifecycle.ownerActionErrorCode == "assembly_line_reconciliation_required")
+        #expect(await launcher.commands.first?.1 == request)
+        await lifecycle.stop()
+
+        let recoveredLauncher = FakeBridgeProcessLauncher(
+            session: FakeBridgeProcessSession(lines: [line]),
+            commandResponse: autoRunAssemblyLineReceiptData(request: request)
+        )
+        let recovered = AssemblywrightDeveloperBridgeProcessLifecycle(
+            configuration: .init(environment: [
+                AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
+                    "/tmp/assemblywright-mac-bridge",
+                AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
+                    "ABCDEFGHIJ"
+            ]),
+            validator: FakeBridgeExecutableValidator(),
+            launcher: recoveredLauncher,
+            assemblyLinePendingMutationStore: pendingStore
+        )
+        #expect(recovered.pendingAssemblyLinePlanningAction == .autoRun)
+        #expect(recovered.ownerActionErrorCode == "assembly_line_reconciliation_required")
+        await recovered.reconcilePendingAssemblyLinePlanningMutation()
+        #expect(await recoveredLauncher.commands.first?.1 == request)
+        #expect(recovered.pendingAssemblyLinePlanningAction == nil)
+        #expect(!FileManager.default.fileExists(atPath: pendingStore.fileURL.path))
+        await recovered.stop()
+    }
+
+    @Test("Assembly Line helper argv is closed and excludes execution controls")
+    func assemblyLineHelperArgumentAllowlist() async {
+        let arguments = AssemblywrightMacAssemblyLinePlanningAction.allCases.map(\.helperArguments)
+        #expect(Set(arguments.map { $0.joined(separator: "\u{0}") }).count == 6)
+        #expect(arguments.allSatisfy { $0.last == "--confirm" && $0.first == "assembly-line" })
+        #expect(arguments.flatMap { $0 }.allSatisfy {
+            !["start", "stop", "emergency-pause", "url", "path", "body"].contains($0)
+        })
+        await #expect(throws: AssemblywrightDeveloperBridgeProcessError.invalidSnapshot) {
+            _ = try await FoundationAssemblywrightDeveloperBridgeProcessLauncher().runCommand(
+                executable: AssemblywrightDeveloperBridgeValidatedExecutable(
+                    executableURL: URL(fileURLWithPath: "/bin/false"),
+                    teamIdentifier: "ABCDEFGHIJ",
+                    codeRequirement: "anchor apple generic",
+                    cdHash: Data(repeating: 0x11, count: 20)
+                ),
+                arguments: ["assembly-line", "start", "--confirm"],
+                input: Data("{}".utf8)
+            )
+        }
+    }
+
+    @Test("Assembly Line signed-helper exit dispositions preserve the effect boundary")
+    func assemblyLineHelperExitDispositionBoundary() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString.lowercased(), isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let projection = try AssemblywrightMacAssemblyLineOwnerProjection.decodeStrict(
+            validAssemblyLineProjectionData()
+        )
+        let request = try AssemblywrightMacAssemblyLineOwnerControl.autoRunRequest(
+            from: projection,
+            enabled: false
+        )
+        let launcher = FoundationAssemblywrightDeveloperBridgeProcessLauncher(
+            runningProcessValidator: FakeBridgeRunningProcessValidator()
+        )
+
+        for (name, exitStatus, expected) in [
+            (
+                "rejected",
+                AssemblywrightMacAssemblyLineHelperExitStatus.rejectedBeforeEffect,
+                AssemblywrightDeveloperBridgeProcessError.commandRejectedBeforeEffect
+            ),
+            (
+                "unknown",
+                AssemblywrightMacAssemblyLineHelperExitStatus.outcomeUnknown,
+                AssemblywrightDeveloperBridgeProcessError.commandOutcomeUnknown
+            )
+        ] {
+            let executable = root.appendingPathComponent(name)
+            let script = "#!/bin/sh\n/bin/cat >/dev/null\nexit \(exitStatus)\n"
+            try Data(script.utf8).write(to: executable, options: .atomic)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: executable.path
+            )
+            let validated = AssemblywrightDeveloperBridgeValidatedExecutable(
+                executableURL: executable,
+                teamIdentifier: "ABCDEFGHIJ",
+                codeRequirement: "anchor apple generic",
+                cdHash: Data(repeating: 0x11, count: 20)
+            )
+            await #expect(throws: expected) {
+                _ = try await launcher.runCommand(
+                    executable: validated,
+                    arguments: AssemblywrightMacAssemblyLinePlanningAction.autoRun.helperArguments,
+                    input: request
+                )
+            }
+        }
+    }
+
+    @Test("Assembly Line observation failure never substitutes the legacy conveyor")
+    func assemblyLineObservationDoesNotUseLegacyConveyor() async {
+        let session = FakeSupervisorSession(
+            connectionEpoch: 201,
+            outcomes: [.response(.init(status: 200, body: validRemoteHealthData()))],
+            assemblyLineOutcome: .response(.init(status: 200, body: Data("{}".utf8)))
+        )
+        let relay = FakeBridgeEventRelay(routingMode: .fixture)
+        let supervisor = AssemblywrightMacBridgeSupervisor(
+            profile: staleFixtureProfile(),
+            connector: FakeSupervisorConnector(sessions: [session]),
+            eventRelay: relay
+        )
+
+        let snapshot = await supervisor.sample()
+
+        #expect(snapshot.phase == .backingOff)
+        #expect(snapshot.errorCode == "invalid_assembly_line")
+        #expect(snapshot.featureConveyor == nil)
+        #expect(snapshot.assemblyLine == nil)
+        #expect(await relay.epochs.isEmpty)
+        #expect(await session.requests.map(\.path) == [
+            AssemblywrightMacBridgeSupervisor.healthPath,
+            AssemblywrightMacBridgeSupervisor.featureConveyorPath,
+            AssemblywrightMacBridgeSupervisor.ownerControlPath,
+            AssemblywrightMacBridgeSupervisor.assemblyLinePath
+        ])
+        #expect(await session.cancelled)
+    }
 }
 
 private struct FixtureJobDocuments {
@@ -6684,6 +7473,153 @@ private func pausedFeatureConveyorData() -> Data {
     )
 }
 
+private func validAssemblyLineProjectionData(
+    emergencyPaused: Bool = false,
+    emergencyPauseRevision: UInt64 = 0,
+    ownerControlRevision: UInt64 = 1,
+    autoRun: Bool = true
+) -> Data {
+    let profile: [String: Any] = [
+        "configuration_revision": 1,
+        "provider_id": "openai.codex",
+        "model_id": "gpt-5.6-sol"
+    ]
+    let profileData = try! JSONSerialization.data(
+        withJSONObject: profile,
+        options: [.sortedKeys, .withoutEscapingSlashes]
+    )
+    let profileDigest = Array(SHA256.hash(data: profileData))
+    var catalog: [String: Any] = [
+        "schema_version": 1,
+        "catalog_revision": 1,
+        "profiles": [profile],
+        "default_profile_sha256": profileDigest
+    ]
+    let catalogData = try! JSONSerialization.data(
+        withJSONObject: catalog,
+        options: [.sortedKeys, .withoutEscapingSlashes]
+    )
+    catalog["catalog_sha256"] = Array(SHA256.hash(data: catalogData))
+    let component: [String: Any] = [
+        "binding_revision": 1,
+        "binding_sha256": Array(repeating: UInt8(0x44), count: 32),
+        "status": "unavailable",
+        "unavailable_reason": "not_configured"
+    ]
+    var repositories: [[String: Any]] = []
+    var queue: [[String: Any]] = []
+    var state: [String: Any] = [
+        "schema_version": 1,
+        "state_revision": 1,
+        "queue_revision": 0,
+        "queue_count": 0,
+        "auto_run": autoRun,
+        "lifecycle": "stopped",
+        "session_id": NSNull(),
+        "active_child_epoch_id": NSNull(),
+        "active_feature_id": NSNull()
+    ]
+    if emergencyPaused {
+        let repositoryID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+        let featureID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        repositories = [[
+            "schema_version": 1,
+            "repository": [
+                "repository_id": repositoryID,
+                "git_url": ["url": "https://github.com/owner/project"]
+            ],
+            "repository_revision": 1,
+            "lifecycle_revision": 1,
+            "visibility": "public",
+            "approved_specification_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+            "approved_specification_revision": 1,
+            "approved_specification_sha256": Array(repeating: UInt8(0x11), count: 32),
+            "owner_approval_sha256": Array(repeating: UInt8(0x22), count: 32),
+            "lifecycle": "created",
+            "effect_possible": true,
+            "creation_evidence_sha256": Array(repeating: UInt8(0x33), count: 32)
+        ]]
+        queue = [[
+            "schema_version": 1,
+            "feature_id": featureID,
+            "repository_id": repositoryID,
+            "specification_id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+            "specification_revision": 1,
+            "specification_sha256": Array(repeating: UInt8(0x55), count: 32),
+            "owner_approval_sha256": Array(repeating: UInt8(0x66), count: 32),
+            "position": 1,
+            "lifecycle_revision": 1,
+            "lifecycle": "emergency_paused"
+        ]]
+        state["queue_revision"] = 1
+        state["queue_count"] = 1
+        state["lifecycle"] = "emergency_paused"
+        state["session_id"] = "11111111-1111-4111-8111-111111111111"
+        state["active_child_epoch_id"] = "22222222-2222-4222-8222-222222222222"
+        state["active_feature_id"] = featureID
+    }
+    let object: [String: Any] = [
+        "schema_version": 1,
+        "owner_control_revision": ownerControlRevision,
+        "emergency_pause_revision": emergencyPauseRevision,
+        "emergency_paused": emergencyPaused,
+        "orchestrator_catalog": catalog,
+        "repositories": repositories,
+        "queue": queue,
+        "assembly_line": state,
+        "availability": [
+            "schema_version": 1,
+            "availability_revision": 1,
+            "observed_at_ms": 1,
+            "brainstorming_provider": component,
+            "github_creation": component,
+            "windows_executor": component,
+            "mac_executor": component,
+            "protected_brokers": component
+        ]
+    ]
+    return try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+}
+
+private func projectDraftRequestData(projection: Data) -> Data {
+    let owner = try! JSONSerialization.jsonObject(with: projection) as! [String: Any]
+    let catalog = owner["orchestrator_catalog"] as! [String: Any]
+    let profiles = catalog["profiles"] as! [[String: Any]]
+    let request: [String: Any] = [
+        "schema_version": 1,
+        "draft_id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        "draft_revision": 1,
+        "repository": [
+            "repository_id": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+            "git_url": ["url": "https://github.com/owner/new-project"]
+        ],
+        "visibility": "public",
+        "orchestrator_catalog": catalog,
+        "orchestrator": profiles[0],
+        "idea": "Create a bounded planning-only project"
+    ]
+    return try! JSONSerialization.data(
+        withJSONObject: request,
+        options: [.sortedKeys, .withoutEscapingSlashes]
+    )
+}
+
+private func autoRunAssemblyLineReceiptData(request: Data) -> Data {
+    let requestObject = try! JSONSerialization.jsonObject(with: request) as! [String: Any]
+    let projection = try! JSONSerialization.jsonObject(
+        with: validAssemblyLineProjectionData()
+    ) as! [String: Any]
+    var state = projection["assembly_line"] as! [String: Any]
+    state["state_revision"] =
+        (requestObject["expected_state_revision"] as! NSNumber).uint64Value + 1
+    state["auto_run"] = requestObject["auto_run"] as! Bool
+    return try! JSONSerialization.data(withJSONObject: [
+        "schema_version": 1,
+        "request_id": requestObject["request_id"] as! String,
+        "resulting_state": state
+    ], options: [.sortedKeys])
+}
+
 private func authenticatedSnapshotData(
     connectionEpoch: UInt64,
     maintenanceActive: Bool = false,
@@ -6691,7 +7627,8 @@ private func authenticatedSnapshotData(
     masterStatus: String? = nil,
     featureConveyor: Data = validFeatureConveyorData(),
     ownerControl: Data? = nil,
-    localModelSelection: Data? = nil
+    localModelSelection: Data? = nil,
+    assemblyLine: Data? = nil
 ) -> Data {
     let featureObject = try! JSONSerialization.jsonObject(with: featureConveyor)
     let guidance = (featureObject as? [String: Any])?["owner_guidance"] as? [String: Any]
@@ -6714,7 +7651,13 @@ private func authenticatedSnapshotData(
         "protocol_version": 5,
         "schema_version": 18,
         "feature_conveyor": featureObject,
-        "owner_control": ownerObject
+        "owner_control": ownerObject,
+        "assembly_line": try! JSONSerialization.jsonObject(
+            with: assemblyLine ?? validAssemblyLineProjectionData(
+                emergencyPaused: emergencyPaused,
+                emergencyPauseRevision: guidance?["emergency_pause_revision"] as? UInt64 ?? 0
+            )
+        )
     ]
     if let localModelSelection {
         object["local_model_selection"] = try! JSONSerialization.jsonObject(
@@ -6734,6 +7677,7 @@ private func localCodingAuthenticatedSnapshotData(connectionEpoch: UInt64) -> Da
     ) as! [String: Any]
     object.removeValue(forKey: "feature_conveyor")
     object.removeValue(forKey: "owner_control")
+    object.removeValue(forKey: "assembly_line")
     return try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
 }
 

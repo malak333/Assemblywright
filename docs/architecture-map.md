@@ -1,5 +1,47 @@
 # Architecture Map
 
+## Approved full-machine Assembly Line target
+
+The current Windows master is protocol v5/schema v20. Schema v20 adds an inert
+Assembly Line planning lane while retaining every legacy schema-v19 Feature Conveyor
+meaning. The approved replacement target is specified in
+`docs/full-machine-assembly-line-design.md`; partial planning implementation grants no
+execution authority. Cutover still requires contained production provider and GitHub
+adapters, execution
+control, signed broker containment on both hosts, native hostile-boundary and recovery
+E2E, deployment, and owner-recorded live evidence.
+
+Full-machine target phase: partial implementation; protocol-v5/schema-v20 inert planning and presentation exist; execution runtime remains unavailable.
+
+```mermaid
+flowchart LR
+  UI["New Project / New Feature disabled; queue + auto-run authoritative"] --> MacCore["Strict MacCore projection/mutation and exact-replay recovery"]
+  MacCore --> Master["Implemented Windows schema-v20 inert planning routes"]
+  Master --> Intent["creation_pending intent; no GitHub effect"]
+  Master --> FIFO["Created + evidence gated FIFO; no dispatch"]
+  Master --> AutoRun["Default-on replay-safe CAS setting; no execution"]
+  Seam["Catalog-bound coordinator + private fake tests only"] -.-> Master
+  Brainstorm["Production planning provider unavailable"] -.-> Seam
+  GitHub["Production GitHub creation unavailable"] -.-> Seam
+  Line["Start / Stop / Emergency routes absent"] -.-> Epoch["No session or child epoch issued"]
+  Epoch -.-> WinExecutor["Windows executor unavailable"]
+  Epoch -.-> MacExecutor["Mac executor unavailable"]
+  WinExecutor -.-> WinBroker["Protected broker unavailable"]
+  MacExecutor -.-> MacBroker["Protected broker unavailable"]
+  WinBroker -.-> Effects["No full-machine effects"]
+  MacBroker -.-> Effects
+  Protected["Protected control plane, keys, audit, enforcement, reservations"] -. "deny before effect" .-> WinBroker
+  Protected -. "deny before effect" .-> MacBroker
+```
+
+The strict protocol defines the eventual orchestrator, session, child-epoch, control,
+termination, and broker-bound records, but types are not runtime availability. The
+current master persists only effect-free planning state. The simplified SwiftUI view
+consumes the MacCore owner projection and submits only the exact replay-safe auto-run
+mutation; ambiguous outcomes survive restart and expose an explicit reconciliation
+action. No current route starts, stops, pauses, executes, brokers, invokes a planning
+provider, or creates a GitHub repository.
+
 ## Local model selection boundary
 
 - SwiftUI `Models` presents four cards: Mac MLX selectable, local coding fixed,

@@ -14,6 +14,59 @@ release requirements, not optional UX guidance.
   to execute side effects.
 - Ambiguity fails closed. A blocked state names one exact next owner action.
 
+The approved full-machine Assembly Line is only partially implemented and is not
+current execution authority. Protocol v5 and master schema v20 now contain strict
+contracts plus effect-free inert planning persistence/routes. Schema v20 preserves
+the legacy schema-v19 Feature Conveyor grant, activation, queue, and restricted-worker
+semantics. No planning record, `creation_pending` repository, feature enqueue,
+auto-run setting, legacy activation, or owner-control receipt widens a worker to the
+target scope.
+
+Full-machine target phase: partial implementation; protocol-v5/schema-v20 inert planning and presentation exist; execution runtime remains unavailable.
+
+The inert planning slice additionally requires:
+
+- New Project visibility defaults to Public and may be changed to Private before
+  approval. Approval records `creation_pending` intent without calling GitHub or
+  marking an external effect possible.
+- A feature draft, frozen specification, and enqueue require an exact repository in
+  `created` state with creation evidence. `creation_pending` never satisfies this gate.
+- Auto-run defaults on and its only current mutation is an exact replay-safe,
+  compare-and-set state change. It creates no session, child epoch, dispatch, or effect.
+- A catalog-bound planning/GitHub coordinator is exercised only with injected fake
+  adapters. Production brainstorming-provider execution and GitHub creation remain
+  unavailable. The Mac UI may submit only exact auto-run CAS/reconciliation;
+  Start/Stop/Emergency effect routes, executors, and brokers are unavailable. Every
+  runtime-availability component must report `unavailable` until separately proven.
+
+For the approved target, these additional rules are release requirements:
+
+- The planning orchestrator is schema-bound and planning-only. Provider output never
+  creates a repository, enqueues a feature, starts the line, or authorizes an effect.
+- Owner approval is required after brainstorming and before GitHub repository creation
+  or feature enqueue. Starting a nonempty Assembly Line is the sole execution approval;
+  it binds one Windows-issued session and one active child feature epoch at a time.
+- Functional full-machine access is brokered. Feature execution must never receive a
+  raw administrator/root token or run arbitrary code as SYSTEM, root, master, or broker.
+- The Assemblywright control plane is the sole protected exception to full-machine
+  scope. Unknown actions, protected targets, privilege escalation, control-plane
+  mutation, untracked delegation, and broker identity drift reject before effect.
+- Audit intent precedes every possible external effect. Audit is same-transition,
+  structurally redacted, and records identities, effect class, target metadata,
+  result, checkpoint, and digests—never raw secrets, credentials, provider prose,
+  process output, or file contents.
+- Stop admits no new step, reaches the next declared durable checkpoint within its
+  bounded window, terminates tracked descendants, and preserves resume state.
+  Emergency Pause terminates tracked executor processes immediately and preserves the
+  last durable checkpoint; neither action claims rollback of completed durable effects.
+- An effect-possible interruption resumes automatically only when its versioned adapter
+  proves an exact reconciliation predicate. Otherwise it enters
+  `reconciliation_required`; no blind retry or auto-run advancement is permitted.
+- Auto-run defaults on but advances only after exact implementation, validation,
+  independent review, protected publication, and final-main verification success.
+  Failure, cancellation, incomplete termination, host loss, ambiguity, or rejected
+  evidence stops advancement.
+
 ## Risk Tiers
 
 | Tier | Meaning | Default behavior |
@@ -1163,6 +1216,10 @@ These are blocked unless `DESIGN.md` is revised and tests prove the new policy:
   Git publication credentials.
 - Reintroducing a general-purpose assistant surface: conversation runtime,
   model routing, plugins, personal memory, scheduling, voice, or trusted wake.
+- Claiming New Project repository creation, planning-only brainstorming,
+  full-machine execution, broker protection, Assembly Line Start/Stop, or default-on
+  auto-run advancement as available before the approved target's complete cutover
+  evidence. The inert default-on CAS setting alone is not advancement.
 
 ## Regression Tests
 

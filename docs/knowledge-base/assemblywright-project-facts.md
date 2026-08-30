@@ -205,6 +205,77 @@ an old one.
   audited. Signing, notarization, live-device QA, and the final evidence bundle
   remain.
 
+## Approved Full-Machine Assembly Line Target
+
+Full-machine target phase: partial implementation; protocol-v5/schema-v20 inert planning and presentation exist; execution runtime remains unavailable.
+
+- The approved simple entry points are New Project, New Feature, and Assembly Line.
+  The owner-facing repository identity is a canonical GitHub URL; Windows retains an
+  immutable internal identity mapped to it.
+- New Project defaults to Public, permits Private before approval, and creates the
+  GitHub repository only after schema-bound brainstorming and owner review/approval.
+  New Feature uses the same planning-only workflow and owner approval before enqueue.
+- Orchestrators are explicitly provisioned provider/model pairs, defaulting to
+  `openai.codex` / `gpt-5.6-sol`, with no fallback. They plan only and receive no
+  execution authority or restricted machine data. This is a built-in typed workflow,
+  not restoration of the removed conversation or plugin runtime.
+- Starting a nonempty Assembly Line is the execution approval. Auto-run defaults on,
+  only one feature is active, and advancement requires exact validation, independent
+  review, publication, and final-main verification success.
+- Full-machine effects across the registered Windows and Mac hosts are functional,
+  brokered authority, not a raw administrator/root token. The protected Assemblywright
+  control plane—master/broker identities and code, IPC/configuration, authority data
+  and backups, audit, tokens/keys, trust/update roots, enforcement state, and reserved
+  enforcement resources—is the sole scope exception and rejects mutation before effect.
+- Stop checkpoint-then-terminates tracked executor processes. Emergency Pause
+  terminates them immediately. Both preserve the last durable checkpoint, and neither
+  claims rollback of completed durable services or external effects. Effect ambiguity
+  requires exact adapter reconciliation or owner resolution; it is never blindly retried.
+- This is approved target architecture with only an inert planning foundation. The
+  current protocol-v5/schema-v20 master preserves schema-v19 restricted-worker grants,
+  queues, and activation meanings until native hostile-boundary tests, deployment, and
+  owner-recorded two-host evidence complete an explicit execution cutover.
+
+## Schema-v20 Inert Assembly Line Planning Foundation
+
+- `assemblywright-protocol` keeps protocol version 5 and adds independent strict
+  schema-v1 types for canonical GitHub URL identity, orchestrator-catalog binding,
+  brainstorming drafts/frozen specifications/owner approval, repository lifecycle,
+  FIFO projection, default-on auto-run, sessions/child epochs, control receipts, and
+  termination evidence. A valid type is not proof that its runtime component exists.
+- The Windows master migrates backup-first from schema 19 to schema 20 and preserves
+  every legacy Feature Conveyor table and meaning. New Assembly Line tables and
+  authenticated owner/designated-Mac routes persist planning state only; they do not
+  write legacy dispatch/effect tables.
+- New Project defaults to Public, permits a frozen Private choice, and records
+  `creation_pending` after owner approval. This is effect-free intent: GitHub is not
+  called, `effect_possible` is false, and no creation evidence exists.
+- New Feature authoring and queue insertion require the exact repository lifecycle to
+  be `created` and creation evidence to be present. A test-only database transition is
+  used to exercise that downstream gate; it is not a production GitHub completion
+  writer. Accepted features append FIFO and do not dispatch work.
+- Auto-run defaults on. The only implemented mutation is exact replay-safe CAS against
+  the state revision. Start, Stop, and Emergency Pause routes are deliberately absent,
+  so the setting cannot create a session, child epoch, or executor effect.
+- The owner projection reports brainstorming provider, GitHub creation, Windows
+  executor, Mac executor, and protected brokers as `unavailable`. The Mac has strict
+  projection/mutation transport and a simplified New Project/New Feature/Assembly Line
+  view. The queue and auto-run setting are authoritative; auto-run uses durable exact
+  signed-helper reconciliation. Brainstorming and execution actions remain disabled.
+- The master library has a Windows-catalog-bound, idempotent planning/GitHub
+  coordinator with private fake-adapter unit tests. It is not connected to HTTP/runtime
+  startup and no credential-owning production adapter is installed.
+- The native loopback HTTP E2E drives an exact Private project draft through frozen
+  brainstorming specification and owner approval, replays that approval without a
+  second mutation, observes `creation_pending` with no GitHub evidence, and proves a
+  feature draft is rejected with a fixed redacted response until exact creation
+  evidence exists. The Windows-only mTLS E2E separately proves that only the
+  designated Mac bridge can reach the distributed planning surface.
+- Repository tests do not prove live Windows migration/deployment, provider calls,
+  GitHub creation through a production adapter, live Windows execution of the Mac
+  owner action, signed/notarized Mac behavior,
+  executors, privileged brokers, termination, full-machine effects, or two-host proof.
+
 ## Current Crate Boundaries
 
 - `assemblywright-protocol` — versioned, bounded wire contracts. No I/O, no state.

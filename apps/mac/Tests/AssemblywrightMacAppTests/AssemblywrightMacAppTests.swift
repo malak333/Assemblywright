@@ -6,6 +6,121 @@ import Testing
 @MainActor
 @Suite("Assemblywright Mac app presentation")
 struct AssemblywrightMacAppTests {
+    @Test("Simple owner flow defaults to Public and auto-run")
+    func simpleOwnerFlowDefaults() {
+        let presentation = AssemblyLineOwnerPresentation()
+
+        #expect(presentation.projectVisibility == .public)
+        #expect(presentation.autoRun)
+        #expect(!presentation.autoRunControlEnabled)
+        #expect(AssemblyLineProjectVisibility.allCases == [.public, .private])
+    }
+
+    @Test("Simple owner flow uses canonical GitHub URLs")
+    func simpleOwnerFlowCanonicalizesGitHubURLs() throws {
+        let canonical = try #require(
+            CanonicalGitHubRepositoryURL("HTTPS://GitHub.com/Owner/Project.git")
+        )
+        #expect(canonical.value == "https://github.com/owner/project")
+        #expect(
+            CanonicalGitHubRepositoryURL("https://github.com/Owner/Project/")?.value
+                == "https://github.com/owner/project"
+        )
+        #expect(CanonicalGitHubRepositoryURL("git@github.com:owner/project.git") == nil)
+        #expect(CanonicalGitHubRepositoryURL("https://example.com/owner/project") == nil)
+        #expect(CanonicalGitHubRepositoryURL("https://github.com/owner") == nil)
+        #expect(CanonicalGitHubRepositoryURL("https://github.com/owner/project/issues") == nil)
+        #expect(CanonicalGitHubRepositoryURL("https://github.com/owner/project?token=value") == nil)
+    }
+
+    @Test("Simple owner flow exposes only the three primary areas")
+    func simpleOwnerFlowLabelsExcludeLegacyAuthoringFields() {
+        let sectionLabels = [
+            AssemblyLineOwnerPresentation.newProjectTitle,
+            AssemblyLineOwnerPresentation.newFeatureTitle,
+            AssemblyLineOwnerPresentation.assemblyLineTitle
+        ]
+        #expect(sectionLabels == ["New Project", "New Feature", "Assembly Line"])
+
+        let ownerActions = [
+            AssemblyLineOwnerPresentation.brainstormProjectLabel,
+            AssemblyLineOwnerPresentation.brainstormFeatureLabel,
+            AssemblyLineOwnerPresentation.startLabel,
+            AssemblyLineOwnerPresentation.stopLabel,
+            AssemblyLineOwnerPresentation.emergencyPauseLabel,
+            AssemblyLineOwnerPresentation.recoveryLabel
+        ]
+            .joined(separator: " ")
+            .lowercased()
+        for legacyAction in ["activate feature conveyor", "cancel active", "abandon", "approve and enqueue"] {
+            #expect(!ownerActions.contains(legacyAction))
+        }
+    }
+
+    @Test("Pending Assembly Line mutation exposes exact-retry recovery and blocks conflicts")
+    func simpleOwnerFlowPendingRecovery() throws {
+        let presentation = AssemblyLineOwnerPresentation(
+            pendingPlanningAction: .autoRun
+        )
+
+        #expect(presentation.recoveryRequired)
+        #expect(presentation.recoveryStatus?.contains("exact saved request") == true)
+        #expect(!presentation.autoRunControlEnabled)
+        #expect(AssemblyLineOwnerPresentation.recoveryLabel == "Retry Exact Pending Action")
+
+        let viewURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/AssemblywrightMacApp/AssemblyLineOwnerView.swift")
+        let source = try String(contentsOf: viewURL, encoding: .utf8)
+        #expect(source.contains("reconcilePendingAssemblyLinePlanningMutation"))
+        #expect(source.contains("assembly-line-reconcile-pending"))
+    }
+
+    @Test("Developer details is a read-only projection of observed diagnostics")
+    func simpleOwnerDeveloperDiagnosticsContent() {
+        let diagnostics = AssemblyLineDeveloperDiagnosticsPresentation(
+            status: AssemblywrightDeveloperBridgeAppStatus(
+                phase: .connected,
+                masterEndpoint: "100.64.23.14:7792",
+                connectionEpoch: 45,
+                featureConveyor: featureConveyorStatus()
+            )
+        )
+
+        #expect(diagnostics.bridge == "Connected")
+        #expect(diagnostics.master == "100.64.23.14:7792")
+        #expect(diagnostics.connectionEpoch == "45")
+        #expect(diagnostics.statusCode == nil)
+        #expect(diagnostics.queue == "0 queued · 0 visible")
+
+        let _: AssemblyLineDeveloperDiagnosticsView = .init(presentation: diagnostics)
+    }
+
+    @Test("Simple owner actions remain unavailable and Start also requires a feature")
+    func simpleOwnerFlowFailsClosedUntilWindowsSupportExists() throws {
+        var presentation = AssemblyLineOwnerPresentation()
+        #expect(!presentation.hasQueuedFeature)
+        #expect(!presentation.canStart)
+        #expect(presentation.startReason == "Add at least one feature to start")
+        #expect(!presentation.canStop)
+        #expect(!presentation.canEmergencyPause)
+
+        presentation.queuedFeatures = [
+            AssemblyLineQueuedFeaturePresentation(
+                id: UUID(),
+                title: "First feature",
+                repositoryURL: try #require(
+                    CanonicalGitHubRepositoryURL("https://github.com/owner/project")
+                )
+            )
+        ]
+        #expect(presentation.hasQueuedFeature)
+        #expect(!presentation.canStart)
+        #expect(presentation.startReason == AssemblyLineOwnerPresentation.executionUnavailableReason)
+    }
+
     @Test("Models presentation exposes one selectable lane and three fixed states")
     func modelsPresentationIsBounded() {
         let active = AssemblywrightMacLocalModelConfiguration(
