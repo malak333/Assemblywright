@@ -1,15 +1,27 @@
-# Full-Machine Assembly Line Design Proposal
+# Full-Machine Assembly Line Design
 
-Status: blocked draft; not accepted architecture or implementation authority
+Status: approved target; partial inert planning implementation; execution and live evidence pending; current master is protocol-v5/schema-v20
 
-This document preserves owner-requested product intent for future design work.
-It does not amend `DESIGN.md`, `docs/safety-rules.md`, protocol contracts, or the
-current bounded executor. Its structured review records an unresolved blocker:
-literal machine-wide authority on the Windows control host can bypass the master,
-audit, credentials, and pause enforcement. No UI or runtime may claim or grant the
-authority described below unless that conflict is resolved in an accepted design,
-implemented with fail-closed boundaries, and proven through the required native and
-live evidence.
+This document is the approved replacement target and preserves its required safety
+exception. Strict protocol contracts, schema-v20 Windows inert planning
+persistence/routes, a private-test planning-effect coordinator, MacCore transport, and
+a simplified authoritative queue/auto-run Mac UI are implemented. They do not replace
+the bounded executor or grant execution
+authority. The owner approved one
+exception to literal full-machine access:
+Assemblywright's control plane, audit, signing keys, and executor-enforcement
+components remain inaccessible to feature execution.
+
+Full-machine target phase: partial implementation; protocol-v5/schema-v20 inert planning and presentation exist; execution runtime remains unavailable.
+
+The current planning lane is effect-free. Project approval defaults to Public unless
+Private was frozen and records only `creation_pending`; GitHub is not called. Feature
+enqueue requires an exact `created` repository with creation evidence and never
+dispatches work. Auto-run defaults on and supports only an exact replay-safe CAS
+setting change. The auto-run UI uses exact signed-helper replay with durable recovery.
+Production brainstorming-provider execution, GitHub creation/reconciliation,
+Start/Stop/Emergency routes, executors, and brokers are unavailable,
+and the owner projection reports every runtime component as `unavailable`.
 
 ## Understanding Summary
 
@@ -24,7 +36,7 @@ live evidence.
 - An owner-approved feature is appended to the Windows-authoritative FIFO queue.
 - Starting the assembly line grants a signed local executor autonomous full-machine
   authority across the registered Windows and Mac hosts. There are no per-action
-  approval prompts while that execution epoch remains active.
+  approval prompts while that execution epoch remains valid.
 - Only one feature is active. Auto-run defaults on and advances only after complete
   implementation, validation, independent review, publication, and final-main
   verification. Stop and Emergency Pause preserve resumable durable state.
@@ -33,13 +45,16 @@ live evidence.
 
 Full-machine authority includes file reads and writes, process execution, network,
 credentials, system configuration, destructive operations, and external effects on
-both registered machines. It belongs only to the signed local executor. It never
+both registered machines, except for the protected Assemblywright control plane. It
+belongs only to the signed local executor and its privileged action brokers. It never
 belongs to the planning orchestrator.
 
 The owner grants this authority by starting a nonempty assembly line. The grant is
-bound to one Windows-issued execution epoch, the designated Windows and Mac
-executors, the queue revision, and the active feature. An executor must stop when the
-epoch, designation, connection, or feature binding becomes invalid.
+bound to one Windows-issued assembly-line session. Each active feature receives one
+narrower child execution epoch bound to the designated Windows and Mac executors,
+queue revision, and feature lifecycle. Auto-run may derive the next child epoch only
+from the same active owner-started session after exact prior-feature success. An
+executor must stop when either binding becomes invalid.
 
 ## User Experience
 
@@ -57,6 +72,9 @@ credentials to create the repository, initialize `main`, record the internal
 repository identity and canonical URL, and retain the approved brainstorming digest.
 An ambiguous GitHub response is reconciled against the exact owner, repository,
 visibility, and request digest before any retry.
+Pre-effect URL, ownership, authentication, or provider failure shows one bounded
+reason with **Edit** and **Retry**. An effect-possible GitHub response shows
+**Reconcile creation** and never offers a blind retry.
 
 ### New Feature
 
@@ -65,6 +83,9 @@ visibility, and request digest before any retry.
 3. Run the same structured brainstorming workflow.
 4. Review the generated feature specification.
 5. Approve and Add to Assembly Line.
+
+A rejected or unavailable brainstorming attempt keeps the editable idea and displays
+one bounded reason with **Edit** and **Retry**. It creates no feature.
 
 The normal UI does not expose UUIDs, grant revisions, raw evidence digests, allowed
 paths, or validation-obligation fields. Full-machine scope is explicit. Testing,
@@ -77,12 +98,16 @@ evidence remain available under diagnostics.
 - Start is disabled while the queue is empty.
 - Auto-run defaults on and can be disabled before or during execution.
 - With auto-run on, a fully successful feature advances to the next queue item.
-- With auto-run off, success leaves the next item queued until Start.
+- With auto-run off, success ends the active execution epoch and enters
+  `waiting_for_owner_start`; the UI shows **Start next feature**.
 - Stop reaches the next declared durable checkpoint, terminates remaining executor
   processes, and preserves the feature for resume.
 - Emergency Pause immediately terminates active executor processes and preserves the
   last durable checkpoint for later resume. It does not impose a separate network
   shutdown or automatic quarantine rule.
+- Closed owner-visible recovery states are `stopping`, `paused_at_checkpoint`,
+  `emergency_paused`, `waiting_for_host_reconnect`, `reconciliation_required`, and
+  `incomplete_termination`; each renders one exact next action.
 
 ## Components And Data Flow
 
@@ -108,11 +133,66 @@ enqueue request.
 
 ### Full-Machine Executor
 
-The executor is a distinct signed runtime rather than a widening of the planning
-orchestrator. It runs locally on both registered hosts and accepts work only for the
-current Windows-issued execution epoch. All child processes belong to a boundedly
-terminable process tree. Checkpoints commit before and after externally effectful
-steps so restart can distinguish completed, not-started, and effect-possible work.
+The executor is a distinct signed unprivileged runtime rather than a widening of the
+planning orchestrator. A separately signed privileged action broker runs on each
+host. The executor has no raw administrator/root token; functional full-machine
+authority is exercised through the broker, whose fixed deny boundary protects the
+master service and database, audit, signing keys, broker identity/configuration, and
+pause/epoch enforcement.
+
+Every action uses a versioned envelope containing action and feature identities,
+session and child epochs, action type, target identities, command or operation
+digest, working-directory identity, environment-key names without values, effect
+classification, deadline, cancellation behavior, and one adapter-owned
+reconciliation strategy. The broker rejects unknown action types or any protected
+control-plane target before effect. Generic shell processes receive a stripped token
+and protected-control-plane ACL denial; operations that require privilege use typed
+broker adapters.
+
+All directly launched processes belong to a boundedly terminable Windows Job Object
+or macOS process group. Privileged adapters are closed operations; they never accept
+an executable, script, interpreter input, command line, service body, scheduled-task
+body, dynamic library, or plugin selected by a feature. Arbitrary code never runs as
+SYSTEM, root, the master identity, or the broker identity.
+
+A feature may install durable executable software only under the restricted feature
+execution identity. Its immutable executable digest, fixed arguments, environment-key
+allowlist, service/task identity, and protected-control-plane denial profile are
+recorded before activation. That identity cannot modify the broker/master services,
+their configuration or update paths, authority state, audit, trust roots, or reserved
+resources. The completed durable effect is not claimed to be an executor process and
+Stop or Emergency Pause does not roll it back. Untracked process delegation is
+rejected. Checkpoints commit before and after externally effectful steps.
+
+### Protected Control Plane And Broker TCB
+
+The protected closure includes the master and broker process identities, binaries,
+service definitions, IPC endpoints, configuration, database and backups, audit,
+owner-control tokens, signing and encryption keys, code-signing trust roots, release
+evidence, update/install staging, enforcement policy, execution-session state, and
+the CPU, memory, process, and disk reservation needed to observe and enforce pause.
+
+On Windows, the master and broker use dedicated service SIDs and LocalSystem-owned
+ordinary single-link storage whose ACL excludes the feature execution identity. The
+feature identity receives no administrator group membership, ownership, backup,
+restore, debug, driver, impersonation, service-control-manager, task-scheduler,
+security-policy, audit-policy, or trusted-installer privilege. Closed broker adapters
+may perform a bounded system change but may not change the protected closure or grant
+one of those privileges. Durable feature services and tasks run only as the restricted
+feature identity and never as SYSTEM or a privileged account.
+
+On macOS, the broker is a separately signed root launch daemon with root-owned
+non-writable code and state. The feature executor uses a dedicated unprivileged
+identity. It receives no entitlement, authorization right, task port, Full Disk
+Access database mutation, launchd-system-domain mutation, security-policy mutation,
+or code-signing bypass that could alter the protected closure. Closed root adapters
+reject executable or script input and cannot install privileged persistent code.
+
+Master/broker installation or update is an owner-run stopped-service ceremony from an
+exact signed release and is unavailable to feature execution. Broker and master keep
+reserved process slots, a bounded private state volume/quota, and memory/CPU priority
+outside executor job limits. Exhausting unreserved host resources may fail a feature,
+but cannot authorize it to consume or rewrite the reservation.
 
 ## Failure And Recovery
 
@@ -124,8 +204,10 @@ steps so restart can distinguish completed, not-started, and effect-possible wor
   checkpoint.
 - A disconnect pauses the feature. Resume requires both hosts to bind the same current
   execution epoch and checkpoint.
-- Completed checkpointed actions are not repeated. Effect-possible actions are
-  reconciled against external state before continuing.
+- Completed checkpointed actions are not repeated. An effect-possible action resumes
+  automatically only when its versioned adapter defines and satisfies an exact
+  reconciliation predicate. Otherwise the feature enters `reconciliation_required`
+  for owner resolution; no per-action prompt is added to normal execution.
 - Auto-run never advances after failure, incomplete validation, rejected review,
   ambiguous publication, or failed final-main verification.
 
@@ -141,9 +223,23 @@ and execution records remain separate.
 - Scale: one owner, two registered machines, one active feature, at most 100 queued or
   active features.
 - Reliability: durable intent before possible external effect; exact reconciliation;
-  no blind retry; checkpointed resume.
-- Responsiveness: local UI state changes are immediate; process termination uses a
-  bounded graceful-to-forced shutdown and reports incomplete termination.
+  no blind retry; checkpointed resume; backup-first migration with verified rollback
+  before the new schema becomes authoritative.
+- Responsiveness: authenticated local state changes appear in the UI within one
+  second of receipt. Stop permits at most five seconds to reach a declared checkpoint,
+  then allows five seconds for graceful termination and five seconds for forced
+  termination. Any survivor enters `incomplete_termination`.
+- Provider budget: a brainstorming attempt accepts at most 16 KiB of owner input,
+  produces at most 64 KiB of strict specification output, makes at most three provider
+  calls, and allows at most 15 minutes per call. There is no automatic provider retry
+  or fallback.
+- Persistence budget: retained brainstorming, checkpoint, and action metadata is
+  capped at 1 MiB per feature excluding SQLite indexes; raw process output and file
+  content are not retained. Audit retention remains durable and owner-managed.
+- Resource boundary: executor processes may consume host resources, but broker and
+  master reservations must retain sufficient process, memory, and disk capacity to
+  observe Stop and Emergency Pause. Exhaustion that defeats the reservation fails the
+  feature and blocks resume until health is restored.
 - Security: planning has no execution authority; execution authority is explicit,
   epoch-bound, revocable, and auditable even though its granted scope is machine-wide.
 - Maintainability: strict versioned protocol types, database migrations, native Rust
@@ -155,12 +251,17 @@ and execution records remain separate.
   orchestrator, queue-empty Start gating, auto-run default/toggle, Stop, and Emergency
   Pause presentation.
 - Rust unit and kernel tests cover URL identity mapping, public/private creation
-  intent, brainstorming freeze/approval, execution epochs, single-active FIFO,
+  intent, brainstorming freeze/approval, execution epochs, single-feature FIFO,
   auto-run advancement, checkpoint resume, stale-epoch rejection, and redacted audit.
 - Native process E2E uses disposable Mac and Windows fixtures to prove process-tree
   termination, checkpoint recovery, cross-host epoch binding, GitHub adapter
   reconciliation, and one-at-a-time advancement. It must not use real destructive
   machine-wide operations as repository-gate evidence.
+- Hostile native broker tests attempt direct and indirect protected-file mutation,
+  ACL/ownership takeover, trust-root or updater replacement, SYSTEM/root service and
+  task creation, child detachment, remote/untracked delegation, reparse/symlink
+  substitution, broker identity drift, and resource-reservation exhaustion. Every
+  attempt must fail before effect and leave the control plane healthy and auditable.
 - Live Windows service, GitHub creation, signed executors, and Mac/Windows full-machine
   operation remain separately owner-recorded evidence.
 
@@ -177,15 +278,65 @@ and execution records remain separate.
 | One active FIFO with auto-run on by default | Parallel features; manual-only advancement | Matches the assembly-line mental model and preserves serial repository authority. |
 | Stop checkpoints; Emergency Pause terminates processes | Always quarantine; network kill switch | Owner selected resumable termination without a separate network shutdown or quarantine policy. |
 | Structurally redacted audit | Raw transcripts and file contents | Records accountability without retaining secrets or content. |
+| Protect the Assemblywright control plane | Literal access to the enforcement substrate | Owner approved the sole exception required for Windows authority, audit, Stop, and Emergency Pause to remain enforceable. |
+| Broker full-machine effects through versioned actions | Give the worker a raw administrator/root token | Brokered access preserves functional machine authority while protecting the control plane and producing actionable provenance. |
 
 ## Known Architecture Changes
 
-This design deliberately replaces the current restricted-worker execution policy and
-requires accepted revisions to `DESIGN.md`, `docs/safety-rules.md`, the protocol,
-Windows schema and routes, the Mac app/helper, executor containment and recovery,
-GitHub provisioning, release evidence, and native E2E. Until those changes and their
-evidence are complete, the existing bounded implementation remains authoritative and
-the new UI must not claim full-machine execution readiness.
+This design deliberately targets replacement of the current restricted-worker
+execution policy. The target documentation, versioned protocol contracts, backup-first
+schema-v20 inert planning persistence/routes, private-test planning-effect coordinator,
+MacCore planning transport, and simplified authoritative queue/auto-run Mac UI exist.
+Implementation still requires contained production brainstorming and GitHub adapters,
+Start/Stop/Emergency effect routes, executor containment and recovery,
+privileged brokers, release evidence, and native hostile/live E2E. Until those changes
+and their evidence are complete, the existing bounded executor remains authoritative
+and the new UI must not claim full-machine execution readiness.
+
+## Implementation And Evidence Phases
+
+The target lands as gated slices. Completion of an earlier phase never implies the
+authority or proof of a later phase:
+
+1. **Contract acceptance:** canonical design, safety, architecture, knowledge, build,
+   and drift documents agree on the target and current/target boundary. This phase
+   is complete and changes no runtime authority.
+2. **Versioned authority foundation:** protocol types, strict action envelopes,
+   repository-URL identity, brainstorming and GitHub intents, assembly-line sessions,
+   child epochs, checkpoints, redacted audit, and backup-first schema migration land
+   with negative-path and compatibility tests. The strict protocol contract and
+   backup-first schema-v20 inert planning subset are implemented. No session, child
+   epoch, action envelope, termination, executor, broker, or external effect is issued.
+3. **Planning and creation:** allowlisted planning-only brainstorming, frozen owner
+   approval, and idempotent GitHub creation/reconciliation land. Strict storage,
+   approval routes, and a catalog-bound private-test coordinator exist, but contained
+   production provider invocation and GitHub effects are pending;
+   project approval therefore remains `creation_pending`. This authorizes no execution
+   and exposes no restricted machine data to a cloud route.
+4. **Broker containment:** signed unprivileged executors and privileged brokers land on
+   Windows and Mac with the complete protected closure, closed adapters, restricted
+   durable execution identity, resource reservations, cancellation, and hostile native
+   tests. Repository tests are not signed or deployed-host proof.
+5. **Assembly Line control:** the simplified UI, queue-empty Start denial, default-on
+   auto-run, single-active child epochs, Stop, Emergency Pause, reconnect, resume, and
+   reconciliation states land with native cross-process E2E. The current UI observes
+   the authoritative queue and performs only the default-on CAS auto-run setting with
+   exact restart-safe reconciliation; brainstorming and Start/Stop/Emergency remain
+   disabled and the effect routes are absent. Full-machine
+   activation remains default-off.
+6. **Cutover and live evidence:** exact signed releases are deployed through the
+   owner-only stopped-service ceremony. Windows migration/rollback, GitHub creation,
+   signed brokers, protected-control-plane denial, termination, checkpoint recovery,
+   and real two-host operation are owner-recorded. Only then may the owner explicitly
+   activate the new authority and may the UI claim it is available.
+
+Compatibility is fail-closed. The protocol-v5/schema-v20 master preserves existing
+schema-v19 grants, activation evidence, queue rows, and restricted-worker leases with
+their old meanings. A new
+binary may migrate only exact supported state; records without an unambiguous target
+mapping remain inert for owner reconciliation. The forward schema must be rejected by
+old binaries. No legacy activation, queue receipt, or owner-control designation may be
+interpreted as an Assembly Line session or full-machine grant.
 
 ## Structured Review Log
 
@@ -195,11 +346,11 @@ Disposition: changes required.
 
 | Objection | Resolution status | Rationale |
 | --- | --- | --- |
-| A full-access Windows executor can rewrite the master, database, audit, credentials, and pause enforcement, collapsing Windows authority. | Unresolved blocker | Literal access to the enforcement substrate cannot coexist with an independently authoritative, fail-closed master on that same substrate. |
-| Arbitrary privileged work can escape a terminable process tree through services, scheduled tasks, remote delegation, or supervisor replacement. | Accepted | The design cannot claim revocation or Emergency Pause coverage without an enforceable delegation boundary. |
-| Arbitrary irreversible effects do not always have an exact reconciliation predicate. | Accepted | The generic resume promise is too broad; effect-possible steps without an exact adapter-owned reconciliation contract must stop for owner resolution. |
-| Auto-run changes queue and feature bindings, invalidating a single feature-bound epoch. | Accepted | Start must authorize a bounded assembly-line session, while each feature receives a narrower child epoch derived from that owner-started session. |
-| The executor has no strict executable action/provenance contract. | Accepted | A versioned action envelope, provenance rules, interception boundary, and adapter-specific reconciliation contract are required before execution. |
+| A full-access Windows executor can rewrite the master, database, audit, credentials, and pause enforcement, collapsing Windows authority. | Resolved | Owner approved a protected-control-plane exception; the unprivileged executor uses a signed broker that denies those targets. |
+| Arbitrary privileged work can escape a terminable process tree through services, scheduled tasks, remote delegation, or supervisor replacement. | Resolved | Direct children are job/process-group bound; durable system effects require typed actions and are explicitly outside process-termination claims. |
+| Arbitrary irreversible effects do not always have an exact reconciliation predicate. | Resolved | Only adapter-defined exact predicates permit automatic reconciliation; all other ambiguity enters owner resolution without retry. |
+| Auto-run changes queue and feature bindings, invalidating a single feature-bound epoch. | Resolved | One owner-started line session derives a separate child epoch for each feature after exact predecessor success. |
+| The executor has no strict executable action/provenance contract. | Resolved | The design now defines a versioned action envelope and signed privileged broker interception boundary. |
 
 ### Constraint Guardian
 
@@ -207,10 +358,10 @@ Disposition: changes required.
 
 | Objection | Resolution status | Rationale |
 | --- | --- | --- |
-| Machine-wide authority makes authority and redacted audit self-bypassable on the Windows control host. | Unresolved blocker | Confirms the skeptic's P0 finding. |
-| Stop and Emergency Pause cannot cover services, scheduled tasks, remote delegation, or a replaced supervisor. | Accepted | Termination claims must be limited to actions created through an enforceable executor boundary. |
-| Recovery and provenance remain undefined for arbitrary actions. | Accepted | Execution must be rejected unless a versioned action type defines launch, audit, cancellation, and reconciliation semantics. |
-| Performance, resource, provider-cost, retention, checkpoint-growth, and migration-rollback limits are not measurable. | Accepted | Numeric budgets and rollback criteria are required in the final design and tests. |
+| Machine-wide authority makes authority and redacted audit self-bypassable on the Windows control host. | Resolved | The owner-approved exception and broker boundary deny the protected control plane. |
+| Stop and Emergency Pause cannot cover services, scheduled tasks, remote delegation, or a replaced supervisor. | Resolved | Claims are limited to broker-launched processes; durable effects are typed, audited, and never described as terminated or rolled back. |
+| Recovery and provenance remain undefined for arbitrary actions. | Resolved | Unknown action types reject; every allowed action defines provenance, cancellation, and reconciliation semantics. |
+| Performance, resource, provider-cost, retention, checkpoint-growth, and migration-rollback limits are not measurable. | Resolved | The design now includes explicit input/output/call/time/storage/termination budgets and backup-first rollback. |
 
 ### User Advocate
 
@@ -221,3 +372,24 @@ Disposition: changes required.
 | Auto-run off leaves the visible on/off and authorization state ambiguous. | Accepted | The UI must enter `waiting_for_owner_start` after success, show `Start next feature`, and create a new feature execution epoch under the still-configured but inactive line. |
 | Recovery states and next owner actions are not visible. | Accepted | The Assembly Line must render closed states for stopping, checkpoint-paused, emergency-paused, host-reconnect wait, reconciliation-required, and incomplete termination. |
 | Brainstorming and creation failure recovery is undefined. | Accepted | Each pre-effect failure must show a bounded reason plus Edit and Retry; URL conflict and effect-possible GitHub creation must use exact reconciliation or owner resolution rather than a blind retry. |
+
+### Integrator / Arbiter, Revision 1
+
+Disposition: revision required.
+
+| Objection | Resolution status | Rationale |
+| --- | --- | --- |
+| Typed persistent services or tasks could still run arbitrary elevated code, escape the process tree, and indirectly alter the protected control plane. | Resolved in revision 2; re-arbitration pending | Privileged adapters are now closed non-executable operations. Arbitrary durable code runs only as the restricted feature identity under a recorded control-plane denial profile. |
+| The protected TCB did not name its identities, storage, service configuration, trust/update roots, reservations, or hostile proof. | Resolved in revision 2; re-arbitration pending | The design now defines the complete protected closure, per-platform identities and privilege exclusions, owner-only update ceremony, resource reservation, and hostile native test matrix. |
+
+### Integrator / Arbiter, Revision 2
+
+Disposition: APPROVED.
+
+The arbiter accepted the closed privileged-adapter contract, restricted durable
+execution identity, complete protected-control-plane closure, per-platform privilege
+exclusions, owner-only update ceremony, resource reservations, and hostile native
+verification matrix. Approval is architectural only. The current bounded runtime
+remains authoritative. The inert schema-v20 planning migration does not complete the
+provider, GitHub, live UI wiring, control-route, executor, broker, deployment, or
+owner-recorded live-evidence phases required for execution cutover.

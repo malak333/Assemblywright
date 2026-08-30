@@ -8,6 +8,24 @@ accepted designs and take precedence within their scope:
 - [`docs/distributed-developer-mode-design.md`](docs/distributed-developer-mode-design.md)
   — the accepted authority, security, routing, recovery, and rollout target for
   distributed Developer Mode.
+- [`docs/full-machine-assembly-line-design.md`](docs/full-machine-assembly-line-design.md)
+  — the approved replacement target for New Project, New Feature, and the
+  protected-control-plane full-machine executor. Its inert planning foundation
+  is partially implemented; execution and live evidence remain pending.
+
+Current/target boundary: protocol v5 and master schema v20 are current. Schema v20
+adds strict full-machine Assembly Line protocol contracts plus effect-free Windows
+planning persistence and authenticated planning routes; it preserves the legacy
+schema-v19 Feature Conveyor grant, queue, activation, and restricted-worker
+semantics unchanged. The simplified Mac surface consumes the strict owner projection
+and can change auto-run through restart-safe exact signed-helper reconciliation.
+Brainstorming and GitHub coordinator seams exist only behind injected fake adapters;
+production provider execution, GitHub creation/reconciliation,
+Start/Stop/Emergency effect routes, executors, brokers, activation, deployment, and
+owner-recorded evidence are unavailable. Design or planning approval does not widen
+an existing worker or authorize the UI to claim full-machine readiness.
+
+Full-machine target phase: partial implementation; protocol-v5/schema-v20 inert planning and presentation exist; execution runtime remains unavailable.
 
 ## Understanding Summary
 
@@ -59,6 +77,38 @@ accepted designs and take precedence within their scope:
   Developer Mode and are not planned.
 
 ## Architecture
+
+The approved next architecture keeps Windows as the sole durable authority but
+replaces manual repository onboarding and restricted feature execution only after
+its gated cutover. A canonical GitHub URL becomes the owner-facing repository
+identity. New Project and New Feature use one explicitly selected, allowlisted,
+planning-only orchestrator to produce a frozen specification. Owner approval is
+required before GitHub repository creation or queue insertion. Starting a nonempty
+Assembly Line creates the execution grant; auto-run defaults on and derives at most
+one active feature epoch at a time.
+
+Full-machine effects are performed by signed, unprivileged local executors through
+separately signed privileged brokers on Windows and Mac. The sole scope exception is
+the protected Assemblywright control plane: master and broker identities, binaries,
+service definitions, IPC, configuration, authority databases and backups, audit,
+tokens and keys, trust/update roots, enforcement state, and enforcement resource
+reservations are never feature targets. The planning orchestrator receives neither
+machine-write authority nor restricted data. Until this complete target is activated,
+the current restricted local-coding boundary below remains unchanged.
+
+The implemented schema-v20 slice is deliberately inert. Project approval records an
+effect-free `creation_pending` intent (Public by default, with Private selectable) and
+does not call GitHub. A feature can enter the new FIFO only after the repository is
+`created` with creation evidence. Auto-run is stored as default-on and may be changed
+through a compare-and-set request, but it cannot start work. Every runtime component
+in the Assembly Line availability projection is `unavailable`, and no Start, Stop, or
+Emergency Pause effect route exists.
+
+The master library also contains a catalog-bound, idempotent planning-effect
+coordinator exercised only through private fake-adapter unit tests. It records pre-call intent,
+requires exact reconciliation, and remains disconnected from HTTP/runtime startup.
+No credential-owning production provider or GitHub adapter is installed, so runtime
+availability remains `unavailable` and the corresponding UI actions remain disabled.
 
 ### Owner-confirmed local model selection
 

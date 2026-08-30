@@ -2,10 +2,14 @@ use assemblywright_protocol::{
     feature_conveyor_publication_request_binding_sha256,
     feature_conveyor_publication_required_checks_sha256,
     feature_conveyor_review_request_binding_sha256,
-    feature_conveyor_validation_request_binding_sha256, AttemptId, CancellationAcknowledgement,
-    CancellationId, CancellationInstruction, CapabilityDescriptor, ContextHandlingPolicy, DeviceId,
-    DeviceRole, DistributedEvent, DistributedEventBatch, DistributedEventBatchRequest,
-    DistributedEventCursor, DistributedEventKind, FeatureConveyorActivationBlocker,
+    feature_conveyor_validation_request_binding_sha256, AssemblyLineAutoRunReceipt,
+    AssemblyLineAutoRunRequest, AssemblyLineLifecycleState, AssemblyLineOwnerProjection,
+    AssemblyLineRepositoryIdentity, AssemblyLineRuntimeAvailabilityProjection, AssemblyLineState,
+    AttemptId, BrainstormingOwnerApprovalBinding, BrainstormingTargetKind,
+    CancellationAcknowledgement, CancellationId, CancellationInstruction, CapabilityDescriptor,
+    ContextHandlingPolicy, DeviceId, DeviceRole, DistributedEvent, DistributedEventBatch,
+    DistributedEventBatchRequest, DistributedEventCursor, DistributedEventKind,
+    FeatureBrainstormingDraft, FeatureConveyorActivationBlocker,
     FeatureConveyorActivationEvidenceAdmissionProjection,
     FeatureConveyorActivationEvidenceAdmissionReceipt,
     FeatureConveyorActivationEvidenceAdmissionRequest, FeatureConveyorActivationEvidenceCategory,
@@ -31,19 +35,24 @@ use assemblywright_protocol::{
     FeatureConveyorReviewGatewayRequest, FeatureConveyorReviewGatewayStatus,
     FeatureConveyorReviewPacket, FeatureConveyorReviewProviderOutput,
     FeatureConveyorValidationCommandId, FeatureConveyorValidationGateReceipt,
-    FeatureConveyorValidationGateRequest, FeatureConveyorValidationGateStatus, HandshakeRequest,
-    HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope, JobResultStatus, LeaseId,
-    LocalCodingJobRequest, LocalCodingJobResult, LocalCodingResultArtifactAdmission,
-    LocalCodingResultArtifactReceipt, LocalCodingSnapshotChunkRequest,
-    LocalModelSelectionProjection, LocalModelSelectionReceipt, LocalModelSelectionRequest,
-    LocalModelSelectionStatus, ProtocolError, Sensitivity, StepId, TaskId,
-    CANCELLATION_ACK_DEADLINE_MS, FEATURE_CONVEYOR_ORCHESTRATION_SCHEMA_VERSION,
+    FeatureConveyorValidationGateRequest, FeatureConveyorValidationGateStatus,
+    FeatureQueueEntryProjection, FeatureQueueLifecycle, FrozenBrainstormingSpecification,
+    HandshakeRequest, HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope,
+    JobResultStatus, LeaseId, LocalCodingJobRequest, LocalCodingJobResult,
+    LocalCodingResultArtifactAdmission, LocalCodingResultArtifactReceipt,
+    LocalCodingSnapshotChunkRequest, LocalModelSelectionProjection, LocalModelSelectionReceipt,
+    LocalModelSelectionRequest, LocalModelSelectionStatus, OrchestratorCatalog,
+    ProjectBrainstormingDraft, ProjectVisibility, ProtocolError, RepositoryCreationLifecycle,
+    RepositoryCreationProjection, RuntimeAvailabilityStatus, RuntimeComponentAvailability,
+    RuntimeUnavailableReason, Sensitivity, StepId, TaskId, CANCELLATION_ACK_DEADLINE_MS,
+    FEATURE_CONVEYOR_ORCHESTRATION_SCHEMA_VERSION,
     FEATURE_CONVEYOR_OWNER_ACTIVATION_SCHEMA_VERSION,
     FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
     FEATURE_CONVEYOR_PUBLICATION_COORDINATOR_SCHEMA_VERSION, FEATURE_CONVEYOR_REVIEW_BACKOFF_MS,
     FEATURE_CONVEYOR_REVIEW_GATEWAY_SCHEMA_VERSION,
     FEATURE_CONVEYOR_VALIDATION_GATE_SCHEMA_VERSION, FIXTURE_REASONING_CAPABILITY_ID,
-    LOCAL_CODING_CAPABILITY_ID, LOCAL_MODEL_SELECTION_SCHEMA_VERSION, MAX_CAPABILITY_ID_BYTES,
+    FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION, LOCAL_CODING_CAPABILITY_ID,
+    LOCAL_MODEL_SELECTION_SCHEMA_VERSION, MAX_ASSEMBLY_LINE_QUEUE_COUNT, MAX_CAPABILITY_ID_BYTES,
     MAX_FEATURE_CONVEYOR_ACTIVE_PROCESSING_MS, MAX_FEATURE_CONVEYOR_REPLACEMENT_CANDIDATES,
     MAX_FEATURE_CONVEYOR_REVIEW_CALLS_PER_FEATURE,
     MAX_FEATURE_CONVEYOR_REVIEW_REQUIREMENT_COVERAGE,
@@ -68,6 +77,7 @@ use fs2::FileExt;
 mod github_publication;
 mod identity;
 mod integration;
+mod planning_effects;
 pub mod publication;
 mod result_artifact;
 mod review_provider;
@@ -87,6 +97,12 @@ pub use github_publication::{
 pub use integration::{
     ArtifactIntegrationError, ArtifactIntegrationStore, CandidateEvidence, IntegrationArtifact,
     PreparedCandidate, ValidationCandidateScratch,
+};
+pub use planning_effects::{
+    run_brainstorming, run_github_repository_creation, BrainstormingAdapter,
+    BrainstormingAdapterBinding, BrainstormingAdapterError, BrainstormingDraft,
+    GithubRepositoryCreationAdapter, GithubRepositoryCreationError, GithubRepositoryObservation,
+    PlanningEffectControl, WindowsPlanningEffectAuthority,
 };
 pub use publication::{PublicationAdapter, PublicationAdapterError, PublicationExecutionControl};
 pub use result_artifact::{
@@ -117,7 +133,7 @@ pub use identity::{
     SERVER_CERTIFICATE_LIFETIME_MS,
 };
 
-pub const MASTER_SCHEMA_VERSION: i64 = 19;
+pub const MASTER_SCHEMA_VERSION: i64 = 20;
 pub const MAX_QUEUED_OR_LEASED_STEPS: u64 = 256;
 pub const MAX_CONCURRENT_JOBS: u64 = 4;
 pub const MAX_CONVEYOR_NONTERMINAL_FEATURES: u64 = 100;
@@ -360,6 +376,30 @@ pub enum MasterError {
     FeatureCancellationBlocksAdvancement,
     #[error("verified healthy main evidence is required")]
     VerifiedHealthyMainRequired,
+    #[error("assembly-line planning input is invalid: {0}")]
+    InvalidAssemblyLinePlanningInput(String),
+    #[error("assembly-line planning record is immutable or conflicts with an existing record")]
+    AssemblyLinePlanningImmutable,
+    #[error("assembly-line owner-control revision is stale: expected {expected}, found {found}")]
+    StaleAssemblyLineOwnerControlRevision { expected: u64, found: u64 },
+    #[error("assembly-line state revision is stale: expected {expected}, found {found}")]
+    StaleAssemblyLineStateRevision { expected: u64, found: u64 },
+    #[error("assembly-line queue revision is stale: expected {expected}, found {found}")]
+    StaleAssemblyLineQueueRevision { expected: u64, found: u64 },
+    #[error("the assembly-line repository is absent, stale, or not created")]
+    AssemblyLineRepositoryUnavailable,
+    #[error("the assembly-line queue has reached its bounded capacity")]
+    AssemblyLineQueueFull,
+    #[error("the selected planning-only brainstorming provider is unavailable")]
+    AssemblyLineBrainstormingUnavailable,
+    #[error("the planning-only brainstorming provider rejected the bounded request")]
+    AssemblyLineBrainstormingRejected,
+    #[error("the GitHub repository-creation adapter is unavailable")]
+    AssemblyLineGithubCreationUnavailable,
+    #[error("the requested GitHub repository already exists or conflicts with the frozen intent")]
+    AssemblyLineGithubCreationConflict,
+    #[error("the GitHub creation result is ambiguous and requires exact reconciliation")]
+    AssemblyLineGithubCreationReconciliationRequired,
     #[error("feature migration backup failed: {0}")]
     MigrationBackup(String),
     #[error("feature migration failed and backup restoration also failed: migration={migration}; restore={restore}")]
@@ -7102,6 +7142,718 @@ impl MasterKernel {
         AttemptStatus::parse(&status)
     }
 
+    /// Returns the independently provisioned planning-only catalog. Caller-carried
+    /// catalogs are validated against this value before any durable admission.
+    pub fn assembly_line_orchestrator_catalog(&self) -> OrchestratorCatalog {
+        OrchestratorCatalog::default()
+    }
+
+    /// Pure durable projection for the inert schema-v20 planning foundation.
+    /// Every runtime component is deliberately unavailable and no execution epoch
+    /// is synthesized.
+    pub fn assembly_line_owner_projection(
+        &self,
+        observed_at_ms: u64,
+    ) -> Result<AssemblyLineOwnerProjection, MasterError> {
+        let (owner_control_revision, state_revision, queue_revision, auto_run, lifecycle): (
+            i64,
+            i64,
+            i64,
+            i64,
+            String,
+        ) = self.connection.query_row(
+            "SELECT owner_control_revision,state_revision,queue_revision,auto_run,lifecycle
+             FROM assembly_line_state WHERE singleton=1",
+            [],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )?;
+        if lifecycle != "stopped" || !matches!(auto_run, 0 | 1) {
+            return Err(MasterError::InvalidStoredState(
+                "inert assembly-line singleton is malformed".to_string(),
+            ));
+        }
+        let mut repositories = Vec::new();
+        let mut statement = self.connection.prepare(
+            "SELECT repository_id,git_url,repository_revision,lifecycle_revision,visibility,
+                    approved_specification_id,approved_specification_revision,
+                    approved_specification_sha256,owner_approval_sha256,lifecycle,
+                    effect_possible,creation_evidence_sha256
+             FROM assembly_line_repositories ORDER BY git_url ASC",
+        )?;
+        let rows = statement.query_map([], repository_projection_row)?;
+        for row in rows {
+            repositories.push(row?);
+        }
+        drop(statement);
+
+        let mut queue = Vec::new();
+        let mut statement = self.connection.prepare(
+            "SELECT feature_id,repository_id,specification_id,specification_revision,
+                    specification_sha256,owner_approval_sha256,queue_position,
+                    lifecycle_revision,lifecycle
+             FROM assembly_line_queue ORDER BY queue_position ASC",
+        )?;
+        let rows = statement.query_map([], queue_projection_row)?;
+        for row in rows {
+            queue.push(row?);
+        }
+        drop(statement);
+
+        let (emergency_paused, emergency_pause_revision) = self.emergency_pause_snapshot()?;
+        let component = |name: &str| RuntimeComponentAvailability {
+            binding_revision: 1,
+            binding_sha256: Sha256::digest(
+                [
+                    b"assemblywright.schema-v20.inert-availability.v1\0".as_slice(),
+                    name.as_bytes(),
+                ]
+                .concat(),
+            )
+            .into(),
+            status: RuntimeAvailabilityStatus::Unavailable,
+            unavailable_reason: Some(RuntimeUnavailableReason::NotConfigured),
+        };
+        let projection = AssemblyLineOwnerProjection {
+            schema_version: FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
+            owner_control_revision: i64_to_u64(owner_control_revision)?,
+            emergency_pause_revision,
+            emergency_paused,
+            orchestrator_catalog: self.assembly_line_orchestrator_catalog(),
+            repositories,
+            queue: queue.clone(),
+            assembly_line: AssemblyLineState {
+                schema_version: FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
+                state_revision: i64_to_u64(state_revision)?,
+                queue_revision: i64_to_u64(queue_revision)?,
+                queue_count: u16::try_from(queue.len())
+                    .map_err(|_| MasterError::IntegerOutOfRange)?,
+                auto_run: auto_run == 1,
+                lifecycle: AssemblyLineLifecycleState::Stopped,
+                session_id: None,
+                active_child_epoch_id: None,
+                active_feature_id: None,
+            },
+            availability: AssemblyLineRuntimeAvailabilityProjection {
+                schema_version: FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
+                availability_revision: 1,
+                observed_at_ms,
+                brainstorming_provider: component("brainstorming_provider"),
+                github_creation: component("github_creation"),
+                windows_executor: component("windows_executor"),
+                mac_executor: component("mac_executor"),
+                protected_brokers: component("protected_brokers"),
+            },
+        };
+        projection.validate()?;
+        Ok(projection)
+    }
+
+    pub fn record_assembly_line_project_draft(
+        &mut self,
+        draft: &ProjectBrainstormingDraft,
+        now_ms: u64,
+    ) -> Result<(), MasterError> {
+        let catalog = self.assembly_line_orchestrator_catalog();
+        draft.validate_against_authoritative_catalog(&catalog)?;
+        let request_sha256 = draft.canonical_sha256()?;
+        let canonical_json = canonical_json(&serde_json::to_value(draft)?)?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if assembly_line_request_replay_tx(&tx, "project_draft", draft.draft_id, request_sha256)? {
+            return Ok(());
+        }
+        let registered: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM assembly_line_repositories WHERE repository_id=?1 OR git_url=?2",
+            params![
+                draft.repository.repository_id.to_string(),
+                draft.repository.git_url.url
+            ],
+            |row| row.get(0),
+        )?;
+        if registered != 0 {
+            return Err(MasterError::AssemblyLineRepositoryUnavailable);
+        }
+        insert_assembly_line_request_tx(
+            &tx,
+            "project_draft",
+            draft.draft_id,
+            request_sha256,
+            None,
+            now_ms,
+        )?;
+        tx.execute(
+            "INSERT INTO assembly_line_project_drafts
+             (draft_id,draft_revision,repository_id,git_url,visibility,request_sha256,canonical_json,recorded_at_ms)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![draft.draft_id.to_string(), u64_to_i64(draft.draft_revision)?,
+                draft.repository.repository_id.to_string(), draft.repository.git_url.url,
+                project_visibility_str(draft.visibility), request_sha256.as_slice(), canonical_json,
+                u64_to_i64(now_ms)?],
+        )?;
+        advance_assembly_line_owner_revision_tx(&tx)?;
+        append_assembly_line_audit_tx(
+            &tx,
+            "project_draft_recorded",
+            now_ms,
+            serde_json::json!({
+                "draft_id": draft.draft_id, "draft_revision": draft.draft_revision,
+                "request_sha256": request_sha256, "planning_only": true, "external_effect": false
+            }),
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn record_assembly_line_feature_draft(
+        &mut self,
+        draft: &FeatureBrainstormingDraft,
+        now_ms: u64,
+    ) -> Result<(), MasterError> {
+        let catalog = self.assembly_line_orchestrator_catalog();
+        draft.validate_against_authoritative_catalog(&catalog)?;
+        let request_sha256 = draft.canonical_sha256()?;
+        let canonical_json = canonical_json(&serde_json::to_value(draft)?)?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if assembly_line_request_replay_tx(&tx, "feature_draft", draft.draft_id, request_sha256)? {
+            return Ok(());
+        }
+        require_created_assembly_line_repository_tx(
+            &tx,
+            &draft.repository,
+            draft.expected_repository_revision,
+        )?;
+        insert_assembly_line_request_tx(
+            &tx,
+            "feature_draft",
+            draft.draft_id,
+            request_sha256,
+            None,
+            now_ms,
+        )?;
+        tx.execute(
+            "INSERT INTO assembly_line_feature_drafts
+             (draft_id,draft_revision,repository_id,expected_repository_revision,request_sha256,canonical_json,recorded_at_ms)
+             VALUES(?1,?2,?3,?4,?5,?6,?7)",
+            params![draft.draft_id.to_string(), u64_to_i64(draft.draft_revision)?,
+                draft.repository.repository_id.to_string(), u64_to_i64(draft.expected_repository_revision)?,
+                request_sha256.as_slice(), canonical_json, u64_to_i64(now_ms)?],
+        )?;
+        advance_assembly_line_owner_revision_tx(&tx)?;
+        append_assembly_line_audit_tx(
+            &tx,
+            "feature_draft_recorded",
+            now_ms,
+            serde_json::json!({
+                "draft_id": draft.draft_id, "draft_revision": draft.draft_revision,
+                "request_sha256": request_sha256, "planning_only": true, "external_effect": false
+            }),
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn record_assembly_line_frozen_specification(
+        &mut self,
+        frozen: &FrozenBrainstormingSpecification,
+        now_ms: u64,
+    ) -> Result<(), MasterError> {
+        frozen.validate()?;
+        let request_json = serde_json::to_value(frozen)?;
+        let canonical_json = canonical_json(&request_json)?;
+        let request_sha256: [u8; 32] = Sha256::digest(canonical_json.as_bytes()).into();
+        let catalog = self.assembly_line_orchestrator_catalog();
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if assembly_line_request_replay_tx(
+            &tx,
+            "frozen_specification",
+            frozen.specification_id,
+            request_sha256,
+        )? {
+            return Ok(());
+        }
+        match frozen.target_kind {
+            BrainstormingTargetKind::Project => {
+                let json: String = tx
+                    .query_row(
+                        "SELECT canonical_json FROM assembly_line_project_drafts WHERE draft_id=?1",
+                        [frozen.draft_id.to_string()],
+                        |row| row.get(0),
+                    )
+                    .optional()?
+                    .ok_or(MasterError::AssemblyLinePlanningImmutable)?;
+                let draft: ProjectBrainstormingDraft = serde_json::from_str(&json)?;
+                frozen.validate_for_project_draft(&draft, &catalog)?;
+            }
+            BrainstormingTargetKind::Feature => {
+                let json: String = tx
+                    .query_row(
+                        "SELECT canonical_json FROM assembly_line_feature_drafts WHERE draft_id=?1",
+                        [frozen.draft_id.to_string()],
+                        |row| row.get(0),
+                    )
+                    .optional()?
+                    .ok_or(MasterError::AssemblyLinePlanningImmutable)?;
+                let draft: FeatureBrainstormingDraft = serde_json::from_str(&json)?;
+                frozen.validate_for_feature_draft(&draft, &catalog)?;
+                require_created_assembly_line_repository_tx(
+                    &tx,
+                    &draft.repository,
+                    draft.expected_repository_revision,
+                )?;
+            }
+        }
+        insert_assembly_line_request_tx(
+            &tx,
+            "frozen_specification",
+            frozen.specification_id,
+            request_sha256,
+            None,
+            now_ms,
+        )?;
+        tx.execute(
+            "INSERT INTO assembly_line_frozen_specifications
+             (specification_id,specification_revision,target_kind,draft_id,repository_id,
+              specification_sha256,request_sha256,canonical_json,recorded_at_ms)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![
+                frozen.specification_id.to_string(),
+                u64_to_i64(frozen.specification_revision)?,
+                brainstorming_target_str(frozen.target_kind),
+                frozen.draft_id.to_string(),
+                frozen.repository.repository_id.to_string(),
+                frozen.specification_sha256.as_slice(),
+                request_sha256.as_slice(),
+                canonical_json,
+                u64_to_i64(now_ms)?
+            ],
+        )?;
+        advance_assembly_line_owner_revision_tx(&tx)?;
+        append_assembly_line_audit_tx(
+            &tx,
+            "frozen_specification_recorded",
+            now_ms,
+            serde_json::json!({
+                "specification_id": frozen.specification_id,
+                "specification_revision": frozen.specification_revision,
+                "specification_sha256": frozen.specification_sha256,
+                "target_kind": brainstorming_target_str(frozen.target_kind),
+                "provider_output_retained_in_audit": false, "external_effect": false
+            }),
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn approve_assembly_line_project(
+        &mut self,
+        approval: &BrainstormingOwnerApprovalBinding,
+        now_ms: u64,
+    ) -> Result<RepositoryCreationProjection, MasterError> {
+        let request_json = serde_json::to_value(approval)?;
+        let canonical_json = canonical_json(&request_json)?;
+        let request_sha256: [u8; 32] = Sha256::digest(canonical_json.as_bytes()).into();
+        let catalog = self.assembly_line_orchestrator_catalog();
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if assembly_line_request_replay_tx(
+            &tx,
+            "project_approval",
+            approval.approval_id,
+            request_sha256,
+        )? {
+            return assembly_line_repository_projection_tx(&tx, approval.repository.repository_id);
+        }
+        let owner_revision = assembly_line_owner_revision_tx(&tx)?;
+        if approval.owner_control_revision != owner_revision {
+            return Err(MasterError::StaleAssemblyLineOwnerControlRevision {
+                expected: approval.owner_control_revision,
+                found: owner_revision,
+            });
+        }
+        let draft_json: String = tx
+            .query_row(
+                "SELECT canonical_json FROM assembly_line_project_drafts WHERE draft_id=?1",
+                [approval.draft_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or(MasterError::AssemblyLinePlanningImmutable)?;
+        let frozen_json: String = tx.query_row(
+            "SELECT canonical_json FROM assembly_line_frozen_specifications WHERE specification_id=?1 AND target_kind='project'",
+            [approval.specification_id.to_string()], |row| row.get(0),
+        ).optional()?.ok_or(MasterError::AssemblyLinePlanningImmutable)?;
+        let draft: ProjectBrainstormingDraft = serde_json::from_str(&draft_json)?;
+        let frozen: FrozenBrainstormingSpecification = serde_json::from_str(&frozen_json)?;
+        approval.validate_for_project(&draft, &frozen, &catalog)?;
+        let conflict: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM assembly_line_repositories WHERE repository_id=?1 OR git_url=?2",
+            params![
+                approval.repository.repository_id.to_string(),
+                approval.repository.git_url.url
+            ],
+            |row| row.get(0),
+        )?;
+        if conflict != 0 {
+            return Err(MasterError::AssemblyLinePlanningImmutable);
+        }
+        insert_assembly_line_request_tx(
+            &tx,
+            "project_approval",
+            approval.approval_id,
+            request_sha256,
+            None,
+            now_ms,
+        )?;
+        tx.execute(
+            "INSERT INTO assembly_line_owner_approvals
+             (approval_id,target_kind,specification_id,repository_id,owner_control_revision,
+              owner_approval_sha256,request_sha256,approved_at_ms)
+             VALUES(?1,'project',?2,?3,?4,?5,?6,?7)",
+            params![
+                approval.approval_id.to_string(),
+                approval.specification_id.to_string(),
+                approval.repository.repository_id.to_string(),
+                u64_to_i64(approval.owner_control_revision)?,
+                approval.owner_approval_sha256.as_slice(),
+                request_sha256.as_slice(),
+                u64_to_i64(now_ms)?
+            ],
+        )?;
+        tx.execute(
+            "INSERT INTO assembly_line_repositories
+             (repository_id,git_url,repository_revision,lifecycle_revision,visibility,
+              approved_specification_id,approved_specification_revision,
+              approved_specification_sha256,owner_approval_sha256,lifecycle,effect_possible,
+              creation_evidence_sha256,created_at_ms)
+             VALUES(?1,?2,1,1,?3,?4,?5,?6,?7,'creation_pending',0,NULL,?8)",
+            params![
+                approval.repository.repository_id.to_string(),
+                approval.repository.git_url.url,
+                project_visibility_str(approval.visibility.ok_or_else(|| {
+                    MasterError::InvalidAssemblyLinePlanningInput(
+                        "project visibility is required".to_string(),
+                    )
+                })?),
+                approval.specification_id.to_string(),
+                u64_to_i64(approval.specification_revision)?,
+                approval.specification_sha256.as_slice(),
+                approval.owner_approval_sha256.as_slice(),
+                u64_to_i64(now_ms)?
+            ],
+        )?;
+        advance_assembly_line_owner_revision_tx(&tx)?;
+        append_assembly_line_audit_tx(
+            &tx,
+            "project_creation_intent_recorded",
+            now_ms,
+            serde_json::json!({
+                "approval_id": approval.approval_id, "specification_id": approval.specification_id,
+                "owner_approval_sha256": approval.owner_approval_sha256,
+                "lifecycle": "creation_pending", "github_called": false, "external_effect": false
+            }),
+        )?;
+        let projection =
+            assembly_line_repository_projection_tx(&tx, approval.repository.repository_id)?;
+        tx.commit()?;
+        Ok(projection)
+    }
+
+    pub fn approve_assembly_line_feature_and_enqueue(
+        &mut self,
+        approval: &BrainstormingOwnerApprovalBinding,
+        now_ms: u64,
+    ) -> Result<FeatureQueueEntryProjection, MasterError> {
+        let canonical_json = canonical_json(&serde_json::to_value(approval)?)?;
+        let request_sha256: [u8; 32] = Sha256::digest(canonical_json.as_bytes()).into();
+        let catalog = self.assembly_line_orchestrator_catalog();
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if assembly_line_request_replay_tx(
+            &tx,
+            "feature_approval",
+            approval.approval_id,
+            request_sha256,
+        )? {
+            return assembly_line_queue_projection_tx(&tx, approval.approval_id);
+        }
+        let owner_revision = assembly_line_owner_revision_tx(&tx)?;
+        if approval.owner_control_revision != owner_revision {
+            return Err(MasterError::StaleAssemblyLineOwnerControlRevision {
+                expected: approval.owner_control_revision,
+                found: owner_revision,
+            });
+        }
+        let expected_queue_revision = approval.expected_queue_revision.ok_or_else(|| {
+            MasterError::InvalidAssemblyLinePlanningInput(
+                "feature queue revision is required".to_string(),
+            )
+        })?;
+        let prior_state = assembly_line_state_tx(&tx)?;
+        if prior_state.queue_revision != expected_queue_revision {
+            return Err(MasterError::StaleAssemblyLineQueueRevision {
+                expected: expected_queue_revision,
+                found: prior_state.queue_revision,
+            });
+        }
+        let next_owner_revision = owner_revision
+            .checked_add(1)
+            .ok_or(MasterError::IntegerOutOfRange)?;
+        let next_state_revision = prior_state
+            .state_revision
+            .checked_add(1)
+            .ok_or(MasterError::IntegerOutOfRange)?;
+        let next_queue_revision = prior_state
+            .queue_revision
+            .checked_add(1)
+            .ok_or(MasterError::IntegerOutOfRange)?;
+        let next_queue_count = prior_state
+            .queue_count
+            .checked_add(1)
+            .ok_or(MasterError::IntegerOutOfRange)?;
+        let next_owner_revision_i64 = u64_to_i64(next_owner_revision)?;
+        let next_state_revision_i64 = u64_to_i64(next_state_revision)?;
+        let next_queue_revision_i64 = u64_to_i64(next_queue_revision)?;
+        let draft_json: String = tx
+            .query_row(
+                "SELECT canonical_json FROM assembly_line_feature_drafts WHERE draft_id=?1",
+                [approval.draft_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or(MasterError::AssemblyLinePlanningImmutable)?;
+        let frozen_json: String = tx.query_row(
+            "SELECT canonical_json FROM assembly_line_frozen_specifications WHERE specification_id=?1 AND target_kind='feature'",
+            [approval.specification_id.to_string()], |row| row.get(0),
+        ).optional()?.ok_or(MasterError::AssemblyLinePlanningImmutable)?;
+        let draft: FeatureBrainstormingDraft = serde_json::from_str(&draft_json)?;
+        let frozen: FrozenBrainstormingSpecification = serde_json::from_str(&frozen_json)?;
+        approval.validate_for_feature(&draft, &frozen, &catalog)?;
+        require_created_assembly_line_repository_tx(
+            &tx,
+            &draft.repository,
+            approval
+                .expected_repository_revision
+                .ok_or(MasterError::AssemblyLineRepositoryUnavailable)?,
+        )?;
+        let count: i64 = tx.query_row("SELECT COUNT(*) FROM assembly_line_queue", [], |row| {
+            row.get(0)
+        })?;
+        if count >= i64::from(MAX_ASSEMBLY_LINE_QUEUE_COUNT) {
+            return Err(MasterError::AssemblyLineQueueFull);
+        }
+        let position = i64_to_u64(count)?
+            .checked_add(1)
+            .ok_or(MasterError::IntegerOutOfRange)?;
+        insert_assembly_line_request_tx(
+            &tx,
+            "feature_approval",
+            approval.approval_id,
+            request_sha256,
+            None,
+            now_ms,
+        )?;
+        tx.execute(
+            "INSERT INTO assembly_line_owner_approvals
+             (approval_id,target_kind,specification_id,repository_id,owner_control_revision,
+              owner_approval_sha256,request_sha256,approved_at_ms)
+             VALUES(?1,'feature',?2,?3,?4,?5,?6,?7)",
+            params![
+                approval.approval_id.to_string(),
+                approval.specification_id.to_string(),
+                approval.repository.repository_id.to_string(),
+                u64_to_i64(approval.owner_control_revision)?,
+                approval.owner_approval_sha256.as_slice(),
+                request_sha256.as_slice(),
+                u64_to_i64(now_ms)?
+            ],
+        )?;
+        tx.execute(
+            "INSERT INTO assembly_line_queue
+             (feature_id,repository_id,specification_id,specification_revision,
+              specification_sha256,owner_approval_sha256,queue_position,lifecycle_revision,
+              lifecycle,enqueued_at_ms)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,1,'queued',?8)",
+            params![
+                approval.approval_id.to_string(),
+                approval.repository.repository_id.to_string(),
+                approval.specification_id.to_string(),
+                u64_to_i64(approval.specification_revision)?,
+                approval.specification_sha256.as_slice(),
+                approval.owner_approval_sha256.as_slice(),
+                u64_to_i64(position)?,
+                u64_to_i64(now_ms)?
+            ],
+        )?;
+        let changed = tx.execute(
+            "UPDATE assembly_line_state
+             SET owner_control_revision=?1,state_revision=?2,queue_revision=?3
+             WHERE singleton=1 AND owner_control_revision=?4
+               AND state_revision=?5 AND queue_revision=?6",
+            params![
+                next_owner_revision_i64,
+                next_state_revision_i64,
+                next_queue_revision_i64,
+                u64_to_i64(owner_revision)?,
+                u64_to_i64(prior_state.state_revision)?,
+                u64_to_i64(prior_state.queue_revision)?
+            ],
+        )?;
+        if changed != 1 {
+            return Err(MasterError::InvalidStoredState(
+                "assembly-line enqueue state CAS affected an unexpected row count".to_string(),
+            ));
+        }
+        let resulting_owner_revision = assembly_line_owner_revision_tx(&tx)?;
+        let resulting_state = assembly_line_state_tx(&tx)?;
+        let mut expected_resulting_state = prior_state.clone();
+        expected_resulting_state.state_revision = next_state_revision;
+        expected_resulting_state.queue_revision = next_queue_revision;
+        expected_resulting_state.queue_count = next_queue_count;
+        if resulting_owner_revision != next_owner_revision
+            || resulting_state != expected_resulting_state
+        {
+            return Err(MasterError::InvalidStoredState(
+                "assembly-line enqueue state did not match its authoritative transition"
+                    .to_string(),
+            ));
+        }
+        append_assembly_line_audit_tx(
+            &tx,
+            "feature_queued",
+            now_ms,
+            serde_json::json!({
+                "feature_id": approval.approval_id, "specification_id": approval.specification_id,
+                "specification_sha256": approval.specification_sha256,
+                "owner_approval_sha256": approval.owner_approval_sha256,
+                "queue_position": position, "dispatch_created": false, "external_effect": false
+            }),
+        )?;
+        let projection = assembly_line_queue_projection_tx(&tx, approval.approval_id)?;
+        tx.commit()?;
+        Ok(projection)
+    }
+
+    pub fn set_assembly_line_auto_run(
+        &mut self,
+        request: &AssemblyLineAutoRunRequest,
+        now_ms: u64,
+    ) -> Result<AssemblyLineAutoRunReceipt, MasterError> {
+        request.validate()?;
+        let request_json = canonical_json(&serde_json::to_value(request)?)?;
+        let request_sha256: [u8; 32] = Sha256::digest(request_json.as_bytes()).into();
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if assembly_line_request_replay_tx(&tx, "auto_run", request.request_id, request_sha256)? {
+            let response: String = tx.query_row(
+                "SELECT response_json FROM assembly_line_requests WHERE request_kind='auto_run' AND record_id=?1",
+                [request.request_id.to_string()], |row| row.get(0),
+            )?;
+            return Ok(serde_json::from_str(&response)?);
+        }
+        let prior_state = assembly_line_state_tx(&tx)?;
+        if prior_state.state_revision != request.expected_state_revision {
+            return Err(MasterError::StaleAssemblyLineStateRevision {
+                expected: request.expected_state_revision,
+                found: prior_state.state_revision,
+            });
+        }
+        let prior_owner_revision = assembly_line_owner_revision_tx(&tx)?;
+        let next_owner_revision = prior_owner_revision
+            .checked_add(1)
+            .ok_or(MasterError::IntegerOutOfRange)?;
+        let next_state_revision = prior_state
+            .state_revision
+            .checked_add(1)
+            .ok_or(MasterError::IntegerOutOfRange)?;
+        let changed = tx.execute(
+            "UPDATE assembly_line_state
+             SET owner_control_revision=?1,state_revision=?2,auto_run=?3
+             WHERE singleton=1 AND owner_control_revision=?4 AND state_revision=?5",
+            params![
+                u64_to_i64(next_owner_revision)?,
+                u64_to_i64(next_state_revision)?,
+                if request.auto_run { 1_i64 } else { 0_i64 },
+                u64_to_i64(prior_owner_revision)?,
+                u64_to_i64(prior_state.state_revision)?
+            ],
+        )?;
+        if changed != 1 {
+            return Err(MasterError::InvalidStoredState(
+                "assembly-line auto-run state CAS affected an unexpected row count".to_string(),
+            ));
+        }
+        let resulting_state = assembly_line_state_tx(&tx)?;
+        let resulting_owner_revision = assembly_line_owner_revision_tx(&tx)?;
+        let mut expected_resulting_state = prior_state.clone();
+        expected_resulting_state.state_revision = next_state_revision;
+        expected_resulting_state.auto_run = request.auto_run;
+        if resulting_owner_revision != next_owner_revision
+            || resulting_state != expected_resulting_state
+        {
+            return Err(MasterError::InvalidStoredState(
+                "assembly-line auto-run state did not match its authoritative transition"
+                    .to_string(),
+            ));
+        }
+        let receipt = AssemblyLineAutoRunReceipt {
+            schema_version: FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
+            request_id: request.request_id,
+            resulting_state,
+        };
+        receipt.validate_for_request_and_prior_state(request, &prior_state)?;
+        let response_json = canonical_json(&serde_json::to_value(&receipt)?)?;
+        insert_assembly_line_request_tx(
+            &tx,
+            "auto_run",
+            request.request_id,
+            request_sha256,
+            Some(&response_json),
+            now_ms,
+        )?;
+        append_assembly_line_audit_tx(
+            &tx,
+            "auto_run_changed",
+            now_ms,
+            serde_json::json!({
+                "request_id": request.request_id, "state_revision": receipt.resulting_state.state_revision,
+                "auto_run": request.auto_run, "execution_started": false, "external_effect": false
+            }),
+        )?;
+        tx.commit()?;
+        Ok(receipt)
+    }
+
+    /// Remote planning actions share the same kernel but additionally require
+    /// the exact current designated Mac owner-control identity.
+    pub fn authorize_assembly_line_owner_bridge(
+        &mut self,
+        registration: &DeviceRegistration,
+    ) -> Result<(), MasterError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let designation_revision = owner_control_bridge_designation_connection(&tx)?
+            .ok_or(MasterError::OwnerControlBridgeNotDesignated)?
+            .designation_revision;
+        require_owner_control_bridge_tx(&tx, registration, designation_revision)
+    }
+
     fn migrate(&mut self) -> Result<(), MasterError> {
         let version = self.schema_version()?;
         if version == 0 {
@@ -8334,6 +9086,144 @@ impl MasterKernel {
                    BEFORE DELETE ON feature_owner_orchestration_controls
                    BEGIN SELECT RAISE(ABORT,'durable owner orchestration control'); END;
                  PRAGMA user_version=19;
+                 COMMIT;",
+            )?;
+        }
+        let version = self.schema_version()?;
+        if version == 19 {
+            self.connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 CREATE TABLE assembly_line_state (
+                   singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton=1),
+                   owner_control_revision INTEGER NOT NULL CHECK(owner_control_revision>0),
+                   state_revision INTEGER NOT NULL CHECK(state_revision>0),
+                   queue_revision INTEGER NOT NULL CHECK(queue_revision>=0),
+                   auto_run INTEGER NOT NULL CHECK(auto_run IN(0,1)),
+                   lifecycle TEXT NOT NULL CHECK(lifecycle='stopped')
+                 );
+                 INSERT INTO assembly_line_state
+                   (singleton,owner_control_revision,state_revision,queue_revision,auto_run,lifecycle)
+                   VALUES(1,1,1,0,1,'stopped');
+                 CREATE TABLE assembly_line_project_drafts (
+                   draft_id TEXT PRIMARY KEY NOT NULL,
+                   draft_revision INTEGER NOT NULL CHECK(draft_revision>0),
+                   repository_id TEXT NOT NULL,
+                   git_url TEXT NOT NULL,
+                   visibility TEXT NOT NULL CHECK(visibility IN('public','private')),
+                   request_sha256 BLOB NOT NULL UNIQUE CHECK(length(request_sha256)=32),
+                   canonical_json TEXT NOT NULL CHECK(length(CAST(canonical_json AS BLOB)) BETWEEN 2 AND 16384),
+                   recorded_at_ms INTEGER NOT NULL CHECK(recorded_at_ms>0)
+                 );
+                 CREATE TABLE assembly_line_feature_drafts (
+                   draft_id TEXT PRIMARY KEY NOT NULL,
+                   draft_revision INTEGER NOT NULL CHECK(draft_revision>0),
+                   repository_id TEXT NOT NULL,
+                   expected_repository_revision INTEGER NOT NULL CHECK(expected_repository_revision>0),
+                   request_sha256 BLOB NOT NULL UNIQUE CHECK(length(request_sha256)=32),
+                   canonical_json TEXT NOT NULL CHECK(length(CAST(canonical_json AS BLOB)) BETWEEN 2 AND 16384),
+                   recorded_at_ms INTEGER NOT NULL CHECK(recorded_at_ms>0)
+                 );
+                 CREATE TABLE assembly_line_frozen_specifications (
+                   specification_id TEXT PRIMARY KEY NOT NULL,
+                   specification_revision INTEGER NOT NULL CHECK(specification_revision>0),
+                   target_kind TEXT NOT NULL CHECK(target_kind IN('project','feature')),
+                   draft_id TEXT NOT NULL,
+                   repository_id TEXT NOT NULL,
+                   specification_sha256 BLOB NOT NULL UNIQUE CHECK(length(specification_sha256)=32),
+                   request_sha256 BLOB NOT NULL UNIQUE CHECK(length(request_sha256)=32),
+                   canonical_json TEXT NOT NULL CHECK(length(CAST(canonical_json AS BLOB)) BETWEEN 2 AND 98304),
+                   recorded_at_ms INTEGER NOT NULL CHECK(recorded_at_ms>0),
+                   UNIQUE(draft_id,target_kind)
+                 );
+                 CREATE TABLE assembly_line_owner_approvals (
+                   approval_id TEXT PRIMARY KEY NOT NULL,
+                   target_kind TEXT NOT NULL CHECK(target_kind IN('project','feature')),
+                   specification_id TEXT NOT NULL,
+                   repository_id TEXT NOT NULL,
+                   owner_control_revision INTEGER NOT NULL CHECK(owner_control_revision>0),
+                   owner_approval_sha256 BLOB NOT NULL UNIQUE CHECK(length(owner_approval_sha256)=32),
+                   request_sha256 BLOB NOT NULL UNIQUE CHECK(length(request_sha256)=32),
+                   approved_at_ms INTEGER NOT NULL CHECK(approved_at_ms>0),
+                   UNIQUE(target_kind,specification_id)
+                 );
+                 CREATE TABLE assembly_line_repositories (
+                   repository_id TEXT PRIMARY KEY NOT NULL,
+                   git_url TEXT NOT NULL UNIQUE,
+                   repository_revision INTEGER NOT NULL CHECK(repository_revision>0),
+                   lifecycle_revision INTEGER NOT NULL CHECK(lifecycle_revision>0),
+                   visibility TEXT NOT NULL CHECK(visibility IN('public','private')),
+                   approved_specification_id TEXT NOT NULL UNIQUE,
+                   approved_specification_revision INTEGER NOT NULL CHECK(approved_specification_revision>0),
+                   approved_specification_sha256 BLOB NOT NULL CHECK(length(approved_specification_sha256)=32),
+                   owner_approval_sha256 BLOB NOT NULL CHECK(length(owner_approval_sha256)=32),
+                   lifecycle TEXT NOT NULL CHECK(lifecycle IN(
+                     'creation_pending','reconciling','created','conflict',
+                     'reconciliation_required','failed'
+                   )),
+                   effect_possible INTEGER NOT NULL CHECK(effect_possible IN(0,1)),
+                   creation_evidence_sha256 BLOB CHECK(
+                     creation_evidence_sha256 IS NULL OR length(creation_evidence_sha256)=32
+                   ),
+                   created_at_ms INTEGER NOT NULL CHECK(created_at_ms>0)
+                 );
+                 CREATE TABLE assembly_line_queue (
+                   feature_id TEXT PRIMARY KEY NOT NULL,
+                   repository_id TEXT NOT NULL REFERENCES assembly_line_repositories(repository_id),
+                   specification_id TEXT NOT NULL UNIQUE,
+                   specification_revision INTEGER NOT NULL CHECK(specification_revision>0),
+                   specification_sha256 BLOB NOT NULL CHECK(length(specification_sha256)=32),
+                   owner_approval_sha256 BLOB NOT NULL CHECK(length(owner_approval_sha256)=32),
+                   queue_position INTEGER NOT NULL UNIQUE CHECK(queue_position>0),
+                   lifecycle_revision INTEGER NOT NULL CHECK(lifecycle_revision>0),
+                   lifecycle TEXT NOT NULL CHECK(lifecycle='queued'),
+                   enqueued_at_ms INTEGER NOT NULL CHECK(enqueued_at_ms>0)
+                 );
+                 CREATE TABLE assembly_line_requests (
+                   request_kind TEXT NOT NULL CHECK(request_kind IN(
+                     'project_draft','feature_draft','frozen_specification',
+                     'project_approval','feature_approval','auto_run'
+                   )),
+                   record_id TEXT NOT NULL,
+                   request_sha256 BLOB NOT NULL CHECK(length(request_sha256)=32),
+                   response_json TEXT CHECK(
+                     response_json IS NULL OR length(CAST(response_json AS BLOB)) BETWEEN 2 AND 98304
+                   ),
+                   recorded_at_ms INTEGER NOT NULL CHECK(recorded_at_ms>0),
+                   PRIMARY KEY(request_kind,record_id)
+                 );
+                 CREATE TABLE assembly_line_audit (
+                   audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   event_kind TEXT NOT NULL CHECK(length(event_kind) BETWEEN 1 AND 96),
+                   occurred_at_ms INTEGER NOT NULL CHECK(occurred_at_ms>0),
+                   redacted_metadata_json TEXT NOT NULL CHECK(
+                     length(CAST(redacted_metadata_json AS BLOB)) BETWEEN 2 AND 4096
+                   )
+                 );
+                 CREATE TRIGGER assembly_line_project_drafts_no_update BEFORE UPDATE ON assembly_line_project_drafts
+                   BEGIN SELECT RAISE(ABORT,'immutable assembly-line project draft'); END;
+                 CREATE TRIGGER assembly_line_project_drafts_no_delete BEFORE DELETE ON assembly_line_project_drafts
+                   BEGIN SELECT RAISE(ABORT,'durable assembly-line project draft'); END;
+                 CREATE TRIGGER assembly_line_feature_drafts_no_update BEFORE UPDATE ON assembly_line_feature_drafts
+                   BEGIN SELECT RAISE(ABORT,'immutable assembly-line feature draft'); END;
+                 CREATE TRIGGER assembly_line_feature_drafts_no_delete BEFORE DELETE ON assembly_line_feature_drafts
+                   BEGIN SELECT RAISE(ABORT,'durable assembly-line feature draft'); END;
+                 CREATE TRIGGER assembly_line_frozen_specs_no_update BEFORE UPDATE ON assembly_line_frozen_specifications
+                   BEGIN SELECT RAISE(ABORT,'immutable assembly-line frozen specification'); END;
+                 CREATE TRIGGER assembly_line_frozen_specs_no_delete BEFORE DELETE ON assembly_line_frozen_specifications
+                   BEGIN SELECT RAISE(ABORT,'durable assembly-line frozen specification'); END;
+                 CREATE TRIGGER assembly_line_approvals_no_update BEFORE UPDATE ON assembly_line_owner_approvals
+                   BEGIN SELECT RAISE(ABORT,'immutable assembly-line approval'); END;
+                 CREATE TRIGGER assembly_line_approvals_no_delete BEFORE DELETE ON assembly_line_owner_approvals
+                   BEGIN SELECT RAISE(ABORT,'durable assembly-line approval'); END;
+                 CREATE TRIGGER assembly_line_requests_no_update BEFORE UPDATE ON assembly_line_requests
+                   BEGIN SELECT RAISE(ABORT,'immutable assembly-line request'); END;
+                 CREATE TRIGGER assembly_line_requests_no_delete BEFORE DELETE ON assembly_line_requests
+                   BEGIN SELECT RAISE(ABORT,'durable assembly-line request'); END;
+                 CREATE TRIGGER assembly_line_audit_no_update BEFORE UPDATE ON assembly_line_audit
+                   BEGIN SELECT RAISE(ABORT,'append-only assembly-line audit'); END;
+                 CREATE TRIGGER assembly_line_audit_no_delete BEFORE DELETE ON assembly_line_audit
+                   BEGIN SELECT RAISE(ABORT,'append-only assembly-line audit'); END;
+                 PRAGMA user_version=20;
                  COMMIT;",
             )?;
         }
@@ -12013,6 +12903,349 @@ fn integration_receipt_matches_request(
         && receipt.queue_revision == request.expected_queue_revision
         && receipt.emergency_pause_revision == request.expected_emergency_pause_revision
         && receipt.grants == request.grants
+}
+
+fn project_visibility_str(visibility: ProjectVisibility) -> &'static str {
+    match visibility {
+        ProjectVisibility::Public => "public",
+        ProjectVisibility::Private => "private",
+    }
+}
+
+fn parse_project_visibility(value: &str) -> Result<ProjectVisibility, MasterError> {
+    match value {
+        "public" => Ok(ProjectVisibility::Public),
+        "private" => Ok(ProjectVisibility::Private),
+        _ => Err(MasterError::InvalidStoredState(
+            "assembly-line project visibility is invalid".to_string(),
+        )),
+    }
+}
+
+fn brainstorming_target_str(target: BrainstormingTargetKind) -> &'static str {
+    match target {
+        BrainstormingTargetKind::Project => "project",
+        BrainstormingTargetKind::Feature => "feature",
+    }
+}
+
+fn parse_repository_creation_lifecycle(
+    value: &str,
+) -> Result<RepositoryCreationLifecycle, MasterError> {
+    match value {
+        "creation_pending" => Ok(RepositoryCreationLifecycle::CreationPending),
+        "reconciling" => Ok(RepositoryCreationLifecycle::Reconciling),
+        "created" => Ok(RepositoryCreationLifecycle::Created),
+        "conflict" => Ok(RepositoryCreationLifecycle::Conflict),
+        "reconciliation_required" => Ok(RepositoryCreationLifecycle::ReconciliationRequired),
+        "failed" => Ok(RepositoryCreationLifecycle::Failed),
+        _ => Err(MasterError::InvalidStoredState(
+            "assembly-line repository lifecycle is invalid".to_string(),
+        )),
+    }
+}
+
+fn repository_projection_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<RepositoryCreationProjection> {
+    let repository_id = row.get::<_, String>(0)?;
+    let git_url = row.get::<_, String>(1)?;
+    let visibility = row.get::<_, String>(4)?;
+    let specification_id = row.get::<_, String>(5)?;
+    let specification_sha256 = row.get::<_, Vec<u8>>(7)?;
+    let owner_approval_sha256 = row.get::<_, Vec<u8>>(8)?;
+    let lifecycle = row.get::<_, String>(9)?;
+    let effect_possible = row.get::<_, i64>(10)?;
+    let creation_evidence = row.get::<_, Option<Vec<u8>>>(11)?;
+    let conversion_error = |message: &str| {
+        rusqlite::Error::FromSqlConversionFailure(
+            0,
+            rusqlite::types::Type::Text,
+            message.to_string().into(),
+        )
+    };
+    Ok(RepositoryCreationProjection {
+        schema_version: FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
+        repository: AssemblyLineRepositoryIdentity {
+            repository_id: Uuid::parse_str(&repository_id)
+                .map_err(|_| conversion_error("invalid repository UUID"))?,
+            git_url: assemblywright_protocol::CanonicalGitHubRepositoryUrl::parse(&git_url)
+                .map_err(|_| conversion_error("invalid canonical GitHub URL"))?,
+        },
+        repository_revision: u64::try_from(row.get::<_, i64>(2)?)
+            .map_err(|_| conversion_error("invalid repository revision"))?,
+        lifecycle_revision: u64::try_from(row.get::<_, i64>(3)?)
+            .map_err(|_| conversion_error("invalid repository lifecycle revision"))?,
+        visibility: parse_project_visibility(&visibility)
+            .map_err(|_| conversion_error("invalid project visibility"))?,
+        approved_specification_id: Uuid::parse_str(&specification_id)
+            .map_err(|_| conversion_error("invalid specification UUID"))?,
+        approved_specification_revision: u64::try_from(row.get::<_, i64>(6)?)
+            .map_err(|_| conversion_error("invalid specification revision"))?,
+        approved_specification_sha256: specification_sha256
+            .try_into()
+            .map_err(|_| conversion_error("invalid specification digest"))?,
+        owner_approval_sha256: owner_approval_sha256
+            .try_into()
+            .map_err(|_| conversion_error("invalid approval digest"))?,
+        lifecycle: parse_repository_creation_lifecycle(&lifecycle)
+            .map_err(|_| conversion_error("invalid repository lifecycle"))?,
+        effect_possible: match effect_possible {
+            0 => false,
+            1 => true,
+            _ => return Err(conversion_error("invalid effect-possible bit")),
+        },
+        creation_evidence_sha256: creation_evidence
+            .map(|value| {
+                value
+                    .try_into()
+                    .map_err(|_| conversion_error("invalid creation digest"))
+            })
+            .transpose()?,
+    })
+}
+
+fn queue_projection_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<FeatureQueueEntryProjection> {
+    let conversion_error = |message: &str| {
+        rusqlite::Error::FromSqlConversionFailure(
+            0,
+            rusqlite::types::Type::Text,
+            message.to_string().into(),
+        )
+    };
+    let lifecycle = row.get::<_, String>(8)?;
+    if lifecycle != "queued" {
+        return Err(conversion_error(
+            "inert queue contains a non-queued lifecycle",
+        ));
+    }
+    Ok(FeatureQueueEntryProjection {
+        schema_version: FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
+        feature_id: Uuid::parse_str(&row.get::<_, String>(0)?)
+            .map_err(|_| conversion_error("invalid feature UUID"))?,
+        repository_id: Uuid::parse_str(&row.get::<_, String>(1)?)
+            .map_err(|_| conversion_error("invalid repository UUID"))?,
+        specification_id: Uuid::parse_str(&row.get::<_, String>(2)?)
+            .map_err(|_| conversion_error("invalid specification UUID"))?,
+        specification_revision: u64::try_from(row.get::<_, i64>(3)?)
+            .map_err(|_| conversion_error("invalid specification revision"))?,
+        specification_sha256: row
+            .get::<_, Vec<u8>>(4)?
+            .try_into()
+            .map_err(|_| conversion_error("invalid specification digest"))?,
+        owner_approval_sha256: row
+            .get::<_, Vec<u8>>(5)?
+            .try_into()
+            .map_err(|_| conversion_error("invalid approval digest"))?,
+        position: u16::try_from(row.get::<_, i64>(6)?)
+            .map_err(|_| conversion_error("invalid queue position"))?,
+        lifecycle_revision: u64::try_from(row.get::<_, i64>(7)?)
+            .map_err(|_| conversion_error("invalid lifecycle revision"))?,
+        lifecycle: FeatureQueueLifecycle::Queued,
+    })
+}
+
+fn assembly_line_request_replay_tx(
+    tx: &Transaction<'_>,
+    request_kind: &str,
+    record_id: Uuid,
+    request_sha256: [u8; 32],
+) -> Result<bool, MasterError> {
+    let stored = tx
+        .query_row(
+            "SELECT request_sha256 FROM assembly_line_requests
+             WHERE request_kind=?1 AND record_id=?2",
+            params![request_kind, record_id.to_string()],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()?;
+    match stored {
+        None => Ok(false),
+        Some(stored) if digest_array(&stored)? == request_sha256 => Ok(true),
+        Some(_) => Err(MasterError::AssemblyLinePlanningImmutable),
+    }
+}
+
+fn insert_assembly_line_request_tx(
+    tx: &Transaction<'_>,
+    request_kind: &str,
+    record_id: Uuid,
+    request_sha256: [u8; 32],
+    response_json: Option<&str>,
+    now_ms: u64,
+) -> Result<(), MasterError> {
+    tx.execute(
+        "INSERT INTO assembly_line_requests
+         (request_kind,record_id,request_sha256,response_json,recorded_at_ms)
+         VALUES(?1,?2,?3,?4,?5)",
+        params![
+            request_kind,
+            record_id.to_string(),
+            request_sha256.as_slice(),
+            response_json,
+            u64_to_i64(now_ms)?
+        ],
+    )?;
+    Ok(())
+}
+
+fn assembly_line_owner_revision_tx(tx: &Transaction<'_>) -> Result<u64, MasterError> {
+    let revision: i64 = tx.query_row(
+        "SELECT owner_control_revision FROM assembly_line_state WHERE singleton=1",
+        [],
+        |row| row.get(0),
+    )?;
+    i64_to_u64(revision)
+}
+
+fn advance_assembly_line_owner_revision_tx(tx: &Transaction<'_>) -> Result<(), MasterError> {
+    let prior_state = assembly_line_state_tx(tx)?;
+    let prior_revision = assembly_line_owner_revision_tx(tx)?;
+    let next_revision = prior_revision
+        .checked_add(1)
+        .ok_or(MasterError::IntegerOutOfRange)?;
+    let changed = tx.execute(
+        "UPDATE assembly_line_state SET owner_control_revision=?1
+         WHERE singleton=1 AND owner_control_revision=?2",
+        params![u64_to_i64(next_revision)?, u64_to_i64(prior_revision)?],
+    )?;
+    if changed != 1 {
+        return Err(MasterError::InvalidStoredState(
+            "assembly-line owner revision CAS affected an unexpected row count".to_string(),
+        ));
+    }
+    if assembly_line_owner_revision_tx(tx)? != next_revision
+        || assembly_line_state_tx(tx)? != prior_state
+    {
+        return Err(MasterError::InvalidStoredState(
+            "assembly-line owner revision did not match its authoritative transition".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn require_created_assembly_line_repository_tx(
+    tx: &Transaction<'_>,
+    repository: &AssemblyLineRepositoryIdentity,
+    expected_revision: u64,
+) -> Result<(), MasterError> {
+    let stored = tx
+        .query_row(
+            "SELECT git_url,repository_revision,lifecycle,effect_possible,creation_evidence_sha256
+             FROM assembly_line_repositories
+             WHERE repository_id=?1",
+            [repository.repository_id.to_string()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, Option<Vec<u8>>>(4)?,
+                ))
+            },
+        )
+        .optional()?;
+    match stored {
+        Some((url, revision, lifecycle, 1, Some(evidence)))
+            if url == repository.git_url.url
+                && i64_to_u64(revision)? == expected_revision
+                && lifecycle == "created"
+                && digest_array(&evidence)? != [0; 32] =>
+        {
+            Ok(())
+        }
+        _ => Err(MasterError::AssemblyLineRepositoryUnavailable),
+    }
+}
+
+fn assembly_line_repository_projection_tx(
+    tx: &Transaction<'_>,
+    repository_id: Uuid,
+) -> Result<RepositoryCreationProjection, MasterError> {
+    tx.query_row(
+        "SELECT repository_id,git_url,repository_revision,lifecycle_revision,visibility,
+                approved_specification_id,approved_specification_revision,
+                approved_specification_sha256,owner_approval_sha256,lifecycle,
+                effect_possible,creation_evidence_sha256
+         FROM assembly_line_repositories WHERE repository_id=?1",
+        [repository_id.to_string()],
+        repository_projection_row,
+    )
+    .optional()?
+    .ok_or(MasterError::AssemblyLineRepositoryUnavailable)
+}
+
+fn assembly_line_queue_projection_tx(
+    tx: &Transaction<'_>,
+    feature_id: Uuid,
+) -> Result<FeatureQueueEntryProjection, MasterError> {
+    tx.query_row(
+        "SELECT feature_id,repository_id,specification_id,specification_revision,
+                specification_sha256,owner_approval_sha256,queue_position,
+                lifecycle_revision,lifecycle
+         FROM assembly_line_queue WHERE feature_id=?1",
+        [feature_id.to_string()],
+        queue_projection_row,
+    )
+    .optional()?
+    .ok_or(MasterError::AssemblyLinePlanningImmutable)
+}
+
+fn assembly_line_state_tx(tx: &Transaction<'_>) -> Result<AssemblyLineState, MasterError> {
+    let (state_revision, queue_revision, auto_run, lifecycle): (i64, i64, i64, String) = tx
+        .query_row(
+            "SELECT state_revision,queue_revision,auto_run,lifecycle
+             FROM assembly_line_state WHERE singleton=1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
+    let count: i64 = tx.query_row("SELECT COUNT(*) FROM assembly_line_queue", [], |row| {
+        row.get(0)
+    })?;
+    if lifecycle != "stopped" || !matches!(auto_run, 0 | 1) {
+        return Err(MasterError::InvalidStoredState(
+            "inert assembly-line state is malformed".to_string(),
+        ));
+    }
+    let state = AssemblyLineState {
+        schema_version: FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
+        state_revision: i64_to_u64(state_revision)?,
+        queue_revision: i64_to_u64(queue_revision)?,
+        queue_count: u16::try_from(count).map_err(|_| MasterError::IntegerOutOfRange)?,
+        auto_run: auto_run == 1,
+        lifecycle: AssemblyLineLifecycleState::Stopped,
+        session_id: None,
+        active_child_epoch_id: None,
+        active_feature_id: None,
+    };
+    state.validate()?;
+    Ok(state)
+}
+
+fn append_assembly_line_audit_tx(
+    tx: &Transaction<'_>,
+    event_kind: &str,
+    occurred_at_ms: u64,
+    redacted_metadata: Value,
+) -> Result<(), MasterError> {
+    if event_kind.is_empty() || event_kind.len() > 96 || !redacted_metadata.is_object() {
+        return Err(MasterError::InvalidAssemblyLinePlanningInput(
+            "assembly-line audit metadata is invalid".to_string(),
+        ));
+    }
+    let metadata_json = canonical_json(&redacted_metadata)?;
+    if metadata_json.len() > 4096 {
+        return Err(MasterError::InvalidAssemblyLinePlanningInput(
+            "assembly-line audit metadata exceeds the redacted bound".to_string(),
+        ));
+    }
+    tx.execute(
+        "INSERT INTO assembly_line_audit(event_kind,occurred_at_ms,redacted_metadata_json)
+         VALUES(?1,?2,?3)",
+        params![event_kind, u64_to_i64(occurred_at_ms)?, metadata_json],
+    )?;
+    Ok(())
 }
 
 fn append_feature_audit_tx(

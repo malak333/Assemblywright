@@ -20,6 +20,7 @@ public struct AssemblywrightDeveloperBridgeAppStatus: Equatable, Sendable {
     public let connectionEpoch: UInt64?
     public let featureConveyor: AssemblywrightMacFeatureConveyorStatus?
     public let ownerControl: AssemblywrightMacFeatureConveyorOwnerControlProjection?
+    public let assemblyLine: AssemblywrightMacAssemblyLineOwnerProjection?
     public let localModelSelection: AssemblywrightMacLocalModelSelectionProjection?
     public let errorCode: String?
 
@@ -30,6 +31,7 @@ public struct AssemblywrightDeveloperBridgeAppStatus: Equatable, Sendable {
         connectionEpoch: UInt64? = nil,
         featureConveyor: AssemblywrightMacFeatureConveyorStatus? = nil,
         ownerControl: AssemblywrightMacFeatureConveyorOwnerControlProjection? = nil,
+        assemblyLine: AssemblywrightMacAssemblyLineOwnerProjection? = nil,
         localModelSelection: AssemblywrightMacLocalModelSelectionProjection? = nil,
         errorCode: String? = nil
     ) {
@@ -39,6 +41,7 @@ public struct AssemblywrightDeveloperBridgeAppStatus: Equatable, Sendable {
         self.connectionEpoch = connectionEpoch
         self.featureConveyor = featureConveyor
         self.ownerControl = ownerControl
+        self.assemblyLine = assemblyLine
         self.localModelSelection = localModelSelection
         self.errorCode = errorCode
     }
@@ -195,6 +198,9 @@ public enum AssemblywrightDeveloperBridgeProcessError: Error, Equatable, Sendabl
     case outputTooLarge
     case invalidSnapshot
     case helperExited
+    case commandRejectedBeforeEffect
+    case commandNotSubmitted
+    case commandOutcomeUnknown
 }
 
 public struct AssemblywrightDeveloperBridgeValidatedExecutable: Equatable, Sendable {
@@ -430,15 +436,23 @@ public struct FoundationAssemblywrightDeveloperBridgeProcessLauncher:
             || arguments
                 == AssemblywrightDeveloperBridgeProcessLifecycle
                     .localModelReconciliationArguments
+        let assemblyLinePlanningAction = AssemblywrightMacAssemblyLinePlanningAction.allCases
+            .first(where: { $0.helperArguments == arguments })
+        let assemblyLinePlanning = assemblyLinePlanningAction != nil
         let inputLimit = approvedFeatureEnqueue
             ? AssemblywrightMacFeatureConveyorApprovedFeatureDraft.maximumRequestBytes
             : localModelSelection
                 ? AssemblywrightMacLocalModelSelectionControl.maximumFrameBytes
+                : assemblyLinePlanning
+                    ? AssemblywrightMacAssemblyLineOwnerControl.maximumRequestBytes
             : 8 * 1_024
         let outputLimit = approvedFeatureEnqueue
             ? AssemblywrightMacFeatureConveyorOwnerControl.maximumReceiptBytes
+            : assemblyLinePlanning
+                ? AssemblywrightMacAssemblyLineOwnerControl.maximumResponseBytes
             : 8 * 1_024
-        guard (ownerActions.contains(arguments) || approvedFeatureEnqueue || localModelSelection),
+        guard (ownerActions.contains(arguments) || approvedFeatureEnqueue || localModelSelection
+                || assemblyLinePlanning),
               !input.isEmpty, input.count <= inputLimit else {
             throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
         }
@@ -463,10 +477,12 @@ public struct FoundationAssemblywrightDeveloperBridgeProcessLauncher:
             deadline: .now() + .milliseconds(timeoutMilliseconds),
             execute: timeout
         )
+        var inputDelivered = false
         do {
             try runningProcessValidator.validate(processIdentifier: process.processIdentifier, expected: executable)
             try inputPipe.fileHandleForWriting.write(contentsOf: input)
             try inputPipe.fileHandleForWriting.close()
+            inputDelivered = true
             let output = try await withTaskCancellationHandler {
                 var result = Data()
                 while true {
@@ -496,17 +512,48 @@ public struct FoundationAssemblywrightDeveloperBridgeProcessLauncher:
                 throw AssemblywrightDeveloperBridgeProcessError.teardownFailed
             }
             try Task.checkCancellation()
+            if assemblyLinePlanning, process.terminationStatus != 0 {
+                guard output.isEmpty else {
+                    throw AssemblywrightDeveloperBridgeProcessError.commandOutcomeUnknown
+                }
+                switch process.terminationStatus {
+                case AssemblywrightMacAssemblyLineHelperExitStatus.rejectedBeforeEffect:
+                    throw AssemblywrightDeveloperBridgeProcessError.commandRejectedBeforeEffect
+                case AssemblywrightMacAssemblyLineHelperExitStatus.outcomeUnknown:
+                    throw AssemblywrightDeveloperBridgeProcessError.commandOutcomeUnknown
+                default:
+                    throw AssemblywrightDeveloperBridgeProcessError.commandOutcomeUnknown
+                }
+            }
             guard process.terminationStatus == 0, !output.isEmpty,
                   output.count <= outputLimit + 1,
                   output.last == 0x0a else { throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot }
             let line = output.dropLast()
             guard !line.isEmpty, !line.contains(0x0a) else { throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot }
-            return Data(line)
+            let response = Data(line)
+            if let assemblyLinePlanningAction {
+                try AssemblywrightMacAssemblyLineOwnerControl.validateHelperOutput(
+                    action: assemblyLinePlanningAction,
+                    requestData: input,
+                    responseData: response
+                )
+            }
+            return response
         } catch {
             timeout.cancel()
             try? inputPipe.fileHandleForWriting.close()
             guard await Self.terminateKillAndReap(process) else {
                 throw AssemblywrightDeveloperBridgeProcessError.teardownFailed
+            }
+            if assemblyLinePlanning, inputDelivered,
+               error as? AssemblywrightDeveloperBridgeProcessError
+                != .commandRejectedBeforeEffect {
+                throw AssemblywrightDeveloperBridgeProcessError.commandOutcomeUnknown
+            }
+            if assemblyLinePlanning, !inputDelivered,
+               error as? AssemblywrightDeveloperBridgeProcessError
+                != .invalidExecutableSignature {
+                throw AssemblywrightDeveloperBridgeProcessError.commandNotSubmitted
             }
             throw error
         }
@@ -711,7 +758,11 @@ private actor FoundationAssemblywrightDeveloperBridgeProcessSession:
 
 @MainActor
 public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObject {
-    nonisolated public static let maximumLineBytes = 96 * 1_024
+    nonisolated public static let maximumLegacySnapshotBytes = 96 * 1_024
+    nonisolated public static let maximumAssemblyLineSnapshotBytes =
+        AssemblywrightMacAssemblyLineOwnerProjection.maximumBytes
+    nonisolated public static let maximumLineBytes =
+        maximumLegacySnapshotBytes + maximumAssemblyLineSnapshotBytes
     nonisolated public static let maximumBufferedBytes = maximumLineBytes + 1
     nonisolated public static let proofBoundary =
         "Read-only observation shows bounded Windows-authoritative Feature Conveyor and activation readiness. Authoring and owner actions are separate, explicitly confirmed signed-helper operations; observation does not enable authority and stores no token, command, path, raw evidence, credential, or provider output."
@@ -723,6 +774,8 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
         AssemblywrightMacFeatureConveyorApprovedFeatureReceipt?
     @Published public private(set) var pendingApprovedFeatureRecovery:
         AssemblywrightMacApprovedFeaturePendingRecovery?
+    @Published public private(set) var pendingAssemblyLinePlanningAction:
+        AssemblywrightMacAssemblyLinePlanningAction?
     @Published public private(set) var localModelSelectionState:
         AssemblywrightMacLocalModelSelectionState
     @Published public private(set) var localModelSelectionErrorCode: String?
@@ -732,9 +785,14 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
     private let launcher: any AssemblywrightDeveloperBridgeProcessLaunching
     private let localModelSelectionStore: AssemblywrightMacLocalModelSelectionStore
     private let localModelSelectionStoreLoadFailed: Bool
+    private let assemblyLinePendingMutationStore:
+        AssemblywrightMacAssemblyLinePendingMutationStore
+    private let assemblyLinePendingMutationStoreLoadFailed: Bool
     private var activeEventRelayConfiguration: AssemblywrightMacDeveloperEventRelayConfiguration?
     private var task: Task<Void, Never>?
     private var session: (any AssemblywrightDeveloperBridgeProcessSession)?
+    private var pendingAssemblyLinePlanningMutation:
+        AssemblywrightMacPendingAssemblyLinePlanningMutation?
 
     public init(
         configuration: AssemblywrightDeveloperBridgeProcessConfiguration = .init(),
@@ -742,12 +800,15 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
             SecurityAssemblywrightDeveloperBridgeExecutableValidator(),
         launcher: any AssemblywrightDeveloperBridgeProcessLaunching =
             FoundationAssemblywrightDeveloperBridgeProcessLauncher(),
-        localModelSelectionStore: AssemblywrightMacLocalModelSelectionStore = .init()
+        localModelSelectionStore: AssemblywrightMacLocalModelSelectionStore = .init(),
+        assemblyLinePendingMutationStore:
+            AssemblywrightMacAssemblyLinePendingMutationStore = .init()
     ) {
         self.configuration = configuration
         self.validator = validator
         self.launcher = launcher
         self.localModelSelectionStore = localModelSelectionStore
+        self.assemblyLinePendingMutationStore = assemblyLinePendingMutationStore
         let loadedSelection: AssemblywrightMacLocalModelSelectionState
         var selectionStoreLoadFailed = false
         do {
@@ -758,6 +819,18 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
             selectionStoreLoadFailed = true
         }
         localModelSelectionState = loadedSelection
+        var loadedAssemblyLinePendingMutation:
+            AssemblywrightMacPendingAssemblyLinePlanningMutation?
+        var assemblyLineStoreLoadFailed = false
+        do {
+            loadedAssemblyLinePendingMutation = try assemblyLinePendingMutationStore.load()
+        } catch {
+            loadedAssemblyLinePendingMutation = nil
+            assemblyLineStoreLoadFailed = true
+        }
+        pendingAssemblyLinePlanningMutation = loadedAssemblyLinePendingMutation
+        pendingAssemblyLinePlanningAction = loadedAssemblyLinePendingMutation?.action
+        assemblyLinePendingMutationStoreLoadFailed = assemblyLineStoreLoadFailed
         var relayConfiguration = configuration.eventRelayConfiguration
         if !selectionStoreLoadFailed,
            let active = loadedSelection.active, let current = relayConfiguration {
@@ -772,10 +845,19 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
         localModelSelectionErrorCode = selectionStoreLoadFailed
             ? "local_model_selection_store_invalid"
             : loadedSelection.pending == nil ? nil : "local_model_reconciliation_required"
+        ownerActionErrorCode = assemblyLineStoreLoadFailed
+            ? "assembly_line_pending_store_invalid"
+            : loadedAssemblyLinePendingMutation == nil
+                ? nil : "assembly_line_reconciliation_required"
         if selectionStoreLoadFailed {
             status = .init(
                 phase: .masterOffline,
                 errorCode: "local_model_selection_store_invalid"
+            )
+        } else if assemblyLineStoreLoadFailed {
+            status = .init(
+                phase: .masterOffline,
+                errorCode: "assembly_line_pending_store_invalid"
             )
         } else if configuration.executableURL == nil {
             status = .disabled
@@ -795,6 +877,13 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
             status = .init(
                 phase: .masterOffline,
                 errorCode: "local_model_selection_store_invalid"
+            )
+            return
+        }
+        guard !assemblyLinePendingMutationStoreLoadFailed else {
+            status = .init(
+                phase: .masterOffline,
+                errorCode: "assembly_line_pending_store_invalid"
             )
             return
         }
@@ -966,6 +1055,138 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
                 : "approved_feature_reconciliation_required"
             status = .init(phase: .masterOffline, errorCode: ownerActionErrorCode)
             start()
+        }
+    }
+
+    public func performAssemblyLinePlanningAction(
+        _ action: AssemblywrightMacAssemblyLinePlanningAction,
+        requestData: Data
+    ) async {
+        guard !ownerActionInProgress, pendingAssemblyLinePlanningMutation == nil,
+              status.phase == .connected,
+              let projection = status.assemblyLine,
+              let (executableURL, expectedTeamIdentifier) =
+                approvedFeatureCommandConfiguration() else {
+            ownerActionErrorCode = pendingAssemblyLinePlanningMutation == nil
+                ? "assembly_line_action_unavailable"
+                : "assembly_line_reconciliation_required"
+            return
+        }
+        ownerActionInProgress = true
+        ownerActionErrorCode = nil
+        defer { ownerActionInProgress = false }
+        do {
+            try AssemblywrightMacAssemblyLineOwnerControl.validateRequest(
+                action: action,
+                requestData: requestData,
+                against: projection
+            )
+            await stop()
+            guard status.errorCode == nil else {
+                throw AssemblywrightDeveloperBridgeProcessError.teardownFailed
+            }
+            let validated = try validator.validate(
+                executableURL: executableURL,
+                expectedTeamIdentifier: expectedTeamIdentifier
+            )
+            let pending = try AssemblywrightMacPendingAssemblyLinePlanningMutation(
+                action: action,
+                requestData: requestData
+            )
+            try assemblyLinePendingMutationStore.save(pending)
+            pendingAssemblyLinePlanningMutation = pending
+            pendingAssemblyLinePlanningAction = action
+            let response = try await launcher.runCommand(
+                executable: validated,
+                arguments: action.helperArguments,
+                input: pending.requestData
+            )
+            try AssemblywrightMacAssemblyLineOwnerControl.validateHelperOutput(
+                action: action,
+                requestData: pending.requestData,
+                responseData: response
+            )
+            try clearPendingAssemblyLinePlanningMutation()
+            status = .init(phase: .starting)
+            start()
+        } catch {
+            if pendingAssemblyLinePlanningMutation != nil,
+               Self.isKnownPreEffectAssemblyLineFailure(error) {
+                do {
+                    try clearPendingAssemblyLinePlanningMutation()
+                } catch {
+                    ownerActionErrorCode = "assembly_line_pending_store_invalid"
+                    status = .init(phase: .masterOffline, errorCode: ownerActionErrorCode)
+                    start()
+                    return
+                }
+            }
+            ownerActionErrorCode = pendingAssemblyLinePlanningMutation == nil
+                ? error is AssemblywrightMacAssemblyLinePendingStoreError
+                    ? "assembly_line_pending_store_invalid"
+                    : error is AssemblywrightMacAssemblyLineError
+                        ? "assembly_line_action_rejected" : Self.errorCode(for: error)
+                : "assembly_line_reconciliation_required"
+            status = .init(phase: .masterOffline, errorCode: ownerActionErrorCode)
+            start()
+        }
+    }
+
+    public func reconcilePendingAssemblyLinePlanningMutation() async {
+        guard !ownerActionInProgress,
+              let pending = pendingAssemblyLinePlanningMutation,
+              let (executableURL, expectedTeamIdentifier) =
+                approvedFeatureCommandConfiguration() else {
+            if pendingAssemblyLinePlanningMutation != nil {
+                ownerActionErrorCode = "assembly_line_reconciliation_required"
+            }
+            return
+        }
+        ownerActionInProgress = true
+        ownerActionErrorCode = nil
+        defer { ownerActionInProgress = false }
+        do {
+            await stop()
+            guard status.errorCode == nil else {
+                throw AssemblywrightDeveloperBridgeProcessError.teardownFailed
+            }
+            let validated = try validator.validate(
+                executableURL: executableURL,
+                expectedTeamIdentifier: expectedTeamIdentifier
+            )
+            let response = try await launcher.runCommand(
+                executable: validated,
+                arguments: pending.action.helperArguments,
+                input: pending.requestData
+            )
+            try AssemblywrightMacAssemblyLineOwnerControl.validateHelperOutput(
+                action: pending.action,
+                requestData: pending.requestData,
+                responseData: response
+            )
+            try clearPendingAssemblyLinePlanningMutation()
+            status = .init(phase: .starting)
+            start()
+        } catch {
+            ownerActionErrorCode = "assembly_line_reconciliation_required"
+            status = .init(phase: .masterOffline, errorCode: ownerActionErrorCode)
+            start()
+        }
+    }
+
+    private func clearPendingAssemblyLinePlanningMutation() throws {
+        try assemblyLinePendingMutationStore.clear()
+        pendingAssemblyLinePlanningMutation = nil
+        pendingAssemblyLinePlanningAction = nil
+    }
+
+    private static func isKnownPreEffectAssemblyLineFailure(_ error: Error) -> Bool {
+        switch error as? AssemblywrightDeveloperBridgeProcessError {
+        case .commandRejectedBeforeEffect, .commandNotSubmitted, .launchFailed,
+            .invalidExecutableSignature:
+            true
+        default:
+            false
         }
     }
 
@@ -1161,6 +1382,7 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
                 connectionEpoch: snapshot.connectionEpoch,
                 featureConveyor: snapshot.featureConveyor,
                 ownerControl: snapshot.ownerControl,
+                assemblyLine: snapshot.assemblyLine,
                 localModelSelection: snapshot.localModelSelection
             )
         case .backingOff:
@@ -1222,6 +1444,9 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
         case .outputTooLarge: "helper_output_too_large"
         case .invalidSnapshot: "invalid_helper_snapshot"
         case .helperExited: "helper_exited"
+        case .commandRejectedBeforeEffect: "assembly_line_action_rejected"
+        case .commandNotSubmitted: "assembly_line_action_rejected"
+        case .commandOutcomeUnknown: "assembly_line_reconciliation_required"
         case nil: "helper_unavailable"
         }
     }

@@ -24,11 +24,13 @@ use assemblywright_master::{
 use assemblywright_protocol::CapabilityKind;
 use assemblywright_protocol::{
     feature_conveyor_provider_binding_sha256, repository_preflight_fingerprint_sha256,
-    AuthenticatedHandshakeRequest, CancellationAcknowledgement, CancellationPollRequest,
-    CapabilityDescriptor, DeviceId, DeviceRole, DistributedEventBatch,
+    AssemblyLineAutoRunReceipt, AssemblyLineAutoRunRequest, AssemblyLineOwnerProjection,
+    AuthenticatedHandshakeRequest, BrainstormingOwnerApprovalBinding, CancellationAcknowledgement,
+    CancellationPollRequest, CapabilityDescriptor, DeviceId, DeviceRole, DistributedEventBatch,
     DistributedEventBatchRequest, EnrollmentCsrReply, EnrollmentInvitation,
-    FeatureConveyorAbandonAndAdvanceReceipt, FeatureConveyorAbandonAndAdvanceRequest,
-    FeatureConveyorAbandonAndAdvanceStatus, FeatureConveyorActivationEvidenceAdmissionProjection,
+    FeatureBrainstormingDraft, FeatureConveyorAbandonAndAdvanceReceipt,
+    FeatureConveyorAbandonAndAdvanceRequest, FeatureConveyorAbandonAndAdvanceStatus,
+    FeatureConveyorActivationEvidenceAdmissionProjection,
     FeatureConveyorActivationEvidenceAdmissionReceipt,
     FeatureConveyorActivationEvidenceAdmissionRequest, FeatureConveyorActivationReceipt,
     FeatureConveyorActivationRequest, FeatureConveyorApprovedFeatureReceipt,
@@ -47,19 +49,22 @@ use assemblywright_protocol::{
     FeatureConveyorRepositoryPreflightRequest, FeatureConveyorRepositoryPreflightStatus,
     FeatureConveyorRepositorySnapshotClaimReceipt, FeatureConveyorRepositorySnapshotClaimRequest,
     FeatureConveyorRepositorySnapshotClaimStatus, FeatureConveyorReviewGatewayRequest,
-    FeatureConveyorReviewPacket, FeatureConveyorValidationGateRequest, FixtureJobResult,
-    HandshakeRequest, HandshakeResponse, HandshakeStatus, JobEnvelope, JobResultEnvelope,
-    JobResultStatus, LocalCodingJobResult, LocalCodingResultArtifactAdmission,
-    LocalCodingResultArtifactReceipt, LocalCodingSnapshotChunk, LocalCodingSnapshotChunkRequest,
-    LocalModelSelectionProjection, LocalModelSelectionReceipt, LocalModelSelectionRequest,
+    FeatureConveyorReviewPacket, FeatureConveyorValidationGateRequest, FeatureQueueEntryProjection,
+    FixtureJobResult, FrozenBrainstormingSpecification, HandshakeRequest, HandshakeResponse,
+    HandshakeStatus, JobEnvelope, JobResultEnvelope, JobResultStatus, LocalCodingJobResult,
+    LocalCodingResultArtifactAdmission, LocalCodingResultArtifactReceipt, LocalCodingSnapshotChunk,
+    LocalCodingSnapshotChunkRequest, LocalModelSelectionProjection, LocalModelSelectionReceipt,
+    LocalModelSelectionRequest, ProjectBrainstormingDraft, RepositoryCreationProjection,
     Sensitivity, StepId, TaskId, ENROLLMENT_INVITATION_READY_STATUS,
     ENROLLMENT_PAIRING_SCHEMA_VERSION, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
-    MAX_ENROLLMENT_PAIRING_FRAME_BYTES, MAX_FEATURE_CONVEYOR_CODING_DISPATCH_REQUEST_BYTES,
+    MAX_ASSEMBLY_LINE_OWNER_PROJECTION_BYTES, MAX_ENROLLMENT_PAIRING_FRAME_BYTES,
+    MAX_FEATURE_CONVEYOR_CODING_DISPATCH_REQUEST_BYTES,
     MAX_FEATURE_CONVEYOR_OWNER_ACTIVATION_FRAME_BYTES,
     MAX_FEATURE_CONVEYOR_OWNER_RESOLUTION_REQUEST_BYTES,
     MAX_FEATURE_CONVEYOR_REPOSITORY_PREFLIGHT_REQUEST_BYTES,
-    MAX_FEATURE_CONVEYOR_SNAPSHOT_CLAIM_REQUEST_BYTES, MAX_LOCAL_CODING_SNAPSHOT_CHUNK_BYTES,
-    MAX_LOCAL_MODEL_SELECTION_FRAME_BYTES, MAX_WIRE_FRAME_BYTES, PROTOCOL_VERSION,
+    MAX_FEATURE_CONVEYOR_SNAPSHOT_CLAIM_REQUEST_BYTES, MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+    MAX_LOCAL_CODING_SNAPSHOT_CHUNK_BYTES, MAX_LOCAL_MODEL_SELECTION_FRAME_BYTES,
+    MAX_WIRE_FRAME_BYTES, PROTOCOL_VERSION,
 };
 use axum::body::Bytes;
 use axum::extract::rejection::BytesRejection;
@@ -2250,6 +2255,48 @@ async fn serve_runtime(
             get(get_feature_conveyor_status),
         )
         .route(
+            "/v1/assembly-line",
+            get(get_assembly_line_owner_projection).layer(DefaultBodyLimit::max(
+                MAX_ASSEMBLY_LINE_OWNER_PROJECTION_BYTES,
+            )),
+        )
+        .route(
+            "/v1/assembly-line/project-drafts",
+            post(record_assembly_line_project_draft).layer(DefaultBodyLimit::max(
+                MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            )),
+        )
+        .route(
+            "/v1/assembly-line/feature-drafts",
+            post(record_assembly_line_feature_draft).layer(DefaultBodyLimit::max(
+                MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            )),
+        )
+        .route(
+            "/v1/assembly-line/frozen-specifications",
+            post(record_assembly_line_frozen_specification).layer(DefaultBodyLimit::max(
+                MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            )),
+        )
+        .route(
+            "/v1/assembly-line/project-approvals",
+            post(approve_assembly_line_project).layer(DefaultBodyLimit::max(
+                MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            )),
+        )
+        .route(
+            "/v1/assembly-line/feature-approvals",
+            post(approve_assembly_line_feature).layer(DefaultBodyLimit::max(
+                MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            )),
+        )
+        .route(
+            "/v1/assembly-line/auto-run",
+            post(set_assembly_line_auto_run).layer(DefaultBodyLimit::max(
+                MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            )),
+        )
+        .route(
             "/v1/feature-conveyor/owner-control-bridge",
             post(designate_owner_control_bridge),
         )
@@ -2541,6 +2588,48 @@ fn remote_router(state: AppState) -> Router {
             get(remote_get_feature_conveyor_owner_control),
         )
         .route(
+            "/v1/distributed/assembly-line",
+            get(remote_get_assembly_line_owner_projection).layer(DefaultBodyLimit::max(
+                MAX_ASSEMBLY_LINE_OWNER_PROJECTION_BYTES,
+            )),
+        )
+        .route(
+            "/v1/distributed/assembly-line/project-drafts",
+            post(remote_record_assembly_line_project_draft).layer(DefaultBodyLimit::max(
+                MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            )),
+        )
+        .route(
+            "/v1/distributed/assembly-line/feature-drafts",
+            post(remote_record_assembly_line_feature_draft).layer(DefaultBodyLimit::max(
+                MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            )),
+        )
+        .route(
+            "/v1/distributed/assembly-line/frozen-specifications",
+            post(remote_record_assembly_line_frozen_specification).layer(DefaultBodyLimit::max(
+                MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            )),
+        )
+        .route(
+            "/v1/distributed/assembly-line/project-approvals",
+            post(remote_approve_assembly_line_project).layer(DefaultBodyLimit::max(
+                MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            )),
+        )
+        .route(
+            "/v1/distributed/assembly-line/feature-approvals",
+            post(remote_approve_assembly_line_feature).layer(DefaultBodyLimit::max(
+                MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            )),
+        )
+        .route(
+            "/v1/distributed/assembly-line/auto-run",
+            post(remote_set_assembly_line_auto_run).layer(DefaultBodyLimit::max(
+                MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            )),
+        )
+        .route(
             "/v1/distributed/feature-conveyor/activation",
             post(remote_activate_feature_orchestration).layer(DefaultBodyLimit::max(
                 MAX_FEATURE_CONVEYOR_OWNER_ACTIVATION_FRAME_BYTES,
@@ -2673,6 +2762,178 @@ async fn remote_get_feature_conveyor_owner_control(
         .feature_conveyor_owner_control_projection(&registration)
         .map_err(|_| unauthorized())?;
     Ok(Json(projection))
+}
+
+fn require_remote_assembly_line_owner(
+    state: &AppState,
+    session: &RemoteSession,
+) -> Result<DeviceRegistration, ApiError> {
+    let registration = require_remote_application_session(state, session, None)?;
+    if registration.role != DeviceRole::MacBridge {
+        return Err(unauthorized());
+    }
+    Ok(registration)
+}
+
+async fn remote_get_assembly_line_owner_projection(
+    State(state): State<AppState>,
+    Extension(session): Extension<RemoteSession>,
+) -> ApiResult<AssemblyLineOwnerProjection> {
+    let registration = require_remote_assembly_line_owner(&state, &session)?;
+    let mut process = lock_process(&state)?;
+    process
+        .kernel_mut()
+        .authorize_assembly_line_owner_bridge(&registration)
+        .map_err(|_| unauthorized())?;
+    let projection = process
+        .kernel()
+        .assembly_line_owner_projection(current_time_ms().map_err(api_error)?)
+        .map_err(assembly_line_api_error)?;
+    Ok(Json(projection))
+}
+
+async fn remote_record_assembly_line_project_draft(
+    State(state): State<AppState>,
+    Extension(session): Extension<RemoteSession>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<AssemblyLineOwnerProjection> {
+    let registration = require_remote_assembly_line_owner(&state, &session)?;
+    let body = assembly_line_body(body)?;
+    let draft = ProjectBrainstormingDraft::decode_frame(&body)
+        .map_err(|_| assembly_line_request_rejected())?;
+    let now_ms = current_time_ms().map_err(api_error)?;
+    let mut process = lock_process(&state)?;
+    process
+        .kernel_mut()
+        .authorize_assembly_line_owner_bridge(&registration)
+        .map_err(|_| unauthorized())?;
+    process
+        .kernel_mut()
+        .record_assembly_line_project_draft(&draft, now_ms)
+        .map_err(assembly_line_api_error)?;
+    Ok(Json(
+        process
+            .kernel()
+            .assembly_line_owner_projection(now_ms)
+            .map_err(assembly_line_api_error)?,
+    ))
+}
+
+async fn remote_record_assembly_line_feature_draft(
+    State(state): State<AppState>,
+    Extension(session): Extension<RemoteSession>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<AssemblyLineOwnerProjection> {
+    let registration = require_remote_assembly_line_owner(&state, &session)?;
+    let body = assembly_line_body(body)?;
+    let draft = FeatureBrainstormingDraft::decode_frame(&body)
+        .map_err(|_| assembly_line_request_rejected())?;
+    let now_ms = current_time_ms().map_err(api_error)?;
+    let mut process = lock_process(&state)?;
+    process
+        .kernel_mut()
+        .authorize_assembly_line_owner_bridge(&registration)
+        .map_err(|_| unauthorized())?;
+    process
+        .kernel_mut()
+        .record_assembly_line_feature_draft(&draft, now_ms)
+        .map_err(assembly_line_api_error)?;
+    Ok(Json(
+        process
+            .kernel()
+            .assembly_line_owner_projection(now_ms)
+            .map_err(assembly_line_api_error)?,
+    ))
+}
+
+async fn remote_record_assembly_line_frozen_specification(
+    State(state): State<AppState>,
+    Extension(session): Extension<RemoteSession>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<AssemblyLineOwnerProjection> {
+    let registration = require_remote_assembly_line_owner(&state, &session)?;
+    let body = assembly_line_body(body)?;
+    let frozen = FrozenBrainstormingSpecification::decode_frame(&body)
+        .map_err(|_| assembly_line_request_rejected())?;
+    let now_ms = current_time_ms().map_err(api_error)?;
+    let mut process = lock_process(&state)?;
+    process
+        .kernel_mut()
+        .authorize_assembly_line_owner_bridge(&registration)
+        .map_err(|_| unauthorized())?;
+    process
+        .kernel_mut()
+        .record_assembly_line_frozen_specification(&frozen, now_ms)
+        .map_err(assembly_line_api_error)?;
+    Ok(Json(
+        process
+            .kernel()
+            .assembly_line_owner_projection(now_ms)
+            .map_err(assembly_line_api_error)?,
+    ))
+}
+
+async fn remote_approve_assembly_line_project(
+    State(state): State<AppState>,
+    Extension(session): Extension<RemoteSession>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<RepositoryCreationProjection> {
+    let registration = require_remote_assembly_line_owner(&state, &session)?;
+    let body = assembly_line_body(body)?;
+    let approval = BrainstormingOwnerApprovalBinding::decode_frame(&body)
+        .map_err(|_| assembly_line_request_rejected())?;
+    let mut process = lock_process(&state)?;
+    process
+        .kernel_mut()
+        .authorize_assembly_line_owner_bridge(&registration)
+        .map_err(|_| unauthorized())?;
+    let projection = process
+        .kernel_mut()
+        .approve_assembly_line_project(&approval, current_time_ms().map_err(api_error)?)
+        .map_err(assembly_line_api_error)?;
+    Ok(Json(projection))
+}
+
+async fn remote_approve_assembly_line_feature(
+    State(state): State<AppState>,
+    Extension(session): Extension<RemoteSession>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<FeatureQueueEntryProjection> {
+    let registration = require_remote_assembly_line_owner(&state, &session)?;
+    let body = assembly_line_body(body)?;
+    let approval = BrainstormingOwnerApprovalBinding::decode_frame(&body)
+        .map_err(|_| assembly_line_request_rejected())?;
+    let mut process = lock_process(&state)?;
+    process
+        .kernel_mut()
+        .authorize_assembly_line_owner_bridge(&registration)
+        .map_err(|_| unauthorized())?;
+    let projection = process
+        .kernel_mut()
+        .approve_assembly_line_feature_and_enqueue(&approval, current_time_ms().map_err(api_error)?)
+        .map_err(assembly_line_api_error)?;
+    Ok(Json(projection))
+}
+
+async fn remote_set_assembly_line_auto_run(
+    State(state): State<AppState>,
+    Extension(session): Extension<RemoteSession>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<AssemblyLineAutoRunReceipt> {
+    let registration = require_remote_assembly_line_owner(&state, &session)?;
+    let body = assembly_line_body(body)?;
+    let request = AssemblyLineAutoRunRequest::decode_frame(&body)
+        .map_err(|_| assembly_line_request_rejected())?;
+    let mut process = lock_process(&state)?;
+    process
+        .kernel_mut()
+        .authorize_assembly_line_owner_bridge(&registration)
+        .map_err(|_| unauthorized())?;
+    let receipt = process
+        .kernel_mut()
+        .set_assembly_line_auto_run(&request, current_time_ms().map_err(api_error)?)
+        .map_err(assembly_line_api_error)?;
+    Ok(Json(receipt))
 }
 
 async fn remote_activate_feature_orchestration(
@@ -3500,6 +3761,169 @@ async fn get_feature_conveyor_status(
         .feature_conveyor_status()
         .map_err(api_error)?;
     Ok(Json(status))
+}
+
+fn assembly_line_body(body: Result<Bytes, BytesRejection>) -> Result<Bytes, ApiError> {
+    let body = body.map_err(|_| fixed_error(StatusCode::PAYLOAD_TOO_LARGE, "payload_too_large"))?;
+    if body.len() > MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES {
+        return Err(fixed_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "payload_too_large",
+        ));
+    }
+    Ok(body)
+}
+
+fn assembly_line_request_rejected() -> ApiError {
+    fixed_error(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "assembly_line_request_rejected",
+    )
+}
+
+fn assembly_line_api_error(error: MasterError) -> ApiError {
+    match error {
+        MasterError::Protocol(_)
+        | MasterError::InvalidAssemblyLinePlanningInput(_)
+        | MasterError::AssemblyLinePlanningImmutable
+        | MasterError::StaleAssemblyLineOwnerControlRevision { .. }
+        | MasterError::StaleAssemblyLineStateRevision { .. }
+        | MasterError::StaleAssemblyLineQueueRevision { .. }
+        | MasterError::AssemblyLineRepositoryUnavailable
+        | MasterError::AssemblyLineQueueFull => {
+            fixed_error(StatusCode::CONFLICT, "assembly_line_request_rejected")
+        }
+        _ => internal_error(),
+    }
+}
+
+async fn get_assembly_line_owner_projection(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> ApiResult<AssemblyLineOwnerProjection> {
+    authorize(&headers, &state)?;
+    let projection = lock_process(&state)?
+        .kernel()
+        .assembly_line_owner_projection(current_time_ms().map_err(api_error)?)
+        .map_err(assembly_line_api_error)?;
+    Ok(Json(projection))
+}
+
+async fn record_assembly_line_project_draft(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<AssemblyLineOwnerProjection> {
+    authorize(&headers, &state)?;
+    let body = assembly_line_body(body)?;
+    let draft = ProjectBrainstormingDraft::decode_frame(&body)
+        .map_err(|_| assembly_line_request_rejected())?;
+    let now_ms = current_time_ms().map_err(api_error)?;
+    let mut process = lock_process(&state)?;
+    process
+        .kernel_mut()
+        .record_assembly_line_project_draft(&draft, now_ms)
+        .map_err(assembly_line_api_error)?;
+    Ok(Json(
+        process
+            .kernel()
+            .assembly_line_owner_projection(now_ms)
+            .map_err(assembly_line_api_error)?,
+    ))
+}
+
+async fn record_assembly_line_feature_draft(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<AssemblyLineOwnerProjection> {
+    authorize(&headers, &state)?;
+    let body = assembly_line_body(body)?;
+    let draft = FeatureBrainstormingDraft::decode_frame(&body)
+        .map_err(|_| assembly_line_request_rejected())?;
+    let now_ms = current_time_ms().map_err(api_error)?;
+    let mut process = lock_process(&state)?;
+    process
+        .kernel_mut()
+        .record_assembly_line_feature_draft(&draft, now_ms)
+        .map_err(assembly_line_api_error)?;
+    Ok(Json(
+        process
+            .kernel()
+            .assembly_line_owner_projection(now_ms)
+            .map_err(assembly_line_api_error)?,
+    ))
+}
+
+async fn record_assembly_line_frozen_specification(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<AssemblyLineOwnerProjection> {
+    authorize(&headers, &state)?;
+    let body = assembly_line_body(body)?;
+    let frozen = FrozenBrainstormingSpecification::decode_frame(&body)
+        .map_err(|_| assembly_line_request_rejected())?;
+    let now_ms = current_time_ms().map_err(api_error)?;
+    let mut process = lock_process(&state)?;
+    process
+        .kernel_mut()
+        .record_assembly_line_frozen_specification(&frozen, now_ms)
+        .map_err(assembly_line_api_error)?;
+    Ok(Json(
+        process
+            .kernel()
+            .assembly_line_owner_projection(now_ms)
+            .map_err(assembly_line_api_error)?,
+    ))
+}
+
+async fn approve_assembly_line_project(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<RepositoryCreationProjection> {
+    authorize(&headers, &state)?;
+    let body = assembly_line_body(body)?;
+    let approval = BrainstormingOwnerApprovalBinding::decode_frame(&body)
+        .map_err(|_| assembly_line_request_rejected())?;
+    let projection = lock_process(&state)?
+        .kernel_mut()
+        .approve_assembly_line_project(&approval, current_time_ms().map_err(api_error)?)
+        .map_err(assembly_line_api_error)?;
+    Ok(Json(projection))
+}
+
+async fn approve_assembly_line_feature(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<FeatureQueueEntryProjection> {
+    authorize(&headers, &state)?;
+    let body = assembly_line_body(body)?;
+    let approval = BrainstormingOwnerApprovalBinding::decode_frame(&body)
+        .map_err(|_| assembly_line_request_rejected())?;
+    let projection = lock_process(&state)?
+        .kernel_mut()
+        .approve_assembly_line_feature_and_enqueue(&approval, current_time_ms().map_err(api_error)?)
+        .map_err(assembly_line_api_error)?;
+    Ok(Json(projection))
+}
+
+async fn set_assembly_line_auto_run(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<AssemblyLineAutoRunReceipt> {
+    authorize(&headers, &state)?;
+    let body = assembly_line_body(body)?;
+    let request = AssemblyLineAutoRunRequest::decode_frame(&body)
+        .map_err(|_| assembly_line_request_rejected())?;
+    let receipt = lock_process(&state)?
+        .kernel_mut()
+        .set_assembly_line_auto_run(&request, current_time_ms().map_err(api_error)?)
+        .map_err(assembly_line_api_error)?;
+    Ok(Json(receipt))
 }
 
 async fn designate_owner_control_bridge(

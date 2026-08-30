@@ -17,6 +17,7 @@ AGENTS="AGENTS.md"
 SAFETY_RULES="docs/safety-rules.md"
 DISTRIBUTED_DESIGN="docs/distributed-developer-mode-design.md"
 FEATURE_CONVEYOR_DESIGN="docs/feature-conveyor-design.md"
+FULL_MACHINE_ASSEMBLY_LINE_DESIGN="docs/full-machine-assembly-line-design.md"
 AGENT_WORKFLOW="docs/development-agent-workflow.md"
 
 IPC_TRANSPORT="crates/assemblywright-core/src/ipc_transport.rs"
@@ -42,12 +43,17 @@ PROTOCOL_VALIDATION_GATE_E2E="crates/assemblywright-protocol/tests/validation_ga
 PROTOCOL_REVIEW_GATEWAY_E2E="crates/assemblywright-protocol/tests/review_gateway_contract.rs"
 PROTOCOL_PUBLICATION_E2E="crates/assemblywright-protocol/tests/publication_coordinator_contract.rs"
 PROTOCOL_OWNER_RESOLUTION_E2E="crates/assemblywright-protocol/tests/owner_resolution_contract.rs"
+PROTOCOL_ASSEMBLY_LINE_E2E="crates/assemblywright-protocol/tests/full_machine_assembly_line_contract.rs"
 MASTER_E2E="crates/assemblywright-master/tests/master_lifecycle_e2e.rs"
 MASTER_PROCESS_E2E="crates/assemblywright-master/tests/master_process_e2e.rs"
 MASTER_IDENTITY_E2E="crates/assemblywright-master/tests/enrollment_identity_e2e.rs"
 MASTER_REMOTE_MTLS_E2E="crates/assemblywright-master/tests/remote_mtls_e2e.rs"
 MASTER_EVENT_E2E="crates/assemblywright-master/tests/event_cursor_e2e.rs"
 MASTER_CONVEYOR_E2E="crates/assemblywright-master/tests/feature_conveyor_kernel.rs"
+MASTER_ASSEMBLY_LINE_E2E="crates/assemblywright-master/tests/assembly_line_planning.rs"
+MASTER_ASSEMBLY_LINE_EFFECTS_E2E="crates/assemblywright-master/src/planning_effects_tests.rs"
+MASTER_ASSEMBLY_LINE_HTTP_E2E="crates/assemblywright-master/tests/assembly_line_planning_http.rs"
+MASTER_ASSEMBLY_LINE_MTLS_E2E="crates/assemblywright-master/tests/assembly_line_planning_mtls.rs"
 MASTER_ARTIFACT_INTEGRATION="crates/assemblywright-master/src/integration.rs"
 MASTER_ARTIFACT_INTEGRATION_E2E="crates/assemblywright-master/tests/artifact_integration_e2e.rs"
 MASTER_VALIDATION_CONTAINMENT="crates/assemblywright-master/src/validation_containment.rs"
@@ -76,9 +82,11 @@ MAC_APPROVED_FEATURE_AUTHORING="apps/mac/Sources/AssemblywrightMacCore/FeatureCo
 MAC_ACTIVATION_CONTROL="apps/mac/Sources/AssemblywrightMacCore/FeatureConveyorActivationControl.swift"
 MAC_BRIDGE_PROCESS="apps/mac/Sources/AssemblywrightMacCore/DeveloperBridgeProcessLifecycle.swift"
 MAC_LOCAL_MODEL_SELECTION="apps/mac/Sources/AssemblywrightMacCore/LocalModelSelection.swift"
+MAC_ASSEMBLY_LINE_CONTROL="apps/mac/Sources/AssemblywrightMacCore/AssemblyLineOwnerControl.swift"
 MAC_EVENT_RELAY="apps/mac/Sources/AssemblywrightMacCore/DeveloperEventRelay.swift"
 MAC_APP="apps/mac/Sources/AssemblywrightMacApp/AssemblywrightMacApp.swift"
 MAC_APPROVED_FEATURE_VIEW="apps/mac/Sources/AssemblywrightMacApp/ApprovedFeatureAuthoringView.swift"
+MAC_ASSEMBLY_LINE_VIEW="apps/mac/Sources/AssemblywrightMacApp/AssemblyLineOwnerView.swift"
 MAC_BRIDGE_TESTS="apps/mac/Tests/AssemblywrightMacCoreTests/DeveloperBridgeTests.swift"
 MAC_LOCAL_MODEL_SELECTION_TESTS="apps/mac/Tests/AssemblywrightMacCoreTests/LocalModelSelectionTests.swift"
 MAC_APP_TESTS="apps/mac/Tests/AssemblywrightMacAppTests/AssemblywrightMacAppTests.swift"
@@ -141,19 +149,135 @@ forbid_text() {
   fi
 }
 
+require_exact_line_once() {
+  local label="$1"
+  local file="$2"
+  local expected="$3"
+  local count
+  count="$(grep -Fxc -- "$expected" "$file" || true)"
+  if [[ "$count" != "1" ]]; then
+    fail "$label requires exactly one canonical line in $file (found $count): $expected"
+  fi
+}
+
+require_line_equals() {
+  local label="$1"
+  local file="$2"
+  local line_number="$3"
+  local expected="$4"
+  local actual
+  actual="$(sed -n "${line_number}p" "$file")"
+  if [[ "$actual" != "$expected" ]]; then
+    fail "$label requires exact line $line_number in $file: $expected"
+  fi
+}
+
+contains_false_full_machine_readiness_claim() {
+  local file="$1"
+  awk '
+    function forbidden_predicate_body(body, normalized, search, consumed, readiness_at, prefix, suffix, term) {
+      normalized = body
+      gsub(/(^|[^[:alnum:]_])not[[:space:]]+only([^[:alnum:]_]|$)/, " ", normalized)
+
+      if (normalized ~ /(^|[^[:alnum:]_])(after[[:space:]]+cutover|following[[:space:]]+cutover|once[[:space:]]+cutover)([^[:alnum:]_]|$)/) {
+        return 0
+      }
+
+      search = normalized
+      consumed = ""
+      while ((readiness_at = match(search, /(^|[^[:alnum:]_])(implemented|active|available|production[- ]ready)([^[:alnum:]_]|$)/)) > 0) {
+        prefix = consumed substr(search, 1, readiness_at - 1)
+        term = substr(search, readiness_at, RLENGTH)
+        suffix = substr(search, readiness_at + RLENGTH)
+        gsub(/[^[:alpha:]-]/, "", term)
+
+        if ((term == "implemented" || term == "active" || term == "available") &&
+            (prefix ~ /(^|[^[:alnum:]_])nowhere[[:space:][:punct:]]*$/ ||
+             suffix ~ /^[[:space:][:punct:]]*nowhere([^[:alnum:]_]|$)/)) {
+          consumed = prefix term
+          search = suffix
+          continue
+        }
+        if (term == "implemented" &&
+            prefix ~ /(^|[^[:alnum:]_])partially[[:space:][:punct:]]*$/) {
+          consumed = prefix term
+          search = suffix
+          continue
+        }
+        if (prefix ~ /(^|[^[:alnum:]_])(not|never)([[:space:][:punct:]]+(yet|fully|now|already|currently|officially|actually|directly|completely|partially))*[[:space:][:punct:]]*$/) {
+          consumed = prefix term
+          search = suffix
+          continue
+        }
+        return 1
+      }
+      return 0
+    }
+
+    function terse_readiness_body(body) {
+      return body ~ /^[[:space:][:punct:]]*((fully|now|already|currently|officially)[[:space:]]+)*(implemented|active|available|production[- ]ready)([^[:alnum:]_]|$)/
+    }
+
+    BEGIN { matched = 0 }
+    {
+      line = tolower($0)
+
+      if (line ~ /^[[:space:]]*status[[:space:]]*:/) {
+        body = line
+        sub(/^[[:space:]]*status[[:space:]]*:[[:space:]]*/, "", body)
+        if (forbidden_predicate_body(body)) {
+          matched = 1
+          exit
+        }
+      }
+
+      subject_pattern = "(^|[^[:alnum:]_])(full-machine[[:space:]]+(target|runtime|execution)|assembly[[:space:]]+line)([^[:alnum:]_]|$)"
+      if (match(line, subject_pattern) == 0) {
+        next
+      }
+      rest = substr(line, RSTART + RLENGTH)
+      if (terse_readiness_body(rest) && forbidden_predicate_body(rest)) {
+        matched = 1
+        exit
+      }
+      predicate_pattern = "^[[:space:][:punct:]]*(is|are|has|have|becomes|remains|status)([^[:alnum:]_]|$)"
+      if (match(rest, predicate_pattern) == 0) {
+        next
+      }
+      body = substr(rest, RSTART + RLENGTH)
+      if (forbidden_predicate_body(body)) {
+        matched = 1
+        exit
+      }
+    }
+    END { exit matched ? 0 : 1 }
+  ' "$file"
+}
+
+forbid_false_full_machine_readiness_claim() {
+  local label="$1"
+  local file="$2"
+  if contains_false_full_machine_readiness_claim "$file"; then
+    fail "$label found forbidden readiness claim in $file"
+  fi
+}
+
 for file in \
   "$LOCAL_GATE" "$BUILD_DOCS" "$CHECKLIST" "$ARCHITECTURE" "$KB" "$README" \
   "$BRAND" "$LICENSE_FILE" "$DESIGN" "$AGENTS" "$SAFETY_RULES" \
-  "$DISTRIBUTED_DESIGN" "$FEATURE_CONVEYOR_DESIGN" "$AGENT_WORKFLOW" \
+  "$DISTRIBUTED_DESIGN" "$FEATURE_CONVEYOR_DESIGN" \
+  "$FULL_MACHINE_ASSEMBLY_LINE_DESIGN" "$AGENT_WORKFLOW" \
   "$IPC_TRANSPORT" "$CORE_STARTUP" "$CORE_RELEASE" "$PROTOCOL_CRATE" \
   "$MASTER_CRATE" "$MASTER_PROCESS" "$MASTER_IDENTITY" "$MASTER_SERVICE_HOST" \
   "$AGENT_CRATE" "$AGENT_PROCESS" "$CLI_MAIN" \
   "$PROTOCOL_E2E" "$PROTOCOL_EVENT_E2E" "$PROTOCOL_MLX_E2E" \
   "$PROTOCOL_LOCAL_CODING_E2E" "$PROTOCOL_ARTIFACT_INTEGRATION_E2E" "$PROTOCOL_VALIDATION_GATE_E2E" \
   "$PROTOCOL_REVIEW_GATEWAY_E2E" \
-  "$PROTOCOL_OWNER_RESOLUTION_E2E" \
+  "$PROTOCOL_OWNER_RESOLUTION_E2E" "$PROTOCOL_ASSEMBLY_LINE_E2E" \
   "$MASTER_E2E" "$MASTER_PROCESS_E2E" "$MASTER_IDENTITY_E2E" \
   "$MASTER_REMOTE_MTLS_E2E" "$MASTER_EVENT_E2E" "$MASTER_CONVEYOR_E2E" \
+  "$MASTER_ASSEMBLY_LINE_E2E" "$MASTER_ASSEMBLY_LINE_HTTP_E2E" \
+  "$MASTER_ASSEMBLY_LINE_MTLS_E2E" \
   "$MASTER_ARTIFACT_INTEGRATION" "$MASTER_ARTIFACT_INTEGRATION_E2E" \
   "$MASTER_VALIDATION_CONTAINMENT" "$MASTER_VALIDATION_CONTAINMENT_E2E" \
   "$MASTER_REVIEW_PROVIDER" "$MASTER_REVIEW_PROVIDER_E2E" \
@@ -162,8 +286,9 @@ for file in \
   "$MASTER_SERVICE_E2E" "$AGENT_E2E" "$AGENT_LOCAL_CODING_E2E" "$CLI_NAMING_E2E" \
   "$CLI_READINESS_E2E" \
   "$MAC_BRIDGE" "$MAC_BRIDGE_CLI" "$MAC_BRIDGE_KEYCHAIN" "$MAC_BRIDGE_NETWORK" \
-  "$MAC_BRIDGE_SUPERVISOR" "$MAC_OWNER_CONTROL" "$MAC_BRIDGE_PROCESS" "$MAC_EVENT_RELAY" \
-  "$MAC_APP" "$MAC_BRIDGE_TESTS" "$MAC_APP_TESTS" \
+  "$MAC_BRIDGE_SUPERVISOR" "$MAC_OWNER_CONTROL" "$MAC_ASSEMBLY_LINE_CONTROL" \
+  "$MAC_BRIDGE_PROCESS" "$MAC_EVENT_RELAY" \
+  "$MAC_APP" "$MAC_ASSEMBLY_LINE_VIEW" "$MAC_BRIDGE_TESTS" "$MAC_APP_TESTS" \
   "$MAC_BRIDGE_LIVE_E2E" "$MAC_LOCAL_CODING_SNAPSHOT_E2E" \
   "$REPOSITORY_GATE_PROOF_CONTROLLER" "$RESTRICTED_WORKER_PROOF_CONTROLLER" \
   "$REVIEW_PROVIDER_PROOF_CONTROLLER" "$REVIEW_PROVIDER_LIVE_E2E" \
@@ -221,9 +346,163 @@ require_text "README selected review-provider integration" "$README" \
 require_text "DESIGN conveyor pointer" "$DESIGN" "docs/feature-conveyor-design.md"
 require_text "DESIGN distributed pointer" "$DESIGN" "docs/distributed-developer-mode-design.md"
 require_text "DESIGN assistant non-goal" "$DESIGN" "No general-purpose assistant surface."
-require_text "DESIGN current master schema" "$DESIGN" "schema-v19"
+require_text "DESIGN current master schema" "$DESIGN" "master schema v20"
+require_text "DESIGN preserved legacy schema" "$DESIGN" \
+  "schema-v19 Feature Conveyor grant, queue, activation, and restricted-worker"
 require_text "DESIGN result artifact boundary" "$DESIGN" \
   "Schema v13 adds bounded general-worker packet"
+require_text "DESIGN full-machine target pointer" "$DESIGN" \
+  "docs/full-machine-assembly-line-design.md"
+require_text "DESIGN current bounded runtime boundary" "$DESIGN" \
+  'availability projection is `unavailable`'
+
+require_text "full-machine design review approval" "$FULL_MACHINE_ASSEMBLY_LINE_DESIGN" \
+  "Disposition: APPROVED."
+require_text "full-machine design protected closure" "$FULL_MACHINE_ASSEMBLY_LINE_DESIGN" \
+  "The protected closure includes"
+require_text "full-machine design planning boundary" "$FULL_MACHINE_ASSEMBLY_LINE_DESIGN" \
+  "Orchestrator is planning-only"
+require_text "full-machine design phased cutover" "$FULL_MACHINE_ASSEMBLY_LINE_DESIGN" \
+  "Implementation And Evidence Phases"
+require_text "full-machine design compatibility boundary" "$FULL_MACHINE_ASSEMBLY_LINE_DESIGN" \
+  "No legacy activation, queue receipt, or owner-control designation"
+require_text "full-machine design inert planning boundary" "$FULL_MACHINE_ASSEMBLY_LINE_DESIGN" \
+  "Project approval defaults to Public unless"
+require_text "full-machine design absent effect routes" "$FULL_MACHINE_ASSEMBLY_LINE_DESIGN" \
+  "Start/Stop/Emergency routes"
+
+require_text "safety target remains pending" "$SAFETY_RULES" \
+  "The approved full-machine Assembly Line is only partially implemented"
+require_text "safety control-plane exception" "$SAFETY_RULES" \
+  "The Assemblywright control plane is the sole protected exception"
+require_text "conveyor target current boundary" "$FEATURE_CONVEYOR_DESIGN" \
+  "schema-v19 bounded Feature Conveyor behavior"
+require_text "architecture target current boundary" "$ARCHITECTURE" \
+  "The current Windows master is protocol v5/schema v20"
+require_text "build docs target proof boundary" "$BUILD_DOCS" \
+  "They do not prove provider brainstorming"
+require_text "knowledge base full-machine target" "$KB" \
+  "Approved Full-Machine Assembly Line Target"
+require_text "knowledge base schema-v20 planning facts" "$KB" \
+  "Schema-v20 Inert Assembly Line Planning Foundation"
+require_text "knowledge base native Assembly Line planning E2E" "$KB" \
+  "The native loopback HTTP E2E drives an exact Private project draft"
+require_text "build docs native Assembly Line planning E2E" "$BUILD_DOCS" \
+  "The loopback process E2E drives one exact Private project"
+
+FULL_MACHINE_PHASE_MARKER="Full-machine target phase: partial implementation; protocol-v5/schema-v20 inert planning and presentation exist; execution runtime remains unavailable."
+FULL_MACHINE_PENDING_STATUS="Status: approved target; partial inert planning implementation; execution and live evidence pending; current master is protocol-v5/schema-v20"
+
+for false_claim in \
+  "Status: implemented and active" \
+  "Status: fully implemented and active" \
+  "Full-machine execution is production-ready." \
+  "Full-machine target is implemented." \
+  "Full-machine target is fully implemented." \
+  "Full-machine Assembly Line active." \
+  "Full-machine runtime status: production-ready." \
+  "Full-machine runtime is now active." \
+  "Full-machine target has been implemented." \
+  "Full-machine target is already implemented." \
+  "Full-machine runtime is currently active." \
+  "Full-machine execution is officially production-ready." \
+  "Full-machine target has now been implemented." \
+  "Full-machine target is not only implemented but active." \
+  "Full-machine target is implemented not pending." \
+  "Full-machine runtime is active without restrictions." \
+  "Full-machine target has been implemented no further work." \
+  "Full-machine runtime is available with brainstorming provider." \
+  "Full-machine runtime is available for GitHub creation." \
+  "Full-machine runtime is available through the Start route." \
+  "Full-machine runtime is available through the Stop route." \
+  "Full-machine runtime is available through the Emergency Pause route." \
+  "Full-machine runtime is available through executors and brokers."; do
+  if ! printf '%s\n' "$false_claim" | contains_false_full_machine_readiness_claim -; then
+    fail "full-machine readiness negative-control no longer rejects: $false_claim"
+  fi
+done
+for allowed_claim in \
+  "Assembly Line displays the active feature." \
+  "Full-machine target permits one active child epoch." \
+  "Full-machine target is not implemented." \
+  "Full-machine target is implemented nowhere." \
+  "Full-machine runtime is active after cutover." \
+  "$FULL_MACHINE_PHASE_MARKER" \
+  "$FULL_MACHINE_PENDING_STATUS"; do
+  if printf '%s\n' "$allowed_claim" | contains_false_full_machine_readiness_claim -; then
+    fail "full-machine readiness negative-control rejects allowed pending text: $allowed_claim"
+  fi
+done
+
+require_line_equals "full-machine canonical pending status" \
+  "$FULL_MACHINE_ASSEMBLY_LINE_DESIGN" 3 "$FULL_MACHINE_PENDING_STATUS"
+
+for file in \
+  "$DESIGN" \
+  "$SAFETY_RULES" \
+  "$FEATURE_CONVEYOR_DESIGN" \
+  "$ARCHITECTURE" \
+  "$BUILD_DOCS" \
+  "$KB" \
+  "$FULL_MACHINE_ASSEMBLY_LINE_DESIGN"; do
+  require_exact_line_once "full-machine current/target phase contract" "$file" \
+    "$FULL_MACHINE_PHASE_MARKER"
+  forbid_false_full_machine_readiness_claim \
+    "full-machine pre-cutover boundary" "$file"
+done
+
+require_text "assembly-line protocol contract version" "$PROTOCOL_CRATE" \
+  "FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION: u16 = 1"
+require_text "assembly-line protocol GitHub URL coverage" "$PROTOCOL_ASSEMBLY_LINE_E2E" \
+  "github_url_is_canonical_and_separate_from_internal_identity"
+require_text "assembly-line protocol authority catalog coverage" "$PROTOCOL_ASSEMBLY_LINE_E2E" \
+  "caller_catalog_cannot_self_authorize_against_windows_catalog"
+require_text "master current schema v20" "$MASTER_CRATE" \
+  "pub const MASTER_SCHEMA_VERSION: i64 = 20;"
+require_text "master effect-free project intent" "$MASTER_CRATE" \
+  '"lifecycle": "creation_pending", "github_called": false, "external_effect": false'
+require_text "master effect-free queue intent" "$MASTER_CRATE" \
+  '"dispatch_created": false, "external_effect": false'
+require_text "master inert runtime projection" "$MASTER_CRATE" \
+  'protected_brokers: component("protected_brokers")'
+require_text "master local assembly-line projection route" "$MASTER_PROCESS" \
+  '"/v1/assembly-line"'
+require_text "master remote assembly-line projection route" "$MASTER_PROCESS" \
+  '"/v1/distributed/assembly-line"'
+require_text "master local assembly-line auto-run route" "$MASTER_PROCESS" \
+  '"/v1/assembly-line/auto-run"'
+require_text "master remote assembly-line auto-run route" "$MASTER_PROCESS" \
+  '"/v1/distributed/assembly-line/auto-run"'
+forbid_text "master Start route remains absent" "$MASTER_PROCESS" \
+  '"/v1/assembly-line/start"'
+forbid_text "master Stop route remains absent" "$MASTER_PROCESS" \
+  '"/v1/assembly-line/stop"'
+forbid_text "master Emergency Pause route remains absent" "$MASTER_PROCESS" \
+  '"/v1/assembly-line/emergency-pause"'
+require_text "master schema-v20 inert default coverage" "$MASTER_ASSEMBLY_LINE_E2E" \
+  "schema_v20_defaults_to_inert_stopped_auto_run_and_unavailable_components"
+require_text "master schema-v20 migration coverage" "$MASTER_ASSEMBLY_LINE_E2E" \
+  "schema_v19_file_upgrade_is_backup_first_and_preserves_legacy_tables"
+require_text "master planning HTTP route absence coverage" "$MASTER_ASSEMBLY_LINE_HTTP_E2E" \
+  "has_no_start_stop_routes"
+require_text "master planning effects fake-adapter coverage" "$MASTER_ASSEMBLY_LINE_EFFECTS_E2E" \
+  "self_asserted_adapter_digest_outside_windows_catalog_has_no_effect"
+require_text "master planning mTLS boundary coverage" "$MASTER_ASSEMBLY_LINE_MTLS_E2E" \
+  "designated_mac_mtls_is_required_for_inert_planning_routes"
+require_text "Mac assembly-line strict projection" "$MAC_ASSEMBLY_LINE_CONTROL" \
+  "AssemblywrightMacAssemblyLineOwnerProjection"
+require_text "Mac simplified owner actions fail closed" "$MAC_ASSEMBLY_LINE_VIEW" \
+  "var canStart: Bool { false }"
+require_text "Mac unavailable execution action coverage" "$MAC_APP_TESTS" \
+  "Simple owner actions remain unavailable and Start also requires a feature"
+require_text "Mac exact pending reconciliation UI" "$MAC_ASSEMBLY_LINE_VIEW" \
+  "reconcilePendingAssemblyLinePlanningMutation"
+require_text "build docs protocol assembly-line command" "$BUILD_DOCS" \
+  "cargo test -p assemblywright-protocol --test full_machine_assembly_line_contract"
+require_text "build docs master assembly-line command" "$BUILD_DOCS" \
+  "cargo test -p assemblywright-master --test assembly_line_planning"
+require_text "build docs master planning-effects command" "$BUILD_DOCS" \
+  "cargo test -p assemblywright-master planning_effects::tests"
 
 require_text "conveyor design status" "$FEATURE_CONVEYOR_DESIGN" "default-inert"
 require_text "conveyor design approval" "$FEATURE_CONVEYOR_DESIGN" "Approve and Enqueue"

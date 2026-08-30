@@ -48,8 +48,8 @@ struct AssemblywrightShellView: View {
     @ObservedObject var developerBridge: AssemblywrightDeveloperBridgeProcessLifecycle
 
     var body: some View {
-        DeveloperBridgeStatusView(model: developerBridge)
-            .frame(minWidth: 640, minHeight: 420)
+        AssemblyLineOwnerView(developerBridge: developerBridge)
+            .frame(minWidth: 720, minHeight: 640)
     }
 }
 

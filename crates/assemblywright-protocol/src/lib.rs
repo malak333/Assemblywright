@@ -78,6 +78,16 @@ pub const LOCAL_CODING_RESULT_ARTIFACT_FORMAT: &str = "assemblywright.multi-file
 const LOCAL_CODING_V4_RESULT_ARTIFACT_FORMAT: &str = "assemblywright.readme-replacement.v1";
 pub const LOCAL_CODING_RESULT_ARTIFACT_STATUS: &str = "result_artifact_admitted";
 pub const LOCAL_CODING_FIXTURE_CONTENT: &[u8] = b"assemblywright contained coding fixture\n";
+pub const FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION: u16 = 1;
+pub const MAX_GITHUB_REPOSITORY_URL_BYTES: usize = 256;
+pub const MAX_BRAINSTORMING_INPUT_BYTES: usize = 16 * 1024;
+pub const MAX_BRAINSTORMING_SPECIFICATION_BYTES: usize = 64 * 1024;
+pub const MAX_BRAINSTORMING_ITEMS: usize = 100;
+pub const MAX_ORCHESTRATOR_PROFILES: usize = 64;
+pub const MAX_ASSEMBLY_LINE_QUEUE_COUNT: u16 = 100;
+pub const MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES: usize = 96 * 1024;
+pub const MAX_ASSEMBLY_LINE_REPOSITORIES: usize = 100;
+pub const MAX_ASSEMBLY_LINE_OWNER_PROJECTION_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum ProtocolError {
@@ -161,6 +171,10 @@ pub enum ProtocolError {
     InvalidLocalCodingResultArtifact,
     #[error("feature conveyor owner-control request is invalid")]
     InvalidFeatureConveyorOwnerControl,
+    #[error("canonical GitHub repository URL is invalid")]
+    InvalidGitHubRepositoryUrl,
+    #[error("full-machine assembly-line contract is invalid")]
+    InvalidFullMachineAssemblyLine,
 }
 
 macro_rules! uuid_id {
@@ -569,6 +583,1895 @@ impl LocalModelSelectionReceipt {
         }
         Ok(())
     }
+}
+
+/// Canonical owner-facing GitHub identity. The durable authority continues to
+/// use the separate UUID in `AssemblyLineRepositoryIdentity`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CanonicalGitHubRepositoryUrl {
+    pub url: String,
+}
+
+impl CanonicalGitHubRepositoryUrl {
+    pub fn parse(value: &str) -> Result<Self, ProtocolError> {
+        if value.len() > MAX_GITHUB_REPOSITORY_URL_BYTES
+            || value.chars().any(char::is_control)
+            || value.contains(['?', '#', '%', '\\'])
+        {
+            return Err(ProtocolError::InvalidGitHubRepositoryUrl);
+        }
+        let (scheme, remainder) = value
+            .split_once("://")
+            .ok_or(ProtocolError::InvalidGitHubRepositoryUrl)?;
+        if !scheme.eq_ignore_ascii_case("https") {
+            return Err(ProtocolError::InvalidGitHubRepositoryUrl);
+        }
+        let (authority, path) = remainder
+            .split_once('/')
+            .ok_or(ProtocolError::InvalidGitHubRepositoryUrl)?;
+        if !authority.eq_ignore_ascii_case("github.com")
+            || authority.contains('@')
+            || authority.contains(':')
+        {
+            return Err(ProtocolError::InvalidGitHubRepositoryUrl);
+        }
+        let path = path.strip_suffix('/').unwrap_or(path);
+        let mut components = path.split('/');
+        let owner = components
+            .next()
+            .ok_or(ProtocolError::InvalidGitHubRepositoryUrl)?;
+        let repository = components
+            .next()
+            .ok_or(ProtocolError::InvalidGitHubRepositoryUrl)?;
+        if components.next().is_some() {
+            return Err(ProtocolError::InvalidGitHubRepositoryUrl);
+        }
+        let repository = repository.strip_suffix(".git").unwrap_or(repository);
+        validate_github_name(owner, 39, false)?;
+        validate_github_name(repository, 100, true)?;
+        Ok(Self {
+            url: format!(
+                "https://github.com/{}/{}",
+                owner.to_ascii_lowercase(),
+                repository.to_ascii_lowercase()
+            ),
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if Self::parse(&self.url)?.url != self.url {
+            return Err(ProtocolError::InvalidGitHubRepositoryUrl);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssemblyLineRepositoryIdentity {
+    pub repository_id: Uuid,
+    pub git_url: CanonicalGitHubRepositoryUrl,
+}
+
+impl AssemblyLineRepositoryIdentity {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_uuid("repository_id", self.repository_id)?;
+        self.git_url.validate()
+    }
+
+    pub fn canonical_sha256(&self) -> Result<[u8; 32], ProtocolError> {
+        canonical_sha256("assembly_line_repository_identity", self, Self::validate)
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectVisibility {
+    #[default]
+    Public,
+    Private,
+}
+
+/// One explicitly provisioned planning-only provider/model binding. The
+/// absence of a fallback field is intentional and enforced by strict decode.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OrchestratorProfile {
+    pub configuration_revision: u64,
+    pub provider_id: String,
+    pub model_id: String,
+}
+
+impl Default for OrchestratorProfile {
+    fn default() -> Self {
+        Self {
+            configuration_revision: 1,
+            provider_id: "openai.codex".to_string(),
+            model_id: "gpt-5.6-sol".to_string(),
+        }
+    }
+}
+
+impl OrchestratorProfile {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_positive_limit(
+            "orchestrator_configuration_revision",
+            self.configuration_revision,
+            u64::MAX,
+        )?;
+        validate_identifier(
+            "orchestrator_provider_id",
+            &self.provider_id,
+            MAX_PROVIDER_NAME_BYTES,
+        )?;
+        validate_identifier(
+            "orchestrator_model_id",
+            &self.model_id,
+            MAX_MODEL_NAME_BYTES,
+        )?;
+        if is_path_or_secret_shaped(&self.provider_id) || is_path_or_secret_shaped(&self.model_id) {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        Ok(())
+    }
+
+    pub fn canonical_sha256(&self) -> Result<[u8; 32], ProtocolError> {
+        canonical_sha256("orchestrator_profile", self, Self::validate)
+    }
+}
+
+/// Strict configured planning catalog. Membership, its selected default, and
+/// the complete catalog revision are digest-bound; no fallback is expressible.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OrchestratorCatalog {
+    pub schema_version: u16,
+    pub catalog_revision: u64,
+    pub profiles: Vec<OrchestratorProfile>,
+    pub default_profile_sha256: [u8; 32],
+    pub catalog_sha256: [u8; 32],
+}
+
+impl Default for OrchestratorCatalog {
+    fn default() -> Self {
+        let profile = OrchestratorProfile::default();
+        let mut catalog = Self {
+            schema_version: FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
+            catalog_revision: profile.configuration_revision,
+            default_profile_sha256: profile
+                .canonical_sha256()
+                .expect("fixed default orchestrator profile must remain valid"),
+            profiles: vec![profile],
+            catalog_sha256: [0; 32],
+        };
+        catalog.catalog_sha256 = catalog
+            .canonical_catalog_sha256()
+            .expect("fixed default orchestrator catalog must remain valid");
+        catalog
+    }
+}
+
+impl OrchestratorCatalog {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "orchestrator_catalog",
+            frame,
+            MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    fn validate_content(&self) -> Result<(), ProtocolError> {
+        validate_assembly_line_schema(self.schema_version)?;
+        validate_positive_limit(
+            "orchestrator_catalog_revision",
+            self.catalog_revision,
+            u64::MAX,
+        )?;
+        if self.profiles.is_empty() || self.profiles.len() > MAX_ORCHESTRATOR_PROFILES {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        let mut previous: Option<(&str, &str)> = None;
+        let mut default_matches = 0_usize;
+        for profile in &self.profiles {
+            profile.validate()?;
+            if profile.configuration_revision != self.catalog_revision {
+                return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+            }
+            let identity = (profile.provider_id.as_str(), profile.model_id.as_str());
+            if previous.is_some_and(|previous| previous >= identity) {
+                return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+            }
+            previous = Some(identity);
+            if profile.canonical_sha256()? == self.default_profile_sha256 {
+                default_matches += 1;
+            }
+        }
+        if self.default_profile_sha256 == [0; 32] || default_matches != 1 {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        Ok(())
+    }
+
+    pub fn canonical_catalog_sha256(&self) -> Result<[u8; 32], ProtocolError> {
+        self.validate_content()?;
+        let value = serde_json::json!({
+            "schema_version": self.schema_version,
+            "catalog_revision": self.catalog_revision,
+            "profiles": self.profiles,
+            "default_profile_sha256": self.default_profile_sha256,
+        });
+        Ok(Sha256::digest(canonical_json_bytes(&value)?).into())
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        self.validate_content()?;
+        if self.catalog_sha256 == [0; 32] || self.canonical_catalog_sha256()? != self.catalog_sha256
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        validate_serialized_limit(
+            "orchestrator_catalog",
+            self,
+            MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+        )
+    }
+
+    pub fn validate_selection(&self, selection: &OrchestratorProfile) -> Result<(), ProtocolError> {
+        self.validate()?;
+        selection.validate()?;
+        if selection.configuration_revision != self.catalog_revision
+            || self
+                .profiles
+                .iter()
+                .filter(|profile| *profile == selection)
+                .count()
+                != 1
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        Ok(())
+    }
+
+    /// Bind a caller-carried catalog and selection to the independently loaded
+    /// Windows runtime catalog. Structural self-validation alone is not
+    /// authority.
+    pub fn validate_against_authoritative_catalog(
+        &self,
+        authoritative_catalog: &Self,
+        selection: &OrchestratorProfile,
+    ) -> Result<(), ProtocolError> {
+        self.validate_selection(selection)?;
+        authoritative_catalog.validate_selection(selection)?;
+        if self.catalog_revision != authoritative_catalog.catalog_revision
+            || self.catalog_sha256 != authoritative_catalog.catalog_sha256
+            || self != authoritative_catalog
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectBrainstormingDraft {
+    pub schema_version: u16,
+    pub draft_id: Uuid,
+    pub draft_revision: u64,
+    pub repository: AssemblyLineRepositoryIdentity,
+    #[serde(default)]
+    pub visibility: ProjectVisibility,
+    pub orchestrator_catalog: OrchestratorCatalog,
+    pub orchestrator: OrchestratorProfile,
+    pub idea: String,
+}
+
+impl ProjectBrainstormingDraft {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "project_brainstorming_draft",
+            frame,
+            MAX_BRAINSTORMING_INPUT_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_assembly_line_schema(self.schema_version)?;
+        validate_uuid("draft_id", self.draft_id)?;
+        validate_positive_limit("draft_revision", self.draft_revision, u64::MAX)?;
+        self.repository.validate()?;
+        self.orchestrator_catalog
+            .validate_selection(&self.orchestrator)?;
+        validate_planning_text("project_idea", &self.idea, MAX_BRAINSTORMING_INPUT_BYTES)?;
+        validate_serialized_limit(
+            "project_brainstorming_draft",
+            self,
+            MAX_BRAINSTORMING_INPUT_BYTES,
+        )
+    }
+
+    pub fn canonical_sha256(&self) -> Result<[u8; 32], ProtocolError> {
+        canonical_sha256("project_brainstorming_draft", self, Self::validate)
+    }
+
+    pub fn validate_against_authoritative_catalog(
+        &self,
+        authoritative_catalog: &OrchestratorCatalog,
+    ) -> Result<(), ProtocolError> {
+        self.validate()?;
+        self.orchestrator_catalog
+            .validate_against_authoritative_catalog(authoritative_catalog, &self.orchestrator)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureBrainstormingDraft {
+    pub schema_version: u16,
+    pub draft_id: Uuid,
+    pub draft_revision: u64,
+    pub repository: AssemblyLineRepositoryIdentity,
+    pub expected_repository_revision: u64,
+    pub orchestrator_catalog: OrchestratorCatalog,
+    pub orchestrator: OrchestratorProfile,
+    pub idea: String,
+}
+
+impl FeatureBrainstormingDraft {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "feature_brainstorming_draft",
+            frame,
+            MAX_BRAINSTORMING_INPUT_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_assembly_line_schema(self.schema_version)?;
+        validate_uuid("draft_id", self.draft_id)?;
+        validate_positive_limit("draft_revision", self.draft_revision, u64::MAX)?;
+        validate_positive_limit(
+            "expected_repository_revision",
+            self.expected_repository_revision,
+            u64::MAX,
+        )?;
+        self.repository.validate()?;
+        self.orchestrator_catalog
+            .validate_selection(&self.orchestrator)?;
+        validate_planning_text("feature_idea", &self.idea, MAX_BRAINSTORMING_INPUT_BYTES)?;
+        validate_serialized_limit(
+            "feature_brainstorming_draft",
+            self,
+            MAX_BRAINSTORMING_INPUT_BYTES,
+        )
+    }
+
+    pub fn canonical_sha256(&self) -> Result<[u8; 32], ProtocolError> {
+        canonical_sha256("feature_brainstorming_draft", self, Self::validate)
+    }
+
+    pub fn validate_against_authoritative_catalog(
+        &self,
+        authoritative_catalog: &OrchestratorCatalog,
+    ) -> Result<(), ProtocolError> {
+        self.validate()?;
+        self.orchestrator_catalog
+            .validate_against_authoritative_catalog(authoritative_catalog, &self.orchestrator)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BrainstormingTargetKind {
+    Project,
+    Feature,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrainstormingAcceptanceCriterion {
+    pub id: String,
+    pub requirement: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrainstormingSpecificationDocument {
+    pub title: String,
+    pub outcome: String,
+    pub acceptance_criteria: Vec<BrainstormingAcceptanceCriterion>,
+    pub obligations: Vec<String>,
+}
+
+impl BrainstormingSpecificationDocument {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_planning_text("specification_title", &self.title, 256)?;
+        validate_planning_text("specification_outcome", &self.outcome, 8 * 1024)?;
+        if self.acceptance_criteria.is_empty()
+            || self.acceptance_criteria.len() > MAX_BRAINSTORMING_ITEMS
+            || self.obligations.is_empty()
+            || self.obligations.len() > MAX_BRAINSTORMING_ITEMS
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        let mut acceptance_ids = BTreeSet::new();
+        for criterion in &self.acceptance_criteria {
+            validate_identifier("acceptance_criterion_id", &criterion.id, 128)?;
+            validate_planning_text(
+                "acceptance_criterion_requirement",
+                &criterion.requirement,
+                4 * 1024,
+            )?;
+            if !acceptance_ids.insert(criterion.id.as_str()) {
+                return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+            }
+        }
+        let mut obligations = BTreeSet::new();
+        for obligation in &self.obligations {
+            validate_planning_text("specification_obligation", obligation, 2 * 1024)?;
+            if !obligations.insert(obligation.as_str()) {
+                return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+            }
+        }
+        validate_serialized_limit(
+            "brainstorming_specification_document",
+            self,
+            MAX_BRAINSTORMING_SPECIFICATION_BYTES,
+        )
+    }
+
+    pub fn canonical_sha256(&self) -> Result<[u8; 32], ProtocolError> {
+        canonical_sha256("brainstorming_specification_document", self, Self::validate)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrozenBrainstormingSpecification {
+    pub schema_version: u16,
+    pub specification_id: Uuid,
+    pub specification_revision: u64,
+    pub target_kind: BrainstormingTargetKind,
+    pub draft_id: Uuid,
+    pub draft_revision: u64,
+    pub draft_sha256: [u8; 32],
+    pub repository: AssemblyLineRepositoryIdentity,
+    pub visibility: Option<ProjectVisibility>,
+    pub orchestrator_catalog_revision: u64,
+    pub orchestrator_catalog_sha256: [u8; 32],
+    pub orchestrator_profile_sha256: [u8; 32],
+    pub specification: BrainstormingSpecificationDocument,
+    pub specification_sha256: [u8; 32],
+}
+
+impl FrozenBrainstormingSpecification {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "frozen_brainstorming_specification",
+            frame,
+            MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_assembly_line_schema(self.schema_version)?;
+        validate_uuid("specification_id", self.specification_id)?;
+        validate_uuid("draft_id", self.draft_id)?;
+        self.repository.validate()?;
+        validate_positive_limit(
+            "specification_revision",
+            self.specification_revision,
+            u64::MAX,
+        )?;
+        validate_positive_limit("draft_revision", self.draft_revision, u64::MAX)?;
+        validate_positive_limit(
+            "orchestrator_catalog_revision",
+            self.orchestrator_catalog_revision,
+            u64::MAX,
+        )?;
+        self.specification.validate()?;
+        if (self.target_kind == BrainstormingTargetKind::Project) != self.visibility.is_some()
+            || self.draft_sha256 == [0; 32]
+            || self.orchestrator_catalog_sha256 == [0; 32]
+            || self.orchestrator_profile_sha256 == [0; 32]
+            || self.specification_sha256 == [0; 32]
+            || self.specification.canonical_sha256()? != self.specification_sha256
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        validate_serialized_limit(
+            "frozen_brainstorming_specification",
+            self,
+            MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+        )
+    }
+
+    pub fn validate_for_project_draft(
+        &self,
+        draft: &ProjectBrainstormingDraft,
+        authoritative_catalog: &OrchestratorCatalog,
+    ) -> Result<(), ProtocolError> {
+        draft.validate_against_authoritative_catalog(authoritative_catalog)?;
+        self.validate()?;
+        if self.target_kind != BrainstormingTargetKind::Project
+            || self.draft_id != draft.draft_id
+            || self.draft_revision != draft.draft_revision
+            || self.draft_sha256 != draft.canonical_sha256()?
+            || self.repository != draft.repository
+            || self.visibility != Some(draft.visibility)
+            || self.orchestrator_catalog_revision != draft.orchestrator_catalog.catalog_revision
+            || self.orchestrator_catalog_sha256 != draft.orchestrator_catalog.catalog_sha256
+            || self.orchestrator_profile_sha256 != draft.orchestrator.canonical_sha256()?
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        Ok(())
+    }
+
+    pub fn validate_for_feature_draft(
+        &self,
+        draft: &FeatureBrainstormingDraft,
+        authoritative_catalog: &OrchestratorCatalog,
+    ) -> Result<(), ProtocolError> {
+        draft.validate_against_authoritative_catalog(authoritative_catalog)?;
+        self.validate()?;
+        if self.target_kind != BrainstormingTargetKind::Feature
+            || self.draft_id != draft.draft_id
+            || self.draft_revision != draft.draft_revision
+            || self.draft_sha256 != draft.canonical_sha256()?
+            || self.repository != draft.repository
+            || self.visibility.is_some()
+            || self.orchestrator_catalog_revision != draft.orchestrator_catalog.catalog_revision
+            || self.orchestrator_catalog_sha256 != draft.orchestrator_catalog.catalog_sha256
+            || self.orchestrator_profile_sha256 != draft.orchestrator.canonical_sha256()?
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrainstormingOwnerApprovalBinding {
+    pub schema_version: u16,
+    pub approval_id: Uuid,
+    pub approved_at_ms: u64,
+    pub owner_control_revision: u64,
+    pub target_kind: BrainstormingTargetKind,
+    pub repository: AssemblyLineRepositoryIdentity,
+    pub visibility: Option<ProjectVisibility>,
+    pub expected_repository_revision: Option<u64>,
+    pub expected_queue_revision: Option<u64>,
+    pub draft_id: Uuid,
+    pub draft_revision: u64,
+    pub draft_sha256: [u8; 32],
+    pub orchestrator_catalog_revision: u64,
+    pub orchestrator_catalog_sha256: [u8; 32],
+    pub specification_id: Uuid,
+    pub specification_revision: u64,
+    pub specification_sha256: [u8; 32],
+    pub orchestrator_profile_sha256: [u8; 32],
+    pub owner_approval_sha256: [u8; 32],
+}
+
+impl BrainstormingOwnerApprovalBinding {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "brainstorming_owner_approval_binding",
+            frame,
+            MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_assembly_line_schema(self.schema_version)?;
+        validate_uuid("approval_id", self.approval_id)?;
+        validate_uuid("draft_id", self.draft_id)?;
+        validate_uuid("specification_id", self.specification_id)?;
+        validate_positive_limit("approved_at_ms", self.approved_at_ms, u64::MAX)?;
+        validate_positive_limit(
+            "owner_control_revision",
+            self.owner_control_revision,
+            u64::MAX,
+        )?;
+        validate_positive_limit(
+            "specification_revision",
+            self.specification_revision,
+            u64::MAX,
+        )?;
+        validate_positive_limit("draft_revision", self.draft_revision, u64::MAX)?;
+        validate_positive_limit(
+            "orchestrator_catalog_revision",
+            self.orchestrator_catalog_revision,
+            u64::MAX,
+        )?;
+        self.repository.validate()?;
+        match self.target_kind {
+            BrainstormingTargetKind::Project => {
+                if self.visibility.is_none()
+                    || self.expected_repository_revision != Some(0)
+                    || self.expected_queue_revision.is_some()
+                {
+                    return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+                }
+            }
+            BrainstormingTargetKind::Feature => {
+                if self.visibility.is_some()
+                    || self
+                        .expected_repository_revision
+                        .is_none_or(|revision| revision == 0)
+                    || self.expected_queue_revision.is_none()
+                {
+                    return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+                }
+            }
+        }
+        if self.draft_sha256 == [0; 32]
+            || self.orchestrator_catalog_sha256 == [0; 32]
+            || self.specification_sha256 == [0; 32]
+            || self.orchestrator_profile_sha256 == [0; 32]
+            || self.owner_approval_sha256 == [0; 32]
+            || self.canonical_approval_sha256()? != self.owner_approval_sha256
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        validate_serialized_limit(
+            "brainstorming_owner_approval_binding",
+            self,
+            MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+        )
+    }
+
+    pub fn canonical_approval_sha256(&self) -> Result<[u8; 32], ProtocolError> {
+        let value = serde_json::json!({
+            "schema_version": self.schema_version,
+            "approval_id": self.approval_id,
+            "approved_at_ms": self.approved_at_ms,
+            "owner_control_revision": self.owner_control_revision,
+            "target_kind": self.target_kind,
+            "repository": self.repository,
+            "visibility": self.visibility,
+            "expected_repository_revision": self.expected_repository_revision,
+            "expected_queue_revision": self.expected_queue_revision,
+            "draft_id": self.draft_id,
+            "draft_revision": self.draft_revision,
+            "draft_sha256": self.draft_sha256,
+            "orchestrator_catalog_revision": self.orchestrator_catalog_revision,
+            "orchestrator_catalog_sha256": self.orchestrator_catalog_sha256,
+            "specification_id": self.specification_id,
+            "specification_revision": self.specification_revision,
+            "specification_sha256": self.specification_sha256,
+            "orchestrator_profile_sha256": self.orchestrator_profile_sha256,
+        });
+        Ok(Sha256::digest(canonical_json_bytes(&value)?).into())
+    }
+
+    fn validate_for_frozen(
+        &self,
+        frozen: &FrozenBrainstormingSpecification,
+    ) -> Result<(), ProtocolError> {
+        self.validate()?;
+        frozen.validate()?;
+        if self.target_kind != frozen.target_kind
+            || self.repository != frozen.repository
+            || self.visibility != frozen.visibility
+            || self.draft_id != frozen.draft_id
+            || self.draft_revision != frozen.draft_revision
+            || self.draft_sha256 != frozen.draft_sha256
+            || self.orchestrator_catalog_revision != frozen.orchestrator_catalog_revision
+            || self.orchestrator_catalog_sha256 != frozen.orchestrator_catalog_sha256
+            || self.specification_id != frozen.specification_id
+            || self.specification_revision != frozen.specification_revision
+            || self.specification_sha256 != frozen.specification_sha256
+            || self.orchestrator_profile_sha256 != frozen.orchestrator_profile_sha256
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        Ok(())
+    }
+
+    pub fn validate_for_project(
+        &self,
+        draft: &ProjectBrainstormingDraft,
+        frozen: &FrozenBrainstormingSpecification,
+        authoritative_catalog: &OrchestratorCatalog,
+    ) -> Result<(), ProtocolError> {
+        frozen.validate_for_project_draft(draft, authoritative_catalog)?;
+        self.validate_for_frozen(frozen)
+    }
+
+    pub fn validate_for_feature(
+        &self,
+        draft: &FeatureBrainstormingDraft,
+        frozen: &FrozenBrainstormingSpecification,
+        authoritative_catalog: &OrchestratorCatalog,
+    ) -> Result<(), ProtocolError> {
+        frozen.validate_for_feature_draft(draft, authoritative_catalog)?;
+        self.validate_for_frozen(frozen)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssemblyLineLifecycleState {
+    Stopped,
+    Running,
+    Stopping,
+    PausedAtCheckpoint,
+    EmergencyPaused,
+    WaitingForHostReconnect,
+    ReconciliationRequired,
+    IncompleteTermination,
+    WaitingForOwnerStart,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssemblyLineState {
+    pub schema_version: u16,
+    pub state_revision: u64,
+    pub queue_revision: u64,
+    pub queue_count: u16,
+    #[serde(default = "default_true")]
+    pub auto_run: bool,
+    pub lifecycle: AssemblyLineLifecycleState,
+    pub session_id: Option<Uuid>,
+    pub active_child_epoch_id: Option<Uuid>,
+    pub active_feature_id: Option<Uuid>,
+}
+
+impl AssemblyLineState {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "assembly_line_state",
+            frame,
+            MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_assembly_line_schema(self.schema_version)?;
+        validate_positive_limit(
+            "assembly_line_state_revision",
+            self.state_revision,
+            u64::MAX,
+        )?;
+        if self.queue_count > MAX_ASSEMBLY_LINE_QUEUE_COUNT
+            || (self.queue_count > 0 && self.queue_revision == 0)
+            || self.active_child_epoch_id.is_some() != self.active_feature_id.is_some()
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        for (field, value) in [
+            ("session_id", self.session_id),
+            ("active_child_epoch_id", self.active_child_epoch_id),
+            ("active_feature_id", self.active_feature_id),
+        ] {
+            if let Some(value) = value {
+                validate_uuid(field, value)?;
+            }
+        }
+        match self.lifecycle {
+            AssemblyLineLifecycleState::Stopped
+            | AssemblyLineLifecycleState::WaitingForOwnerStart => {
+                if self.session_id.is_some() || self.active_child_epoch_id.is_some() {
+                    return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+                }
+            }
+            AssemblyLineLifecycleState::Running => {
+                if self.queue_count == 0
+                    || self.session_id.is_none()
+                    || self.active_child_epoch_id.is_none()
+                {
+                    return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+                }
+            }
+            _ => {
+                if self.session_id.is_none() || self.active_child_epoch_id.is_none() {
+                    return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+                }
+            }
+        }
+        validate_serialized_limit(
+            "assembly_line_state",
+            self,
+            MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssemblyLineStartRequest {
+    pub schema_version: u16,
+    pub request_id: Uuid,
+    pub expected_state_revision: u64,
+    pub expected_queue_revision: u64,
+    pub expected_emergency_pause_revision: u64,
+    pub queue_count: u16,
+    pub windows_executor_id: Uuid,
+    pub windows_executor_revision: u64,
+    pub mac_executor_id: Uuid,
+    pub mac_executor_revision: u64,
+    #[serde(default = "default_true")]
+    pub auto_run: bool,
+    pub owner_start_approval_sha256: [u8; 32],
+}
+
+impl AssemblyLineStartRequest {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "assembly_line_start_request",
+            frame,
+            MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_assembly_line_schema(self.schema_version)?;
+        validate_uuid("request_id", self.request_id)?;
+        validate_uuid("windows_executor_id", self.windows_executor_id)?;
+        validate_uuid("mac_executor_id", self.mac_executor_id)?;
+        validate_positive_limit(
+            "expected_state_revision",
+            self.expected_state_revision,
+            u64::MAX,
+        )?;
+        validate_positive_limit(
+            "expected_queue_revision",
+            self.expected_queue_revision,
+            u64::MAX,
+        )?;
+        validate_positive_limit(
+            "windows_executor_revision",
+            self.windows_executor_revision,
+            u64::MAX,
+        )?;
+        validate_positive_limit(
+            "mac_executor_revision",
+            self.mac_executor_revision,
+            u64::MAX,
+        )?;
+        if self.queue_count == 0
+            || self.queue_count > MAX_ASSEMBLY_LINE_QUEUE_COUNT
+            || self.windows_executor_id == self.mac_executor_id
+            || self.owner_start_approval_sha256 == [0; 32]
+            || self.canonical_owner_start_approval_sha256()? != self.owner_start_approval_sha256
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        validate_serialized_limit(
+            "assembly_line_start_request",
+            self,
+            MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+        )
+    }
+
+    pub fn canonical_owner_start_approval_sha256(&self) -> Result<[u8; 32], ProtocolError> {
+        let value = serde_json::json!({
+            "schema_version": self.schema_version,
+            "request_id": self.request_id,
+            "expected_state_revision": self.expected_state_revision,
+            "expected_queue_revision": self.expected_queue_revision,
+            "expected_emergency_pause_revision": self.expected_emergency_pause_revision,
+            "queue_count": self.queue_count,
+            "windows_executor_id": self.windows_executor_id,
+            "windows_executor_revision": self.windows_executor_revision,
+            "mac_executor_id": self.mac_executor_id,
+            "mac_executor_revision": self.mac_executor_revision,
+            "auto_run": self.auto_run,
+        });
+        Ok(Sha256::digest(canonical_json_bytes(&value)?).into())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssemblyLineStopRequest {
+    pub schema_version: u16,
+    pub request_id: Uuid,
+    pub session_id: Uuid,
+    pub expected_state_revision: u64,
+    pub expected_child_epoch_id: Uuid,
+}
+
+impl AssemblyLineStopRequest {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "assembly_line_stop_request",
+            frame,
+            MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_assembly_line_schema(self.schema_version)?;
+        validate_uuid("request_id", self.request_id)?;
+        validate_uuid("session_id", self.session_id)?;
+        validate_uuid("expected_child_epoch_id", self.expected_child_epoch_id)?;
+        validate_positive_limit(
+            "expected_state_revision",
+            self.expected_state_revision,
+            u64::MAX,
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssemblyLineEmergencyPauseRequest {
+    pub schema_version: u16,
+    pub request_id: Uuid,
+    pub session_id: Uuid,
+    pub expected_child_epoch_id: Uuid,
+    pub expected_state_revision: u64,
+    pub expected_emergency_pause_revision: u64,
+}
+
+impl AssemblyLineEmergencyPauseRequest {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "assembly_line_emergency_pause_request",
+            frame,
+            MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_assembly_line_schema(self.schema_version)?;
+        validate_uuid("request_id", self.request_id)?;
+        validate_uuid("session_id", self.session_id)?;
+        validate_uuid("expected_child_epoch_id", self.expected_child_epoch_id)?;
+        validate_positive_limit(
+            "expected_state_revision",
+            self.expected_state_revision,
+            u64::MAX,
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssemblyLineAutoRunRequest {
+    pub schema_version: u16,
+    pub request_id: Uuid,
+    pub expected_state_revision: u64,
+    pub auto_run: bool,
+}
+
+impl AssemblyLineAutoRunRequest {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "assembly_line_auto_run_request",
+            frame,
+            MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_assembly_line_schema(self.schema_version)?;
+        validate_uuid("request_id", self.request_id)?;
+        validate_positive_limit(
+            "expected_state_revision",
+            self.expected_state_revision,
+            u64::MAX,
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssemblyLineSessionEpoch {
+    pub schema_version: u16,
+    pub session_id: Uuid,
+    pub session_revision: u64,
+    pub start_request_id: Uuid,
+    pub started_queue_count: u16,
+    pub state_revision: u64,
+    pub queue_revision: u64,
+    pub emergency_pause_revision: u64,
+    pub owner_start_approval_sha256: [u8; 32],
+    pub windows_executor_id: Uuid,
+    pub windows_executor_revision: u64,
+    pub mac_executor_id: Uuid,
+    pub mac_executor_revision: u64,
+    pub auto_run: bool,
+}
+
+impl AssemblyLineSessionEpoch {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "assembly_line_session_epoch",
+            frame,
+            MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_assembly_line_schema(self.schema_version)?;
+        for (field, value) in [
+            ("session_id", self.session_id),
+            ("start_request_id", self.start_request_id),
+            ("windows_executor_id", self.windows_executor_id),
+            ("mac_executor_id", self.mac_executor_id),
+        ] {
+            validate_uuid(field, value)?;
+        }
+        for (field, value) in [
+            ("session_revision", self.session_revision),
+            ("state_revision", self.state_revision),
+            ("queue_revision", self.queue_revision),
+            ("windows_executor_revision", self.windows_executor_revision),
+            ("mac_executor_revision", self.mac_executor_revision),
+        ] {
+            validate_positive_limit(field, value, u64::MAX)?;
+        }
+        if self.started_queue_count == 0
+            || self.started_queue_count > MAX_ASSEMBLY_LINE_QUEUE_COUNT
+            || self.windows_executor_id == self.mac_executor_id
+            || self.owner_start_approval_sha256 == [0; 32]
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        Ok(())
+    }
+
+    pub fn validate_for_start(
+        &self,
+        start: &AssemblyLineStartRequest,
+    ) -> Result<(), ProtocolError> {
+        self.validate()?;
+        start.validate()?;
+        if self.start_request_id != start.request_id
+            || self.started_queue_count != start.queue_count
+            || start.expected_state_revision == u64::MAX
+            || self.state_revision != start.expected_state_revision + 1
+            || self.queue_revision != start.expected_queue_revision
+            || self.emergency_pause_revision != start.expected_emergency_pause_revision
+            || self.owner_start_approval_sha256 != start.owner_start_approval_sha256
+            || self.windows_executor_id != start.windows_executor_id
+            || self.windows_executor_revision != start.windows_executor_revision
+            || self.mac_executor_id != start.mac_executor_id
+            || self.mac_executor_revision != start.mac_executor_revision
+            || self.auto_run != start.auto_run
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssemblyLineChildEpoch {
+    pub schema_version: u16,
+    pub child_epoch_id: Uuid,
+    pub child_epoch_revision: u64,
+    pub session_id: Uuid,
+    pub session_revision: u64,
+    pub feature_id: Uuid,
+    pub repository_id: Uuid,
+    pub feature_lifecycle_revision: u64,
+    pub queue_revision: u64,
+    pub windows_executor_id: Uuid,
+    pub windows_executor_revision: u64,
+    pub mac_executor_id: Uuid,
+    pub mac_executor_revision: u64,
+}
+
+impl AssemblyLineChildEpoch {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "assembly_line_child_epoch",
+            frame,
+            MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_assembly_line_schema(self.schema_version)?;
+        for (field, value) in [
+            ("child_epoch_id", self.child_epoch_id),
+            ("session_id", self.session_id),
+            ("feature_id", self.feature_id),
+            ("repository_id", self.repository_id),
+            ("windows_executor_id", self.windows_executor_id),
+            ("mac_executor_id", self.mac_executor_id),
+        ] {
+            validate_uuid(field, value)?;
+        }
+        for (field, value) in [
+            ("child_epoch_revision", self.child_epoch_revision),
+            ("session_revision", self.session_revision),
+            (
+                "feature_lifecycle_revision",
+                self.feature_lifecycle_revision,
+            ),
+            ("queue_revision", self.queue_revision),
+            ("windows_executor_revision", self.windows_executor_revision),
+            ("mac_executor_revision", self.mac_executor_revision),
+        ] {
+            validate_positive_limit(field, value, u64::MAX)?;
+        }
+        if self.windows_executor_id == self.mac_executor_id {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        Ok(())
+    }
+
+    pub fn validate_for_session(
+        &self,
+        session: &AssemblyLineSessionEpoch,
+    ) -> Result<(), ProtocolError> {
+        self.validate()?;
+        session.validate()?;
+        if self.session_id != session.session_id
+            || self.session_revision != session.session_revision
+            || self.queue_revision < session.queue_revision
+            || self.windows_executor_id != session.windows_executor_id
+            || self.windows_executor_revision != session.windows_executor_revision
+            || self.mac_executor_id != session.mac_executor_id
+            || self.mac_executor_revision != session.mac_executor_revision
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepositoryCreationLifecycle {
+    CreationPending,
+    Reconciling,
+    Created,
+    Conflict,
+    ReconciliationRequired,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepositoryCreationProjection {
+    pub schema_version: u16,
+    pub repository: AssemblyLineRepositoryIdentity,
+    pub repository_revision: u64,
+    pub lifecycle_revision: u64,
+    pub visibility: ProjectVisibility,
+    pub approved_specification_id: Uuid,
+    pub approved_specification_revision: u64,
+    pub approved_specification_sha256: [u8; 32],
+    pub owner_approval_sha256: [u8; 32],
+    pub lifecycle: RepositoryCreationLifecycle,
+    pub effect_possible: bool,
+    pub creation_evidence_sha256: Option<[u8; 32]>,
+}
+
+impl RepositoryCreationProjection {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "repository_creation_projection",
+            frame,
+            MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_assembly_line_schema(self.schema_version)?;
+        self.repository.validate()?;
+        validate_uuid("approved_specification_id", self.approved_specification_id)?;
+        for (field, value) in [
+            ("repository_revision", self.repository_revision),
+            ("repository_lifecycle_revision", self.lifecycle_revision),
+            (
+                "approved_specification_revision",
+                self.approved_specification_revision,
+            ),
+        ] {
+            validate_positive_limit(field, value, u64::MAX)?;
+        }
+        if self.approved_specification_sha256 == [0; 32]
+            || self.owner_approval_sha256 == [0; 32]
+            || self.creation_evidence_sha256 == Some([0; 32])
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        let valid_lifecycle = match self.lifecycle {
+            RepositoryCreationLifecycle::CreationPending
+            | RepositoryCreationLifecycle::Conflict
+            | RepositoryCreationLifecycle::Failed => {
+                !self.effect_possible && self.creation_evidence_sha256.is_none()
+            }
+            RepositoryCreationLifecycle::Reconciling
+            | RepositoryCreationLifecycle::ReconciliationRequired => {
+                self.effect_possible && self.creation_evidence_sha256.is_none()
+            }
+            RepositoryCreationLifecycle::Created => {
+                self.effect_possible && self.creation_evidence_sha256.is_some()
+            }
+        };
+        if !valid_lifecycle {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        validate_serialized_limit(
+            "repository_creation_projection",
+            self,
+            MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureQueueLifecycle {
+    Queued,
+    Active,
+    Stopping,
+    PausedAtCheckpoint,
+    EmergencyPaused,
+    WaitingForHostReconnect,
+    ReconciliationRequired,
+    IncompleteTermination,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureQueueEntryProjection {
+    pub schema_version: u16,
+    pub feature_id: Uuid,
+    pub repository_id: Uuid,
+    pub specification_id: Uuid,
+    pub specification_revision: u64,
+    pub specification_sha256: [u8; 32],
+    pub owner_approval_sha256: [u8; 32],
+    pub position: u16,
+    pub lifecycle_revision: u64,
+    pub lifecycle: FeatureQueueLifecycle,
+}
+
+impl FeatureQueueEntryProjection {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "feature_queue_entry_projection",
+            frame,
+            MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_assembly_line_schema(self.schema_version)?;
+        validate_uuid("feature_id", self.feature_id)?;
+        validate_uuid("repository_id", self.repository_id)?;
+        validate_uuid("specification_id", self.specification_id)?;
+        validate_positive_limit(
+            "feature_specification_revision",
+            self.specification_revision,
+            u64::MAX,
+        )?;
+        validate_positive_limit(
+            "feature_lifecycle_revision",
+            self.lifecycle_revision,
+            u64::MAX,
+        )?;
+        if self.position == 0
+            || self.position > MAX_ASSEMBLY_LINE_QUEUE_COUNT
+            || self.specification_sha256 == [0; 32]
+            || self.owner_approval_sha256 == [0; 32]
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeAvailabilityStatus {
+    Available,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeUnavailableReason {
+    NotConfigured,
+    NotAuthenticated,
+    Disconnected,
+    Unhealthy,
+    EmergencyPaused,
+    IdentityDrift,
+    EvidenceRequired,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeComponentAvailability {
+    pub binding_revision: u64,
+    pub binding_sha256: [u8; 32],
+    pub status: RuntimeAvailabilityStatus,
+    pub unavailable_reason: Option<RuntimeUnavailableReason>,
+}
+
+impl RuntimeComponentAvailability {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_positive_limit("runtime_binding_revision", self.binding_revision, u64::MAX)?;
+        if self.binding_sha256 == [0; 32]
+            || (self.status == RuntimeAvailabilityStatus::Available)
+                != self.unavailable_reason.is_none()
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssemblyLineRuntimeAvailabilityProjection {
+    pub schema_version: u16,
+    pub availability_revision: u64,
+    pub observed_at_ms: u64,
+    pub brainstorming_provider: RuntimeComponentAvailability,
+    pub github_creation: RuntimeComponentAvailability,
+    pub windows_executor: RuntimeComponentAvailability,
+    pub mac_executor: RuntimeComponentAvailability,
+    pub protected_brokers: RuntimeComponentAvailability,
+}
+
+impl AssemblyLineRuntimeAvailabilityProjection {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "assembly_line_runtime_availability_projection",
+            frame,
+            MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_assembly_line_schema(self.schema_version)?;
+        validate_positive_limit(
+            "runtime_availability_revision",
+            self.availability_revision,
+            u64::MAX,
+        )?;
+        validate_positive_limit(
+            "runtime_availability_observed_at_ms",
+            self.observed_at_ms,
+            u64::MAX,
+        )?;
+        for component in [
+            self.brainstorming_provider,
+            self.github_creation,
+            self.windows_executor,
+            self.mac_executor,
+            self.protected_brokers,
+        ] {
+            component.validate()?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssemblyLineOwnerProjection {
+    pub schema_version: u16,
+    pub owner_control_revision: u64,
+    pub emergency_pause_revision: u64,
+    pub emergency_paused: bool,
+    pub orchestrator_catalog: OrchestratorCatalog,
+    pub repositories: Vec<RepositoryCreationProjection>,
+    pub queue: Vec<FeatureQueueEntryProjection>,
+    pub assembly_line: AssemblyLineState,
+    pub availability: AssemblyLineRuntimeAvailabilityProjection,
+}
+
+impl AssemblyLineOwnerProjection {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "assembly_line_owner_projection",
+            frame,
+            MAX_ASSEMBLY_LINE_OWNER_PROJECTION_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_assembly_line_schema(self.schema_version)?;
+        validate_positive_limit(
+            "owner_control_revision",
+            self.owner_control_revision,
+            u64::MAX,
+        )?;
+        self.orchestrator_catalog.validate()?;
+        self.assembly_line.validate()?;
+        self.availability.validate()?;
+        if self.repositories.len() > MAX_ASSEMBLY_LINE_REPOSITORIES
+            || self.queue.len() > MAX_ASSEMBLY_LINE_QUEUE_COUNT as usize
+            || self.queue.len() != self.assembly_line.queue_count as usize
+            || self.assembly_line.lifecycle == AssemblyLineLifecycleState::EmergencyPaused
+                && !self.emergency_paused
+            || self.emergency_paused
+                && !matches!(
+                    self.assembly_line.lifecycle,
+                    AssemblyLineLifecycleState::Stopped
+                        | AssemblyLineLifecycleState::EmergencyPaused
+                        | AssemblyLineLifecycleState::IncompleteTermination
+                )
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        let mut repository_ids = BTreeSet::new();
+        let mut created_repository_ids = BTreeSet::new();
+        let mut repository_urls = BTreeSet::new();
+        let mut previous_url: Option<&str> = None;
+        for repository in &self.repositories {
+            repository.validate()?;
+            let url = repository.repository.git_url.url.as_str();
+            if previous_url.is_some_and(|previous| previous >= url)
+                || !repository_ids.insert(repository.repository.repository_id)
+                || !repository_urls.insert(url)
+            {
+                return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+            }
+            if repository.lifecycle == RepositoryCreationLifecycle::Created
+                && repository.creation_evidence_sha256.is_some()
+            {
+                created_repository_ids.insert(repository.repository.repository_id);
+            }
+            previous_url = Some(url);
+        }
+        if !execution_availability_matches_lifecycle(&self.availability, &self.assembly_line) {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        let expected_active_lifecycle = owner_queue_active_lifecycle(self.assembly_line.lifecycle);
+        let mut feature_ids = BTreeSet::new();
+        let mut active_entries = 0_usize;
+        for (index, entry) in self.queue.iter().enumerate() {
+            entry.validate()?;
+            if entry.position as usize != index + 1
+                || !feature_ids.insert(entry.feature_id)
+                || !created_repository_ids.contains(&entry.repository_id)
+            {
+                return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+            }
+            if entry.lifecycle != FeatureQueueLifecycle::Queued {
+                active_entries += 1;
+                if entry.position != 1
+                    || Some(entry.lifecycle) != expected_active_lifecycle
+                    || Some(entry.feature_id) != self.assembly_line.active_feature_id
+                {
+                    return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+                }
+            }
+        }
+        if active_entries != usize::from(expected_active_lifecycle.is_some()) {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        validate_serialized_limit(
+            "assembly_line_owner_projection",
+            self,
+            MAX_ASSEMBLY_LINE_OWNER_PROJECTION_BYTES,
+        )
+    }
+}
+
+fn execution_availability_matches_lifecycle(
+    availability: &AssemblyLineRuntimeAvailabilityProjection,
+    state: &AssemblyLineState,
+) -> bool {
+    let execution_unavailable = [
+        availability.windows_executor,
+        availability.mac_executor,
+        availability.protected_brokers,
+    ]
+    .into_iter()
+    .any(|component| component.status != RuntimeAvailabilityStatus::Available);
+    if !execution_unavailable {
+        return true;
+    }
+    matches!(
+        state.lifecycle,
+        AssemblyLineLifecycleState::Stopped
+            | AssemblyLineLifecycleState::WaitingForOwnerStart
+            | AssemblyLineLifecycleState::PausedAtCheckpoint
+            | AssemblyLineLifecycleState::EmergencyPaused
+            | AssemblyLineLifecycleState::WaitingForHostReconnect
+            | AssemblyLineLifecycleState::ReconciliationRequired
+            | AssemblyLineLifecycleState::IncompleteTermination
+    )
+}
+
+fn owner_queue_active_lifecycle(
+    lifecycle: AssemblyLineLifecycleState,
+) -> Option<FeatureQueueLifecycle> {
+    match lifecycle {
+        AssemblyLineLifecycleState::Stopped | AssemblyLineLifecycleState::WaitingForOwnerStart => {
+            None
+        }
+        AssemblyLineLifecycleState::Running => Some(FeatureQueueLifecycle::Active),
+        AssemblyLineLifecycleState::Stopping => Some(FeatureQueueLifecycle::Stopping),
+        AssemblyLineLifecycleState::PausedAtCheckpoint => {
+            Some(FeatureQueueLifecycle::PausedAtCheckpoint)
+        }
+        AssemblyLineLifecycleState::EmergencyPaused => Some(FeatureQueueLifecycle::EmergencyPaused),
+        AssemblyLineLifecycleState::WaitingForHostReconnect => {
+            Some(FeatureQueueLifecycle::WaitingForHostReconnect)
+        }
+        AssemblyLineLifecycleState::ReconciliationRequired => {
+            Some(FeatureQueueLifecycle::ReconciliationRequired)
+        }
+        AssemblyLineLifecycleState::IncompleteTermination => {
+            Some(FeatureQueueLifecycle::IncompleteTermination)
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssemblyLineStartReceipt {
+    pub schema_version: u16,
+    pub request_id: Uuid,
+    pub owner_start_approval_sha256: [u8; 32],
+    pub resulting_state: AssemblyLineState,
+    pub session: AssemblyLineSessionEpoch,
+    pub child: AssemblyLineChildEpoch,
+}
+
+impl AssemblyLineStartReceipt {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "assembly_line_start_receipt",
+            frame,
+            MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_assembly_line_schema(self.schema_version)?;
+        validate_uuid("request_id", self.request_id)?;
+        self.resulting_state.validate()?;
+        self.session.validate()?;
+        self.child.validate_for_session(&self.session)?;
+        if self.owner_start_approval_sha256 == [0; 32]
+            || self.resulting_state.lifecycle != AssemblyLineLifecycleState::Running
+            || self.request_id != self.session.start_request_id
+            || self.owner_start_approval_sha256 != self.session.owner_start_approval_sha256
+            || self.resulting_state.state_revision != self.session.state_revision
+            || self.resulting_state.queue_revision != self.session.queue_revision
+            || self.resulting_state.queue_count != self.session.started_queue_count
+            || self.resulting_state.auto_run != self.session.auto_run
+            || self.resulting_state.session_id != Some(self.session.session_id)
+            || self.resulting_state.active_child_epoch_id != Some(self.child.child_epoch_id)
+            || self.resulting_state.active_feature_id != Some(self.child.feature_id)
+            || self.child.queue_revision != self.session.queue_revision
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        validate_serialized_limit(
+            "assembly_line_start_receipt",
+            self,
+            MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+        )
+    }
+
+    pub fn validate_for_request(
+        &self,
+        request: &AssemblyLineStartRequest,
+    ) -> Result<(), ProtocolError> {
+        self.validate()?;
+        self.session.validate_for_start(request)?;
+        if self.request_id != request.request_id
+            || self.owner_start_approval_sha256 != request.owner_start_approval_sha256
+            || self.resulting_state.auto_run != request.auto_run
+            || self.session.auto_run != request.auto_run
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProcessTerminationOutcome {
+    AllTerminated,
+    SurvivorsDetected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProcessTerminationEvidenceReference {
+    pub evidence_id: Uuid,
+    pub evidence_sha256: [u8; 32],
+    pub observed_at_ms: u64,
+    pub outcome: ProcessTerminationOutcome,
+}
+
+impl ProcessTerminationEvidenceReference {
+    pub fn canonical_evidence_sha256(&self) -> Result<[u8; 32], ProtocolError> {
+        self.validate_metadata()?;
+        let value = serde_json::json!({
+            "evidence_type": "assembly_line_process_termination",
+            "evidence_id": self.evidence_id,
+            "observed_at_ms": self.observed_at_ms,
+            "outcome": self.outcome,
+        });
+        Ok(Sha256::digest(canonical_json_bytes(&value)?).into())
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        self.validate_metadata()?;
+        if self.evidence_sha256 != self.canonical_evidence_sha256()? {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        Ok(())
+    }
+
+    fn validate_metadata(&self) -> Result<(), ProtocolError> {
+        validate_uuid("termination_evidence_id", self.evidence_id)?;
+        validate_positive_limit("termination_observed_at_ms", self.observed_at_ms, u64::MAX)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssemblyLineStopReceipt {
+    pub schema_version: u16,
+    pub request_id: Uuid,
+    pub session_id: Uuid,
+    pub child_epoch_id: Uuid,
+    pub checkpoint_id: Uuid,
+    pub checkpoint_sha256: [u8; 32],
+    pub resulting_state: AssemblyLineState,
+    pub termination_evidence: ProcessTerminationEvidenceReference,
+}
+
+impl AssemblyLineStopReceipt {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "assembly_line_stop_receipt",
+            frame,
+            MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_assembly_line_schema(self.schema_version)?;
+        for (field, value) in [
+            ("request_id", self.request_id),
+            ("session_id", self.session_id),
+            ("child_epoch_id", self.child_epoch_id),
+            ("checkpoint_id", self.checkpoint_id),
+        ] {
+            validate_uuid(field, value)?;
+        }
+        self.resulting_state.validate()?;
+        self.termination_evidence.validate()?;
+        let valid_result = match self.resulting_state.lifecycle {
+            AssemblyLineLifecycleState::PausedAtCheckpoint => {
+                self.termination_evidence.outcome == ProcessTerminationOutcome::AllTerminated
+            }
+            AssemblyLineLifecycleState::IncompleteTermination => {
+                self.termination_evidence.outcome == ProcessTerminationOutcome::SurvivorsDetected
+            }
+            _ => false,
+        };
+        if self.checkpoint_sha256 == [0; 32]
+            || self.resulting_state.session_id != Some(self.session_id)
+            || self.resulting_state.active_child_epoch_id != Some(self.child_epoch_id)
+            || !valid_result
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        validate_serialized_limit(
+            "assembly_line_stop_receipt",
+            self,
+            MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+        )
+    }
+
+    pub fn validate_for_request_and_prior_state(
+        &self,
+        request: &AssemblyLineStopRequest,
+        prior_state: &AssemblyLineState,
+    ) -> Result<(), ProtocolError> {
+        self.validate()?;
+        request.validate()?;
+        prior_state.validate()?;
+        if request.expected_state_revision == u64::MAX
+            || self.request_id != request.request_id
+            || self.session_id != request.session_id
+            || self.child_epoch_id != request.expected_child_epoch_id
+            || request.expected_state_revision != prior_state.state_revision
+            || prior_state.session_id != Some(request.session_id)
+            || prior_state.active_child_epoch_id != Some(request.expected_child_epoch_id)
+            || self.resulting_state.state_revision != request.expected_state_revision + 1
+            || !control_resulting_state_preserves_prior(prior_state, &self.resulting_state)
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssemblyLineEmergencyPauseReceipt {
+    pub schema_version: u16,
+    pub request_id: Uuid,
+    pub session_id: Uuid,
+    pub child_epoch_id: Uuid,
+    pub emergency_pause_revision: u64,
+    pub checkpoint_id: Uuid,
+    pub checkpoint_sha256: [u8; 32],
+    pub resulting_state: AssemblyLineState,
+    pub termination_evidence: ProcessTerminationEvidenceReference,
+}
+
+impl AssemblyLineEmergencyPauseReceipt {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "assembly_line_emergency_pause_receipt",
+            frame,
+            MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_assembly_line_schema(self.schema_version)?;
+        for (field, value) in [
+            ("request_id", self.request_id),
+            ("session_id", self.session_id),
+            ("child_epoch_id", self.child_epoch_id),
+            ("checkpoint_id", self.checkpoint_id),
+        ] {
+            validate_uuid(field, value)?;
+        }
+        validate_positive_limit(
+            "emergency_pause_revision",
+            self.emergency_pause_revision,
+            u64::MAX,
+        )?;
+        self.resulting_state.validate()?;
+        self.termination_evidence.validate()?;
+        let valid_result = match self.resulting_state.lifecycle {
+            AssemblyLineLifecycleState::EmergencyPaused => {
+                self.termination_evidence.outcome == ProcessTerminationOutcome::AllTerminated
+            }
+            AssemblyLineLifecycleState::IncompleteTermination => {
+                self.termination_evidence.outcome == ProcessTerminationOutcome::SurvivorsDetected
+            }
+            _ => false,
+        };
+        if self.checkpoint_sha256 == [0; 32]
+            || self.resulting_state.session_id != Some(self.session_id)
+            || self.resulting_state.active_child_epoch_id != Some(self.child_epoch_id)
+            || !valid_result
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        validate_serialized_limit(
+            "assembly_line_emergency_pause_receipt",
+            self,
+            MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+        )
+    }
+
+    pub fn validate_for_request_and_prior_state(
+        &self,
+        request: &AssemblyLineEmergencyPauseRequest,
+        prior_state: &AssemblyLineState,
+    ) -> Result<(), ProtocolError> {
+        self.validate()?;
+        request.validate()?;
+        prior_state.validate()?;
+        if request.expected_state_revision == u64::MAX
+            || request.expected_emergency_pause_revision == u64::MAX
+            || self.request_id != request.request_id
+            || self.session_id != request.session_id
+            || self.child_epoch_id != request.expected_child_epoch_id
+            || request.expected_state_revision != prior_state.state_revision
+            || prior_state.session_id != Some(request.session_id)
+            || prior_state.active_child_epoch_id != Some(request.expected_child_epoch_id)
+            || self.resulting_state.state_revision != request.expected_state_revision + 1
+            || self.emergency_pause_revision != request.expected_emergency_pause_revision + 1
+            || !control_resulting_state_preserves_prior(prior_state, &self.resulting_state)
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssemblyLineAutoRunReceipt {
+    pub schema_version: u16,
+    pub request_id: Uuid,
+    pub resulting_state: AssemblyLineState,
+}
+
+impl AssemblyLineAutoRunReceipt {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "assembly_line_auto_run_receipt",
+            frame,
+            MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_assembly_line_schema(self.schema_version)?;
+        validate_uuid("request_id", self.request_id)?;
+        self.resulting_state.validate()?;
+        validate_serialized_limit(
+            "assembly_line_auto_run_receipt",
+            self,
+            MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+        )
+    }
+
+    pub fn validate_for_request_and_prior_state(
+        &self,
+        request: &AssemblyLineAutoRunRequest,
+        prior_state: &AssemblyLineState,
+    ) -> Result<(), ProtocolError> {
+        self.validate()?;
+        request.validate()?;
+        prior_state.validate()?;
+        if request.expected_state_revision == u64::MAX
+            || self.request_id != request.request_id
+            || request.expected_state_revision != prior_state.state_revision
+            || self.resulting_state.state_revision != request.expected_state_revision + 1
+            || self.resulting_state.auto_run != request.auto_run
+            || self.resulting_state.schema_version != prior_state.schema_version
+            || self.resulting_state.queue_revision != prior_state.queue_revision
+            || self.resulting_state.queue_count != prior_state.queue_count
+            || self.resulting_state.lifecycle != prior_state.lifecycle
+            || self.resulting_state.session_id != prior_state.session_id
+            || self.resulting_state.active_child_epoch_id != prior_state.active_child_epoch_id
+            || self.resulting_state.active_feature_id != prior_state.active_feature_id
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        Ok(())
+    }
+}
+
+fn control_resulting_state_preserves_prior(
+    prior_state: &AssemblyLineState,
+    resulting_state: &AssemblyLineState,
+) -> bool {
+    resulting_state.schema_version == prior_state.schema_version
+        && resulting_state.queue_revision == prior_state.queue_revision
+        && resulting_state.queue_count == prior_state.queue_count
+        && resulting_state.auto_run == prior_state.auto_run
+        && resulting_state.session_id == prior_state.session_id
+        && resulting_state.active_child_epoch_id == prior_state.active_child_epoch_id
+        && resulting_state.active_feature_id == prior_state.active_feature_id
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -4988,6 +6891,221 @@ fn validate_version(received: u16) -> Result<(), ProtocolError> {
         });
     }
     Ok(())
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn validate_assembly_line_schema(received: u16) -> Result<(), ProtocolError> {
+    validate_fixed_value(
+        "schema_version",
+        received.to_string(),
+        FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION.to_string(),
+    )
+}
+
+fn validate_github_name(
+    value: &str,
+    maximum: usize,
+    allow_underscore_and_dot: bool,
+) -> Result<(), ProtocolError> {
+    if value.is_empty()
+        || value.len() > maximum
+        || value.starts_with(['-', '.', '_'])
+        || value.ends_with(['-', '.', '_'])
+        || value.contains("--")
+        || !value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || byte == b'-'
+                || (allow_underscore_and_dot && matches!(byte, b'_' | b'.'))
+        })
+    {
+        return Err(ProtocolError::InvalidGitHubRepositoryUrl);
+    }
+    Ok(())
+}
+
+fn is_path_or_secret_shaped(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    let compact = lower
+        .chars()
+        .filter(|character| !character.is_ascii_whitespace())
+        .collect::<String>();
+    if lower.contains("-----begin ")
+        || compact.contains("authorization:bearer")
+        || compact.contains("authorization:basic")
+        || contains_sensitive_assignment(&lower)
+        || contains_prefixed_token_case_insensitive(&lower, "github_pat_", 8)
+        || ["ghp_", "gho_", "ghu_", "ghs_", "ghr_"]
+            .iter()
+            .any(|prefix| contains_prefixed_token_case_insensitive(&lower, prefix, 16))
+        || contains_prefixed_token_case_insensitive(&lower, "sk-", 17)
+        || contains_aws_access_key_case_insensitive(&lower)
+        || contains_embedded_jwt(value)
+        || contains_credentialed_url(value)
+    {
+        return true;
+    }
+    let path_markers = [
+        "/users/",
+        "/home/",
+        "/.ssh/",
+        "~/.ssh",
+        "/etc/",
+        "/var/",
+        "/private/",
+        "/tmp/",
+        "/opt/",
+        "/usr/",
+        "/root/",
+        "file://",
+        "ssh://",
+        "git://",
+        "git@",
+    ];
+    path_markers.iter().any(|marker| compact.contains(marker))
+        || compact.ends_with("/users")
+        || compact.ends_with("/home")
+        || compact.contains("\\\\")
+        || compact.as_bytes().windows(3).any(|window| {
+            window[0].is_ascii_alphabetic()
+                && window[1] == b':'
+                && matches!(window[2], b'/' | b'\\')
+        })
+}
+
+fn contains_prefixed_token_case_insensitive(
+    lower: &str,
+    prefix: &str,
+    minimum_suffix: usize,
+) -> bool {
+    lower.match_indices(prefix).any(|(offset, _)| {
+        let has_token_boundary = offset == 0
+            || !lower.as_bytes()[offset - 1].is_ascii_alphanumeric()
+                && !matches!(lower.as_bytes()[offset - 1], b'_' | b'-');
+        if !has_token_boundary {
+            return false;
+        }
+        lower[offset + prefix.len()..]
+            .bytes()
+            .take_while(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+            .count()
+            >= minimum_suffix
+    })
+}
+
+fn contains_sensitive_assignment(lower: &str) -> bool {
+    const SENSITIVE_KEYS: [&str; 7] = [
+        "password",
+        "token",
+        "secret",
+        "apikey",
+        "clientsecret",
+        "accesstoken",
+        "apitoken",
+    ];
+    lower.match_indices([':', '=']).any(|(separator, _)| {
+        let key_start = lower[..separator]
+            .char_indices()
+            .rev()
+            .take_while(|(_, character)| {
+                character.is_ascii_alphanumeric()
+                    || character.is_ascii_whitespace()
+                    || matches!(character, '_' | '-' | '.')
+            })
+            .last()
+            .map(|(offset, _)| offset)
+            .unwrap_or(separator);
+        let normalized = lower[key_start..separator]
+            .chars()
+            .filter(|character| character.is_ascii_alphanumeric())
+            .collect::<String>();
+        SENSITIVE_KEYS
+            .iter()
+            .any(|sensitive| normalized.ends_with(sensitive))
+    })
+}
+
+fn contains_aws_access_key_case_insensitive(lower: &str) -> bool {
+    lower.match_indices("akia").any(|(offset, _)| {
+        lower.as_bytes()[offset + 4..]
+            .iter()
+            .take(16)
+            .copied()
+            .filter(|byte| byte.is_ascii_alphanumeric())
+            .count()
+            == 16
+    })
+}
+
+fn contains_embedded_jwt(value: &str) -> bool {
+    value.match_indices("eyJ").any(|(offset, _)| {
+        let candidate = &value[offset..];
+        let mut segments = candidate.splitn(3, '.');
+        let (Some(header), Some(payload), Some(signature_and_suffix)) =
+            (segments.next(), segments.next(), segments.next())
+        else {
+            return false;
+        };
+        if !header
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+            || payload.is_empty()
+            || !payload
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        {
+            return false;
+        }
+        let signature_len = signature_and_suffix
+            .bytes()
+            .take_while(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+            .count();
+        signature_len > 0 && header.len() + payload.len() + signature_len + 2 >= 32
+    })
+}
+
+fn contains_credentialed_url(value: &str) -> bool {
+    value.match_indices("://").any(|(offset, _)| {
+        value[offset + 3..]
+            .split(|character: char| {
+                character.is_ascii_whitespace() || matches!(character, '/' | '?' | '#')
+            })
+            .next()
+            .unwrap_or_default()
+            .contains('@')
+    })
+}
+
+fn validate_planning_text(
+    field: &'static str,
+    value: &str,
+    maximum: usize,
+) -> Result<(), ProtocolError> {
+    validate_text(field, value, maximum)?;
+    if value.trim() != value
+        || value
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+        || is_path_or_secret_shaped(value)
+    {
+        return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+    }
+    Ok(())
+}
+
+fn canonical_sha256<T: Serialize>(
+    field: &'static str,
+    value: &T,
+    validate: impl FnOnce(&T) -> Result<(), ProtocolError>,
+) -> Result<[u8; 32], ProtocolError> {
+    validate(value)?;
+    let value = serde_json::to_value(value).map_err(|error| ProtocolError::Serialization {
+        field,
+        message: error.to_string(),
+    })?;
+    Ok(Sha256::digest(canonical_json_bytes(&value)?).into())
 }
 
 fn validate_fixed_value(

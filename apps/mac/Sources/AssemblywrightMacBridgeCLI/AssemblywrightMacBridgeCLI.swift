@@ -11,7 +11,7 @@ private enum BridgeCLIError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .usage:
-            "Usage: assemblywright-mac-bridge enrollment prepare|install [--identity-profile fixture|local-coding] | enrollment rotate prepare|install --confirm | enrollment rebind prepare|stage|promote|cancel --confirm | enrollment remove --confirm --identity-profile fixture|local-coding | local-model select|reconcile --confirm | feature-conveyor approve-and-enqueue|activation|orchestration pause|orchestration resume|cancel-active-feature|abandon-and-advance --confirm | status|connect [--identity-profile fixture|local-coding] | monitor|relay [--identity-profile fixture|local-coding] [--samples COUNT] [--interval-ms MILLISECONDS] [--reconnect-between-samples]"
+            "Usage: assemblywright-mac-bridge enrollment prepare|install [--identity-profile fixture|local-coding] | enrollment rotate prepare|install --confirm | enrollment rebind prepare|stage|promote|cancel --confirm | enrollment remove --confirm --identity-profile fixture|local-coding | local-model select|reconcile --confirm | assembly-line project-draft|feature-draft|frozen-specification|approve-project|approve-feature|auto-run --confirm | feature-conveyor approve-and-enqueue|activation|orchestration pause|orchestration resume|cancel-active-feature|abandon-and-advance --confirm | status|connect [--identity-profile fixture|local-coding] | monitor|relay [--identity-profile fixture|local-coding] [--samples COUNT] [--interval-ms MILLISECONDS] [--reconnect-between-samples]"
         case .inputTooLarge:
             "Input exceeds this command's fixed document limit."
         case .notEnrolled:
@@ -22,11 +22,26 @@ private enum BridgeCLIError: Error, CustomStringConvertible {
     }
 }
 
+private enum AssemblyLineCLIOutcome: Error {
+    case rejectedBeforeEffect
+    case outcomeUnknown
+}
+
 @main
 private struct AssemblywrightMacBridgeCLI {
     static func main() async {
         do {
             try await run(arguments: Array(CommandLine.arguments.dropFirst()))
+        } catch AssemblyLineCLIOutcome.rejectedBeforeEffect {
+            FileHandle.standardError.write(
+                Data("assemblywright-mac-bridge: assembly-line request rejected\n".utf8)
+            )
+            Darwin.exit(AssemblywrightMacAssemblyLineHelperExitStatus.rejectedBeforeEffect)
+        } catch AssemblyLineCLIOutcome.outcomeUnknown {
+            FileHandle.standardError.write(
+                Data("assemblywright-mac-bridge: assembly-line outcome unknown\n".utf8)
+            )
+            Darwin.exit(AssemblywrightMacAssemblyLineHelperExitStatus.outcomeUnknown)
         } catch {
             FileHandle.standardError.write(Data("assemblywright-mac-bridge: \(error)\n".utf8))
             Darwin.exit(1)
@@ -218,6 +233,42 @@ private struct AssemblywrightMacBridgeCLI {
                 )
             )
             try writeStdout(outcome.commandData)
+        case let arguments where parsed.profile == .standard
+            && assemblyLinePlanningAction(arguments) != nil:
+            guard let action = assemblyLinePlanningAction(arguments) else {
+                throw BridgeCLIError.usage
+            }
+            let receipt: Data
+            do {
+                guard let profile = try coordinator.status() else {
+                    throw BridgeCLIError.notEnrolled
+                }
+                let request = try readBoundedStdin(
+                    maximum: AssemblywrightMacAssemblyLineOwnerControl.maximumRequestBytes
+                )
+                let session = try await AssemblywrightMacMTLSBridgeTransport(
+                    factory: NetworkAssemblywrightMacTLSChannelFactory(identityStore: identityStore)
+                ).connect(profile: profile)
+                receipt = try await AssemblywrightMacAssemblyLineOwnerControl.perform(
+                    action: action,
+                    requestData: request,
+                    using: session
+                )
+            } catch let error as AssemblywrightMacAssemblyLineError {
+                switch error {
+                case .outcomeUnknown, .ambiguous, .invalidReceipt:
+                    throw AssemblyLineCLIOutcome.outcomeUnknown
+                case .invalidRequest, .requestTooLarge, .invalidProjection, .rejected:
+                    throw AssemblyLineCLIOutcome.rejectedBeforeEffect
+                }
+            } catch {
+                throw AssemblyLineCLIOutcome.rejectedBeforeEffect
+            }
+            do {
+                try writeStdout(receipt)
+            } catch {
+                throw AssemblyLineCLIOutcome.outcomeUnknown
+            }
         case let arguments where parsed.profile == .standard && ownerControlAction(arguments) != nil:
             guard let action = ownerControlAction(arguments) else { throw BridgeCLIError.usage }
             guard let profile = try coordinator.status() else { throw BridgeCLIError.notEnrolled }
@@ -278,6 +329,14 @@ private struct AssemblywrightMacBridgeCLI {
         case ["feature-conveyor", "abandon-and-advance", "--confirm"]: .abandonAndAdvance
         default: nil
         }
+    }
+
+    private static func assemblyLinePlanningAction(
+        _ arguments: [String]
+    ) -> AssemblywrightMacAssemblyLinePlanningAction? {
+        AssemblywrightMacAssemblyLinePlanningAction.allCases.first(where: {
+            $0.helperArguments == arguments
+        })
     }
 
     private static func identityProfileArguments(
