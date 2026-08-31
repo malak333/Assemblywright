@@ -37,7 +37,7 @@ pub const MAX_UNIX_IPC_PATH_AND_QUERY_BYTES: usize = 8 * 1024;
 pub const MAX_UNIX_IPC_REQUEST_HEADER_VALUE_BYTES: usize = 1024;
 pub const MAX_UNIX_IPC_RESPONSE_CONTENT_TYPE_BYTES: usize = 256;
 pub const UNIX_IPC_READ_TIMEOUT_SECONDS: u64 = 10;
-pub const UNIX_IPC_PEER_IDENTITY_TIMEOUT_SECONDS: u64 = 10;
+pub const UNIX_IPC_PEER_IDENTITY_TIMEOUT_SECONDS: u64 = 45;
 // This must outlive the protocol's ten-minute job bound plus agent-side
 // process-group cleanup. Shorter client routes retain their own tighter bounds.
 pub const UNIX_IPC_DISPATCH_TIMEOUT_SECONDS: u64 = 620;

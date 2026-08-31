@@ -3,13 +3,17 @@ use assemblywright_protocol::{
     feature_conveyor_publication_required_checks_sha256,
     feature_conveyor_review_request_binding_sha256,
     feature_conveyor_validation_request_binding_sha256, AssemblyLineAutoRunReceipt,
-    AssemblyLineAutoRunRequest, AssemblyLineLifecycleState, AssemblyLineOwnerProjection,
-    AssemblyLineRepositoryIdentity, AssemblyLineRuntimeAvailabilityProjection, AssemblyLineState,
-    AttemptId, BrainstormingOwnerApprovalBinding, BrainstormingTargetKind,
-    CancellationAcknowledgement, CancellationId, CancellationInstruction, CapabilityDescriptor,
-    ContextHandlingPolicy, DeviceId, DeviceRole, DistributedEvent, DistributedEventBatch,
-    DistributedEventBatchRequest, DistributedEventCursor, DistributedEventKind,
-    FeatureBrainstormingDraft, FeatureConveyorActivationBlocker,
+    AssemblyLineAutoRunRequest, AssemblyLineChildEpoch, AssemblyLineEmergencyPauseRequest,
+    AssemblyLineLifecycleState, AssemblyLineOwnerProjection, AssemblyLineRepositoryIdentity,
+    AssemblyLineRuntimeAvailabilityProjection, AssemblyLineSessionEpoch, AssemblyLineStartReceipt,
+    AssemblyLineStartRequest, AssemblyLineState, AssemblyLineStopRequest, AttemptId,
+    BrainstormingOwnerApprovalBinding, BrainstormingTargetKind, CancellationAcknowledgement,
+    CancellationId, CancellationInstruction, CapabilityDescriptor, ContextHandlingPolicy, DeviceId,
+    DeviceRole, DistributedEvent, DistributedEventBatch, DistributedEventBatchRequest,
+    DistributedEventCursor, DistributedEventKind, ExecutionActivationReceipt,
+    ExecutionCheckpointPhase, ExecutionCheckpointReceipt, ExecutionDescendantScope,
+    ExecutionHostPlatform, ExecutionTerminationMode, ExecutionTerminationOutcome,
+    ExecutionTerminationReceipt, FeatureBrainstormingDraft, FeatureConveyorActivationBlocker,
     FeatureConveyorActivationEvidenceAdmissionProjection,
     FeatureConveyorActivationEvidenceAdmissionReceipt,
     FeatureConveyorActivationEvidenceAdmissionRequest, FeatureConveyorActivationEvidenceCategory,
@@ -42,10 +46,10 @@ use assemblywright_protocol::{
     LocalCodingResultArtifactAdmission, LocalCodingResultArtifactReceipt,
     LocalCodingSnapshotChunkRequest, LocalModelSelectionProjection, LocalModelSelectionReceipt,
     LocalModelSelectionRequest, LocalModelSelectionStatus, OrchestratorCatalog,
-    ProjectBrainstormingDraft, ProjectVisibility, ProtocolError, RepositoryCreationLifecycle,
-    RepositoryCreationProjection, RuntimeAvailabilityStatus, RuntimeComponentAvailability,
-    RuntimeUnavailableReason, Sensitivity, StepId, TaskId, CANCELLATION_ACK_DEADLINE_MS,
-    FEATURE_CONVEYOR_ORCHESTRATION_SCHEMA_VERSION,
+    OrchestratorProfile, ProjectBrainstormingDraft, ProjectVisibility, ProtocolError,
+    RepositoryCreationLifecycle, RepositoryCreationProjection, RuntimeAvailabilityStatus,
+    RuntimeComponentAvailability, RuntimeUnavailableReason, Sensitivity, StepId, TaskId,
+    CANCELLATION_ACK_DEADLINE_MS, FEATURE_CONVEYOR_ORCHESTRATION_SCHEMA_VERSION,
     FEATURE_CONVEYOR_OWNER_ACTIVATION_SCHEMA_VERSION,
     FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
     FEATURE_CONVEYOR_PUBLICATION_COORDINATOR_SCHEMA_VERSION, FEATURE_CONVEYOR_REVIEW_BACKOFF_MS,
@@ -78,6 +82,7 @@ mod github_publication;
 mod identity;
 mod integration;
 mod planning_effects;
+mod planning_runtime;
 pub mod publication;
 mod result_artifact;
 mod review_provider;
@@ -99,10 +104,14 @@ pub use integration::{
     PreparedCandidate, ValidationCandidateScratch,
 };
 pub use planning_effects::{
-    run_brainstorming, run_github_repository_creation, BrainstormingAdapter,
-    BrainstormingAdapterBinding, BrainstormingAdapterError, BrainstormingDraft,
-    GithubRepositoryCreationAdapter, GithubRepositoryCreationError, GithubRepositoryObservation,
-    PlanningEffectControl, WindowsPlanningEffectAuthority,
+    run_brainstorming, run_brainstorming_authorized, run_github_repository_creation,
+    BrainstormingAdapter, BrainstormingAdapterBinding, BrainstormingAdapterError,
+    BrainstormingCloudAuthorization, BrainstormingDraft, GithubRepositoryCreationAdapter,
+    GithubRepositoryCreationError, GithubRepositoryObservation, PlanningEffectControl,
+    WindowsPlanningEffectAuthority,
+};
+pub use planning_runtime::{
+    PlanningRuntime, PlanningRuntimeConfigError, PlanningRuntimeStatus, PLANNING_EFFECT_DEADLINE,
 };
 pub use publication::{PublicationAdapter, PublicationAdapterError, PublicationExecutionControl};
 pub use result_artifact::{
@@ -133,7 +142,7 @@ pub use identity::{
     SERVER_CERTIFICATE_LIFETIME_MS,
 };
 
-pub const MASTER_SCHEMA_VERSION: i64 = 20;
+pub const MASTER_SCHEMA_VERSION: i64 = 22;
 pub const MAX_QUEUED_OR_LEASED_STEPS: u64 = 256;
 pub const MAX_CONCURRENT_JOBS: u64 = 4;
 pub const MAX_CONVEYOR_NONTERMINAL_FEATURES: u64 = 100;
@@ -400,6 +409,12 @@ pub enum MasterError {
     AssemblyLineGithubCreationConflict,
     #[error("the GitHub creation result is ambiguous and requires exact reconciliation")]
     AssemblyLineGithubCreationReconciliationRequired,
+    #[error("the assembly-line execution capabilities are absent, unhealthy, or stale")]
+    AssemblyLineExecutionCapabilityUnavailable,
+    #[error("the assembly-line execution control binding is stale or unavailable")]
+    AssemblyLineExecutionControlUnavailable,
+    #[error("the assembly-line execution receipt does not match its durable intent")]
+    AssemblyLineExecutionReceiptMismatch,
     #[error("feature migration backup failed: {0}")]
     MigrationBackup(String),
     #[error("feature migration failed and backup restoration also failed: migration={migration}; restore={restore}")]
@@ -1107,6 +1122,7 @@ pub struct MasterKernel {
     connection: Connection,
     startup_reconciliation: StartupReconciliation,
     feature_startup_quarantines: u64,
+    assembly_line_startup_reconciliation: AssemblyLineStartupReconciliation,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1119,6 +1135,209 @@ pub struct MasterHealthSnapshot {
     pub leased_steps: u64,
     pub terminal_steps: u64,
     pub active_attempts: u64,
+}
+
+/// Provisioned, source-only execution identity binding. Recording this binding
+/// does not install, launch, or authorize an executor or broker. A later Start
+/// must match every executor identity and revision exactly and the binding must
+/// still be marked healthy inside the same durable transaction.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssemblyLineExecutionCapabilityBinding {
+    pub binding_revision: u64,
+    pub expected_state_revision: u64,
+    pub expected_emergency_pause_revision: u64,
+    pub windows_executor_id: Uuid,
+    pub windows_executor_revision: u64,
+    pub windows_executor_sha256: [u8; 32],
+    pub mac_executor_id: Uuid,
+    pub mac_executor_revision: u64,
+    pub mac_executor_sha256: [u8; 32],
+    pub windows_broker_id: Uuid,
+    pub windows_broker_revision: u64,
+    pub windows_broker_sha256: [u8; 32],
+    pub mac_broker_id: Uuid,
+    pub mac_broker_revision: u64,
+    pub mac_broker_sha256: [u8; 32],
+    pub protected_control_plane_sha256: [u8; 32],
+    pub windows_receipt_signer_key_id: String,
+    pub windows_receipt_verifying_key: [u8; 32],
+    pub mac_receipt_signer_key_id: String,
+    pub mac_receipt_verifying_key: [u8; 32],
+    pub healthy: bool,
+    pub provisioning_evidence_sha256: [u8; 32],
+}
+
+impl AssemblyLineExecutionCapabilityBinding {
+    fn validate(&self) -> Result<(), MasterError> {
+        for value in [
+            self.binding_revision,
+            self.expected_state_revision,
+            self.windows_executor_revision,
+            self.mac_executor_revision,
+            self.windows_broker_revision,
+            self.mac_broker_revision,
+        ] {
+            if value == 0 {
+                return Err(MasterError::AssemblyLineExecutionCapabilityUnavailable);
+            }
+        }
+        let identities = [
+            self.windows_executor_id,
+            self.mac_executor_id,
+            self.windows_broker_id,
+            self.mac_broker_id,
+        ];
+        if identities.iter().any(Uuid::is_nil)
+            || identities
+                .iter()
+                .enumerate()
+                .any(|(index, value)| identities[index + 1..].contains(value))
+            || [
+                self.windows_executor_sha256,
+                self.mac_executor_sha256,
+                self.windows_broker_sha256,
+                self.mac_broker_sha256,
+                self.protected_control_plane_sha256,
+                self.provisioning_evidence_sha256,
+                self.windows_receipt_verifying_key,
+                self.mac_receipt_verifying_key,
+            ]
+            .contains(&[0; 32])
+            || !valid_execution_signer_key_id(&self.windows_receipt_signer_key_id)
+            || !valid_execution_signer_key_id(&self.mac_receipt_signer_key_id)
+            || self.windows_receipt_signer_key_id == self.mac_receipt_signer_key_id
+            || self.windows_receipt_verifying_key == self.mac_receipt_verifying_key
+        {
+            return Err(MasterError::AssemblyLineExecutionCapabilityUnavailable);
+        }
+        Ok(())
+    }
+}
+
+/// Evidence that the product runtime has a concrete authenticated path to both
+/// platform executors and their protected brokers. Source capability rows alone
+/// never create this status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AssemblyLineExecutionRuntimeStatus {
+    pub binding_revision: u64,
+    pub dispatcher_sha256: [u8; 32],
+}
+
+impl AssemblyLineExecutionRuntimeStatus {
+    fn validate(self) -> Result<(), MasterError> {
+        if self.binding_revision == 0 || self.dispatcher_sha256 == [0; 32] {
+            return Err(MasterError::AssemblyLineExecutionCapabilityUnavailable);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssemblyLineStartDispatchIntent {
+    pub request_id: Uuid,
+    pub session_id: Uuid,
+    pub child_epoch_id: Uuid,
+    pub authority_revision: u64,
+    pub state_revision: u64,
+    pub queue_revision: u64,
+    pub owner_start_approval_sha256: [u8; 32],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum AssemblyLineEffectDispatchError {
+    #[error("assembly-line host-effect dispatch is unavailable")]
+    Unavailable,
+    #[error("assembly-line host-effect dispatch outcome is ambiguous")]
+    Ambiguous,
+}
+
+/// Host effects live behind this boundary. Implementations must authenticate
+/// the exact request and make request IDs idempotent; the master still verifies
+/// every signed receipt before changing lifecycle state.
+pub trait AssemblyLineEffectDispatcher: Send + Sync {
+    fn runtime_status(&self) -> Option<AssemblyLineExecutionRuntimeStatus>;
+
+    fn dispatch_start(
+        &self,
+        intent: &AssemblyLineStartDispatchIntent,
+    ) -> Result<Vec<ExecutionActivationReceipt>, AssemblyLineEffectDispatchError>;
+
+    fn dispatch_termination(
+        &self,
+        intent: &AssemblyLineTerminationIntent,
+    ) -> Result<Vec<ExecutionTerminationReceipt>, AssemblyLineEffectDispatchError>;
+}
+
+#[derive(Debug, Default)]
+pub struct UnavailableAssemblyLineEffectDispatcher;
+
+impl AssemblyLineEffectDispatcher for UnavailableAssemblyLineEffectDispatcher {
+    fn runtime_status(&self) -> Option<AssemblyLineExecutionRuntimeStatus> {
+        None
+    }
+
+    fn dispatch_start(
+        &self,
+        _intent: &AssemblyLineStartDispatchIntent,
+    ) -> Result<Vec<ExecutionActivationReceipt>, AssemblyLineEffectDispatchError> {
+        Err(AssemblyLineEffectDispatchError::Unavailable)
+    }
+
+    fn dispatch_termination(
+        &self,
+        _intent: &AssemblyLineTerminationIntent,
+    ) -> Result<Vec<ExecutionTerminationReceipt>, AssemblyLineEffectDispatchError> {
+        Err(AssemblyLineEffectDispatchError::Unavailable)
+    }
+}
+
+/// Durable control-plane intent only. `external_effect_performed` remains false
+/// until separately installed executors and brokers consume the intent and
+/// return matching signed receipts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssemblyLineTerminationIntent {
+    pub request_id: Uuid,
+    pub session_id: Uuid,
+    pub child_epoch_id: Uuid,
+    pub mode: ExecutionTerminationMode,
+    pub authority_revision: u64,
+    pub checkpoint_id: Uuid,
+    pub checkpoint_sha256: [u8; 32],
+    pub resulting_state: AssemblyLineState,
+    pub external_effect_performed: bool,
+}
+
+/// Result of durable restart reconciliation for the new Assembly Line state.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AssemblyLineStartupReconciliation {
+    pub quarantined_effect_possible_session: bool,
+    pub pending_termination_intent: bool,
+}
+
+struct AssemblyLineTerminationControlBinding {
+    request_kind: &'static str,
+    request_id: Uuid,
+    session_id: Uuid,
+    child_epoch_id: Uuid,
+    expected_state_revision: u64,
+    expected_emergency_pause_revision: Option<u64>,
+}
+
+struct AssemblyLineActivationVerificationBinding {
+    child_session: String,
+    child_authority_revision: i64,
+    start_request_id: String,
+    windows_executor_id: String,
+    windows_executor_revision: i64,
+    mac_executor_id: String,
+    mac_executor_revision: i64,
+    windows_key_id: String,
+    windows_key: Vec<u8>,
+    mac_key_id: String,
+    mac_key: Vec<u8>,
 }
 
 pub struct MasterProcess {
@@ -1274,6 +1493,30 @@ impl MasterKernel {
         Self::initialize(connection)
     }
 
+    /// Opens one additional connection owned by the running Windows master.
+    /// It neither migrates nor performs startup reconciliation; those remain
+    /// exclusive to `MasterProcess::acquire`.
+    pub fn open_planning_runtime_connection(path: impl AsRef<Path>) -> Result<Self, MasterError> {
+        let connection = Connection::open(path)?;
+        connection.execute_batch(
+            "PRAGMA foreign_keys = ON;\nPRAGMA busy_timeout = 5000;\nPRAGMA synchronous = FULL;",
+        )?;
+        let kernel = Self {
+            connection,
+            startup_reconciliation: StartupReconciliation::default(),
+            feature_startup_quarantines: 0,
+            assembly_line_startup_reconciliation: AssemblyLineStartupReconciliation::default(),
+        };
+        let found = kernel.schema_version()?;
+        if found != MASTER_SCHEMA_VERSION {
+            return Err(MasterError::UnsupportedSchemaVersion {
+                expected: MASTER_SCHEMA_VERSION,
+                found,
+            });
+        }
+        Ok(kernel)
+    }
+
     fn initialize(connection: Connection) -> Result<Self, MasterError> {
         connection.execute_batch(
             "PRAGMA foreign_keys = ON;\nPRAGMA busy_timeout = 5000;\nPRAGMA synchronous = FULL;",
@@ -1282,11 +1525,14 @@ impl MasterKernel {
             connection,
             startup_reconciliation: StartupReconciliation::default(),
             feature_startup_quarantines: 0,
+            assembly_line_startup_reconciliation: AssemblyLineStartupReconciliation::default(),
         };
         kernel.migrate()?;
         kernel.startup_reconciliation = kernel.reconcile_interrupted_state(current_time_ms()?)?;
         kernel.feature_startup_quarantines =
             kernel.reconcile_feature_conveyor_startup(current_time_ms()?)?;
+        kernel.assembly_line_startup_reconciliation =
+            kernel.reconcile_assembly_line_startup(current_time_ms()?)?;
         Ok(kernel)
     }
 
@@ -1304,12 +1550,20 @@ impl MasterKernel {
         self.feature_startup_quarantines
     }
 
+    pub fn assembly_line_startup_reconciliation(&self) -> AssemblyLineStartupReconciliation {
+        self.assembly_line_startup_reconciliation
+    }
+
     pub fn emergency_paused(&self) -> Result<bool, MasterError> {
         Ok(self.emergency_pause_snapshot()?.0)
     }
 
     pub fn emergency_pause_revision(&self) -> Result<u64, MasterError> {
         Ok(self.emergency_pause_snapshot()?.1)
+    }
+
+    pub fn planning_effect_pause_snapshot(&self) -> Result<(bool, u64), MasterError> {
+        self.emergency_pause_snapshot()
     }
 
     fn emergency_pause_snapshot(&self) -> Result<(bool, u64), MasterError> {
@@ -7148,38 +7402,58 @@ impl MasterKernel {
         OrchestratorCatalog::default()
     }
 
-    /// Pure durable projection for the inert schema-v20 planning foundation.
-    /// Every runtime component is deliberately unavailable and no execution epoch
-    /// is synthesized.
+    /// Pure durable projection. Execution components remain deliberately
+    /// unavailable to product routes even when source-only capability bindings
+    /// exist; this method never synthesizes an execution epoch.
     pub fn assembly_line_owner_projection(
         &self,
         observed_at_ms: u64,
     ) -> Result<AssemblyLineOwnerProjection, MasterError> {
-        let (owner_control_revision, state_revision, queue_revision, auto_run, lifecycle): (
-            i64,
-            i64,
-            i64,
-            i64,
-            String,
-        ) = self.connection.query_row(
-            "SELECT owner_control_revision,state_revision,queue_revision,auto_run,lifecycle
-             FROM assembly_line_state WHERE singleton=1",
-            [],
-            |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                ))
-            },
-        )?;
-        if lifecycle != "stopped" || !matches!(auto_run, 0 | 1) {
+        self.assembly_line_owner_projection_with_planning_runtime(observed_at_ms, None)
+    }
+
+    /// Adds only the two independently loaded planning components to the
+    /// projection. Execution and broker components remain unavailable.
+    pub fn assembly_line_owner_projection_with_planning_runtime(
+        &self,
+        observed_at_ms: u64,
+        planning: Option<PlanningRuntimeStatus>,
+    ) -> Result<AssemblyLineOwnerProjection, MasterError> {
+        self.assembly_line_owner_projection_with_runtime(observed_at_ms, planning, None)
+    }
+
+    /// Projects only independently attested runtime boundaries. Durable source
+    /// capability rows cannot make execution appear available without a live
+    /// dispatcher status supplied by the hosting process.
+    pub fn assembly_line_owner_projection_with_runtime(
+        &self,
+        observed_at_ms: u64,
+        planning: Option<PlanningRuntimeStatus>,
+        execution: Option<AssemblyLineExecutionRuntimeStatus>,
+    ) -> Result<AssemblyLineOwnerProjection, MasterError> {
+        if let Some(execution) = execution {
+            execution.validate()?;
+        }
+        let capability_healthy = self
+            .connection
+            .query_row(
+                "SELECT healthy FROM assembly_line_execution_capabilities
+                 ORDER BY binding_revision DESC LIMIT 1",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        if capability_healthy.is_some_and(|healthy| !matches!(healthy, 0 | 1)) {
             return Err(MasterError::InvalidStoredState(
-                "inert assembly-line singleton is malformed".to_string(),
+                "assembly-line execution capability health is malformed".to_string(),
             ));
         }
+        let execution = execution.filter(|_| capability_healthy == Some(1));
+        let owner_control_revision: i64 = self.connection.query_row(
+            "SELECT owner_control_revision FROM assembly_line_state WHERE singleton=1",
+            [],
+            |row| row.get(0),
+        )?;
         let mut repositories = Vec::new();
         let mut statement = self.connection.prepare(
             "SELECT repository_id,git_url,repository_revision,lifecycle_revision,visibility,
@@ -7221,6 +7495,56 @@ impl MasterKernel {
             status: RuntimeAvailabilityStatus::Unavailable,
             unavailable_reason: Some(RuntimeUnavailableReason::NotConfigured),
         };
+        let planning_component = |name: &str, sha256: [u8; 32]| RuntimeComponentAvailability {
+            binding_revision: planning.map_or(1, |runtime| runtime.binding_revision),
+            binding_sha256: planning.map_or_else(
+                || component(name).binding_sha256,
+                |runtime| {
+                    Sha256::digest(
+                        [
+                            b"assemblywright.schema-v20.planning-availability.v1\0".as_slice(),
+                            sha256.as_slice(),
+                            runtime.catalog_sha256.as_slice(),
+                        ]
+                        .concat(),
+                    )
+                    .into()
+                },
+            ),
+            status: if planning.is_some() {
+                RuntimeAvailabilityStatus::Available
+            } else {
+                RuntimeAvailabilityStatus::Unavailable
+            },
+            unavailable_reason: planning
+                .is_none()
+                .then_some(RuntimeUnavailableReason::NotConfigured),
+        };
+        let execution_component = |name: &str| RuntimeComponentAvailability {
+            binding_revision: execution.map_or(1, |runtime| runtime.binding_revision),
+            binding_sha256: execution.map_or_else(
+                || component(name).binding_sha256,
+                |runtime| {
+                    Sha256::digest(
+                        [
+                            b"assemblywright.schema-v21.execution-availability.v1\0".as_slice(),
+                            name.as_bytes(),
+                            runtime.dispatcher_sha256.as_slice(),
+                        ]
+                        .concat(),
+                    )
+                    .into()
+                },
+            ),
+            status: if execution.is_some() {
+                RuntimeAvailabilityStatus::Available
+            } else {
+                RuntimeAvailabilityStatus::Unavailable
+            },
+            unavailable_reason: execution
+                .is_none()
+                .then_some(RuntimeUnavailableReason::NotConfigured),
+        };
         let projection = AssemblyLineOwnerProjection {
             schema_version: FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
             owner_control_revision: i64_to_u64(owner_control_revision)?,
@@ -7229,27 +7553,22 @@ impl MasterKernel {
             orchestrator_catalog: self.assembly_line_orchestrator_catalog(),
             repositories,
             queue: queue.clone(),
-            assembly_line: AssemblyLineState {
-                schema_version: FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
-                state_revision: i64_to_u64(state_revision)?,
-                queue_revision: i64_to_u64(queue_revision)?,
-                queue_count: u16::try_from(queue.len())
-                    .map_err(|_| MasterError::IntegerOutOfRange)?,
-                auto_run: auto_run == 1,
-                lifecycle: AssemblyLineLifecycleState::Stopped,
-                session_id: None,
-                active_child_epoch_id: None,
-                active_feature_id: None,
-            },
+            assembly_line: assembly_line_state_connection(&self.connection)?,
             availability: AssemblyLineRuntimeAvailabilityProjection {
                 schema_version: FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
                 availability_revision: 1,
                 observed_at_ms,
-                brainstorming_provider: component("brainstorming_provider"),
-                github_creation: component("github_creation"),
-                windows_executor: component("windows_executor"),
-                mac_executor: component("mac_executor"),
-                protected_brokers: component("protected_brokers"),
+                brainstorming_provider: planning_component(
+                    "brainstorming_provider",
+                    planning.map_or([0; 32], |runtime| runtime.brainstorming_sha256),
+                ),
+                github_creation: planning_component(
+                    "github_creation",
+                    planning.map_or([0; 32], |runtime| runtime.github_sha256),
+                ),
+                windows_executor: execution_component("windows_executor"),
+                mac_executor: execution_component("mac_executor"),
+                protected_brokers: execution_component("protected_brokers"),
             },
         };
         projection.validate()?;
@@ -7368,10 +7687,36 @@ impl MasterKernel {
         frozen: &FrozenBrainstormingSpecification,
         now_ms: u64,
     ) -> Result<(), MasterError> {
+        self.record_assembly_line_frozen_specification_inner(frozen, None, now_ms)
+    }
+
+    pub(crate) fn record_assembly_line_frozen_specification_with_provider(
+        &mut self,
+        frozen: &FrozenBrainstormingSpecification,
+        binding: &crate::planning_effects::BrainstormingAdapterBinding,
+        adapter_catalog_sha256: [u8; 32],
+        now_ms: u64,
+    ) -> Result<(), MasterError> {
+        self.record_assembly_line_frozen_specification_inner(
+            frozen,
+            Some((binding, adapter_catalog_sha256)),
+            now_ms,
+        )
+    }
+
+    fn record_assembly_line_frozen_specification_inner(
+        &mut self,
+        frozen: &FrozenBrainstormingSpecification,
+        provider: Option<(
+            &crate::planning_effects::BrainstormingAdapterBinding,
+            [u8; 32],
+        )>,
+        now_ms: u64,
+    ) -> Result<(), MasterError> {
         frozen.validate()?;
         let request_json = serde_json::to_value(frozen)?;
-        let canonical_json = canonical_json(&request_json)?;
-        let request_sha256: [u8; 32] = Sha256::digest(canonical_json.as_bytes()).into();
+        let frozen_canonical_json = canonical_json(&request_json)?;
+        let request_sha256: [u8; 32] = Sha256::digest(frozen_canonical_json.as_bytes()).into();
         let catalog = self.assembly_line_orchestrator_catalog();
         let tx = self
             .connection
@@ -7382,6 +7727,31 @@ impl MasterKernel {
             frozen.specification_id,
             request_sha256,
         )? {
+            if let Some((binding, adapter_catalog_sha256)) = provider {
+                let expected = canonical_json(&serde_json::json!({
+                    "target_kind": brainstorming_target_str(frozen.target_kind),
+                    "draft_id": frozen.draft_id,
+                    "specification_id": frozen.specification_id,
+                    "specification_sha256": frozen.specification_sha256,
+                    "provider_id": binding.profile.provider_id,
+                    "model_id": binding.profile.model_id,
+                    "adapter_sha256": binding.executable_sha256,
+                    "adapter_catalog_sha256": adapter_catalog_sha256,
+                    "planning_only": true,
+                    "provider_output_retained_in_audit": false,
+                    "external_effect_authorized": false
+                }))?;
+                let count: i64 = tx.query_row(
+                    "SELECT COUNT(*) FROM assembly_line_audit
+                     WHERE event_kind='brainstorming_provider_output_accepted'
+                       AND redacted_metadata_json=?1",
+                    [expected],
+                    |row| row.get(0),
+                )?;
+                if count != 1 {
+                    return Err(MasterError::AssemblyLineBrainstormingUnavailable);
+                }
+            }
             return Ok(());
         }
         match frozen.target_kind {
@@ -7436,7 +7806,7 @@ impl MasterKernel {
                 frozen.repository.repository_id.to_string(),
                 frozen.specification_sha256.as_slice(),
                 request_sha256.as_slice(),
-                canonical_json,
+                frozen_canonical_json,
                 u64_to_i64(now_ms)?
             ],
         )?;
@@ -7453,6 +7823,26 @@ impl MasterKernel {
                 "provider_output_retained_in_audit": false, "external_effect": false
             }),
         )?;
+        if let Some((binding, adapter_catalog_sha256)) = provider {
+            append_assembly_line_audit_tx(
+                &tx,
+                "brainstorming_provider_output_accepted",
+                now_ms,
+                serde_json::json!({
+                    "target_kind": brainstorming_target_str(frozen.target_kind),
+                    "draft_id": frozen.draft_id,
+                    "specification_id": frozen.specification_id,
+                    "specification_sha256": frozen.specification_sha256,
+                    "provider_id": binding.profile.provider_id,
+                    "model_id": binding.profile.model_id,
+                    "adapter_sha256": binding.executable_sha256,
+                    "adapter_catalog_sha256": adapter_catalog_sha256,
+                    "planning_only": true,
+                    "provider_output_retained_in_audit": false,
+                    "external_effect_authorized": false
+                }),
+            )?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -7577,6 +7967,32 @@ impl MasterKernel {
         approval: &BrainstormingOwnerApprovalBinding,
         now_ms: u64,
     ) -> Result<FeatureQueueEntryProjection, MasterError> {
+        self.approve_assembly_line_feature_and_enqueue_inner(approval, None, now_ms)
+    }
+
+    pub(crate) fn approve_assembly_line_feature_and_enqueue_with_provider(
+        &mut self,
+        approval: &BrainstormingOwnerApprovalBinding,
+        binding: &crate::planning_effects::BrainstormingAdapterBinding,
+        adapter_catalog_sha256: [u8; 32],
+        now_ms: u64,
+    ) -> Result<FeatureQueueEntryProjection, MasterError> {
+        self.approve_assembly_line_feature_and_enqueue_inner(
+            approval,
+            Some((binding, adapter_catalog_sha256)),
+            now_ms,
+        )
+    }
+
+    fn approve_assembly_line_feature_and_enqueue_inner(
+        &mut self,
+        approval: &BrainstormingOwnerApprovalBinding,
+        provider: Option<(
+            &crate::planning_effects::BrainstormingAdapterBinding,
+            [u8; 32],
+        )>,
+        now_ms: u64,
+    ) -> Result<FeatureQueueEntryProjection, MasterError> {
         let canonical_json = canonical_json(&serde_json::to_value(approval)?)?;
         let request_sha256: [u8; 32] = Sha256::digest(canonical_json.as_bytes()).into();
         let catalog = self.assembly_line_orchestrator_catalog();
@@ -7643,6 +8059,7 @@ impl MasterKernel {
         let draft: FeatureBrainstormingDraft = serde_json::from_str(&draft_json)?;
         let frozen: FrozenBrainstormingSpecification = serde_json::from_str(&frozen_json)?;
         approval.validate_for_feature(&draft, &frozen, &catalog)?;
+        require_accepted_feature_provider_provenance_tx(&tx, &frozen, provider)?;
         require_created_assembly_line_repository_tx(
             &tx,
             &draft.repository,
@@ -7837,6 +8254,1307 @@ impl MasterKernel {
         )?;
         tx.commit()?;
         Ok(receipt)
+    }
+
+    /// Records a revisioned provisioning observation only. It does not install,
+    /// launch, or expose the bound components to any product route.
+    pub fn record_assembly_line_execution_capabilities(
+        &mut self,
+        binding: &AssemblyLineExecutionCapabilityBinding,
+        now_ms: u64,
+    ) -> Result<(), MasterError> {
+        binding.validate()?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let state = assembly_line_state_tx(&tx)?;
+        if state.state_revision != binding.expected_state_revision
+            || !matches!(
+                state.lifecycle,
+                AssemblyLineLifecycleState::Stopped
+                    | AssemblyLineLifecycleState::WaitingForOwnerStart
+            )
+        {
+            return Err(MasterError::StaleAssemblyLineStateRevision {
+                expected: binding.expected_state_revision,
+                found: state.state_revision,
+            });
+        }
+        require_emergency_pause_revision_tx(&tx, binding.expected_emergency_pause_revision)?;
+        let current_revision: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(binding_revision),0)
+             FROM assembly_line_execution_capabilities",
+            [],
+            |row| row.get(0),
+        )?;
+        let current_revision = i64_to_u64(current_revision)?;
+        if binding.binding_revision != current_revision.saturating_add(1) {
+            return Err(MasterError::AssemblyLineExecutionCapabilityUnavailable);
+        }
+        tx.execute(
+            "INSERT INTO assembly_line_execution_capabilities
+             (binding_revision,state_revision,emergency_pause_revision,
+              windows_executor_id,windows_executor_revision,windows_executor_sha256,
+              mac_executor_id,mac_executor_revision,mac_executor_sha256,
+              windows_broker_id,windows_broker_revision,windows_broker_sha256,
+              mac_broker_id,mac_broker_revision,mac_broker_sha256,
+              protected_control_plane_sha256,windows_receipt_signer_key_id,
+              windows_receipt_verifying_key,mac_receipt_signer_key_id,
+              mac_receipt_verifying_key,healthy,provisioning_evidence_sha256,recorded_at_ms)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,
+                    ?16,?17,?18,?19,?20,?21,?22,?23)",
+            params![
+                u64_to_i64(binding.binding_revision)?,
+                u64_to_i64(binding.expected_state_revision)?,
+                u64_to_i64(binding.expected_emergency_pause_revision)?,
+                binding.windows_executor_id.to_string(),
+                u64_to_i64(binding.windows_executor_revision)?,
+                binding.windows_executor_sha256.as_slice(),
+                binding.mac_executor_id.to_string(),
+                u64_to_i64(binding.mac_executor_revision)?,
+                binding.mac_executor_sha256.as_slice(),
+                binding.windows_broker_id.to_string(),
+                u64_to_i64(binding.windows_broker_revision)?,
+                binding.windows_broker_sha256.as_slice(),
+                binding.mac_broker_id.to_string(),
+                u64_to_i64(binding.mac_broker_revision)?,
+                binding.mac_broker_sha256.as_slice(),
+                binding.protected_control_plane_sha256.as_slice(),
+                binding.windows_receipt_signer_key_id,
+                binding.windows_receipt_verifying_key.as_slice(),
+                binding.mac_receipt_signer_key_id,
+                binding.mac_receipt_verifying_key.as_slice(),
+                i64::from(binding.healthy),
+                binding.provisioning_evidence_sha256.as_slice(),
+                u64_to_i64(now_ms)?,
+            ],
+        )?;
+        append_assembly_line_audit_tx(
+            &tx,
+            "execution_capabilities_recorded",
+            now_ms,
+            serde_json::json!({
+                "binding_revision": binding.binding_revision,
+                "state_revision": binding.expected_state_revision,
+                "emergency_pause_revision": binding.expected_emergency_pause_revision,
+                "healthy": binding.healthy,
+                "provisioning_evidence_sha256": binding.provisioning_evidence_sha256,
+                "installed_or_started": false,
+                "external_effect": false
+            }),
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Creates durable authority in `starting`. The authority is effect-possible
+    /// but cannot become `running` until both platform activation receipts are
+    /// cryptographically admitted.
+    pub fn start_assembly_line(
+        &mut self,
+        request: &AssemblyLineStartRequest,
+        now_ms: u64,
+    ) -> Result<AssemblyLineStartReceipt, MasterError> {
+        request.validate()?;
+        let request_json = canonical_json(&serde_json::to_value(request)?)?;
+        let request_sha256: [u8; 32] = Sha256::digest(request_json.as_bytes()).into();
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(response) = assembly_line_execution_request_replay_tx(
+            &tx,
+            "start",
+            request.request_id,
+            request_sha256,
+        )? {
+            let receipt: AssemblyLineStartReceipt = serde_json::from_str(&response)?;
+            receipt.validate_for_request(request)?;
+            return Ok(receipt);
+        }
+        let prior = assembly_line_state_tx(&tx)?;
+        if prior.state_revision != request.expected_state_revision {
+            return Err(MasterError::StaleAssemblyLineStateRevision {
+                expected: request.expected_state_revision,
+                found: prior.state_revision,
+            });
+        }
+        if prior.queue_revision != request.expected_queue_revision {
+            return Err(MasterError::StaleAssemblyLineQueueRevision {
+                expected: request.expected_queue_revision,
+                found: prior.queue_revision,
+            });
+        }
+        require_unpaused_revision_tx(&tx, request.expected_emergency_pause_revision)?;
+        if prior.queue_count == 0
+            || prior.queue_count != request.queue_count
+            || prior.auto_run != request.auto_run
+            || prior.lifecycle != AssemblyLineLifecycleState::Stopped
+        {
+            return Err(MasterError::AssemblyLineExecutionControlUnavailable);
+        }
+        let capability = current_assembly_line_execution_capability_tx(&tx)?;
+        if !capability.healthy
+            || capability.expected_state_revision != prior.state_revision
+            || capability.expected_emergency_pause_revision
+                != request.expected_emergency_pause_revision
+            || capability.windows_executor_id != request.windows_executor_id
+            || capability.windows_executor_revision != request.windows_executor_revision
+            || capability.mac_executor_id != request.mac_executor_id
+            || capability.mac_executor_revision != request.mac_executor_revision
+        {
+            return Err(MasterError::AssemblyLineExecutionCapabilityUnavailable);
+        }
+        let (feature_id, repository_id, feature_lifecycle_revision): (String, String, i64) = tx
+            .query_row(
+                "SELECT feature_id,repository_id,lifecycle_revision
+                 FROM assembly_line_queue ORDER BY queue_position ASC LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+        let feature_id = parse_uuid(&feature_id)?;
+        let repository_id = parse_uuid(&repository_id)?;
+        let session_id = Uuid::new_v4();
+        let child_epoch_id = Uuid::new_v4();
+        let next_state_revision = prior
+            .state_revision
+            .checked_add(1)
+            .ok_or(MasterError::IntegerOutOfRange)?;
+        let prior_authority_revision: i64 = tx.query_row(
+            "SELECT authority_revision FROM assembly_line_execution_authority WHERE singleton=1",
+            [],
+            |row| row.get(0),
+        )?;
+        let next_authority_revision = i64_to_u64(prior_authority_revision)?
+            .checked_add(1)
+            .ok_or(MasterError::IntegerOutOfRange)?;
+        let session = AssemblyLineSessionEpoch {
+            schema_version: FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
+            session_id,
+            session_revision: 1,
+            start_request_id: request.request_id,
+            started_queue_count: request.queue_count,
+            state_revision: next_state_revision,
+            queue_revision: request.expected_queue_revision,
+            emergency_pause_revision: request.expected_emergency_pause_revision,
+            owner_start_approval_sha256: request.owner_start_approval_sha256,
+            windows_executor_id: request.windows_executor_id,
+            windows_executor_revision: request.windows_executor_revision,
+            mac_executor_id: request.mac_executor_id,
+            mac_executor_revision: request.mac_executor_revision,
+            auto_run: request.auto_run,
+        };
+        session.validate_for_start(request)?;
+        let child = AssemblyLineChildEpoch {
+            schema_version: FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
+            child_epoch_id,
+            child_epoch_revision: 1,
+            session_id,
+            session_revision: session.session_revision,
+            feature_id,
+            repository_id,
+            feature_lifecycle_revision: i64_to_u64(feature_lifecycle_revision)?,
+            queue_revision: request.expected_queue_revision,
+            windows_executor_id: request.windows_executor_id,
+            windows_executor_revision: request.windows_executor_revision,
+            mac_executor_id: request.mac_executor_id,
+            mac_executor_revision: request.mac_executor_revision,
+        };
+        child.validate_for_session(&session)?;
+        tx.execute(
+            "INSERT INTO assembly_line_execution_sessions
+             (session_id,session_revision,start_request_id,started_queue_count,state_revision,
+              queue_revision,emergency_pause_revision,owner_start_approval_sha256,
+              capability_binding_revision,windows_executor_id,windows_executor_revision,
+              mac_executor_id,mac_executor_revision,auto_run,started_at_ms)
+             VALUES(?1,1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+            params![
+                session_id.to_string(),
+                request.request_id.to_string(),
+                i64::from(request.queue_count),
+                u64_to_i64(next_state_revision)?,
+                u64_to_i64(request.expected_queue_revision)?,
+                u64_to_i64(request.expected_emergency_pause_revision)?,
+                request.owner_start_approval_sha256.as_slice(),
+                u64_to_i64(capability.binding_revision)?,
+                request.windows_executor_id.to_string(),
+                u64_to_i64(request.windows_executor_revision)?,
+                request.mac_executor_id.to_string(),
+                u64_to_i64(request.mac_executor_revision)?,
+                i64::from(request.auto_run),
+                u64_to_i64(now_ms)?,
+            ],
+        )?;
+        tx.execute(
+            "INSERT INTO assembly_line_child_epochs
+             (child_epoch_id,child_epoch_revision,session_id,session_revision,feature_id,
+              repository_id,feature_lifecycle_revision,queue_revision,authority_revision,
+              lifecycle,effect_possible,started_at_ms)
+             VALUES(?1,1,?2,1,?3,?4,?5,?6,?7,'starting',1,?8)",
+            params![
+                child_epoch_id.to_string(),
+                session_id.to_string(),
+                feature_id.to_string(),
+                repository_id.to_string(),
+                feature_lifecycle_revision,
+                u64_to_i64(request.expected_queue_revision)?,
+                u64_to_i64(next_authority_revision)?,
+                u64_to_i64(now_ms)?,
+            ],
+        )?;
+        if tx.execute(
+            "UPDATE assembly_line_queue
+             SET lifecycle='starting',lifecycle_revision=lifecycle_revision+1
+             WHERE feature_id=?1 AND queue_position=1 AND lifecycle='queued'",
+            [feature_id.to_string()],
+        )? != 1
+        {
+            return Err(MasterError::AssemblyLineExecutionControlUnavailable);
+        }
+        if tx.execute(
+            "UPDATE assembly_line_execution_authority
+             SET authority_revision=?1,revoked=0,session_id=?2,child_epoch_id=?3,updated_at_ms=?4
+             WHERE singleton=1 AND authority_revision=?5",
+            params![
+                u64_to_i64(next_authority_revision)?,
+                session_id.to_string(),
+                child_epoch_id.to_string(),
+                u64_to_i64(now_ms)?,
+                prior_authority_revision,
+            ],
+        )? != 1
+        {
+            return Err(MasterError::AssemblyLineExecutionControlUnavailable);
+        }
+        let prior_owner_revision = assembly_line_owner_revision_tx(&tx)?;
+        let next_owner_revision = prior_owner_revision
+            .checked_add(1)
+            .ok_or(MasterError::IntegerOutOfRange)?;
+        if tx.execute(
+            "UPDATE assembly_line_state
+             SET owner_control_revision=?1,state_revision=?2,
+                 lifecycle='starting',session_id=?3,active_child_epoch_id=?4,
+                 active_feature_id=?5,effect_possible=1,authority_revision=?6
+             WHERE singleton=1 AND owner_control_revision=?7 AND state_revision=?8
+               AND queue_revision=?9
+               AND lifecycle='stopped' AND session_id IS NULL",
+            params![
+                u64_to_i64(next_owner_revision)?,
+                u64_to_i64(next_state_revision)?,
+                session_id.to_string(),
+                child_epoch_id.to_string(),
+                feature_id.to_string(),
+                u64_to_i64(next_authority_revision)?,
+                u64_to_i64(prior_owner_revision)?,
+                u64_to_i64(prior.state_revision)?,
+                u64_to_i64(prior.queue_revision)?,
+            ],
+        )? != 1
+        {
+            return Err(MasterError::AssemblyLineExecutionControlUnavailable);
+        }
+        let resulting_state = assembly_line_state_tx(&tx)?;
+        let receipt = AssemblyLineStartReceipt {
+            schema_version: FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
+            request_id: request.request_id,
+            owner_start_approval_sha256: request.owner_start_approval_sha256,
+            resulting_state,
+            session,
+            child,
+        };
+        receipt.validate_for_request(request)?;
+        let response_json = canonical_json(&serde_json::to_value(&receipt)?)?;
+        insert_assembly_line_execution_request_tx(
+            &tx,
+            "start",
+            request.request_id,
+            request_sha256,
+            &response_json,
+            now_ms,
+        )?;
+        append_assembly_line_audit_tx(
+            &tx,
+            "execution_start_intent_recorded",
+            now_ms,
+            serde_json::json!({
+                "request_id": request.request_id,
+                "session_id": session_id,
+                "child_epoch_id": child_epoch_id,
+                "feature_id": feature_id,
+                "state_revision": next_state_revision,
+                "queue_revision": request.expected_queue_revision,
+                "authority_revision": next_authority_revision,
+                "capability_binding_revision": capability.binding_revision,
+                "owner_control_revision": next_owner_revision,
+                "audit_precedes_effect": true,
+                "running_claimed": false,
+                "external_effect_performed": false
+            }),
+        )?;
+        tx.commit()?;
+        Ok(receipt)
+    }
+
+    /// Claims the one effect-possible dispatch attempt for an exact durable
+    /// Start intent. `None` means the identical intent was already claimed and
+    /// must not be dispatched again automatically.
+    pub fn claim_assembly_line_start_dispatch(
+        &mut self,
+        receipt: &AssemblyLineStartReceipt,
+        now_ms: u64,
+    ) -> Result<Option<AssemblyLineStartDispatchIntent>, MasterError> {
+        receipt.validate()?;
+        let response_json = canonical_json(&serde_json::to_value(receipt)?)?;
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let stored_response: String = tx
+            .query_row(
+                "SELECT response_json FROM assembly_line_execution_requests
+                 WHERE request_kind='start' AND request_id=?1",
+                [receipt.request_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or(MasterError::AssemblyLineExecutionControlUnavailable)?;
+        if stored_response != response_json {
+            return Err(MasterError::AssemblyLineExecutionControlUnavailable);
+        }
+        let state = assembly_line_state_tx(&tx)?;
+        if state.lifecycle != AssemblyLineLifecycleState::Starting
+            || state.state_revision != receipt.resulting_state.state_revision
+            || state.session_id != Some(receipt.session.session_id)
+            || state.active_child_epoch_id != Some(receipt.child.child_epoch_id)
+        {
+            return Err(MasterError::AssemblyLineExecutionControlUnavailable);
+        }
+        let (authority_revision, revoked, authority_session, authority_child): (
+            i64,
+            i64,
+            Option<String>,
+            Option<String>,
+        ) = tx.query_row(
+            "SELECT authority_revision,revoked,session_id,child_epoch_id
+             FROM assembly_line_execution_authority WHERE singleton=1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
+        if revoked != 0
+            || authority_session.as_deref() != Some(receipt.session.session_id.to_string().as_str())
+            || authority_child.as_deref() != Some(receipt.child.child_epoch_id.to_string().as_str())
+        {
+            return Err(MasterError::AssemblyLineExecutionControlUnavailable);
+        }
+        let intent = AssemblyLineStartDispatchIntent {
+            request_id: receipt.request_id,
+            session_id: receipt.session.session_id,
+            child_epoch_id: receipt.child.child_epoch_id,
+            authority_revision: i64_to_u64(authority_revision)?,
+            state_revision: receipt.resulting_state.state_revision,
+            queue_revision: receipt.resulting_state.queue_revision,
+            owner_start_approval_sha256: receipt.owner_start_approval_sha256,
+        };
+        let intent_sha256: [u8; 32] =
+            Sha256::digest(canonical_json(&serde_json::to_value(&intent)?)?.as_bytes()).into();
+        if !claim_assembly_line_effect_dispatch_tx(
+            &tx,
+            "start",
+            intent.request_id,
+            intent_sha256,
+            now_ms,
+        )? {
+            return Ok(None);
+        }
+        append_assembly_line_audit_tx(
+            &tx,
+            "execution_start_dispatch_claimed",
+            now_ms,
+            serde_json::json!({
+                "request_id": intent.request_id,
+                "session_id": intent.session_id,
+                "child_epoch_id": intent.child_epoch_id,
+                "authority_revision": intent.authority_revision,
+                "intent_sha256": intent_sha256,
+                "effect_possible": true,
+                "external_effect_confirmed": false
+            }),
+        )?;
+        tx.commit()?;
+        Ok(Some(intent))
+    }
+
+    /// Verifies one platform activation acknowledgement. Only a complete pair
+    /// from the session-pinned Windows and macOS keys promotes `starting` to
+    /// `running`.
+    pub fn record_assembly_line_activation_receipt(
+        &mut self,
+        receipt: &ExecutionActivationReceipt,
+        now_ms: u64,
+    ) -> Result<AssemblyLineState, MasterError> {
+        receipt.validate()?;
+        let receipt_json = canonical_json(&serde_json::to_value(receipt)?)?;
+        let receipt_sha256: [u8; 32] = Sha256::digest(receipt_json.as_bytes()).into();
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let binding = tx
+            .query_row(
+                "SELECT e.session_id,e.authority_revision,s.start_request_id,
+                        s.windows_executor_id,s.windows_executor_revision,
+                        s.mac_executor_id,s.mac_executor_revision,
+                        c.windows_receipt_signer_key_id,c.windows_receipt_verifying_key,
+                        c.mac_receipt_signer_key_id,c.mac_receipt_verifying_key
+                 FROM assembly_line_child_epochs e
+                 JOIN assembly_line_execution_sessions s ON s.session_id=e.session_id
+                 JOIN assembly_line_execution_capabilities c
+                   ON c.binding_revision=s.capability_binding_revision
+                 WHERE e.child_epoch_id=?1",
+                [receipt.child_epoch_id.to_string()],
+                |row| {
+                    Ok(AssemblyLineActivationVerificationBinding {
+                        child_session: row.get(0)?,
+                        child_authority_revision: row.get(1)?,
+                        start_request_id: row.get(2)?,
+                        windows_executor_id: row.get(3)?,
+                        windows_executor_revision: row.get(4)?,
+                        mac_executor_id: row.get(5)?,
+                        mac_executor_revision: row.get(6)?,
+                        windows_key_id: row.get(7)?,
+                        windows_key: row.get(8)?,
+                        mac_key_id: row.get(9)?,
+                        mac_key: row.get(10)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or(MasterError::AssemblyLineExecutionReceiptMismatch)?;
+        if binding.child_session != receipt.session_id.to_string()
+            || i64_to_u64(binding.child_authority_revision)? != receipt.authority_revision
+        {
+            return Err(MasterError::AssemblyLineExecutionReceiptMismatch);
+        }
+        let dispatch_exists: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM assembly_line_effect_dispatches
+             WHERE request_kind='start' AND request_id=?1",
+            [binding.start_request_id],
+            |row| row.get(0),
+        )?;
+        if dispatch_exists != 1 {
+            return Err(MasterError::AssemblyLineExecutionReceiptMismatch);
+        }
+        let (expected_executor_id, expected_executor_revision, expected_key_id, expected_key) =
+            match receipt.host_platform {
+                ExecutionHostPlatform::Windows => (
+                    binding.windows_executor_id,
+                    binding.windows_executor_revision,
+                    binding.windows_key_id,
+                    binding.windows_key,
+                ),
+                ExecutionHostPlatform::Macos => (
+                    binding.mac_executor_id,
+                    binding.mac_executor_revision,
+                    binding.mac_key_id,
+                    binding.mac_key,
+                ),
+            };
+        if expected_executor_id != receipt.executor_id.to_string()
+            || i64_to_u64(expected_executor_revision)? != receipt.executor_revision
+            || expected_key_id != receipt.signer_key_id
+        {
+            return Err(MasterError::AssemblyLineExecutionReceiptMismatch);
+        }
+        verify_execution_activation_receipt_signature(receipt, digest_array(&expected_key)?)?;
+        let existing = tx
+            .query_row(
+                "SELECT session_id,receipt_sha256 FROM assembly_line_activation_receipts
+                 WHERE receipt_id=?1",
+                [receipt.receipt_id.to_string()],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)),
+            )
+            .optional()?;
+        if let Some((session_id, existing_sha256)) = existing {
+            if session_id != receipt.session_id.to_string()
+                || digest_array(&existing_sha256)? != receipt_sha256
+            {
+                return Err(MasterError::AssemblyLineExecutionReceiptMismatch);
+            }
+            return assembly_line_state_tx(&tx);
+        }
+        let platform = match receipt.host_platform {
+            ExecutionHostPlatform::Windows => "windows",
+            ExecutionHostPlatform::Macos => "macos",
+        };
+        let platform_exists: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM assembly_line_activation_receipts
+             WHERE session_id=?1 AND host_platform=?2",
+            params![receipt.session_id.to_string(), platform],
+            |row| row.get(0),
+        )?;
+        if platform_exists != 0 {
+            return Err(MasterError::AssemblyLineExecutionReceiptMismatch);
+        }
+        let (authority_revision, revoked, authority_session, authority_child): (
+            i64,
+            i64,
+            Option<String>,
+            Option<String>,
+        ) = tx.query_row(
+            "SELECT authority_revision,revoked,session_id,child_epoch_id
+             FROM assembly_line_execution_authority WHERE singleton=1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
+        if revoked != 0
+            || i64_to_u64(authority_revision)? != receipt.authority_revision
+            || authority_session.as_deref() != Some(receipt.session_id.to_string().as_str())
+            || authority_child.as_deref() != Some(receipt.child_epoch_id.to_string().as_str())
+        {
+            return Err(MasterError::AssemblyLineExecutionReceiptMismatch);
+        }
+        tx.execute(
+            "INSERT INTO assembly_line_activation_receipts
+             (receipt_id,session_id,child_epoch_id,authority_revision,host_platform,
+              signer_key_id,receipt_sha256,receipt_json,recorded_at_ms)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![
+                receipt.receipt_id.to_string(),
+                receipt.session_id.to_string(),
+                receipt.child_epoch_id.to_string(),
+                u64_to_i64(receipt.authority_revision)?,
+                platform,
+                receipt.signer_key_id,
+                receipt_sha256.as_slice(),
+                receipt_json,
+                u64_to_i64(now_ms)?,
+            ],
+        )?;
+        let receipt_count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM assembly_line_activation_receipts WHERE session_id=?1",
+            [receipt.session_id.to_string()],
+            |row| row.get(0),
+        )?;
+        if receipt_count == 2 {
+            let state = assembly_line_state_tx(&tx)?;
+            if state.lifecycle != AssemblyLineLifecycleState::Starting
+                || state.session_id != Some(receipt.session_id)
+                || state.active_child_epoch_id != Some(receipt.child_epoch_id)
+            {
+                return Err(MasterError::AssemblyLineExecutionReceiptMismatch);
+            }
+            let next_state_revision = state
+                .state_revision
+                .checked_add(1)
+                .ok_or(MasterError::IntegerOutOfRange)?;
+            let owner_revision = assembly_line_owner_revision_tx(&tx)?;
+            let next_owner_revision = owner_revision
+                .checked_add(1)
+                .ok_or(MasterError::IntegerOutOfRange)?;
+            if tx.execute(
+                "UPDATE assembly_line_state
+                 SET owner_control_revision=?1,state_revision=?2,lifecycle='running'
+                 WHERE singleton=1 AND owner_control_revision=?3 AND state_revision=?4
+                   AND lifecycle='starting' AND session_id=?5 AND active_child_epoch_id=?6",
+                params![
+                    u64_to_i64(next_owner_revision)?,
+                    u64_to_i64(next_state_revision)?,
+                    u64_to_i64(owner_revision)?,
+                    u64_to_i64(state.state_revision)?,
+                    receipt.session_id.to_string(),
+                    receipt.child_epoch_id.to_string(),
+                ],
+            )? != 1
+            {
+                return Err(MasterError::AssemblyLineExecutionReceiptMismatch);
+            }
+            if tx.execute(
+                "UPDATE assembly_line_child_epochs SET lifecycle='running'
+                 WHERE child_epoch_id=?1 AND session_id=?2 AND lifecycle='starting'",
+                params![
+                    receipt.child_epoch_id.to_string(),
+                    receipt.session_id.to_string()
+                ],
+            )? != 1
+            {
+                return Err(MasterError::AssemblyLineExecutionReceiptMismatch);
+            }
+            if tx.execute(
+                "UPDATE assembly_line_queue SET lifecycle='active',lifecycle_revision=lifecycle_revision+1
+                 WHERE feature_id=(SELECT active_feature_id FROM assembly_line_state WHERE singleton=1)
+                   AND queue_position=1 AND lifecycle='starting'",
+                [],
+            )? != 1
+            {
+                return Err(MasterError::AssemblyLineExecutionReceiptMismatch);
+            }
+        }
+        append_assembly_line_audit_tx(
+            &tx,
+            "execution_activation_receipt_recorded",
+            now_ms,
+            serde_json::json!({
+                "receipt_id": receipt.receipt_id,
+                "session_id": receipt.session_id,
+                "child_epoch_id": receipt.child_epoch_id,
+                "authority_revision": receipt.authority_revision,
+                "host_platform": platform,
+                "receipt_sha256": receipt_sha256,
+                "complete_receipt_set": receipt_count == 2,
+                "running_claimed": receipt_count == 2
+            }),
+        )?;
+        let state = assembly_line_state_tx(&tx)?;
+        tx.commit()?;
+        Ok(state)
+    }
+
+    pub fn stop_assembly_line(
+        &mut self,
+        request: &AssemblyLineStopRequest,
+        now_ms: u64,
+    ) -> Result<AssemblyLineTerminationIntent, MasterError> {
+        request.validate()?;
+        self.record_assembly_line_termination_intent(
+            AssemblyLineTerminationControlBinding {
+                request_kind: "stop",
+                request_id: request.request_id,
+                session_id: request.session_id,
+                child_epoch_id: request.expected_child_epoch_id,
+                expected_state_revision: request.expected_state_revision,
+                expected_emergency_pause_revision: None,
+            },
+            now_ms,
+        )
+    }
+
+    pub fn emergency_pause_assembly_line(
+        &mut self,
+        request: &AssemblyLineEmergencyPauseRequest,
+        now_ms: u64,
+    ) -> Result<AssemblyLineTerminationIntent, MasterError> {
+        request.validate()?;
+        self.record_assembly_line_termination_intent(
+            AssemblyLineTerminationControlBinding {
+                request_kind: "emergency_pause",
+                request_id: request.request_id,
+                session_id: request.session_id,
+                child_epoch_id: request.expected_child_epoch_id,
+                expected_state_revision: request.expected_state_revision,
+                expected_emergency_pause_revision: Some(request.expected_emergency_pause_revision),
+            },
+            now_ms,
+        )
+    }
+
+    /// Claims the one host-effect dispatch attempt for an exact durable Stop or
+    /// Emergency Pause intent. Authority has already been revoked by the time
+    /// this method can succeed.
+    pub fn claim_assembly_line_termination_dispatch(
+        &mut self,
+        intent: &AssemblyLineTerminationIntent,
+        now_ms: u64,
+    ) -> Result<bool, MasterError> {
+        if intent.request_id.is_nil()
+            || intent.session_id.is_nil()
+            || intent.child_epoch_id.is_nil()
+            || intent.authority_revision == 0
+            || intent.checkpoint_id.is_nil()
+            || intent.checkpoint_sha256 == [0; 32]
+            || intent.external_effect_performed
+        {
+            return Err(MasterError::AssemblyLineExecutionControlUnavailable);
+        }
+        let request_kind = match intent.mode {
+            ExecutionTerminationMode::Stop => "stop",
+            ExecutionTerminationMode::EmergencyPause => "emergency_pause",
+        };
+        let response_json = canonical_json(&serde_json::to_value(intent)?)?;
+        let intent_sha256: [u8; 32] = Sha256::digest(response_json.as_bytes()).into();
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let stored_response: String = tx
+            .query_row(
+                "SELECT response_json FROM assembly_line_execution_requests
+                 WHERE request_kind=?1 AND request_id=?2",
+                params![request_kind, intent.request_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or(MasterError::AssemblyLineExecutionControlUnavailable)?;
+        if stored_response != response_json {
+            return Err(MasterError::AssemblyLineExecutionControlUnavailable);
+        }
+        let (authority_revision, revoked, authority_session, authority_child): (
+            i64,
+            i64,
+            Option<String>,
+            Option<String>,
+        ) = tx.query_row(
+            "SELECT authority_revision,revoked,session_id,child_epoch_id
+             FROM assembly_line_execution_authority
+             WHERE singleton=1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
+        if revoked != 1
+            || i64_to_u64(authority_revision)? != intent.authority_revision
+            || authority_session.as_deref() != Some(intent.session_id.to_string().as_str())
+            || authority_child.as_deref() != Some(intent.child_epoch_id.to_string().as_str())
+        {
+            return Err(MasterError::AssemblyLineExecutionControlUnavailable);
+        }
+        let claimed = claim_assembly_line_effect_dispatch_tx(
+            &tx,
+            request_kind,
+            intent.request_id,
+            intent_sha256,
+            now_ms,
+        )?;
+        if claimed {
+            append_assembly_line_audit_tx(
+                &tx,
+                "execution_termination_dispatch_claimed",
+                now_ms,
+                serde_json::json!({
+                    "request_kind": request_kind,
+                    "request_id": intent.request_id,
+                    "session_id": intent.session_id,
+                    "child_epoch_id": intent.child_epoch_id,
+                    "authority_revision": intent.authority_revision,
+                    "intent_sha256": intent_sha256,
+                    "authority_revoked_before_dispatch": true,
+                    "external_effect_confirmed": false
+                }),
+            )?;
+        }
+        tx.commit()?;
+        Ok(claimed)
+    }
+
+    pub fn assembly_line_termination_pending(&self, request_id: Uuid) -> Result<bool, MasterError> {
+        if request_id.is_nil() {
+            return Err(MasterError::AssemblyLineExecutionControlUnavailable);
+        }
+        let (intent_exists, count): (i64, i64) = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM assembly_line_control_intents WHERE request_id=?1),
+                    (SELECT COUNT(*) FROM assembly_line_termination_receipts WHERE request_id=?1)",
+            [request_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        if intent_exists != 1 {
+            return Err(MasterError::AssemblyLineExecutionControlUnavailable);
+        }
+        Ok(count < 2)
+    }
+
+    fn record_assembly_line_termination_intent(
+        &mut self,
+        control: AssemblyLineTerminationControlBinding,
+        now_ms: u64,
+    ) -> Result<AssemblyLineTerminationIntent, MasterError> {
+        let AssemblyLineTerminationControlBinding {
+            request_kind,
+            request_id,
+            session_id,
+            child_epoch_id,
+            expected_state_revision,
+            expected_emergency_pause_revision,
+        } = control;
+        let request_value = serde_json::json!({
+            "request_kind": request_kind,
+            "request_id": request_id,
+            "session_id": session_id,
+            "child_epoch_id": child_epoch_id,
+            "expected_state_revision": expected_state_revision,
+            "expected_emergency_pause_revision": expected_emergency_pause_revision,
+        });
+        let request_json = canonical_json(&request_value)?;
+        let request_sha256: [u8; 32] = Sha256::digest(request_json.as_bytes()).into();
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(response) = assembly_line_execution_request_replay_tx(
+            &tx,
+            request_kind,
+            request_id,
+            request_sha256,
+        )? {
+            return Ok(serde_json::from_str(&response)?);
+        }
+        let prior = assembly_line_state_tx(&tx)?;
+        if prior.state_revision != expected_state_revision {
+            return Err(MasterError::StaleAssemblyLineStateRevision {
+                expected: expected_state_revision,
+                found: prior.state_revision,
+            });
+        }
+        if !matches!(
+            prior.lifecycle,
+            AssemblyLineLifecycleState::Starting | AssemblyLineLifecycleState::Running
+        ) || prior.session_id != Some(session_id)
+            || prior.active_child_epoch_id != Some(child_epoch_id)
+        {
+            return Err(MasterError::AssemblyLineExecutionControlUnavailable);
+        }
+        let (authority_revision, revoked, authority_session, authority_child): (
+            i64,
+            i64,
+            Option<String>,
+            Option<String>,
+        ) = tx.query_row(
+            "SELECT authority_revision,revoked,session_id,child_epoch_id
+                 FROM assembly_line_execution_authority WHERE singleton=1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
+        let session_text = session_id.to_string();
+        let child_text = child_epoch_id.to_string();
+        if revoked != 0
+            || authority_session.as_deref() != Some(session_text.as_str())
+            || authority_child.as_deref() != Some(child_text.as_str())
+        {
+            return Err(MasterError::AssemblyLineExecutionControlUnavailable);
+        }
+        if let Some(expected_pause_revision) = expected_emergency_pause_revision {
+            require_unpaused_revision_tx(&tx, expected_pause_revision)?;
+        }
+        let next_authority_revision = i64_to_u64(authority_revision)?
+            .checked_add(1)
+            .ok_or(MasterError::IntegerOutOfRange)?;
+        let next_state_revision = expected_state_revision
+            .checked_add(1)
+            .ok_or(MasterError::IntegerOutOfRange)?;
+        let prior_owner_revision = assembly_line_owner_revision_tx(&tx)?;
+        let next_owner_revision = prior_owner_revision
+            .checked_add(1)
+            .ok_or(MasterError::IntegerOutOfRange)?;
+        let checkpoint_id = Uuid::new_v4();
+        let checkpoint_sha256: [u8; 32] = Sha256::digest(
+            canonical_json(&serde_json::json!({
+                "domain": "assemblywright.assembly-line.control-checkpoint-intent.v1",
+                "request_id": request_id,
+                "session_id": session_id,
+                "child_epoch_id": child_epoch_id,
+                "mode": request_kind,
+                "authority_revision": next_authority_revision,
+                "checkpoint_id": checkpoint_id,
+            }))?
+            .as_bytes(),
+        )
+        .into();
+        let lifecycle = if request_kind == "emergency_pause" {
+            "emergency_paused"
+        } else {
+            "stopping"
+        };
+        if let Some(expected_pause_revision) = expected_emergency_pause_revision {
+            if tx.execute(
+                "UPDATE master_metadata SET integer_value=1
+                 WHERE key='emergency_paused' AND integer_value=0",
+                [],
+            )? != 1
+                || tx.execute(
+                    "UPDATE master_metadata SET integer_value=integer_value+1
+                     WHERE key='emergency_pause_revision' AND integer_value=?1",
+                    [u64_to_i64(expected_pause_revision)?],
+                )? != 1
+            {
+                return Err(MasterError::StaleEmergencyPauseRevision {
+                    expected: expected_pause_revision,
+                    found: emergency_pause_revision_tx(&tx)?,
+                });
+            }
+            request_active_remote_work_cancellations_tx(&tx, now_ms)?;
+        }
+        if tx.execute(
+            "UPDATE assembly_line_execution_authority
+             SET authority_revision=?1,revoked=1,updated_at_ms=?2
+             WHERE singleton=1 AND authority_revision=?3 AND revoked=0",
+            params![
+                u64_to_i64(next_authority_revision)?,
+                u64_to_i64(now_ms)?,
+                authority_revision,
+            ],
+        )? != 1
+        {
+            return Err(MasterError::AssemblyLineExecutionControlUnavailable);
+        }
+        if tx.execute(
+            "UPDATE assembly_line_state
+             SET owner_control_revision=?1,state_revision=?2,
+                 lifecycle=?3,effect_possible=1,authority_revision=?4
+             WHERE singleton=1 AND owner_control_revision=?5 AND state_revision=?6
+               AND lifecycle IN('starting','running')
+               AND session_id=?7 AND active_child_epoch_id=?8",
+            params![
+                u64_to_i64(next_owner_revision)?,
+                u64_to_i64(next_state_revision)?,
+                lifecycle,
+                u64_to_i64(next_authority_revision)?,
+                u64_to_i64(prior_owner_revision)?,
+                u64_to_i64(expected_state_revision)?,
+                session_id.to_string(),
+                child_epoch_id.to_string(),
+            ],
+        )? != 1
+        {
+            return Err(MasterError::AssemblyLineExecutionControlUnavailable);
+        }
+        if tx.execute(
+            "UPDATE assembly_line_child_epochs
+             SET authority_revision=?1,lifecycle=?2,effect_possible=1
+             WHERE child_epoch_id=?3 AND session_id=?4 AND lifecycle IN('starting','running')",
+            params![
+                u64_to_i64(next_authority_revision)?,
+                lifecycle,
+                child_epoch_id.to_string(),
+                session_id.to_string(),
+            ],
+        )? != 1
+        {
+            return Err(MasterError::AssemblyLineExecutionControlUnavailable);
+        }
+        if tx.execute(
+            "UPDATE assembly_line_queue
+             SET lifecycle=?1,lifecycle_revision=lifecycle_revision+1
+             WHERE feature_id=(SELECT active_feature_id FROM assembly_line_state WHERE singleton=1)
+               AND queue_position=1 AND lifecycle IN('starting','active')",
+            [lifecycle],
+        )? != 1
+        {
+            return Err(MasterError::AssemblyLineExecutionControlUnavailable);
+        }
+        tx.execute(
+            "INSERT INTO assembly_line_control_intents
+             (request_id,mode,session_id,child_epoch_id,authority_revision,checkpoint_id,
+              checkpoint_sha256,request_sha256,state_revision,termination_pending,recorded_at_ms)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,1,?10)",
+            params![
+                request_id.to_string(),
+                request_kind,
+                session_id.to_string(),
+                child_epoch_id.to_string(),
+                u64_to_i64(next_authority_revision)?,
+                checkpoint_id.to_string(),
+                checkpoint_sha256.as_slice(),
+                request_sha256.as_slice(),
+                u64_to_i64(next_state_revision)?,
+                u64_to_i64(now_ms)?,
+            ],
+        )?;
+        let intent = AssemblyLineTerminationIntent {
+            request_id,
+            session_id,
+            child_epoch_id,
+            mode: if request_kind == "emergency_pause" {
+                ExecutionTerminationMode::EmergencyPause
+            } else {
+                ExecutionTerminationMode::Stop
+            },
+            authority_revision: next_authority_revision,
+            checkpoint_id,
+            checkpoint_sha256,
+            resulting_state: assembly_line_state_tx(&tx)?,
+            external_effect_performed: false,
+        };
+        let response_json = canonical_json(&serde_json::to_value(&intent)?)?;
+        insert_assembly_line_execution_request_tx(
+            &tx,
+            request_kind,
+            request_id,
+            request_sha256,
+            &response_json,
+            now_ms,
+        )?;
+        append_assembly_line_audit_tx(
+            &tx,
+            if request_kind == "emergency_pause" {
+                "emergency_termination_intent_recorded"
+            } else {
+                "stop_checkpoint_termination_intent_recorded"
+            },
+            now_ms,
+            serde_json::json!({
+                "request_id": request_id,
+                "session_id": session_id,
+                "child_epoch_id": child_epoch_id,
+                "authority_revision": next_authority_revision,
+                "checkpoint_id": checkpoint_id,
+                "checkpoint_sha256": checkpoint_sha256,
+                "termination_pending": true,
+                "no_new_actions": true,
+                "audit_precedes_effect": true,
+                "external_effect_performed": false
+            }),
+        )?;
+        tx.commit()?;
+        Ok(intent)
+    }
+
+    /// Verifies and admits one executor receipt against the platform key pinned
+    /// by the session's durable capability binding and the exact control intent.
+    /// This kernel does not perform process termination.
+    pub fn record_assembly_line_termination_receipt(
+        &mut self,
+        request_id: Uuid,
+        receipt: &ExecutionTerminationReceipt,
+        now_ms: u64,
+    ) -> Result<AssemblyLineState, MasterError> {
+        receipt.validate()?;
+        let receipt_json = canonical_json(&serde_json::to_value(receipt)?)?;
+        let receipt_sha256: [u8; 32] = Sha256::digest(receipt_json.as_bytes()).into();
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let existing = tx
+            .query_row(
+                "SELECT request_id,receipt_sha256 FROM assembly_line_termination_receipts
+                 WHERE receipt_id=?1",
+                [receipt.receipt_id.to_string()],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)),
+            )
+            .optional()?;
+        if let Some((existing_request_id, existing)) = existing {
+            if existing_request_id != request_id.to_string()
+                || digest_array(&existing)? != receipt_sha256
+            {
+                return Err(MasterError::AssemblyLineExecutionReceiptMismatch);
+            }
+            return assembly_line_state_tx(&tx);
+        }
+        let (mode, child_epoch_id, checkpoint_sha256, session_id): (
+            String,
+            String,
+            Vec<u8>,
+            String,
+        ) = tx
+            .query_row(
+                "SELECT mode,child_epoch_id,checkpoint_sha256,session_id
+                     FROM assembly_line_control_intents WHERE request_id=?1",
+                [request_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?
+            .ok_or(MasterError::AssemblyLineExecutionReceiptMismatch)?;
+        let expected_mode = if mode == "emergency_pause" {
+            ExecutionTerminationMode::EmergencyPause
+        } else {
+            ExecutionTerminationMode::Stop
+        };
+        let dispatch_exists: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM assembly_line_effect_dispatches
+             WHERE request_kind=?1 AND request_id=?2",
+            params![mode, request_id.to_string()],
+            |row| row.get(0),
+        )?;
+        if receipt.child_epoch_id.to_string() != child_epoch_id
+            || receipt.mode != expected_mode
+            || receipt.last_checkpoint_sha256 != digest_array(&checkpoint_sha256)?
+            || dispatch_exists != 1
+        {
+            return Err(MasterError::AssemblyLineExecutionReceiptMismatch);
+        }
+        let (windows_key_id, windows_key, mac_key_id, mac_key): (String, Vec<u8>, String, Vec<u8>) =
+            tx.query_row(
+                "SELECT c.windows_receipt_signer_key_id,c.windows_receipt_verifying_key,
+                    c.mac_receipt_signer_key_id,c.mac_receipt_verifying_key
+             FROM assembly_line_execution_sessions s
+             JOIN assembly_line_execution_capabilities c
+               ON c.binding_revision=s.capability_binding_revision
+             WHERE s.session_id=?1",
+                [session_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )?;
+        let (expected_key_id, expected_key) = match receipt.descendant_scope {
+            ExecutionDescendantScope::WindowsJobObject => (windows_key_id, windows_key),
+            ExecutionDescendantScope::MacosProcessGroup => (mac_key_id, mac_key),
+        };
+        if receipt.signer_key_id != expected_key_id {
+            return Err(MasterError::AssemblyLineExecutionReceiptMismatch);
+        }
+        verify_execution_termination_receipt_signature(receipt, digest_array(&expected_key)?)?;
+        tx.execute(
+            "INSERT INTO assembly_line_termination_receipts
+             (receipt_id,request_id,child_epoch_id,mode,signer_key_id,outcome,
+              last_checkpoint_sha256,receipt_sha256,receipt_json,recorded_at_ms)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+            params![
+                receipt.receipt_id.to_string(),
+                request_id.to_string(),
+                receipt.child_epoch_id.to_string(),
+                mode,
+                receipt.signer_key_id,
+                match receipt.outcome {
+                    ExecutionTerminationOutcome::Reaped => "reaped",
+                    ExecutionTerminationOutcome::Incomplete => "incomplete",
+                },
+                receipt.last_checkpoint_sha256.as_slice(),
+                receipt_sha256.as_slice(),
+                receipt_json,
+                u64_to_i64(now_ms)?,
+            ],
+        )?;
+        let (count, incomplete): (i64, i64) = tx.query_row(
+            "SELECT COUNT(*),COALESCE(SUM(CASE WHEN outcome='incomplete' THEN 1 ELSE 0 END),0)
+             FROM assembly_line_termination_receipts WHERE request_id=?1",
+            [request_id.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        if count == 2 {
+            let final_lifecycle = if incomplete != 0 {
+                "incomplete_termination"
+            } else if expected_mode == ExecutionTerminationMode::Stop {
+                "paused_at_checkpoint"
+            } else {
+                "emergency_paused"
+            };
+            tx.execute(
+                "UPDATE assembly_line_state
+                 SET state_revision=state_revision+1,lifecycle=?1,
+                     effect_possible=CASE WHEN ?1='paused_at_checkpoint' OR ?1='emergency_paused'
+                                          THEN 0 ELSE 1 END
+                 WHERE singleton=1 AND active_child_epoch_id=?2
+                   AND lifecycle IN('stopping','emergency_paused')",
+                params![final_lifecycle, child_epoch_id],
+            )?;
+            tx.execute(
+                "UPDATE assembly_line_child_epochs
+                 SET lifecycle=?1,effect_possible=CASE WHEN ?1='paused_at_checkpoint'
+                                                        OR ?1='emergency_paused' THEN 0 ELSE 1 END
+                 WHERE child_epoch_id=?2",
+                params![final_lifecycle, child_epoch_id],
+            )?;
+            tx.execute(
+                "UPDATE assembly_line_queue
+                 SET lifecycle=?1,lifecycle_revision=lifecycle_revision+1
+                 WHERE feature_id=(SELECT active_feature_id FROM assembly_line_state WHERE singleton=1)
+                   AND queue_position=1 AND lifecycle IN('stopping','emergency_paused')",
+                [final_lifecycle],
+            )?;
+        }
+        append_assembly_line_audit_tx(
+            &tx,
+            "termination_receipt_recorded",
+            now_ms,
+            serde_json::json!({
+                "request_id": request_id,
+                "receipt_id": receipt.receipt_id,
+                "child_epoch_id": receipt.child_epoch_id,
+                "mode": mode,
+                "outcome": match receipt.outcome {
+                    ExecutionTerminationOutcome::Reaped => "reaped",
+                    ExecutionTerminationOutcome::Incomplete => "incomplete",
+                },
+                "receipt_sha256": receipt_sha256,
+                "complete_receipt_set": count == 2,
+                "external_effect_claimed_by_master": false
+            }),
+        )?;
+        let state = assembly_line_state_tx(&tx)?;
+        tx.commit()?;
+        Ok(state)
+    }
+
+    /// Verifies and persists one checkpoint receipt against the action host's
+    /// session-pinned platform key and exact durable action intent. The action
+    /// issuance path is intentionally not exposed by this controller slice.
+    pub fn record_assembly_line_checkpoint_receipt(
+        &mut self,
+        receipt: &ExecutionCheckpointReceipt,
+        now_ms: u64,
+    ) -> Result<(), MasterError> {
+        receipt.validate()?;
+        let receipt_json = canonical_json(&serde_json::to_value(receipt)?)?;
+        let receipt_sha256: [u8; 32] = Sha256::digest(receipt_json.as_bytes()).into();
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let action: Option<(i64, String, String, String)> = tx
+            .query_row(
+                "SELECT action_sequence,child_epoch_id,session_id,host_platform
+                 FROM assembly_line_action_ledger WHERE action_id=?1",
+                [receipt.action_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?;
+        let Some((action_sequence, child_epoch_id, session_id, host_platform)) = action else {
+            return Err(MasterError::AssemblyLineExecutionReceiptMismatch);
+        };
+        if i64_to_u64(action_sequence)? != receipt.action_sequence
+            || child_epoch_id != receipt.child_epoch_id.to_string()
+        {
+            return Err(MasterError::AssemblyLineExecutionReceiptMismatch);
+        }
+        let (windows_key_id, windows_key, mac_key_id, mac_key): (String, Vec<u8>, String, Vec<u8>) =
+            tx.query_row(
+                "SELECT c.windows_receipt_signer_key_id,c.windows_receipt_verifying_key,
+                    c.mac_receipt_signer_key_id,c.mac_receipt_verifying_key
+             FROM assembly_line_execution_sessions s
+             JOIN assembly_line_execution_capabilities c
+               ON c.binding_revision=s.capability_binding_revision
+             WHERE s.session_id=?1",
+                [session_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )?;
+        let (expected_key_id, expected_key) = match host_platform.as_str() {
+            "windows" => (windows_key_id, windows_key),
+            "macos" => (mac_key_id, mac_key),
+            _ => return Err(MasterError::AssemblyLineExecutionReceiptMismatch),
+        };
+        if receipt.signer_key_id != expected_key_id {
+            return Err(MasterError::AssemblyLineExecutionReceiptMismatch);
+        }
+        verify_execution_checkpoint_receipt_signature(receipt, digest_array(&expected_key)?)?;
+        let phase = match receipt.phase {
+            ExecutionCheckpointPhase::BeforeEffect => "before_effect",
+            ExecutionCheckpointPhase::AfterEffect => "after_effect",
+        };
+        let existing = tx
+            .query_row(
+                "SELECT receipt_sha256 FROM assembly_line_checkpoint_receipts
+                 WHERE action_id=?1 AND phase=?2",
+                params![receipt.action_id.to_string(), phase],
+                |row| row.get::<_, Vec<u8>>(0),
+            )
+            .optional()?;
+        if let Some(existing) = existing {
+            return if digest_array(&existing)? == receipt_sha256 {
+                Ok(())
+            } else {
+                Err(MasterError::AssemblyLineExecutionReceiptMismatch)
+            };
+        }
+        tx.execute(
+            "INSERT INTO assembly_line_checkpoint_receipts
+             (action_id,child_epoch_id,action_sequence,phase,checkpoint_sha256,
+              receipt_sha256,receipt_json,recorded_at_ms)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![
+                receipt.action_id.to_string(),
+                receipt.child_epoch_id.to_string(),
+                u64_to_i64(receipt.action_sequence)?,
+                phase,
+                receipt.checkpoint_sha256.as_slice(),
+                receipt_sha256.as_slice(),
+                receipt_json,
+                u64_to_i64(now_ms)?,
+            ],
+        )?;
+        append_assembly_line_audit_tx(
+            &tx,
+            "execution_checkpoint_receipt_recorded",
+            now_ms,
+            serde_json::json!({
+                "action_id": receipt.action_id,
+                "action_sequence": receipt.action_sequence,
+                "child_epoch_id": receipt.child_epoch_id,
+                "phase": phase,
+                "checkpoint_sha256": receipt.checkpoint_sha256,
+                "receipt_sha256": receipt_sha256,
+                "external_effect_claimed_by_master": false
+            }),
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// Remote planning actions share the same kernel but additionally require
@@ -9228,6 +10946,353 @@ impl MasterKernel {
             )?;
         }
         let version = self.schema_version()?;
+        if version == 20 {
+            self.connection.execute_batch(
+                "BEGIN IMMEDIATE;
+                 ALTER TABLE assembly_line_state RENAME TO assembly_line_state_v20;
+                 CREATE TABLE assembly_line_state (
+                   singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton=1),
+                   owner_control_revision INTEGER NOT NULL CHECK(owner_control_revision>0),
+                   state_revision INTEGER NOT NULL CHECK(state_revision>0),
+                   queue_revision INTEGER NOT NULL CHECK(queue_revision>=0),
+                   auto_run INTEGER NOT NULL CHECK(auto_run IN(0,1)),
+                   lifecycle TEXT NOT NULL CHECK(lifecycle IN(
+                     'stopped','running','stopping','paused_at_checkpoint','emergency_paused',
+                     'waiting_for_host_reconnect','reconciliation_required',
+                     'incomplete_termination','waiting_for_owner_start'
+                   )),
+                   session_id TEXT,
+                   active_child_epoch_id TEXT,
+                   active_feature_id TEXT,
+                   effect_possible INTEGER NOT NULL CHECK(effect_possible IN(0,1)),
+                   authority_revision INTEGER NOT NULL CHECK(authority_revision>=0),
+                   CHECK((session_id IS NULL)=(active_child_epoch_id IS NULL)),
+                   CHECK((active_child_epoch_id IS NULL)=(active_feature_id IS NULL))
+                 );
+                 INSERT INTO assembly_line_state
+                   (singleton,owner_control_revision,state_revision,queue_revision,auto_run,
+                    lifecycle,session_id,active_child_epoch_id,active_feature_id,effect_possible,
+                    authority_revision)
+                 SELECT singleton,owner_control_revision,state_revision,queue_revision,auto_run,
+                        lifecycle,NULL,NULL,NULL,0,0
+                 FROM assembly_line_state_v20;
+                 DROP TABLE assembly_line_state_v20;
+                 ALTER TABLE assembly_line_queue RENAME TO assembly_line_queue_v20;
+                 CREATE TABLE assembly_line_queue (
+                   feature_id TEXT PRIMARY KEY NOT NULL,
+                   repository_id TEXT NOT NULL REFERENCES assembly_line_repositories(repository_id),
+                   specification_id TEXT NOT NULL UNIQUE,
+                   specification_revision INTEGER NOT NULL CHECK(specification_revision>0),
+                   specification_sha256 BLOB NOT NULL CHECK(length(specification_sha256)=32),
+                   owner_approval_sha256 BLOB NOT NULL CHECK(length(owner_approval_sha256)=32),
+                   queue_position INTEGER NOT NULL UNIQUE CHECK(queue_position>0),
+                   lifecycle_revision INTEGER NOT NULL CHECK(lifecycle_revision>0),
+                   lifecycle TEXT NOT NULL CHECK(lifecycle IN(
+                     'queued','active','stopping','paused_at_checkpoint','emergency_paused',
+                     'waiting_for_host_reconnect','reconciliation_required','incomplete_termination'
+                   )),
+                   enqueued_at_ms INTEGER NOT NULL CHECK(enqueued_at_ms>0)
+                 );
+                 INSERT INTO assembly_line_queue
+                 SELECT feature_id,repository_id,specification_id,specification_revision,
+                        specification_sha256,owner_approval_sha256,queue_position,
+                        lifecycle_revision,lifecycle,enqueued_at_ms
+                 FROM assembly_line_queue_v20;
+                 DROP TABLE assembly_line_queue_v20;
+                 CREATE TABLE assembly_line_execution_capabilities (
+                   binding_revision INTEGER PRIMARY KEY NOT NULL CHECK(binding_revision>0),
+                   state_revision INTEGER NOT NULL CHECK(state_revision>0),
+                   emergency_pause_revision INTEGER NOT NULL CHECK(emergency_pause_revision>=0),
+                   windows_executor_id TEXT NOT NULL,
+                   windows_executor_revision INTEGER NOT NULL CHECK(windows_executor_revision>0),
+                   windows_executor_sha256 BLOB NOT NULL CHECK(length(windows_executor_sha256)=32),
+                   mac_executor_id TEXT NOT NULL,
+                   mac_executor_revision INTEGER NOT NULL CHECK(mac_executor_revision>0),
+                   mac_executor_sha256 BLOB NOT NULL CHECK(length(mac_executor_sha256)=32),
+                   windows_broker_id TEXT NOT NULL,
+                   windows_broker_revision INTEGER NOT NULL CHECK(windows_broker_revision>0),
+                   windows_broker_sha256 BLOB NOT NULL CHECK(length(windows_broker_sha256)=32),
+                   mac_broker_id TEXT NOT NULL,
+                   mac_broker_revision INTEGER NOT NULL CHECK(mac_broker_revision>0),
+                   mac_broker_sha256 BLOB NOT NULL CHECK(length(mac_broker_sha256)=32),
+                   protected_control_plane_sha256 BLOB NOT NULL CHECK(length(protected_control_plane_sha256)=32),
+                   windows_receipt_signer_key_id TEXT NOT NULL,
+                   windows_receipt_verifying_key BLOB NOT NULL CHECK(length(windows_receipt_verifying_key)=32),
+                   mac_receipt_signer_key_id TEXT NOT NULL,
+                   mac_receipt_verifying_key BLOB NOT NULL CHECK(length(mac_receipt_verifying_key)=32),
+                   healthy INTEGER NOT NULL CHECK(healthy IN(0,1)),
+                   provisioning_evidence_sha256 BLOB NOT NULL CHECK(length(provisioning_evidence_sha256)=32),
+                   recorded_at_ms INTEGER NOT NULL CHECK(recorded_at_ms>0)
+                 );
+                 CREATE TABLE assembly_line_execution_sessions (
+                   session_id TEXT PRIMARY KEY NOT NULL,
+                   session_revision INTEGER NOT NULL CHECK(session_revision>0),
+                   start_request_id TEXT NOT NULL UNIQUE,
+                   started_queue_count INTEGER NOT NULL CHECK(started_queue_count>0),
+                   state_revision INTEGER NOT NULL CHECK(state_revision>0),
+                   queue_revision INTEGER NOT NULL CHECK(queue_revision>0),
+                   emergency_pause_revision INTEGER NOT NULL CHECK(emergency_pause_revision>=0),
+                   owner_start_approval_sha256 BLOB NOT NULL CHECK(length(owner_start_approval_sha256)=32),
+                   capability_binding_revision INTEGER NOT NULL REFERENCES assembly_line_execution_capabilities(binding_revision),
+                   windows_executor_id TEXT NOT NULL,
+                   windows_executor_revision INTEGER NOT NULL CHECK(windows_executor_revision>0),
+                   mac_executor_id TEXT NOT NULL,
+                   mac_executor_revision INTEGER NOT NULL CHECK(mac_executor_revision>0),
+                   auto_run INTEGER NOT NULL CHECK(auto_run IN(0,1)),
+                   started_at_ms INTEGER NOT NULL CHECK(started_at_ms>0)
+                 );
+                 CREATE TABLE assembly_line_child_epochs (
+                   child_epoch_id TEXT PRIMARY KEY NOT NULL,
+                   child_epoch_revision INTEGER NOT NULL CHECK(child_epoch_revision>0),
+                   session_id TEXT NOT NULL REFERENCES assembly_line_execution_sessions(session_id),
+                   session_revision INTEGER NOT NULL CHECK(session_revision>0),
+                   feature_id TEXT NOT NULL,
+                   repository_id TEXT NOT NULL,
+                   feature_lifecycle_revision INTEGER NOT NULL CHECK(feature_lifecycle_revision>0),
+                   queue_revision INTEGER NOT NULL CHECK(queue_revision>0),
+                   authority_revision INTEGER NOT NULL CHECK(authority_revision>0),
+                   lifecycle TEXT NOT NULL CHECK(lifecycle IN(
+                     'running','stopping','paused_at_checkpoint','emergency_paused',
+                     'waiting_for_host_reconnect','reconciliation_required',
+                     'incomplete_termination'
+                   )),
+                   effect_possible INTEGER NOT NULL CHECK(effect_possible IN(0,1)),
+                   started_at_ms INTEGER NOT NULL CHECK(started_at_ms>0),
+                   UNIQUE(session_id,child_epoch_revision)
+                 );
+                 CREATE TABLE assembly_line_execution_authority (
+                   singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton=1),
+                   authority_revision INTEGER NOT NULL CHECK(authority_revision>=0),
+                   revoked INTEGER NOT NULL CHECK(revoked IN(0,1)),
+                   session_id TEXT,
+                   child_epoch_id TEXT,
+                   updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms>0),
+                   CHECK((session_id IS NULL)=(child_epoch_id IS NULL))
+                 );
+                 INSERT INTO assembly_line_execution_authority
+                   (singleton,authority_revision,revoked,session_id,child_epoch_id,updated_at_ms)
+                 VALUES(1,0,1,NULL,NULL,1);
+                 CREATE TABLE assembly_line_action_ledger (
+                   action_id TEXT PRIMARY KEY NOT NULL,
+                   action_sequence INTEGER NOT NULL CHECK(action_sequence>0),
+                   session_id TEXT NOT NULL,
+                   child_epoch_id TEXT NOT NULL,
+                   host_platform TEXT NOT NULL CHECK(host_platform IN('windows','macos')),
+                   authority_revision INTEGER NOT NULL CHECK(authority_revision>0),
+                   envelope_sha256 BLOB NOT NULL UNIQUE CHECK(length(envelope_sha256)=32),
+                   effect_possible INTEGER NOT NULL CHECK(effect_possible IN(0,1)),
+                   reconciliation_strategy TEXT NOT NULL CHECK(length(reconciliation_strategy) BETWEEN 1 AND 64),
+                   recorded_at_ms INTEGER NOT NULL CHECK(recorded_at_ms>0),
+                   UNIQUE(child_epoch_id,action_sequence)
+                 );
+                 CREATE TABLE assembly_line_checkpoint_receipts (
+                   action_id TEXT NOT NULL,
+                   child_epoch_id TEXT NOT NULL,
+                   action_sequence INTEGER NOT NULL CHECK(action_sequence>0),
+                   phase TEXT NOT NULL CHECK(phase IN('before_effect','after_effect')),
+                   checkpoint_sha256 BLOB NOT NULL CHECK(length(checkpoint_sha256)=32),
+                   receipt_sha256 BLOB NOT NULL UNIQUE CHECK(length(receipt_sha256)=32),
+                   receipt_json TEXT NOT NULL CHECK(length(CAST(receipt_json AS BLOB)) BETWEEN 2 AND 16384),
+                   recorded_at_ms INTEGER NOT NULL CHECK(recorded_at_ms>0),
+                   PRIMARY KEY(action_id,phase)
+                 );
+                 CREATE TABLE assembly_line_control_intents (
+                   request_id TEXT PRIMARY KEY NOT NULL,
+                   mode TEXT NOT NULL CHECK(mode IN('stop','emergency_pause')),
+                   session_id TEXT NOT NULL,
+                   child_epoch_id TEXT NOT NULL,
+                   authority_revision INTEGER NOT NULL CHECK(authority_revision>0),
+                   checkpoint_id TEXT NOT NULL UNIQUE,
+                   checkpoint_sha256 BLOB NOT NULL CHECK(length(checkpoint_sha256)=32),
+                   request_sha256 BLOB NOT NULL UNIQUE CHECK(length(request_sha256)=32),
+                   state_revision INTEGER NOT NULL CHECK(state_revision>0),
+                   termination_pending INTEGER NOT NULL CHECK(termination_pending=1),
+                   recorded_at_ms INTEGER NOT NULL CHECK(recorded_at_ms>0)
+                 );
+                 CREATE TABLE assembly_line_termination_receipts (
+                   receipt_id TEXT PRIMARY KEY NOT NULL,
+                   request_id TEXT NOT NULL REFERENCES assembly_line_control_intents(request_id),
+                   child_epoch_id TEXT NOT NULL,
+                   mode TEXT NOT NULL CHECK(mode IN('stop','emergency_pause')),
+                   signer_key_id TEXT NOT NULL,
+                   outcome TEXT NOT NULL CHECK(outcome IN('reaped','incomplete')),
+                   last_checkpoint_sha256 BLOB NOT NULL CHECK(length(last_checkpoint_sha256)=32),
+                   receipt_sha256 BLOB NOT NULL UNIQUE CHECK(length(receipt_sha256)=32),
+                   receipt_json TEXT NOT NULL CHECK(length(CAST(receipt_json AS BLOB)) BETWEEN 2 AND 16384),
+                   recorded_at_ms INTEGER NOT NULL CHECK(recorded_at_ms>0),
+                   UNIQUE(request_id,signer_key_id)
+                 );
+                 CREATE TABLE assembly_line_execution_requests (
+                   request_kind TEXT NOT NULL CHECK(request_kind IN('start','stop','emergency_pause')),
+                   request_id TEXT NOT NULL,
+                   request_sha256 BLOB NOT NULL CHECK(length(request_sha256)=32),
+                   response_json TEXT NOT NULL CHECK(length(CAST(response_json AS BLOB)) BETWEEN 2 AND 98304),
+                   recorded_at_ms INTEGER NOT NULL CHECK(recorded_at_ms>0),
+                   PRIMARY KEY(request_kind,request_id)
+                 );
+                 CREATE TRIGGER assembly_line_execution_capabilities_no_update
+                   BEFORE UPDATE ON assembly_line_execution_capabilities
+                   BEGIN SELECT RAISE(ABORT,'immutable assembly-line execution capability'); END;
+                 CREATE TRIGGER assembly_line_execution_capabilities_no_delete
+                   BEFORE DELETE ON assembly_line_execution_capabilities
+                   BEGIN SELECT RAISE(ABORT,'durable assembly-line execution capability'); END;
+                 CREATE TRIGGER assembly_line_execution_sessions_no_update
+                   BEFORE UPDATE ON assembly_line_execution_sessions
+                   BEGIN SELECT RAISE(ABORT,'immutable assembly-line execution session'); END;
+                 CREATE TRIGGER assembly_line_execution_sessions_no_delete
+                   BEFORE DELETE ON assembly_line_execution_sessions
+                   BEGIN SELECT RAISE(ABORT,'durable assembly-line execution session'); END;
+                 CREATE TRIGGER assembly_line_action_ledger_no_update
+                   BEFORE UPDATE ON assembly_line_action_ledger
+                   BEGIN SELECT RAISE(ABORT,'immutable assembly-line action intent'); END;
+                 CREATE TRIGGER assembly_line_action_ledger_no_delete
+                   BEFORE DELETE ON assembly_line_action_ledger
+                   BEGIN SELECT RAISE(ABORT,'durable assembly-line action intent'); END;
+                 CREATE TRIGGER assembly_line_checkpoint_receipts_no_update
+                   BEFORE UPDATE ON assembly_line_checkpoint_receipts
+                   BEGIN SELECT RAISE(ABORT,'immutable assembly-line checkpoint receipt'); END;
+                 CREATE TRIGGER assembly_line_checkpoint_receipts_no_delete
+                   BEFORE DELETE ON assembly_line_checkpoint_receipts
+                   BEGIN SELECT RAISE(ABORT,'durable assembly-line checkpoint receipt'); END;
+                 CREATE TRIGGER assembly_line_control_intents_no_update
+                   BEFORE UPDATE ON assembly_line_control_intents
+                   BEGIN SELECT RAISE(ABORT,'immutable assembly-line control intent'); END;
+                 CREATE TRIGGER assembly_line_control_intents_no_delete
+                   BEFORE DELETE ON assembly_line_control_intents
+                   BEGIN SELECT RAISE(ABORT,'durable assembly-line control intent'); END;
+                 CREATE TRIGGER assembly_line_termination_receipts_no_update
+                   BEFORE UPDATE ON assembly_line_termination_receipts
+                   BEGIN SELECT RAISE(ABORT,'immutable assembly-line termination receipt'); END;
+                 CREATE TRIGGER assembly_line_termination_receipts_no_delete
+                   BEFORE DELETE ON assembly_line_termination_receipts
+                   BEGIN SELECT RAISE(ABORT,'durable assembly-line termination receipt'); END;
+                 CREATE TRIGGER assembly_line_execution_requests_no_update
+                   BEFORE UPDATE ON assembly_line_execution_requests
+                   BEGIN SELECT RAISE(ABORT,'immutable assembly-line execution request'); END;
+                 CREATE TRIGGER assembly_line_execution_requests_no_delete
+                   BEFORE DELETE ON assembly_line_execution_requests
+                   BEGIN SELECT RAISE(ABORT,'durable assembly-line execution request'); END;
+                 PRAGMA user_version=21;
+                 COMMIT;",
+            )?;
+        }
+        let version = self.schema_version()?;
+        if version == 21 {
+            self.connection.execute_batch(
+                "PRAGMA foreign_keys=OFF;
+                 PRAGMA legacy_alter_table=ON;
+                 BEGIN IMMEDIATE;
+                 ALTER TABLE assembly_line_state RENAME TO assembly_line_state_v21;
+                 CREATE TABLE assembly_line_state (
+                   singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton=1),
+                   owner_control_revision INTEGER NOT NULL CHECK(owner_control_revision>0),
+                   state_revision INTEGER NOT NULL CHECK(state_revision>0),
+                   queue_revision INTEGER NOT NULL CHECK(queue_revision>=0),
+                   auto_run INTEGER NOT NULL CHECK(auto_run IN(0,1)),
+                   lifecycle TEXT NOT NULL CHECK(lifecycle IN(
+                     'stopped','starting','running','stopping','paused_at_checkpoint','emergency_paused',
+                     'waiting_for_host_reconnect','reconciliation_required',
+                     'incomplete_termination','waiting_for_owner_start'
+                   )),
+                   session_id TEXT,
+                   active_child_epoch_id TEXT,
+                   active_feature_id TEXT,
+                   effect_possible INTEGER NOT NULL CHECK(effect_possible IN(0,1)),
+                   authority_revision INTEGER NOT NULL CHECK(authority_revision>=0),
+                   CHECK((session_id IS NULL)=(active_child_epoch_id IS NULL)),
+                   CHECK((active_child_epoch_id IS NULL)=(active_feature_id IS NULL))
+                 );
+                 INSERT INTO assembly_line_state SELECT * FROM assembly_line_state_v21;
+                 DROP TABLE assembly_line_state_v21;
+                 ALTER TABLE assembly_line_queue RENAME TO assembly_line_queue_v21;
+                 CREATE TABLE assembly_line_queue (
+                   feature_id TEXT PRIMARY KEY NOT NULL,
+                   repository_id TEXT NOT NULL REFERENCES assembly_line_repositories(repository_id),
+                   specification_id TEXT NOT NULL UNIQUE,
+                   specification_revision INTEGER NOT NULL CHECK(specification_revision>0),
+                   specification_sha256 BLOB NOT NULL CHECK(length(specification_sha256)=32),
+                   owner_approval_sha256 BLOB NOT NULL CHECK(length(owner_approval_sha256)=32),
+                   queue_position INTEGER NOT NULL UNIQUE CHECK(queue_position>0),
+                   lifecycle_revision INTEGER NOT NULL CHECK(lifecycle_revision>0),
+                   lifecycle TEXT NOT NULL CHECK(lifecycle IN(
+                     'queued','starting','active','stopping','paused_at_checkpoint','emergency_paused',
+                     'waiting_for_host_reconnect','reconciliation_required','incomplete_termination'
+                   )),
+                   enqueued_at_ms INTEGER NOT NULL CHECK(enqueued_at_ms>0)
+                 );
+                 INSERT INTO assembly_line_queue SELECT * FROM assembly_line_queue_v21;
+                 DROP TABLE assembly_line_queue_v21;
+                 ALTER TABLE assembly_line_child_epochs RENAME TO assembly_line_child_epochs_v21;
+                 CREATE TABLE assembly_line_child_epochs (
+                   child_epoch_id TEXT PRIMARY KEY NOT NULL,
+                   child_epoch_revision INTEGER NOT NULL CHECK(child_epoch_revision>0),
+                   session_id TEXT NOT NULL REFERENCES assembly_line_execution_sessions(session_id),
+                   session_revision INTEGER NOT NULL CHECK(session_revision>0),
+                   feature_id TEXT NOT NULL,
+                   repository_id TEXT NOT NULL,
+                   feature_lifecycle_revision INTEGER NOT NULL CHECK(feature_lifecycle_revision>0),
+                   queue_revision INTEGER NOT NULL CHECK(queue_revision>0),
+                   authority_revision INTEGER NOT NULL CHECK(authority_revision>0),
+                   lifecycle TEXT NOT NULL CHECK(lifecycle IN(
+                     'starting','running','stopping','paused_at_checkpoint','emergency_paused',
+                     'waiting_for_host_reconnect','reconciliation_required',
+                     'incomplete_termination'
+                   )),
+                   effect_possible INTEGER NOT NULL CHECK(effect_possible IN(0,1)),
+                   started_at_ms INTEGER NOT NULL CHECK(started_at_ms>0),
+                   UNIQUE(session_id,child_epoch_revision)
+                 );
+                 INSERT INTO assembly_line_child_epochs SELECT * FROM assembly_line_child_epochs_v21;
+                 DROP TABLE assembly_line_child_epochs_v21;
+                 CREATE TABLE assembly_line_activation_receipts (
+                   receipt_id TEXT PRIMARY KEY NOT NULL,
+                   session_id TEXT NOT NULL REFERENCES assembly_line_execution_sessions(session_id),
+                   child_epoch_id TEXT NOT NULL,
+                   authority_revision INTEGER NOT NULL CHECK(authority_revision>0),
+                   host_platform TEXT NOT NULL CHECK(host_platform IN('windows','macos')),
+                   signer_key_id TEXT NOT NULL,
+                   receipt_sha256 BLOB NOT NULL UNIQUE CHECK(length(receipt_sha256)=32),
+                   receipt_json TEXT NOT NULL CHECK(length(CAST(receipt_json AS BLOB)) BETWEEN 2 AND 16384),
+                   recorded_at_ms INTEGER NOT NULL CHECK(recorded_at_ms>0),
+                   UNIQUE(session_id,host_platform)
+                 );
+                 CREATE TABLE assembly_line_effect_dispatches (
+                   request_kind TEXT NOT NULL CHECK(request_kind IN('start','stop','emergency_pause')),
+                   request_id TEXT NOT NULL,
+                   intent_sha256 BLOB NOT NULL CHECK(length(intent_sha256)=32),
+                   effect_possible INTEGER NOT NULL CHECK(effect_possible=1),
+                   recorded_at_ms INTEGER NOT NULL CHECK(recorded_at_ms>0),
+                   PRIMARY KEY(request_kind,request_id)
+                 );
+                 CREATE TRIGGER assembly_line_activation_receipts_no_update
+                   BEFORE UPDATE ON assembly_line_activation_receipts
+                   BEGIN SELECT RAISE(ABORT,'immutable assembly-line activation receipt'); END;
+                 CREATE TRIGGER assembly_line_activation_receipts_no_delete
+                   BEFORE DELETE ON assembly_line_activation_receipts
+                   BEGIN SELECT RAISE(ABORT,'durable assembly-line activation receipt'); END;
+                 CREATE TRIGGER assembly_line_effect_dispatches_no_update
+                   BEFORE UPDATE ON assembly_line_effect_dispatches
+                   BEGIN SELECT RAISE(ABORT,'immutable assembly-line effect dispatch'); END;
+                 CREATE TRIGGER assembly_line_effect_dispatches_no_delete
+                   BEFORE DELETE ON assembly_line_effect_dispatches
+                   BEGIN SELECT RAISE(ABORT,'durable assembly-line effect dispatch'); END;
+                 PRAGMA user_version=22;
+                 COMMIT;
+                 PRAGMA legacy_alter_table=OFF;
+                 PRAGMA foreign_keys=ON;",
+            )?;
+            let violations: i64 = self.connection.query_row(
+                "SELECT COUNT(*) FROM pragma_foreign_key_check",
+                [],
+                |row| row.get(0),
+            )?;
+            if violations != 0 {
+                return Err(MasterError::InvalidStoredState(
+                    "schema-v22 migration produced foreign-key violations".to_string(),
+                ));
+            }
+        }
+        let version = self.schema_version()?;
         if version != MASTER_SCHEMA_VERSION {
             return Err(MasterError::UnsupportedSchemaVersion {
                 expected: MASTER_SCHEMA_VERSION,
@@ -9235,6 +11300,158 @@ impl MasterKernel {
             });
         }
         Ok(())
+    }
+
+    fn reconcile_assembly_line_startup(
+        &mut self,
+        now_ms: u64,
+    ) -> Result<AssemblyLineStartupReconciliation, MasterError> {
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let state = assembly_line_state_tx(&tx)?;
+        if matches!(
+            state.lifecycle,
+            AssemblyLineLifecycleState::Stopped
+                | AssemblyLineLifecycleState::WaitingForOwnerStart
+                | AssemblyLineLifecycleState::PausedAtCheckpoint
+        ) {
+            tx.commit()?;
+            return Ok(AssemblyLineStartupReconciliation::default());
+        }
+        let Some(child_epoch_id) = state.active_child_epoch_id else {
+            return Err(MasterError::InvalidStoredState(
+                "active assembly-line restart state has no child epoch".to_string(),
+            ));
+        };
+        let pending_termination_intent: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM assembly_line_control_intents i
+             WHERE i.child_epoch_id=?1
+               AND (SELECT COUNT(*) FROM assembly_line_termination_receipts r
+                    WHERE r.request_id=i.request_id) < 2",
+            [child_epoch_id.to_string()],
+            |row| row.get(0),
+        )?;
+        let action_effect_possible: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM assembly_line_action_ledger
+             WHERE child_epoch_id=?1 AND effect_possible=1",
+            [child_epoch_id.to_string()],
+            |row| row.get(0),
+        )?;
+        let state_effect_possible: i64 = tx.query_row(
+            "SELECT effect_possible FROM assembly_line_state WHERE singleton=1",
+            [],
+            |row| row.get(0),
+        )?;
+        if !matches!(state_effect_possible, 0 | 1) {
+            return Err(MasterError::InvalidStoredState(
+                "assembly-line restart effect marker is malformed".to_string(),
+            ));
+        }
+        let effect_possible = state_effect_possible == 1 || action_effect_possible != 0;
+        let lifecycle = if pending_termination_intent != 0 {
+            "incomplete_termination"
+        } else if effect_possible {
+            "reconciliation_required"
+        } else {
+            "waiting_for_host_reconnect"
+        };
+        let prior_authority_revision: i64 = tx.query_row(
+            "SELECT authority_revision FROM assembly_line_execution_authority WHERE singleton=1",
+            [],
+            |row| row.get(0),
+        )?;
+        let next_authority_revision = i64_to_u64(prior_authority_revision)?
+            .checked_add(1)
+            .ok_or(MasterError::IntegerOutOfRange)?;
+        let prior_owner_revision = assembly_line_owner_revision_tx(&tx)?;
+        let next_owner_revision = prior_owner_revision
+            .checked_add(1)
+            .ok_or(MasterError::IntegerOutOfRange)?;
+        let next_state_revision = state
+            .state_revision
+            .checked_add(1)
+            .ok_or(MasterError::IntegerOutOfRange)?;
+        if tx.execute(
+            "UPDATE assembly_line_execution_authority
+             SET authority_revision=?1,revoked=1,updated_at_ms=?2
+             WHERE singleton=1 AND authority_revision=?3",
+            params![
+                u64_to_i64(next_authority_revision)?,
+                u64_to_i64(now_ms)?,
+                prior_authority_revision,
+            ],
+        )? != 1
+        {
+            return Err(MasterError::AssemblyLineExecutionControlUnavailable);
+        }
+        if tx.execute(
+            "UPDATE assembly_line_state
+             SET owner_control_revision=?1,state_revision=?2,lifecycle=?3,
+                 effect_possible=?4,authority_revision=?5
+             WHERE singleton=1 AND owner_control_revision=?6 AND state_revision=?7
+               AND active_child_epoch_id=?8",
+            params![
+                u64_to_i64(next_owner_revision)?,
+                u64_to_i64(next_state_revision)?,
+                lifecycle,
+                i64::from(effect_possible || pending_termination_intent != 0),
+                u64_to_i64(next_authority_revision)?,
+                u64_to_i64(prior_owner_revision)?,
+                u64_to_i64(state.state_revision)?,
+                child_epoch_id.to_string(),
+            ],
+        )? != 1
+        {
+            return Err(MasterError::AssemblyLineExecutionControlUnavailable);
+        }
+        if tx.execute(
+            "UPDATE assembly_line_child_epochs
+             SET lifecycle=?1,effect_possible=?2,authority_revision=?3
+             WHERE child_epoch_id=?4",
+            params![
+                lifecycle,
+                i64::from(effect_possible || pending_termination_intent != 0),
+                u64_to_i64(next_authority_revision)?,
+                child_epoch_id.to_string(),
+            ],
+        )? != 1
+        {
+            return Err(MasterError::AssemblyLineExecutionControlUnavailable);
+        }
+        if tx.execute(
+            "UPDATE assembly_line_queue
+             SET lifecycle=?1,lifecycle_revision=lifecycle_revision+1
+             WHERE feature_id=(SELECT active_feature_id FROM assembly_line_state WHERE singleton=1)
+               AND queue_position=1
+               AND lifecycle IN('starting','active','stopping','emergency_paused','waiting_for_host_reconnect',
+                                'reconciliation_required','incomplete_termination')",
+            [lifecycle],
+        )? != 1
+        {
+            return Err(MasterError::AssemblyLineExecutionControlUnavailable);
+        }
+        append_assembly_line_audit_tx(
+            &tx,
+            "execution_restart_reconciled",
+            now_ms,
+            serde_json::json!({
+                "child_epoch_id": child_epoch_id,
+                "state_revision": next_state_revision,
+                "authority_revision": next_authority_revision,
+                "authority_revoked": true,
+                "effect_possible": effect_possible,
+                "pending_termination_intent": pending_termination_intent != 0,
+                "resulting_lifecycle": lifecycle,
+                "automatic_retry": false,
+                "external_effect": false
+            }),
+        )?;
+        tx.commit()?;
+        Ok(AssemblyLineStartupReconciliation {
+            quarantined_effect_possible_session: effect_possible,
+            pending_termination_intent: pending_termination_intent != 0,
+        })
     }
 
     fn reconcile_feature_conveyor_startup(&mut self, now_ms: u64) -> Result<u64, MasterError> {
@@ -9388,6 +11605,68 @@ impl MasterKernel {
             requeued_steps,
         })
     }
+}
+
+fn require_accepted_feature_provider_provenance_tx(
+    tx: &Transaction<'_>,
+    frozen: &FrozenBrainstormingSpecification,
+    provider: Option<(
+        &crate::planning_effects::BrainstormingAdapterBinding,
+        [u8; 32],
+    )>,
+) -> Result<(), MasterError> {
+    let default_profile = OrchestratorProfile::default();
+    let (provider_id, model_id, adapter_sha256, adapter_catalog_sha256) = match provider {
+        Some((binding, catalog_sha256)) => (
+            binding.profile.provider_id.as_str(),
+            binding.profile.model_id.as_str(),
+            Some(binding.executable_sha256),
+            Some(catalog_sha256),
+        ),
+        None => (
+            default_profile.provider_id.as_str(),
+            default_profile.model_id.as_str(),
+            None,
+            None,
+        ),
+    };
+    let mut statement = tx.prepare(
+        "SELECT redacted_metadata_json FROM assembly_line_audit
+         WHERE event_kind='brainstorming_provider_output_accepted' ORDER BY audit_id ASC",
+    )?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+    let mut matches = 0_usize;
+    for row in rows {
+        let value: Value = serde_json::from_str(&row?)?;
+        let accepted: crate::planning_effects::BrainstormingAcceptedAudit =
+            serde_json::from_value(value)?;
+        if accepted.target_kind == "feature"
+            && accepted.draft_id == frozen.draft_id
+            && accepted.specification_id == frozen.specification_id
+            && accepted.specification_sha256 == frozen.specification_sha256
+            && accepted.provider_id == provider_id
+            && accepted.model_id == model_id
+            && adapter_sha256.is_none_or(|expected| accepted.adapter_sha256 == expected)
+            && adapter_catalog_sha256
+                .is_none_or(|expected| accepted.adapter_catalog_sha256 == expected)
+        {
+            if accepted.adapter_sha256 == [0; 32]
+                || accepted.adapter_catalog_sha256 == [0; 32]
+                || !accepted.planning_only
+                || accepted.provider_output_retained_in_audit
+                || accepted.external_effect_authorized
+            {
+                return Err(MasterError::InvalidStoredState(
+                    "accepted feature brainstorming provenance audit is malformed".to_string(),
+                ));
+            }
+            matches += 1;
+        }
+    }
+    if matches != 1 {
+        return Err(MasterError::AssemblyLineBrainstormingUnavailable);
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -13014,11 +15293,18 @@ fn queue_projection_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<FeatureQueu
         )
     };
     let lifecycle = row.get::<_, String>(8)?;
-    if lifecycle != "queued" {
-        return Err(conversion_error(
-            "inert queue contains a non-queued lifecycle",
-        ));
-    }
+    let lifecycle = match lifecycle.as_str() {
+        "queued" => FeatureQueueLifecycle::Queued,
+        "starting" => FeatureQueueLifecycle::Starting,
+        "active" => FeatureQueueLifecycle::Active,
+        "stopping" => FeatureQueueLifecycle::Stopping,
+        "paused_at_checkpoint" => FeatureQueueLifecycle::PausedAtCheckpoint,
+        "emergency_paused" => FeatureQueueLifecycle::EmergencyPaused,
+        "waiting_for_host_reconnect" => FeatureQueueLifecycle::WaitingForHostReconnect,
+        "reconciliation_required" => FeatureQueueLifecycle::ReconciliationRequired,
+        "incomplete_termination" => FeatureQueueLifecycle::IncompleteTermination,
+        _ => return Err(conversion_error("invalid assembly-line queue lifecycle")),
+    };
     Ok(FeatureQueueEntryProjection {
         schema_version: FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
         feature_id: Uuid::parse_str(&row.get::<_, String>(0)?)
@@ -13041,7 +15327,7 @@ fn queue_projection_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<FeatureQueu
             .map_err(|_| conversion_error("invalid queue position"))?,
         lifecycle_revision: u64::try_from(row.get::<_, i64>(7)?)
             .map_err(|_| conversion_error("invalid lifecycle revision"))?,
-        lifecycle: FeatureQueueLifecycle::Queued,
+        lifecycle,
     })
 }
 
@@ -13064,6 +15350,163 @@ fn assembly_line_request_replay_tx(
         Some(stored) if digest_array(&stored)? == request_sha256 => Ok(true),
         Some(_) => Err(MasterError::AssemblyLinePlanningImmutable),
     }
+}
+
+fn assembly_line_execution_request_replay_tx(
+    tx: &Transaction<'_>,
+    request_kind: &str,
+    request_id: Uuid,
+    request_sha256: [u8; 32],
+) -> Result<Option<String>, MasterError> {
+    let stored = tx
+        .query_row(
+            "SELECT request_sha256,response_json FROM assembly_line_execution_requests
+             WHERE request_kind=?1 AND request_id=?2",
+            params![request_kind, request_id.to_string()],
+            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?;
+    match stored {
+        None => Ok(None),
+        Some((stored, response)) if digest_array(&stored)? == request_sha256 => Ok(Some(response)),
+        Some(_) => Err(MasterError::AssemblyLinePlanningImmutable),
+    }
+}
+
+fn insert_assembly_line_execution_request_tx(
+    tx: &Transaction<'_>,
+    request_kind: &str,
+    request_id: Uuid,
+    request_sha256: [u8; 32],
+    response_json: &str,
+    now_ms: u64,
+) -> Result<(), MasterError> {
+    tx.execute(
+        "INSERT INTO assembly_line_execution_requests
+         (request_kind,request_id,request_sha256,response_json,recorded_at_ms)
+         VALUES(?1,?2,?3,?4,?5)",
+        params![
+            request_kind,
+            request_id.to_string(),
+            request_sha256.as_slice(),
+            response_json,
+            u64_to_i64(now_ms)?,
+        ],
+    )?;
+    Ok(())
+}
+
+fn claim_assembly_line_effect_dispatch_tx(
+    tx: &Transaction<'_>,
+    request_kind: &str,
+    request_id: Uuid,
+    intent_sha256: [u8; 32],
+    now_ms: u64,
+) -> Result<bool, MasterError> {
+    let existing = tx
+        .query_row(
+            "SELECT intent_sha256 FROM assembly_line_effect_dispatches
+             WHERE request_kind=?1 AND request_id=?2",
+            params![request_kind, request_id.to_string()],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()?;
+    match existing {
+        Some(existing) if digest_array(&existing)? == intent_sha256 => Ok(false),
+        Some(_) => Err(MasterError::AssemblyLineExecutionControlUnavailable),
+        None => {
+            tx.execute(
+                "INSERT INTO assembly_line_effect_dispatches
+                 (request_kind,request_id,intent_sha256,effect_possible,recorded_at_ms)
+                 VALUES(?1,?2,?3,1,?4)",
+                params![
+                    request_kind,
+                    request_id.to_string(),
+                    intent_sha256.as_slice(),
+                    u64_to_i64(now_ms)?,
+                ],
+            )?;
+            Ok(true)
+        }
+    }
+}
+
+fn current_assembly_line_execution_capability_tx(
+    tx: &Transaction<'_>,
+) -> Result<AssemblyLineExecutionCapabilityBinding, MasterError> {
+    let row = tx
+        .query_row(
+            "SELECT binding_revision,state_revision,emergency_pause_revision,
+                    windows_executor_id,windows_executor_revision,windows_executor_sha256,
+                    mac_executor_id,mac_executor_revision,mac_executor_sha256,
+                    windows_broker_id,windows_broker_revision,windows_broker_sha256,
+                    mac_broker_id,mac_broker_revision,mac_broker_sha256,
+                    protected_control_plane_sha256,windows_receipt_signer_key_id,
+                    windows_receipt_verifying_key,mac_receipt_signer_key_id,
+                    mac_receipt_verifying_key,healthy,provisioning_evidence_sha256
+             FROM assembly_line_execution_capabilities
+             ORDER BY binding_revision DESC LIMIT 1",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, Vec<u8>>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, i64>(7)?,
+                    row.get::<_, Vec<u8>>(8)?,
+                    row.get::<_, String>(9)?,
+                    row.get::<_, i64>(10)?,
+                    row.get::<_, Vec<u8>>(11)?,
+                    row.get::<_, String>(12)?,
+                    row.get::<_, i64>(13)?,
+                    row.get::<_, Vec<u8>>(14)?,
+                    row.get::<_, Vec<u8>>(15)?,
+                    row.get::<_, String>(16)?,
+                    row.get::<_, Vec<u8>>(17)?,
+                    row.get::<_, String>(18)?,
+                    row.get::<_, Vec<u8>>(19)?,
+                    row.get::<_, i64>(20)?,
+                    row.get::<_, Vec<u8>>(21)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or(MasterError::AssemblyLineExecutionCapabilityUnavailable)?;
+    let healthy = match row.20 {
+        0 => false,
+        1 => true,
+        _ => return Err(MasterError::AssemblyLineExecutionCapabilityUnavailable),
+    };
+    let binding = AssemblyLineExecutionCapabilityBinding {
+        binding_revision: i64_to_u64(row.0)?,
+        expected_state_revision: i64_to_u64(row.1)?,
+        expected_emergency_pause_revision: i64_to_u64(row.2)?,
+        windows_executor_id: parse_uuid(&row.3)?,
+        windows_executor_revision: i64_to_u64(row.4)?,
+        windows_executor_sha256: digest_array(&row.5)?,
+        mac_executor_id: parse_uuid(&row.6)?,
+        mac_executor_revision: i64_to_u64(row.7)?,
+        mac_executor_sha256: digest_array(&row.8)?,
+        windows_broker_id: parse_uuid(&row.9)?,
+        windows_broker_revision: i64_to_u64(row.10)?,
+        windows_broker_sha256: digest_array(&row.11)?,
+        mac_broker_id: parse_uuid(&row.12)?,
+        mac_broker_revision: i64_to_u64(row.13)?,
+        mac_broker_sha256: digest_array(&row.14)?,
+        protected_control_plane_sha256: digest_array(&row.15)?,
+        windows_receipt_signer_key_id: row.16,
+        windows_receipt_verifying_key: digest_array(&row.17)?,
+        mac_receipt_signer_key_id: row.18,
+        mac_receipt_verifying_key: digest_array(&row.19)?,
+        healthy,
+        provisioning_evidence_sha256: digest_array(&row.21)?,
+    };
+    binding.validate()?;
+    Ok(binding)
 }
 
 fn insert_assembly_line_request_tx(
@@ -13193,19 +15636,52 @@ fn assembly_line_queue_projection_tx(
 }
 
 fn assembly_line_state_tx(tx: &Transaction<'_>) -> Result<AssemblyLineState, MasterError> {
-    let (state_revision, queue_revision, auto_run, lifecycle): (i64, i64, i64, String) = tx
-        .query_row(
-            "SELECT state_revision,queue_revision,auto_run,lifecycle
+    assembly_line_state_connection(tx)
+}
+
+fn assembly_line_state_connection(
+    connection: &Connection,
+) -> Result<AssemblyLineState, MasterError> {
+    let (
+        state_revision,
+        queue_revision,
+        auto_run,
+        lifecycle,
+        session_id,
+        child_epoch_id,
+        feature_id,
+    ): (
+        i64,
+        i64,
+        i64,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = connection.query_row(
+        "SELECT state_revision,queue_revision,auto_run,lifecycle,session_id,
+                    active_child_epoch_id,active_feature_id
              FROM assembly_line_state WHERE singleton=1",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-        )?;
-    let count: i64 = tx.query_row("SELECT COUNT(*) FROM assembly_line_queue", [], |row| {
-        row.get(0)
-    })?;
-    if lifecycle != "stopped" || !matches!(auto_run, 0 | 1) {
+        [],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+            ))
+        },
+    )?;
+    let count: i64 =
+        connection.query_row("SELECT COUNT(*) FROM assembly_line_queue", [], |row| {
+            row.get(0)
+        })?;
+    if !matches!(auto_run, 0 | 1) {
         return Err(MasterError::InvalidStoredState(
-            "inert assembly-line state is malformed".to_string(),
+            "assembly-line auto-run state is malformed".to_string(),
         ));
     }
     let state = AssemblyLineState {
@@ -13214,13 +15690,81 @@ fn assembly_line_state_tx(tx: &Transaction<'_>) -> Result<AssemblyLineState, Mas
         queue_revision: i64_to_u64(queue_revision)?,
         queue_count: u16::try_from(count).map_err(|_| MasterError::IntegerOutOfRange)?,
         auto_run: auto_run == 1,
-        lifecycle: AssemblyLineLifecycleState::Stopped,
-        session_id: None,
-        active_child_epoch_id: None,
-        active_feature_id: None,
+        lifecycle: assembly_line_lifecycle_from_str(&lifecycle)?,
+        session_id: session_id.as_deref().map(parse_uuid).transpose()?,
+        active_child_epoch_id: child_epoch_id.as_deref().map(parse_uuid).transpose()?,
+        active_feature_id: feature_id.as_deref().map(parse_uuid).transpose()?,
     };
     state.validate()?;
     Ok(state)
+}
+
+fn assembly_line_lifecycle_from_str(
+    lifecycle: &str,
+) -> Result<AssemblyLineLifecycleState, MasterError> {
+    match lifecycle {
+        "stopped" => Ok(AssemblyLineLifecycleState::Stopped),
+        "starting" => Ok(AssemblyLineLifecycleState::Starting),
+        "running" => Ok(AssemblyLineLifecycleState::Running),
+        "stopping" => Ok(AssemblyLineLifecycleState::Stopping),
+        "paused_at_checkpoint" => Ok(AssemblyLineLifecycleState::PausedAtCheckpoint),
+        "emergency_paused" => Ok(AssemblyLineLifecycleState::EmergencyPaused),
+        "waiting_for_host_reconnect" => Ok(AssemblyLineLifecycleState::WaitingForHostReconnect),
+        "reconciliation_required" => Ok(AssemblyLineLifecycleState::ReconciliationRequired),
+        "incomplete_termination" => Ok(AssemblyLineLifecycleState::IncompleteTermination),
+        "waiting_for_owner_start" => Ok(AssemblyLineLifecycleState::WaitingForOwnerStart),
+        _ => Err(MasterError::InvalidStoredState(
+            "assembly-line lifecycle is malformed".to_string(),
+        )),
+    }
+}
+
+fn valid_execution_signer_key_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 96
+        && value.is_ascii()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+fn verify_execution_checkpoint_receipt_signature(
+    receipt: &ExecutionCheckpointReceipt,
+    verifying_key: [u8; 32],
+) -> Result<(), MasterError> {
+    let verifying_key = verifying_key
+        .as_slice()
+        .try_into()
+        .map_err(|_| MasterError::AssemblyLineExecutionReceiptMismatch)?;
+    receipt
+        .verify_signature(&verifying_key)
+        .map_err(|_| MasterError::AssemblyLineExecutionReceiptMismatch)
+}
+
+fn verify_execution_activation_receipt_signature(
+    receipt: &ExecutionActivationReceipt,
+    verifying_key: [u8; 32],
+) -> Result<(), MasterError> {
+    let verifying_key = verifying_key
+        .as_slice()
+        .try_into()
+        .map_err(|_| MasterError::AssemblyLineExecutionReceiptMismatch)?;
+    receipt
+        .verify_signature(&verifying_key)
+        .map_err(|_| MasterError::AssemblyLineExecutionReceiptMismatch)
+}
+
+fn verify_execution_termination_receipt_signature(
+    receipt: &ExecutionTerminationReceipt,
+    verifying_key: [u8; 32],
+) -> Result<(), MasterError> {
+    let verifying_key = verifying_key
+        .as_slice()
+        .try_into()
+        .map_err(|_| MasterError::AssemblyLineExecutionReceiptMismatch)?;
+    receipt
+        .verify_signature(&verifying_key)
+        .map_err(|_| MasterError::AssemblyLineExecutionReceiptMismatch)
 }
 
 fn append_assembly_line_audit_tx(

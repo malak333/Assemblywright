@@ -1058,10 +1058,11 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
         }
     }
 
+    @discardableResult
     public func performAssemblyLinePlanningAction(
         _ action: AssemblywrightMacAssemblyLinePlanningAction,
         requestData: Data
-    ) async {
+    ) async -> Data? {
         guard !ownerActionInProgress, pendingAssemblyLinePlanningMutation == nil,
               status.phase == .connected,
               let projection = status.assemblyLine,
@@ -1070,7 +1071,7 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
             ownerActionErrorCode = pendingAssemblyLinePlanningMutation == nil
                 ? "assembly_line_action_unavailable"
                 : "assembly_line_reconciliation_required"
-            return
+            return nil
         }
         ownerActionInProgress = true
         ownerActionErrorCode = nil
@@ -1107,8 +1108,22 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
                 responseData: response
             )
             try clearPendingAssemblyLinePlanningMutation()
+            let finalResponse: Data
+            if action == .projectApproval {
+                let repository = try JSONDecoder().decode(
+                    AssemblywrightMacRepositoryCreationProjection.self,
+                    from: response
+                )
+                finalResponse = try await performRepositoryCreationAfterApproval(
+                    repositoryID: repository.repository.repositoryID,
+                    executable: validated
+                )
+            } else {
+                finalResponse = response
+            }
             status = .init(phase: .starting)
             start()
+            return finalResponse
         } catch {
             if pendingAssemblyLinePlanningMutation != nil,
                Self.isKnownPreEffectAssemblyLineFailure(error) {
@@ -1118,7 +1133,7 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
                     ownerActionErrorCode = "assembly_line_pending_store_invalid"
                     status = .init(phase: .masterOffline, errorCode: ownerActionErrorCode)
                     start()
-                    return
+                    return nil
                 }
             }
             ownerActionErrorCode = pendingAssemblyLinePlanningMutation == nil
@@ -1129,6 +1144,7 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
                 : "assembly_line_reconciliation_required"
             status = .init(phase: .masterOffline, errorCode: ownerActionErrorCode)
             start()
+            return nil
         }
     }
 
@@ -1165,6 +1181,16 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
                 responseData: response
             )
             try clearPendingAssemblyLinePlanningMutation()
+            if pending.action == .projectApproval {
+                let repository = try JSONDecoder().decode(
+                    AssemblywrightMacRepositoryCreationProjection.self,
+                    from: response
+                )
+                _ = try await performRepositoryCreationAfterApproval(
+                    repositoryID: repository.repository.repositoryID,
+                    executable: validated
+                )
+            }
             status = .init(phase: .starting)
             start()
         } catch {
@@ -1172,6 +1198,34 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
             status = .init(phase: .masterOffline, errorCode: ownerActionErrorCode)
             start()
         }
+    }
+
+    private func performRepositoryCreationAfterApproval(
+        repositoryID: UUID,
+        executable: AssemblywrightDeveloperBridgeValidatedExecutable
+    ) async throws -> Data {
+        let request = try AssemblywrightMacAssemblyLineOwnerControl.repositoryCreationRequest(
+            repositoryID: repositoryID
+        )
+        let pending = try AssemblywrightMacPendingAssemblyLinePlanningMutation(
+            action: .repositoryCreation,
+            requestData: request
+        )
+        try assemblyLinePendingMutationStore.save(pending)
+        pendingAssemblyLinePlanningMutation = pending
+        pendingAssemblyLinePlanningAction = .repositoryCreation
+        let response = try await launcher.runCommand(
+            executable: executable,
+            arguments: AssemblywrightMacAssemblyLinePlanningAction.repositoryCreation.helperArguments,
+            input: request
+        )
+        try AssemblywrightMacAssemblyLineOwnerControl.validateHelperOutput(
+            action: .repositoryCreation,
+            requestData: request,
+            responseData: response
+        )
+        try clearPendingAssemblyLinePlanningMutation()
+        return response
     }
 
     private func clearPendingAssemblyLinePlanningMutation() throws {

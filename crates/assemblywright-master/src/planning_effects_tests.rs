@@ -356,6 +356,178 @@ fn provider_rejection_creates_no_specification_repository_or_github_effect() {
 }
 
 #[test]
+fn malformed_provider_output_is_rejected_without_freezing_or_creating_authority() {
+    let mut kernel = MasterKernel::in_memory().unwrap();
+    let draft = draft(
+        repository("https://github.com/Example-Owner/Malformed-Planning"),
+        ProjectVisibility::Public,
+    );
+    let malformed = BrainstormingSpecificationDocument {
+        title: "".to_string(),
+        outcome: "invalid".to_string(),
+        acceptance_criteria: Vec::new(),
+        obligations: Vec::new(),
+    };
+    let mut provider = FakeBrainstorming {
+        profile: OrchestratorProfile::default(),
+        result: Ok(malformed),
+        calls: 0,
+        reconcile_calls: 0,
+        reconcile_result: Ok(None),
+        idempotency_keys: Vec::new(),
+        cancel_on_generate: None,
+    };
+    let result = run_brainstorming(
+        &mut kernel,
+        BrainstormingDraft::Project(draft.clone()),
+        &mut provider,
+        &catalog(),
+        &control(),
+    );
+    assert!(matches!(
+        result,
+        Err(MasterError::AssemblyLineBrainstormingRejected)
+    ));
+    assert!(kernel
+        .assembly_line_frozen_specification_for_draft(
+            BrainstormingTargetKind::Project,
+            draft.draft_id
+        )
+        .unwrap()
+        .is_none());
+    assert!(kernel
+        .assembly_line_owner_projection(1)
+        .unwrap()
+        .repositories
+        .is_empty());
+}
+
+#[test]
+fn caller_persisted_frozen_output_cannot_mint_production_github_authority() {
+    let mut kernel = MasterKernel::in_memory().unwrap();
+    let draft = draft(
+        repository("https://github.com/Example-Owner/Caller-Minted"),
+        ProjectVisibility::Public,
+    );
+    kernel
+        .record_assembly_line_project_draft(&draft, 1)
+        .unwrap();
+    let frozen = BrainstormingDraft::Project(draft.clone())
+        .frozen(specification())
+        .unwrap();
+    kernel
+        .record_assembly_line_frozen_specification(&frozen, 2)
+        .unwrap();
+    let pending = approve_project(&mut kernel, &draft, &frozen);
+    let mut github = FakeGithub::exact();
+    let result = run_github_repository_creation(
+        &mut kernel,
+        pending.repository.repository_id,
+        &mut github,
+        &catalog(),
+        &control(),
+    );
+    assert!(matches!(
+        result,
+        Err(MasterError::AssemblyLineGithubCreationUnavailable)
+    ));
+    assert!(github.inspected.is_empty());
+    assert!(github.created.is_empty());
+}
+
+#[test]
+fn feature_enqueue_rejects_accepted_provenance_after_adapter_catalog_drift() {
+    let (mut kernel, project, pending) = pending_project(ProjectVisibility::Public);
+    let mut github = FakeGithub::exact();
+    run_github_repository_creation(
+        &mut kernel,
+        pending.repository.repository_id,
+        &mut github,
+        &catalog(),
+        &control(),
+    )
+    .unwrap();
+
+    let feature = FeatureBrainstormingDraft {
+        schema_version: FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
+        draft_id: Uuid::new_v4(),
+        draft_revision: 1,
+        repository: project.repository.clone(),
+        expected_repository_revision: 1,
+        orchestrator_catalog: OrchestratorCatalog::default(),
+        orchestrator: OrchestratorProfile::default(),
+        idea: "Add the owner-approved feature".to_string(),
+    };
+    let mut provider = FakeBrainstorming::successful();
+    provider.result = Ok(BrainstormingSpecificationDocument {
+        title: "Owner-approved feature".to_string(),
+        outcome: "Add the exact approved feature to the created repository.".to_string(),
+        acceptance_criteria: vec![BrainstormingAcceptanceCriterion {
+            id: "feature-complete".to_string(),
+            requirement: "The focused native feature test passes.".to_string(),
+        }],
+        obligations: vec!["Preserve the planning and execution boundary.".to_string()],
+    });
+    let frozen = run_brainstorming(
+        &mut kernel,
+        BrainstormingDraft::Feature(feature.clone()),
+        &mut provider,
+        &catalog(),
+        &control(),
+    )
+    .unwrap();
+    let projection = kernel.assembly_line_owner_projection(200).unwrap();
+    let mut approval = BrainstormingOwnerApprovalBinding {
+        schema_version: FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
+        approval_id: Uuid::new_v4(),
+        approved_at_ms: 201,
+        owner_control_revision: projection.owner_control_revision,
+        target_kind: BrainstormingTargetKind::Feature,
+        repository: feature.repository.clone(),
+        visibility: None,
+        expected_repository_revision: Some(1),
+        expected_queue_revision: Some(projection.assembly_line.queue_revision),
+        draft_id: feature.draft_id,
+        draft_revision: feature.draft_revision,
+        draft_sha256: feature.canonical_sha256().unwrap(),
+        orchestrator_catalog_revision: feature.orchestrator_catalog.catalog_revision,
+        orchestrator_catalog_sha256: feature.orchestrator_catalog.catalog_sha256,
+        specification_id: frozen.specification_id,
+        specification_revision: frozen.specification_revision,
+        specification_sha256: frozen.specification_sha256,
+        orchestrator_profile_sha256: feature.orchestrator.canonical_sha256().unwrap(),
+        owner_approval_sha256: [0; 32],
+    };
+    approval.owner_approval_sha256 = approval.canonical_approval_sha256().unwrap();
+
+    let drifted = WindowsPlanningEffectAuthority::for_test(
+        PlanningEffectAdapterCatalog::new(
+            2,
+            vec![BrainstormingAdapterBinding {
+                profile: OrchestratorProfile::default(),
+                executable_sha256: Sha256::digest(b"replacement-adapter").into(),
+            }],
+            vec![github_digest()],
+        )
+        .unwrap(),
+    );
+    assert!(matches!(
+        drifted.approve_feature_and_enqueue(&mut kernel, &approval, 202),
+        Err(MasterError::AssemblyLineBrainstormingUnavailable)
+    ));
+    assert!(kernel
+        .assembly_line_owner_projection(203)
+        .unwrap()
+        .queue
+        .is_empty());
+
+    let entry = catalog()
+        .approve_feature_and_enqueue(&mut kernel, &approval, 204)
+        .unwrap();
+    assert_eq!(entry.position, 1);
+}
+
+#[test]
 fn github_creation_maps_public_and_private_exactly_and_binds_url_owner_repo() {
     for visibility in [ProjectVisibility::Public, ProjectVisibility::Private] {
         let (mut kernel, draft, pending) = pending_project(visibility);

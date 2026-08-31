@@ -4,10 +4,11 @@ use crate::{
     project_visibility_str, u64_to_i64, MasterError, MasterKernel,
 };
 use assemblywright_protocol::{
-    AssemblyLineRepositoryIdentity, BrainstormingSpecificationDocument, BrainstormingTargetKind,
-    FeatureBrainstormingDraft, FrozenBrainstormingSpecification, OrchestratorProfile,
-    ProjectBrainstormingDraft, ProjectVisibility, RepositoryCreationLifecycle,
-    RepositoryCreationProjection, FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
+    AssemblyLineRepositoryIdentity, BrainstormingOwnerApprovalBinding,
+    BrainstormingSpecificationDocument, BrainstormingTargetKind, FeatureBrainstormingDraft,
+    FrozenBrainstormingSpecification, OrchestratorProfile, ProjectBrainstormingDraft,
+    ProjectVisibility, RepositoryCreationLifecycle, RepositoryCreationProjection,
+    FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
 };
 use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
@@ -23,8 +24,26 @@ use uuid::Uuid;
 pub struct PlanningEffectControl {
     cancelled: Arc<AtomicBool>,
     deadline: Instant,
+    authority_current: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
     #[cfg(test)]
     cancel_on_poll: Option<(Arc<AtomicUsize>, usize)>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrainstormingCloudAuthorization {
+    pub owner_cloud_disclosure_sha256: [u8; 32],
+}
+
+impl BrainstormingCloudAuthorization {
+    fn validate(&self) -> Result<(), MasterError> {
+        if self.owner_cloud_disclosure_sha256 == [0; 32] {
+            return Err(MasterError::InvalidAssemblyLinePlanningInput(
+                "owner cloud disclosure digest is invalid".to_string(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl PlanningEffectControl {
@@ -32,6 +51,7 @@ impl PlanningEffectControl {
         Self {
             cancelled,
             deadline,
+            authority_current: None,
             #[cfg(test)]
             cancel_on_poll: None,
         }
@@ -42,6 +62,7 @@ impl PlanningEffectControl {
         Self {
             cancelled: Arc::new(AtomicBool::new(false)),
             deadline,
+            authority_current: None,
             cancel_on_poll: Some((Arc::new(AtomicUsize::new(0)), poll_number)),
         }
     }
@@ -53,7 +74,20 @@ impl PlanningEffectControl {
                 self.cancelled.store(true, Ordering::Release);
             }
         }
-        !self.cancelled.load(Ordering::Acquire) && Instant::now() < self.deadline
+        !self.cancelled.load(Ordering::Acquire)
+            && Instant::now() < self.deadline
+            && self
+                .authority_current
+                .as_ref()
+                .is_none_or(|authority_current| authority_current())
+    }
+
+    pub fn with_authority(
+        mut self,
+        authority_current: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> Self {
+        self.authority_current = Some(authority_current);
+        self
     }
 }
 
@@ -74,7 +108,6 @@ struct PlanningEffectAdapterCatalog {
 }
 
 impl PlanningEffectAdapterCatalog {
-    #[cfg(test)]
     fn new(
         catalog_revision: u64,
         mut brainstorming: Vec<BrainstormingAdapterBinding>,
@@ -196,6 +229,85 @@ impl WindowsPlanningEffectAuthority {
     fn for_test(catalog: PlanningEffectAdapterCatalog) -> Self {
         Self { catalog }
     }
+
+    pub(crate) fn from_loaded_bindings(
+        catalog_revision: u64,
+        brainstorming: BrainstormingAdapterBinding,
+        github_creation: [u8; 32],
+    ) -> Result<Self, MasterError> {
+        Ok(Self {
+            catalog: PlanningEffectAdapterCatalog::new(
+                catalog_revision,
+                vec![brainstorming],
+                vec![github_creation],
+            )?,
+        })
+    }
+
+    pub(crate) fn catalog_sha256(&self) -> [u8; 32] {
+        self.catalog.catalog_sha256
+    }
+
+    pub(crate) fn require_feature_enqueue_provenance(
+        &self,
+        kernel: &MasterKernel,
+        approval: &BrainstormingOwnerApprovalBinding,
+    ) -> Result<(), MasterError> {
+        self.catalog.validate()?;
+        let frozen = kernel
+            .assembly_line_frozen_specification_for_draft(
+                BrainstormingTargetKind::Feature,
+                approval.draft_id,
+            )?
+            .ok_or(MasterError::AssemblyLineBrainstormingUnavailable)?;
+        if frozen.specification_id != approval.specification_id
+            || frozen.specification_sha256 != approval.specification_sha256
+        {
+            return Err(MasterError::AssemblyLineBrainstormingUnavailable);
+        }
+        let binding = self
+            .catalog
+            .brainstorming
+            .iter()
+            .find(|binding| {
+                binding.profile.canonical_sha256().ok() == Some(frozen.orchestrator_profile_sha256)
+            })
+            .ok_or(MasterError::AssemblyLineBrainstormingUnavailable)?;
+        kernel.require_assembly_line_provider_accepted_specification(
+            &frozen,
+            binding,
+            self.catalog.catalog_sha256,
+        )
+    }
+
+    pub(crate) fn approve_feature_and_enqueue(
+        &self,
+        kernel: &mut MasterKernel,
+        approval: &BrainstormingOwnerApprovalBinding,
+        now_ms: u64,
+    ) -> Result<assemblywright_protocol::FeatureQueueEntryProjection, MasterError> {
+        self.catalog.validate()?;
+        let frozen = kernel
+            .assembly_line_frozen_specification_for_draft(
+                BrainstormingTargetKind::Feature,
+                approval.draft_id,
+            )?
+            .ok_or(MasterError::AssemblyLineBrainstormingUnavailable)?;
+        let binding = self
+            .catalog
+            .brainstorming
+            .iter()
+            .find(|binding| {
+                binding.profile.canonical_sha256().ok() == Some(frozen.orchestrator_profile_sha256)
+            })
+            .ok_or(MasterError::AssemblyLineBrainstormingUnavailable)?;
+        kernel.approve_assembly_line_feature_and_enqueue_with_provider(
+            approval,
+            binding,
+            self.catalog.catalog_sha256,
+            now_ms,
+        )
+    }
 }
 
 impl BrainstormingAdapterBinding {
@@ -209,7 +321,8 @@ impl BrainstormingAdapterBinding {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "target_kind", content = "draft")]
 pub enum BrainstormingDraft {
     Project(ProjectBrainstormingDraft),
     Feature(FeatureBrainstormingDraft),
@@ -338,11 +451,32 @@ pub trait BrainstormingAdapter: Send {
         control: &PlanningEffectControl,
     ) -> Result<BrainstormingSpecificationDocument, BrainstormingAdapterError>;
 
+    fn generate_authorized(
+        &mut self,
+        draft: &BrainstormingDraft,
+        authorization: &BrainstormingCloudAuthorization,
+        idempotency_key: [u8; 32],
+        control: &PlanningEffectControl,
+    ) -> Result<BrainstormingSpecificationDocument, BrainstormingAdapterError> {
+        let _ = authorization;
+        self.generate(draft, idempotency_key, control)
+    }
+
     fn reconcile(
         &mut self,
         idempotency_key: [u8; 32],
         control: &PlanningEffectControl,
     ) -> Result<Option<BrainstormingSpecificationDocument>, BrainstormingAdapterError>;
+
+    fn reconcile_authorized(
+        &mut self,
+        authorization: &BrainstormingCloudAuthorization,
+        idempotency_key: [u8; 32],
+        control: &PlanningEffectControl,
+    ) -> Result<Option<BrainstormingSpecificationDocument>, BrainstormingAdapterError> {
+        let _ = authorization;
+        self.reconcile(idempotency_key, control)
+    }
 }
 
 pub fn run_brainstorming<A: BrainstormingAdapter + ?Sized>(
@@ -352,35 +486,77 @@ pub fn run_brainstorming<A: BrainstormingAdapter + ?Sized>(
     authority: &WindowsPlanningEffectAuthority,
     control: &PlanningEffectControl,
 ) -> Result<FrozenBrainstormingSpecification, MasterError> {
+    run_brainstorming_inner(kernel, draft, None, adapter, authority, control)
+}
+
+pub fn run_brainstorming_authorized<A: BrainstormingAdapter + ?Sized>(
+    kernel: &mut MasterKernel,
+    draft: BrainstormingDraft,
+    authorization: BrainstormingCloudAuthorization,
+    adapter: &mut A,
+    authority: &WindowsPlanningEffectAuthority,
+    control: &PlanningEffectControl,
+) -> Result<FrozenBrainstormingSpecification, MasterError> {
+    authorization.validate()?;
+    run_brainstorming_inner(
+        kernel,
+        draft,
+        Some(authorization),
+        adapter,
+        authority,
+        control,
+    )
+}
+
+fn run_brainstorming_inner<A: BrainstormingAdapter + ?Sized>(
+    kernel: &mut MasterKernel,
+    draft: BrainstormingDraft,
+    authorization: Option<BrainstormingCloudAuthorization>,
+    adapter: &mut A,
+    authority: &WindowsPlanningEffectAuthority,
+    control: &PlanningEffectControl,
+) -> Result<FrozenBrainstormingSpecification, MasterError> {
     let now_ms = current_time_ms()?;
     draft.record(kernel, now_ms)?;
-    if let Some(existing) = kernel
-        .assembly_line_frozen_specification_for_draft(draft.target_kind(), draft.draft_id())?
-    {
-        return Ok(existing);
-    }
     let binding = adapter
         .binding()
         .ok_or(MasterError::AssemblyLineBrainstormingUnavailable)?;
     binding.validate_for(draft.orchestrator())?;
     authority.catalog.validate_brainstorming_binding(&binding)?;
+    if let Some(existing) = kernel
+        .assembly_line_frozen_specification_for_draft(draft.target_kind(), draft.draft_id())?
+    {
+        kernel.require_assembly_line_provider_accepted_specification(
+            &existing,
+            &binding,
+            authority.catalog.catalog_sha256,
+        )?;
+        return Ok(existing);
+    }
     if !control.poll() {
         return Err(MasterError::AssemblyLineBrainstormingUnavailable);
     }
-    let (idempotency_key, existing_intent) = kernel.prepare_assembly_line_brainstorming_intent(
-        draft.target_kind(),
-        draft.draft_id(),
-        draft.canonical_sha256()?,
-        &binding,
-        authority.catalog.catalog_sha256,
-        now_ms,
-    )?;
+    let (idempotency_key, existing_intent) =
+        kernel.prepare_assembly_line_brainstorming_intent(BrainstormingIntentParameters {
+            target_kind: draft.target_kind(),
+            draft_id: draft.draft_id(),
+            draft_sha256: draft.canonical_sha256()?,
+            binding: &binding,
+            adapter_catalog_sha256: authority.catalog.catalog_sha256,
+            authorization: authorization.as_ref(),
+            now_ms,
+        })?;
 
     let specification_result = if existing_intent {
         if !control.poll() {
             return Err(MasterError::AssemblyLineBrainstormingUnavailable);
         }
-        let result = adapter.reconcile(idempotency_key, control);
+        let result = match authorization.as_ref() {
+            Some(authorization) => {
+                adapter.reconcile_authorized(authorization, idempotency_key, control)
+            }
+            None => adapter.reconcile(idempotency_key, control),
+        };
         if !control.poll() {
             kernel.record_assembly_line_brainstorming_failure(
                 draft.target_kind(),
@@ -399,7 +575,12 @@ pub fn run_brainstorming<A: BrainstormingAdapter + ?Sized>(
         if !control.poll() {
             return Err(MasterError::AssemblyLineBrainstormingUnavailable);
         }
-        let result = adapter.generate(&draft, idempotency_key, control);
+        let result = match authorization.as_ref() {
+            Some(authorization) => {
+                adapter.generate_authorized(&draft, authorization, idempotency_key, control)
+            }
+            None => adapter.generate(&draft, idempotency_key, control),
+        };
         if !control.poll() {
             kernel.record_assembly_line_brainstorming_failure(
                 draft.target_kind(),
@@ -416,7 +597,12 @@ pub fn run_brainstorming<A: BrainstormingAdapter + ?Sized>(
         Ok(specification) => specification,
         Err(error) => {
             if !existing_intent && control.poll() {
-                let reconciled = adapter.reconcile(idempotency_key, control);
+                let reconciled = match authorization.as_ref() {
+                    Some(authorization) => {
+                        adapter.reconcile_authorized(authorization, idempotency_key, control)
+                    }
+                    None => adapter.reconcile(idempotency_key, control),
+                };
                 if !control.poll() {
                     kernel.record_assembly_line_brainstorming_failure(
                         draft.target_kind(),
@@ -479,7 +665,12 @@ pub fn run_brainstorming<A: BrainstormingAdapter + ?Sized>(
             return Err(MasterError::AssemblyLineBrainstormingRejected);
         }
     };
-    kernel.record_assembly_line_frozen_specification(&frozen, current_time_ms()?)?;
+    kernel.record_assembly_line_frozen_specification_with_provider(
+        &frozen,
+        &binding,
+        authority.catalog.catalog_sha256,
+        current_time_ms()?,
+    )?;
     Ok(frozen)
 }
 
@@ -503,9 +694,37 @@ struct BrainstormingStartedAudit {
     adapter_sha256: [u8; 32],
     adapter_catalog_sha256: [u8; 32],
     idempotency_key_sha256: [u8; 32],
+    information_classification: Option<String>,
+    owner_cloud_disclosure_sha256: Option<[u8; 32]>,
     planning_only: bool,
     provider_output_retained_in_audit: bool,
     external_effect_possible: bool,
+}
+
+struct BrainstormingIntentParameters<'a> {
+    target_kind: BrainstormingTargetKind,
+    draft_id: Uuid,
+    draft_sha256: [u8; 32],
+    binding: &'a BrainstormingAdapterBinding,
+    adapter_catalog_sha256: [u8; 32],
+    authorization: Option<&'a BrainstormingCloudAuthorization>,
+    now_ms: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct BrainstormingAcceptedAudit {
+    pub(crate) target_kind: String,
+    pub(crate) draft_id: Uuid,
+    pub(crate) specification_id: Uuid,
+    pub(crate) specification_sha256: [u8; 32],
+    pub(crate) provider_id: String,
+    pub(crate) model_id: String,
+    pub(crate) adapter_sha256: [u8; 32],
+    pub(crate) adapter_catalog_sha256: [u8; 32],
+    pub(crate) planning_only: bool,
+    pub(crate) provider_output_retained_in_audit: bool,
+    pub(crate) external_effect_authorized: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -577,6 +796,15 @@ pub trait GithubRepositoryCreationAdapter: Send {
         idempotency_key: [u8; 32],
         control: &PlanningEffectControl,
     ) -> Result<GithubRepositoryObservation, GithubRepositoryCreationError>;
+
+    fn reconcile_creation(
+        &mut self,
+        plan: &RepositoryCreationProjection,
+        idempotency_key: [u8; 32],
+        control: &PlanningEffectControl,
+    ) -> Result<Option<GithubRepositoryObservation>, GithubRepositoryCreationError> {
+        self.inspect(&plan.repository, idempotency_key, control)
+    }
 }
 
 fn github_effect_idempotency_key(
@@ -612,6 +840,8 @@ pub fn run_github_repository_creation<A: GithubRepositoryCreationAdapter + ?Size
         .ok_or(MasterError::AssemblyLineGithubCreationUnavailable)?;
     authority.catalog.validate_github_binding(binding_sha256)?;
     let plan = kernel.assembly_line_repository_creation_projection(repository_id)?;
+    kernel
+        .require_assembly_line_repository_provider_provenance(repository_id, &authority.catalog)?;
     if plan.lifecycle == RepositoryCreationLifecycle::Created {
         return Ok(plan);
     }
@@ -680,7 +910,11 @@ pub fn run_github_repository_creation<A: GithubRepositoryCreationAdapter + ?Size
         return Err(MasterError::AssemblyLineGithubCreationUnavailable);
     }
 
-    let inspection = adapter.inspect(&plan.repository, inspection_idempotency_key, control);
+    let inspection = if plan.lifecycle == RepositoryCreationLifecycle::CreationPending {
+        adapter.inspect(&plan.repository, inspection_idempotency_key, control)
+    } else {
+        adapter.reconcile_creation(&plan, creation_idempotency_key, control)
+    };
     if !control.poll() {
         if matches!(
             plan.lifecycle,
@@ -849,6 +1083,103 @@ pub fn run_github_repository_creation<A: GithubRepositoryCreationAdapter + ?Size
 }
 
 impl MasterKernel {
+    fn require_assembly_line_repository_provider_provenance(
+        &self,
+        repository_id: Uuid,
+        catalog: &PlanningEffectAdapterCatalog,
+    ) -> Result<(), MasterError> {
+        catalog.validate()?;
+        let frozen_json: String = self
+            .connection
+            .query_row(
+                "SELECT frozen.canonical_json
+                 FROM assembly_line_repositories repository
+                 JOIN assembly_line_frozen_specifications frozen
+                   ON frozen.specification_id=repository.approved_specification_id
+                 WHERE repository.repository_id=?1 AND frozen.target_kind='project'",
+                [repository_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or(MasterError::AssemblyLineGithubCreationUnavailable)?;
+        let frozen: FrozenBrainstormingSpecification = serde_json::from_str(&frozen_json)?;
+        frozen.validate()?;
+        for binding in &catalog.brainstorming {
+            if self.has_assembly_line_provider_accepted_specification(&frozen, binding)? {
+                return Ok(());
+            }
+        }
+        Err(MasterError::AssemblyLineGithubCreationUnavailable)
+    }
+
+    fn has_assembly_line_provider_accepted_specification(
+        &self,
+        frozen: &FrozenBrainstormingSpecification,
+        binding: &BrainstormingAdapterBinding,
+    ) -> Result<bool, MasterError> {
+        let mut statement = self.connection.prepare(
+            "SELECT redacted_metadata_json FROM assembly_line_audit
+             WHERE event_kind='brainstorming_provider_output_accepted' ORDER BY audit_id ASC",
+        )?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        let mut matches = 0_usize;
+        for row in rows {
+            let audit: BrainstormingAcceptedAudit = serde_json::from_str(&row?)?;
+            if audit.target_kind == brainstorming_target(frozen.target_kind)
+                && audit.draft_id == frozen.draft_id
+                && audit.specification_id == frozen.specification_id
+                && audit.specification_sha256 == frozen.specification_sha256
+                && audit.provider_id == binding.profile.provider_id
+                && audit.model_id == binding.profile.model_id
+                && audit.adapter_sha256 == binding.executable_sha256
+            {
+                if audit.adapter_catalog_sha256 == [0; 32]
+                    || !audit.planning_only
+                    || audit.provider_output_retained_in_audit
+                    || audit.external_effect_authorized
+                {
+                    return Err(MasterError::InvalidStoredState(
+                        "accepted brainstorming provenance audit is malformed".to_string(),
+                    ));
+                }
+                matches += 1;
+            }
+        }
+        Ok(matches == 1)
+    }
+
+    pub(crate) fn require_assembly_line_provider_accepted_specification(
+        &self,
+        frozen: &FrozenBrainstormingSpecification,
+        binding: &BrainstormingAdapterBinding,
+        adapter_catalog_sha256: [u8; 32],
+    ) -> Result<(), MasterError> {
+        let expected = canonical_json(&serde_json::json!({
+            "target_kind": brainstorming_target(frozen.target_kind),
+            "draft_id": frozen.draft_id,
+            "specification_id": frozen.specification_id,
+            "specification_sha256": frozen.specification_sha256,
+            "provider_id": binding.profile.provider_id,
+            "model_id": binding.profile.model_id,
+            "adapter_sha256": binding.executable_sha256,
+            "adapter_catalog_sha256": adapter_catalog_sha256,
+            "planning_only": true,
+            "provider_output_retained_in_audit": false,
+            "external_effect_authorized": false
+        }))?;
+        let count: i64 = self.connection.query_row(
+            "SELECT COUNT(*) FROM assembly_line_audit
+             WHERE event_kind='brainstorming_provider_output_accepted'
+               AND redacted_metadata_json=?1",
+            [expected],
+            |row| row.get(0),
+        )?;
+        if count != 1 {
+            return Err(MasterError::AssemblyLineBrainstormingUnavailable);
+        }
+        Ok(())
+    }
+
     pub fn assembly_line_frozen_specification_for_draft(
         &self,
         target_kind: BrainstormingTargetKind,
@@ -879,13 +1210,17 @@ impl MasterKernel {
 
     fn prepare_assembly_line_brainstorming_intent(
         &mut self,
-        target_kind: BrainstormingTargetKind,
-        draft_id: Uuid,
-        draft_sha256: [u8; 32],
-        binding: &BrainstormingAdapterBinding,
-        adapter_catalog_sha256: [u8; 32],
-        now_ms: u64,
+        parameters: BrainstormingIntentParameters<'_>,
     ) -> Result<([u8; 32], bool), MasterError> {
+        let BrainstormingIntentParameters {
+            target_kind,
+            draft_id,
+            draft_sha256,
+            binding,
+            adapter_catalog_sha256,
+            authorization,
+            now_ms,
+        } = parameters;
         let target_kind = match target_kind {
             BrainstormingTargetKind::Project => "project",
             BrainstormingTargetKind::Feature => "feature",
@@ -899,7 +1234,9 @@ impl MasterKernel {
                 "provider_id": binding.profile.provider_id,
                 "model_id": binding.profile.model_id,
                 "adapter_sha256": binding.executable_sha256,
-                "adapter_catalog_sha256": adapter_catalog_sha256
+                "adapter_catalog_sha256": adapter_catalog_sha256,
+                "information_classification": authorization.map(|_| "public"),
+                "owner_cloud_disclosure_sha256": authorization.map(|value| value.owner_cloud_disclosure_sha256)
             }))?)
             .into();
         let tx = self
@@ -921,6 +1258,10 @@ impl MasterKernel {
                     || audit.adapter_sha256 != binding.executable_sha256
                     || audit.adapter_catalog_sha256 != adapter_catalog_sha256
                     || audit.idempotency_key_sha256 != idempotency_key_sha256
+                    || audit.information_classification.as_deref()
+                        != authorization.map(|_| "public")
+                    || audit.owner_cloud_disclosure_sha256
+                        != authorization.map(|value| value.owner_cloud_disclosure_sha256)
                     || !audit.planning_only
                     || audit.provider_output_retained_in_audit
                     || !audit.external_effect_possible
@@ -951,6 +1292,8 @@ impl MasterKernel {
                 "adapter_sha256": binding.executable_sha256,
                 "adapter_catalog_sha256": adapter_catalog_sha256,
                 "idempotency_key_sha256": idempotency_key_sha256,
+                "information_classification": authorization.map(|_| "public"),
+                "owner_cloud_disclosure_sha256": authorization.map(|value| value.owner_cloud_disclosure_sha256),
                 "planning_only": true,
                 "provider_output_retained_in_audit": false,
                 "external_effect_possible": true
@@ -1330,6 +1673,13 @@ impl MasterKernel {
         )?;
         tx.commit()?;
         Ok(())
+    }
+}
+
+fn brainstorming_target(target: BrainstormingTargetKind) -> &'static str {
+    match target {
+        BrainstormingTargetKind::Project => "project",
+        BrainstormingTargetKind::Feature => "feature",
     }
 }
 

@@ -207,7 +207,7 @@ an old one.
 
 ## Approved Full-Machine Assembly Line Target
 
-Full-machine target phase: partial implementation; protocol-v5/schema-v20 inert planning and presentation exist; execution runtime remains unavailable.
+Full-machine target phase: planning/creation containment implemented and requires native Windows proof; execution admission implemented and effects remain unavailable.
 
 - The approved simple entry points are New Project, New Feature, and Assembly Line.
   The owner-facing repository identity is a canonical GitHub URL; Windows retains an
@@ -231,12 +231,13 @@ Full-machine target phase: partial implementation; protocol-v5/schema-v20 inert 
   terminates them immediately. Both preserve the last durable checkpoint, and neither
   claims rollback of completed durable services or external effects. Effect ambiguity
   requires exact adapter reconciliation or owner resolution; it is never blindly retried.
-- This is approved target architecture with only an inert planning foundation. The
-  current protocol-v5/schema-v20 master preserves schema-v19 restricted-worker grants,
+- This is approved target architecture with a reviewed planning/creation source slice
+  that remains effect-free on Windows until capability separation is proved. The
+  current protocol-v5/schema-v21 master preserves schema-v19 restricted-worker grants,
   queues, and activation meanings until native hostile-boundary tests, deployment, and
   owner-recorded two-host evidence complete an explicit execution cutover.
 
-## Schema-v20 Inert Assembly Line Planning Foundation
+## Schema-v20 Assembly Line Planning Foundation
 
 - `assemblywright-protocol` keeps protocol version 5 and adds independent strict
   schema-v1 types for canonical GitHub URL identity, orchestrator-catalog binding,
@@ -247,9 +248,11 @@ Full-machine target phase: partial implementation; protocol-v5/schema-v20 inert 
   every legacy Feature Conveyor table and meaning. New Assembly Line tables and
   authenticated owner/designated-Mac routes persist planning state only; they do not
   write legacy dispatch/effect tables.
-- New Project defaults to Public, permits a frozen Private choice, and records
-  `creation_pending` after owner approval. This is effect-free intent: GitHub is not
-  called, `effect_possible` is false, and no creation evidence exists.
+- New Project defaults to Public, permits a frozen Private choice, and uses a strict
+  Public-only cloud-disclosure wrapper. Source implements the fixed provider, frozen
+  approval, intent-before-effect, and exact GitHub reconciliation. Windows loading is
+  fail-closed pending distinct restricted planning and GitHub identities/ACLs, so the
+  deployed target still performs no GitHub effect.
 - New Feature authoring and queue insertion require the exact repository lifecycle to
   be `created` and creation evidence to be present. A test-only database transition is
   used to exercise that downstream gate; it is not a production GitHub completion
@@ -260,25 +263,93 @@ Full-machine target phase: partial implementation; protocol-v5/schema-v20 inert 
 - The owner projection reports brainstorming provider, GitHub creation, Windows
   executor, Mac executor, and protected brokers as `unavailable`. The Mac has strict
   projection/mutation transport and a simplified New Project/New Feature/Assembly Line
-  view. The queue and auto-run setting are authoritative; auto-run uses durable exact
-  signed-helper reconciliation. Brainstorming and execution actions remain disabled.
+  view. The queue and auto-run setting are authoritative; frozen planning approval and
+  ambiguous outcomes use durable exact signed-helper reconciliation. Execution actions
+  remain disabled.
 - The master library has a Windows-catalog-bound, idempotent planning/GitHub
-  coordinator with private fake-adapter unit tests. It is not connected to HTTP/runtime
-  startup and no credential-owning production adapter is installed.
-- The native loopback HTTP E2E drives an exact Private project draft through frozen
-  brainstorming specification and owner approval, replays that approval without a
-  second mutation, observes `creation_pending` with no GitHub evidence, and proves a
-  feature draft is rejected with a fixed redacted response until exact creation
-  evidence exists. The Windows-only mTLS E2E separately proves that only the
+  coordinator, fixed tool-free Codex adapter, exact GitHub adapter, cancellation/pause
+  fencing, and atomic frozen-specification/provenance storage. Unit tests and a real
+  adapter process E2E cover the source path. Windows runtime loading returns
+  unavailable until its capability separation is provisioned and proved.
+- The brainstorming Codex adapter remains planning-only with all tool surfaces
+  disabled. On Windows its inner sandbox is `danger-full-access` because the actual
+  isolation boundary is Assemblywright's restricted-token AppContainer, exact ACL
+  tree, closed environment, pinned executable, kill-on-close Job, and a per-call
+  create-only private window station/desktop admitting only LocalSystem, the
+  provisioning owner, and the exact profile. The master does not widen `Winsta0` and
+  restores its original station before child creation. Windows Codex receives
+  `LOCALAPPDATA` and `TEMP`/`TMP` only as separate validated provider-private writable
+  roots; ambient owner paths are not forwarded. Non-Windows
+  planning keeps inner `read-only`; the Windows label grants no host or implementation
+  authority.
+- Windows planning schema v4 separates the master-private `DataDir` locator/config from
+  the effect packages. Provider, GitHub, and staged-check files are rooted only below
+  canonical Common Application Data at
+  `Assemblywright/planning-runtime/<runtime_instance>`. Provisioning preserves unrelated
+  shared-parent ACL entries while merging exact non-inheriting traverse ACEs for the two
+  profiles on canonical Common Application Data itself, the vendor directory, and the
+  planning namespace. The known-folder ACE is required because a LocalSystem-derived
+  restricted AppContainer does not inherit the ordinary Users traverse grant; without
+  it, `CreateProcessAsUserW` fails closed with file-not-found before opening the provider.
+  Load and every call reject path, identity, reparse, missing-ACE, or broader-rights
+  drift. Schema v3 is not accepted.
+- The native loopback HTTP E2E drives authenticated Public-only provider disclosure,
+  exact replay, durable intent, GitHub create/reconciliation, and fixed redacted error
+  boundaries with synthetic process adapters. The Windows-only mTLS E2E separately
+  proves that only the
   designated Mac bridge can reach the distributed planning surface.
 - Repository tests do not prove live Windows migration/deployment, provider calls,
   GitHub creation through a production adapter, live Windows execution of the Mac
   owner action, signed/notarized Mac behavior,
   executors, privileged brokers, termination, full-machine effects, or two-host proof.
 
+## Schema-v22 Fail-Closed Execution Activation Controller
+
+- The Windows master migrates backup-first from schema 20 or 21 to schema 22 and preserves
+  planning and legacy Feature Conveyor meanings. It durably records provisioned
+  execution capabilities, Start sessions, one FIFO child epoch, authority revisions,
+  action/checkpoint evidence, Stop/Emergency Pause intents, termination evidence, and
+  replay-safe control responses. Schema 22 adds `starting`, immutable once-only effect
+  dispatch claims, and capability-pinned signed activation receipts.
+- Start requires a nonempty queue plus exact state, queue, emergency-pause, owner
+  approval, and healthy capability bindings. It remains `starting` until exact Windows
+  and macOS Ed25519 activation receipts verify. Stop and Emergency Pause durably revoke
+  authority before claiming and dispatching termination. Restart never retries an
+  ambiguous effect: effect-possible work is quarantined for reconciliation.
+- Authenticated local and distributed Start, Stop, and Emergency Pause routes now call
+  an explicit effect-dispatch interface. Production installs an unavailable dispatcher,
+  so those routes return not-found without decoding or mutating a request until a real
+  authenticated host runtime is provisioned.
+- The strict Swift owner projection recognizes both queue and Assembly Line `starting`
+  states only when Windows executor, Mac executor, and protected-broker availability are
+  all authoritative and available. It rejects `starting` when any execution component is
+  unavailable, while the product controls remain visibly disabled until that runtime exists.
+- The broker and executor binaries now implement bounded inherited length-framed stdio
+  runtimes with held no-follow configuration, exact binary/config digests, signed
+  authority/session/replay validation, and fail-closed quarantine. They expose no
+  ambient listener. Broker effects and executor activation receipts remain unavailable,
+  and no four-host installation exists; therefore a genuine two-host Start and the Mac
+  execution buttons remain unavailable.
+
 ## Current Crate Boundaries
 
 - `assemblywright-protocol` — versioned, bounded wire contracts. No I/O, no state.
+- `assemblywright-executor` — inert-by-default unprivileged full-machine containment
+  source. It verifies exact signed action/identity/digest/deadline bindings, rejects
+  protected paths and replay/gaps, and validates held macOS executable/cwd plus signed
+  parent/object identities. Mac spawn is disabled because process groups are escapable;
+  Windows source retains no-reparse path handles, verifies the suspended image, assigns
+  a kill-on-close Job, and rechecks authority before resume. Its inherited-pipe runtime
+  accepts exact signed authority/control frames, supports one active action, and signs
+  termination receipts. It has no installed service/client and emits no activation
+  receipt, so product execution cannot be activated.
+- `assemblywright-broker` — inert-by-default privileged-broker policy and closed adapter
+  source. It binds all named protected-control-plane categories into one digest and
+  rejects protected descendants, case/link/reparse ambiguity, drift, replay, and
+  unknown operations. Its inherited-pipe runtime authenticates exact signed FIFO control
+  frames and quarantines ambiguity, but all privileged adapters remain effect-disabled
+  pending held-handle native implementations. No root/SYSTEM broker service or master
+  IPC client is installed.
 - `assemblywright-master` — the durable Windows authority: distributed device
   lifecycle, the default-inert Feature Conveyor repository kernel, enrollment
   identity and mTLS, and the Windows SCM service host. Does not depend on
@@ -1959,13 +2030,19 @@ Full-machine target phase: partial implementation; protocol-v5/schema-v20 inert 
   argument boundary. Reject non-absolute results and do not broaden the
   normalization to caller-selected paths or stored authority.
 - Native Mac relay tests must keep their client read timeout above the server's
-  ten-second peer-code-identity validation bound. A five-second client timeout
+  forty-five-second peer-code-identity validation bound. A shorter client timeout
   can surface Security.framework latency as `WouldBlock` before the server's
-  bounded identity decision; the test client uses twelve seconds so the
+  bounded identity decision; the Rust test client derives forty-seven seconds from the
+  shared server constant, and the production Swift authenticated-agent transport uses
+  the same forty-seven-second total request bound, so the
   recovery assertion observes the actual transport contract. The agent SIGTERM
-  E2E's backend-start marker must use the same twelve-second bound: five seconds
+  E2E's backend-start marker must use the same derived bound: five seconds
   passes alone but races the valid identity decision under parallel workspace
   load, creating a false missing-marker failure before shutdown is exercised.
+  After one full Security.framework success, the server caches only the exact
+  eight-word `LOCAL_PEERTOKEN` (which includes PID generation) for its own lifetime;
+  the fixed 64-token cap avoids unbounded identity state, and new or rejected tokens
+  always retain the pre-frame validation boundary.
 - A committed-byte proof is not contained merely because its primary executable
   is digest-pinned. Every interpreter and result parser must resolve through a
   fixed validated system identity, and build tools must reject configuration

@@ -69,6 +69,51 @@ struct AssemblyLineQueuedFeaturePresentation: Identifiable, Equatable {
   let repositoryURL: CanonicalGitHubRepositoryURL
 }
 
+struct AssemblyLineOwnerApprovalConfirmationPresentation: Equatable {
+  let repositoryURL: String
+  let visibility: String
+  let specificationID: String
+  let specificationSHA256: String
+  let ownerApprovalSHA256: String
+
+  init(_ preview: AssemblywrightMacOwnerApprovalPreview) {
+    repositoryURL = preview.repositoryURL
+    visibility = preview.visibility?.rawValue.capitalized ?? "Existing repository"
+    specificationID = preview.specificationID.uuidString.lowercased()
+    specificationSHA256 = Self.hex(preview.specificationSHA256)
+    ownerApprovalSHA256 = Self.hex(preview.ownerApprovalSHA256)
+  }
+
+  var summary: String {
+    "Repository: \(repositoryURL)\nVisibility: \(visibility)\nSpecification ID: "
+      + "\(specificationID)\nSpecification SHA-256: \(specificationSHA256)\n"
+      + "Owner approval SHA-256: \(ownerApprovalSHA256)"
+  }
+
+  private static func hex(_ bytes: [UInt8]) -> String {
+    bytes.map { String(format: "%02x", $0) }.joined()
+  }
+}
+
+struct AssemblyLineFrozenReviewInputBinding: Equatable {
+  let repositoryURL: String
+  let visibility: AssemblyLineProjectVisibility?
+  let idea: String
+  let orchestratorCatalogSHA256: [UInt8]
+
+  func matches(
+    repositoryURL: String,
+    visibility: AssemblyLineProjectVisibility?,
+    idea: String,
+    orchestratorCatalogSHA256: [UInt8]
+  ) -> Bool {
+    self.repositoryURL == repositoryURL
+      && self.visibility == visibility
+      && self.idea == idea
+      && self.orchestratorCatalogSHA256 == orchestratorCatalogSHA256
+  }
+}
+
 struct AssemblyLineOwnerPresentation: Equatable {
   static let newProjectTitle = "New Project"
   static let newFeatureTitle = "New Feature"
@@ -79,7 +124,6 @@ struct AssemblyLineOwnerPresentation: Equatable {
   static let stopLabel = "Stop"
   static let emergencyPauseLabel = "Emergency Pause"
   static let recoveryLabel = "Retry Exact Pending Action"
-  static let planningUnavailableReason = "Brainstorming provider not configured"
   static let executionUnavailableReason =
     "Start is unavailable until the executors and protected brokers are installed"
 
@@ -88,6 +132,11 @@ struct AssemblyLineOwnerPresentation: Equatable {
   var queuedFeatures: [AssemblyLineQueuedFeaturePresentation] = []
   var autoRunControlEnabled = false
   var pendingPlanningAction: AssemblywrightMacAssemblyLinePlanningAction?
+  var brainstormingAvailable = false
+  var githubCreationAvailable = false
+  var planningReason = "Connect to the Windows master"
+  var githubCreationReason = "Connect to the Windows master"
+  var orchestratorLabel = "Unavailable"
 
   var hasQueuedFeature: Bool { !queuedFeatures.isEmpty }
   var canStart: Bool { false }
@@ -136,9 +185,50 @@ struct AssemblyLineOwnerPresentation: Equatable {
       projectVisibility: projectVisibility,
       autoRun: projection.assemblyLine.autoRun,
       queuedFeatures: queued,
-      autoRunControlEnabled: !ownerActionInProgress && pendingPlanningAction == nil,
-      pendingPlanningAction: pendingPlanningAction
+      autoRunControlEnabled: !ownerActionInProgress && pendingPlanningAction == nil
+        && !projection.emergencyPaused,
+      pendingPlanningAction: pendingPlanningAction,
+      brainstormingAvailable: !ownerActionInProgress && pendingPlanningAction == nil
+        && !projection.emergencyPaused
+        && projection.availability.brainstormingProvider.status == .available,
+      githubCreationAvailable: !ownerActionInProgress && pendingPlanningAction == nil
+        && !projection.emergencyPaused
+        && projection.availability.githubCreation.status == .available,
+      planningReason: availabilityReason(
+        projection.availability.brainstormingProvider,
+        paused: projection.emergencyPaused,
+        label: "Brainstorming"
+      ),
+      githubCreationReason: availabilityReason(
+        projection.availability.githubCreation,
+        paused: projection.emergencyPaused,
+        label: "Repository creation"
+      ),
+      orchestratorLabel: projection.orchestratorCatalog.profiles.first(where: {
+        $0.providerID == "openai.codex" && $0.modelID == "gpt-5.6-sol"
+      }).map { "\($0.providerID) / \($0.modelID)" } ?? "Unavailable"
     )
+  }
+
+  private static func availabilityReason(
+    _ component: AssemblywrightMacRuntimeComponentAvailability,
+    paused: Bool,
+    label: String
+  ) -> String {
+    if paused { return "Emergency Pause is active" }
+    if component.status == .available { return "\(label) is available" }
+    let reason: String
+    switch component.unavailableReason {
+    case .notConfigured: reason = "not configured"
+    case .notAuthenticated: reason = "not authenticated"
+    case .disconnected: reason = "disconnected"
+    case .unhealthy: reason = "unhealthy"
+    case .emergencyPaused: reason = "Emergency Pause is active"
+    case .identityDrift: reason = "identity drift"
+    case .evidenceRequired: reason = "evidence required"
+    case nil: reason = "unavailable"
+    }
+    return "\(label) unavailable: \(reason)"
   }
 
   private static func actionName(_ action: AssemblywrightMacAssemblyLinePlanningAction) -> String {
@@ -146,8 +236,11 @@ struct AssemblyLineOwnerPresentation: Equatable {
     case .projectDraft: "project brainstorm"
     case .featureDraft: "feature brainstorm"
     case .frozenSpecification: "specification freeze"
+    case .projectBrainstorm: "project brainstorm"
+    case .featureBrainstorm: "feature brainstorm"
     case .projectApproval: "project approval"
     case .featureApproval: "feature approval"
+    case .repositoryCreation: "repository creation/reconciliation"
     case .autoRun: "auto-run update"
     }
   }
@@ -172,14 +265,29 @@ struct AssemblyLineDeveloperDiagnosticsPresentation: Equatable {
 }
 
 struct AssemblyLineOwnerView: View {
+  private enum CloudBrainstormTarget {
+    case project
+    case feature
+  }
+
   @ObservedObject var developerBridge: AssemblywrightDeveloperBridgeProcessLifecycle
   @State private var projectURL = ""
   @State private var projectIdea = ""
   @State private var featureURL = ""
   @State private var featureIdea = ""
-  @State private var orchestrator = "Orchestrator AI"
   @State private var projectVisibility: AssemblyLineProjectVisibility = .public
   @State private var showsDeveloperDetails = false
+  @State private var projectReview: AssemblywrightMacFrozenBrainstormingSpecification?
+  @State private var featureReview: AssemblywrightMacFrozenBrainstormingSpecification?
+  @State private var projectReviewBinding: AssemblyLineFrozenReviewInputBinding?
+  @State private var featureReviewBinding: AssemblyLineFrozenReviewInputBinding?
+  @State private var projectReviewGeneration: UInt64 = 0
+  @State private var featureReviewGeneration: UInt64 = 0
+  @State private var confirmsProjectApproval = false
+  @State private var confirmsFeatureApproval = false
+  @State private var projectApprovalPreview: AssemblywrightMacOwnerApprovalPreview?
+  @State private var featureApprovalPreview: AssemblywrightMacOwnerApprovalPreview?
+  @State private var cloudBrainstormTarget: CloudBrainstormTarget?
 
   private var presentation: AssemblyLineOwnerPresentation {
     .observed(
@@ -189,6 +297,10 @@ struct AssemblyLineOwnerView: View {
       pendingPlanningAction: developerBridge.pendingAssemblyLinePlanningAction
     )
   }
+
+  private static let publicCloudDisclosure =
+    "Public information only. Your idea and the selected public planning metadata will be sent "
+    + "to openai.codex. Do not include private, restricted, secret, credential, or path data."
 
   var body: some View {
     ScrollView {
@@ -211,15 +323,32 @@ struct AssemblyLineOwnerView: View {
               }
             }
             .pickerStyle(.segmented)
-            Picker("Orchestrator", selection: $orchestrator) {
-              Text("Orchestrator AI").tag("Orchestrator AI")
-            }
+            LabeledContent("Orchestrator", value: presentation.orchestratorLabel)
             TextField("What do you want to build?", text: $projectIdea, axis: .vertical)
               .lineLimit(2...5)
               .textFieldStyle(.roundedBorder)
-            Button(AssemblyLineOwnerPresentation.brainstormProjectLabel) {}
-              .disabled(true)
-            planningUnavailableMessage
+            Text(Self.publicCloudDisclosure)
+              .font(.caption)
+              .foregroundStyle(.secondary)
+            Button(AssemblyLineOwnerPresentation.brainstormProjectLabel) {
+              cloudBrainstormTarget = .project
+            }
+            .disabled(!canBrainstormProject)
+            .accessibilityIdentifier("assembly-line-brainstorm-project")
+            Text(presentation.planningReason)
+              .font(.caption)
+              .foregroundStyle(.secondary)
+            if let projectReview {
+              AssemblyLineFrozenSpecificationReview(specification: projectReview)
+              Button("Approve Project and Create Repository") {
+                prepareProjectApproval()
+              }
+              .disabled(!presentation.brainstormingAvailable
+                || !presentation.githubCreationAvailable
+                || developerBridge.ownerActionInProgress
+                || developerBridge.pendingAssemblyLinePlanningAction != nil)
+              .accessibilityIdentifier("assembly-line-approve-project")
+            }
           }
           .padding(.top, 6)
         }
@@ -236,10 +365,28 @@ struct AssemblyLineOwnerView: View {
             TextField("What should this feature do?", text: $featureIdea, axis: .vertical)
               .lineLimit(2...5)
               .textFieldStyle(.roundedBorder)
-            LabeledContent("Orchestrator", value: orchestrator)
-            Button(AssemblyLineOwnerPresentation.brainstormFeatureLabel) {}
-              .disabled(true)
-            planningUnavailableMessage
+            Text(Self.publicCloudDisclosure)
+              .font(.caption)
+              .foregroundStyle(.secondary)
+            LabeledContent("Orchestrator", value: presentation.orchestratorLabel)
+            Button(AssemblyLineOwnerPresentation.brainstormFeatureLabel) {
+              cloudBrainstormTarget = .feature
+            }
+            .disabled(!canBrainstormFeature)
+            .accessibilityIdentifier("assembly-line-brainstorm-feature")
+            Text(presentation.planningReason)
+              .font(.caption)
+              .foregroundStyle(.secondary)
+            if let featureReview {
+              AssemblyLineFrozenSpecificationReview(specification: featureReview)
+              Button("Approve Feature and Add to Queue") {
+                prepareFeatureApproval()
+              }
+              .disabled(!presentation.brainstormingAvailable
+                || developerBridge.ownerActionInProgress
+                || developerBridge.pendingAssemblyLinePlanningAction != nil)
+              .accessibilityIdentifier("assembly-line-approve-feature")
+            }
           }
           .padding(.top, 6)
         }
@@ -285,6 +432,18 @@ struct AssemblyLineOwnerView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
+            ForEach(pendingRepositoryCreations, id: \.repository.repositoryID) { repository in
+              Button("Create/Reconcile \(repository.repository.gitURL.url)") {
+                createOrReconcile(repository.repository.repositoryID)
+              }
+              .disabled(!presentation.githubCreationAvailable)
+              .accessibilityIdentifier("assembly-line-create-reconcile-repository")
+            }
+            if !pendingRepositoryCreations.isEmpty {
+              Text(presentation.githubCreationReason)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
           }
           .padding(.top, 6)
         }
@@ -298,12 +457,84 @@ struct AssemblyLineOwnerView: View {
       }
       .padding(24)
     }
+    .confirmationDialog(
+      "Approve this frozen project specification?",
+      isPresented: $confirmsProjectApproval,
+      titleVisibility: .visible
+    ) {
+      Button("Approve and Create Repository") { approveProject() }
+      Button("Cancel", role: .cancel) { projectApprovalPreview = nil }
+    } message: {
+      Text(projectApprovalPreview.map {
+        AssemblyLineOwnerApprovalConfirmationPresentation($0).summary
+      } ?? "No frozen project approval is available.")
+    }
+    .confirmationDialog(
+      "Approve this frozen feature specification?",
+      isPresented: $confirmsFeatureApproval,
+      titleVisibility: .visible
+    ) {
+      Button("Approve and Add to Queue") { approveFeature() }
+      Button("Cancel", role: .cancel) { featureApprovalPreview = nil }
+    } message: {
+      Text(featureApprovalPreview.map {
+        AssemblyLineOwnerApprovalConfirmationPresentation($0).summary
+      } ?? "No frozen feature approval is available.")
+    }
+    .confirmationDialog(
+      "Confirm Public cloud brainstorming disclosure",
+      isPresented: Binding(
+        get: { cloudBrainstormTarget != nil },
+        set: { if !$0 { cloudBrainstormTarget = nil } }
+      ),
+      titleVisibility: .visible
+    ) {
+      Button("Send Public Idea to openai.codex") {
+        let target = cloudBrainstormTarget
+        cloudBrainstormTarget = nil
+        switch target {
+        case .project: brainstormProject()
+        case .feature: brainstormFeature()
+        case nil: break
+        }
+      }
+      Button("Cancel", role: .cancel) { cloudBrainstormTarget = nil }
+    } message: {
+      Text(Self.publicCloudDisclosure)
+    }
+    .onChange(of: projectURL) { _, _ in invalidateProjectReview() }
+    .onChange(of: projectIdea) { _, _ in invalidateProjectReview() }
+    .onChange(of: projectVisibility) { _, _ in invalidateProjectReview() }
+    .onChange(of: featureURL) { _, _ in invalidateFeatureReview() }
+    .onChange(of: featureIdea) { _, _ in invalidateFeatureReview() }
+    .onChange(of: developerBridge.status.assemblyLine?.orchestratorCatalog.catalogSHA256) {
+      _, _ in
+      invalidateProjectReview()
+      invalidateFeatureReview()
+    }
   }
 
-  private var planningUnavailableMessage: some View {
-    Text(AssemblyLineOwnerPresentation.planningUnavailableReason)
-      .font(.caption)
-      .foregroundStyle(.secondary)
+  private var canBrainstormProject: Bool {
+    presentation.brainstormingAvailable
+      && CanonicalGitHubRepositoryURL(projectURL) != nil
+      && validIdea(projectIdea)
+  }
+
+  private var canBrainstormFeature: Bool {
+    guard presentation.brainstormingAvailable,
+      let canonical = CanonicalGitHubRepositoryURL(featureURL), validIdea(featureIdea),
+      let projection = developerBridge.status.assemblyLine
+    else { return false }
+    return projection.repositories.contains {
+      $0.repository.gitURL.url == canonical.value && $0.lifecycle == .created
+    }
+  }
+
+  private var pendingRepositoryCreations: [AssemblywrightMacRepositoryCreationProjection] {
+    guard let projection = developerBridge.status.assemblyLine else { return [] }
+    return projection.repositories.filter {
+      [.creationPending, .reconciling, .reconciliationRequired].contains($0.lifecycle)
+    }
   }
 
   private var autoRunBinding: Binding<Bool> {
@@ -328,12 +559,237 @@ struct AssemblyLineOwnerView: View {
     )
   }
 
+  private func brainstormProject() {
+    guard let projection = developerBridge.status.assemblyLine,
+      let canonical = CanonicalGitHubRepositoryURL(projectURL), validIdea(projectIdea),
+      let request = try? AssemblywrightMacAssemblyLineOwnerControl.projectBrainstormRequest(
+        from: projection,
+        repositoryURL: canonical.value,
+        visibility: projectVisibility == .public ? .public : .private,
+        idea: projectIdea,
+        informationClassification: .public,
+        ownerConfirmedCloudDisclosure: true
+      )
+    else { return }
+    let binding = AssemblyLineFrozenReviewInputBinding(
+      repositoryURL: canonical.value,
+      visibility: projectVisibility,
+      idea: projectIdea,
+      orchestratorCatalogSHA256: projection.orchestratorCatalog.catalogSHA256
+    )
+    let generation = projectReviewGeneration
+    Task {
+      guard let response = await developerBridge.performAssemblyLinePlanningAction(
+        .projectBrainstorm,
+        requestData: request
+      ),
+        let frozen = try? AssemblywrightMacFrozenBrainstormingSpecification.decodeStrict(
+          response,
+          matchingDraft: request,
+          projection: projection
+        ),
+        let currentProjection = developerBridge.status.assemblyLine,
+        projectReviewGeneration == generation,
+        binding.matches(
+          repositoryURL: CanonicalGitHubRepositoryURL(projectURL)?.value ?? "",
+          visibility: projectVisibility,
+          idea: projectIdea,
+          orchestratorCatalogSHA256: currentProjection.orchestratorCatalog.catalogSHA256
+        )
+      else { return }
+      projectReview = frozen
+      projectReviewBinding = binding
+    }
+  }
+
+  private func brainstormFeature() {
+    guard let projection = developerBridge.status.assemblyLine,
+      let canonical = CanonicalGitHubRepositoryURL(featureURL), validIdea(featureIdea),
+      let request = try? AssemblywrightMacAssemblyLineOwnerControl.featureBrainstormRequest(
+        from: projection,
+        repositoryURL: canonical.value,
+        idea: featureIdea,
+        informationClassification: .public,
+        ownerConfirmedCloudDisclosure: true
+      )
+    else { return }
+    let binding = AssemblyLineFrozenReviewInputBinding(
+      repositoryURL: canonical.value,
+      visibility: nil,
+      idea: featureIdea,
+      orchestratorCatalogSHA256: projection.orchestratorCatalog.catalogSHA256
+    )
+    let generation = featureReviewGeneration
+    Task {
+      guard let response = await developerBridge.performAssemblyLinePlanningAction(
+        .featureBrainstorm,
+        requestData: request
+      ),
+        let frozen = try? AssemblywrightMacFrozenBrainstormingSpecification.decodeStrict(
+          response,
+          matchingDraft: request,
+          projection: projection
+        ),
+        let currentProjection = developerBridge.status.assemblyLine,
+        featureReviewGeneration == generation,
+        binding.matches(
+          repositoryURL: CanonicalGitHubRepositoryURL(featureURL)?.value ?? "",
+          visibility: nil,
+          idea: featureIdea,
+          orchestratorCatalogSHA256: currentProjection.orchestratorCatalog.catalogSHA256
+        )
+      else { return }
+      featureReview = frozen
+      featureReviewBinding = binding
+    }
+  }
+
+  private func prepareProjectApproval() {
+    guard let frozen = projectReview,
+      let binding = projectReviewBinding,
+      let projection = developerBridge.status.assemblyLine,
+      binding.matches(
+        repositoryURL: CanonicalGitHubRepositoryURL(projectURL)?.value ?? "",
+        visibility: projectVisibility,
+        idea: projectIdea,
+        orchestratorCatalogSHA256: projection.orchestratorCatalog.catalogSHA256
+      ),
+      let preview = try? AssemblywrightMacAssemblyLineOwnerControl.ownerApprovalPreview(
+        for: frozen,
+        from: projection,
+        approvedAtMilliseconds: UInt64(Date().timeIntervalSince1970 * 1_000)
+      )
+    else { return }
+    projectApprovalPreview = preview
+    confirmsProjectApproval = true
+  }
+
+  private func approveProject() {
+    guard let preview = projectApprovalPreview else { return }
+    projectApprovalPreview = nil
+    Task {
+      if await developerBridge.performAssemblyLinePlanningAction(
+        .projectApproval,
+        requestData: preview.requestData
+      ) != nil {
+        projectReview = nil
+      }
+    }
+  }
+
+  private func prepareFeatureApproval() {
+    guard let frozen = featureReview,
+      let binding = featureReviewBinding,
+      let projection = developerBridge.status.assemblyLine,
+      binding.matches(
+        repositoryURL: CanonicalGitHubRepositoryURL(featureURL)?.value ?? "",
+        visibility: nil,
+        idea: featureIdea,
+        orchestratorCatalogSHA256: projection.orchestratorCatalog.catalogSHA256
+      ),
+      let preview = try? AssemblywrightMacAssemblyLineOwnerControl.ownerApprovalPreview(
+        for: frozen,
+        from: projection,
+        approvedAtMilliseconds: UInt64(Date().timeIntervalSince1970 * 1_000)
+      )
+    else { return }
+    featureApprovalPreview = preview
+    confirmsFeatureApproval = true
+  }
+
+  private func approveFeature() {
+    guard let preview = featureApprovalPreview else { return }
+    featureApprovalPreview = nil
+    Task {
+      if await developerBridge.performAssemblyLinePlanningAction(
+        .featureApproval,
+        requestData: preview.requestData
+      ) != nil {
+        featureReview = nil
+      }
+    }
+  }
+
+  private func createOrReconcile(_ repositoryID: UUID) {
+    guard presentation.githubCreationAvailable,
+      let request = try? AssemblywrightMacAssemblyLineOwnerControl.repositoryCreationRequest(
+        repositoryID: repositoryID
+      )
+    else { return }
+    Task {
+      _ = await developerBridge.performAssemblyLinePlanningAction(
+        .repositoryCreation,
+        requestData: request
+      )
+    }
+  }
+
+  private func validIdea(_ idea: String) -> Bool {
+    let trimmed = idea.trimmingCharacters(in: .whitespacesAndNewlines)
+    return !trimmed.isEmpty && trimmed == idea && idea.utf8.count <= 16 * 1_024
+  }
+
+  private func invalidateProjectReview() {
+    projectReviewGeneration &+= 1
+    projectReview = nil
+    projectReviewBinding = nil
+    projectApprovalPreview = nil
+    confirmsProjectApproval = false
+    if cloudBrainstormTarget == .project {
+      cloudBrainstormTarget = nil
+    }
+  }
+
+  private func invalidateFeatureReview() {
+    featureReviewGeneration &+= 1
+    featureReview = nil
+    featureReviewBinding = nil
+    featureApprovalPreview = nil
+    confirmsFeatureApproval = false
+    if cloudBrainstormTarget == .feature {
+      cloudBrainstormTarget = nil
+    }
+  }
+
   private func repositoryURLMessage(_ candidate: String) -> String? {
     guard !candidate.isEmpty else { return nil }
     guard let canonical = CanonicalGitHubRepositoryURL(candidate) else {
       return "Enter a GitHub URL like https://github.com/owner/repository"
     }
     return canonical.value == candidate ? "Valid GitHub URL" : "Will use \(canonical.value)"
+  }
+}
+
+private struct AssemblyLineFrozenSpecificationReview: View {
+  let specification: AssemblywrightMacFrozenBrainstormingSpecification
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Text("Review Frozen Specification")
+        .font(.headline)
+      LabeledContent("Title", value: specification.specification.title)
+      Text(specification.specification.outcome)
+      Text("Acceptance criteria")
+        .font(.subheadline.bold())
+      ForEach(specification.specification.acceptanceCriteria) { criterion in
+        Text("\(criterion.id): \(criterion.requirement)")
+      }
+      Text("Obligations")
+        .font(.subheadline.bold())
+      ForEach(specification.specification.obligations, id: \.self) { obligation in
+        Text(obligation)
+      }
+      Text("Specification digest: \(digestPrefix(specification.specificationSHA256))")
+        .font(.caption.monospaced())
+        .foregroundStyle(.secondary)
+    }
+    .padding(10)
+    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+    .accessibilityElement(children: .contain)
+  }
+
+  private func digestPrefix(_ bytes: [UInt8]) -> String {
+    bytes.prefix(8).map { String(format: "%02x", $0) }.joined()
   }
 }
 

@@ -1,0 +1,30 @@
+[package]
+name = "assemblywright-broker"
+version = "0.1.4"
+description = "Fail-closed privileged action broker containment for Assemblywright."
+default-run = "assemblywright-broker"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "assemblywright-broker"
+path = "src/main.rs"
+
+[dependencies]
+assemblywright-protocol = { path = "../assemblywright-protocol", version = "0.1.4" }
+ed25519-dalek.workspace = true
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

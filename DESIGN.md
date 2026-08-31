@@ -10,22 +10,55 @@ accepted designs and take precedence within their scope:
   distributed Developer Mode.
 - [`docs/full-machine-assembly-line-design.md`](docs/full-machine-assembly-line-design.md)
   — the approved replacement target for New Project, New Feature, and the
-  protected-control-plane full-machine executor. Its inert planning foundation
-  is partially implemented; execution and live evidence remain pending.
+  protected-control-plane full-machine executor. Its reviewed planning/creation
+  source slice is implemented but Windows effects remain fail-closed pending
+  capability separation; execution and live evidence remain pending.
 
-Current/target boundary: protocol v5 and master schema v20 are current. Schema v20
-adds strict full-machine Assembly Line protocol contracts plus effect-free Windows
-planning persistence and authenticated planning routes; it preserves the legacy
+Current/target boundary: protocol v5 and master schema v21 are current. Schema v20
+added strict full-machine Assembly Line protocol contracts plus Windows planning
+persistence and authenticated planning routes. Schema v21 adds durable, effect-free
+execution-control capability/session/authority/action/checkpoint/termination ledgers
+and restart quarantine; it preserves the legacy
 schema-v19 Feature Conveyor grant, queue, activation, and restricted-worker
 semantics unchanged. The simplified Mac surface consumes the strict owner projection
 and can change auto-run through restart-safe exact signed-helper reconciliation.
-Brainstorming and GitHub coordinator seams exist only behind injected fake adapters;
-production provider execution, GitHub creation/reconciliation,
-Start/Stop/Emergency effect routes, executors, brokers, activation, deployment, and
-owner-recorded evidence are unavailable. Design or planning approval does not widen
+Source includes a fixed, tool-free Codex adapter, strict Public disclosure, durable
+intent, and exact GitHub reconciliation with real cross-process adapter coverage.
+For planning calls on Windows, Codex's inner sandbox is `danger-full-access` only
+because Assemblywright already supplies the effective boundary: a restricted-token
+AppContainer, exact ACL tree, closed environment, pinned executable, and kill-on-close
+Job. Each call also receives a create-only private window station and desktop with a
+protected DACL containing only LocalSystem, the provisioning owner, and that call's
+exact AppContainer profile; the master restores its original station before creating
+the suspended child and never modifies `Winsta0`. The closed Codex environment maps
+`LOCALAPPDATA` to a distinct validated
+provider-private writable root and maps `TEMP`/`TMP` to the validated provider temp,
+never to ambient owner paths. The call remains planning-only and every Codex tool
+surface stays disabled; non-Windows planning calls retain the inner `read-only` sandbox.
+On Windows the master-private data directory contains only a schema-v4 locator/config;
+provider, GitHub, and staged-check assets live under the canonical Common Application
+Data `Assemblywright/planning-runtime/<runtime_instance>` tree. The two fixed profile
+SIDs receive exact non-inheriting traverse-only ACEs on canonical Common Application
+Data itself and on the vendor and namespace shared ancestry. Unrelated
+parent ACL entries are preserved, while canonical path, directory identity, and exact
+profile rights are revalidated at load and before every external call. Schema v3,
+user-profile placement, links, missing traversal, broader rights, or identity drift
+keep planning unavailable.
+Windows deliberately refuses to load those adapters until capability-separated
+identities and ACLs are provisioned and proved. Therefore deployed provider execution
+and GitHub creation/reconciliation remain unavailable, as do Start/Stop/Emergency
+effect routes, installed executor/broker services, activation, deployment, and
+owner-recorded evidence are unavailable. Source now includes strict signed action,
+checkpoint, and termination contracts plus separate fail-closed executor and broker
+containment crates; their standalone binaries deliberately refuse authority. The
+schema-v21 controller is not an effect route: its persistence API verifies capability-
+pinned Ed25519 receipts, while authenticated executor/broker receipt IPC, host
+termination effects, and installed identities remain cutover gates. This
+repository source is not an installed, signed, identity-provisioned runtime. Design
+or planning approval does not widen
 an existing worker or authorize the UI to claim full-machine readiness.
 
-Full-machine target phase: partial implementation; protocol-v5/schema-v20 inert planning and presentation exist; execution runtime remains unavailable.
+Full-machine target phase: planning/creation containment implemented and requires native Windows proof; execution admission implemented and effects remain unavailable.
 
 ## Understanding Summary
 
@@ -96,6 +129,24 @@ reservations are never feature targets. The planning orchestrator receives neith
 machine-write authority nor restricted data. Until this complete target is activated,
 the current restricted local-coding boundary below remains unchanged.
 
+The containment source slice keeps that cutover closed. Schema-v1 Ed25519 action
+envelopes bind the session/child epoch, monotonic sequence and nonce, executor and
+broker identities/revisions/executable digests, a digest of the complete protected
+closure, typed action, exact target and parent identities, operation and working-
+directory digests, environment-key names only, deadline, cancellation, effect class,
+and reconciliation strategy. Broker policy rejects protected descendants, case aliases,
+symlinks/reparse points, hard-linked files, drift, gaps, and replay, but all privileged
+adapters remain effect-disabled until held-handle native implementations land. The
+unprivileged executor validates held macOS executable/cwd and signed parent/object
+identities, but macOS spawn remains disabled because a hostile descendant can escape a
+process group with `setsid`/`setpgid` and Darwin exposes no unprivileged Job-Object-like
+reaper. Windows source retains no-reparse path handles, verifies the suspended image,
+assigns a kill-on-close Job, rechecks authority, and only then resumes; it remains
+uninstalled and unavailable through product routes pending native-host proof.
+Broker file replacement, removal, service adapters, OS installation/identity, IPC,
+durable replay restoration, resource reservations, and master control routes remain
+unavailable.
+
 The implemented schema-v20 slice is deliberately inert. Project approval records an
 effect-free `creation_pending` intent (Public by default, with Private selectable) and
 does not call GitHub. A feature can enter the new FIFO only after the repository is
@@ -103,6 +154,12 @@ does not call GitHub. A feature can enter the new FIFO only after the repository
 through a compare-and-set request, but it cannot start work. Every runtime component
 in the Assembly Line availability projection is `unavailable`, and no Start, Stop, or
 Emergency Pause effect route exists.
+
+Schema v21 adds the durable execution-control ledger without activating it. Start
+admission, FIFO child-epoch state, authority revocation, checkpoint/termination
+evidence, replay safety, and restart quarantine are represented in master-owned state.
+No HTTP or host IPC route invokes those APIs, and no executor or broker is installed;
+therefore this persistence cannot launch or terminate a process.
 
 The master library also contains a catalog-bound, idempotent planning-effect
 coordinator exercised only through private fake-adapter unit tests. It records pre-call intent,
@@ -985,6 +1042,10 @@ pause, grant, and enqueue-audit binding remain exact.
 between the helper and the agent, its startup validation, and read-only release
 readiness and evidence inspection. `assemblywright-protocol` provides the versioned,
 bounded wire contracts shared across every component.
+The server performs full Security.framework validation before reading the first frame
+from a new macOS audit token. It may then reuse that decision only for the exact
+eight-word audit token, including PID generation, during the lifetime of that one
+bound server; the cache is capped at 64 identities and never caches a rejection.
 
 ## Authority Model
 

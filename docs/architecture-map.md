@@ -2,27 +2,45 @@
 
 ## Approved full-machine Assembly Line target
 
-The current Windows master is protocol v5/schema v20. Schema v20 adds an inert
-Assembly Line planning lane while retaining every legacy schema-v19 Feature Conveyor
-meaning. The approved replacement target is specified in
-`docs/full-machine-assembly-line-design.md`; partial planning implementation grants no
-execution authority. Cutover still requires contained production provider and GitHub
-adapters, execution
+The current Windows master is protocol v5/schema v21. Schema v20 added an
+Assembly Line planning lane; schema v21 adds durable execution-control and restart-
+quarantine state while retaining every legacy schema-v19 Feature Conveyor meaning.
+The approved replacement target is specified in
+`docs/full-machine-assembly-line-design.md`; the reviewed planning/creation source
+slice grants no execution authority. Windows keeps its effect adapters unavailable
+until capability-separated identities and ACLs are installed and proved. Cutover
+still requires that Windows containment, execution
 control, signed broker containment on both hosts, native hostile-boundary and recovery
 E2E, deployment, and owner-recorded live evidence.
 
-Full-machine target phase: partial implementation; protocol-v5/schema-v20 inert planning and presentation exist; execution runtime remains unavailable.
+The planning Codex call remains tool-free and planning-only. On Windows its inner
+sandbox value is `danger-full-access`; isolation instead comes from the outer
+restricted-token AppContainer, exact ACL tree, closed environment, pinned executable,
+kill-on-close Job, and a per-call create-only private window station/desktop whose
+protected DACL is profile-specific. The master restores its original station before
+the suspended child is created and never widens `Winsta0`. The closed Codex child
+environment derives `LOCALAPPDATA` and `TEMP`/`TMP` only from separate validated
+provider-private writable roots. Non-Windows planning calls keep the inner `read-only` sandbox.
+The Windows value is not host or implementation authority.
+The Windows effect packages are not below the owner-profile master data path. A
+schema-v4 master-private locator binds one exact runtime instance below the canonical
+Common Application Data `Assemblywright/planning-runtime` namespace. Exact profile
+traverse-only ACEs are merged onto held Common Application Data and shared-ancestor
+handles without replacing unrelated ACLs; canonical identities and rights are rechecked
+before each effect.
+
+Full-machine target phase: planning/creation containment implemented and requires native Windows proof; execution admission implemented and effects remain unavailable.
 
 ```mermaid
 flowchart LR
-  UI["New Project / New Feature disabled; queue + auto-run authoritative"] --> MacCore["Strict MacCore projection/mutation and exact-replay recovery"]
-  MacCore --> Master["Implemented Windows schema-v20 inert planning routes"]
-  Master --> Intent["creation_pending intent; no GitHub effect"]
+  UI["New Project / New Feature review and approval; queue + auto-run authoritative"] --> MacCore["Strict MacCore projection/mutation and exact-replay recovery"]
+  MacCore --> Master["Schema-v21 planning routes + inert execution-control ledger"]
+  Master --> Intent["Durable pre-effect intent and reconciliation"]
   Master --> FIFO["Created + evidence gated FIFO; no dispatch"]
   Master --> AutoRun["Default-on replay-safe CAS setting; no execution"]
-  Seam["Catalog-bound coordinator + private fake tests only"] -.-> Master
-  Brainstorm["Production planning provider unavailable"] -.-> Seam
-  GitHub["Production GitHub creation unavailable"] -.-> Seam
+  Seam["Catalog-bound coordinator + real adapter process E2E"] -.-> Master
+  Brainstorm["Fixed Codex adapter; Windows load denied pending ACL profile"] -.-> Seam
+  GitHub["Exact GitHub adapter; Windows load denied pending ACL profile"] -.-> Seam
   Line["Start / Stop / Emergency routes absent"] -.-> Epoch["No session or child epoch issued"]
   Epoch -.-> WinExecutor["Windows executor unavailable"]
   Epoch -.-> MacExecutor["Mac executor unavailable"]
@@ -36,11 +54,12 @@ flowchart LR
 
 The strict protocol defines the eventual orchestrator, session, child-epoch, control,
 termination, and broker-bound records, but types are not runtime availability. The
-current master persists only effect-free planning state. The simplified SwiftUI view
-consumes the MacCore owner projection and submits only the exact replay-safe auto-run
-mutation; ambiguous outcomes survive restart and expose an explicit reconciliation
-action. No current route starts, stops, pauses, executes, brokers, invokes a planning
-provider, or creates a GitHub repository.
+current master persists planning state and exposes strict production-effect routes,
+but Windows cannot load their adapters without the unimplemented containment profile.
+The simplified SwiftUI view can review and approve exact frozen specifications and
+uses durable exact replay for ambiguous mutations. No current route starts, stops,
+pauses, executes, or brokers, and the deployed Windows service cannot invoke the
+planning provider or create a GitHub repository.
 
 ## Local model selection boundary
 

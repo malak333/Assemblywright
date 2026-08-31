@@ -10,6 +10,7 @@ use core_foundation_sys::number::{kCFNumberSInt64Type, CFNumberGetValue, CFNumbe
 use core_foundation_sys::string::{kCFStringEncodingUTF8, CFStringCreateWithBytes, CFStringRef};
 use std::ffi::c_void;
 use std::ptr;
+use std::sync::Mutex;
 
 pub(crate) type PeerAuditToken = [u32; 8];
 
@@ -17,6 +18,22 @@ const ERR_SEC_SUCCESS: i32 = 0;
 const K_SEC_CS_SIGNING_INFORMATION: u32 = 1 << 1;
 const K_SEC_CS_NO_NETWORK_ACCESS: u32 = 1 << 29;
 const K_SEC_CODE_SIGNATURE_RUNTIME: u64 = 0x10000;
+const MAX_VERIFIED_PEER_AUDIT_TOKENS: usize = 64;
+
+#[derive(Default)]
+struct VerifiedPeerAuditTokens(Vec<PeerAuditToken>);
+
+impl VerifiedPeerAuditTokens {
+    fn contains(&self, token: &PeerAuditToken) -> bool {
+        self.0.iter().any(|verified| verified == token)
+    }
+
+    fn remember(&mut self, token: PeerAuditToken) {
+        if self.0.len() < MAX_VERIFIED_PEER_AUDIT_TOKENS && !self.contains(&token) {
+            self.0.push(token);
+        }
+    }
+}
 
 /// A requirement is compiled once before the socket is bound and retained in
 /// its stable binary form. Each blocking verification reconstructs an owned
@@ -24,6 +41,7 @@ const K_SEC_CODE_SIGNATURE_RUNTIME: u64 = 0x10000;
 pub(crate) struct CompiledPeerRequirement {
     bytes: Box<[u8]>,
     profile: PeerIdentityProfile,
+    verified_tokens: Mutex<VerifiedPeerAuditTokens>,
 }
 
 impl CompiledPeerRequirement {
@@ -67,10 +85,21 @@ impl CompiledPeerRequirement {
         Ok(Self {
             bytes: bytes.to_vec().into_boxed_slice(),
             profile,
+            verified_tokens: Mutex::new(VerifiedPeerAuditTokens::default()),
         })
     }
 
     pub(crate) fn verify(&self, token: PeerAuditToken) -> anyhow::Result<()> {
+        // LOCAL_PEERTOKEN includes the process-id generation. Holding this bounded
+        // server-lifetime cache lock across the first Security.framework check both
+        // prevents duplicate slow checks and keeps a new token fail closed.
+        let mut verified_tokens = self
+            .verified_tokens
+            .lock()
+            .map_err(|_| anyhow!("peer code identity cache is unavailable"))?;
+        if verified_tokens.contains(&token) {
+            return Ok(());
+        }
         let token_data = OwnedCf::new(unsafe {
             CFDataCreate(
                 kCFAllocatorDefault,
@@ -138,7 +167,32 @@ impl CompiledPeerRequirement {
         if self.profile == PeerIdentityProfile::DeveloperIdHardened {
             require_hardened_runtime(code.as_type())?;
         }
+        verified_tokens.remember(token);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    #[test]
+    fn verified_audit_token_cache_is_exact_deduplicated_and_bounded() {
+        let mut cache = VerifiedPeerAuditTokens::default();
+        let first = [1_u32; 8];
+        cache.remember(first);
+        cache.remember(first);
+        assert!(cache.contains(&first));
+        assert_eq!(cache.0.len(), 1);
+
+        for value in 2..=MAX_VERIFIED_PEER_AUDIT_TOKENS as u32 {
+            cache.remember([value; 8]);
+        }
+        assert_eq!(cache.0.len(), MAX_VERIFIED_PEER_AUDIT_TOKENS);
+        let overflow = [u32::MAX; 8];
+        cache.remember(overflow);
+        assert!(!cache.contains(&overflow));
+        assert_eq!(cache.0.len(), MAX_VERIFIED_PEER_AUDIT_TOKENS);
     }
 }
 

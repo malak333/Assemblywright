@@ -1,5 +1,6 @@
 #![cfg(target_os = "macos")]
 
+use assemblywright_core::UNIX_IPC_PEER_IDENTITY_TIMEOUT_SECONDS;
 use assemblywright_protocol::{
     AttemptId, CancellationId, CancellationInstruction, ContextHandlingPolicy, DistributedEvent,
     DistributedEventBatch, DistributedEventCursor, DistributedEventKind,
@@ -25,6 +26,7 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 const TOKEN: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+const PEER_IDENTITY_CLIENT_TIMEOUT_SECONDS: u64 = UNIX_IPC_PEER_IDENTITY_TIMEOUT_SECONDS + 2;
 static AGENT_E2E_LOCK: Mutex<()> = Mutex::new(());
 
 fn serialize_agent_e2e() -> MutexGuard<'static, ()> {
@@ -647,9 +649,10 @@ fn agent_sigterm_reaps_active_mlx_process_group_before_exit() {
             )
         })
     });
-    // The authenticated peer-code-identity boundary is allowed ten seconds;
+    // The authenticated peer-code-identity boundary is bounded by the shared transport contract;
     // parallel workspace load must not make this pre-shutdown marker race it.
-    let marker_deadline = Instant::now() + Duration::from_secs(12);
+    let marker_deadline =
+        Instant::now() + Duration::from_secs(PEER_IDENTITY_CLIENT_TIMEOUT_SECONDS);
     while !backend_pid_path.exists() && Instant::now() < marker_deadline {
         thread::sleep(Duration::from_millis(20));
     }
@@ -1070,13 +1073,20 @@ fn request(method: &str, path: &str, authorization: Option<String>, body: Option
 fn send(socket_path: &Path, request: Value) -> Value {
     let mut stream = UnixStream::connect(socket_path).expect("connect agent relay");
     stream
-        // The server permits up to ten seconds for macOS peer-code validation.
+        // Keep the client above the server's bounded macOS peer-code validation.
         // Keep the client bound above that contract so a slow Security.framework
         // lookup cannot mask the response as an unrelated socket WouldBlock.
-        .set_read_timeout(Some(Duration::from_secs(12)))
+        .set_read_timeout(Some(Duration::from_secs(
+            PEER_IDENTITY_CLIENT_TIMEOUT_SECONDS,
+        )))
         .expect("set read timeout");
     stream
-        .set_write_timeout(Some(Duration::from_secs(5)))
+        // The server authenticates the peer before it drains the request frame.
+        // Use the same derived bound for large frames so a valid first request
+        // cannot fail while Security.framework is still making its decision.
+        .set_write_timeout(Some(Duration::from_secs(
+            PEER_IDENTITY_CLIENT_TIMEOUT_SECONDS,
+        )))
         .expect("set write timeout");
     let frame = serde_json::to_vec(&request).expect("encode UDS request");
     stream

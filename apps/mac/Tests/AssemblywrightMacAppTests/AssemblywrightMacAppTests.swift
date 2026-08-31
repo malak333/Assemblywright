@@ -78,6 +78,105 @@ struct AssemblywrightMacAppTests {
         #expect(source.contains("assembly-line-reconcile-pending"))
     }
 
+    @Test("Planning controls expose review confirmation and authoritative recovery wiring")
+    func planningReviewAndCreationWiring() throws {
+        let viewURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/AssemblywrightMacApp/AssemblyLineOwnerView.swift")
+        let source = try String(contentsOf: viewURL, encoding: .utf8)
+
+        for hook in [
+            "assembly-line-brainstorm-project",
+            "assembly-line-brainstorm-feature",
+            "assembly-line-approve-project",
+            "assembly-line-approve-feature",
+            "assembly-line-create-reconcile-repository"
+        ] {
+            #expect(source.contains(hook))
+        }
+        #expect(source.contains("confirmationDialog"))
+        #expect(source.contains("projectBrainstormRequest"))
+        #expect(source.contains("featureBrainstormRequest"))
+        #expect(source.contains("ownerApprovalPreview"))
+        #expect(source.contains("repositoryCreationRequest"))
+        #expect(source.contains("Public information only"))
+        #expect(source.contains("Send Public Idea to openai.codex"))
+        #expect(source.contains("preview.requestData"))
+        #expect(source.contains("invalidateProjectReview"))
+        #expect(source.contains("invalidateFeatureReview"))
+        #expect(source.contains("projectReviewGeneration == generation"))
+        #expect(source.contains("featureReviewGeneration == generation"))
+    }
+
+    @Test("Frozen review binding denies approval after any effect input changes")
+    func planningReviewBindingRejectsEdits() {
+        let digest = Array(repeating: UInt8(0x44), count: 32)
+        let binding = AssemblyLineFrozenReviewInputBinding(
+            repositoryURL: "https://github.com/owner/project",
+            visibility: .public,
+            idea: "Build one public project",
+            orchestratorCatalogSHA256: digest
+        )
+
+        #expect(binding.matches(
+            repositoryURL: "https://github.com/owner/project",
+            visibility: .public,
+            idea: "Build one public project",
+            orchestratorCatalogSHA256: digest
+        ))
+        #expect(!binding.matches(
+            repositoryURL: "https://github.com/owner/edited",
+            visibility: .public,
+            idea: "Build one public project",
+            orchestratorCatalogSHA256: digest
+        ))
+        #expect(!binding.matches(
+            repositoryURL: "https://github.com/owner/project",
+            visibility: .private,
+            idea: "Build one public project",
+            orchestratorCatalogSHA256: digest
+        ))
+        #expect(!binding.matches(
+            repositoryURL: "https://github.com/owner/project",
+            visibility: .public,
+            idea: "Edited idea",
+            orchestratorCatalogSHA256: digest
+        ))
+        #expect(!binding.matches(
+            repositoryURL: "https://github.com/owner/project",
+            visibility: .public,
+            idea: "Build one public project",
+            orchestratorCatalogSHA256: Array(repeating: UInt8(0x45), count: 32)
+        ))
+    }
+
+    @Test("Owner confirmation names every exact frozen project effect binding")
+    func planningApprovalConfirmationContents() {
+        let preview = AssemblywrightMacOwnerApprovalPreview(
+            requestData: Data(#"{"frozen":true}"#.utf8),
+            targetKind: .project,
+            repositoryURL: "https://github.com/owner/project",
+            visibility: .private,
+            specificationID: UUID(uuidString: "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA")!,
+            specificationSHA256: Array(repeating: UInt8(0x11), count: 32),
+            ownerApprovalSHA256: Array(repeating: UInt8(0x22), count: 32)
+        )
+        let confirmation = AssemblyLineOwnerApprovalConfirmationPresentation(preview)
+
+        #expect(confirmation.repositoryURL == "https://github.com/owner/project")
+        #expect(confirmation.visibility == "Private")
+        #expect(confirmation.specificationID == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+        #expect(confirmation.specificationSHA256 == String(repeating: "11", count: 32))
+        #expect(confirmation.ownerApprovalSHA256 == String(repeating: "22", count: 32))
+        #expect(confirmation.summary.contains("Repository: https://github.com/owner/project"))
+        #expect(confirmation.summary.contains("Visibility: Private"))
+        #expect(confirmation.summary.contains("Specification ID: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"))
+        #expect(confirmation.summary.contains("Specification SHA-256: \(String(repeating: "11", count: 32))"))
+        #expect(confirmation.summary.contains("Owner approval SHA-256: \(String(repeating: "22", count: 32))"))
+    }
+
     @Test("Developer details is a read-only projection of observed diagnostics")
     func simpleOwnerDeveloperDiagnosticsContent() {
         let diagnostics = AssemblyLineDeveloperDiagnosticsPresentation(

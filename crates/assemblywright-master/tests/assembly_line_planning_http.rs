@@ -6,7 +6,14 @@ use assemblywright_protocol::{
     ProjectBrainstormingDraft, ProjectVisibility, RepositoryCreationLifecycle,
     FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION, MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
 };
+#[cfg(unix)]
+use assemblywright_protocol::{
+    FeatureBrainstormingCloudRequest, ProjectBrainstormingCloudRequest,
+    PublicInformationClassification,
+};
 use serde_json::Value;
+#[cfg(unix)]
+use sha2::{Digest, Sha256};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
@@ -21,6 +28,370 @@ impl Drop for ChildGuard {
         let _ = self.0.kill();
         let _ = self.0.wait();
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn production_planning_runtime_is_authenticated_idempotent_and_creation_is_exactly_reconciled() {
+    let directory = tempdir().unwrap();
+    let binary = env!("CARGO_BIN_EXE_assemblywright-master");
+    assert!(Command::new(binary)
+        .arg("--data-dir")
+        .arg(directory.path())
+        .arg("setup")
+        .status()
+        .unwrap()
+        .success());
+    provision_planning_runtime(directory.path(), "owner");
+    let endpoint = unused_loopback_addr();
+    let mut server = spawn_server(binary, directory.path(), endpoint);
+    read_ready(&mut server.0);
+    let token = std::fs::read_to_string(directory.path().join("development.token")).unwrap();
+    let token = token.trim();
+
+    let initial: AssemblyLineOwnerProjection = serde_json::from_value(response_json(&get_request(
+        endpoint,
+        "/v1/assembly-line",
+        Some(token),
+    )))
+    .unwrap();
+    assert_eq!(
+        initial.availability.brainstorming_provider.status,
+        assemblywright_protocol::RuntimeAvailabilityStatus::Available
+    );
+    assert_eq!(
+        initial.availability.github_creation.status,
+        assemblywright_protocol::RuntimeAvailabilityStatus::Available
+    );
+    assert_eq!(
+        initial.availability.windows_executor.status,
+        assemblywright_protocol::RuntimeAvailabilityStatus::Unavailable
+    );
+
+    let repository = AssemblyLineRepositoryIdentity {
+        repository_id: Uuid::new_v4(),
+        git_url: CanonicalGitHubRepositoryUrl::parse(
+            "https://github.com/owner/production-planning-e2e",
+        )
+        .unwrap(),
+    };
+    let draft = ProjectBrainstormingDraft {
+        schema_version: FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
+        draft_id: Uuid::new_v4(),
+        draft_revision: 1,
+        repository: repository.clone(),
+        visibility: ProjectVisibility::Public,
+        orchestrator_catalog: OrchestratorCatalog::default(),
+        orchestrator: Default::default(),
+        idea: "Create the exact owner-approved repository.".to_string(),
+    };
+    let mut cloud_request = ProjectBrainstormingCloudRequest {
+        schema_version: FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
+        draft: draft.clone(),
+        information_classification: PublicInformationClassification::Public,
+        owner_cloud_disclosure_sha256: [0; 32],
+    };
+    cloud_request.owner_cloud_disclosure_sha256 =
+        cloud_request.canonical_disclosure_sha256().unwrap();
+    let unauthorized = post_json_without_token(
+        endpoint,
+        "/v1/assembly-line/project-brainstorms",
+        &cloud_request,
+    );
+    assert!(unauthorized.starts_with("HTTP/1.1 401 Unauthorized"));
+    let generated = post_json(
+        endpoint,
+        "/v1/assembly-line/project-brainstorms",
+        token,
+        &cloud_request,
+    );
+    assert!(generated.starts_with("HTTP/1.1 200 OK"), "{generated}");
+    let frozen: FrozenBrainstormingSpecification =
+        serde_json::from_value(response_json(&generated)).unwrap();
+    let after_generation: AssemblyLineOwnerProjection = serde_json::from_value(response_json(
+        &get_request(endpoint, "/v1/assembly-line", Some(token)),
+    ))
+    .unwrap();
+    assert_eq!(
+        after_generation.owner_control_revision,
+        initial.owner_control_revision + 2
+    );
+    let replay = post_json(
+        endpoint,
+        "/v1/assembly-line/project-brainstorms",
+        token,
+        &cloud_request,
+    );
+    assert_eq!(response_json(&replay), response_json(&generated));
+    let after_replay: AssemblyLineOwnerProjection = serde_json::from_value(response_json(
+        &get_request(endpoint, "/v1/assembly-line", Some(token)),
+    ))
+    .unwrap();
+    assert_eq!(
+        after_replay.owner_control_revision,
+        after_generation.owner_control_revision
+    );
+
+    let mut approval = BrainstormingOwnerApprovalBinding {
+        schema_version: FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
+        approval_id: Uuid::new_v4(),
+        approved_at_ms: 20_000,
+        owner_control_revision: after_generation.owner_control_revision,
+        target_kind: BrainstormingTargetKind::Project,
+        repository: repository.clone(),
+        visibility: Some(ProjectVisibility::Public),
+        expected_repository_revision: Some(0),
+        expected_queue_revision: None,
+        draft_id: draft.draft_id,
+        draft_revision: draft.draft_revision,
+        draft_sha256: draft.canonical_sha256().unwrap(),
+        orchestrator_catalog_revision: frozen.orchestrator_catalog_revision,
+        orchestrator_catalog_sha256: frozen.orchestrator_catalog_sha256,
+        specification_id: frozen.specification_id,
+        specification_revision: frozen.specification_revision,
+        specification_sha256: frozen.specification_sha256,
+        orchestrator_profile_sha256: frozen.orchestrator_profile_sha256,
+        owner_approval_sha256: [0; 32],
+    };
+    approval.owner_approval_sha256 = approval.canonical_approval_sha256().unwrap();
+    let approved = post_json(
+        endpoint,
+        "/v1/assembly-line/project-approvals",
+        token,
+        &approval,
+    );
+    assert!(approved.starts_with("HTTP/1.1 200 OK"), "{approved}");
+    let create_path = format!(
+        "/v1/assembly-line/repositories/{}/create",
+        repository.repository_id
+    );
+    let nonempty = post_request(endpoint, &create_path, Some(token), "{}");
+    assert!(
+        nonempty.starts_with("HTTP/1.1 422 Unprocessable Entity"),
+        "{nonempty}"
+    );
+    let created = post_request(endpoint, &create_path, Some(token), "");
+    assert!(created.starts_with("HTTP/1.1 200 OK"), "{created}");
+    assert_eq!(response_json(&created)["lifecycle"], "created");
+    assert_eq!(response_json(&created)["visibility"], "public");
+    let github_invocations =
+        std::fs::read_to_string(directory.path().join("planning-runtime/.gh-invocations")).unwrap();
+    assert!(github_invocations
+        .contains("repo create owner/production-planning-e2e --public --add-readme\n"));
+    assert!(github_invocations.contains(
+        "api --method POST repos/owner/production-planning-e2e/branches/trunk/rename -f new_name=main\n"
+    ));
+    let replayed = post_request(endpoint, &create_path, Some(token), "");
+    assert!(replayed.starts_with("HTTP/1.1 200 OK"), "{replayed}");
+    assert_eq!(response_json(&replayed), response_json(&created));
+
+    let feature = FeatureBrainstormingDraft {
+        schema_version: FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
+        draft_id: Uuid::new_v4(),
+        draft_revision: 1,
+        repository,
+        expected_repository_revision: 1,
+        orchestrator_catalog: OrchestratorCatalog::default(),
+        orchestrator: Default::default(),
+        idea: "Add a bounded feature after repository creation.".to_string(),
+    };
+    let mut feature_cloud_request = FeatureBrainstormingCloudRequest {
+        schema_version: FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
+        draft: feature,
+        information_classification: PublicInformationClassification::Public,
+        owner_cloud_disclosure_sha256: [0; 32],
+    };
+    feature_cloud_request.owner_cloud_disclosure_sha256 =
+        feature_cloud_request.canonical_disclosure_sha256().unwrap();
+    let feature_generated = post_json(
+        endpoint,
+        "/v1/assembly-line/feature-brainstorms",
+        token,
+        &feature_cloud_request,
+    );
+    assert!(
+        feature_generated.starts_with("HTTP/1.1 200 OK"),
+        "{feature_generated}"
+    );
+    let final_projection: AssemblyLineOwnerProjection = serde_json::from_value(response_json(
+        &get_request(endpoint, "/v1/assembly-line", Some(token)),
+    ))
+    .unwrap();
+    assert!(
+        final_projection.queue.is_empty(),
+        "brainstorming must not enqueue"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn incomplete_production_planning_configuration_fails_master_startup_closed() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempdir().unwrap();
+    let binary = env!("CARGO_BIN_EXE_assemblywright-master");
+    assert!(Command::new(binary)
+        .arg("--data-dir")
+        .arg(directory.path())
+        .arg("setup")
+        .status()
+        .unwrap()
+        .success());
+    let root = directory.path().join("planning-runtime");
+    std::fs::create_dir(&root).unwrap();
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let output = Command::new(binary)
+        .arg("--data-dir")
+        .arg(directory.path())
+        .arg("serve")
+        .arg("--bind")
+        .arg(unused_loopback_addr().to_string())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        output.stdout.is_empty(),
+        "invalid runtime must never announce ready"
+    );
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("oauth"));
+}
+
+#[cfg(unix)]
+fn provision_planning_runtime(data_dir: &Path, owner: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    let root = data_dir.join("planning-runtime");
+    let gh_config = root.join("gh-config");
+    std::fs::create_dir_all(&gh_config).unwrap();
+    let provider = root.join("brainstorming-provider");
+    let codex = root.join("codex");
+    let output_schema = root.join("brainstorming-output-schema.json");
+    let codex_home = root.join("codex-home");
+    let reconciliation = root.join("reconciliation");
+    let temporary = root.join("temp");
+    let local_app_data = root.join("local-app-data");
+    std::fs::create_dir(&codex_home).unwrap();
+    std::fs::create_dir(&reconciliation).unwrap();
+    std::fs::create_dir(&temporary).unwrap();
+    std::fs::create_dir(&local_app_data).unwrap();
+    let gh = root.join("gh");
+    std::fs::write(
+        &provider,
+        r##"#!/bin/sh
+payload=$(/bin/cat)
+case "$payload" in
+  *'"operation":"reconcile"'*)
+    /bin/echo '{"status":"not_found","specification":null}'
+    ;;
+  *'"target_kind":"feature"'*)
+    /bin/echo '{"title":"Production feature planning E2E","outcome":"Add the exact bounded feature.","acceptance_criteria":[{"id":"feature-specified","requirement":"The feature has a frozen specification."}],"obligations":["Do not enqueue before owner approval."]}'
+    ;;
+  *)
+    /bin/echo '{"title":"Production planning E2E","outcome":"Create the exact approved repository.","acceptance_criteria":[{"id":"repository-created","requirement":"The exact repository is initialized on main."}],"obligations":["Retain redacted audit evidence."]}'
+    ;;
+esac
+"##,
+    )
+    .unwrap();
+    std::fs::write(
+        &codex,
+        r##"#!/bin/sh
+payload=$(/bin/cat)
+case "$payload" in
+  *'"target_kind":"feature"'*)
+    /bin/echo '{"title":"Production feature planning E2E","outcome":"Add the exact bounded feature.","acceptance_criteria":[{"id":"feature-specified","requirement":"The feature has a frozen specification."}],"obligations":["Do not enqueue before owner approval."]}'
+    ;;
+  *)
+    /bin/echo '{"title":"Production planning E2E","outcome":"Create the exact approved repository.","acceptance_criteria":[{"id":"repository-created","requirement":"The exact repository is initialized on main."}],"obligations":["Retain redacted audit evidence."]}'
+    ;;
+esac
+"##,
+    )
+    .unwrap();
+    std::fs::write(
+        &output_schema,
+        include_bytes!("../resources/brainstorming-output-schema.json"),
+    )
+    .unwrap();
+    std::fs::write(
+        &gh,
+        format!(
+            r##"#!/bin/sh
+printf '%s\n' "$*" >> .gh-invocations
+if [ "$1 $2" = "api user" ]; then
+  /bin/echo '{{"login":"{owner}"}}'
+elif [ "$1 $2" = "repo create" ]; then
+  : > .created
+  printf trunk > .branch
+  /bin/echo '{{}}'
+elif [ "$1 $2" = "repo view" ] && [ -f .created ]; then
+  branch=$(/bin/cat .branch)
+  /bin/echo "{{\"nameWithOwner\":\"$3\",\"visibility\":\"PUBLIC\",\"defaultBranchRef\":{{\"name\":\"$branch\"}},\"isEmpty\":false,\"url\":\"https://github.com/$3\"}}"
+elif [ "$*" = "api --method POST repos/{owner}/production-planning-e2e/branches/trunk/rename -f new_name=main" ]; then
+  printf main > .branch
+  /bin/echo '{{"name":"main"}}'
+else
+  exit 1
+fi
+"##
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        gh_config.join("hosts.yml"),
+        format!("github.com:\n  user: {owner}\n"),
+    )
+    .unwrap();
+    let provider_sha = hex_sha256(&std::fs::read(&provider).unwrap());
+    let codex_sha = hex_sha256(&std::fs::read(&codex).unwrap());
+    let output_schema_sha = hex_sha256(&std::fs::read(&output_schema).unwrap());
+    let gh_sha = hex_sha256(&std::fs::read(&gh).unwrap());
+    std::fs::write(
+        root.join("runtime.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1,
+            "enabled": true,
+            "catalog_revision": 1,
+            "provider_id": "openai.codex",
+            "model_id": "gpt-5.6-sol",
+            "adapter_kind": "codex_exec_v1",
+            "brainstorming_provider_sha256": provider_sha,
+            "codex_executable_sha256": codex_sha,
+            "output_schema_sha256": output_schema_sha,
+            "gh_executable_sha256": gh_sha,
+            "github_owner": owner
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    for (path, mode) in [
+        (&root, 0o700),
+        (&gh_config, 0o700),
+        (&codex_home, 0o700),
+        (&reconciliation, 0o700),
+        (&temporary, 0o700),
+        (&local_app_data, 0o700),
+        (&provider, 0o700),
+        (&codex, 0o700),
+        (&gh, 0o700),
+    ] {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+    for path in [
+        root.join("runtime.json"),
+        gh_config.join("hosts.yml"),
+        output_schema,
+    ] {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+}
+
+#[cfg(unix)]
+fn hex_sha256(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    let mut output = String::new();
+    for byte in Sha256::digest(bytes) {
+        write!(&mut output, "{byte:02x}").unwrap();
+    }
+    output
 }
 
 #[test]
@@ -319,6 +690,15 @@ fn post_json<T: serde::Serialize>(
         Some(token),
         &serde_json::to_string(body).unwrap(),
     )
+}
+
+#[cfg(unix)]
+fn post_json_without_token<T: serde::Serialize>(
+    endpoint: SocketAddr,
+    path: &str,
+    body: &T,
+) -> String {
+    post_request(endpoint, path, None, &serde_json::to_string(body).unwrap())
 }
 
 fn read_response(stream: &mut TcpStream) -> String {

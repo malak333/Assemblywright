@@ -6863,31 +6863,68 @@ fn drop_publication_schema_for_legacy_fixture(connection: &Connection) {
 }
 
 fn drop_assembly_line_schema_for_legacy_fixture(connection: &Connection) {
-    connection
-        .execute_batch(
-            "DROP TRIGGER assembly_line_project_drafts_no_update;
-             DROP TRIGGER assembly_line_project_drafts_no_delete;
-             DROP TRIGGER assembly_line_feature_drafts_no_update;
-             DROP TRIGGER assembly_line_feature_drafts_no_delete;
-             DROP TRIGGER assembly_line_frozen_specs_no_update;
-             DROP TRIGGER assembly_line_frozen_specs_no_delete;
-             DROP TRIGGER assembly_line_approvals_no_update;
-             DROP TRIGGER assembly_line_approvals_no_delete;
-             DROP TRIGGER assembly_line_requests_no_update;
-             DROP TRIGGER assembly_line_requests_no_delete;
-             DROP TRIGGER assembly_line_audit_no_update;
-             DROP TRIGGER assembly_line_audit_no_delete;
-             DROP TABLE assembly_line_audit;
-             DROP TABLE assembly_line_requests;
-             DROP TABLE assembly_line_queue;
-             DROP TABLE assembly_line_repositories;
-             DROP TABLE assembly_line_owner_approvals;
-             DROP TABLE assembly_line_frozen_specifications;
-             DROP TABLE assembly_line_feature_drafts;
-             DROP TABLE assembly_line_project_drafts;
-             DROP TABLE assembly_line_state;",
-        )
-        .unwrap();
+    for trigger in [
+        "assembly_line_activation_receipts_no_update",
+        "assembly_line_activation_receipts_no_delete",
+        "assembly_line_effect_dispatches_no_update",
+        "assembly_line_effect_dispatches_no_delete",
+        "assembly_line_execution_capabilities_no_update",
+        "assembly_line_execution_capabilities_no_delete",
+        "assembly_line_execution_sessions_no_update",
+        "assembly_line_execution_sessions_no_delete",
+        "assembly_line_action_ledger_no_update",
+        "assembly_line_action_ledger_no_delete",
+        "assembly_line_checkpoint_receipts_no_update",
+        "assembly_line_checkpoint_receipts_no_delete",
+        "assembly_line_control_intents_no_update",
+        "assembly_line_control_intents_no_delete",
+        "assembly_line_termination_receipts_no_update",
+        "assembly_line_termination_receipts_no_delete",
+        "assembly_line_execution_requests_no_update",
+        "assembly_line_execution_requests_no_delete",
+        "assembly_line_project_drafts_no_update",
+        "assembly_line_project_drafts_no_delete",
+        "assembly_line_feature_drafts_no_update",
+        "assembly_line_feature_drafts_no_delete",
+        "assembly_line_frozen_specs_no_update",
+        "assembly_line_frozen_specs_no_delete",
+        "assembly_line_approvals_no_update",
+        "assembly_line_approvals_no_delete",
+        "assembly_line_requests_no_update",
+        "assembly_line_requests_no_delete",
+        "assembly_line_audit_no_update",
+        "assembly_line_audit_no_delete",
+    ] {
+        connection
+            .execute_batch(&format!("DROP TRIGGER {trigger};"))
+            .unwrap();
+    }
+    for table in [
+        "assembly_line_activation_receipts",
+        "assembly_line_effect_dispatches",
+        "assembly_line_termination_receipts",
+        "assembly_line_control_intents",
+        "assembly_line_checkpoint_receipts",
+        "assembly_line_action_ledger",
+        "assembly_line_child_epochs",
+        "assembly_line_execution_requests",
+        "assembly_line_execution_authority",
+        "assembly_line_execution_sessions",
+        "assembly_line_execution_capabilities",
+        "assembly_line_audit",
+        "assembly_line_requests",
+        "assembly_line_queue",
+        "assembly_line_repositories",
+        "assembly_line_owner_approvals",
+        "assembly_line_frozen_specifications",
+        "assembly_line_feature_drafts",
+        "assembly_line_project_drafts",
+        "assembly_line_state",
+    ] {
+        connection
+            .execute_batch(&format!("DROP TABLE {table};"))
+            .unwrap();
+    }
 }
 
 fn downgrade_v5_database_to_v4(path: &std::path::Path, sabotage: bool) {

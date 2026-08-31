@@ -17,6 +17,10 @@ path = "src/main.rs"
 name = "assemblywright-review-provider"
 path = "src/review_provider_adapter.rs"
 
+[[bin]]
+name = "assemblywright-brainstorming-provider"
+path = "src/brainstorming_provider_adapter.rs"
+
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
@@ -49,13 +53,18 @@ zeroize.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [
+  "Win32_Graphics_Gdi",
   "Win32_Security_Authorization",
   "Win32_Security_Isolation",
   "Win32_System_Console",
+  "Win32_System_Com",
+  "Win32_System_Environment",
   "Win32_System_JobObjects",
   "Win32_System_Pipes",
   "Win32_System_SystemInformation",
+  "Win32_System_StationsAndDesktops",
   "Win32_System_Threading",
+  "Win32_UI_Shell",
 ] }
 windows-service.workspace = true
 
