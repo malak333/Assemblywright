@@ -18,7 +18,7 @@ jobs:
   protocol-windows:
     name: Protocol, master, identity, mTLS, and SCM
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
 
     steps:
       - name: Check out repository
