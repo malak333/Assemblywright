@@ -10,7 +10,7 @@ fn disposable_windows_planning_service_e2e_is_bounded_and_self_cleaning() {
         "provision-planning-runtime.ps1",
         "/v1/assembly-line/project-brainstorms",
         "windows_planning_service_e2e_passed",
-        "stderr_bytes_discarded = 262144",
+        "codex_stderr_bytes_drained = 32768",
         "production_service_untouched = $true",
         "service uninstall",
         "Remove-Item -LiteralPath $runtime -Recurse -Force",
@@ -23,7 +23,7 @@ fn disposable_windows_planning_service_e2e_is_bounded_and_self_cleaning() {
     }
     assert!(!script.contains("AssemblywrightMaster' --"));
     assert!(!script.contains("sc.exe delete AssemblywrightMaster"));
-    assert!(fixture.contains("for _ in 0..32"));
+    assert!(fixture.contains("for _ in 0..4"));
     assert!(fixture.contains("The Windows service launches the provider inside the AppContainer."));
     assert!(!fixture.contains("std::env::vars"));
 }

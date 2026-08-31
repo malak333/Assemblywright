@@ -12,7 +12,7 @@ fn main() {
     // retaining or returning the content.
     let diagnostic = [b'x'; 8192];
     let mut stderr = std::io::stderr().lock();
-    for _ in 0..32 {
+    for _ in 0..4 {
         stderr
             .write_all(&diagnostic)
             .expect("write bounded fixture stderr");

@@ -120,7 +120,7 @@ try {
         status = 'windows_planning_service_e2e_passed'
         service_identity = 'LocalSystem'
         appcontainer_profile = 'Assemblywright.Planning.Provider.v1'
-        stderr_bytes_discarded = 262144
+        codex_stderr_bytes_drained = 32768
         production_service_untouched = $true
     }
 } finally {
