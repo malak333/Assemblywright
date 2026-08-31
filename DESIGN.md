@@ -14,7 +14,7 @@ accepted designs and take precedence within their scope:
   source slice is implemented but Windows effects remain fail-closed pending
   capability separation; execution and live evidence remain pending.
 
-Current/target boundary: protocol v5 and master schema v21 are current. Schema v20
+Current/target boundary: protocol v5 and master schema v22 are current. Schema v20
 added strict full-machine Assembly Line protocol contracts plus Windows planning
 persistence and authenticated planning routes. Schema v21 adds durable, effect-free
 execution-control capability/session/authority/action/checkpoint/termination ledgers
@@ -41,7 +41,13 @@ Data `Assemblywright/planning-runtime/<runtime_instance>` tree. The two fixed pr
 SIDs receive exact non-inheriting traverse-only ACEs on canonical Common Application
 Data itself and on the vendor and namespace shared ancestry. Unrelated
 parent ACL entries are preserved, while canonical path, directory identity, and exact
-profile rights are revalidated at load and before every external call. Schema v3,
+profile rights are revalidated at load and before every external call. Each fixed
+AppContainer profile is first matched to its deterministic expected SID and then
+registered idempotently in the current Windows service identity's profile namespace;
+provisioning under the owner identity is not evidence that LocalSystem can launch it.
+When `STARTF_USESTDHANDLES` is set, the provider receives valid inherited stdin,
+stdout, and stderr handles, and stderr is drained concurrently into a content-free
+bounded discard path. Schema v3,
 user-profile placement, links, missing traversal, broader rights, or identity drift
 keep planning unavailable.
 Windows deliberately refuses to load those adapters until capability-separated
@@ -58,7 +64,7 @@ repository source is not an installed, signed, identity-provisioned runtime. Des
 or planning approval does not widen
 an existing worker or authorize the UI to claim full-machine readiness.
 
-Full-machine target phase: planning/creation containment implemented and requires native Windows proof; execution admission implemented and effects remain unavailable.
+Full-machine target phase: planning/creation containment has bounded native Windows LocalSystem/AppContainer service proof; execution admission is implemented and effects remain unavailable.
 
 ## Understanding Summary
 

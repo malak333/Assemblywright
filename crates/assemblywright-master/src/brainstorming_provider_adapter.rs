@@ -615,15 +615,41 @@ fn configure_codex_environment(
     local_app_data: &Path,
     environment: &ClosedEnvironment,
 ) {
-    command.env_clear().env("CODEX_HOME", codex_home);
+    command.env_clear();
     #[cfg(windows)]
     command
-        .env("LOCALAPPDATA", local_app_data)
+        .env("CODEX_HOME", codex_windows_environment_path(codex_home))
+        .env(
+            "LOCALAPPDATA",
+            codex_windows_environment_path(local_app_data),
+        )
         .env("SystemRoot", &environment.system_root)
-        .env("TEMP", temporary)
-        .env("TMP", temporary);
+        .env("TEMP", codex_windows_environment_path(temporary))
+        .env("TMP", codex_windows_environment_path(temporary));
     #[cfg(not(windows))]
-    let _ = (temporary, local_app_data, environment);
+    {
+        command.env("CODEX_HOME", codex_home);
+        let _ = (temporary, local_app_data, environment);
+    }
+}
+
+#[cfg(windows)]
+fn codex_windows_environment_path(path: &Path) -> OsString {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+    let units = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    let drive = units.get(4).copied().unwrap_or_default();
+    let local_drive = units.len() >= 7
+        && units[..4] == [b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16]
+        && ((b'A' as u16..=b'Z' as u16).contains(&drive)
+            || (b'a' as u16..=b'z' as u16).contains(&drive))
+        && units[5] == b':' as u16
+        && units[6] == b'\\' as u16;
+    if local_drive {
+        OsString::from_wide(&units[4..])
+    } else {
+        path.as_os_str().to_owned()
+    }
 }
 
 fn codex_arguments(configuration: &Configuration) -> Vec<OsString> {
@@ -1129,6 +1155,27 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn codex_environment_uses_plain_local_drive_paths_without_widening_other_namespaces() {
+        assert_eq!(
+            codex_windows_environment_path(Path::new(
+                r"\\?\C:\ProgramData\Assemblywright\planning-runtime\provider\codex-home"
+            )),
+            OsString::from(r"C:\ProgramData\Assemblywright\planning-runtime\provider\codex-home")
+        );
+        assert_eq!(
+            codex_windows_environment_path(Path::new(
+                r"C:\ProgramData\Assemblywright\planning-runtime\provider\temp"
+            )),
+            OsString::from(r"C:\ProgramData\Assemblywright\planning-runtime\provider\temp")
+        );
+        assert_eq!(
+            codex_windows_environment_path(Path::new(r"\\?\UNC\server\share\state")),
+            OsString::from(r"\\?\UNC\server\share\state")
+        );
+    }
+
     #[test]
     fn failure_stage_exit_codes_are_fixed_unique_and_content_free() {
         let stages = [
@@ -1352,11 +1399,13 @@ mod tests {
         let source = include_str!("brainstorming_provider_adapter.rs");
         for required in [
             "capture_windows_environment(env::vars_os())?",
-            ".env_clear().env(\"CODEX_HOME\", codex_home)",
-            ".env(\"LOCALAPPDATA\", local_app_data)",
+            "command.env_clear();",
+            ".env(\"CODEX_HOME\", codex_windows_environment_path(codex_home))",
+            "codex_windows_environment_path(local_app_data)",
             ".env(\"SystemRoot\", &environment.system_root)",
-            ".env(\"TEMP\", temporary)",
-            ".env(\"TMP\", temporary)",
+            ".env(\"TEMP\", codex_windows_environment_path(temporary))",
+            ".env(\"TMP\", codex_windows_environment_path(temporary))",
+            "fn codex_windows_environment_path(path: &Path) -> OsString",
             "let temporary = root.join(TEMP_DIRECTORY);",
             "validate_private(&temporary, true)?;",
             "let local_app_data = root.join(LOCAL_APP_DATA_DIRECTORY);",
@@ -1384,9 +1433,9 @@ mod tests {
             "let temporary = root.join(TEMP_DIRECTORY);",
             "reject_link(path)?;",
             "validate_private(&temporary, true)?;",
-            ".env(\"TEMP\", temporary)",
-            ".env(\"TMP\", temporary)",
-            ".env(\"LOCALAPPDATA\", local_app_data)",
+            ".env(\"TEMP\", codex_windows_environment_path(temporary))",
+            ".env(\"TMP\", codex_windows_environment_path(temporary))",
+            "codex_windows_environment_path(local_app_data)",
         ] {
             assert!(source.contains(required));
         }

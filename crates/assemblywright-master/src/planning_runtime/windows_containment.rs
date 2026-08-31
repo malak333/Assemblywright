@@ -5,7 +5,7 @@ use super::{
 use std::collections::HashSet;
 use std::ffi::{c_void, OsStr};
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::mem::{size_of, size_of_val, zeroed};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
@@ -24,7 +24,11 @@ use windows_sys::Win32::Security::Authorization::{
     NO_MULTIPLE_TRUSTEE, SDDL_REVISION_1, SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN,
     TRUSTEE_W,
 };
-use windows_sys::Win32::Security::Isolation::DeriveAppContainerSidFromAppContainerName;
+#[cfg(test)]
+use windows_sys::Win32::Security::Isolation::DeleteAppContainerProfile;
+use windows_sys::Win32::Security::Isolation::{
+    CreateAppContainerProfile, DeriveAppContainerSidFromAppContainerName,
+};
 use windows_sys::Win32::Security::{
     AclSizeInformation, CreateRestrictedToken, CreateWellKnownSid, EqualSid, FreeSid, GetAce,
     GetAclInformation, GetSecurityDescriptorControl, WinLocalSystemSid, ACCESS_ALLOWED_ACE,
@@ -70,6 +74,7 @@ const GITHUB_PROFILE: &str = "Assemblywright.Planning.Github.v1";
 const INTERNET_CLIENT_SID: &str = "S-1-15-3-1";
 const TERMINATED_EXIT_CODE: u32 = 0xA55E_1001;
 const MAX_PROFILE_NAME_BYTES: usize = 64;
+const HRESULT_PROFILE_ALREADY_EXISTS: i32 = 0x8007_00B7u32 as i32;
 const MAX_USER_ENVIRONMENT_UNITS: usize = 32_768;
 const MAX_USER_ENVIRONMENT_ENTRIES: usize = 512;
 const PRIVATE_WINDOW_STATION_CREATE_ONLY: u32 = 1;
@@ -1446,7 +1451,8 @@ pub(super) fn run_command(
     profile.revalidate().map_err(|_| CommandError::Failed)?;
     let (stdin_read, stdin_write) = stdin_pipe()?;
     let (stdout_read, stdout_write) = stdout_pipe()?;
-    let mut inherited = [stdin_read.raw(), stdout_write.raw()];
+    let (stderr_read, stderr_write) = stdout_pipe()?;
+    let mut inherited = [stdin_read.raw(), stdout_write.raw(), stderr_write.raw()];
     let mut attributes = AttributeList::new(2)?;
     let mut capability = SID_AND_ATTRIBUTES {
         Sid: internet.raw(),
@@ -1473,7 +1479,7 @@ pub(super) fn run_command(
     startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
     startup.StartupInfo.hStdInput = stdin_read.raw();
     startup.StartupInfo.hStdOutput = stdout_write.raw();
-    startup.StartupInfo.hStdError = INVALID_HANDLE_VALUE;
+    startup.StartupInfo.hStdError = stderr_write.raw();
     startup.StartupInfo.lpDesktop = private_desktop.startup_name.as_ptr().cast_mut();
     startup.lpAttributeList = attributes.ptr;
     let mut command_line = command_line(&executable.path, invocation.args)?;
@@ -1505,6 +1511,7 @@ pub(super) fn run_command(
     let mut suspended = SuspendedProcessGuard::new(process)?;
     drop(stdin_read);
     drop(stdout_write);
+    drop(stderr_write);
     profile.revalidate().map_err(|_| CommandError::Failed)?;
     revalidate_image_guard(executable, &executable_guard)?;
     let job = create_job()?;
@@ -1535,20 +1542,29 @@ pub(super) fn run_command(
     drop(stdin_file);
     let stdout_file = unsafe { File::from_raw_handle(stdout_read.into_raw() as RawHandle) };
     let output_thread = bounded_reader(stdout_file, invocation.max_output);
+    let stderr_file = unsafe { File::from_raw_handle(stderr_read.into_raw() as RawHandle) };
+    let stderr_thread = discard_reader(stderr_file);
     loop {
         if !control.poll() {
             terminate_job(&job, suspended.process());
             let _ = output_thread.join();
+            let _ = stderr_thread.join();
             return Err(CommandError::Cancelled);
         }
         match unsafe { WaitForSingleObject(suspended.process(), 25) } {
             WAIT_OBJECT_0 => {
-                return complete_signaled_process(job, suspended.process(), output_thread);
+                return complete_signaled_process(
+                    job,
+                    suspended.process(),
+                    output_thread,
+                    stderr_thread,
+                );
             }
             WAIT_TIMEOUT => {}
             _ => {
                 terminate_job(&job, suspended.process());
                 let _ = output_thread.join();
+                let _ = stderr_thread.join();
                 return Err(CommandError::Failed);
             }
         }
@@ -1559,6 +1575,7 @@ fn complete_signaled_process(
     job: OwnedHandle,
     process: HANDLE,
     output_thread: std::thread::JoinHandle<Result<Vec<u8>, CommandError>>,
+    stderr_thread: std::thread::JoinHandle<Result<(), CommandError>>,
 ) -> Result<Vec<u8>, CommandError> {
     let mut exit_code = 0;
     let exit_observed = unsafe { GetExitCodeProcess(process, &mut exit_code) } != 0;
@@ -1568,10 +1585,26 @@ fn complete_signaled_process(
     drop(job);
     let reaped = unsafe { WaitForSingleObject(process, 5_000) } == WAIT_OBJECT_0;
     let output = output_thread.join().unwrap_or(Err(CommandError::Failed));
-    if !exit_observed || !reaped {
+    let stderr_drained = stderr_thread.join().unwrap_or(Err(CommandError::Failed));
+    if !exit_observed || !reaped || stderr_drained.is_err() {
         return Err(CommandError::Failed);
     }
     classify_completed_output(exit_code, output)
+}
+
+fn discard_reader(
+    mut reader: impl Read + Send + 'static,
+) -> std::thread::JoinHandle<Result<(), CommandError>> {
+    std::thread::spawn(move || {
+        let mut buffer = [0_u8; 8192];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => return Ok(()),
+                Ok(_) => {}
+                Err(_) => return Err(CommandError::Failed),
+            }
+        }
+    })
 }
 
 fn classify_completed_output(
@@ -2100,7 +2133,39 @@ impl ProfileSid {
         if unsafe { EqualSid(derived.raw(), expected.raw()) } == 0 {
             return Err(());
         }
-        Ok(derived)
+        drop(derived);
+
+        // AppContainer profile registration is scoped to the calling Windows identity.
+        // Provisioning registers the fixed profiles for the owner, while the durable master
+        // normally runs as LocalSystem. Register the already-validated fixed profile in the
+        // current identity namespace before launching the contained process.
+        let name = wide(OsStr::new(name));
+        let mut sid = null_mut();
+        let created = unsafe {
+            CreateAppContainerProfile(
+                name.as_ptr(),
+                name.as_ptr(),
+                name.as_ptr(),
+                null(),
+                0,
+                &mut sid,
+            )
+        };
+        if created == HRESULT_PROFILE_ALREADY_EXISTS {
+            if unsafe { DeriveAppContainerSidFromAppContainerName(name.as_ptr(), &mut sid) } < 0 {
+                return Err(());
+            }
+        } else if created < 0 {
+            return Err(());
+        }
+        if sid.is_null() {
+            return Err(());
+        }
+        let registered = Self(sid);
+        if unsafe { EqualSid(registered.raw(), expected.raw()) } == 0 {
+            return Err(());
+        }
+        Ok(registered)
     }
 
     fn raw(&self) -> PSID {
@@ -2237,6 +2302,31 @@ mod tests {
         value
     }
 
+    struct TestAppContainerProfile(Vec<u16>);
+
+    impl Drop for TestAppContainerProfile {
+        fn drop(&mut self) {
+            assert!(unsafe { DeleteAppContainerProfile(self.0.as_ptr()) } >= 0);
+        }
+    }
+
+    #[test]
+    fn profile_registration_is_idempotent_for_the_current_windows_identity() {
+        let name = format!("Assemblywright.Test.{}", Uuid::new_v4().simple());
+        let expected = sid_text(ProfileSid::derive(&name).unwrap().raw());
+        let cleanup = TestAppContainerProfile(wide(OsStr::new(&name)));
+
+        let registered = ProfileSid::derive_and_match(&name, &expected).unwrap();
+        assert_eq!(sid_text(registered.raw()), expected);
+        drop(registered);
+
+        let existing = ProfileSid::derive_and_match(&name, &expected).unwrap();
+        assert_eq!(sid_text(existing.raw()), expected);
+        assert!(ProfileSid::derive_and_match(&name, "S-1-15-2-1").is_err());
+        drop(existing);
+        drop(cleanup);
+    }
+
     #[test]
     fn explicit_pipe_contract_inherits_only_child_ends() {
         let (stdin_child, stdin_parent) = stdin_pipe().unwrap();
@@ -2315,12 +2405,13 @@ mod tests {
         let interactive_station = ["Win", "sta0"].concat();
         assert!(!source.contains(&interactive_station));
         let inherited = source
-            .find("let mut inherited = [stdin_read.raw(), stdout_write.raw()];")
+            .find("let mut inherited = [stdin_read.raw(), stdout_write.raw(), stderr_write.raw()];")
             .unwrap();
         let attributes = source
             .find("PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize")
             .unwrap();
         assert!(inherited < attributes);
+        assert!(source.contains("startup.StartupInfo.hStdError = stderr_write.raw();"));
     }
 
     #[test]
@@ -2384,6 +2475,29 @@ mod tests {
                 .join()
                 .unwrap(),
             Err(CommandError::Malformed)
+        ));
+    }
+
+    #[test]
+    fn stderr_discarder_drains_without_retaining_content_and_fails_on_read_error() {
+        assert!(discard_reader(std::io::Cursor::new(Vec::<u8>::new()))
+            .join()
+            .unwrap()
+            .is_ok());
+        assert!(discard_reader(std::io::Cursor::new(vec![b'x'; 32 * 1024]))
+            .join()
+            .unwrap()
+            .is_ok());
+
+        struct FailingReader;
+        impl std::io::Read for FailingReader {
+            fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("fixture read failure"))
+            }
+        }
+        assert!(matches!(
+            discard_reader(FailingReader).join().unwrap(),
+            Err(CommandError::Failed)
         ));
     }
 

@@ -30,11 +30,11 @@ The approved target contract is documented in
 full-machine Assembly Line schema-v1 contracts, the Windows master is schema v22 with
 planning persistence/routes plus a fail-closed durable activation controller, and the Mac has strict frozen review/approval transport
 plus restart-safe reconciliation in the simplified UI. Source includes catalog-bound
-provider/GitHub process adapters, but Windows deliberately refuses to load them until
-capability-separated identities, ACLs, and atomic containment are proved. None of this
-is eligible for execution activation.
+provider/GitHub process adapters. Source now has bounded native LocalSystem/AppContainer
+service proof when its fixed runtime is provisioned exactly; production configuration,
+real-provider behavior, and execution activation remain separate unproved boundaries.
 
-Full-machine target phase: planning/creation containment implemented and requires native Windows proof; execution admission implemented and effects remain unavailable.
+Full-machine target phase: planning/creation containment has bounded native Windows LocalSystem/AppContainer service proof; execution admission is implemented and effects remain unavailable.
 
 ```sh
 cargo test -p assemblywright-protocol --test full_machine_assembly_line_contract
@@ -84,7 +84,38 @@ The Windows inner value is not repository-write, implementation, or host authori
 Windows native planning proof must also show that schema v4 derives the package root
 from canonical Common Application Data, keeps the locator/config master-private under
 `DataDir`, preserves unrelated shared-parent ACLs, and rejects missing, broadened, or
-identity-drifted profile traversal before an effect.
+identity-drifted profile traversal before an effect. The deterministic fixed profile SID
+must match before idempotent registration for the current Windows identity; owner-time
+registration does not establish LocalSystem registration. A launch using
+`STARTF_USESTDHANDLES` must inherit valid stdin, stdout, and stderr handles and drain
+stderr concurrently without retaining its content.
+
+Run the synthetic LocalSystem/AppContainer planning boundary from an elevated native
+Windows PowerShell in a disposable checkout:
+
+```powershell
+cargo test -p assemblywright-master `
+  profile_registration_is_idempotent_for_the_current_windows_identity -- --nocapture
+cargo test -p assemblywright-master --test windows_planning_private_desktop_contract
+cargo test -p assemblywright-master --test windows_planning_service_e2e_contract
+cargo build -p assemblywright-master --bin assemblywright-master `
+  --bin assemblywright-brainstorming-provider --release
+
+& .\scripts\windows-planning-service-e2e.ps1 `
+  -MasterExe .\target\release\assemblywright-master.exe `
+  -ProviderExe .\target\release\assemblywright-brainstorming-provider.exe `
+  -OutputSchema .\crates\assemblywright-master\resources\brainstorming-output-schema.json `
+  -ServiceName AssemblywrightPlanningE2E_Local `
+  -Port <unused-port> `
+  -Confirm
+```
+
+The native E2E installs one exact disposable LocalSystem master, uses the synthetic
+Codex fixture in the fixed provider AppContainer, drains 32 KiB of fixture stderr,
+checks the planning response, and removes only its exact service and data roots. It
+asserts that the production service is untouched. This proves the synthetic native
+service boundary, not real Codex authentication, network/model quality, GitHub effects,
+production planning configuration, or deployed execution authority.
 
 The inert Phase-4 containment source slice is covered by native Rust contracts and
 process tests (not Playwright):

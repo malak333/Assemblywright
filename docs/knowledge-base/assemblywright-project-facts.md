@@ -207,7 +207,7 @@ an old one.
 
 ## Approved Full-Machine Assembly Line Target
 
-Full-machine target phase: planning/creation containment implemented and requires native Windows proof; execution admission implemented and effects remain unavailable.
+Full-machine target phase: planning/creation containment has bounded native Windows LocalSystem/AppContainer service proof; execution admission is implemented and effects remain unavailable.
 
 - The approved simple entry points are New Project, New Feature, and Assembly Line.
   The owner-facing repository identity is a canonical GitHub URL; Windows retains an
@@ -233,7 +233,7 @@ Full-machine target phase: planning/creation containment implemented and require
   requires exact adapter reconciliation or owner resolution; it is never blindly retried.
 - This is approved target architecture with a reviewed planning/creation source slice
   that remains effect-free on Windows until capability separation is proved. The
-  current protocol-v5/schema-v21 master preserves schema-v19 restricted-worker grants,
+  current protocol-v5/schema-v22 master preserves schema-v19 restricted-worker grants,
   queues, and activation meanings until native hostile-boundary tests, deployment, and
   owner-recorded two-host evidence complete an explicit execution cutover.
 
@@ -291,8 +291,26 @@ Full-machine target phase: planning/creation containment implemented and require
   planning namespace. The known-folder ACE is required because a LocalSystem-derived
   restricted AppContainer does not inherit the ordinary Users traverse grant; without
   it, `CreateProcessAsUserW` fails closed with file-not-found before opening the provider.
+  AppContainer profile registration is also scoped to the current Windows identity:
+  registering the fixed profile while provisioning as the owner does not register it
+  for the LocalSystem service. The master therefore verifies the deterministic expected
+  SID before idempotently registering the fixed profile in its own identity namespace;
+  SID mismatch rejects before profile creation. Missing LocalSystem registration is an
+  independent file-not-found cause at `CreateProcessAsUserW`.
   Load and every call reject path, identity, reparse, missing-ACE, or broader-rights
   drift. Schema v3 is not accepted.
+- A Windows provider launch that sets `STARTF_USESTDHANDLES` must supply valid inherited
+  stdin, stdout, and stderr handles. The adapter drains stderr concurrently to avoid a
+  blocked child but discards its bytes within the fixed cap; provider stderr content is
+  never returned, audited, or included in diagnostics. Windows extended-length paths
+  remain valid for held-path verification, while environment values consumed by Codex
+  use normalized local-drive strings.
+- The native Windows planning service E2E installs a disposable LocalSystem master,
+  launches the synthetic Codex fixture inside the fixed provider AppContainer, drains
+  32 KiB of fixture stderr, verifies the planning response, and removes only its exact
+  disposable service and data roots. It keeps the production service untouched. This
+  is stronger than source-contract or direct-loopback evidence but does not prove real
+  Codex authentication, network/model behavior, production deployment, or GitHub effects.
 - The native loopback HTTP E2E drives authenticated Public-only provider disclosure,
   exact replay, durable intent, GitHub create/reconciliation, and fixed redacted error
   boundaries with synthetic process adapters. The Windows-only mTLS E2E separately

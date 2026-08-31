@@ -1,10 +1,10 @@
 # Full-Machine Assembly Line Design
 
-Status: approved target; reviewed planning/creation and inert execution-control source with Windows effects fail-closed; broker IPC, execution, and live evidence pending; current master is protocol-v5/schema-v21
+Status: approved target; reviewed planning/creation and inert execution-control source with Windows effects fail-closed; broker IPC, execution, and live evidence pending; current master is protocol-v5/schema-v22
 
 This document is the approved replacement target and preserves its required safety
 exception. Strict protocol contracts, schema-v20 Windows planning persistence/routes,
-a schema-v21 durable effect-free execution-control ledger,
+a schema-v21 durable effect-free execution-control ledger and schema-v22 fail-closed activation controller,
 a catalog-bound planning-effect coordinator, a fixed tool-free Codex adapter, exact
 GitHub create/reconcile adapter, MacCore transport, and the owner review/approval UI
 are implemented in source. Windows runtime loading deliberately remains unavailable
@@ -15,7 +15,7 @@ exception to literal full-machine access:
 Assemblywright's control plane, audit, signing keys, and executor-enforcement
 components remain inaccessible to feature execution.
 
-Full-machine target phase: planning/creation containment implemented and requires native Windows proof; execution admission implemented and effects remain unavailable.
+Full-machine target phase: planning/creation containment has bounded native Windows LocalSystem/AppContainer service proof; execution admission is implemented and effects remain unavailable.
 
 Containment source status: `assemblywright-executor` and `assemblywright-broker` are
 distinct binaries and libraries. The private schema-v2 action envelope is Ed25519
@@ -65,6 +65,12 @@ the vendor directory, and the planning namespace while keeping unrelated parent 
 The known-folder ACE is necessary because the LocalSystem-derived restricted
 AppContainer is not an ordinary Users token. Load and every call bind and revalidate the canonical ancestry,
 directory identities, and exact profile rights; schema/path/ACL drift is unavailable.
+The master first matches each fixed profile to its deterministic expected SID and then
+registers that profile idempotently for its current Windows identity. This is required
+because an owner-provisioned AppContainer profile does not establish LocalSystem's
+identity-scoped profile registration. `STARTF_USESTDHANDLES` launches inherit valid
+stdin, stdout, and stderr handles; stderr is drained concurrently and discarded within
+the fixed bound without entering diagnostics or audit.
 
 ## Understanding Summary
 
