@@ -5,7 +5,7 @@ use super::{
 use std::collections::HashSet;
 use std::ffi::{c_void, OsStr};
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::mem::{size_of, size_of_val, zeroed};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
@@ -1446,7 +1446,8 @@ pub(super) fn run_command(
     profile.revalidate().map_err(|_| CommandError::Failed)?;
     let (stdin_read, stdin_write) = stdin_pipe()?;
     let (stdout_read, stdout_write) = stdout_pipe()?;
-    let mut inherited = [stdin_read.raw(), stdout_write.raw()];
+    let (stderr_read, stderr_write) = stdout_pipe()?;
+    let mut inherited = [stdin_read.raw(), stdout_write.raw(), stderr_write.raw()];
     let mut attributes = AttributeList::new(2)?;
     let mut capability = SID_AND_ATTRIBUTES {
         Sid: internet.raw(),
@@ -1473,7 +1474,7 @@ pub(super) fn run_command(
     startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
     startup.StartupInfo.hStdInput = stdin_read.raw();
     startup.StartupInfo.hStdOutput = stdout_write.raw();
-    startup.StartupInfo.hStdError = INVALID_HANDLE_VALUE;
+    startup.StartupInfo.hStdError = stderr_write.raw();
     startup.StartupInfo.lpDesktop = private_desktop.startup_name.as_ptr().cast_mut();
     startup.lpAttributeList = attributes.ptr;
     let mut command_line = command_line(&executable.path, invocation.args)?;
@@ -1505,6 +1506,7 @@ pub(super) fn run_command(
     let mut suspended = SuspendedProcessGuard::new(process)?;
     drop(stdin_read);
     drop(stdout_write);
+    drop(stderr_write);
     profile.revalidate().map_err(|_| CommandError::Failed)?;
     revalidate_image_guard(executable, &executable_guard)?;
     let job = create_job()?;
@@ -1535,20 +1537,29 @@ pub(super) fn run_command(
     drop(stdin_file);
     let stdout_file = unsafe { File::from_raw_handle(stdout_read.into_raw() as RawHandle) };
     let output_thread = bounded_reader(stdout_file, invocation.max_output);
+    let stderr_file = unsafe { File::from_raw_handle(stderr_read.into_raw() as RawHandle) };
+    let stderr_thread = discard_reader(stderr_file);
     loop {
         if !control.poll() {
             terminate_job(&job, suspended.process());
             let _ = output_thread.join();
+            let _ = stderr_thread.join();
             return Err(CommandError::Cancelled);
         }
         match unsafe { WaitForSingleObject(suspended.process(), 25) } {
             WAIT_OBJECT_0 => {
-                return complete_signaled_process(job, suspended.process(), output_thread);
+                return complete_signaled_process(
+                    job,
+                    suspended.process(),
+                    output_thread,
+                    stderr_thread,
+                );
             }
             WAIT_TIMEOUT => {}
             _ => {
                 terminate_job(&job, suspended.process());
                 let _ = output_thread.join();
+                let _ = stderr_thread.join();
                 return Err(CommandError::Failed);
             }
         }
@@ -1559,6 +1570,7 @@ fn complete_signaled_process(
     job: OwnedHandle,
     process: HANDLE,
     output_thread: std::thread::JoinHandle<Result<Vec<u8>, CommandError>>,
+    stderr_thread: std::thread::JoinHandle<Result<(), CommandError>>,
 ) -> Result<Vec<u8>, CommandError> {
     let mut exit_code = 0;
     let exit_observed = unsafe { GetExitCodeProcess(process, &mut exit_code) } != 0;
@@ -1568,10 +1580,26 @@ fn complete_signaled_process(
     drop(job);
     let reaped = unsafe { WaitForSingleObject(process, 5_000) } == WAIT_OBJECT_0;
     let output = output_thread.join().unwrap_or(Err(CommandError::Failed));
-    if !exit_observed || !reaped {
+    let stderr_drained = stderr_thread.join().unwrap_or(Err(CommandError::Failed));
+    if !exit_observed || !reaped || stderr_drained.is_err() {
         return Err(CommandError::Failed);
     }
     classify_completed_output(exit_code, output)
+}
+
+fn discard_reader(
+    mut reader: impl Read + Send + 'static,
+) -> std::thread::JoinHandle<Result<(), CommandError>> {
+    std::thread::spawn(move || {
+        let mut buffer = [0_u8; 8192];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => return Ok(()),
+                Ok(_) => {}
+                Err(_) => return Err(CommandError::Failed),
+            }
+        }
+    })
 }
 
 fn classify_completed_output(
@@ -2315,12 +2343,13 @@ mod tests {
         let interactive_station = ["Win", "sta0"].concat();
         assert!(!source.contains(&interactive_station));
         let inherited = source
-            .find("let mut inherited = [stdin_read.raw(), stdout_write.raw()];")
+            .find("let mut inherited = [stdin_read.raw(), stdout_write.raw(), stderr_write.raw()];")
             .unwrap();
         let attributes = source
             .find("PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize")
             .unwrap();
         assert!(inherited < attributes);
+        assert!(source.contains("startup.StartupInfo.hStdError = stderr_write.raw();"));
     }
 
     #[test]
@@ -2384,6 +2413,29 @@ mod tests {
                 .join()
                 .unwrap(),
             Err(CommandError::Malformed)
+        ));
+    }
+
+    #[test]
+    fn stderr_discarder_drains_without_retaining_content_and_fails_on_read_error() {
+        assert!(discard_reader(std::io::Cursor::new(Vec::<u8>::new()))
+            .join()
+            .unwrap()
+            .is_ok());
+        assert!(discard_reader(std::io::Cursor::new(vec![b'x'; 32 * 1024]))
+            .join()
+            .unwrap()
+            .is_ok());
+
+        struct FailingReader;
+        impl std::io::Read for FailingReader {
+            fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("fixture read failure"))
+            }
+        }
+        assert!(matches!(
+            discard_reader(FailingReader).join().unwrap(),
+            Err(CommandError::Failed)
         ));
     }
 

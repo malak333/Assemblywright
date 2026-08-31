@@ -33,12 +33,14 @@ fn private_desktop_launch_contract_is_create_only_closed_and_pre_spawn_restored(
     assert!(station < desktop && desktop < restore && restore < process);
 
     let inherited = source
-        .find("let mut inherited = [stdin_read.raw(), stdout_write.raw()];")
+        .find("let mut inherited = [stdin_read.raw(), stdout_write.raw(), stderr_write.raw()];")
         .unwrap();
     let handle_list = source
         .find("PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize")
         .unwrap();
     assert!(inherited < handle_list);
+    assert!(source.contains("startup.StartupInfo.hStdError = stderr_write.raw();"));
+    assert!(source.contains("let stderr_thread = discard_reader(stderr_file);"));
 }
 
 #[test]
