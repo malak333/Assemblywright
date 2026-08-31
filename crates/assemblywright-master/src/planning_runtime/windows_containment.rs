@@ -24,7 +24,11 @@ use windows_sys::Win32::Security::Authorization::{
     NO_MULTIPLE_TRUSTEE, SDDL_REVISION_1, SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN,
     TRUSTEE_W,
 };
-use windows_sys::Win32::Security::Isolation::DeriveAppContainerSidFromAppContainerName;
+#[cfg(test)]
+use windows_sys::Win32::Security::Isolation::DeleteAppContainerProfile;
+use windows_sys::Win32::Security::Isolation::{
+    CreateAppContainerProfile, DeriveAppContainerSidFromAppContainerName,
+};
 use windows_sys::Win32::Security::{
     AclSizeInformation, CreateRestrictedToken, CreateWellKnownSid, EqualSid, FreeSid, GetAce,
     GetAclInformation, GetSecurityDescriptorControl, WinLocalSystemSid, ACCESS_ALLOWED_ACE,
@@ -70,6 +74,7 @@ const GITHUB_PROFILE: &str = "Assemblywright.Planning.Github.v1";
 const INTERNET_CLIENT_SID: &str = "S-1-15-3-1";
 const TERMINATED_EXIT_CODE: u32 = 0xA55E_1001;
 const MAX_PROFILE_NAME_BYTES: usize = 64;
+const HRESULT_PROFILE_ALREADY_EXISTS: i32 = 0x8007_00B7u32 as i32;
 const MAX_USER_ENVIRONMENT_UNITS: usize = 32_768;
 const MAX_USER_ENVIRONMENT_ENTRIES: usize = 512;
 const PRIVATE_WINDOW_STATION_CREATE_ONLY: u32 = 1;
@@ -2128,7 +2133,39 @@ impl ProfileSid {
         if unsafe { EqualSid(derived.raw(), expected.raw()) } == 0 {
             return Err(());
         }
-        Ok(derived)
+        drop(derived);
+
+        // AppContainer profile registration is scoped to the calling Windows identity.
+        // Provisioning registers the fixed profiles for the owner, while the durable master
+        // normally runs as LocalSystem. Register the already-validated fixed profile in the
+        // current identity namespace before launching the contained process.
+        let name = wide(OsStr::new(name));
+        let mut sid = null_mut();
+        let created = unsafe {
+            CreateAppContainerProfile(
+                name.as_ptr(),
+                name.as_ptr(),
+                name.as_ptr(),
+                null(),
+                0,
+                &mut sid,
+            )
+        };
+        if created == HRESULT_PROFILE_ALREADY_EXISTS {
+            if unsafe { DeriveAppContainerSidFromAppContainerName(name.as_ptr(), &mut sid) } < 0 {
+                return Err(());
+            }
+        } else if created < 0 {
+            return Err(());
+        }
+        if sid.is_null() {
+            return Err(());
+        }
+        let registered = Self(sid);
+        if unsafe { EqualSid(registered.raw(), expected.raw()) } == 0 {
+            return Err(());
+        }
+        Ok(registered)
     }
 
     fn raw(&self) -> PSID {
@@ -2263,6 +2300,31 @@ mod tests {
             String::from_utf16(unsafe { std::slice::from_raw_parts(text, length) }).unwrap();
         unsafe { LocalFree(text.cast()) };
         value
+    }
+
+    struct TestAppContainerProfile(Vec<u16>);
+
+    impl Drop for TestAppContainerProfile {
+        fn drop(&mut self) {
+            assert!(unsafe { DeleteAppContainerProfile(self.0.as_ptr()) } >= 0);
+        }
+    }
+
+    #[test]
+    fn profile_registration_is_idempotent_for_the_current_windows_identity() {
+        let name = format!("Assemblywright.Test.{}", Uuid::new_v4().simple());
+        let expected = sid_text(ProfileSid::derive(&name).unwrap().raw());
+        let cleanup = TestAppContainerProfile(wide(OsStr::new(&name)));
+
+        let registered = ProfileSid::derive_and_match(&name, &expected).unwrap();
+        assert_eq!(sid_text(registered.raw()), expected);
+        drop(registered);
+
+        let existing = ProfileSid::derive_and_match(&name, &expected).unwrap();
+        assert_eq!(sid_text(existing.raw()), expected);
+        assert!(ProfileSid::derive_and_match(&name, "S-1-15-2-1").is_err());
+        drop(existing);
+        drop(cleanup);
     }
 
     #[test]

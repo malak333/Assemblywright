@@ -26,7 +26,13 @@ Before starting a release pass, confirm the claim you intend to make.
   Common Application Data runtime instance separately. Record native proof that both
   fixed profiles have only non-inheriting traverse rights on the held shared ancestry,
   unrelated ACLs remain intact, and path/identity/ACL drift fails closed. Repository
-  tests are not live Windows deployment evidence.
+  tests are not live Windows deployment evidence. Verify the fixed profile's exact
+  deterministic SID before idempotent registration in the current Windows service
+  identity; owner registration is not LocalSystem registration. With
+  `STARTF_USESTDHANDLES`, require valid inherited stdin, stdout, and stderr handles and
+  prove that concurrently drained stderr remains content-free and bounded. Keep source
+  contracts, unit tests, the synthetic LocalSystem service E2E, a real Codex call, and
+  production deployment as separate evidence layers.
 - Confirm `docs/feature-conveyor-design.md` still marks the implemented slice
   accurately. The repository kernel is default-inert and exposes the
   owner-token-authenticated loopback read-only

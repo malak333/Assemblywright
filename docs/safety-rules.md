@@ -15,7 +15,7 @@ release requirements, not optional UX guidance.
 - Ambiguity fails closed. A blocked state names one exact next owner action.
 
 The approved full-machine Assembly Line is only partially implemented and is not
-current execution authority. Protocol v5 and master schema v21 now contain strict
+current execution authority. Protocol v5 and master schema v22 now contain strict
 contracts, planning persistence/routes, and a durable execution-control ledger.
 Schema v21 records Start/Stop/Emergency Pause intent and restart quarantine only;
 without authenticated IPC, verified receipts, and host effects it grants no execution
@@ -25,7 +25,7 @@ semantics. No planning record, `creation_pending` repository, feature enqueue,
 auto-run setting, legacy activation, or owner-control receipt widens a worker to the
 target scope.
 
-Full-machine target phase: planning/creation containment implemented and requires native Windows proof; execution admission implemented and effects remain unavailable.
+Full-machine target phase: planning/creation containment has bounded native Windows LocalSystem/AppContainer service proof; execution admission is implemented and effects remain unavailable.
 
 The inert planning slice additionally requires:
 
@@ -56,6 +56,12 @@ The inert planning slice additionally requires:
   path and directory identity plus those rights are checked at load and before every
   call. Older schemas, profile-directory placement, links, missing/broadened ACEs, or
   ancestry drift fail closed.
+  The master must match each fixed AppContainer name to its deterministic expected SID
+  before it registers that profile idempotently for its current Windows identity.
+  Owner-time profile registration does not establish LocalSystem registration. A
+  contained provider launch using `STARTF_USESTDHANDLES` must inherit valid stdin,
+  stdout, and stderr handles; stderr is drained concurrently and discarded without
+  entering diagnostics, audit, or provider output.
   Production Windows runtime loading remains unavailable until distinct restricted
   planning and GitHub identities/ACLs and atomic containment are provisioned and proved. The Mac UI
   may review and approve frozen specifications, but target effects fail closed;

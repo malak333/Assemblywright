@@ -60,3 +60,22 @@ fn private_desktop_failure_remains_pre_effect_and_content_free() {
     assert!(!source.contains("private desktop failed:"));
     assert!(!source.contains("station_name, diagnostic"));
 }
+
+#[test]
+fn fixed_appcontainer_profiles_are_registered_for_the_service_identity_after_sid_validation() {
+    let source = include_str!("../src/planning_runtime/windows_containment.rs");
+    for required in [
+        "CreateAppContainerProfile(",
+        "HRESULT_PROFILE_ALREADY_EXISTS",
+        "DeriveAppContainerSidFromAppContainerName(",
+        "profile_registration_is_idempotent_for_the_current_windows_identity",
+    ] {
+        assert!(source.contains(required), "missing contract: {required}");
+    }
+    let binding = &source[source.find("fn derive_and_match(").unwrap()..];
+    let expected_match = binding
+        .find("EqualSid(derived.raw(), expected.raw())")
+        .unwrap();
+    let registration = binding.find("CreateAppContainerProfile(").unwrap();
+    assert!(expected_match < registration);
+}

@@ -57,6 +57,9 @@ MASTER_ASSEMBLY_LINE_EFFECTS_E2E="crates/assemblywright-master/src/planning_effe
 MASTER_ASSEMBLY_LINE_HTTP_E2E="crates/assemblywright-master/tests/assembly_line_planning_http.rs"
 MASTER_ASSEMBLY_LINE_MTLS_E2E="crates/assemblywright-master/tests/assembly_line_planning_mtls.rs"
 MASTER_BRAINSTORMING_PROVIDER_ADAPTER="crates/assemblywright-master/src/brainstorming_provider_adapter.rs"
+MASTER_WINDOWS_PLANNING_CONTAINMENT="crates/assemblywright-master/src/planning_runtime/windows_containment.rs"
+MASTER_WINDOWS_PLANNING_E2E_CONTRACT="crates/assemblywright-master/tests/windows_planning_service_e2e_contract.rs"
+WINDOWS_PLANNING_SERVICE_E2E="scripts/windows-planning-service-e2e.ps1"
 MASTER_ARTIFACT_INTEGRATION="crates/assemblywright-master/src/integration.rs"
 MASTER_ARTIFACT_INTEGRATION_E2E="crates/assemblywright-master/tests/artifact_integration_e2e.rs"
 MASTER_VALIDATION_CONTAINMENT="crates/assemblywright-master/src/validation_containment.rs"
@@ -283,6 +286,8 @@ for file in \
   "$MASTER_REMOTE_MTLS_E2E" "$MASTER_EVENT_E2E" "$MASTER_CONVEYOR_E2E" \
   "$MASTER_ASSEMBLY_LINE_E2E" "$MASTER_ASSEMBLY_LINE_EXECUTION_E2E" "$MASTER_ASSEMBLY_LINE_HTTP_E2E" \
   "$MASTER_ASSEMBLY_LINE_MTLS_E2E" \
+  "$MASTER_WINDOWS_PLANNING_CONTAINMENT" "$MASTER_WINDOWS_PLANNING_E2E_CONTRACT" \
+  "$WINDOWS_PLANNING_SERVICE_E2E" \
   "$MASTER_ARTIFACT_INTEGRATION" "$MASTER_ARTIFACT_INTEGRATION_E2E" \
   "$MASTER_VALIDATION_CONTAINMENT" "$MASTER_VALIDATION_CONTAINMENT_E2E" \
   "$MASTER_REVIEW_PROVIDER" "$MASTER_REVIEW_PROVIDER_E2E" \
@@ -351,7 +356,7 @@ require_text "README selected review-provider integration" "$README" \
 require_text "DESIGN conveyor pointer" "$DESIGN" "docs/feature-conveyor-design.md"
 require_text "DESIGN distributed pointer" "$DESIGN" "docs/distributed-developer-mode-design.md"
 require_text "DESIGN assistant non-goal" "$DESIGN" "No general-purpose assistant surface."
-require_text "DESIGN current master schema" "$DESIGN" "master schema v21"
+require_text "DESIGN current master schema" "$DESIGN" "master schema v22"
 require_text "DESIGN preserved legacy schema" "$DESIGN" \
   "schema-v19 Feature Conveyor grant, queue, activation, and restricted-worker"
 require_text "DESIGN result artifact boundary" "$DESIGN" \
@@ -383,7 +388,7 @@ require_text "safety control-plane exception" "$SAFETY_RULES" \
 require_text "conveyor target current boundary" "$FEATURE_CONVEYOR_DESIGN" \
   "schema-v19 bounded Feature Conveyor behavior"
 require_text "architecture target current boundary" "$ARCHITECTURE" \
-  "The current Windows master is protocol v5/schema v21"
+  "The current Windows master is protocol v5/schema v22"
 require_text "build docs target proof boundary" "$BUILD_DOCS" \
   "do not prove Windows capability-separated provider/GitHub execution"
 forbid_text "build docs stale fake-adapter-only planning claim" "$BUILD_DOCS" \
@@ -396,6 +401,19 @@ require_text "knowledge base native Assembly Line planning E2E" "$KB" \
   "The native loopback HTTP E2E drives authenticated Public-only provider disclosure"
 require_text "build docs native Assembly Line planning E2E" "$BUILD_DOCS" \
   "The loopback process E2E drives one exact Private project"
+require_text "build docs native Windows planning service E2E" "$BUILD_DOCS" \
+  "windows-planning-service-e2e.ps1"
+require_text "knowledge base identity-scoped AppContainer registration" "$KB" \
+  "AppContainer profile registration is also scoped to the current Windows identity"
+require_text "Windows planning current-identity profile registration" \
+  "$MASTER_WINDOWS_PLANNING_CONTAINMENT" "CreateAppContainerProfile("
+require_text "Windows planning profile registration unit coverage" \
+  "$MASTER_WINDOWS_PLANNING_CONTAINMENT" \
+  "profile_registration_is_idempotent_for_the_current_windows_identity"
+require_text "Windows planning native service E2E contract" \
+  "$MASTER_WINDOWS_PLANNING_E2E_CONTRACT" "windows_planning_service_e2e_passed"
+require_text "Windows planning native service E2E script" \
+  "$WINDOWS_PLANNING_SERVICE_E2E" "codex_stderr_bytes_drained = 32768"
 require_text "Windows planning Codex outer containment contract" \
   "$MASTER_BRAINSTORMING_PROVIDER_ADAPTER" 'let sandbox = "danger-full-access";'
 require_text "non-Windows planning Codex inner read-only contract" \
@@ -415,8 +433,8 @@ require_text "build docs planning Codex Windows sandbox split" "$BUILD_DOCS" \
 require_text "knowledge base planning Codex Windows sandbox split" "$KB" \
   'On Windows its inner sandbox is `danger-full-access`'
 
-FULL_MACHINE_PHASE_MARKER="Full-machine target phase: planning/creation containment implemented and requires native Windows proof; execution admission implemented and effects remain unavailable."
-FULL_MACHINE_PENDING_STATUS="Status: approved target; reviewed planning/creation and inert execution-control source with Windows effects fail-closed; broker IPC, execution, and live evidence pending; current master is protocol-v5/schema-v21"
+FULL_MACHINE_PHASE_MARKER="Full-machine target phase: planning/creation containment has bounded native Windows LocalSystem/AppContainer service proof; execution admission is implemented and effects remain unavailable."
+FULL_MACHINE_PENDING_STATUS="Status: approved target; reviewed planning/creation and inert execution-control source with Windows effects fail-closed; broker IPC, execution, and live evidence pending; current master is protocol-v5/schema-v22"
 
 for false_claim in \
   "Status: implemented and active" \

@@ -2,9 +2,10 @@
 
 ## Approved full-machine Assembly Line target
 
-The current Windows master is protocol v5/schema v21. Schema v20 added an
-Assembly Line planning lane; schema v21 adds durable execution-control and restart-
-quarantine state while retaining every legacy schema-v19 Feature Conveyor meaning.
+The current Windows master is protocol v5/schema v22. Schema v20 added an
+Assembly Line planning lane; schema v21 added durable execution-control and restart-
+quarantine state, and schema v22 adds the fail-closed activation controller while
+retaining every legacy schema-v19 Feature Conveyor meaning.
 The approved replacement target is specified in
 `docs/full-machine-assembly-line-design.md`; the reviewed planning/creation source
 slice grants no execution authority. Windows keeps its effect adapters unavailable
@@ -27,14 +28,17 @@ schema-v4 master-private locator binds one exact runtime instance below the cano
 Common Application Data `Assemblywright/planning-runtime` namespace. Exact profile
 traverse-only ACEs are merged onto held Common Application Data and shared-ancestor
 handles without replacing unrelated ACLs; canonical identities and rights are rechecked
-before each effect.
+before each effect. The exact fixed profile SID is matched before the profile is
+registered idempotently for the current Windows service identity; owner registration
+does not substitute for LocalSystem registration. Provider stdin, stdout, and stderr
+are all valid inherited handles, with stderr drained concurrently and discarded.
 
-Full-machine target phase: planning/creation containment implemented and requires native Windows proof; execution admission implemented and effects remain unavailable.
+Full-machine target phase: planning/creation containment has bounded native Windows LocalSystem/AppContainer service proof; execution admission is implemented and effects remain unavailable.
 
 ```mermaid
 flowchart LR
   UI["New Project / New Feature review and approval; queue + auto-run authoritative"] --> MacCore["Strict MacCore projection/mutation and exact-replay recovery"]
-  MacCore --> Master["Schema-v21 planning routes + inert execution-control ledger"]
+  MacCore --> Master["Schema-v22 planning routes + fail-closed activation controller"]
   Master --> Intent["Durable pre-effect intent and reconciliation"]
   Master --> FIFO["Created + evidence gated FIFO; no dispatch"]
   Master --> AutoRun["Default-on replay-safe CAS setting; no execution"]

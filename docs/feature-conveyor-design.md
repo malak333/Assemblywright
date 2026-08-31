@@ -19,9 +19,9 @@ fixed provider/GitHub source adapters, and simplified Mac review/approval UI are
 implemented. Windows refuses to load the effect adapters pending capability-separated
 identities/ACLs; execution-control, executor, and broker parts remain unavailable. The
 schema-v19 bounded Feature Conveyor behavior
-documented below retains its historical meaning under the current schema-v21 master.
+documented below retains its historical meaning under the current schema-v22 master.
 
-Full-machine target phase: planning/creation containment implemented and requires native Windows proof; execution admission implemented and effects remain unavailable.
+Full-machine target phase: planning/creation containment has bounded native Windows LocalSystem/AppContainer service proof; execution admission is implemented and effects remain unavailable.
 
 The replacement is an atomic authority cutover, not an inference that existing grants
 have widened. Existing repository grants, activation evidence, queued specifications,
@@ -56,7 +56,10 @@ implementation authority.
 Windows packages that adapter below canonical Common Application Data, not below the
 owner-profile master data directory. A master-private schema-v4 locator binds the exact
 runtime instance, and every call revalidates the no-reparse ancestor identities plus
-the two profiles' exact non-inheriting traverse-only shared-parent rights.
+the two profiles' exact non-inheriting traverse-only shared-parent rights. The master
+matches each fixed profile's deterministic SID before idempotently registering it in
+the current service identity's AppContainer namespace; it also supplies valid inherited
+stdin, stdout, and stderr handles and drains stderr through a bounded discard path.
 
 Implementation status: the default-inert protocol-v5/schema-v19 Windows
 `assemblywright-master` kernel is implemented through the owner-control and
