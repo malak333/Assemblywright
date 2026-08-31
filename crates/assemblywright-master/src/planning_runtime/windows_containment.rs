@@ -1846,10 +1846,10 @@ fn extract_local_app_data(block: &[u16]) -> Result<Vec<u16>, CommandError> {
         let name = String::from_utf16(&entry[..separator]).map_err(|_| CommandError::Failed)?;
         let value = &entry[separator + 1..];
         String::from_utf16(value).map_err(|_| CommandError::Failed)?;
-        if name.eq_ignore_ascii_case("LOCALAPPDATA") {
-            if local_app_data.replace(value.to_vec()).is_some() {
-                return Err(CommandError::Failed);
-            }
+        if name.eq_ignore_ascii_case("LOCALAPPDATA")
+            && local_app_data.replace(value.to_vec()).is_some()
+        {
+            return Err(CommandError::Failed);
         }
         cursor += relative_end + 1;
     }
