@@ -1399,11 +1399,13 @@ mod tests {
         let source = include_str!("brainstorming_provider_adapter.rs");
         for required in [
             "capture_windows_environment(env::vars_os())?",
-            ".env_clear().env(\"CODEX_HOME\", codex_home)",
-            ".env(\"LOCALAPPDATA\", local_app_data)",
+            "command.env_clear();",
+            ".env(\"CODEX_HOME\", codex_windows_environment_path(codex_home))",
+            "codex_windows_environment_path(local_app_data)",
             ".env(\"SystemRoot\", &environment.system_root)",
-            ".env(\"TEMP\", temporary)",
-            ".env(\"TMP\", temporary)",
+            ".env(\"TEMP\", codex_windows_environment_path(temporary))",
+            ".env(\"TMP\", codex_windows_environment_path(temporary))",
+            "fn codex_windows_environment_path(path: &Path) -> OsString",
             "let temporary = root.join(TEMP_DIRECTORY);",
             "validate_private(&temporary, true)?;",
             "let local_app_data = root.join(LOCAL_APP_DATA_DIRECTORY);",
@@ -1431,9 +1433,9 @@ mod tests {
             "let temporary = root.join(TEMP_DIRECTORY);",
             "reject_link(path)?;",
             "validate_private(&temporary, true)?;",
-            ".env(\"TEMP\", temporary)",
-            ".env(\"TMP\", temporary)",
-            ".env(\"LOCALAPPDATA\", local_app_data)",
+            ".env(\"TEMP\", codex_windows_environment_path(temporary))",
+            ".env(\"TMP\", codex_windows_environment_path(temporary))",
+            "codex_windows_environment_path(local_app_data)",
         ] {
             assert!(source.contains(required));
         }
