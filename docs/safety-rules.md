@@ -15,14 +15,17 @@ release requirements, not optional UX guidance.
 - Ambiguity fails closed. A blocked state names one exact next owner action.
 
 The approved full-machine Assembly Line is only partially implemented and is not
-current execution authority. Protocol v5 and master schema v20 now contain strict
-contracts plus effect-free inert planning persistence/routes. Schema v20 preserves
+current execution authority. Protocol v5 and master schema v21 now contain strict
+contracts, planning persistence/routes, and a durable execution-control ledger.
+Schema v21 records Start/Stop/Emergency Pause intent and restart quarantine only;
+without authenticated IPC, verified receipts, and host effects it grants no execution
+authority. It preserves
 the legacy schema-v19 Feature Conveyor grant, activation, queue, and restricted-worker
 semantics. No planning record, `creation_pending` repository, feature enqueue,
 auto-run setting, legacy activation, or owner-control receipt widens a worker to the
 target scope.
 
-Full-machine target phase: partial implementation; protocol-v5/schema-v20 inert planning and presentation exist; execution runtime remains unavailable.
+Full-machine target phase: planning/creation containment implemented and requires native Windows proof; execution admission implemented and effects remain unavailable.
 
 The inert planning slice additionally requires:
 
@@ -33,10 +36,30 @@ The inert planning slice additionally requires:
   `created` state with creation evidence. `creation_pending` never satisfies this gate.
 - Auto-run defaults on and its only current mutation is an exact replay-safe,
   compare-and-set state change. It creates no session, child epoch, dispatch, or effect.
-- A catalog-bound planning/GitHub coordinator is exercised only with injected fake
-  adapters. Production brainstorming-provider execution and GitHub creation remain
-  unavailable. The Mac UI may submit only exact auto-run CAS/reconciliation;
-  Start/Stop/Emergency effect routes, executors, and brokers are unavailable. Every
+- The catalog-bound coordinator, fixed tool-free Codex adapter, Public-only cloud
+  wrapper, and exact GitHub reconciliation have source and cross-process coverage.
+  The Windows brainstorming adapter deliberately selects Codex inner
+  `danger-full-access` because the effective isolation is Assemblywright's
+  restricted-token AppContainer, exact ACL tree, closed environment, pinned
+  executable, kill-on-close Job, and per-call create-only private window
+  station/desktop. The GUI-object DACL admits only LocalSystem, the provisioning
+  owner, and the exact profile; `Winsta0` is never widened. Codex `LOCALAPPDATA` and
+  `TEMP`/`TMP` are distinct validated provider-private writable roots, never ambient
+  owner directories. This grants no implementation authority:
+  planning remains schema-bound and all Codex tools stay disabled. Non-Windows
+  planning retains the inner `read-only` sandbox.
+  Windows schema v4 keeps the master config/locator owner-private under `DataDir` and
+  derives the effect tree only from the canonical Common Application Data known folder
+  plus one exact `runtime_instance`. Canonical Common Application Data and the shared
+  effect-tree ancestors preserve unrelated ACLs but must contain exactly one
+  non-inheriting traverse ACE for each fixed profile;
+  path and directory identity plus those rights are checked at load and before every
+  call. Older schemas, profile-directory placement, links, missing/broadened ACEs, or
+  ancestry drift fail closed.
+  Production Windows runtime loading remains unavailable until distinct restricted
+  planning and GitHub identities/ACLs and atomic containment are provisioned and proved. The Mac UI
+  may review and approve frozen specifications, but target effects fail closed;
+  Start/Stop/Emergency effects, executors, and brokers are unavailable. Every
   runtime-availability component must report `unavailable` until separately proven.
 
 For the approved target, these additional rules are release requirements:
@@ -51,6 +74,26 @@ For the approved target, these additional rules are release requirements:
 - The Assemblywright control plane is the sole protected exception to full-machine
   scope. Unknown actions, protected targets, privilege escalation, control-plane
   mutation, untracked delegation, and broker identity drift reject before effect.
+- A broker action is admitted only from one strict Ed25519-signed schema-v2 envelope
+  bound to the exact session/child epoch, contiguous sequence and fresh nonce,
+  authenticated authority revision,
+  executor/broker identities and executable digests, complete protected-closure
+  manifest digest, typed operation digest, canonical target and parent identities,
+  deadline, cancellation behavior, effect class, and reconciliation strategy.
+  Missing protected categories, stale or future envelopes, replay/gaps, case aliases,
+  symlink/reparse substitution, multi-link files, and identity or digest drift reject.
+  Executor restart requires the master ledger's exact authenticated authority revision
+  and snapshot digest; the executor owns no writable rollback checkpoint, and an
+  authentic historical snapshot cannot clear a durable pause or revocation.
+- Direct executor or broker launch grants no authority. An unprivileged process must
+  enter an OS-enforced descendant boundary before it can run, and untrusted code must
+  be unable to leave that boundary. A process group alone is insufficient because a
+  descendant can call `setsid`/`setpgid`; macOS execution therefore remains disabled.
+  Windows source must retain no-reparse image/parent handles, verify the suspended
+  image, assign the Job, and recheck authority in one pre-resume transaction; product
+  execution remains unavailable until that source is installed and proved natively.
+  An unproved complete reap is
+  `incomplete_termination`.
 - Audit intent precedes every possible external effect. Audit is same-transition,
   structurally redacted, and records identities, effect class, target metadata,
   result, checkpoint, and digests—never raw secrets, credentials, provider prose,
@@ -1085,6 +1128,10 @@ For the approved target, these additional rules are release requirements:
   Both UDS peers must validate audit token, current EUID, exact executable path,
   and exact CDHash before framing; the agent must reject any requirement text
   that is not canonical for its declared profile before opening durable state.
+  The agent may cache a successful Security.framework decision only for the exact
+  `LOCAL_PEERTOKEN` value, including PID generation, for one server lifetime and at
+  most 64 tokens. A new token, a full cache, a poisoned cache, or any failed check
+  must still perform or fail the bounded pre-frame identity decision.
   The agent cursor may store only stream ID, sequence, and update time.
 - By default the long-running helper may request only authenticated MacBridge health, the
   exact bounded Feature Conveyor observation route, and the metadata event

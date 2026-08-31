@@ -2436,9 +2436,10 @@ private actor FoundationAssemblywrightMacDeveloperAgentSession:
             expectedCoreExecutableURL: agentIdentity.executableURL
         )
         let transport = DarwinAssemblywrightUnixSocketTransport(
-            // A valid fixture may deliberately wait for up to five seconds.
-            // Keep bounded framing and scheduling overhead outside that budget.
-            timeoutSeconds: 10,
+            // The Rust server authenticates peer code identity before reading the frame.
+            // Keep this total request bound above that fail-closed Security.framework bound.
+            timeoutSeconds:
+                DarwinAssemblywrightUnixSocketTransport.authenticatedPeerRequestTimeoutSeconds,
             peerIdentityPolicy: { peerPolicy }
         )
         let mlxExecutionTransport = DarwinAssemblywrightUnixSocketTransport(

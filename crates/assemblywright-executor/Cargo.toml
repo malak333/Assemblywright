@@ -1,0 +1,34 @@
+[package]
+name = "assemblywright-executor"
+version = "0.1.4"
+description = "Unprivileged full-machine execution containment for Assemblywright."
+default-run = "assemblywright-executor"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "assemblywright-executor"
+path = "src/main.rs"
+
+[[bin]]
+name = "assemblywright-executor-windows-helper"
+path = "src/bin/windows_containment_helper.rs"
+
+[dependencies]
+assemblywright-protocol = { path = "../assemblywright-protocol", version = "0.1.4" }
+ed25519-dalek.workspace = true
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

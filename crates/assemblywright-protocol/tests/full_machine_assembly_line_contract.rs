@@ -6,10 +6,11 @@ use assemblywright_protocol::{
     AssemblyLineStartRequest, AssemblyLineState, AssemblyLineStopReceipt, AssemblyLineStopRequest,
     BrainstormingAcceptanceCriterion, BrainstormingOwnerApprovalBinding,
     BrainstormingSpecificationDocument, BrainstormingTargetKind, CanonicalGitHubRepositoryUrl,
-    FeatureBrainstormingDraft, FeatureQueueEntryProjection, FeatureQueueLifecycle,
-    FrozenBrainstormingSpecification, OrchestratorCatalog, OrchestratorProfile,
-    ProcessTerminationEvidenceReference, ProcessTerminationOutcome, ProjectBrainstormingDraft,
-    ProjectVisibility, RepositoryCreationLifecycle, RepositoryCreationProjection,
+    FeatureBrainstormingCloudRequest, FeatureBrainstormingDraft, FeatureQueueEntryProjection,
+    FeatureQueueLifecycle, FrozenBrainstormingSpecification, OrchestratorCatalog,
+    OrchestratorProfile, ProcessTerminationEvidenceReference, ProcessTerminationOutcome,
+    ProjectBrainstormingCloudRequest, ProjectBrainstormingDraft, ProjectVisibility,
+    PublicInformationClassification, RepositoryCreationLifecycle, RepositoryCreationProjection,
     RuntimeAvailabilityStatus, RuntimeComponentAvailability, RuntimeUnavailableReason,
     FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION, MAX_ASSEMBLY_LINE_OWNER_PROJECTION_BYTES,
     MAX_ASSEMBLY_LINE_QUEUE_COUNT, MAX_BRAINSTORMING_INPUT_BYTES,
@@ -60,6 +61,28 @@ fn feature_draft() -> FeatureBrainstormingDraft {
         orchestrator: OrchestratorProfile::default(),
         idea: "Add one strict owner-approved feature with regression coverage.".into(),
     }
+}
+
+fn project_cloud_request() -> ProjectBrainstormingCloudRequest {
+    let mut request = ProjectBrainstormingCloudRequest {
+        schema_version: FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
+        draft: project_draft(),
+        information_classification: PublicInformationClassification::Public,
+        owner_cloud_disclosure_sha256: [0; 32],
+    };
+    request.owner_cloud_disclosure_sha256 = request.canonical_disclosure_sha256().unwrap();
+    request
+}
+
+fn feature_cloud_request() -> FeatureBrainstormingCloudRequest {
+    let mut request = FeatureBrainstormingCloudRequest {
+        schema_version: FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
+        draft: feature_draft(),
+        information_classification: PublicInformationClassification::Public,
+        owner_cloud_disclosure_sha256: [0; 32],
+    };
+    request.owner_cloud_disclosure_sha256 = request.canonical_disclosure_sha256().unwrap();
+    request
 }
 
 fn specification() -> BrainstormingSpecificationDocument {
@@ -159,6 +182,62 @@ fn repository_and_orchestrator_canonical_digests_are_fixed() {
         hex(OrchestratorProfile::default().canonical_sha256().unwrap()),
         "6f4eafc8125fd3762accf9628f22280f2cc21640572c48b36463162177a483ee"
     );
+}
+
+#[test]
+fn production_brainstorming_cloud_disclosure_is_public_and_digest_bound() {
+    let project = project_cloud_request();
+    project.validate().unwrap();
+    assert_eq!(
+        hex(project.owner_cloud_disclosure_sha256),
+        "295ec0847c198b1463ff9f4b0b5318f1b2276acf9c0e715bef585b3f3c06a914"
+    );
+    let project_bytes = serde_json::to_vec(&project).unwrap();
+    assert_eq!(
+        ProjectBrainstormingCloudRequest::decode_frame(&project_bytes).unwrap(),
+        project
+    );
+
+    let feature = feature_cloud_request();
+    feature.validate().unwrap();
+    assert_eq!(
+        hex(feature.owner_cloud_disclosure_sha256),
+        "905215bf4e48f9768026ac013b66f48076b5737019c846544a7c81c4fad60dae"
+    );
+    let feature_bytes = serde_json::to_vec(&feature).unwrap();
+    assert_eq!(
+        FeatureBrainstormingCloudRequest::decode_frame(&feature_bytes).unwrap(),
+        feature
+    );
+}
+
+#[test]
+fn production_brainstorming_cloud_disclosure_rejects_minting_and_ambiguity() {
+    let mut forged = project_cloud_request();
+    forged.draft.idea.push_str(" altered");
+    assert!(forged.validate().is_err());
+
+    let mut zero = feature_cloud_request();
+    zero.owner_cloud_disclosure_sha256 = [0; 32];
+    assert!(zero.validate().is_err());
+
+    let mut value = serde_json::to_value(project_cloud_request()).unwrap();
+    value["information_classification"] = json!("private");
+    assert!(
+        ProjectBrainstormingCloudRequest::decode_frame(&serde_json::to_vec(&value).unwrap())
+            .is_err()
+    );
+
+    value = serde_json::to_value(project_cloud_request()).unwrap();
+    value["unexpected"] = json!(true);
+    assert!(
+        ProjectBrainstormingCloudRequest::decode_frame(&serde_json::to_vec(&value).unwrap())
+            .is_err()
+    );
+
+    let bytes = serde_json::to_string(&project_cloud_request()).unwrap();
+    let duplicate = bytes.replacen("{", "{\"schema_version\":1,", 1);
+    assert!(ProjectBrainstormingCloudRequest::decode_frame(duplicate.as_bytes()).is_err());
 }
 
 #[test]
@@ -1058,11 +1137,13 @@ fn termination_evidence_digest_binds_identity_time_and_outcome() {
 #[test]
 fn start_receipt_binds_request_resulting_state_session_and_child() {
     let request = start_request();
+    let mut starting_state = running_state();
+    starting_state.lifecycle = AssemblyLineLifecycleState::Starting;
     let receipt = AssemblyLineStartReceipt {
         schema_version: FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
         request_id: request.request_id,
         owner_start_approval_sha256: request.owner_start_approval_sha256,
-        resulting_state: running_state(),
+        resulting_state: starting_state,
         session: session(),
         child: child(),
     };

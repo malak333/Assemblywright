@@ -1,27 +1,70 @@
 # Full-Machine Assembly Line Design
 
-Status: approved target; partial inert planning implementation; execution and live evidence pending; current master is protocol-v5/schema-v20
+Status: approved target; reviewed planning/creation and inert execution-control source with Windows effects fail-closed; broker IPC, execution, and live evidence pending; current master is protocol-v5/schema-v21
 
 This document is the approved replacement target and preserves its required safety
-exception. Strict protocol contracts, schema-v20 Windows inert planning
-persistence/routes, a private-test planning-effect coordinator, MacCore transport, and
-a simplified authoritative queue/auto-run Mac UI are implemented. They do not replace
-the bounded executor or grant execution
+exception. Strict protocol contracts, schema-v20 Windows planning persistence/routes,
+a schema-v21 durable effect-free execution-control ledger,
+a catalog-bound planning-effect coordinator, a fixed tool-free Codex adapter, exact
+GitHub create/reconcile adapter, MacCore transport, and the owner review/approval UI
+are implemented in source. Windows runtime loading deliberately remains unavailable
+until capability-separated planning and GitHub identities/ACLs are provisioned and
+proved. These changes do not replace the bounded executor or grant execution
 authority. The owner approved one
 exception to literal full-machine access:
 Assemblywright's control plane, audit, signing keys, and executor-enforcement
 components remain inaccessible to feature execution.
 
-Full-machine target phase: partial implementation; protocol-v5/schema-v20 inert planning and presentation exist; execution runtime remains unavailable.
+Full-machine target phase: planning/creation containment implemented and requires native Windows proof; execution admission implemented and effects remain unavailable.
 
-The current planning lane is effect-free. Project approval defaults to Public unless
-Private was frozen and records only `creation_pending`; GitHub is not called. Feature
-enqueue requires an exact `created` repository with creation evidence and never
-dispatches work. Auto-run defaults on and supports only an exact replay-safe CAS
-setting change. The auto-run UI uses exact signed-helper replay with durable recovery.
-Production brainstorming-provider execution, GitHub creation/reconciliation,
-Start/Stop/Emergency routes, executors, and brokers are unavailable,
-and the owner projection reports every runtime component as `unavailable`.
+Containment source status: `assemblywright-executor` and `assemblywright-broker` are
+distinct binaries and libraries. The private schema-v2 action envelope is Ed25519
+signed and binds executor/broker executable digests plus a digest of all named
+protected-control-plane categories and the exact authenticated authority revision.
+Legacy schema-v1 grants reject, and pause/resume or revocation revision changes
+invalidate grants signed against the earlier authority state. Executor restart requires
+the exact authenticated snapshot revision and digest restored from the master ledger;
+an authentic historical unpaused snapshot cannot roll back a durable pause or
+revocation. Broker admission policy is testable, but every
+privileged adapter remains effect-disabled pending held-handle native implementation;
+file replacement/removal and restricted service adapters remain closed. The executor
+holds and revalidates macOS executable/cwd descriptors plus signed parent/object
+identities, but refuses spawn because process-group membership is escapable by hostile
+code. Windows source holds no-reparse executable/cwd chains, verifies the suspended
+image, assigns a kill-on-close Job, and rechecks authority before resume. It remains
+uninstalled and unavailable through product routes pending native Windows proof. Repository
+tests are not OS code-signing, service installation, dedicated identity/ACL, Windows
+native execution, resource-reservation, or live two-host proof.
+
+The deployed Windows planning lane remains effect-free. Source now contains bounded
+Public-only cloud disclosure, provider invocation, frozen owner approval, durable
+pre-effect intent, and exact GitHub reconciliation. Windows rejects loading those
+effect adapters until its capability separation is installed, so deployed project
+approval still cannot call GitHub. Feature enqueue requires an exact `created`
+repository with creation evidence and never dispatches work. Auto-run defaults on and
+supports only an exact replay-safe CAS setting change. Authenticated
+Start/Stop/Emergency routes fail closed through an unavailable production dispatcher;
+installed executor/broker services remain unavailable. Their inherited-pipe runtimes
+cannot acquire authority without exact signed configuration, and no privileged effect
+adapter, activation-receipt path, master IPC client, or service identity is wired.
+
+Planning process creation uses a fresh create-only private window station and desktop
+per call. Their protected DACL contains only LocalSystem, the provisioning owner, and
+the exact provider or GitHub AppContainer profile. The master serializes the brief
+process-global station switch, restores its original station before creating the
+suspended child, retains both GUI-object handles through complete Job termination, and
+never changes `Winsta0`.
+The closed Windows Codex environment separately maps `LOCALAPPDATA` to the validated
+provider `local-app-data` root and `TEMP`/`TMP` to the validated provider temp root;
+ambient owner paths never cross into the Codex child.
+The Windows package root is derived from the Common Application Data known folder as
+`Assemblywright/planning-runtime/<runtime_instance>`; `DataDir` retains only the
+master-private schema-v4 locator/config. Provisioning merges exact non-inheriting
+traverse ACEs for both fixed profile SIDs onto held handles for Common Application Data,
+the vendor directory, and the planning namespace while keeping unrelated parent ACLs.
+The known-folder ACE is necessary because the LocalSystem-derived restricted
+AppContainer is not an ordinary Users token. Load and every call bind and revalidate the canonical ancestry,
+directory identities, and exact profile rights; schema/path/ACL drift is unavailable.
 
 ## Understanding Summary
 
@@ -149,8 +192,9 @@ control-plane target before effect. Generic shell processes receive a stripped t
 and protected-control-plane ACL denial; operations that require privilege use typed
 broker adapters.
 
-All directly launched processes belong to a boundedly terminable Windows Job Object
-or macOS process group. Privileged adapters are closed operations; they never accept
+All directly launched processes must belong to an OS-enforced descendant boundary that
+untrusted code cannot leave. A Windows Job Object may satisfy that boundary; a macOS
+process group alone does not, so Mac execution remains unavailable. Privileged adapters never accept
 an executable, script, interpreter input, command line, service body, scheduled-task
 body, dynamic library, or plugin selected by a feature. Arbitrary code never runs as
 SYSTEM, root, the master identity, or the broker identity.
@@ -285,10 +329,10 @@ and execution records remain separate.
 
 This design deliberately targets replacement of the current restricted-worker
 execution policy. The target documentation, versioned protocol contracts, backup-first
-schema-v20 inert planning persistence/routes, private-test planning-effect coordinator,
-MacCore planning transport, and simplified authoritative queue/auto-run Mac UI exist.
-Implementation still requires contained production brainstorming and GitHub adapters,
-Start/Stop/Emergency effect routes, executor containment and recovery,
+schema-v20 planning persistence/routes, contained source adapters, MacCore planning
+transport, and simplified authoritative queue/auto-run Mac UI exist. Implementation
+still requires Windows capability-separated enablement for the planning and GitHub
+adapters, Start/Stop/Emergency effect routes, executor containment and recovery,
 privileged brokers, release evidence, and native hostile/live E2E. Until those changes
 and their evidence are complete, the existing bounded executor remains authoritative
 and the new UI must not claim full-machine execution readiness.
@@ -307,16 +351,21 @@ authority or proof of a later phase:
    with negative-path and compatibility tests. The strict protocol contract and
    backup-first schema-v20 inert planning subset are implemented. No session, child
    epoch, action envelope, termination, executor, broker, or external effect is issued.
-3. **Planning and creation:** allowlisted planning-only brainstorming, frozen owner
-   approval, and idempotent GitHub creation/reconciliation land. Strict storage,
-   approval routes, and a catalog-bound private-test coordinator exist, but contained
-   production provider invocation and GitHub effects are pending;
-   project approval therefore remains `creation_pending`. This authorizes no execution
-   and exposes no restricted machine data to a cloud route.
-4. **Broker containment:** signed unprivileged executors and privileged brokers land on
-   Windows and Mac with the complete protected closure, closed adapters, restricted
-   durable execution identity, resource reservations, cancellation, and hostile native
-   tests. Repository tests are not signed or deployed-host proof.
+3. **Planning and creation:** allowlisted planning-only brainstorming, Public-only
+   disclosure binding, frozen owner approval, and idempotent GitHub
+   creation/reconciliation are implemented in source with a real cross-process adapter
+   E2E. Windows production loading remains fail-closed until distinct restricted
+   planning and GitHub identities/ACLs, atomic Job Object containment, provisioning,
+   and native denial proof land. This authorizes no execution.
+4. **Broker containment:** the first inert source slice has landed: strict signed
+   envelopes and receipts, distinct unprivileged executor/privileged broker crates,
+   complete protected-manifest digest binding, effect-disabled typed broker adapters,
+   replay/gap rejection, held macOS target-identity validation with spawn disabled,
+   held-image Windows Job Object source, and portable hostile filesystem tests. Completion still requires protected
+   installed identities/IPC, durable replay restore, the remaining closed adapters,
+   resource reservations, native Windows hostile/process proof, OS code signatures,
+   and owner-recorded deployment evidence. Repository tests are not signed or
+   deployed-host proof.
 5. **Assembly Line control:** the simplified UI, queue-empty Start denial, default-on
    auto-run, single-active child epochs, Stop, Emergency Pause, reconnect, resume, and
    reconciliation states land with native cross-process E2E. The current UI observes

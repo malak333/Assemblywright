@@ -14,13 +14,14 @@ Feature, and Assembly Line experience. It changes repository identity to a canon
 GitHub URL, places schema-bound brainstorming before owner-approved creation/enqueue,
 and replaces restricted execution with brokered full-machine effects outside a
 protected Assemblywright control plane. Its strict protocol contracts, schema-v20
-Windows inert planning persistence/routes, catalog-bound private-test planning-effect
-coordinator, and simplified Mac projection/auto-run UI are implemented. Production
-provider, GitHub, execution-control, executor, and broker parts
-are not implemented or activated. The schema-v19 bounded Feature Conveyor behavior
-documented below retains its historical meaning under the current schema-v20 master.
+Windows planning persistence/routes, a catalog-bound planning-effect coordinator,
+fixed provider/GitHub source adapters, and simplified Mac review/approval UI are
+implemented. Windows refuses to load the effect adapters pending capability-separated
+identities/ACLs; execution-control, executor, and broker parts remain unavailable. The
+schema-v19 bounded Feature Conveyor behavior
+documented below retains its historical meaning under the current schema-v21 master.
 
-Full-machine target phase: partial implementation; protocol-v5/schema-v20 inert planning and presentation exist; execution runtime remains unavailable.
+Full-machine target phase: planning/creation containment implemented and requires native Windows proof; execution admission implemented and effects remain unavailable.
 
 The replacement is an atomic authority cutover, not an inference that existing grants
 have widened. Existing repository grants, activation evidence, queued specifications,
@@ -31,16 +32,31 @@ must not interpret a legacy activation as a full-machine Assembly Line session.
 
 The schema-v20 Assembly Line foundation accepts strict planning records through
 owner-token loopback routes and the designated authenticated MacBridge routes. Project
-approval defaults to Public unless Private was frozen and produces only effect-free
-`creation_pending` intent. No GitHub adapter runs. Feature authoring/enqueue requires
+approval defaults to Public unless Private was frozen. Source contains strict provider
+invocation, approval, intent, and GitHub reconciliation, but Windows cannot load those
+effect adapters until its restricted identities and ACLs are proved. Deployed approval
+therefore remains effect-free. Feature authoring/enqueue requires
 the exact repository to be `created` with creation evidence and appends FIFO without
 dispatching legacy or new work. Auto-run defaults on and has an exact replay-safe CAS
-toggle, but Start, Stop, and Emergency Pause effect routes are absent. The owner
+toggle. Authenticated Start, Stop, and Emergency Pause routes exist but fail closed
+through an unavailable production dispatcher until exact executor/broker installation
+and activation evidence exist. The owner
 projection reports the brainstorming provider, GitHub creation, both executors, and
-protected brokers as `unavailable`. The current SwiftUI surface presents New Project,
-New Feature, and Assembly Line, consumes the authoritative projection, and wires only
-the restart-safe auto-run CAS/reconciliation action. Brainstorming and execution
-controls remain disabled.
+protected brokers as `unavailable`. The current source SwiftUI surface presents New
+Project, New Feature, and Assembly Line, consumes the authoritative projection, and
+wires frozen review/approval plus restart-safe exact reconciliation. Execution controls
+remain disabled while the runtime availability projection is unavailable.
+
+The brainstorming Codex adapter disables every tool and remains planning-only on all
+hosts. Its Windows inner sandbox is `danger-full-access` because Assemblywright already
+launches it inside a restricted-token AppContainer with an exact ACL tree, closed
+environment, pinned executable, and kill-on-close Job. Non-Windows planning retains
+the inner `read-only` sandbox. This nested-sandbox choice adds no repository-write or
+implementation authority.
+Windows packages that adapter below canonical Common Application Data, not below the
+owner-profile master data directory. A master-private schema-v4 locator binds the exact
+runtime instance, and every call revalidates the no-reparse ancestor identities plus
+the two profiles' exact non-inheriting traverse-only shared-parent rights.
 
 Implementation status: the default-inert protocol-v5/schema-v19 Windows
 `assemblywright-master` kernel is implemented through the owner-control and

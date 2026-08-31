@@ -21,6 +21,7 @@ FULL_MACHINE_ASSEMBLY_LINE_DESIGN="docs/full-machine-assembly-line-design.md"
 AGENT_WORKFLOW="docs/development-agent-workflow.md"
 
 IPC_TRANSPORT="crates/assemblywright-core/src/ipc_transport.rs"
+MACOS_CODE_IDENTITY="crates/assemblywright-core/src/macos_code_identity.rs"
 CORE_STARTUP="crates/assemblywright-core/src/startup.rs"
 CORE_RELEASE="crates/assemblywright-core/src/release.rs"
 PROTOCOL_CRATE="crates/assemblywright-protocol/src/lib.rs"
@@ -51,9 +52,11 @@ MASTER_REMOTE_MTLS_E2E="crates/assemblywright-master/tests/remote_mtls_e2e.rs"
 MASTER_EVENT_E2E="crates/assemblywright-master/tests/event_cursor_e2e.rs"
 MASTER_CONVEYOR_E2E="crates/assemblywright-master/tests/feature_conveyor_kernel.rs"
 MASTER_ASSEMBLY_LINE_E2E="crates/assemblywright-master/tests/assembly_line_planning.rs"
+MASTER_ASSEMBLY_LINE_EXECUTION_E2E="crates/assemblywright-master/tests/assembly_line_execution_control.rs"
 MASTER_ASSEMBLY_LINE_EFFECTS_E2E="crates/assemblywright-master/src/planning_effects_tests.rs"
 MASTER_ASSEMBLY_LINE_HTTP_E2E="crates/assemblywright-master/tests/assembly_line_planning_http.rs"
 MASTER_ASSEMBLY_LINE_MTLS_E2E="crates/assemblywright-master/tests/assembly_line_planning_mtls.rs"
+MASTER_BRAINSTORMING_PROVIDER_ADAPTER="crates/assemblywright-master/src/brainstorming_provider_adapter.rs"
 MASTER_ARTIFACT_INTEGRATION="crates/assemblywright-master/src/integration.rs"
 MASTER_ARTIFACT_INTEGRATION_E2E="crates/assemblywright-master/tests/artifact_integration_e2e.rs"
 MASTER_VALIDATION_CONTAINMENT="crates/assemblywright-master/src/validation_containment.rs"
@@ -73,6 +76,8 @@ CLI_READINESS_E2E="crates/assemblywright-cli/tests/release_readiness_e2e.rs"
 AGENT_MAIN="crates/assemblywright-agent/src/main.rs"
 
 MAC_BRIDGE="apps/mac/Sources/AssemblywrightMacCore/DeveloperBridge.swift"
+MAC_UNIX_IPC_TRANSPORT="apps/mac/Sources/AssemblywrightMacCore/UnixIPCTransport.swift"
+MAC_DEVELOPER_EVENT_RELAY="apps/mac/Sources/AssemblywrightMacCore/DeveloperEventRelay.swift"
 MAC_BRIDGE_CLI="apps/mac/Sources/AssemblywrightMacBridgeCLI/AssemblywrightMacBridgeCLI.swift"
 MAC_BRIDGE_KEYCHAIN="apps/mac/Sources/AssemblywrightMacCore/KeychainDeveloperIdentity.swift"
 MAC_BRIDGE_NETWORK="apps/mac/Sources/AssemblywrightMacCore/NetworkMTLSBridge.swift"
@@ -276,7 +281,7 @@ for file in \
   "$PROTOCOL_OWNER_RESOLUTION_E2E" "$PROTOCOL_ASSEMBLY_LINE_E2E" \
   "$MASTER_E2E" "$MASTER_PROCESS_E2E" "$MASTER_IDENTITY_E2E" \
   "$MASTER_REMOTE_MTLS_E2E" "$MASTER_EVENT_E2E" "$MASTER_CONVEYOR_E2E" \
-  "$MASTER_ASSEMBLY_LINE_E2E" "$MASTER_ASSEMBLY_LINE_HTTP_E2E" \
+  "$MASTER_ASSEMBLY_LINE_E2E" "$MASTER_ASSEMBLY_LINE_EXECUTION_E2E" "$MASTER_ASSEMBLY_LINE_HTTP_E2E" \
   "$MASTER_ASSEMBLY_LINE_MTLS_E2E" \
   "$MASTER_ARTIFACT_INTEGRATION" "$MASTER_ARTIFACT_INTEGRATION_E2E" \
   "$MASTER_VALIDATION_CONTAINMENT" "$MASTER_VALIDATION_CONTAINMENT_E2E" \
@@ -346,7 +351,7 @@ require_text "README selected review-provider integration" "$README" \
 require_text "DESIGN conveyor pointer" "$DESIGN" "docs/feature-conveyor-design.md"
 require_text "DESIGN distributed pointer" "$DESIGN" "docs/distributed-developer-mode-design.md"
 require_text "DESIGN assistant non-goal" "$DESIGN" "No general-purpose assistant surface."
-require_text "DESIGN current master schema" "$DESIGN" "master schema v20"
+require_text "DESIGN current master schema" "$DESIGN" "master schema v21"
 require_text "DESIGN preserved legacy schema" "$DESIGN" \
   "schema-v19 Feature Conveyor grant, queue, activation, and restricted-worker"
 require_text "DESIGN result artifact boundary" "$DESIGN" \
@@ -366,8 +371,8 @@ require_text "full-machine design phased cutover" "$FULL_MACHINE_ASSEMBLY_LINE_D
   "Implementation And Evidence Phases"
 require_text "full-machine design compatibility boundary" "$FULL_MACHINE_ASSEMBLY_LINE_DESIGN" \
   "No legacy activation, queue receipt, or owner-control designation"
-require_text "full-machine design inert planning boundary" "$FULL_MACHINE_ASSEMBLY_LINE_DESIGN" \
-  "Project approval defaults to Public unless"
+require_text "full-machine design Windows-disabled planning boundary" "$FULL_MACHINE_ASSEMBLY_LINE_DESIGN" \
+  "Windows rejects loading those"
 require_text "full-machine design absent effect routes" "$FULL_MACHINE_ASSEMBLY_LINE_DESIGN" \
   "Start/Stop/Emergency routes"
 
@@ -378,20 +383,40 @@ require_text "safety control-plane exception" "$SAFETY_RULES" \
 require_text "conveyor target current boundary" "$FEATURE_CONVEYOR_DESIGN" \
   "schema-v19 bounded Feature Conveyor behavior"
 require_text "architecture target current boundary" "$ARCHITECTURE" \
-  "The current Windows master is protocol v5/schema v20"
+  "The current Windows master is protocol v5/schema v21"
 require_text "build docs target proof boundary" "$BUILD_DOCS" \
-  "They do not prove provider brainstorming"
+  "do not prove Windows capability-separated provider/GitHub execution"
+forbid_text "build docs stale fake-adapter-only planning claim" "$BUILD_DOCS" \
+  "fake-adapter-only"
 require_text "knowledge base full-machine target" "$KB" \
   "Approved Full-Machine Assembly Line Target"
 require_text "knowledge base schema-v20 planning facts" "$KB" \
-  "Schema-v20 Inert Assembly Line Planning Foundation"
+  "Schema-v20 Assembly Line Planning Foundation"
 require_text "knowledge base native Assembly Line planning E2E" "$KB" \
-  "The native loopback HTTP E2E drives an exact Private project draft"
+  "The native loopback HTTP E2E drives authenticated Public-only provider disclosure"
 require_text "build docs native Assembly Line planning E2E" "$BUILD_DOCS" \
   "The loopback process E2E drives one exact Private project"
+require_text "Windows planning Codex outer containment contract" \
+  "$MASTER_BRAINSTORMING_PROVIDER_ADAPTER" 'let sandbox = "danger-full-access";'
+require_text "non-Windows planning Codex inner read-only contract" \
+  "$MASTER_BRAINSTORMING_PROVIDER_ADAPTER" 'let sandbox = "read-only";'
+require_text "DESIGN planning Codex Windows sandbox split" "$DESIGN" \
+  'inner sandbox is `danger-full-access`'
+require_text "safety planning Codex Windows sandbox split" "$SAFETY_RULES" \
+  'Windows brainstorming adapter deliberately selects Codex inner'
+require_text "architecture planning Codex Windows sandbox split" "$ARCHITECTURE" \
+  'On Windows its inner'
+require_text "conveyor planning Codex Windows sandbox split" "$FEATURE_CONVEYOR_DESIGN" \
+  'Its Windows inner sandbox is `danger-full-access`'
+require_text "release checklist planning Codex Windows sandbox split" "$CHECKLIST" \
+  'Windows intentionally uses Codex inner `danger-full-access`'
+require_text "build docs planning Codex Windows sandbox split" "$BUILD_DOCS" \
+  'Windows uses Codex inner `danger-full-access`'
+require_text "knowledge base planning Codex Windows sandbox split" "$KB" \
+  'On Windows its inner sandbox is `danger-full-access`'
 
-FULL_MACHINE_PHASE_MARKER="Full-machine target phase: partial implementation; protocol-v5/schema-v20 inert planning and presentation exist; execution runtime remains unavailable."
-FULL_MACHINE_PENDING_STATUS="Status: approved target; partial inert planning implementation; execution and live evidence pending; current master is protocol-v5/schema-v20"
+FULL_MACHINE_PHASE_MARKER="Full-machine target phase: planning/creation containment implemented and requires native Windows proof; execution admission implemented and effects remain unavailable."
+FULL_MACHINE_PENDING_STATUS="Status: approved target; reviewed planning/creation and inert execution-control source with Windows effects fail-closed; broker IPC, execution, and live evidence pending; current master is protocol-v5/schema-v21"
 
 for false_claim in \
   "Status: implemented and active" \
@@ -457,14 +482,14 @@ require_text "assembly-line protocol GitHub URL coverage" "$PROTOCOL_ASSEMBLY_LI
   "github_url_is_canonical_and_separate_from_internal_identity"
 require_text "assembly-line protocol authority catalog coverage" "$PROTOCOL_ASSEMBLY_LINE_E2E" \
   "caller_catalog_cannot_self_authorize_against_windows_catalog"
-require_text "master current schema v20" "$MASTER_CRATE" \
-  "pub const MASTER_SCHEMA_VERSION: i64 = 20;"
+require_text "master current schema v22" "$MASTER_CRATE" \
+  "pub const MASTER_SCHEMA_VERSION: i64 = 22;"
 require_text "master effect-free project intent" "$MASTER_CRATE" \
   '"lifecycle": "creation_pending", "github_called": false, "external_effect": false'
 require_text "master effect-free queue intent" "$MASTER_CRATE" \
   '"dispatch_created": false, "external_effect": false'
-require_text "master inert runtime projection" "$MASTER_CRATE" \
-  'protected_brokers: component("protected_brokers")'
+require_text "master fail-closed execution runtime projection" "$MASTER_CRATE" \
+  'protected_brokers: execution_component("protected_brokers")'
 require_text "master local assembly-line projection route" "$MASTER_PROCESS" \
   '"/v1/assembly-line"'
 require_text "master remote assembly-line projection route" "$MASTER_PROCESS" \
@@ -473,16 +498,21 @@ require_text "master local assembly-line auto-run route" "$MASTER_PROCESS" \
   '"/v1/assembly-line/auto-run"'
 require_text "master remote assembly-line auto-run route" "$MASTER_PROCESS" \
   '"/v1/distributed/assembly-line/auto-run"'
-forbid_text "master Start route remains absent" "$MASTER_PROCESS" \
+require_text "master fail-closed Start route" "$MASTER_PROCESS" \
   '"/v1/assembly-line/start"'
-forbid_text "master Stop route remains absent" "$MASTER_PROCESS" \
+require_text "master fail-closed Stop route" "$MASTER_PROCESS" \
   '"/v1/assembly-line/stop"'
-forbid_text "master Emergency Pause route remains absent" "$MASTER_PROCESS" \
+require_text "master fail-closed Emergency Pause route" "$MASTER_PROCESS" \
   '"/v1/assembly-line/emergency-pause"'
-require_text "master schema-v20 inert default coverage" "$MASTER_ASSEMBLY_LINE_E2E" \
-  "schema_v20_defaults_to_inert_stopped_auto_run_and_unavailable_components"
+require_text "master schema-v22 inert default coverage" "$MASTER_ASSEMBLY_LINE_E2E" \
+  "schema_v22_defaults_to_inert_stopped_auto_run_and_unavailable_components"
 require_text "master schema-v20 migration coverage" "$MASTER_ASSEMBLY_LINE_E2E" \
   "schema_v19_file_upgrade_is_backup_first_and_preserves_legacy_tables"
+require_text "master schema-v22 execution-control coverage" "$MASTER_ASSEMBLY_LINE_EXECUTION_E2E" \
+  "start_is_fifo_revision_bound_and_exact_replay_is_immutable"
+require_text "master unavailable-dispatcher HTTP coverage" \
+  "crates/assemblywright-master/tests/assembly_line_execution_http.rs" \
+  "execution_routes_fail_closed_without_authenticated_host_effect_runtime"
 require_text "master planning HTTP route absence coverage" "$MASTER_ASSEMBLY_LINE_HTTP_E2E" \
   "has_no_start_stop_routes"
 require_text "master planning effects fake-adapter coverage" "$MASTER_ASSEMBLY_LINE_EFFECTS_E2E" \
@@ -639,7 +669,21 @@ require_text "Mac/Windows control-streaming knowledge base" "$KB" \
 require_text "restart-recovery controller exact native agent E2E" "$RESTART_RECOVERY_LIVE_E2E" \
   "authenticated_uds_local_coding_snapshot_admission_cancellation_and_restart_cleanup"
 require_text "agent shutdown marker honors peer identity bound" "$AGENT_E2E" \
-  'let marker_deadline = Instant::now() + Duration::from_secs(12);'
+  'Duration::from_secs(PEER_IDENTITY_CLIENT_TIMEOUT_SECONDS);'
+require_text "agent peer identity timeout stays explicitly bounded" "$IPC_TRANSPORT" \
+  'UNIX_IPC_PEER_IDENTITY_TIMEOUT_SECONDS: u64 = 45;'
+require_text "agent test client derives its identity timeout" "$AGENT_E2E" \
+  'UNIX_IPC_PEER_IDENTITY_TIMEOUT_SECONDS + 2;'
+require_text "agent test writes honor peer identity bound" "$AGENT_E2E" \
+  '.set_write_timeout(Some(Duration::from_secs('
+require_text "macOS identity cache remains bounded" "$MACOS_CODE_IDENTITY" \
+  'MAX_VERIFIED_PEER_AUDIT_TOKENS: usize = 64;'
+require_text "peer identity timeout knowledge" "$KB" \
+  'forty-five-second peer-code-identity validation bound'
+require_text "Swift agent client outlives peer identity timeout" "$MAC_UNIX_IPC_TRANSPORT" \
+  'authenticatedPeerRequestTimeoutSeconds = 47'
+require_text "production agent transport uses authenticated peer timeout" "$MAC_DEVELOPER_EVENT_RELAY" \
+  'DarwinAssemblywrightUnixSocketTransport.authenticatedPeerRequestTimeoutSeconds'
 require_text "restart-recovery controller committed harness" "$RESTART_RECOVERY_PROOF_CONTROLLER" \
   'git_safe "$root" show "$head:$HARNESS_PATH"'
 require_text "restart-recovery controller receipt descriptor" "$RESTART_RECOVERY_PROOF_CONTROLLER" \

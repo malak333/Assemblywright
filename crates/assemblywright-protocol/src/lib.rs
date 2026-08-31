@@ -1,3 +1,4 @@
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -79,8 +80,14 @@ const LOCAL_CODING_V4_RESULT_ARTIFACT_FORMAT: &str = "assemblywright.readme-repl
 pub const LOCAL_CODING_RESULT_ARTIFACT_STATUS: &str = "result_artifact_admitted";
 pub const LOCAL_CODING_FIXTURE_CONTENT: &[u8] = b"assemblywright contained coding fixture\n";
 pub const FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION: u16 = 1;
+/// Private signed execution actions use an independently versioned schema.
+/// Version 2 adds the master authority revision to prevent grants signed
+/// before an Emergency Pause transition from being admitted after resume.
+pub const EXECUTION_ACTION_ENVELOPE_SCHEMA_VERSION: u16 = 2;
 pub const MAX_GITHUB_REPOSITORY_URL_BYTES: usize = 256;
 pub const MAX_BRAINSTORMING_INPUT_BYTES: usize = 16 * 1024;
+pub const MAX_BRAINSTORMING_CLOUD_REQUEST_BYTES: usize = 24 * 1024;
+pub const OWNER_CLOUD_DISCLOSURE_DOMAIN: &[u8] = b"assemblywright.owner-cloud-disclosure.v1\0";
 pub const MAX_BRAINSTORMING_SPECIFICATION_BYTES: usize = 64 * 1024;
 pub const MAX_BRAINSTORMING_ITEMS: usize = 100;
 pub const MAX_ORCHESTRATOR_PROFILES: usize = 64;
@@ -88,6 +95,13 @@ pub const MAX_ASSEMBLY_LINE_QUEUE_COUNT: u16 = 100;
 pub const MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES: usize = 96 * 1024;
 pub const MAX_ASSEMBLY_LINE_REPOSITORIES: usize = 100;
 pub const MAX_ASSEMBLY_LINE_OWNER_PROJECTION_BYTES: usize = 256 * 1024;
+pub const MAX_EXECUTION_ACTION_FRAME_BYTES: usize = 64 * 1024;
+pub const MAX_EXECUTION_TARGETS: usize = 32;
+pub const MAX_EXECUTION_ENVIRONMENT_KEYS: usize = 64;
+pub const MAX_EXECUTION_IDENTITY_BYTES: usize = 128;
+pub const MAX_EXECUTION_PATH_BYTES: usize = 4 * 1024;
+const EXECUTION_ACTION_SIGNATURE_DOMAIN: &[u8] = b"assemblywright.execution-action-envelope.v1\0";
+const EXECUTION_RECEIPT_SIGNATURE_DOMAIN: &[u8] = b"assemblywright.execution-receipt.v1\0";
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum ProtocolError {
@@ -964,6 +978,134 @@ impl FeatureBrainstormingDraft {
     }
 }
 
+/// The production brainstorming boundary admits only owner-classified Public
+/// planning data. Deliberately exposing no other variant makes Private or
+/// Restricted cloud disclosure unrepresentable in a validated request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PublicInformationClassification {
+    Public,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProjectBrainstormingCloudRequest {
+    pub schema_version: u16,
+    pub draft: ProjectBrainstormingDraft,
+    pub information_classification: PublicInformationClassification,
+    pub owner_cloud_disclosure_sha256: [u8; 32],
+}
+
+impl ProjectBrainstormingCloudRequest {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "project_brainstorming_cloud_request",
+            frame,
+            MAX_BRAINSTORMING_CLOUD_REQUEST_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn canonical_disclosure_sha256(&self) -> Result<[u8; 32], ProtocolError> {
+        brainstorming_cloud_disclosure_sha256(
+            BrainstormingTargetKind::Project,
+            self.draft.canonical_sha256()?,
+            &self.draft.orchestrator_catalog,
+            &self.draft.orchestrator,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_assembly_line_schema(self.schema_version)?;
+        self.draft.validate()?;
+        if self.schema_version != self.draft.schema_version
+            || self.information_classification != PublicInformationClassification::Public
+            || self.owner_cloud_disclosure_sha256 == [0; 32]
+            || self.owner_cloud_disclosure_sha256 != self.canonical_disclosure_sha256()?
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        validate_serialized_limit(
+            "project_brainstorming_cloud_request",
+            self,
+            MAX_BRAINSTORMING_CLOUD_REQUEST_BYTES,
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FeatureBrainstormingCloudRequest {
+    pub schema_version: u16,
+    pub draft: FeatureBrainstormingDraft,
+    pub information_classification: PublicInformationClassification,
+    pub owner_cloud_disclosure_sha256: [u8; 32],
+}
+
+impl FeatureBrainstormingCloudRequest {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "feature_brainstorming_cloud_request",
+            frame,
+            MAX_BRAINSTORMING_CLOUD_REQUEST_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn canonical_disclosure_sha256(&self) -> Result<[u8; 32], ProtocolError> {
+        brainstorming_cloud_disclosure_sha256(
+            BrainstormingTargetKind::Feature,
+            self.draft.canonical_sha256()?,
+            &self.draft.orchestrator_catalog,
+            &self.draft.orchestrator,
+        )
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_assembly_line_schema(self.schema_version)?;
+        self.draft.validate()?;
+        if self.schema_version != self.draft.schema_version
+            || self.information_classification != PublicInformationClassification::Public
+            || self.owner_cloud_disclosure_sha256 == [0; 32]
+            || self.owner_cloud_disclosure_sha256 != self.canonical_disclosure_sha256()?
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        validate_serialized_limit(
+            "feature_brainstorming_cloud_request",
+            self,
+            MAX_BRAINSTORMING_CLOUD_REQUEST_BYTES,
+        )
+    }
+}
+
+fn brainstorming_cloud_disclosure_sha256(
+    target_kind: BrainstormingTargetKind,
+    draft_sha256: [u8; 32],
+    catalog: &OrchestratorCatalog,
+    profile: &OrchestratorProfile,
+) -> Result<[u8; 32], ProtocolError> {
+    let value = serde_json::json!({
+        "schema_version": FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
+        "target_kind": match target_kind {
+            BrainstormingTargetKind::Project => "project",
+            BrainstormingTargetKind::Feature => "feature",
+        },
+        "draft_sha256": draft_sha256,
+        "provider_id": profile.provider_id,
+        "model_id": profile.model_id,
+        "orchestrator_catalog_revision": catalog.catalog_revision,
+        "orchestrator_catalog_sha256": catalog.catalog_sha256,
+        "orchestrator_profile_sha256": profile.canonical_sha256()?,
+        "information_classification": "public",
+    });
+    let canonical = canonical_json_bytes(&value)?;
+    let mut digest = Sha256::new();
+    digest.update(OWNER_CLOUD_DISCLOSURE_DOMAIN);
+    digest.update(canonical);
+    Ok(digest.finalize().into())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BrainstormingTargetKind {
@@ -1302,6 +1444,7 @@ impl BrainstormingOwnerApprovalBinding {
 #[serde(rename_all = "snake_case")]
 pub enum AssemblyLineLifecycleState {
     Stopped,
+    Starting,
     Running,
     Stopping,
     PausedAtCheckpoint,
@@ -1366,7 +1509,7 @@ impl AssemblyLineState {
                     return Err(ProtocolError::InvalidFullMachineAssemblyLine);
                 }
             }
-            AssemblyLineLifecycleState::Running => {
+            AssemblyLineLifecycleState::Starting | AssemblyLineLifecycleState::Running => {
                 if self.queue_count == 0
                     || self.session_id.is_none()
                     || self.active_child_epoch_id.is_none()
@@ -1735,6 +1878,699 @@ impl AssemblyLineChildEpoch {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum ExecutionHostPlatform {
+    Windows,
+    Macos,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionActionType {
+    RunUnprivilegedProcess,
+    CreateDirectory,
+    ReplaceFile,
+    RemoveFile,
+    SetRestrictedServiceEnabled,
+}
+
+impl ExecutionActionType {
+    pub fn requires_privileged_broker(self) -> bool {
+        !matches!(self, Self::RunUnprivilegedProcess)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionEffectClassification {
+    LocalReversible,
+    LocalDurable,
+    ExternalEffect,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionCancellationBehavior {
+    CheckpointThenTerminate,
+    ImmediateTerminate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionReconciliationStrategy {
+    NoEffectRetry,
+    ExactPostStateDigest,
+    OwnerResolutionRequired,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionTargetIdentity {
+    pub platform: ExecutionHostPlatform,
+    pub canonical_path: String,
+    pub canonical_path_sha256: [u8; 32],
+    pub canonical_parent_sha256: [u8; 32],
+    pub expected_object_sha256: Option<[u8; 32]>,
+    pub expected_single_link: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProtectedControlPlanePathManifest {
+    pub schema_version: u16,
+    pub platform: ExecutionHostPlatform,
+    pub master_binary: String,
+    pub broker_binary: String,
+    pub service_configuration: String,
+    pub authority_database: String,
+    pub database_backups: String,
+    pub audit: String,
+    pub owner_tokens_and_signing: String,
+    pub trust_and_update_roots: String,
+    pub ipc_and_enforcement_state: String,
+    pub release_evidence: String,
+    pub resource_reservations: String,
+}
+
+impl ProtectedControlPlanePathManifest {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_assembly_line_schema(self.schema_version)?;
+        for path in self.paths() {
+            validate_execution_path(self.platform, path)?;
+        }
+        Ok(())
+    }
+
+    pub fn canonical_sha256(&self) -> Result<[u8; 32], ProtocolError> {
+        canonical_sha256(
+            "protected_control_plane_path_manifest",
+            self,
+            Self::validate,
+        )
+    }
+
+    pub fn paths(&self) -> [&str; 11] {
+        [
+            &self.master_binary,
+            &self.broker_binary,
+            &self.service_configuration,
+            &self.authority_database,
+            &self.database_backups,
+            &self.audit,
+            &self.owner_tokens_and_signing,
+            &self.trust_and_update_roots,
+            &self.ipc_and_enforcement_state,
+            &self.release_evidence,
+            &self.resource_reservations,
+        ]
+    }
+}
+
+impl ExecutionTargetIdentity {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_execution_path(self.platform, &self.canonical_path)?;
+        if self.canonical_path_sha256 != execution_path_sha256(self.platform, &self.canonical_path)?
+            || self.canonical_parent_sha256 == [0; 32]
+            || self.expected_object_sha256 == Some([0; 32])
+            || !self.expected_single_link
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        Ok(())
+    }
+}
+
+/// A private, typed execution grant. The signature covers every field except
+/// `signature`. Secrets and environment values are deliberately not part of
+/// this contract; a separately supplied operation must match `operation_sha256`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionActionEnvelope {
+    pub schema_version: u16,
+    pub action_id: Uuid,
+    pub action_sequence: u64,
+    pub feature_id: Uuid,
+    pub repository_id: Uuid,
+    pub session_id: Uuid,
+    pub session_revision: u64,
+    pub child_epoch_id: Uuid,
+    pub child_epoch_revision: u64,
+    pub feature_lifecycle_revision: u64,
+    pub authority_revision: u64,
+    pub executor_id: Uuid,
+    pub executor_revision: u64,
+    pub executor_executable_sha256: [u8; 32],
+    pub broker_id: Uuid,
+    pub broker_revision: u64,
+    pub broker_executable_sha256: [u8; 32],
+    pub protected_control_plane_sha256: [u8; 32],
+    pub host_platform: ExecutionHostPlatform,
+    pub action_type: ExecutionActionType,
+    pub targets: Vec<ExecutionTargetIdentity>,
+    pub operation_sha256: [u8; 32],
+    pub working_directory_sha256: [u8; 32],
+    pub environment_keys: Vec<String>,
+    pub effect_classification: ExecutionEffectClassification,
+    pub deadline_ms: u64,
+    pub cancellation_behavior: ExecutionCancellationBehavior,
+    pub reconciliation_strategy: ExecutionReconciliationStrategy,
+    pub issued_at_ms: u64,
+    pub nonce: Uuid,
+    pub signer_key_id: String,
+    pub signature: Vec<u8>,
+}
+
+impl ExecutionActionEnvelope {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "execution_action_envelope",
+            frame,
+            MAX_EXECUTION_ACTION_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn sign(&mut self, key: &SigningKey) -> Result<(), ProtocolError> {
+        self.validate_shape(false)?;
+        self.signature = key.sign(&self.signing_bytes()?).to_bytes().to_vec();
+        self.validate()
+    }
+
+    pub fn verify_signature(&self, key: &VerifyingKey) -> Result<(), ProtocolError> {
+        self.validate()?;
+        let signature = Signature::from_slice(&self.signature)
+            .map_err(|_| ProtocolError::InvalidFullMachineAssemblyLine)?;
+        key.verify(&self.signing_bytes()?, &signature)
+            .map_err(|_| ProtocolError::InvalidFullMachineAssemblyLine)
+    }
+
+    pub fn validate_for_epochs(
+        &self,
+        session: &AssemblyLineSessionEpoch,
+        child: &AssemblyLineChildEpoch,
+    ) -> Result<(), ProtocolError> {
+        self.validate()?;
+        child.validate_for_session(session)?;
+        if self.session_id != session.session_id
+            || self.session_revision != session.session_revision
+            || self.child_epoch_id != child.child_epoch_id
+            || self.child_epoch_revision != child.child_epoch_revision
+            || self.feature_id != child.feature_id
+            || self.repository_id != child.repository_id
+            || self.feature_lifecycle_revision != child.feature_lifecycle_revision
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        Ok(())
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        self.validate_shape(true)
+    }
+
+    fn validate_shape(&self, require_signature: bool) -> Result<(), ProtocolError> {
+        if self.schema_version != EXECUTION_ACTION_ENVELOPE_SCHEMA_VERSION {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        for (field, value) in [
+            ("action_id", self.action_id),
+            ("feature_id", self.feature_id),
+            ("repository_id", self.repository_id),
+            ("session_id", self.session_id),
+            ("child_epoch_id", self.child_epoch_id),
+            ("executor_id", self.executor_id),
+            ("broker_id", self.broker_id),
+            ("nonce", self.nonce),
+        ] {
+            validate_uuid(field, value)?;
+        }
+        for (field, value) in [
+            ("action_sequence", self.action_sequence),
+            ("session_revision", self.session_revision),
+            ("child_epoch_revision", self.child_epoch_revision),
+            (
+                "feature_lifecycle_revision",
+                self.feature_lifecycle_revision,
+            ),
+            ("authority_revision", self.authority_revision),
+            ("executor_revision", self.executor_revision),
+            ("broker_revision", self.broker_revision),
+            ("issued_at_ms", self.issued_at_ms),
+            ("deadline_ms", self.deadline_ms),
+        ] {
+            validate_positive_limit(field, value, u64::MAX)?;
+        }
+        if self.deadline_ms <= self.issued_at_ms
+            || self.executor_id == self.broker_id
+            || self.executor_executable_sha256 == [0; 32]
+            || self.broker_executable_sha256 == [0; 32]
+            || self.protected_control_plane_sha256 == [0; 32]
+            || self.operation_sha256 == [0; 32]
+            || self.working_directory_sha256 == [0; 32]
+            || self.targets.is_empty()
+            || self.targets.len() > MAX_EXECUTION_TARGETS
+            || self.environment_keys.len() > MAX_EXECUTION_ENVIRONMENT_KEYS
+            || (require_signature && self.signature.len() != 64)
+            || (!require_signature && !self.signature.is_empty())
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        let mut target_digests = HashSet::new();
+        for target in &self.targets {
+            target.validate()?;
+            if target.platform != self.host_platform
+                || !target_digests.insert(target.canonical_path_sha256)
+            {
+                return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+            }
+        }
+        let mut environment_keys = BTreeSet::new();
+        for key in &self.environment_keys {
+            validate_identifier(
+                "execution_environment_key",
+                key,
+                MAX_EXECUTION_IDENTITY_BYTES,
+            )?;
+            if !environment_keys.insert(key) {
+                return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+            }
+        }
+        validate_identifier(
+            "execution_signer_key_id",
+            &self.signer_key_id,
+            MAX_EXECUTION_IDENTITY_BYTES,
+        )?;
+        validate_serialized_limit(
+            "execution_action_envelope",
+            self,
+            MAX_EXECUTION_ACTION_FRAME_BYTES,
+        )
+    }
+
+    fn signing_bytes(&self) -> Result<Vec<u8>, ProtocolError> {
+        let mut unsigned = self.clone();
+        unsigned.signature.clear();
+        let value =
+            serde_json::to_value(&unsigned).map_err(|error| ProtocolError::Serialization {
+                field: "execution_action_envelope",
+                message: error.to_string(),
+            })?;
+        let mut bytes = EXECUTION_ACTION_SIGNATURE_DOMAIN.to_vec();
+        bytes.extend(canonical_json_bytes(&value)?);
+        Ok(bytes)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionCheckpointPhase {
+    BeforeEffect,
+    AfterEffect,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionCheckpointReceipt {
+    pub schema_version: u16,
+    pub action_id: Uuid,
+    pub action_sequence: u64,
+    pub child_epoch_id: Uuid,
+    pub phase: ExecutionCheckpointPhase,
+    pub checkpoint_sha256: [u8; 32],
+    pub result_sha256: Option<[u8; 32]>,
+    pub observed_at_ms: u64,
+    pub signer_key_id: String,
+    pub signature: Vec<u8>,
+}
+
+impl ExecutionCheckpointReceipt {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "execution_checkpoint_receipt",
+            frame,
+            MAX_EXECUTION_ACTION_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn sign(&mut self, key: &SigningKey) -> Result<(), ProtocolError> {
+        self.validate_shape(false)?;
+        self.signature = key.sign(&self.signing_bytes()?).to_bytes().to_vec();
+        self.validate()
+    }
+
+    pub fn verify_signature(&self, key: &VerifyingKey) -> Result<(), ProtocolError> {
+        self.validate()?;
+        let signature = Signature::from_slice(&self.signature)
+            .map_err(|_| ProtocolError::InvalidFullMachineAssemblyLine)?;
+        key.verify(&self.signing_bytes()?, &signature)
+            .map_err(|_| ProtocolError::InvalidFullMachineAssemblyLine)
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        self.validate_shape(true)
+    }
+
+    fn validate_shape(&self, require_signature: bool) -> Result<(), ProtocolError> {
+        validate_assembly_line_schema(self.schema_version)?;
+        validate_uuid("action_id", self.action_id)?;
+        validate_uuid("child_epoch_id", self.child_epoch_id)?;
+        validate_positive_limit("action_sequence", self.action_sequence, u64::MAX)?;
+        validate_positive_limit("observed_at_ms", self.observed_at_ms, u64::MAX)?;
+        validate_identifier(
+            "receipt_signer_key_id",
+            &self.signer_key_id,
+            MAX_EXECUTION_IDENTITY_BYTES,
+        )?;
+        if self.checkpoint_sha256 == [0; 32]
+            || self.result_sha256 == Some([0; 32])
+            || (self.phase == ExecutionCheckpointPhase::BeforeEffect
+                && self.result_sha256.is_some())
+            || (self.phase == ExecutionCheckpointPhase::AfterEffect && self.result_sha256.is_none())
+            || (require_signature && self.signature.len() != 64)
+            || (!require_signature && !self.signature.is_empty())
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        Ok(())
+    }
+
+    fn signing_bytes(&self) -> Result<Vec<u8>, ProtocolError> {
+        signed_receipt_bytes(self, "execution_checkpoint_receipt")
+    }
+}
+
+/// Signed acknowledgement that one platform accepted the exact master-issued
+/// session, child epoch, and authority revision. A Start intent is not Running
+/// until the master verifies one receipt from each pinned platform identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionActivationReceipt {
+    pub schema_version: u16,
+    pub receipt_id: Uuid,
+    pub session_id: Uuid,
+    pub child_epoch_id: Uuid,
+    pub authority_revision: u64,
+    pub host_platform: ExecutionHostPlatform,
+    pub executor_id: Uuid,
+    pub executor_revision: u64,
+    pub observed_at_ms: u64,
+    pub signer_key_id: String,
+    pub signature: Vec<u8>,
+}
+
+impl ExecutionActivationReceipt {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "execution_activation_receipt",
+            frame,
+            MAX_EXECUTION_ACTION_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn sign(&mut self, key: &SigningKey) -> Result<(), ProtocolError> {
+        self.validate_shape(false)?;
+        self.signature = key.sign(&self.signing_bytes()?).to_bytes().to_vec();
+        self.validate()
+    }
+
+    pub fn verify_signature(&self, key: &VerifyingKey) -> Result<(), ProtocolError> {
+        self.validate()?;
+        let signature = Signature::from_slice(&self.signature)
+            .map_err(|_| ProtocolError::InvalidFullMachineAssemblyLine)?;
+        key.verify(&self.signing_bytes()?, &signature)
+            .map_err(|_| ProtocolError::InvalidFullMachineAssemblyLine)
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        self.validate_shape(true)
+    }
+
+    fn validate_shape(&self, require_signature: bool) -> Result<(), ProtocolError> {
+        validate_assembly_line_schema(self.schema_version)?;
+        for (field, value) in [
+            ("activation_receipt_id", self.receipt_id),
+            ("session_id", self.session_id),
+            ("child_epoch_id", self.child_epoch_id),
+            ("executor_id", self.executor_id),
+        ] {
+            validate_uuid(field, value)?;
+        }
+        validate_positive_limit("authority_revision", self.authority_revision, u64::MAX)?;
+        validate_positive_limit("executor_revision", self.executor_revision, u64::MAX)?;
+        validate_positive_limit("observed_at_ms", self.observed_at_ms, u64::MAX)?;
+        validate_identifier(
+            "receipt_signer_key_id",
+            &self.signer_key_id,
+            MAX_EXECUTION_IDENTITY_BYTES,
+        )?;
+        if (require_signature && self.signature.len() != 64)
+            || (!require_signature && !self.signature.is_empty())
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        Ok(())
+    }
+
+    fn signing_bytes(&self) -> Result<Vec<u8>, ProtocolError> {
+        signed_receipt_bytes(self, "execution_activation_receipt")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionTerminationMode {
+    Stop,
+    EmergencyPause,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionTerminationOutcome {
+    Reaped,
+    Incomplete,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionDescendantScope {
+    MacosProcessGroup,
+    WindowsJobObject,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionTerminationReceipt {
+    pub schema_version: u16,
+    pub receipt_id: Uuid,
+    pub child_epoch_id: Uuid,
+    pub mode: ExecutionTerminationMode,
+    pub outcome: ExecutionTerminationOutcome,
+    pub tracked_root_process_count: u32,
+    pub graceful_root_termination_count: u32,
+    pub forced_root_termination_count: u32,
+    pub reaped_root_process_count: u32,
+    pub survivor_root_process_count: u32,
+    pub descendant_scope: ExecutionDescendantScope,
+    pub descendants_reaped: bool,
+    pub last_checkpoint_sha256: [u8; 32],
+    pub observed_at_ms: u64,
+    pub signer_key_id: String,
+    pub signature: Vec<u8>,
+}
+
+impl ExecutionTerminationReceipt {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "execution_termination_receipt",
+            frame,
+            MAX_EXECUTION_ACTION_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    pub fn sign(&mut self, key: &SigningKey) -> Result<(), ProtocolError> {
+        self.validate_shape(false)?;
+        self.signature = key.sign(&self.signing_bytes()?).to_bytes().to_vec();
+        self.validate()
+    }
+
+    pub fn verify_signature(&self, key: &VerifyingKey) -> Result<(), ProtocolError> {
+        self.validate()?;
+        let signature = Signature::from_slice(&self.signature)
+            .map_err(|_| ProtocolError::InvalidFullMachineAssemblyLine)?;
+        key.verify(&self.signing_bytes()?, &signature)
+            .map_err(|_| ProtocolError::InvalidFullMachineAssemblyLine)
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        self.validate_shape(true)
+    }
+
+    fn validate_shape(&self, require_signature: bool) -> Result<(), ProtocolError> {
+        validate_assembly_line_schema(self.schema_version)?;
+        validate_uuid("termination_receipt_id", self.receipt_id)?;
+        validate_uuid("child_epoch_id", self.child_epoch_id)?;
+        validate_positive_limit("observed_at_ms", self.observed_at_ms, u64::MAX)?;
+        validate_identifier(
+            "receipt_signer_key_id",
+            &self.signer_key_id,
+            MAX_EXECUTION_IDENTITY_BYTES,
+        )?;
+        let accounted = self
+            .reaped_root_process_count
+            .checked_add(self.survivor_root_process_count);
+        if self.tracked_root_process_count == 0
+            || accounted != Some(self.tracked_root_process_count)
+            || self
+                .graceful_root_termination_count
+                .checked_add(self.forced_root_termination_count)
+                .is_none_or(|count| count > self.tracked_root_process_count)
+            || self.last_checkpoint_sha256 == [0; 32]
+            || (self.outcome == ExecutionTerminationOutcome::Reaped
+                && (self.survivor_root_process_count != 0 || !self.descendants_reaped))
+            || (self.outcome == ExecutionTerminationOutcome::Incomplete
+                && self.survivor_root_process_count == 0
+                && self.descendants_reaped)
+            || (require_signature && self.signature.len() != 64)
+            || (!require_signature && !self.signature.is_empty())
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        Ok(())
+    }
+
+    fn signing_bytes(&self) -> Result<Vec<u8>, ProtocolError> {
+        signed_receipt_bytes(self, "execution_termination_receipt")
+    }
+}
+
+fn signed_receipt_bytes<T>(receipt: &T, field: &'static str) -> Result<Vec<u8>, ProtocolError>
+where
+    T: Serialize + Clone + ReceiptSignature,
+{
+    let mut unsigned = receipt.clone();
+    unsigned.clear_signature();
+    let value = serde_json::to_value(unsigned).map_err(|error| ProtocolError::Serialization {
+        field,
+        message: error.to_string(),
+    })?;
+    let mut bytes = EXECUTION_RECEIPT_SIGNATURE_DOMAIN.to_vec();
+    bytes.extend(field.as_bytes());
+    bytes.push(0);
+    bytes.extend(canonical_json_bytes(&value)?);
+    Ok(bytes)
+}
+
+trait ReceiptSignature {
+    fn clear_signature(&mut self);
+}
+
+impl ReceiptSignature for ExecutionCheckpointReceipt {
+    fn clear_signature(&mut self) {
+        self.signature.clear();
+    }
+}
+
+impl ReceiptSignature for ExecutionActivationReceipt {
+    fn clear_signature(&mut self) {
+        self.signature.clear();
+    }
+}
+
+impl ReceiptSignature for ExecutionTerminationReceipt {
+    fn clear_signature(&mut self) {
+        self.signature.clear();
+    }
+}
+
+pub fn execution_path_sha256(
+    platform: ExecutionHostPlatform,
+    path: &str,
+) -> Result<[u8; 32], ProtocolError> {
+    validate_execution_path(platform, path)?;
+    let normalized = match platform {
+        ExecutionHostPlatform::Windows => path.to_ascii_lowercase(),
+        ExecutionHostPlatform::Macos => path.to_string(),
+    };
+    Ok(Sha256::digest(normalized.as_bytes()).into())
+}
+
+fn validate_execution_path(
+    platform: ExecutionHostPlatform,
+    path: &str,
+) -> Result<(), ProtocolError> {
+    if path.is_empty()
+        || path.len() > MAX_EXECUTION_PATH_BYTES
+        || path.trim() != path
+        || path.chars().any(char::is_control)
+    {
+        return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+    }
+    let valid = match platform {
+        ExecutionHostPlatform::Windows => {
+            let bytes = path.as_bytes();
+            bytes.len() >= 3
+                && bytes[0].is_ascii_uppercase()
+                && bytes[1] == b':'
+                && bytes[2] == b'\\'
+                && !path.contains('/')
+                && !path.ends_with('\\')
+                && path.split('\\').enumerate().all(|(index, part)| {
+                    if index == 0 {
+                        return part.len() == 2;
+                    }
+                    let upper = part.to_ascii_uppercase();
+                    let stem = upper.split('.').next().unwrap_or_default();
+                    !part.is_empty()
+                        && part.is_ascii()
+                        && !part.ends_with(['.', ' '])
+                        && !part.bytes().any(|byte| {
+                            matches!(byte, b'<' | b'>' | b':' | b'"' | b'|' | b'?' | b'*')
+                        })
+                        && !matches!(
+                            stem,
+                            "CON"
+                                | "PRN"
+                                | "AUX"
+                                | "NUL"
+                                | "COM1"
+                                | "COM2"
+                                | "COM3"
+                                | "COM4"
+                                | "COM5"
+                                | "COM6"
+                                | "COM7"
+                                | "COM8"
+                                | "COM9"
+                                | "LPT1"
+                                | "LPT2"
+                                | "LPT3"
+                                | "LPT4"
+                                | "LPT5"
+                                | "LPT6"
+                                | "LPT7"
+                                | "LPT8"
+                                | "LPT9"
+                        )
+                })
+        }
+        ExecutionHostPlatform::Macos => {
+            path.starts_with('/')
+                && path != "/"
+                && !path.ends_with('/')
+                && !path.contains("//")
+                && !path.split('/').any(|part| matches!(part, "." | ".."))
+        }
+    };
+    if !valid {
+        return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RepositoryCreationLifecycle {
     CreationPending,
     Reconciling,
@@ -1820,6 +2656,7 @@ impl RepositoryCreationProjection {
 #[serde(rename_all = "snake_case")]
 pub enum FeatureQueueLifecycle {
     Queued,
+    Starting,
     Active,
     Stopping,
     PausedAtCheckpoint,
@@ -2106,6 +2943,7 @@ fn owner_queue_active_lifecycle(
         AssemblyLineLifecycleState::Stopped | AssemblyLineLifecycleState::WaitingForOwnerStart => {
             None
         }
+        AssemblyLineLifecycleState::Starting => Some(FeatureQueueLifecycle::Starting),
         AssemblyLineLifecycleState::Running => Some(FeatureQueueLifecycle::Active),
         AssemblyLineLifecycleState::Stopping => Some(FeatureQueueLifecycle::Stopping),
         AssemblyLineLifecycleState::PausedAtCheckpoint => {
@@ -2152,7 +2990,7 @@ impl AssemblyLineStartReceipt {
         self.session.validate()?;
         self.child.validate_for_session(&self.session)?;
         if self.owner_start_approval_sha256 == [0; 32]
-            || self.resulting_state.lifecycle != AssemblyLineLifecycleState::Running
+            || self.resulting_state.lifecycle != AssemblyLineLifecycleState::Starting
             || self.request_id != self.session.start_request_id
             || self.owner_start_approval_sha256 != self.session.owner_start_approval_sha256
             || self.resulting_state.state_revision != self.session.state_revision

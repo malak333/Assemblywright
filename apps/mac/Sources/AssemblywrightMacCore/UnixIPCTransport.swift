@@ -60,6 +60,7 @@ public struct DarwinAssemblywrightUnixSocketTransport: AssemblywrightUnixSocketR
     public static let maximumResponseFrameBytes = 12 * 1024 * 1024
     public static let maximumResponseBodyBytes = 8 * 1024 * 1024
     public static let maximumTimeoutSeconds = 610
+    public static let authenticatedPeerRequestTimeoutSeconds = 47
     public var timeoutSeconds: Int
     private let peerIdentityPolicy: @Sendable () throws -> AssemblywrightIPCPeerIdentityPolicy?
     private let peerIdentityVerifier: any AssemblywrightUnixPeerIdentityVerifying

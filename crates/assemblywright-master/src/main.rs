@@ -8,29 +8,29 @@ use assemblywright_master::{
     current_time_ms, execute_github_publication_live_proof, execute_review_provider_live_proof,
     invoke_review_provider, prepare_review_provider_call, AcceptedCancellation, AcceptedResult,
     ApprovedFeatureSpecification, ArtifactIntegrationAuthorization, ArtifactIntegrationError,
+    AssemblyLineEffectDispatcher, BrainstormingCloudAuthorization, BrainstormingDraft,
     CapabilityRebindAcknowledgement, DeviceRegistration, EnrollmentGrantSpec, EnrollmentRequest,
     EphemeralServerIdentity, FeatureAbandonmentEvidence, FeatureConveyorStatus,
     FeatureGrantRevisions, FeatureSnapshotClaimPlan, IdentityAuthority, IssuedDeviceCertificate,
-    MasterError, MasterHealthSnapshot, MasterProcess, NewStep, PlatformSecretProtector,
-    ProcessGithubPublication, ProcessReviewProvider, PublicationAdapter,
-    PublicationExecutionControl, RemoteWorkContract, RepositoryGrantKind, RepositoryGrantRevision,
-    RepositorySnapshotEvidence, RepositorySnapshotStore, ResultArtifactReference,
-    ReviewGatewayAuthorization, ReviewProvider, ReviewProviderInvocationError,
-    ReviewTransportFailure, StartupReconciliation, UnavailableReviewProvider,
-    ValidationCommandEvidence, ValidationGateAuthorization, ValidationGateEvidence,
-    ValidationGateExecutionPlan,
+    MasterError, MasterHealthSnapshot, MasterKernel, MasterProcess, NewStep, PlanningEffectControl,
+    PlanningRuntime, PlanningRuntimeStatus, PlatformSecretProtector, ProcessGithubPublication,
+    ProcessReviewProvider, PublicationAdapter, PublicationExecutionControl, RemoteWorkContract,
+    RepositoryGrantKind, RepositoryGrantRevision, RepositorySnapshotEvidence,
+    RepositorySnapshotStore, ResultArtifactReference, ReviewGatewayAuthorization, ReviewProvider,
+    ReviewProviderInvocationError, ReviewTransportFailure, StartupReconciliation,
+    UnavailableAssemblyLineEffectDispatcher, UnavailableReviewProvider, ValidationCommandEvidence,
+    ValidationGateAuthorization, ValidationGateEvidence, ValidationGateExecutionPlan,
 };
-#[cfg(test)]
-use assemblywright_protocol::CapabilityKind;
 use assemblywright_protocol::{
     feature_conveyor_provider_binding_sha256, repository_preflight_fingerprint_sha256,
-    AssemblyLineAutoRunReceipt, AssemblyLineAutoRunRequest, AssemblyLineOwnerProjection,
-    AuthenticatedHandshakeRequest, BrainstormingOwnerApprovalBinding, CancellationAcknowledgement,
-    CancellationPollRequest, CapabilityDescriptor, DeviceId, DeviceRole, DistributedEventBatch,
-    DistributedEventBatchRequest, EnrollmentCsrReply, EnrollmentInvitation,
-    FeatureBrainstormingDraft, FeatureConveyorAbandonAndAdvanceReceipt,
-    FeatureConveyorAbandonAndAdvanceRequest, FeatureConveyorAbandonAndAdvanceStatus,
-    FeatureConveyorActivationEvidenceAdmissionProjection,
+    AssemblyLineAutoRunReceipt, AssemblyLineAutoRunRequest, AssemblyLineEmergencyPauseRequest,
+    AssemblyLineLifecycleState, AssemblyLineOwnerProjection, AssemblyLineStartRequest,
+    AssemblyLineStopRequest, AuthenticatedHandshakeRequest, BrainstormingOwnerApprovalBinding,
+    CancellationAcknowledgement, CancellationPollRequest, CapabilityDescriptor, DeviceId,
+    DeviceRole, DistributedEventBatch, DistributedEventBatchRequest, EnrollmentCsrReply,
+    EnrollmentInvitation, FeatureBrainstormingCloudRequest, FeatureBrainstormingDraft,
+    FeatureConveyorAbandonAndAdvanceReceipt, FeatureConveyorAbandonAndAdvanceRequest,
+    FeatureConveyorAbandonAndAdvanceStatus, FeatureConveyorActivationEvidenceAdmissionProjection,
     FeatureConveyorActivationEvidenceAdmissionReceipt,
     FeatureConveyorActivationEvidenceAdmissionRequest, FeatureConveyorActivationReceipt,
     FeatureConveyorActivationRequest, FeatureConveyorApprovedFeatureReceipt,
@@ -54,8 +54,8 @@ use assemblywright_protocol::{
     HandshakeStatus, JobEnvelope, JobResultEnvelope, JobResultStatus, LocalCodingJobResult,
     LocalCodingResultArtifactAdmission, LocalCodingResultArtifactReceipt, LocalCodingSnapshotChunk,
     LocalCodingSnapshotChunkRequest, LocalModelSelectionProjection, LocalModelSelectionReceipt,
-    LocalModelSelectionRequest, ProjectBrainstormingDraft, RepositoryCreationProjection,
-    Sensitivity, StepId, TaskId, ENROLLMENT_INVITATION_READY_STATUS,
+    LocalModelSelectionRequest, ProjectBrainstormingCloudRequest, ProjectBrainstormingDraft,
+    RepositoryCreationProjection, Sensitivity, StepId, TaskId, ENROLLMENT_INVITATION_READY_STATUS,
     ENROLLMENT_PAIRING_SCHEMA_VERSION, FEATURE_CONVEYOR_OWNER_CONTROL_SCHEMA_VERSION,
     MAX_ASSEMBLY_LINE_OWNER_PROJECTION_BYTES, MAX_ENROLLMENT_PAIRING_FRAME_BYTES,
     MAX_FEATURE_CONVEYOR_CODING_DISPATCH_REQUEST_BYTES,
@@ -65,6 +65,11 @@ use assemblywright_protocol::{
     MAX_FEATURE_CONVEYOR_SNAPSHOT_CLAIM_REQUEST_BYTES, MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
     MAX_LOCAL_CODING_SNAPSHOT_CHUNK_BYTES, MAX_LOCAL_MODEL_SELECTION_FRAME_BYTES,
     MAX_WIRE_FRAME_BYTES, PROTOCOL_VERSION,
+};
+#[cfg(test)]
+use assemblywright_protocol::{
+    CapabilityKind, ExecutionDescendantScope, ExecutionHostPlatform, ExecutionTerminationMode,
+    ExecutionTerminationOutcome, FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
 };
 use axum::body::Bytes;
 use axum::extract::rejection::BytesRejection;
@@ -91,7 +96,7 @@ use std::io::{Read, Write};
 use std::net::SocketAddr;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 use std::time::Instant;
 use tokio_rustls::TlsAcceptor;
@@ -175,6 +180,11 @@ enum Command {
         /// Exact authenticated main commit from the clean published Windows checkout.
         #[arg(long)]
         expected_source_head: String,
+    },
+    /// Validate the provisioned capability-separated planning runtime without invoking providers.
+    PlanningRuntimeCheck {
+        #[arg(long)]
+        confirm: bool,
     },
     /// Manage the Windows enrollment identity and short-lived device grants.
     Enrollment {
@@ -457,6 +467,11 @@ struct AppState {
     publication_reservation: Arc<tokio::sync::Mutex<()>>,
     review_provider: Arc<dyn ReviewProvider>,
     github_publication: Option<Arc<ProcessGithubPublication>>,
+    planning_runtime: Option<Arc<Mutex<PlanningRuntime>>>,
+    planning_runtime_status: Option<PlanningRuntimeStatus>,
+    planning_database_path: PathBuf,
+    active_planning_calls: Arc<Mutex<Vec<Weak<AtomicBool>>>>,
+    assembly_line_effect_dispatcher: Arc<dyn AssemblyLineEffectDispatcher>,
     validation_runtime: ValidationRuntime,
 }
 
@@ -649,6 +664,18 @@ async fn main() -> anyhow::Result<()> {
                 .validate()
                 .map_err(|_| anyhow::anyhow!("GitHub publication proof receipt was invalid"))?;
             println!("{}", serde_json::to_string(&receipt)?);
+            Ok(())
+        }
+        Command::PlanningRuntimeCheck { confirm } => {
+            require_operator_confirmation(confirm, "planning runtime trust-boundary check")?;
+            let runtime =
+                PlanningRuntime::load(&data_dir)?.context("planning runtime is not provisioned")?;
+            if runtime.validated_status().is_none() {
+                bail!("planning runtime trust boundary is invalid");
+            }
+            println!(
+                "{{\"status\":\"planning_runtime_validated\",\"live_evidence_required\":true}}"
+            );
             Ok(())
         }
         Command::Enrollment { command } => enrollment(&data_dir, command),
@@ -2233,6 +2260,9 @@ async fn serve_runtime(
             None => Arc::new(UnavailableReviewProvider),
         };
     let github_publication = ProcessGithubPublication::load(process.data_dir())?.map(Arc::new);
+    let planning_runtime = PlanningRuntime::load(process.data_dir())?;
+    let planning_runtime_status = planning_runtime.as_ref().map(PlanningRuntime::status);
+    let planning_database_path = process.database_path().to_path_buf();
     let state = AppState {
         process: Arc::new(Mutex::new(process)),
         token_sha256: Sha256::digest(token.as_bytes()).into(),
@@ -2245,6 +2275,11 @@ async fn serve_runtime(
         publication_reservation: Arc::new(tokio::sync::Mutex::new(())),
         review_provider,
         github_publication,
+        planning_runtime: planning_runtime.map(|runtime| Arc::new(Mutex::new(runtime))),
+        planning_runtime_status,
+        planning_database_path,
+        active_planning_calls: Arc::new(Mutex::new(Vec::new())),
+        assembly_line_effect_dispatcher: Arc::new(UnavailableAssemblyLineEffectDispatcher),
         validation_runtime,
     };
 
@@ -2273,6 +2308,24 @@ async fn serve_runtime(
             )),
         )
         .route(
+            "/v1/assembly-line/project-brainstorms",
+            post(run_assembly_line_project_brainstorm).layer(DefaultBodyLimit::max(
+                MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            )),
+        )
+        .route(
+            "/v1/assembly-line/feature-brainstorms",
+            post(run_assembly_line_feature_brainstorm).layer(DefaultBodyLimit::max(
+                MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            )),
+        )
+        .route(
+            "/v1/assembly-line/repositories/:repository_id/create",
+            post(run_assembly_line_github_creation).layer(DefaultBodyLimit::max(
+                MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            )),
+        )
+        .route(
             "/v1/assembly-line/frozen-specifications",
             post(record_assembly_line_frozen_specification).layer(DefaultBodyLimit::max(
                 MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
@@ -2293,6 +2346,24 @@ async fn serve_runtime(
         .route(
             "/v1/assembly-line/auto-run",
             post(set_assembly_line_auto_run).layer(DefaultBodyLimit::max(
+                MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            )),
+        )
+        .route(
+            "/v1/assembly-line/start",
+            post(start_assembly_line).layer(DefaultBodyLimit::max(
+                MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            )),
+        )
+        .route(
+            "/v1/assembly-line/stop",
+            post(stop_assembly_line).layer(DefaultBodyLimit::max(
+                MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            )),
+        )
+        .route(
+            "/v1/assembly-line/emergency-pause",
+            post(emergency_pause_assembly_line).layer(DefaultBodyLimit::max(
                 MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
             )),
         )
@@ -2606,6 +2677,24 @@ fn remote_router(state: AppState) -> Router {
             )),
         )
         .route(
+            "/v1/distributed/assembly-line/project-brainstorms",
+            post(remote_run_assembly_line_project_brainstorm).layer(DefaultBodyLimit::max(
+                MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            )),
+        )
+        .route(
+            "/v1/distributed/assembly-line/feature-brainstorms",
+            post(remote_run_assembly_line_feature_brainstorm).layer(DefaultBodyLimit::max(
+                MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            )),
+        )
+        .route(
+            "/v1/distributed/assembly-line/repositories/:repository_id/create",
+            post(remote_run_assembly_line_github_creation).layer(DefaultBodyLimit::max(
+                MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            )),
+        )
+        .route(
             "/v1/distributed/assembly-line/frozen-specifications",
             post(remote_record_assembly_line_frozen_specification).layer(DefaultBodyLimit::max(
                 MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
@@ -2626,6 +2715,24 @@ fn remote_router(state: AppState) -> Router {
         .route(
             "/v1/distributed/assembly-line/auto-run",
             post(remote_set_assembly_line_auto_run).layer(DefaultBodyLimit::max(
+                MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            )),
+        )
+        .route(
+            "/v1/distributed/assembly-line/start",
+            post(remote_start_assembly_line).layer(DefaultBodyLimit::max(
+                MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            )),
+        )
+        .route(
+            "/v1/distributed/assembly-line/stop",
+            post(remote_stop_assembly_line).layer(DefaultBodyLimit::max(
+                MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
+            )),
+        )
+        .route(
+            "/v1/distributed/assembly-line/emergency-pause",
+            post(remote_emergency_pause_assembly_line).layer(DefaultBodyLimit::max(
                 MAX_FULL_MACHINE_ASSEMBLY_LINE_FRAME_BYTES,
             )),
         )
@@ -2775,6 +2882,14 @@ fn require_remote_assembly_line_owner(
     Ok(registration)
 }
 
+fn current_planning_runtime_status(state: &AppState) -> Option<PlanningRuntimeStatus> {
+    match state.planning_runtime.as_ref()?.try_lock() {
+        Ok(runtime) => runtime.validated_status(),
+        Err(std::sync::TryLockError::WouldBlock) => state.planning_runtime_status,
+        Err(std::sync::TryLockError::Poisoned(_)) => None,
+    }
+}
+
 async fn remote_get_assembly_line_owner_projection(
     State(state): State<AppState>,
     Extension(session): Extension<RemoteSession>,
@@ -2787,7 +2902,11 @@ async fn remote_get_assembly_line_owner_projection(
         .map_err(|_| unauthorized())?;
     let projection = process
         .kernel()
-        .assembly_line_owner_projection(current_time_ms().map_err(api_error)?)
+        .assembly_line_owner_projection_with_runtime(
+            current_time_ms().map_err(api_error)?,
+            current_planning_runtime_status(&state),
+            state.assembly_line_effect_dispatcher.runtime_status(),
+        )
         .map_err(assembly_line_api_error)?;
     Ok(Json(projection))
 }
@@ -2844,6 +2963,64 @@ async fn remote_record_assembly_line_feature_draft(
             .assembly_line_owner_projection(now_ms)
             .map_err(assembly_line_api_error)?,
     ))
+}
+
+async fn remote_run_assembly_line_project_brainstorm(
+    State(state): State<AppState>,
+    Extension(session): Extension<RemoteSession>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<FrozenBrainstormingSpecification> {
+    let registration = require_remote_assembly_line_owner(&state, &session)?;
+    let body = assembly_line_body(body)?;
+    let request = ProjectBrainstormingCloudRequest::decode_frame(&body)
+        .map_err(|_| assembly_line_request_rejected())?;
+    run_planning_brainstorm(
+        state,
+        BrainstormingDraft::Project(request.draft),
+        BrainstormingCloudAuthorization {
+            owner_cloud_disclosure_sha256: request.owner_cloud_disclosure_sha256,
+        },
+        Some(registration),
+    )
+    .await
+}
+
+async fn remote_run_assembly_line_feature_brainstorm(
+    State(state): State<AppState>,
+    Extension(session): Extension<RemoteSession>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<FrozenBrainstormingSpecification> {
+    let registration = require_remote_assembly_line_owner(&state, &session)?;
+    let body = assembly_line_body(body)?;
+    let request = FeatureBrainstormingCloudRequest::decode_frame(&body)
+        .map_err(|_| assembly_line_request_rejected())?;
+    run_planning_brainstorm(
+        state,
+        BrainstormingDraft::Feature(request.draft),
+        BrainstormingCloudAuthorization {
+            owner_cloud_disclosure_sha256: request.owner_cloud_disclosure_sha256,
+        },
+        Some(registration),
+    )
+    .await
+}
+
+async fn remote_run_assembly_line_github_creation(
+    State(state): State<AppState>,
+    Extension(session): Extension<RemoteSession>,
+    AxumPath(repository_id): AxumPath<String>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<RepositoryCreationProjection> {
+    let registration = require_remote_assembly_line_owner(&state, &session)?;
+    let body = assembly_line_body(body)?;
+    if !body.is_empty() {
+        return Err(assembly_line_request_rejected());
+    }
+    let repository_id = Uuid::parse_str(&repository_id)
+        .ok()
+        .filter(|identifier| !identifier.is_nil())
+        .ok_or_else(assembly_line_request_rejected)?;
+    run_planning_github_creation(state, repository_id, Some(registration)).await
 }
 
 async fn remote_record_assembly_line_frozen_specification(
@@ -2903,15 +3080,25 @@ async fn remote_approve_assembly_line_feature(
     let body = assembly_line_body(body)?;
     let approval = BrainstormingOwnerApprovalBinding::decode_frame(&body)
         .map_err(|_| assembly_line_request_rejected())?;
+    let runtime = state
+        .planning_runtime
+        .as_ref()
+        .ok_or_else(planning_runtime_unavailable)?
+        .clone();
     let mut process = lock_process(&state)?;
     process
         .kernel_mut()
         .authorize_assembly_line_owner_bridge(&registration)
         .map_err(|_| unauthorized())?;
-    let projection = process
-        .kernel_mut()
-        .approve_assembly_line_feature_and_enqueue(&approval, current_time_ms().map_err(api_error)?)
-        .map_err(assembly_line_api_error)?;
+    let projection = runtime
+        .lock()
+        .map_err(|_| planning_runtime_unavailable())?
+        .approve_feature_and_enqueue(
+            process.kernel_mut(),
+            &approval,
+            current_time_ms().map_err(api_error)?,
+        )
+        .map_err(planning_effect_api_error)?;
     Ok(Json(projection))
 }
 
@@ -2934,6 +3121,60 @@ async fn remote_set_assembly_line_auto_run(
         .set_assembly_line_auto_run(&request, current_time_ms().map_err(api_error)?)
         .map_err(assembly_line_api_error)?;
     Ok(Json(receipt))
+}
+
+async fn remote_start_assembly_line(
+    State(state): State<AppState>,
+    Extension(session): Extension<RemoteSession>,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<(StatusCode, Json<AssemblyLineOwnerProjection>), ApiError> {
+    let registration = require_remote_assembly_line_owner(&state, &session)?;
+    if state
+        .assembly_line_effect_dispatcher
+        .runtime_status()
+        .is_none()
+    {
+        return Err(assembly_line_effect_routes_unavailable());
+    }
+    let request = AssemblyLineStartRequest::decode_frame(&assembly_line_body(body)?)
+        .map_err(|_| assembly_line_request_rejected())?;
+    execute_assembly_line_start(&state, &request, Some(&registration))
+}
+
+async fn remote_stop_assembly_line(
+    State(state): State<AppState>,
+    Extension(session): Extension<RemoteSession>,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<(StatusCode, Json<AssemblyLineOwnerProjection>), ApiError> {
+    let registration = require_remote_assembly_line_owner(&state, &session)?;
+    if state
+        .assembly_line_effect_dispatcher
+        .runtime_status()
+        .is_none()
+    {
+        return Err(assembly_line_effect_routes_unavailable());
+    }
+    let request = AssemblyLineStopRequest::decode_frame(&assembly_line_body(body)?)
+        .map_err(|_| assembly_line_request_rejected())?;
+    execute_assembly_line_termination(&state, Some(&request), None, Some(&registration))
+}
+
+async fn remote_emergency_pause_assembly_line(
+    State(state): State<AppState>,
+    Extension(session): Extension<RemoteSession>,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<(StatusCode, Json<AssemblyLineOwnerProjection>), ApiError> {
+    let registration = require_remote_assembly_line_owner(&state, &session)?;
+    if state
+        .assembly_line_effect_dispatcher
+        .runtime_status()
+        .is_none()
+    {
+        return Err(assembly_line_effect_routes_unavailable());
+    }
+    let request = AssemblyLineEmergencyPauseRequest::decode_frame(&assembly_line_body(body)?)
+        .map_err(|_| assembly_line_request_rejected())?;
+    execute_assembly_line_termination(&state, None, Some(&request), Some(&registration))
 }
 
 async fn remote_activate_feature_orchestration(
@@ -3790,11 +4031,173 @@ fn assembly_line_api_error(error: MasterError) -> ApiError {
         | MasterError::StaleAssemblyLineStateRevision { .. }
         | MasterError::StaleAssemblyLineQueueRevision { .. }
         | MasterError::AssemblyLineRepositoryUnavailable
-        | MasterError::AssemblyLineQueueFull => {
+        | MasterError::AssemblyLineQueueFull
+        | MasterError::AssemblyLineExecutionCapabilityUnavailable
+        | MasterError::AssemblyLineExecutionControlUnavailable
+        | MasterError::AssemblyLineExecutionReceiptMismatch => {
             fixed_error(StatusCode::CONFLICT, "assembly_line_request_rejected")
         }
         _ => internal_error(),
     }
+}
+
+fn assembly_line_execution_unavailable() -> ApiError {
+    fixed_error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "assembly_line_execution_unavailable",
+    )
+}
+
+fn assembly_line_effect_routes_unavailable() -> ApiError {
+    fixed_error(StatusCode::NOT_FOUND, "not_found")
+}
+
+fn assembly_line_execution_projection(
+    state: &AppState,
+    process: &MasterProcess,
+    now_ms: u64,
+) -> Result<AssemblyLineOwnerProjection, ApiError> {
+    process
+        .kernel()
+        .assembly_line_owner_projection_with_runtime(
+            now_ms,
+            current_planning_runtime_status(state),
+            state.assembly_line_effect_dispatcher.runtime_status(),
+        )
+        .map_err(assembly_line_api_error)
+}
+
+fn execute_assembly_line_start(
+    state: &AppState,
+    request: &AssemblyLineStartRequest,
+    registration: Option<&DeviceRegistration>,
+) -> Result<(StatusCode, Json<AssemblyLineOwnerProjection>), ApiError> {
+    if state
+        .assembly_line_effect_dispatcher
+        .runtime_status()
+        .is_none()
+    {
+        return Err(assembly_line_execution_unavailable());
+    }
+    let now_ms = current_time_ms().map_err(api_error)?;
+    let dispatch = {
+        let mut process = lock_process(state)?;
+        if let Some(registration) = registration {
+            process
+                .kernel_mut()
+                .authorize_assembly_line_owner_bridge(registration)
+                .map_err(|_| unauthorized())?;
+        }
+        let receipt = process
+            .kernel_mut()
+            .start_assembly_line(request, now_ms)
+            .map_err(assembly_line_api_error)?;
+        let dispatch = process
+            .kernel_mut()
+            .claim_assembly_line_start_dispatch(&receipt, now_ms)
+            .map_err(assembly_line_api_error)?;
+        dispatch
+    };
+    if let Some(dispatch) = dispatch {
+        let receipts = state
+            .assembly_line_effect_dispatcher
+            .dispatch_start(&dispatch)
+            .map_err(|_| assembly_line_execution_unavailable())?;
+        let mut process = lock_process(state)?;
+        for activation in receipts {
+            process
+                .kernel_mut()
+                .record_assembly_line_activation_receipt(
+                    &activation,
+                    current_time_ms().map_err(api_error)?,
+                )
+                .map_err(assembly_line_api_error)?;
+        }
+    }
+    let now_ms = current_time_ms().map_err(api_error)?;
+    let process = lock_process(state)?;
+    let projection = assembly_line_execution_projection(state, &process, now_ms)?;
+    let status = if projection.assembly_line.lifecycle == AssemblyLineLifecycleState::Running {
+        StatusCode::OK
+    } else {
+        StatusCode::ACCEPTED
+    };
+    Ok((status, Json(projection)))
+}
+
+fn execute_assembly_line_termination(
+    state: &AppState,
+    stop: Option<&AssemblyLineStopRequest>,
+    pause: Option<&AssemblyLineEmergencyPauseRequest>,
+    registration: Option<&DeviceRegistration>,
+) -> Result<(StatusCode, Json<AssemblyLineOwnerProjection>), ApiError> {
+    if stop.is_some() == pause.is_some() {
+        return Err(assembly_line_request_rejected());
+    }
+    if state
+        .assembly_line_effect_dispatcher
+        .runtime_status()
+        .is_none()
+    {
+        return Err(assembly_line_execution_unavailable());
+    }
+    let now_ms = current_time_ms().map_err(api_error)?;
+    let intent = {
+        let mut process = lock_process(state)?;
+        if let Some(registration) = registration {
+            process
+                .kernel_mut()
+                .authorize_assembly_line_owner_bridge(registration)
+                .map_err(|_| unauthorized())?;
+        }
+        if let Some(request) = stop {
+            process
+                .kernel_mut()
+                .stop_assembly_line(request, now_ms)
+                .map_err(assembly_line_api_error)?
+        } else {
+            process
+                .kernel_mut()
+                .emergency_pause_assembly_line(pause.expect("checked pause request"), now_ms)
+                .map_err(assembly_line_api_error)?
+        }
+    };
+    let claimed = lock_process(state)?
+        .kernel_mut()
+        .claim_assembly_line_termination_dispatch(&intent, current_time_ms().map_err(api_error)?)
+        .map_err(assembly_line_api_error)?;
+    if claimed {
+        let receipts = state
+            .assembly_line_effect_dispatcher
+            .dispatch_termination(&intent)
+            .map_err(|_| assembly_line_execution_unavailable())?;
+        let mut process = lock_process(state)?;
+        for termination in receipts {
+            process
+                .kernel_mut()
+                .record_assembly_line_termination_receipt(
+                    intent.request_id,
+                    &termination,
+                    current_time_ms().map_err(api_error)?,
+                )
+                .map_err(assembly_line_api_error)?;
+        }
+    }
+    let now_ms = current_time_ms().map_err(api_error)?;
+    let process = lock_process(state)?;
+    let pending = process
+        .kernel()
+        .assembly_line_termination_pending(intent.request_id)
+        .map_err(assembly_line_api_error)?;
+    let projection = assembly_line_execution_projection(state, &process, now_ms)?;
+    Ok((
+        if pending {
+            StatusCode::ACCEPTED
+        } else {
+            StatusCode::OK
+        },
+        Json(projection),
+    ))
 }
 
 async fn get_assembly_line_owner_projection(
@@ -3804,7 +4207,11 @@ async fn get_assembly_line_owner_projection(
     authorize(&headers, &state)?;
     let projection = lock_process(&state)?
         .kernel()
-        .assembly_line_owner_projection(current_time_ms().map_err(api_error)?)
+        .assembly_line_owner_projection_with_runtime(
+            current_time_ms().map_err(api_error)?,
+            current_planning_runtime_status(&state),
+            state.assembly_line_effect_dispatcher.runtime_status(),
+        )
         .map_err(assembly_line_api_error)?;
     Ok(Json(projection))
 }
@@ -3855,6 +4262,211 @@ async fn record_assembly_line_feature_draft(
     ))
 }
 
+struct PlanningCallCancellation {
+    cancelled: Arc<AtomicBool>,
+    completed: bool,
+}
+
+impl PlanningCallCancellation {
+    fn new() -> Self {
+        Self {
+            cancelled: Arc::new(AtomicBool::new(false)),
+            completed: false,
+        }
+    }
+}
+
+impl Drop for PlanningCallCancellation {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.cancelled.store(true, Ordering::Release);
+        }
+    }
+}
+
+fn planning_effect_control(
+    state: &AppState,
+    cancelled: Arc<AtomicBool>,
+) -> Result<PlanningEffectControl, ApiError> {
+    let mut active = state
+        .active_planning_calls
+        .lock()
+        .map_err(|_| internal_error())?;
+    active.retain(|call| call.strong_count() != 0);
+    let kernel = MasterKernel::open_planning_runtime_connection(&state.planning_database_path)
+        .map_err(|_| planning_runtime_unavailable())?;
+    let (paused, expected_revision) = kernel
+        .planning_effect_pause_snapshot()
+        .map_err(|_| planning_runtime_unavailable())?;
+    if paused {
+        return Err(planning_runtime_unavailable());
+    }
+    active.push(Arc::downgrade(&cancelled));
+    let database_path = state.planning_database_path.clone();
+    let authority_current = Arc::new(move || {
+        MasterKernel::open_planning_runtime_connection(&database_path)
+            .and_then(|kernel| kernel.planning_effect_pause_snapshot())
+            .is_ok_and(|(paused, revision)| !paused && revision == expected_revision)
+    });
+    Ok(PlanningEffectControl::new(
+        cancelled,
+        Instant::now() + assemblywright_master::PLANNING_EFFECT_DEADLINE,
+    )
+    .with_authority(authority_current))
+}
+
+fn planning_runtime_unavailable() -> ApiError {
+    fixed_error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "planning_runtime_unavailable",
+    )
+}
+
+fn planning_effect_api_error(error: MasterError) -> ApiError {
+    match error {
+        MasterError::AssemblyLineBrainstormingRejected => {
+            fixed_error(StatusCode::CONFLICT, "brainstorming_rejected")
+        }
+        MasterError::AssemblyLineBrainstormingUnavailable => fixed_error(
+            StatusCode::CONFLICT,
+            "brainstorming_reconciliation_required",
+        ),
+        MasterError::AssemblyLineGithubCreationConflict => {
+            fixed_error(StatusCode::CONFLICT, "github_creation_conflict")
+        }
+        MasterError::AssemblyLineGithubCreationReconciliationRequired => fixed_error(
+            StatusCode::CONFLICT,
+            "github_creation_reconciliation_required",
+        ),
+        MasterError::AssemblyLineGithubCreationUnavailable => fixed_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "github_creation_unavailable",
+        ),
+        error => assembly_line_api_error(error),
+    }
+}
+
+async fn run_planning_brainstorm(
+    state: AppState,
+    draft: BrainstormingDraft,
+    authorization: BrainstormingCloudAuthorization,
+    registration: Option<DeviceRegistration>,
+) -> ApiResult<FrozenBrainstormingSpecification> {
+    let runtime = state
+        .planning_runtime
+        .clone()
+        .ok_or_else(planning_runtime_unavailable)?;
+    let database_path = state.planning_database_path.clone();
+    let mut cancellation = PlanningCallCancellation::new();
+    let control = planning_effect_control(&state, cancellation.cancelled.clone())?;
+    let result = tokio::task::spawn_blocking(move || {
+        let mut kernel = MasterKernel::open_planning_runtime_connection(database_path)?;
+        if let Some(registration) = registration.as_ref() {
+            kernel.authorize_assembly_line_owner_bridge(registration)?;
+        }
+        if !control.poll() {
+            return Err(MasterError::AssemblyLineBrainstormingUnavailable);
+        }
+        let mut runtime = runtime.lock().map_err(|_| {
+            MasterError::InvalidStoredState("planning runtime lock is poisoned".to_string())
+        })?;
+        runtime.run_brainstorming(&mut kernel, draft, authorization, &control)
+    })
+    .await
+    .map_err(|_| internal_error())?;
+    cancellation.completed = true;
+    Ok(Json(result.map_err(planning_effect_api_error)?))
+}
+
+async fn run_planning_github_creation(
+    state: AppState,
+    repository_id: Uuid,
+    registration: Option<DeviceRegistration>,
+) -> ApiResult<RepositoryCreationProjection> {
+    let runtime = state
+        .planning_runtime
+        .clone()
+        .ok_or_else(planning_runtime_unavailable)?;
+    let database_path = state.planning_database_path.clone();
+    let mut cancellation = PlanningCallCancellation::new();
+    let control = planning_effect_control(&state, cancellation.cancelled.clone())?;
+    let result = tokio::task::spawn_blocking(move || {
+        let mut kernel = MasterKernel::open_planning_runtime_connection(database_path)?;
+        if let Some(registration) = registration.as_ref() {
+            kernel.authorize_assembly_line_owner_bridge(registration)?;
+        }
+        if !control.poll() {
+            return Err(MasterError::AssemblyLineGithubCreationUnavailable);
+        }
+        let mut runtime = runtime.lock().map_err(|_| {
+            MasterError::InvalidStoredState("planning runtime lock is poisoned".to_string())
+        })?;
+        runtime.run_github_creation(&mut kernel, repository_id, &control)
+    })
+    .await
+    .map_err(|_| internal_error())?;
+    cancellation.completed = true;
+    Ok(Json(result.map_err(planning_effect_api_error)?))
+}
+
+async fn run_assembly_line_project_brainstorm(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<FrozenBrainstormingSpecification> {
+    authorize(&headers, &state)?;
+    let body = assembly_line_body(body)?;
+    let request = ProjectBrainstormingCloudRequest::decode_frame(&body)
+        .map_err(|_| assembly_line_request_rejected())?;
+    run_planning_brainstorm(
+        state,
+        BrainstormingDraft::Project(request.draft),
+        BrainstormingCloudAuthorization {
+            owner_cloud_disclosure_sha256: request.owner_cloud_disclosure_sha256,
+        },
+        None,
+    )
+    .await
+}
+
+async fn run_assembly_line_feature_brainstorm(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<FrozenBrainstormingSpecification> {
+    authorize(&headers, &state)?;
+    let body = assembly_line_body(body)?;
+    let request = FeatureBrainstormingCloudRequest::decode_frame(&body)
+        .map_err(|_| assembly_line_request_rejected())?;
+    run_planning_brainstorm(
+        state,
+        BrainstormingDraft::Feature(request.draft),
+        BrainstormingCloudAuthorization {
+            owner_cloud_disclosure_sha256: request.owner_cloud_disclosure_sha256,
+        },
+        None,
+    )
+    .await
+}
+
+async fn run_assembly_line_github_creation(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    AxumPath(repository_id): AxumPath<String>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<RepositoryCreationProjection> {
+    authorize(&headers, &state)?;
+    let body = assembly_line_body(body)?;
+    if !body.is_empty() {
+        return Err(assembly_line_request_rejected());
+    }
+    let repository_id = Uuid::parse_str(&repository_id)
+        .ok()
+        .filter(|identifier| !identifier.is_nil())
+        .ok_or_else(assembly_line_request_rejected)?;
+    run_planning_github_creation(state, repository_id, None).await
+}
+
 async fn record_assembly_line_frozen_specification(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -3903,10 +4515,21 @@ async fn approve_assembly_line_feature(
     let body = assembly_line_body(body)?;
     let approval = BrainstormingOwnerApprovalBinding::decode_frame(&body)
         .map_err(|_| assembly_line_request_rejected())?;
-    let projection = lock_process(&state)?
-        .kernel_mut()
-        .approve_assembly_line_feature_and_enqueue(&approval, current_time_ms().map_err(api_error)?)
-        .map_err(assembly_line_api_error)?;
+    let runtime = state
+        .planning_runtime
+        .as_ref()
+        .ok_or_else(planning_runtime_unavailable)?
+        .clone();
+    let mut process = lock_process(&state)?;
+    let projection = runtime
+        .lock()
+        .map_err(|_| planning_runtime_unavailable())?
+        .approve_feature_and_enqueue(
+            process.kernel_mut(),
+            &approval,
+            current_time_ms().map_err(api_error)?,
+        )
+        .map_err(planning_effect_api_error)?;
     Ok(Json(projection))
 }
 
@@ -3924,6 +4547,60 @@ async fn set_assembly_line_auto_run(
         .set_assembly_line_auto_run(&request, current_time_ms().map_err(api_error)?)
         .map_err(assembly_line_api_error)?;
     Ok(Json(receipt))
+}
+
+async fn start_assembly_line(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<(StatusCode, Json<AssemblyLineOwnerProjection>), ApiError> {
+    authorize(&headers, &state)?;
+    if state
+        .assembly_line_effect_dispatcher
+        .runtime_status()
+        .is_none()
+    {
+        return Err(assembly_line_effect_routes_unavailable());
+    }
+    let request = AssemblyLineStartRequest::decode_frame(&assembly_line_body(body)?)
+        .map_err(|_| assembly_line_request_rejected())?;
+    execute_assembly_line_start(&state, &request, None)
+}
+
+async fn stop_assembly_line(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<(StatusCode, Json<AssemblyLineOwnerProjection>), ApiError> {
+    authorize(&headers, &state)?;
+    if state
+        .assembly_line_effect_dispatcher
+        .runtime_status()
+        .is_none()
+    {
+        return Err(assembly_line_effect_routes_unavailable());
+    }
+    let request = AssemblyLineStopRequest::decode_frame(&assembly_line_body(body)?)
+        .map_err(|_| assembly_line_request_rejected())?;
+    execute_assembly_line_termination(&state, Some(&request), None, None)
+}
+
+async fn emergency_pause_assembly_line(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
+) -> Result<(StatusCode, Json<AssemblyLineOwnerProjection>), ApiError> {
+    authorize(&headers, &state)?;
+    if state
+        .assembly_line_effect_dispatcher
+        .runtime_status()
+        .is_none()
+    {
+        return Err(assembly_line_effect_routes_unavailable());
+    }
+    let request = AssemblyLineEmergencyPauseRequest::decode_frame(&assembly_line_body(body)?)
+        .map_err(|_| assembly_line_request_rejected())?;
+    execute_assembly_line_termination(&state, None, Some(&request), None)
 }
 
 async fn designate_owner_control_bridge(
@@ -6015,10 +6692,26 @@ async fn activate_emergency_pause(
     Json(_request): Json<EmergencyPauseActionRequest>,
 ) -> ApiResult<EmergencyPauseResponse> {
     authorize(&headers, &state)?;
+    let mut active = state
+        .active_planning_calls
+        .lock()
+        .map_err(|_| internal_error())?;
+    active.retain(|call| {
+        if let Some(call) = call.upgrade() {
+            call.store(true, Ordering::Release);
+            true
+        } else {
+            false
+        }
+    });
     lock_process(&state)?
         .kernel_mut()
         .set_emergency_paused(true)
         .map_err(api_error)?;
+    for call in active.iter().filter_map(Weak::upgrade) {
+        call.store(true, Ordering::Release);
+    }
+    drop(active);
     schedule_cancellation_deadline_reconciliation(&state);
     Ok(Json(EmergencyPauseResponse {
         emergency_paused: true,
@@ -6490,6 +7183,350 @@ fn hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    const TEST_WINDOWS_SEED: [u8; 32] = [71; 32];
+    const TEST_MAC_SEED: [u8; 32] = [72; 32];
+
+    struct NativeBoundaryDispatcher {
+        database_path: PathBuf,
+        windows_executor_id: Uuid,
+        mac_executor_id: Uuid,
+        available: Arc<std::sync::atomic::AtomicBool>,
+        observations: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl AssemblyLineEffectDispatcher for NativeBoundaryDispatcher {
+        fn runtime_status(
+            &self,
+        ) -> Option<assemblywright_master::AssemblyLineExecutionRuntimeStatus> {
+            if !self.available.load(std::sync::atomic::Ordering::SeqCst) {
+                return None;
+            }
+            Some(assemblywright_master::AssemblyLineExecutionRuntimeStatus {
+                binding_revision: 1,
+                dispatcher_sha256: [73; 32],
+            })
+        }
+
+        fn dispatch_start(
+            &self,
+            intent: &assemblywright_master::AssemblyLineStartDispatchIntent,
+        ) -> Result<
+            Vec<assemblywright_protocol::ExecutionActivationReceipt>,
+            assemblywright_master::AssemblyLineEffectDispatchError,
+        > {
+            let lifecycle: String = rusqlite::Connection::open(&self.database_path)
+                .unwrap()
+                .query_row(
+                    "SELECT lifecycle FROM assembly_line_state WHERE singleton=1",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            self.observations
+                .lock()
+                .unwrap()
+                .push(format!("start:{lifecycle}"));
+            Ok(vec![
+                signed_activation_receipt(
+                    intent,
+                    ExecutionHostPlatform::Windows,
+                    self.windows_executor_id,
+                    "windows.executor.receipts.v1",
+                    TEST_WINDOWS_SEED,
+                ),
+                signed_activation_receipt(
+                    intent,
+                    ExecutionHostPlatform::Macos,
+                    self.mac_executor_id,
+                    "mac.executor.receipts.v1",
+                    TEST_MAC_SEED,
+                ),
+            ])
+        }
+
+        fn dispatch_termination(
+            &self,
+            intent: &assemblywright_master::AssemblyLineTerminationIntent,
+        ) -> Result<
+            Vec<assemblywright_protocol::ExecutionTerminationReceipt>,
+            assemblywright_master::AssemblyLineEffectDispatchError,
+        > {
+            let revoked: i64 = rusqlite::Connection::open(&self.database_path)
+                .unwrap()
+                .query_row(
+                    "SELECT revoked FROM assembly_line_execution_authority WHERE singleton=1",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            self.observations
+                .lock()
+                .unwrap()
+                .push(format!("termination:{revoked}"));
+            Ok(vec![
+                signed_termination_receipt(
+                    intent,
+                    ExecutionDescendantScope::WindowsJobObject,
+                    "windows.executor.receipts.v1",
+                    TEST_WINDOWS_SEED,
+                ),
+                signed_termination_receipt(
+                    intent,
+                    ExecutionDescendantScope::MacosProcessGroup,
+                    "mac.executor.receipts.v1",
+                    TEST_MAC_SEED,
+                ),
+            ])
+        }
+    }
+
+    fn signed_activation_receipt(
+        intent: &assemblywright_master::AssemblyLineStartDispatchIntent,
+        host_platform: ExecutionHostPlatform,
+        executor_id: Uuid,
+        signer_key_id: &str,
+        seed: [u8; 32],
+    ) -> assemblywright_protocol::ExecutionActivationReceipt {
+        let mut receipt = assemblywright_protocol::ExecutionActivationReceipt {
+            schema_version: FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
+            receipt_id: Uuid::new_v4(),
+            session_id: intent.session_id,
+            child_epoch_id: intent.child_epoch_id,
+            authority_revision: intent.authority_revision,
+            host_platform,
+            executor_id,
+            executor_revision: 1,
+            observed_at_ms: 1,
+            signer_key_id: signer_key_id.to_string(),
+            signature: Vec::new(),
+        };
+        let signing_key = seed.into();
+        receipt.sign(&signing_key).unwrap();
+        receipt
+    }
+
+    fn signed_termination_receipt(
+        intent: &assemblywright_master::AssemblyLineTerminationIntent,
+        descendant_scope: ExecutionDescendantScope,
+        signer_key_id: &str,
+        seed: [u8; 32],
+    ) -> assemblywright_protocol::ExecutionTerminationReceipt {
+        let mut receipt = assemblywright_protocol::ExecutionTerminationReceipt {
+            schema_version: FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
+            receipt_id: Uuid::new_v4(),
+            child_epoch_id: intent.child_epoch_id,
+            mode: intent.mode,
+            outcome: ExecutionTerminationOutcome::Reaped,
+            tracked_root_process_count: 1,
+            graceful_root_termination_count: 1,
+            forced_root_termination_count: 0,
+            reaped_root_process_count: 1,
+            survivor_root_process_count: 0,
+            descendant_scope,
+            descendants_reaped: true,
+            last_checkpoint_sha256: intent.checkpoint_sha256,
+            observed_at_ms: 2,
+            signer_key_id: signer_key_id.to_string(),
+            signature: Vec::new(),
+        };
+        let signing_key = seed.into();
+        receipt.sign(&signing_key).unwrap();
+        receipt
+    }
+
+    fn test_verifying_key(seed: [u8; 32]) -> [u8; 32] {
+        let signing_key = seed.into();
+        let mut receipt = assemblywright_protocol::ExecutionTerminationReceipt {
+            schema_version: FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
+            receipt_id: Uuid::new_v4(),
+            child_epoch_id: Uuid::new_v4(),
+            mode: ExecutionTerminationMode::Stop,
+            outcome: ExecutionTerminationOutcome::Reaped,
+            tracked_root_process_count: 1,
+            graceful_root_termination_count: 1,
+            forced_root_termination_count: 0,
+            reaped_root_process_count: 1,
+            survivor_root_process_count: 0,
+            descendant_scope: ExecutionDescendantScope::WindowsJobObject,
+            descendants_reaped: true,
+            last_checkpoint_sha256: [1; 32],
+            observed_at_ms: 1,
+            signer_key_id: "key".to_string(),
+            signature: Vec::new(),
+        };
+        receipt.sign(&signing_key).unwrap();
+        signing_key.verifying_key().to_bytes()
+    }
+
+    #[test]
+    fn native_execution_boundary_waits_for_signed_activation_and_revokes_before_termination() {
+        let directory = tempfile::tempdir().unwrap();
+        let lifecycle = RuntimeLifecycle::load(directory.path(), "test", "test-owner").unwrap();
+        let process = MasterProcess::acquire(directory.path().join("master")).unwrap();
+        let database_path = process.database_path().to_path_buf();
+        let repository_id = Uuid::new_v4();
+        let feature_id = Uuid::new_v4();
+        let specification_id = Uuid::new_v4();
+        let connection = rusqlite::Connection::open(&database_path).unwrap();
+        connection
+            .execute(
+                "INSERT INTO assembly_line_repositories
+                 (repository_id,git_url,repository_revision,lifecycle_revision,visibility,
+                  approved_specification_id,approved_specification_revision,
+                  approved_specification_sha256,owner_approval_sha256,lifecycle,effect_possible,
+                  creation_evidence_sha256,created_at_ms)
+                 VALUES(?1,'https://github.com/owner/native-boundary',1,2,'public',?2,1,
+                        ?3,?4,'created',1,?5,1)",
+                rusqlite::params![
+                    repository_id.to_string(),
+                    specification_id.to_string(),
+                    [1_u8; 32].as_slice(),
+                    [2_u8; 32].as_slice(),
+                    [3_u8; 32].as_slice(),
+                ],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO assembly_line_queue
+                 (feature_id,repository_id,specification_id,specification_revision,
+                  specification_sha256,owner_approval_sha256,queue_position,
+                  lifecycle_revision,lifecycle,enqueued_at_ms)
+                 VALUES(?1,?2,?3,1,?4,?5,1,1,'queued',1)",
+                rusqlite::params![
+                    feature_id.to_string(),
+                    repository_id.to_string(),
+                    specification_id.to_string(),
+                    [4_u8; 32].as_slice(),
+                    [5_u8; 32].as_slice(),
+                ],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE assembly_line_state SET queue_revision=1 WHERE singleton=1",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+
+        let windows_executor_id = Uuid::new_v4();
+        let mac_executor_id = Uuid::new_v4();
+        let dispatcher_available = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let observations = Arc::new(Mutex::new(Vec::new()));
+        let dispatcher = Arc::new(NativeBoundaryDispatcher {
+            database_path: database_path.clone(),
+            windows_executor_id,
+            mac_executor_id,
+            available: dispatcher_available.clone(),
+            observations: observations.clone(),
+        });
+        let state = AppState {
+            process: Arc::new(Mutex::new(process)),
+            token_sha256: [1; 32],
+            started_at_ms: 1,
+            lifecycle,
+            repository_snapshot_claim_reservation: Arc::new(tokio::sync::Mutex::new(())),
+            artifact_integration_reservation: Arc::new(tokio::sync::Mutex::new(())),
+            validation_gate_reservation: Arc::new(tokio::sync::Mutex::new(())),
+            review_gateway_reservation: Arc::new(tokio::sync::Mutex::new(())),
+            publication_reservation: Arc::new(tokio::sync::Mutex::new(())),
+            review_provider: Arc::new(UnavailableReviewProvider),
+            github_publication: None,
+            planning_runtime: None,
+            planning_runtime_status: None,
+            planning_database_path: database_path.clone(),
+            active_planning_calls: Arc::new(Mutex::new(Vec::new())),
+            assembly_line_effect_dispatcher: dispatcher,
+            validation_runtime: ValidationRuntime::Disabled,
+        };
+        state
+            .process
+            .lock()
+            .unwrap()
+            .kernel_mut()
+            .record_assembly_line_execution_capabilities(
+                &assemblywright_master::AssemblyLineExecutionCapabilityBinding {
+                    binding_revision: 1,
+                    expected_state_revision: 1,
+                    expected_emergency_pause_revision: 0,
+                    windows_executor_id,
+                    windows_executor_revision: 1,
+                    windows_executor_sha256: [11; 32],
+                    mac_executor_id,
+                    mac_executor_revision: 1,
+                    mac_executor_sha256: [12; 32],
+                    windows_broker_id: Uuid::new_v4(),
+                    windows_broker_revision: 1,
+                    windows_broker_sha256: [13; 32],
+                    mac_broker_id: Uuid::new_v4(),
+                    mac_broker_revision: 1,
+                    mac_broker_sha256: [14; 32],
+                    protected_control_plane_sha256: [15; 32],
+                    windows_receipt_signer_key_id: "windows.executor.receipts.v1".to_string(),
+                    windows_receipt_verifying_key: test_verifying_key(TEST_WINDOWS_SEED),
+                    mac_receipt_signer_key_id: "mac.executor.receipts.v1".to_string(),
+                    mac_receipt_verifying_key: test_verifying_key(TEST_MAC_SEED),
+                    healthy: true,
+                    provisioning_evidence_sha256: [16; 32],
+                },
+                2,
+            )
+            .unwrap();
+        let mut start = AssemblyLineStartRequest {
+            schema_version: FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
+            request_id: Uuid::new_v4(),
+            expected_state_revision: 1,
+            expected_queue_revision: 1,
+            expected_emergency_pause_revision: 0,
+            queue_count: 1,
+            windows_executor_id,
+            windows_executor_revision: 1,
+            mac_executor_id,
+            mac_executor_revision: 1,
+            auto_run: true,
+            owner_start_approval_sha256: [0; 32],
+        };
+        start.owner_start_approval_sha256 = start.canonical_owner_start_approval_sha256().unwrap();
+        let (status, Json(running)) = execute_assembly_line_start(&state, &start, None).unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            running.assembly_line.lifecycle,
+            AssemblyLineLifecycleState::Running
+        );
+
+        let stop = AssemblyLineStopRequest {
+            schema_version: FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,
+            request_id: Uuid::new_v4(),
+            session_id: running.assembly_line.session_id.unwrap(),
+            expected_state_revision: running.assembly_line.state_revision,
+            expected_child_epoch_id: running.assembly_line.active_child_epoch_id.unwrap(),
+        };
+        dispatcher_available.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(execute_assembly_line_termination(&state, Some(&stop), None, None).is_err());
+        let lifecycle: String = rusqlite::Connection::open(&database_path)
+            .unwrap()
+            .query_row(
+                "SELECT lifecycle FROM assembly_line_state WHERE singleton=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(lifecycle, "running");
+        dispatcher_available.store(true, std::sync::atomic::Ordering::SeqCst);
+        let (status, Json(paused)) =
+            execute_assembly_line_termination(&state, Some(&stop), None, None).unwrap();
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            paused.assembly_line.lifecycle,
+            AssemblyLineLifecycleState::PausedAtCheckpoint
+        );
+        assert_eq!(
+            observations.lock().unwrap().as_slice(),
+            ["start:starting", "termination:1"]
+        );
+    }
+
     fn pairing_invitation() -> EnrollmentInvitation {
         EnrollmentInvitation {
             schema_version: ENROLLMENT_PAIRING_SCHEMA_VERSION,
@@ -6853,6 +7890,11 @@ mod tests {
             publication_reservation: Arc::new(tokio::sync::Mutex::new(())),
             review_provider: Arc::new(UnavailableReviewProvider),
             github_publication: None,
+            planning_runtime: None,
+            planning_runtime_status: None,
+            planning_database_path: directory.path().join("master/master.sqlite3"),
+            active_planning_calls: Arc::new(Mutex::new(Vec::new())),
+            assembly_line_effect_dispatcher: Arc::new(UnavailableAssemblyLineEffectDispatcher),
             validation_runtime: ValidationRuntime::Disabled,
         };
         let rejection = require_work_admission(&state).expect_err("pause must dominate work");

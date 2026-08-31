@@ -5928,6 +5928,44 @@ struct DeveloperBridgeTests {
         #expect(projection.queue.first?.lifecycle == .queued)
     }
 
+    @Test("Assembly Line accepts Starting only with all execution components available")
+    func assemblyLineStartingRequiresAvailableExecutionRuntime() throws {
+        var object = try #require(
+            JSONSerialization.jsonObject(
+                with: validAssemblyLineProjectionData(
+                    emergencyPaused: true,
+                    emergencyPauseRevision: 2
+                )
+            ) as? [String: Any]
+        )
+        object["emergency_paused"] = false
+        var state = try #require(object["assembly_line"] as? [String: Any])
+        state["lifecycle"] = "starting"
+        object["assembly_line"] = state
+        var queue = try #require(object["queue"] as? [[String: Any]])
+        queue[0]["lifecycle"] = "starting"
+        object["queue"] = queue
+
+        let unavailable = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        #expect(throws: AssemblywrightMacAssemblyLineError.invalidProjection) {
+            try AssemblywrightMacAssemblyLineOwnerProjection.decodeStrict(unavailable)
+        }
+
+        var availability = try #require(object["availability"] as? [String: Any])
+        for key in ["windows_executor", "mac_executor", "protected_brokers"] {
+            var component = try #require(availability[key] as? [String: Any])
+            component["status"] = "available"
+            component["unavailable_reason"] = NSNull()
+            availability[key] = component
+        }
+        object["availability"] = availability
+        let projection = try AssemblywrightMacAssemblyLineOwnerProjection.decodeStrict(
+            JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        )
+        #expect(projection.assemblyLine.lifecycle == .starting)
+        #expect(projection.queue.first?.lifecycle == .starting)
+    }
+
     @Test("Planning mutation preflights, posts, and postflights one authenticated session")
     func assemblyLinePlanningUsesOneSession() async throws {
         let prior = validAssemblyLineProjectionData(ownerControlRevision: 1)
@@ -5953,6 +5991,411 @@ struct DeveloperBridgeTests {
             AssemblywrightMacBridgeSupervisor.assemblyLinePath
         ])
         #expect(await session.cancelled)
+    }
+
+    @Test("Project brainstorming builds a canonical request and binds the frozen response")
+    func assemblyLineProjectBrainstormingHappyPath() async throws {
+        let prior = validAssemblyLineProjectionData(
+            ownerControlRevision: 7,
+            brainstormingAvailable: true
+        )
+        let post = validAssemblyLineProjectionData(
+            ownerControlRevision: 9,
+            brainstormingAvailable: true
+        )
+        let projection = try AssemblywrightMacAssemblyLineOwnerProjection.decodeStrict(prior)
+        let draftID = UUID(uuidString: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee")!
+        let repositoryID = UUID(uuidString: "ffffffff-ffff-4fff-8fff-ffffffffffff")!
+        let request = try AssemblywrightMacAssemblyLineOwnerControl.projectBrainstormRequest(
+            from: projection,
+            repositoryID: repositoryID,
+            repositoryURL: "https://github.com/owner/new-project",
+            visibility: .public,
+            idea: "Create a bounded planning-only project",
+            informationClassification: .public,
+            ownerConfirmedCloudDisclosure: true,
+            draftID: draftID
+        )
+        let frozen = frozenSpecificationData(draftRequest: request, targetKind: "project")
+        let session = FakeAssemblyLinePlanningSession(responses: [
+            .init(status: 200, body: prior),
+            .init(status: 200, body: frozen),
+            .init(status: 200, body: post)
+        ])
+
+        let output = try await AssemblywrightMacAssemblyLineOwnerControl.perform(
+            action: .projectBrainstorm,
+            requestData: request,
+            using: session
+        )
+        let decoded = try AssemblywrightMacFrozenBrainstormingSpecification.decodeStrict(
+            output,
+            matchingDraft: request,
+            projection: projection
+        )
+
+        #expect(decoded.targetKind == .project)
+        #expect(decoded.repository.repositoryID == repositoryID)
+        #expect(decoded.specification.title == "Bounded project")
+        #expect(await session.requests[1].path == "/v1/distributed/assembly-line/project-brainstorms")
+        #expect(await session.requests[1].body == request)
+    }
+
+    @Test("Cloud brainstorming wrapper matches the Rust public-disclosure golden digest")
+    func assemblyLineProjectBrainstormingCloudGolden() throws {
+        let projection = try AssemblywrightMacAssemblyLineOwnerProjection.decodeStrict(
+            validAssemblyLineProjectionData(brainstormingAvailable: true)
+        )
+        let request = try AssemblywrightMacAssemblyLineOwnerControl.projectBrainstormRequest(
+            from: projection,
+            repositoryID: UUID(uuidString: "11111111-1111-4111-8111-111111111111")!,
+            repositoryURL: "https://github.com/assemblywright/protocol-test",
+            visibility: .public,
+            idea: "Create a bounded project with native tests and durable documentation.",
+            informationClassification: .public,
+            ownerConfirmedCloudDisclosure: true,
+            draftID: UUID(uuidString: "22222222-2222-4222-8222-222222222222")!
+        )
+        let envelope = try #require(
+            JSONSerialization.jsonObject(with: request) as? [String: Any]
+        )
+        let disclosure = try #require(
+            (envelope["owner_cloud_disclosure_sha256"] as? [NSNumber])?.map(\.uint8Value)
+        )
+
+        #expect(Set(envelope.keys) == Set([
+            "schema_version", "draft", "information_classification",
+            "owner_cloud_disclosure_sha256"
+        ]))
+        #expect(envelope["information_classification"] as? String == "public")
+        #expect(disclosure.map { String(format: "%02x", $0) }.joined()
+            == "295ec0847c198b1463ff9f4b0b5318f1b2276acf9c0e715bef585b3f3c06a914")
+        try AssemblywrightMacAssemblyLineOwnerControl.validateStoredRequest(
+            action: .projectBrainstorm,
+            requestData: request
+        )
+    }
+
+    @Test("Cloud brainstorming rejects non-Public classification or absent disclosure")
+    func assemblyLineBrainstormingRejectsRestrictedClassification() throws {
+        let projection = try AssemblywrightMacAssemblyLineOwnerProjection.decodeStrict(
+            validAssemblyLineProjectionData(brainstormingAvailable: true)
+        )
+
+        for classification in [
+            AssemblywrightMacPlanningInformationClassification.private,
+            .restricted,
+            .secret
+        ] {
+            #expect(throws: AssemblywrightMacAssemblyLineError.invalidRequest) {
+                _ = try AssemblywrightMacAssemblyLineOwnerControl.projectBrainstormRequest(
+                    from: projection,
+                    repositoryURL: "https://github.com/owner/project",
+                    visibility: .public,
+                    idea: "Public-looking input cannot override an owner classification",
+                    informationClassification: classification,
+                    ownerConfirmedCloudDisclosure: true
+                )
+            }
+        }
+        #expect(throws: AssemblywrightMacAssemblyLineError.invalidRequest) {
+            _ = try AssemblywrightMacAssemblyLineOwnerControl.projectBrainstormRequest(
+                from: projection,
+                repositoryURL: "https://github.com/owner/project",
+                visibility: .public,
+                idea: "Public information still requires explicit owner disclosure",
+                informationClassification: .public,
+                ownerConfirmedCloudDisclosure: false
+            )
+        }
+
+        let valid = try AssemblywrightMacAssemblyLineOwnerControl.projectBrainstormRequest(
+            from: projection,
+            repositoryURL: "https://github.com/owner/project",
+            visibility: .public,
+            idea: "Public information with owner disclosure",
+            informationClassification: .public,
+            ownerConfirmedCloudDisclosure: true
+        )
+        var tampered = try #require(
+            JSONSerialization.jsonObject(with: valid) as? [String: Any]
+        )
+        tampered["information_classification"] = "restricted"
+        let tamperedData = try JSONSerialization.data(
+            withJSONObject: tampered,
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        )
+        #expect(throws: AssemblywrightMacAssemblyLineError.invalidRequest) {
+            try AssemblywrightMacAssemblyLineOwnerControl.validateStoredRequest(
+                action: .projectBrainstorm,
+                requestData: tamperedData
+            )
+        }
+
+        var resignedEnvelope = try #require(
+            JSONSerialization.jsonObject(with: valid) as? [String: Any]
+        )
+        var resignedDraft = try #require(resignedEnvelope["draft"] as? [String: Any])
+        resignedDraft["unexpected"] = true
+        let catalog = try #require(resignedDraft["orchestrator_catalog"] as? [String: Any])
+        let profile = try #require(resignedDraft["orchestrator"] as? [String: Any])
+        let canonical: (Any) throws -> Data = {
+            try JSONSerialization.data(
+                withJSONObject: $0,
+                options: [.sortedKeys, .withoutEscapingSlashes]
+            )
+        }
+        let binding: [String: Any] = [
+            "schema_version": 1,
+            "target_kind": "project",
+            "draft_sha256": Array(SHA256.hash(data: try canonical(resignedDraft))),
+            "information_classification": "public",
+            "provider_id": profile["provider_id"]!,
+            "model_id": profile["model_id"]!,
+            "orchestrator_catalog_revision": catalog["catalog_revision"]!,
+            "orchestrator_catalog_sha256": catalog["catalog_sha256"]!,
+            "orchestrator_profile_sha256": Array(
+                SHA256.hash(data: try canonical(profile))
+            )
+        ]
+        var preimage = Data("assemblywright.owner-cloud-disclosure.v1\0".utf8)
+        preimage.append(try canonical(binding))
+        resignedEnvelope["draft"] = resignedDraft
+        resignedEnvelope["owner_cloud_disclosure_sha256"] = Array(
+            SHA256.hash(data: preimage)
+        )
+        let resignedData = try canonical(resignedEnvelope)
+        #expect(throws: AssemblywrightMacAssemblyLineError.invalidRequest) {
+            try AssemblywrightMacAssemblyLineOwnerControl.validateStoredRequest(
+                action: .projectBrainstorm,
+                requestData: resignedData
+            )
+        }
+    }
+
+    @Test("Feature brainstorming and owner approval bind authoritative revisions")
+    func assemblyLineFeatureBrainstormAndApprovalBinding() throws {
+        let repositoryID = UUID(uuidString: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")!
+        let source = assemblyLineProjectionWithPendingRepository(
+            repositoryID: repositoryID,
+            created: true,
+            brainstormingAvailable: true
+        )
+        let projection = try AssemblywrightMacAssemblyLineOwnerProjection.decodeStrict(source)
+        let draft = try AssemblywrightMacAssemblyLineOwnerControl.featureBrainstormRequest(
+            from: projection,
+            repositoryURL: "https://github.com/owner/project",
+            idea: "Add a bounded owner-reviewed feature",
+            informationClassification: .public,
+            ownerConfirmedCloudDisclosure: true,
+            draftID: UUID(uuidString: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee")!
+        )
+        let frozen = try AssemblywrightMacFrozenBrainstormingSpecification.decodeStrict(
+            frozenSpecificationData(draftRequest: draft, targetKind: "feature"),
+            matchingDraft: draft,
+            projection: projection
+        )
+        let approval = try AssemblywrightMacAssemblyLineOwnerControl.ownerApprovalRequest(
+            for: frozen,
+            from: projection,
+            approvalID: UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")!,
+            approvedAtMilliseconds: 1_000
+        )
+        let object = try #require(
+            JSONSerialization.jsonObject(with: approval) as? [String: Any]
+        )
+        var binding = object
+        binding.removeValue(forKey: "owner_approval_sha256")
+        let canonical = try JSONSerialization.data(
+            withJSONObject: binding,
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        )
+
+        #expect(object["target_kind"] as? String == "feature")
+        #expect(object["visibility"] is NSNull)
+        #expect((object["expected_repository_revision"] as? NSNumber)?.uint64Value == 1)
+        #expect((object["expected_queue_revision"] as? NSNumber)?.uint64Value == 0)
+        let approvalDigest = (object["owner_approval_sha256"] as? [NSNumber])?.map(\.uint8Value)
+        #expect(approvalDigest == Array(SHA256.hash(data: canonical)))
+    }
+
+    @Test("Brainstorming rejects malformed, oversized, stale, and ambiguous outcomes")
+    func assemblyLineBrainstormingNegativePaths() async throws {
+        let prior = validAssemblyLineProjectionData(
+            ownerControlRevision: 3,
+            brainstormingAvailable: true
+        )
+        let projection = try AssemblywrightMacAssemblyLineOwnerProjection.decodeStrict(prior)
+        let request = try AssemblywrightMacAssemblyLineOwnerControl.projectBrainstormRequest(
+            from: projection,
+            repositoryID: UUID(uuidString: "ffffffff-ffff-4fff-8fff-ffffffffffff")!,
+            repositoryURL: "https://github.com/owner/new-project",
+            visibility: .private,
+            idea: "Create a bounded planning-only project",
+            informationClassification: .public,
+            ownerConfirmedCloudDisclosure: true
+        )
+        let frozen = frozenSpecificationData(draftRequest: request, targetKind: "project")
+        var malformed = try #require(JSONSerialization.jsonObject(with: frozen) as? [String: Any])
+        malformed["draft_sha256"] = Array(repeating: UInt8(0x99), count: 32)
+        #expect(throws: AssemblywrightMacAssemblyLineError.invalidReceipt) {
+            try AssemblywrightMacFrozenBrainstormingSpecification.decodeStrict(
+                JSONSerialization.data(withJSONObject: malformed, options: [.sortedKeys]),
+                matchingDraft: request,
+                projection: projection
+            )
+        }
+        #expect(throws: AssemblywrightMacAssemblyLineError.requestTooLarge) {
+            _ = try AssemblywrightMacAssemblyLineOwnerControl.projectBrainstormRequest(
+                from: projection,
+                repositoryID: UUID(),
+                repositoryURL: "https://github.com/owner/oversized",
+                visibility: .public,
+                idea: String(repeating: "a", count: 16 * 1_024 + 1),
+                informationClassification: .public,
+                ownerConfirmedCloudDisclosure: true
+            )
+        }
+
+        let stalePost = validAssemblyLineProjectionData(
+            ownerControlRevision: 4,
+            brainstormingAvailable: true
+        )
+        let staleSession = FakeAssemblyLinePlanningSession(responses: [
+            .init(status: 200, body: prior),
+            .init(status: 200, body: frozen),
+            .init(status: 200, body: stalePost)
+        ])
+        await #expect(throws: AssemblywrightMacAssemblyLineError.outcomeUnknown) {
+            _ = try await AssemblywrightMacAssemblyLineOwnerControl.perform(
+                action: .projectBrainstorm,
+                requestData: request,
+                using: staleSession
+            )
+        }
+
+        let ambiguous = FakeAssemblyLinePlanningSession(responses: [
+            .init(status: 200, body: prior),
+            .init(
+                status: 409,
+                body: Data(#"{"error":"brainstorming_reconciliation_required"}"#.utf8)
+            )
+        ])
+        await #expect(throws: AssemblywrightMacAssemblyLineError.outcomeUnknown) {
+            _ = try await AssemblywrightMacAssemblyLineOwnerControl.perform(
+                action: .projectBrainstorm,
+                requestData: request,
+                using: ambiguous
+            )
+        }
+    }
+
+    @Test("Repository creation derives a lowercase route and sends an empty body")
+    func assemblyLineRepositoryCreationExactRoute() async throws {
+        let repositoryID = UUID(uuidString: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")!
+        let prior = assemblyLineProjectionWithPendingRepository(repositoryID: repositoryID)
+        let created = repositoryCreationProjectionData(repositoryID: repositoryID, created: true)
+        let post = assemblyLineProjectionWithPendingRepository(
+            repositoryID: repositoryID,
+            created: true
+        )
+        let request = try AssemblywrightMacAssemblyLineOwnerControl.repositoryCreationRequest(
+            repositoryID: repositoryID
+        )
+        let session = FakeAssemblyLinePlanningSession(responses: [
+            .init(status: 200, body: prior),
+            .init(status: 200, body: created),
+            .init(status: 200, body: post)
+        ])
+
+        _ = try await AssemblywrightMacAssemblyLineOwnerControl.perform(
+            action: .repositoryCreation,
+            requestData: request,
+            using: session
+        )
+
+        #expect(await session.requests[1].path ==
+            "/v1/distributed/assembly-line/repositories/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb/create")
+        #expect(await session.requests[1].body == Data())
+    }
+
+    @Test("Fixed pre-effect planning errors reject while reconciliation remains ambiguous")
+    func assemblyLinePlanningFixedErrorDisposition() async throws {
+        let prior = validAssemblyLineProjectionData(
+            ownerControlRevision: 3,
+            brainstormingAvailable: true
+        )
+        let projection = try AssemblywrightMacAssemblyLineOwnerProjection.decodeStrict(prior)
+        let request = try AssemblywrightMacAssemblyLineOwnerControl.projectBrainstormRequest(
+            from: projection,
+            repositoryURL: "https://github.com/owner/new-project",
+            visibility: .public,
+            idea: "Create a bounded project",
+            informationClassification: .public,
+            ownerConfirmedCloudDisclosure: true
+        )
+        for (status, code) in [
+            (401, "unauthorized"),
+            (413, "payload_too_large"),
+            (422, "assembly_line_request_rejected"),
+            (409, "brainstorming_rejected"),
+            (503, "planning_runtime_unavailable")
+        ] {
+            let body = try JSONSerialization.data(withJSONObject: ["error": code])
+            let session = FakeAssemblyLinePlanningSession(responses: [
+                .init(status: 200, body: prior), .init(status: status, body: body)
+            ])
+            await #expect(throws: AssemblywrightMacAssemblyLineError.rejected) {
+                _ = try await AssemblywrightMacAssemblyLineOwnerControl.perform(
+                    action: .projectBrainstorm,
+                    requestData: request,
+                    using: session
+                )
+            }
+        }
+    }
+
+    @Test("Repository creation distinguishes fixed pre-effect errors from reconciliation")
+    func assemblyLineRepositoryCreationErrorDisposition() async throws {
+        let repositoryID = UUID(uuidString: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")!
+        let prior = assemblyLineProjectionWithPendingRepository(repositoryID: repositoryID)
+        let request = try AssemblywrightMacAssemblyLineOwnerControl.repositoryCreationRequest(
+            repositoryID: repositoryID
+        )
+        for (status, code) in [
+            (409, "github_creation_conflict"),
+            (503, "github_creation_unavailable")
+        ] {
+            let session = FakeAssemblyLinePlanningSession(responses: [
+                .init(status: 200, body: prior),
+                .init(
+                    status: status,
+                    body: try JSONSerialization.data(withJSONObject: ["error": code])
+                )
+            ])
+            await #expect(throws: AssemblywrightMacAssemblyLineError.rejected) {
+                _ = try await AssemblywrightMacAssemblyLineOwnerControl.perform(
+                    action: .repositoryCreation,
+                    requestData: request,
+                    using: session
+                )
+            }
+        }
+
+        let reconciliation = FakeAssemblyLinePlanningSession(responses: [
+            .init(status: 200, body: prior),
+            .init(
+                status: 409,
+                body: Data(#"{"error":"github_creation_reconciliation_required"}"#.utf8)
+            )
+        ])
+        await #expect(throws: AssemblywrightMacAssemblyLineError.outcomeUnknown) {
+            _ = try await AssemblywrightMacAssemblyLineOwnerControl.perform(
+                action: .repositoryCreation,
+                requestData: request,
+                using: reconciliation
+            )
+        }
     }
 
     @Test("Planning rejects stale bindings and accepts only an exact replay")
@@ -6406,7 +6849,7 @@ struct DeveloperBridgeTests {
         }
         for _ in 0 ..< 100 where await launcher.commands.isEmpty { await Task.yield() }
         operation.cancel()
-        await operation.value
+        _ = await operation.value
         for _ in 0 ..< 100 where await launcher.launchCount < 2 { await Task.yield() }
 
         #expect(lifecycle.pendingAssemblyLinePlanningAction == .autoRun)
@@ -6438,10 +6881,133 @@ struct DeveloperBridgeTests {
         await recovered.stop()
     }
 
+    @MainActor
+    @Test("Project approval immediately persists and invokes repository creation")
+    func assemblyLineProjectApprovalChainsCreation() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString.lowercased(), isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let pendingStore = AssemblywrightMacAssemblyLinePendingMutationStore(
+            fileURL: root.appendingPathComponent("pending.json")
+        )
+        let projectionData = validAssemblyLineProjectionData(
+            ownerControlRevision: 5,
+            brainstormingAvailable: true,
+            githubCreationAvailable: true
+        )
+        let projection = try AssemblywrightMacAssemblyLineOwnerProjection.decodeStrict(
+            projectionData
+        )
+        let draft = try AssemblywrightMacAssemblyLineOwnerControl.projectBrainstormRequest(
+            from: projection,
+            repositoryID: UUID(uuidString: "ffffffff-ffff-4fff-8fff-ffffffffffff")!,
+            repositoryURL: "https://github.com/owner/new-project",
+            visibility: .public,
+            idea: "Create a bounded project",
+            informationClassification: .public,
+            ownerConfirmedCloudDisclosure: true
+        )
+        let frozen = try AssemblywrightMacFrozenBrainstormingSpecification.decodeStrict(
+            frozenSpecificationData(draftRequest: draft, targetKind: "project"),
+            matchingDraft: draft,
+            projection: projection
+        )
+        let approval = try AssemblywrightMacAssemblyLineOwnerControl.ownerApprovalRequest(
+            for: frozen,
+            from: projection,
+            approvalID: UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")!,
+            approvedAtMilliseconds: 1_000
+        )
+        let creationUnavailable = try AssemblywrightMacAssemblyLineOwnerProjection.decodeStrict(
+            validAssemblyLineProjectionData(
+                ownerControlRevision: 5,
+                brainstormingAvailable: true,
+                githubCreationAvailable: false
+            )
+        )
+        #expect(throws: AssemblywrightMacAssemblyLineError.invalidRequest) {
+            try AssemblywrightMacAssemblyLineOwnerControl.validateRequest(
+                action: .projectApproval,
+                requestData: approval,
+                against: creationUnavailable
+            )
+        }
+        let paused = try AssemblywrightMacAssemblyLineOwnerProjection.decodeStrict(
+            validAssemblyLineProjectionData(
+                emergencyPaused: true,
+                emergencyPauseRevision: 1,
+                ownerControlRevision: 5,
+                brainstormingAvailable: true,
+                githubCreationAvailable: true
+            )
+        )
+        #expect(throws: AssemblywrightMacAssemblyLineError.invalidRequest) {
+            try AssemblywrightMacAssemblyLineOwnerControl.validateRequest(
+                action: .projectApproval,
+                requestData: approval,
+                against: paused
+            )
+        }
+        let pendingReceipt = projectApprovalReceiptData(approvalRequest: approval)
+        let pendingObject = try #require(
+            JSONSerialization.jsonObject(with: pendingReceipt) as? [String: Any]
+        )
+        var createdObject = pendingObject
+        createdObject["lifecycle_revision"] = 2
+        createdObject["lifecycle"] = "created"
+        createdObject["effect_possible"] = true
+        createdObject["creation_evidence_sha256"] = Array(repeating: UInt8(0x77), count: 32)
+        let createdReceipt = try JSONSerialization.data(
+            withJSONObject: createdObject,
+            options: [.sortedKeys]
+        )
+        let line = authenticatedSnapshotData(
+            connectionEpoch: 205,
+            assemblyLine: projectionData
+        )
+        let launcher = FakeBridgeProcessLauncher(
+            session: FakeBridgeProcessSession(lines: [line]),
+            restartSession: FakeBridgeProcessSession(lines: [line]),
+            commandResponses: [pendingReceipt, createdReceipt]
+        )
+        let lifecycle = AssemblywrightDeveloperBridgeProcessLifecycle(
+            configuration: .init(environment: [
+                AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
+                    "/tmp/assemblywright-mac-bridge",
+                AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
+                    "ABCDEFGHIJ"
+            ]),
+            validator: FakeBridgeExecutableValidator(),
+            launcher: launcher,
+            assemblyLinePendingMutationStore: pendingStore
+        )
+        lifecycle.start()
+        for _ in 0 ..< 100 where lifecycle.status.assemblyLine == nil { await Task.yield() }
+
+        let result = await lifecycle.performAssemblyLinePlanningAction(
+            .projectApproval,
+            requestData: approval
+        )
+        let commands = await launcher.commands
+
+        #expect(result == createdReceipt)
+        #expect(commands.map(\.0) == [
+            AssemblywrightMacAssemblyLinePlanningAction.projectApproval.helperArguments,
+            AssemblywrightMacAssemblyLinePlanningAction.repositoryCreation.helperArguments
+        ])
+        #expect(commands[0].1 == approval)
+        let expectedCreation = try AssemblywrightMacAssemblyLineOwnerControl
+            .repositoryCreationRequest(repositoryID: frozen.repository.repositoryID)
+        #expect(commands[1].1 == expectedCreation)
+        #expect(lifecycle.pendingAssemblyLinePlanningAction == nil)
+        #expect(!FileManager.default.fileExists(atPath: pendingStore.fileURL.path))
+        await lifecycle.stop()
+    }
+
     @Test("Assembly Line helper argv is closed and excludes execution controls")
     func assemblyLineHelperArgumentAllowlist() async {
         let arguments = AssemblywrightMacAssemblyLinePlanningAction.allCases.map(\.helperArguments)
-        #expect(Set(arguments.map { $0.joined(separator: "\u{0}") }).count == 6)
+        #expect(Set(arguments.map { $0.joined(separator: "\u{0}") }).count == 9)
         #expect(arguments.allSatisfy { $0.last == "--confirm" && $0.first == "assembly-line" })
         #expect(arguments.flatMap { $0 }.allSatisfy {
             !["start", "stop", "emergency-pause", "url", "path", "body"].contains($0)
@@ -6540,6 +7106,17 @@ struct DeveloperBridgeTests {
             AssemblywrightMacBridgeSupervisor.assemblyLinePath
         ])
         #expect(await session.cancelled)
+    }
+
+    @Test("Authenticated agent client outlives the bounded Rust peer identity decision")
+    func authenticatedAgentClientTimeoutMatchesRustContract() {
+        #expect(
+            DarwinAssemblywrightUnixSocketTransport.authenticatedPeerRequestTimeoutSeconds == 47
+        )
+        #expect(
+            DarwinAssemblywrightUnixSocketTransport.authenticatedPeerRequestTimeoutSeconds
+                < DarwinAssemblywrightUnixSocketTransport.maximumTimeoutSeconds
+        )
     }
 }
 
@@ -7477,7 +8054,9 @@ private func validAssemblyLineProjectionData(
     emergencyPaused: Bool = false,
     emergencyPauseRevision: UInt64 = 0,
     ownerControlRevision: UInt64 = 1,
-    autoRun: Bool = true
+    autoRun: Bool = true,
+    brainstormingAvailable: Bool = false,
+    githubCreationAvailable: Bool = false
 ) -> Data {
     let profile: [String: Any] = [
         "configuration_revision": 1,
@@ -7505,6 +8084,12 @@ private func validAssemblyLineProjectionData(
         "binding_sha256": Array(repeating: UInt8(0x44), count: 32),
         "status": "unavailable",
         "unavailable_reason": "not_configured"
+    ]
+    let availableComponent: [String: Any] = [
+        "binding_revision": 1,
+        "binding_sha256": Array(repeating: UInt8(0x44), count: 32),
+        "status": "available",
+        "unavailable_reason": NSNull()
     ]
     var repositories: [[String: Any]] = []
     var queue: [[String: Any]] = []
@@ -7571,8 +8156,8 @@ private func validAssemblyLineProjectionData(
             "schema_version": 1,
             "availability_revision": 1,
             "observed_at_ms": 1,
-            "brainstorming_provider": component,
-            "github_creation": component,
+            "brainstorming_provider": brainstormingAvailable ? availableComponent : component,
+            "github_creation": githubCreationAvailable ? availableComponent : component,
             "windows_executor": component,
             "mac_executor": component,
             "protected_brokers": component
@@ -7602,6 +8187,115 @@ private func projectDraftRequestData(projection: Data) -> Data {
         withJSONObject: request,
         options: [.sortedKeys, .withoutEscapingSlashes]
     )
+}
+
+private func frozenSpecificationData(draftRequest: Data, targetKind: String) -> Data {
+    let envelope = try! JSONSerialization.jsonObject(with: draftRequest) as! [String: Any]
+    let draft = (envelope["draft"] as? [String: Any]) ?? envelope
+    let specification: [String: Any] = [
+        "title": targetKind == "project" ? "Bounded project" : "Bounded feature",
+        "outcome": "Deliver the owner-reviewed result",
+        "acceptance_criteria": [[
+            "id": "owner_review",
+            "requirement": "The owner reviews the frozen specification"
+        ]],
+        "obligations": ["Keep planning separate from effects"]
+    ]
+    let canonical: (Any) -> Data = { object in
+        try! JSONSerialization.data(
+            withJSONObject: object,
+            options: [.sortedKeys, .withoutEscapingSlashes]
+        )
+    }
+    let object: [String: Any] = [
+        "schema_version": 1,
+        "specification_id": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "specification_revision": 1,
+        "target_kind": targetKind,
+        "draft_id": draft["draft_id"]!,
+        "draft_revision": draft["draft_revision"]!,
+        "draft_sha256": Array(SHA256.hash(data: canonical(draft))),
+        "repository": draft["repository"]!,
+        "visibility": targetKind == "project" ? draft["visibility"]! : NSNull(),
+        "orchestrator_catalog_revision":
+            (draft["orchestrator_catalog"] as! [String: Any])["catalog_revision"]!,
+        "orchestrator_catalog_sha256":
+            (draft["orchestrator_catalog"] as! [String: Any])["catalog_sha256"]!,
+        "orchestrator_profile_sha256": Array(
+            SHA256.hash(data: canonical(draft["orchestrator"]!))
+        ),
+        "specification": specification,
+        "specification_sha256": Array(SHA256.hash(data: canonical(specification)))
+    ]
+    return try! JSONSerialization.data(
+        withJSONObject: object,
+        options: [.sortedKeys, .withoutEscapingSlashes]
+    )
+}
+
+private func repositoryCreationProjectionData(
+    repositoryID: UUID,
+    created: Bool
+) -> Data {
+    var object: [String: Any] = [
+        "schema_version": 1,
+        "repository": [
+            "repository_id": repositoryID.uuidString.lowercased(),
+            "git_url": ["url": "https://github.com/owner/project"]
+        ],
+        "repository_revision": 1,
+        "lifecycle_revision": created ? 2 : 1,
+        "visibility": "public",
+        "approved_specification_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        "approved_specification_revision": 1,
+        "approved_specification_sha256": Array(repeating: UInt8(0x11), count: 32),
+        "owner_approval_sha256": Array(repeating: UInt8(0x22), count: 32),
+        "lifecycle": created ? "created" : "creation_pending",
+        "effect_possible": created,
+        "creation_evidence_sha256": NSNull()
+    ]
+    if created {
+        object["creation_evidence_sha256"] = Array(repeating: UInt8(0x33), count: 32)
+    }
+    return try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+}
+
+private func projectApprovalReceiptData(approvalRequest: Data) -> Data {
+    let approval = try! JSONSerialization.jsonObject(with: approvalRequest) as! [String: Any]
+    return try! JSONSerialization.data(withJSONObject: [
+        "schema_version": 1,
+        "repository": approval["repository"]!,
+        "repository_revision": 1,
+        "lifecycle_revision": 1,
+        "visibility": approval["visibility"]!,
+        "approved_specification_id": approval["specification_id"]!,
+        "approved_specification_revision": approval["specification_revision"]!,
+        "approved_specification_sha256": approval["specification_sha256"]!,
+        "owner_approval_sha256": approval["owner_approval_sha256"]!,
+        "lifecycle": "creation_pending",
+        "effect_possible": false,
+        "creation_evidence_sha256": NSNull()
+    ], options: [.sortedKeys])
+}
+
+private func assemblyLineProjectionWithPendingRepository(
+    repositoryID: UUID,
+    created: Bool = false,
+    brainstormingAvailable: Bool = false
+) -> Data {
+    var projection = try! JSONSerialization.jsonObject(
+        with: validAssemblyLineProjectionData(
+            ownerControlRevision: created ? 3 : 2,
+            brainstormingAvailable: brainstormingAvailable,
+            githubCreationAvailable: true
+        )
+    ) as! [String: Any]
+    projection["repositories"] = [
+        try! JSONSerialization.jsonObject(
+            with: repositoryCreationProjectionData(repositoryID: repositoryID, created: created)
+        )
+    ]
+    return try! JSONSerialization.data(withJSONObject: projection, options: [.sortedKeys])
 }
 
 private func autoRunAssemblyLineReceiptData(request: Data) -> Data {

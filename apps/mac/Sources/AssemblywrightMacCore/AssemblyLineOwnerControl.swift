@@ -20,8 +20,11 @@ public enum AssemblywrightMacAssemblyLinePlanningAction: String, CaseIterable, C
   case projectDraft
   case featureDraft
   case frozenSpecification
+  case projectBrainstorm
+  case featureBrainstorm
   case projectApproval
   case featureApproval
+  case repositoryCreation
   case autoRun
 
   public var helperArguments: [String] {
@@ -29,20 +32,39 @@ public enum AssemblywrightMacAssemblyLinePlanningAction: String, CaseIterable, C
     case .projectDraft: ["assembly-line", "project-draft", "--confirm"]
     case .featureDraft: ["assembly-line", "feature-draft", "--confirm"]
     case .frozenSpecification: ["assembly-line", "frozen-specification", "--confirm"]
+    case .projectBrainstorm: ["assembly-line", "project-brainstorm", "--confirm"]
+    case .featureBrainstorm: ["assembly-line", "feature-brainstorm", "--confirm"]
     case .projectApproval: ["assembly-line", "approve-project", "--confirm"]
     case .featureApproval: ["assembly-line", "approve-feature", "--confirm"]
+    case .repositoryCreation: ["assembly-line", "create-repository", "--confirm"]
     case .autoRun: ["assembly-line", "auto-run", "--confirm"]
     }
   }
 
-  fileprivate var remotePath: String {
+  fileprivate func remoteRequest(_ request: [String: Any], requestData: Data) throws ->
+    (path: String, body: Data)
+  {
     switch self {
-    case .projectDraft: "/v1/distributed/assembly-line/project-drafts"
-    case .featureDraft: "/v1/distributed/assembly-line/feature-drafts"
-    case .frozenSpecification: "/v1/distributed/assembly-line/frozen-specifications"
-    case .projectApproval: "/v1/distributed/assembly-line/project-approvals"
-    case .featureApproval: "/v1/distributed/assembly-line/feature-approvals"
-    case .autoRun: "/v1/distributed/assembly-line/auto-run"
+    case .projectDraft: return ("/v1/distributed/assembly-line/project-drafts", requestData)
+    case .featureDraft: return ("/v1/distributed/assembly-line/feature-drafts", requestData)
+    case .frozenSpecification:
+      return ("/v1/distributed/assembly-line/frozen-specifications", requestData)
+    case .projectBrainstorm:
+      return ("/v1/distributed/assembly-line/project-brainstorms", requestData)
+    case .featureBrainstorm:
+      return ("/v1/distributed/assembly-line/feature-brainstorms", requestData)
+    case .projectApproval:
+      return ("/v1/distributed/assembly-line/project-approvals", requestData)
+    case .featureApproval:
+      return ("/v1/distributed/assembly-line/feature-approvals", requestData)
+    case .repositoryCreation:
+      guard let repositoryID = AssemblyLineStrictJSON.canonicalUUIDText(request["repository_id"])
+      else { throw AssemblywrightMacAssemblyLineError.invalidRequest }
+      return (
+        "/v1/distributed/assembly-line/repositories/\(repositoryID)/create",
+        Data()
+      )
+    case .autoRun: return ("/v1/distributed/assembly-line/auto-run", requestData)
     }
   }
 
@@ -65,6 +87,11 @@ public enum AssemblywrightMacAssemblyLinePlanningAction: String, CaseIterable, C
         "orchestrator_catalog_revision", "orchestrator_catalog_sha256",
         "orchestrator_profile_sha256", "specification", "specification_sha256",
       ]
+    case .projectBrainstorm, .featureBrainstorm:
+      [
+        "schema_version", "draft", "information_classification",
+        "owner_cloud_disclosure_sha256",
+      ]
     case .projectApproval, .featureApproval:
       [
         "schema_version", "approval_id", "approved_at_ms", "owner_control_revision",
@@ -74,6 +101,8 @@ public enum AssemblywrightMacAssemblyLinePlanningAction: String, CaseIterable, C
         "specification_revision", "specification_sha256", "orchestrator_profile_sha256",
         "owner_approval_sha256",
       ]
+    case .repositoryCreation:
+      ["schema_version", "repository_id"]
     case .autoRun:
       ["schema_version", "request_id", "expected_state_revision", "auto_run"]
     }
@@ -83,6 +112,13 @@ public enum AssemblywrightMacAssemblyLinePlanningAction: String, CaseIterable, C
 public enum AssemblywrightMacProjectVisibility: String, Codable, Sendable {
   case `public`
   case `private`
+}
+
+public enum AssemblywrightMacPlanningInformationClassification: String, Sendable {
+  case `public`
+  case `private`
+  case restricted
+  case secret
 }
 
 public enum AssemblywrightMacRepositoryCreationLifecycle: String, Codable, Sendable {
@@ -96,6 +132,7 @@ public enum AssemblywrightMacRepositoryCreationLifecycle: String, Codable, Senda
 
 public enum AssemblywrightMacFeatureQueueLifecycle: String, Codable, Sendable {
   case queued
+  case starting
   case active
   case stopping
   case pausedAtCheckpoint = "paused_at_checkpoint"
@@ -107,6 +144,7 @@ public enum AssemblywrightMacFeatureQueueLifecycle: String, Codable, Sendable {
 
 public enum AssemblywrightMacAssemblyLineLifecycle: String, Codable, Sendable {
   case stopped
+  case starting
   case running
   case stopping
   case pausedAtCheckpoint = "paused_at_checkpoint"
@@ -160,6 +198,31 @@ public struct AssemblywrightMacOrchestratorCatalog: Codable, Equatable, Sendable
   }
 }
 
+public enum AssemblywrightMacBrainstormingTargetKind: String, Codable, Sendable {
+  case project
+  case feature
+}
+
+public struct AssemblywrightMacBrainstormingAcceptanceCriterion: Codable, Equatable, Sendable,
+  Identifiable
+{
+  public let id: String
+  public let requirement: String
+}
+
+public struct AssemblywrightMacBrainstormingSpecificationDocument: Codable, Equatable, Sendable {
+  public let title: String
+  public let outcome: String
+  public let acceptanceCriteria: [AssemblywrightMacBrainstormingAcceptanceCriterion]
+  public let obligations: [String]
+
+  enum CodingKeys: String, CodingKey, CaseIterable {
+    case title, outcome
+    case acceptanceCriteria = "acceptance_criteria"
+    case obligations
+  }
+}
+
 public struct AssemblywrightMacAssemblyLineRepositoryIdentity: Codable, Equatable, Sendable {
   public struct GitURL: Codable, Equatable, Sendable {
     public let url: String
@@ -180,6 +243,79 @@ public struct AssemblywrightMacAssemblyLineRepositoryIdentity: Codable, Equatabl
     try container.encode(repositoryID.uuidString.lowercased(), forKey: .repositoryID)
     try container.encode(gitURL, forKey: .gitURL)
   }
+}
+
+public struct AssemblywrightMacFrozenBrainstormingSpecification: Codable, Equatable, Sendable {
+  public let schemaVersion: UInt16
+  public let specificationID: UUID
+  public let specificationRevision: UInt64
+  public let targetKind: AssemblywrightMacBrainstormingTargetKind
+  public let draftID: UUID
+  public let draftRevision: UInt64
+  public let draftSHA256: [UInt8]
+  public let repository: AssemblywrightMacAssemblyLineRepositoryIdentity
+  public let visibility: AssemblywrightMacProjectVisibility?
+  public let orchestratorCatalogRevision: UInt64
+  public let orchestratorCatalogSHA256: [UInt8]
+  public let orchestratorProfileSHA256: [UInt8]
+  public let specification: AssemblywrightMacBrainstormingSpecificationDocument
+  public let specificationSHA256: [UInt8]
+
+  enum CodingKeys: String, CodingKey, CaseIterable {
+    case schemaVersion = "schema_version"
+    case specificationID = "specification_id"
+    case specificationRevision = "specification_revision"
+    case targetKind = "target_kind"
+    case draftID = "draft_id"
+    case draftRevision = "draft_revision"
+    case draftSHA256 = "draft_sha256"
+    case repository, visibility
+    case orchestratorCatalogRevision = "orchestrator_catalog_revision"
+    case orchestratorCatalogSHA256 = "orchestrator_catalog_sha256"
+    case orchestratorProfileSHA256 = "orchestrator_profile_sha256"
+    case specification
+    case specificationSHA256 = "specification_sha256"
+  }
+
+  public func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(schemaVersion, forKey: .schemaVersion)
+    try container.encode(specificationID.uuidString.lowercased(), forKey: .specificationID)
+    try container.encode(specificationRevision, forKey: .specificationRevision)
+    try container.encode(targetKind, forKey: .targetKind)
+    try container.encode(draftID.uuidString.lowercased(), forKey: .draftID)
+    try container.encode(draftRevision, forKey: .draftRevision)
+    try container.encode(draftSHA256, forKey: .draftSHA256)
+    try container.encode(repository, forKey: .repository)
+    try container.encode(visibility, forKey: .visibility)
+    try container.encode(orchestratorCatalogRevision, forKey: .orchestratorCatalogRevision)
+    try container.encode(orchestratorCatalogSHA256, forKey: .orchestratorCatalogSHA256)
+    try container.encode(orchestratorProfileSHA256, forKey: .orchestratorProfileSHA256)
+    try container.encode(specification, forKey: .specification)
+    try container.encode(specificationSHA256, forKey: .specificationSHA256)
+  }
+
+  public static func decodeStrict(
+    _ data: Data,
+    matchingDraft draftData: Data,
+    projection: AssemblywrightMacAssemblyLineOwnerProjection
+  ) throws -> Self {
+    try AssemblyLineStrictJSON.decodeFrozenResponse(
+      data,
+      matchingDraft: draftData,
+      projection: projection
+    )
+  }
+}
+
+public struct AssemblywrightMacOwnerApprovalPreview: Equatable, Sendable {
+  public let requestData: Data
+  public let targetKind: AssemblywrightMacBrainstormingTargetKind
+  public let repositoryURL: String
+  public let visibility: AssemblywrightMacProjectVisibility?
+  public let specificationID: UUID
+  public let specificationSHA256: [UInt8]
+  public let ownerApprovalSHA256: [UInt8]
 }
 
 public struct AssemblywrightMacRepositoryCreationProjection: Codable, Equatable, Sendable {
@@ -403,6 +539,232 @@ public struct AssemblywrightMacAssemblyLineOwnerProjection: Codable, Equatable, 
 public enum AssemblywrightMacAssemblyLineOwnerControl {
   public static let maximumRequestBytes = 96 * 1_024
   public static let maximumResponseBytes = 256 * 1_024
+  public static let maximumBrainstormingCloudRequestBytes = 24 * 1_024
+
+  public static func projectBrainstormRequest(
+    from projection: AssemblywrightMacAssemblyLineOwnerProjection,
+    repositoryID: UUID = UUID(),
+    repositoryURL: String,
+    visibility: AssemblywrightMacProjectVisibility,
+    idea: String,
+    informationClassification: AssemblywrightMacPlanningInformationClassification,
+    ownerConfirmedCloudDisclosure: Bool,
+    draftID: UUID = UUID()
+  ) throws -> Data {
+    try brainstormRequest(
+      action: .projectBrainstorm,
+      projection: projection,
+      repositoryID: repositoryID,
+      repositoryURL: repositoryURL,
+      visibility: visibility,
+      idea: idea,
+      informationClassification: informationClassification,
+      ownerConfirmedCloudDisclosure: ownerConfirmedCloudDisclosure,
+      draftID: draftID
+    )
+  }
+
+  public static func featureBrainstormRequest(
+    from projection: AssemblywrightMacAssemblyLineOwnerProjection,
+    repositoryURL: String,
+    idea: String,
+    informationClassification: AssemblywrightMacPlanningInformationClassification,
+    ownerConfirmedCloudDisclosure: Bool,
+    draftID: UUID = UUID()
+  ) throws -> Data {
+    guard
+      let repository = projection.repositories.first(where: {
+        $0.repository.gitURL.url == repositoryURL && $0.lifecycle == .created
+      })
+    else { throw AssemblywrightMacAssemblyLineError.invalidRequest }
+    return try brainstormRequest(
+      action: .featureBrainstorm,
+      projection: projection,
+      repositoryID: repository.repository.repositoryID,
+      repositoryURL: repositoryURL,
+      visibility: nil,
+      idea: idea,
+      informationClassification: informationClassification,
+      ownerConfirmedCloudDisclosure: ownerConfirmedCloudDisclosure,
+      draftID: draftID,
+      expectedRepositoryRevision: repository.repositoryRevision
+    )
+  }
+
+  public static func ownerApprovalRequest(
+    for frozen: AssemblywrightMacFrozenBrainstormingSpecification,
+    from projection: AssemblywrightMacAssemblyLineOwnerProjection,
+    approvalID: UUID = UUID(),
+    approvedAtMilliseconds: UInt64
+  ) throws -> Data {
+    guard approvalID != AssemblyLineStrictJSON.nilUUID, approvedAtMilliseconds > 0,
+      frozen.orchestratorCatalogRevision == projection.orchestratorCatalog.catalogRevision,
+      frozen.orchestratorCatalogSHA256 == projection.orchestratorCatalog.catalogSHA256,
+      !projection.emergencyPaused
+    else { throw AssemblywrightMacAssemblyLineError.invalidRequest }
+    var request: [String: Any] = [
+      "schema_version": 1,
+      "approval_id": approvalID.uuidString.lowercased(),
+      "approved_at_ms": approvedAtMilliseconds,
+      "owner_control_revision": projection.ownerControlRevision,
+      "target_kind": frozen.targetKind.rawValue,
+      "repository": try AssemblyLineStrictJSON.object(JSONEncoder().encode(frozen.repository)),
+      "visibility": frozen.visibility?.rawValue ?? NSNull(),
+      "expected_repository_revision": NSNull(),
+      "expected_queue_revision": NSNull(),
+      "draft_id": frozen.draftID.uuidString.lowercased(),
+      "draft_revision": frozen.draftRevision,
+      "draft_sha256": frozen.draftSHA256,
+      "orchestrator_catalog_revision": frozen.orchestratorCatalogRevision,
+      "orchestrator_catalog_sha256": frozen.orchestratorCatalogSHA256,
+      "specification_id": frozen.specificationID.uuidString.lowercased(),
+      "specification_revision": frozen.specificationRevision,
+      "specification_sha256": frozen.specificationSHA256,
+      "orchestrator_profile_sha256": frozen.orchestratorProfileSHA256,
+    ]
+    let action: AssemblywrightMacAssemblyLinePlanningAction
+    switch frozen.targetKind {
+    case .project:
+      guard frozen.visibility != nil,
+        !projection.repositories.contains(where: {
+          $0.repository.repositoryID == frozen.repository.repositoryID
+            || $0.repository.gitURL.url == frozen.repository.gitURL.url
+        })
+      else { throw AssemblywrightMacAssemblyLineError.invalidRequest }
+      request["expected_repository_revision"] = 0
+      action = .projectApproval
+    case .feature:
+      guard frozen.visibility == nil,
+        let repository = projection.repositories.first(where: {
+          $0.repository == frozen.repository && $0.lifecycle == .created
+        })
+      else { throw AssemblywrightMacAssemblyLineError.invalidRequest }
+      request["expected_repository_revision"] = repository.repositoryRevision
+      request["expected_queue_revision"] = projection.assemblyLine.queueRevision
+      action = .featureApproval
+    }
+    request["owner_approval_sha256"] = try AssemblyLineStrictJSON.sha256(request)
+    let data = try AssemblyLineStrictJSON.canonicalData(request)
+    try validateRequest(action: action, requestData: data, against: projection)
+    return data
+  }
+
+  public static func ownerApprovalPreview(
+    for frozen: AssemblywrightMacFrozenBrainstormingSpecification,
+    from projection: AssemblywrightMacAssemblyLineOwnerProjection,
+    approvalID: UUID = UUID(),
+    approvedAtMilliseconds: UInt64
+  ) throws -> AssemblywrightMacOwnerApprovalPreview {
+    let requestData = try ownerApprovalRequest(
+      for: frozen,
+      from: projection,
+      approvalID: approvalID,
+      approvedAtMilliseconds: approvedAtMilliseconds
+    )
+    let request = try AssemblyLineStrictJSON.object(requestData)
+    guard let ownerApprovalSHA256 = AssemblyLineStrictJSON.digest(
+      request["owner_approval_sha256"]
+    ) else { throw AssemblywrightMacAssemblyLineError.invalidRequest }
+    return AssemblywrightMacOwnerApprovalPreview(
+      requestData: requestData,
+      targetKind: frozen.targetKind,
+      repositoryURL: frozen.repository.gitURL.url,
+      visibility: frozen.visibility,
+      specificationID: frozen.specificationID,
+      specificationSHA256: frozen.specificationSHA256,
+      ownerApprovalSHA256: ownerApprovalSHA256
+    )
+  }
+
+  public static func repositoryCreationRequest(repositoryID: UUID) throws -> Data {
+    guard repositoryID != AssemblyLineStrictJSON.nilUUID else {
+      throw AssemblywrightMacAssemblyLineError.invalidRequest
+    }
+    let data = try AssemblyLineStrictJSON.canonicalData([
+      "schema_version": 1,
+      "repository_id": repositoryID.uuidString.lowercased(),
+    ])
+    try validateStoredRequest(action: .repositoryCreation, requestData: data)
+    return data
+  }
+
+  private static func brainstormRequest(
+    action: AssemblywrightMacAssemblyLinePlanningAction,
+    projection: AssemblywrightMacAssemblyLineOwnerProjection,
+    repositoryID: UUID,
+    repositoryURL: String,
+    visibility: AssemblywrightMacProjectVisibility?,
+    idea: String,
+    informationClassification: AssemblywrightMacPlanningInformationClassification,
+    ownerConfirmedCloudDisclosure: Bool,
+    draftID: UUID,
+    expectedRepositoryRevision: UInt64? = nil
+  ) throws -> Data {
+    guard idea.utf8.count <= 16 * 1_024 else {
+      throw AssemblywrightMacAssemblyLineError.requestTooLarge
+    }
+    let profile = try AssemblyLineStrictJSON.defaultProfile(
+      in: projection.orchestratorCatalog
+    )
+    guard [.projectBrainstorm, .featureBrainstorm].contains(action),
+      repositoryID != AssemblyLineStrictJSON.nilUUID, draftID != AssemblyLineStrictJSON.nilUUID,
+      informationClassification == .public, ownerConfirmedCloudDisclosure,
+      !projection.emergencyPaused,
+      projection.availability.brainstormingProvider.status == .available,
+      projection.availability.brainstormingProvider.unavailableReason == nil,
+      let catalog = try? AssemblyLineStrictJSON.object(JSONEncoder().encode(
+        projection.orchestratorCatalog
+      ))
+    else { throw AssemblywrightMacAssemblyLineError.invalidRequest }
+    var request: [String: Any] = [
+      "schema_version": 1,
+      "draft_id": draftID.uuidString.lowercased(),
+      "draft_revision": 1,
+      "repository": [
+        "repository_id": repositoryID.uuidString.lowercased(),
+        "git_url": ["url": repositoryURL],
+      ],
+      "orchestrator_catalog": catalog,
+      "orchestrator": try AssemblyLineStrictJSON.object(JSONEncoder().encode(profile)),
+      "idea": idea,
+    ]
+    if action == .projectBrainstorm {
+      guard let visibility else { throw AssemblywrightMacAssemblyLineError.invalidRequest }
+      request["visibility"] = visibility.rawValue
+    } else {
+      guard let expectedRepositoryRevision else {
+        throw AssemblywrightMacAssemblyLineError.invalidRequest
+      }
+      request["expected_repository_revision"] = expectedRepositoryRevision
+    }
+    let draftSHA256 = try AssemblyLineStrictJSON.sha256(request)
+    let profileObject = try AssemblyLineStrictJSON.object(JSONEncoder().encode(profile))
+    let disclosureBinding: [String: Any] = [
+      "schema_version": 1,
+      "target_kind": action == .projectBrainstorm ? "project" : "feature",
+      "draft_sha256": draftSHA256,
+      "information_classification": "public",
+      "provider_id": profile.providerID,
+      "model_id": profile.modelID,
+      "orchestrator_catalog_revision": projection.orchestratorCatalog.catalogRevision,
+      "orchestrator_catalog_sha256": projection.orchestratorCatalog.catalogSHA256,
+      "orchestrator_profile_sha256": try AssemblyLineStrictJSON.sha256(profileObject),
+    ]
+    var disclosurePreimage = Data("assemblywright.owner-cloud-disclosure.v1\0".utf8)
+    disclosurePreimage.append(try AssemblyLineStrictJSON.canonicalData(disclosureBinding))
+    let envelope: [String: Any] = [
+      "schema_version": 1,
+      "draft": request,
+      "information_classification": "public",
+      "owner_cloud_disclosure_sha256": Array(SHA256.hash(data: disclosurePreimage)),
+    ]
+    let data = try AssemblyLineStrictJSON.canonicalData(envelope)
+    guard data.count <= maximumBrainstormingCloudRequestBytes else {
+      throw AssemblywrightMacAssemblyLineError.requestTooLarge
+    }
+    try validateRequest(action: action, requestData: data, against: projection)
+    return data
+  }
 
   public static func autoRunRequest(
     from projection: AssemblywrightMacAssemblyLineOwnerProjection,
@@ -434,9 +796,7 @@ public enum AssemblywrightMacAssemblyLineOwnerControl {
     requestData: Data,
     against projection: AssemblywrightMacAssemblyLineOwnerProjection
   ) throws {
-    let actionLimit =
-      action == .projectDraft || action == .featureDraft
-      ? 16 * 1_024 : maximumRequestBytes
+    let actionLimit = requestLimit(for: action)
     guard !requestData.isEmpty, requestData.count <= actionLimit else {
       throw requestData.count > actionLimit
         ? AssemblywrightMacAssemblyLineError.requestTooLarge
@@ -450,9 +810,7 @@ public enum AssemblywrightMacAssemblyLineOwnerControl {
     action: AssemblywrightMacAssemblyLinePlanningAction,
     requestData: Data
   ) throws {
-    let actionLimit =
-      action == .projectDraft || action == .featureDraft
-      ? 16 * 1_024 : maximumRequestBytes
+    let actionLimit = requestLimit(for: action)
     guard !requestData.isEmpty, requestData.count <= actionLimit else {
       throw AssemblywrightMacAssemblyLineError.invalidRequest
     }
@@ -461,6 +819,14 @@ public enum AssemblywrightMacAssemblyLineOwnerControl {
       AssemblyLineStrictJSON.exact(request, action.persistedRequestKeys),
       !AssemblyLineStrictJSON.containsSensitiveString(request)
     else { throw AssemblywrightMacAssemblyLineError.invalidRequest }
+    if action == .repositoryCreation,
+      AssemblyLineStrictJSON.uuid(request["repository_id"]) == nil
+    {
+      throw AssemblywrightMacAssemblyLineError.invalidRequest
+    }
+    if action == .projectBrainstorm || action == .featureBrainstorm {
+      _ = try AssemblyLineStrictJSON.validateCloudBrainstormRequest(request, action: action)
+    }
   }
 
   public static func perform(
@@ -473,26 +839,28 @@ public enum AssemblywrightMacAssemblyLineOwnerControl {
       guard !requestData.isEmpty else {
         throw AssemblywrightMacAssemblyLineError.invalidRequest
       }
-      let actionLimit =
-        action == .projectDraft || action == .featureDraft
-        ? 16 * 1_024 : maximumRequestBytes
+      let actionLimit = requestLimit(for: action)
       guard requestData.count <= actionLimit else {
         throw AssemblywrightMacAssemblyLineError.requestTooLarge
       }
       let request = try AssemblyLineStrictJSON.decodeRequest(requestData, action: action)
       let prior = try await fetchProjection(using: session)
       try validateRequest(action: action, requestData: requestData, against: prior)
+      let remote = try action.remoteRequest(request, requestData: requestData)
       postAttempted = true
       let response = try await session.send(
-        .init(method: "POST", path: action.remotePath, body: requestData))
+        .init(method: "POST", path: remote.path, body: remote.body))
       guard response.body.count <= maximumResponseBytes else {
         throw AssemblywrightMacAssemblyLineError.invalidReceipt
       }
       guard response.status == 200 else {
-        if [401, 409, 422].contains(response.status) {
-          throw AssemblywrightMacAssemblyLineError.rejected
-        }
-        throw AssemblywrightMacAssemblyLineError.ambiguous
+        throw try AssemblyLineStrictJSON.errorDisposition(
+          status: response.status,
+          data: response.body,
+          action: action,
+          prior: prior,
+          request: request
+        )
       }
       try validateHelperOutput(
         action: action,
@@ -534,6 +902,11 @@ public enum AssemblywrightMacAssemblyLineOwnerControl {
       switch action {
       case .projectDraft, .featureDraft, .frozenSpecification:
         _ = try AssemblywrightMacAssemblyLineOwnerProjection.decodeStrict(responseData)
+      case .projectBrainstorm, .featureBrainstorm:
+        _ = try AssemblyLineStrictJSON.decodeFrozenResponseWithoutProjection(
+          responseData,
+          matchingDraft: requestData
+        )
       case .projectApproval:
         var scanner = AssemblywrightStrictJSONObjectKeyScanner(data: responseData)
         try scanner.validateNoDuplicateObjectKeysRecursively()
@@ -586,6 +959,13 @@ public enum AssemblywrightMacAssemblyLineOwnerControl {
               request["owner_approval_sha256"]),
           typed.lifecycleRevision == 1, typed.lifecycle == .queued
         else { throw AssemblywrightMacAssemblyLineError.invalidReceipt }
+      case .repositoryCreation:
+        var scanner = AssemblywrightStrictJSONObjectKeyScanner(data: responseData)
+        try scanner.validateNoDuplicateObjectKeysRecursively()
+        let raw = try AssemblyLineStrictJSON.object(responseData)
+        let receipt = try AssemblyLineStrictJSON.validateRepository(raw)
+        guard receipt.id == AssemblyLineStrictJSON.uuid(request["repository_id"])
+        else { throw AssemblywrightMacAssemblyLineError.invalidReceipt }
       case .autoRun:
         var scanner = AssemblywrightStrictJSONObjectKeyScanner(data: responseData)
         try scanner.validateNoDuplicateObjectKeysRecursively()
@@ -623,6 +1003,16 @@ public enum AssemblywrightMacAssemblyLineOwnerControl {
       throw AssemblywrightMacAssemblyLineError.invalidProjection
     }
     return try AssemblywrightMacAssemblyLineOwnerProjection.decodeStrict(response.body)
+  }
+
+  private static func requestLimit(
+    for action: AssemblywrightMacAssemblyLinePlanningAction
+  ) -> Int {
+    switch action {
+    case .projectDraft, .featureDraft: 16 * 1_024
+    case .projectBrainstorm, .featureBrainstorm: maximumBrainstormingCloudRequestBytes
+    default: maximumRequestBytes
+    }
   }
 }
 
@@ -766,6 +1156,7 @@ private enum AssemblyLineStrictJSON {
     }
     var previous: (String, String)?
     var defaultMatches = 0
+    var defaultProfileIdentity: (String, String)?
     for rawProfile in rawProfiles {
       let profile = try validateProfile(rawProfile, catalogRevision: revision)
       let current = (profile["provider_id"] as! String, profile["model_id"] as! String)
@@ -773,16 +1164,37 @@ private enum AssemblyLineStrictJSON {
       {
         throw AssemblywrightMacAssemblyLineError.invalidProjection
       }
-      if try sha256(profile) == defaultDigest { defaultMatches += 1 }
+      if try sha256(profile) == defaultDigest {
+        defaultMatches += 1
+        defaultProfileIdentity = current
+      }
       previous = current
     }
     var digestObject = object
     digestObject.removeValue(forKey: "catalog_sha256")
-    guard defaultMatches == 1, try sha256(digestObject) == catalogDigest else {
+    guard defaultMatches == 1,
+      defaultProfileIdentity?.0 == "openai.codex",
+      defaultProfileIdentity?.1 == "gpt-5.6-sol",
+      try sha256(digestObject) == catalogDigest
+    else {
       throw AssemblywrightMacAssemblyLineError.invalidProjection
     }
     let data = try canonicalData(object)
     return try JSONDecoder().decode(AssemblywrightMacOrchestratorCatalog.self, from: data)
+  }
+
+  static func defaultProfile(
+    in catalog: AssemblywrightMacOrchestratorCatalog
+  ) throws -> AssemblywrightMacOrchestratorProfile {
+    var matches: [AssemblywrightMacOrchestratorProfile] = []
+    for profile in catalog.profiles {
+      let raw = try object(JSONEncoder().encode(profile))
+      if try sha256(raw) == catalog.defaultProfileSHA256 { matches.append(profile) }
+    }
+    guard matches.count == 1, let profile = matches.first,
+      profile.providerID == "openai.codex", profile.modelID == "gpt-5.6-sol"
+    else { throw AssemblywrightMacAssemblyLineError.invalidProjection }
+    return profile
   }
 
   static func validateProjection(_ object: [String: Any]) throws {
@@ -911,7 +1323,7 @@ private enum AssemblyLineStrictJSON {
       uint(object["lifecycle_revision"], positive: true) != nil,
       let lifecycle = object["lifecycle"] as? String,
       [
-        "queued", "active", "stopping", "paused_at_checkpoint", "emergency_paused",
+        "queued", "starting", "active", "stopping", "paused_at_checkpoint", "emergency_paused",
         "waiting_for_host_reconnect", "reconciliation_required", "incomplete_termination",
       ].contains(lifecycle)
     else {
@@ -936,7 +1348,7 @@ private enum AssemblyLineStrictJSON {
       let queueCount = uint(object["queue_count"], maximum: 100), object["auto_run"] is Bool,
       let lifecycle = object["lifecycle"] as? String,
       [
-        "stopped", "running", "stopping", "paused_at_checkpoint", "emergency_paused",
+        "stopped", "starting", "running", "stopping", "paused_at_checkpoint", "emergency_paused",
         "waiting_for_host_reconnect", "reconciliation_required", "incomplete_termination",
         "waiting_for_owner_start",
       ].contains(lifecycle)
@@ -967,6 +1379,7 @@ private enum AssemblyLineStrictJSON {
   static func expectedQueueLifecycle(_ lifecycle: String) -> String? {
     switch lifecycle {
     case "stopped", "waiting_for_owner_start": nil
+    case "starting": "starting"
     case "running": "active"
     case "stopping": "stopping"
     case "paused_at_checkpoint": "paused_at_checkpoint"
@@ -1029,7 +1442,7 @@ private enum AssemblyLineStrictJSON {
         }
       }
     }
-    if executionUnavailable && ["running", "stopping"].contains(stateLifecycle) {
+    if executionUnavailable && ["starting", "running", "stopping"].contains(stateLifecycle) {
       throw AssemblywrightMacAssemblyLineError.invalidProjection
     }
   }
@@ -1051,6 +1464,21 @@ private enum AssemblyLineStrictJSON {
   ) throws {
     guard uint(request["schema_version"]) == 1 else {
       throw AssemblywrightMacAssemblyLineError.invalidRequest
+    }
+    if action == .projectBrainstorm || action == .featureBrainstorm {
+      let draft = try validateCloudBrainstormRequest(request, action: action)
+      let persistenceAction: AssemblywrightMacAssemblyLinePlanningAction =
+        action == .projectBrainstorm ? .projectDraft : .featureDraft
+      try validateRequest(draft, action: persistenceAction, against: projection)
+      guard !projection.emergencyPaused,
+        projection.availability.brainstormingProvider.status == .available,
+        projection.availability.brainstormingProvider.unavailableReason == nil,
+        let profile = draft["orchestrator"] as? [String: Any],
+        let selected = try? defaultProfile(in: projection.orchestratorCatalog),
+        selected.providerID == profile["provider_id"] as? String,
+        selected.modelID == profile["model_id"] as? String
+      else { throw AssemblywrightMacAssemblyLineError.invalidRequest }
+      return
     }
     let projectionObject = try object(JSONEncoder().encode(projection))
     let catalogObject = projectionObject["orchestrator_catalog"] as? [String: Any]
@@ -1097,10 +1525,24 @@ private enum AssemblyLineStrictJSON {
           throw AssemblywrightMacAssemblyLineError.invalidRequest
         }
       }
+    case .projectBrainstorm, .featureBrainstorm:
+      throw AssemblywrightMacAssemblyLineError.invalidRequest
     case .frozenSpecification:
       try validateFrozenRequest(request, catalog: projection.orchestratorCatalog)
     case .projectApproval, .featureApproval:
       try validateApprovalRequest(request, action: action, projection: projection)
+    case .repositoryCreation:
+      guard exact(request, ["schema_version", "repository_id"]),
+        let repositoryID = uuid(request["repository_id"]),
+        !projection.emergencyPaused,
+        projection.availability.githubCreation.status == .available,
+        projection.availability.githubCreation.unavailableReason == nil,
+        projection.repositories.contains(where: {
+          $0.repository.repositoryID == repositoryID
+            && [.creationPending, .reconciling, .reconciliationRequired, .created]
+              .contains($0.lifecycle)
+        })
+      else { throw AssemblywrightMacAssemblyLineError.invalidRequest }
     case .autoRun:
       guard
         exact(request, ["schema_version", "request_id", "expected_state_revision", "auto_run"]),
@@ -1114,6 +1556,101 @@ private enum AssemblyLineStrictJSON {
       else {
         throw AssemblywrightMacAssemblyLineError.invalidRequest
       }
+    }
+  }
+
+  static func validateCloudBrainstormRequest(
+    _ request: [String: Any],
+    action: AssemblywrightMacAssemblyLinePlanningAction
+  ) throws -> [String: Any] {
+    guard action == .projectBrainstorm || action == .featureBrainstorm,
+      exact(
+        request,
+        [
+          "schema_version", "draft", "information_classification",
+          "owner_cloud_disclosure_sha256",
+        ]
+      ),
+      uint(request["schema_version"]) == 1,
+      request["information_classification"] as? String == "public",
+      let draft = request["draft"] as? [String: Any],
+      let profile = draft["orchestrator"] as? [String: Any],
+      let providerID = profile["provider_id"] as? String,
+      let modelID = profile["model_id"] as? String,
+      let catalog = draft["orchestrator_catalog"] as? [String: Any],
+      let catalogRevision = uint(catalog["catalog_revision"], positive: true),
+      let catalogSHA256 = digest(catalog["catalog_sha256"]),
+      let supplied = digest(request["owner_cloud_disclosure_sha256"])
+    else { throw AssemblywrightMacAssemblyLineError.invalidRequest }
+    let binding: [String: Any] = [
+      "schema_version": 1,
+      "target_kind": action == .projectBrainstorm ? "project" : "feature",
+      "draft_sha256": try sha256(draft),
+      "information_classification": "public",
+      "provider_id": providerID,
+      "model_id": modelID,
+      "orchestrator_catalog_revision": catalogRevision,
+      "orchestrator_catalog_sha256": catalogSHA256,
+      "orchestrator_profile_sha256": try sha256(profile),
+    ]
+    var preimage = Data("assemblywright.owner-cloud-disclosure.v1\0".utf8)
+    preimage.append(try canonicalData(binding))
+    guard Array(SHA256.hash(data: preimage)) == supplied else {
+      throw AssemblywrightMacAssemblyLineError.invalidRequest
+    }
+    try validateStandaloneDraft(
+      draft,
+      action: action == .projectBrainstorm ? .projectDraft : .featureDraft
+    )
+    return draft
+  }
+
+  static func validateStandaloneDraft(
+    _ request: [String: Any],
+    action: AssemblywrightMacAssemblyLinePlanningAction
+  ) throws {
+    let expected: [String]
+    switch action {
+    case .projectDraft:
+      expected = [
+        "schema_version", "draft_id", "draft_revision", "repository", "visibility",
+        "orchestrator_catalog", "orchestrator", "idea",
+      ]
+    case .featureDraft:
+      expected = [
+        "schema_version", "draft_id", "draft_revision", "repository",
+        "expected_repository_revision", "orchestrator_catalog", "orchestrator", "idea",
+      ]
+    default:
+      throw AssemblywrightMacAssemblyLineError.invalidRequest
+    }
+    do {
+      guard exact(request, expected), uint(request["schema_version"]) == 1,
+        uuid(request["draft_id"]) != nil,
+        uint(request["draft_revision"], positive: true) != nil,
+        (try? validateRepositoryIdentity(request["repository"])) != nil,
+        let catalogObject = request["orchestrator_catalog"] as? [String: Any],
+        let profileObject = request["orchestrator"] as? [String: Any]
+      else { throw AssemblywrightMacAssemblyLineError.invalidRequest }
+      let catalog = try validateCatalog(catalogObject)
+      _ = try validateProfile(profileObject, catalogRevision: catalog.catalogRevision)
+      guard catalog.profiles.contains(where: {
+        $0.providerID == profileObject["provider_id"] as? String
+          && $0.modelID == profileObject["model_id"] as? String
+          && $0.configurationRevision == uint(profileObject["configuration_revision"])
+      }), validPlanningText(request["idea"], maximum: 16 * 1_024)
+      else { throw AssemblywrightMacAssemblyLineError.invalidRequest }
+      if action == .projectDraft {
+        guard ["public", "private"].contains(request["visibility"] as? String ?? "") else {
+          throw AssemblywrightMacAssemblyLineError.invalidRequest
+        }
+      } else {
+        guard uint(request["expected_repository_revision"], positive: true) != nil else {
+          throw AssemblywrightMacAssemblyLineError.invalidRequest
+        }
+      }
+    } catch {
+      throw AssemblywrightMacAssemblyLineError.invalidRequest
     }
   }
 
@@ -1285,13 +1822,16 @@ private enum AssemblyLineStrictJSON {
         == projection.orchestratorCatalog.catalogRevision,
       digest(request["orchestrator_catalog_sha256"])
         == projection.orchestratorCatalog.catalogSHA256,
-      (try? validateRepositoryIdentity(request["repository"])) != nil
+      (try? validateRepositoryIdentity(request["repository"])) != nil,
+      !projection.emergencyPaused
     else { throw AssemblywrightMacAssemblyLineError.invalidRequest }
     if action == .projectApproval {
       guard request["target_kind"] as? String == "project",
         ["public", "private"].contains(request["visibility"] as? String ?? ""),
         uint(request["expected_repository_revision"]) == 0,
-        request["expected_queue_revision"] is NSNull
+        request["expected_queue_revision"] is NSNull,
+        projection.availability.githubCreation.status == .available,
+        projection.availability.githubCreation.unavailableReason == nil
       else { throw AssemblywrightMacAssemblyLineError.invalidRequest }
     } else {
       guard request["target_kind"] as? String == "feature", request["visibility"] is NSNull,
@@ -1311,6 +1851,116 @@ private enum AssemblyLineStrictJSON {
     }
   }
 
+  static func decodeFrozenResponse(
+    _ data: Data,
+    matchingDraft draftData: Data,
+    projection: AssemblywrightMacAssemblyLineOwnerProjection
+  ) throws -> AssemblywrightMacFrozenBrainstormingSpecification {
+    let envelope = try decodeRequest(draftData, action: .projectBrainstorm)
+    let action: AssemblywrightMacAssemblyLinePlanningAction =
+      ((envelope["draft"] as? [String: Any])?["visibility"] == nil)
+      ? .featureBrainstorm : .projectBrainstorm
+    let draft = try validateCloudBrainstormRequest(envelope, action: action)
+    guard let rawCatalog = draft["orchestrator_catalog"] as? [String: Any],
+      try canonicalData(rawCatalog)
+        == canonicalData(object(JSONEncoder().encode(projection.orchestratorCatalog)))
+    else { throw AssemblywrightMacAssemblyLineError.invalidReceipt }
+    return try decodeFrozenResponseWithoutProjection(data, matchingDraft: draftData)
+  }
+
+  static func decodeFrozenResponseWithoutProjection(
+    _ data: Data,
+    matchingDraft draftData: Data
+  ) throws -> AssemblywrightMacFrozenBrainstormingSpecification {
+    do {
+      guard !data.isEmpty,
+        data.count <= AssemblywrightMacAssemblyLineOwnerControl.maximumResponseBytes
+      else { throw AssemblywrightMacAssemblyLineError.invalidReceipt }
+      var scanner = AssemblywrightStrictJSONObjectKeyScanner(data: data)
+      try scanner.validateNoDuplicateObjectKeysRecursively()
+      let envelope = try object(draftData)
+      let action: AssemblywrightMacAssemblyLinePlanningAction =
+        ((envelope["draft"] as? [String: Any])?["visibility"] == nil)
+        ? .featureBrainstorm : .projectBrainstorm
+      let draft = try validateCloudBrainstormRequest(envelope, action: action)
+      let raw = try object(data)
+      guard let catalogRaw = draft["orchestrator_catalog"] as? [String: Any] else {
+        throw AssemblywrightMacAssemblyLineError.invalidReceipt
+      }
+      let catalog = try validateCatalog(catalogRaw)
+      try validateFrozenRequest(raw, catalog: catalog)
+      let project = draft["visibility"] != nil
+      guard let rawRepository = raw["repository"] as? [String: Any],
+        let draftRepository = draft["repository"] as? [String: Any],
+        canonicalUUIDText(raw["draft_id"]) == canonicalUUIDText(draft["draft_id"]),
+        uint(raw["draft_revision"]) == uint(draft["draft_revision"]),
+        digest(raw["draft_sha256"]) == (try sha256(draft)),
+        try canonicalData(rawRepository) == canonicalData(draftRepository),
+        raw["target_kind"] as? String == (project ? "project" : "feature"),
+        project
+          ? raw["visibility"] as? String == draft["visibility"] as? String
+          : raw["visibility"] is NSNull,
+        uint(raw["orchestrator_catalog_revision"])
+          == uint(catalogRaw["catalog_revision"]),
+        digest(raw["orchestrator_catalog_sha256"])
+          == digest(catalogRaw["catalog_sha256"]),
+        let profile = draft["orchestrator"] as? [String: Any],
+        digest(raw["orchestrator_profile_sha256"]) == (try sha256(profile))
+      else { throw AssemblywrightMacAssemblyLineError.invalidReceipt }
+      return try JSONDecoder().decode(
+        AssemblywrightMacFrozenBrainstormingSpecification.self,
+        from: data
+      )
+    } catch let error as AssemblywrightMacAssemblyLineError {
+      throw error == .invalidRequest ? .invalidReceipt : error
+    } catch {
+      throw AssemblywrightMacAssemblyLineError.invalidReceipt
+    }
+  }
+
+  static func errorDisposition(
+    status: Int,
+    data: Data,
+    action: AssemblywrightMacAssemblyLinePlanningAction,
+    prior: AssemblywrightMacAssemblyLineOwnerProjection,
+    request: [String: Any]
+  ) throws -> AssemblywrightMacAssemblyLineError {
+    guard data.count <= 1_024 else { return .ambiguous }
+    var scanner = AssemblywrightStrictJSONObjectKeyScanner(data: data)
+    guard (try? scanner.validateNoDuplicateObjectKeysRecursively()) != nil,
+      let body = try? object(data), exact(body, ["error"]),
+      let code = body["error"] as? String, code.utf8.count <= 64
+    else { return .ambiguous }
+    switch (status, code) {
+    case (401, "unauthorized"), (413, "payload_too_large"),
+      (422, "assembly_line_request_rejected"):
+      return .rejected
+    case (409, "brainstorming_rejected")
+      where action == .projectBrainstorm || action == .featureBrainstorm:
+      return .rejected
+    case (503, "planning_runtime_unavailable")
+      where action == .projectBrainstorm || action == .featureBrainstorm:
+      return .rejected
+    case (409, "github_creation_conflict") where action == .repositoryCreation:
+      return .rejected
+    case (503, "github_creation_unavailable") where action == .repositoryCreation:
+      if let repositoryID = uuid(request["repository_id"]),
+        prior.repositories.contains(where: {
+          $0.repository.repositoryID == repositoryID
+            && $0.lifecycle == .creationPending && !$0.effectPossible
+        })
+      {
+        return .rejected
+      }
+      return .ambiguous
+    case (409, "brainstorming_reconciliation_required"),
+      (409, "github_creation_reconciliation_required"):
+      return .ambiguous
+    default:
+      return .ambiguous
+    }
+  }
+
   static func validateResponse(
     _ data: Data, action: AssemblywrightMacAssemblyLinePlanningAction, request: [String: Any],
     prior: AssemblywrightMacAssemblyLineOwnerProjection,
@@ -1324,6 +1974,26 @@ private enum AssemblyLineStrictJSON {
       else {
         throw AssemblywrightMacAssemblyLineError.invalidReceipt
       }
+    case .projectBrainstorm, .featureBrainstorm:
+      _ = try decodeFrozenResponse(data, matchingDraft: try canonicalData(request), projection: prior)
+      let freshRevision = prior.ownerControlRevision <= UInt64.max - 2
+        ? prior.ownerControlRevision + 2 : nil
+      guard post.ownerControlRevision == prior.ownerControlRevision
+          || post.ownerControlRevision == freshRevision,
+        post.emergencyPauseRevision == prior.emergencyPauseRevision,
+        post.emergencyPaused == prior.emergencyPaused,
+        post.orchestratorCatalog == prior.orchestratorCatalog,
+        post.repositories == prior.repositories,
+        post.queue == prior.queue,
+        post.assemblyLine == prior.assemblyLine,
+        post.availability.schemaVersion == prior.availability.schemaVersion,
+        post.availability.availabilityRevision == prior.availability.availabilityRevision,
+        post.availability.brainstormingProvider == prior.availability.brainstormingProvider,
+        post.availability.githubCreation == prior.availability.githubCreation,
+        post.availability.windowsExecutor == prior.availability.windowsExecutor,
+        post.availability.macExecutor == prior.availability.macExecutor,
+        post.availability.protectedBrokers == prior.availability.protectedBrokers
+      else { throw AssemblywrightMacAssemblyLineError.invalidReceipt }
     case .projectApproval:
       var scanner = AssemblywrightStrictJSONObjectKeyScanner(data: data)
       try scanner.validateNoDuplicateObjectKeysRecursively()
@@ -1365,6 +2035,17 @@ private enum AssemblyLineStrictJSON {
       else {
         throw AssemblywrightMacAssemblyLineError.invalidReceipt
       }
+    case .repositoryCreation:
+      var scanner = AssemblywrightStrictJSONObjectKeyScanner(data: data)
+      try scanner.validateNoDuplicateObjectKeysRecursively()
+      let raw = try object(data)
+      let receipt = try validateRepository(raw)
+      let typed = try JSONDecoder().decode(
+        AssemblywrightMacRepositoryCreationProjection.self,
+        from: data
+      )
+      guard receipt.id == uuid(request["repository_id"]), post.repositories.contains(typed)
+      else { throw AssemblywrightMacAssemblyLineError.invalidReceipt }
     case .autoRun:
       var scanner = AssemblywrightStrictJSONObjectKeyScanner(data: data)
       try scanner.validateNoDuplicateObjectKeysRecursively()

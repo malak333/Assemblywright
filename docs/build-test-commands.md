@@ -27,26 +27,32 @@ Run commands from the repository root unless noted otherwise.
 
 The approved target contract is documented in
 `docs/full-machine-assembly-line-design.md`. Protocol v5 now includes strict
-full-machine Assembly Line schema-v1 contracts, the Windows master is schema v20 with
-effect-free planning persistence/routes, and the Mac has strict projection/mutation
-transport plus restart-safe auto-run reconciliation in the simplified UI. A
-catalog-bound planning/GitHub coordinator is fake-adapter-only. None is eligible for
-execution activation.
+full-machine Assembly Line schema-v1 contracts, the Windows master is schema v22 with
+planning persistence/routes plus a fail-closed durable activation controller, and the Mac has strict frozen review/approval transport
+plus restart-safe reconciliation in the simplified UI. Source includes catalog-bound
+provider/GitHub process adapters, but Windows deliberately refuses to load them until
+capability-separated identities, ACLs, and atomic containment are proved. None of this
+is eligible for execution activation.
 
-Full-machine target phase: partial implementation; protocol-v5/schema-v20 inert planning and presentation exist; execution runtime remains unavailable.
+Full-machine target phase: planning/creation containment implemented and requires native Windows proof; execution admission implemented and effects remain unavailable.
 
 ```sh
 cargo test -p assemblywright-protocol --test full_machine_assembly_line_contract
 cargo test -p assemblywright-master --test assembly_line_planning
+cargo test -p assemblywright-master --test assembly_line_execution_control
+cargo test -p assemblywright-master --test assembly_line_execution_http
+cargo test -p assemblywright-broker --all-targets
+cargo test -p assemblywright-executor --all-targets
 cargo test -p assemblywright-master planning_effects::tests
 cargo test -p assemblywright-master --test assembly_line_planning_http
 swift test --disable-sandbox --package-path apps/mac --filter DeveloperBridgeTests
 swift test --disable-sandbox --package-path apps/mac --filter AssemblywrightMacAppTests
+swift test --disable-sandbox --package-path apps/mac --filter assemblyLineStartingRequiresAvailableExecutionRuntime
 ./scripts/release-docs-drift-smoke.sh
 git diff --check
 ```
 
-The schema-v19-to-v20 backup-first migration and legacy-table preservation test can be
+The schema-v19-to-v22 backup-first migration and legacy-table preservation test can be
 run directly with:
 
 ```sh
@@ -60,26 +66,74 @@ On a native Windows toolchain, the designated-Mac mTLS planning boundary is:
 cargo test -p assemblywright-master --test assembly_line_planning_mtls
 ```
 
+The contained planning source slice is covered by:
+
+```sh
+cargo test -p assemblywright-protocol --test full_machine_assembly_line_contract
+cargo test -p assemblywright-master --lib planning_effects::tests -- --nocapture
+cargo test -p assemblywright-master --test brainstorming_provider_adapter_e2e -- --nocapture
+cargo test -p assemblywright-master --test assembly_line_planning_http -- --nocapture
+swift test --disable-sandbox --package-path apps/mac
+```
+
+These planning tests bind the sandbox split to the source contract: brainstorming is
+tool-free and planning-only; Windows uses Codex inner `danger-full-access` inside the
+Assemblywright restricted-token AppContainer, exact ACL tree, closed environment,
+pinned executable, and kill-on-close Job, while non-Windows uses inner `read-only`.
+The Windows inner value is not repository-write, implementation, or host authority.
+Windows native planning proof must also show that schema v4 derives the package root
+from canonical Common Application Data, keeps the locator/config master-private under
+`DataDir`, preserves unrelated shared-parent ACLs, and rejects missing, broadened, or
+identity-drifted profile traversal before an effect.
+
+The inert Phase-4 containment source slice is covered by native Rust contracts and
+process tests (not Playwright):
+
+```sh
+cargo test -p assemblywright-protocol --test execution_containment_contract -- --nocapture
+cargo test -p assemblywright-broker --test protected_boundary -- --nocapture
+cargo test -p assemblywright-executor --test process_group_e2e -- --nocapture
+cargo test -p assemblywright-executor --test windows_job_e2e -- --nocapture
+cargo clippy -p assemblywright-protocol -p assemblywright-broker -p assemblywright-executor --all-targets -- -D warnings
+```
+
+The first two suites prove strict signature/digest/schema/target/replay rejection at a
+portable repository boundary. On macOS, `process_group_e2e` proves real held
+parent/object identity checks, rejects replacement before preparation, and proves that
+an adversarial `setsid` escape command is denied before spawn. Process groups are not
+claimed as descendant containment. `windows_job_e2e` must run on the native Windows
+owner host: it launches a real descendant only after suspended-image verification and
+Job assignment, then requires a signed receipt with a signaled root and zero active Job
+processes. Cross-compilation does not prove that native boundary. Installed services,
+a master IPC client, broker effects, and activation receipts remain unavailable. None
+of these commands
+prove OS code signatures, dedicated service identities/ACLs, privileged IPC,
+resource reservations, activated Start/Stop/Emergency effects, deployment, or live
+two-host use.
+
 These checks prove strict contracts, inert persistence, authenticated/bounded routes,
 schema migration, strict Mac decoding/transport behavior, and presentation defaults at
 repository-test boundaries. The loopback process E2E drives one exact Private project
 through draft, frozen brainstorming specification, approval, exact replay, and
 authoritative projection, then proves New Feature remains rejected until GitHub
-creation evidence exists. They do not prove provider brainstorming, GitHub
-creation/reconciliation through production adapters, live Windows execution of the
+creation evidence exists. They prove the source adapter process, frozen provenance,
+Public-only disclosure, intent/reconciliation, and Swift owner review boundaries. They
+do not prove Windows capability-separated provider/GitHub execution or live Windows execution of the
 simplified UI action path, Start, Stop,
 Emergency Pause, executors, broker containment, process termination, full-machine
 effects, Windows deployment, signed/notarized Mac artifacts, or live two-host behavior.
 
-The current inert contract coverage includes strict GitHub URL and visibility handling,
+The current fail-closed contract coverage includes strict GitHub URL and visibility handling,
 owner-bound drafts/specifications/approvals, Public default/Private option,
 `creation_pending` without external effect, Created-plus-evidence feature gating, FIFO,
 default-on compare-and-set auto-run, stale session/epoch contract rejection, and
-redacted planning audit. The Start/Stop/Emergency contract types are not routes.
-The planning-effects suite proves the injected coordinator's catalog binding,
+redacted planning audit. Start/Stop/Emergency are authenticated routes, but production
+uses an unavailable effect dispatcher until the protected runtime is installed.
+The planning-effects and real adapter-process suites prove the coordinator's catalog binding,
 idempotent brainstorming reconciliation, pre-inspection GitHub intent, Public/Private
-mapping, cancellation fencing, and exact post-effect observation; it does not install
-or activate a credential-owning adapter.
+mapping, cancellation fencing, and exact post-effect observation. Windows still needs
+distinct restricted identities/ACLs, atomic suspended-process-to-Job containment,
+provisioning checks, and native hostile denial proof before the adapters may load.
 Executable phases must add native E2E for those routes, one-at-a-time execution,
 termination, reconciliation, and hostile protected-control-plane mutation denial.
 

@@ -16,6 +16,17 @@ Before starting a release pass, confirm the claim you intend to make.
   implemented. Schema v16 implements bounded review-provider invocation only
   through the default-unavailable owner-loopback gateway; repository proof does
   not establish production provider provisioning or reviewer competence.
+- For the brainstorming provider, verify the tool-free planning contract separately
+  from sandbox labels. Windows intentionally uses Codex inner `danger-full-access`
+  inside Assemblywright's restricted-token AppContainer, exact ACL tree, closed
+  environment, pinned executable, and kill-on-close Job; non-Windows uses inner
+  `read-only`. Never describe the Windows inner value as host full access or
+  implementation authority, and never describe it as inner read-only.
+- For Windows planning, verify the schema-v4 master-private locator and the canonical
+  Common Application Data runtime instance separately. Record native proof that both
+  fixed profiles have only non-inheriting traverse rights on the held shared ancestry,
+  unrelated ACLs remain intact, and path/identity/ACL drift fails closed. Repository
+  tests are not live Windows deployment evidence.
 - Confirm `docs/feature-conveyor-design.md` still marks the implemented slice
   accurately. The repository kernel is default-inert and exposes the
   owner-token-authenticated loopback read-only

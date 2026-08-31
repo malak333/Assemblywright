@@ -168,8 +168,59 @@ fn mark_repository_created(path: &std::path::Path, repository_id: Uuid) {
         .unwrap();
 }
 
+fn record_test_provider_acceptance(
+    path: &std::path::Path,
+    frozen: &FrozenBrainstormingSpecification,
+    occurred_at_ms: u64,
+) {
+    let connection = Connection::open(path).unwrap();
+    let adapter_sha256 = [3_u8; 32];
+    let adapter_catalog_sha256 = [4_u8; 32];
+    connection
+        .execute(
+            "INSERT INTO assembly_line_audit(event_kind,occurred_at_ms,redacted_metadata_json)
+             VALUES('brainstorming_provider_output_accepted',?1,?2)",
+            params![
+                occurred_at_ms,
+                serde_json::json!({
+                    "target_kind": "feature",
+                    "draft_id": frozen.draft_id,
+                    "specification_id": frozen.specification_id,
+                    "specification_sha256": frozen.specification_sha256,
+                    "provider_id": "openai.codex",
+                    "model_id": "gpt-5.6-sol",
+                    "adapter_sha256": adapter_sha256,
+                    "adapter_catalog_sha256": adapter_catalog_sha256,
+                    "planning_only": true,
+                    "provider_output_retained_in_audit": false,
+                    "external_effect_authorized": false
+                })
+                .to_string()
+            ],
+        )
+        .unwrap();
+}
+
 fn drop_assembly_line_schema(connection: &Connection) {
     for trigger in [
+        "assembly_line_activation_receipts_no_update",
+        "assembly_line_activation_receipts_no_delete",
+        "assembly_line_effect_dispatches_no_update",
+        "assembly_line_effect_dispatches_no_delete",
+        "assembly_line_execution_capabilities_no_update",
+        "assembly_line_execution_capabilities_no_delete",
+        "assembly_line_execution_sessions_no_update",
+        "assembly_line_execution_sessions_no_delete",
+        "assembly_line_action_ledger_no_update",
+        "assembly_line_action_ledger_no_delete",
+        "assembly_line_checkpoint_receipts_no_update",
+        "assembly_line_checkpoint_receipts_no_delete",
+        "assembly_line_control_intents_no_update",
+        "assembly_line_control_intents_no_delete",
+        "assembly_line_termination_receipts_no_update",
+        "assembly_line_termination_receipts_no_delete",
+        "assembly_line_execution_requests_no_update",
+        "assembly_line_execution_requests_no_delete",
         "assembly_line_project_drafts_no_update",
         "assembly_line_project_drafts_no_delete",
         "assembly_line_feature_drafts_no_update",
@@ -188,6 +239,17 @@ fn drop_assembly_line_schema(connection: &Connection) {
             .unwrap();
     }
     for table in [
+        "assembly_line_activation_receipts",
+        "assembly_line_effect_dispatches",
+        "assembly_line_termination_receipts",
+        "assembly_line_control_intents",
+        "assembly_line_checkpoint_receipts",
+        "assembly_line_action_ledger",
+        "assembly_line_child_epochs",
+        "assembly_line_execution_requests",
+        "assembly_line_execution_authority",
+        "assembly_line_execution_sessions",
+        "assembly_line_execution_capabilities",
         "assembly_line_audit",
         "assembly_line_requests",
         "assembly_line_queue",
@@ -205,7 +267,7 @@ fn drop_assembly_line_schema(connection: &Connection) {
 }
 
 #[test]
-fn schema_v20_defaults_to_inert_stopped_auto_run_and_unavailable_components() {
+fn schema_v22_defaults_to_inert_stopped_auto_run_and_unavailable_components() {
     let kernel = MasterKernel::in_memory().unwrap();
     assert_eq!(kernel.schema_version().unwrap(), MASTER_SCHEMA_VERSION);
     let projection = kernel.assembly_line_owner_projection(1).unwrap();
@@ -360,8 +422,9 @@ fn created_repository_feature_approvals_are_fifo_cas_bound_and_never_dispatch() 
         kernel
             .record_assembly_line_frozen_specification(&frozen, 201 + index as u64 * 10)
             .unwrap();
+        record_test_provider_acceptance(&database, &frozen, 202 + index as u64 * 10);
         let projection = kernel
-            .assembly_line_owner_projection(202 + index as u64 * 10)
+            .assembly_line_owner_projection(203 + index as u64 * 10)
             .unwrap();
         let feature_approval = approval(
             BrainstormingTargetKind::Feature,
@@ -556,7 +619,10 @@ fn schema_v19_file_upgrade_is_backup_first_and_preserves_legacy_tables() {
     drop(connection);
 
     let process = MasterProcess::acquire(temp.path()).unwrap();
-    assert_eq!(process.kernel().schema_version().unwrap(), 20);
+    assert_eq!(
+        process.kernel().schema_version().unwrap(),
+        MASTER_SCHEMA_VERSION
+    );
     let backup = process.migration_backup_path().unwrap();
     assert!(backup.exists());
     let backup_connection = Connection::open(backup).unwrap();
