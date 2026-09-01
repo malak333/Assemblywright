@@ -139,6 +139,18 @@ For the approved target, these additional rules are release requirements:
   stdin, and issues only when the grant, device, expiry, role, registry
   revision, endpoint, and CSR match. Interruption leaves no transferable
   secret and the digest-only grant expires without automatic retry.
+- Mac connection setup may persist only a schema-versioned helper path and the
+  independently supplied ten-character Apple team identifier in an owner-only,
+  no-follow, bounded, duplicate-free, atomically replaced file. Missing setup is
+  not an error; malformed, linked, non-owner, or permissive setup state blocks
+  supervision and must never fall back to ambient environment configuration.
+  Saving setup, reading enrollment status, pairing, and certificate recovery must
+  revalidate the fixed helper identifier, Apple signature, entitlements, expected
+  team, CDHash, and running process. Pairing invitations, CSR replies, certificate
+  receipts, raw grants, keys, and credentials must not enter this store, diagnostics,
+  argv, or child environment. The UI must render helper configuration, installed
+  identity, authenticated Windows connection, and Windows-authoritative readiness
+  as distinct states.
 - Standard-profile certificate rotation is a separate confirmed same-device
   ceremony. The stopped Windows pairing process must retain and zeroize the raw
   rotation grant in memory, emit only a strict public invitation for the exact

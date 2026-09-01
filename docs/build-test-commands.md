@@ -1114,6 +1114,30 @@ installation, Finder or LaunchServices behavior, live cross-device reliability,
 autonomous dispatch, repository mutation, publication authority, or unattended
 operation. Those remain owner-recorded external evidence.
 
+## Owner Connection Setup
+
+The Mac app's Developer Mode Connection card replaces normal-product launch-variable
+configuration. Choose the separately Xcode-provisioned helper and enter the independently
+verified ten-character Apple team identifier. The app validates the fixed helper identity
+before saving an owner-private locator and before every supervision or one-shot command.
+It then exposes the same bounded enrollment and rotation stdin ceremonies documented
+below. Public invitations, CSR replies, and certificate receipts remain in memory; the
+Windows pairing process retains the only raw grant.
+
+Focused native coverage:
+
+```sh
+swift test --disable-sandbox --package-path apps/mac --filter persistedHelperLocator
+swift test --disable-sandbox --package-path apps/mac --filter persistedOwnerSetupNativeProcessE2E
+swift test --disable-sandbox --package-path apps/mac --filter AssemblywrightMacAppTests
+swift test --disable-sandbox --package-path apps/mac --filter DeveloperBridge
+```
+
+These tests cover strict persistence, signed-helper command whitelisting, presentation,
+and a real persisted-configuration-to-monitor/status process lifecycle with bounded reap.
+The native process fixture uses a test signature validator. These tests do not prove the Xcode-provisioned Keychain group,
+live Windows enrollment, Developer ID distribution, notarization, or clean-profile launch.
+
 ## Owner-Confirmed Standard Capability Rebind
 
 The rebind is a four-receipt stdin ceremony, not one pipeline: keep each

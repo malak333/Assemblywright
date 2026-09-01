@@ -4510,6 +4510,642 @@ struct DeveloperBridgeTests {
         }
     }
 
+    @Test("Persisted helper locator round trips only an exact owner-private safe file")
+    func persistedHelperLocatorIsStrictAndPrivate() throws {
+        let root = try privateTemporaryDirectory(prefix: "assemblywright-helper-locator")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let helper = try executableFixture(in: root)
+        let store = AssemblywrightDeveloperBridgeConfigurationStore(
+            fileURL: root.appendingPathComponent("private/configuration.json")
+        )
+        let stored = try AssemblywrightDeveloperBridgeStoredConfiguration(
+            helperPath: helper.path,
+            teamIdentifier: "ABCDEFGHIJ"
+        )
+
+        try store.save(stored)
+
+        #expect(try store.load() == stored)
+        let firstDocument = try Data(contentsOf: store.fileURL)
+        try store.save(stored)
+        #expect(try Data(contentsOf: store.fileURL) == firstDocument)
+        #expect(
+            try FileManager.default.contentsOfDirectory(
+                at: store.fileURL.deletingLastPathComponent(),
+                includingPropertiesForKeys: nil
+            ).allSatisfy { !$0.lastPathComponent.hasSuffix(".tmp") }
+        )
+        var metadata = stat()
+        #expect(lstat(store.fileURL.path, &metadata) == 0)
+        #expect(metadata.st_mode & 0o777 == 0o600)
+        #expect(metadata.st_nlink == 1)
+
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o644],
+            ofItemAtPath: store.fileURL.path
+        )
+        #expect(throws: AssemblywrightDeveloperBridgeConfigurationStoreError.unsafeStore) {
+            _ = try store.load()
+        }
+    }
+
+    @Test("Persisted helper locator rejects duplicate shape, symlinks, unsafe modes, and team drift")
+    func persistedHelperLocatorRejectsUnsafeInputs() throws {
+        let root = try privateTemporaryDirectory(prefix: "assemblywright-helper-locator-negative")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let helper = try executableFixture(in: root)
+        let symlink = root.appendingPathComponent("helper-link")
+        try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: helper)
+
+        #expect(throws: AssemblywrightDeveloperBridgeConfigurationStoreError.invalidConfiguration) {
+            _ = try AssemblywrightDeveloperBridgeStoredConfiguration(
+                helperPath: symlink.path,
+                teamIdentifier: "ABCDEFGHIJ"
+            )
+        }
+        #expect(throws: AssemblywrightDeveloperBridgeConfigurationStoreError.invalidConfiguration) {
+            _ = try AssemblywrightDeveloperBridgeStoredConfiguration(
+                helperPath: helper.path,
+                teamIdentifier: "abc"
+            )
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: helper.path)
+        #expect(throws: AssemblywrightDeveloperBridgeConfigurationStoreError.invalidConfiguration) {
+            _ = try AssemblywrightDeveloperBridgeStoredConfiguration(
+                helperPath: helper.path,
+                teamIdentifier: "ABCDEFGHIJ"
+            )
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: helper.path)
+        #expect(throws: AssemblywrightDeveloperBridgeConfigurationStoreError.invalidConfiguration) {
+            _ = try AssemblywrightDeveloperBridgeStoredConfiguration(
+                helperPath: "assemblywright-mac-bridge",
+                teamIdentifier: "ABCDEFGHIJ"
+            )
+        }
+        #expect(throws: AssemblywrightDeveloperBridgeConfigurationStoreError.invalidConfiguration) {
+            _ = try AssemblywrightDeveloperBridgeStoredConfiguration(
+                helperPath: root.appendingPathComponent("nested/../assemblywright-mac-bridge").path,
+                teamIdentifier: "ABCDEFGHIJ"
+            )
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o722], ofItemAtPath: helper.path)
+        #expect(throws: AssemblywrightDeveloperBridgeConfigurationStoreError.invalidConfiguration) {
+            _ = try AssemblywrightDeveloperBridgeStoredConfiguration(
+                helperPath: helper.path,
+                teamIdentifier: "ABCDEFGHIJ"
+            )
+        }
+
+        let store = AssemblywrightDeveloperBridgeConfigurationStore(
+            fileURL: root.appendingPathComponent("duplicate.json")
+        )
+        let duplicate = Data(
+            "{\"schema_version\":1,\"schema_version\":1,\"helper_path\":\"\(helper.path)\",\"team_identifier\":\"ABCDEFGHIJ\"}".utf8
+        )
+        FileManager.default.createFile(atPath: store.fileURL.path, contents: duplicate)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: store.fileURL.path
+        )
+        #expect(throws: AssemblywrightDeveloperBridgeConfigurationStoreError.unsafeStore) {
+            _ = try store.load()
+        }
+    }
+
+    @Test("Persisted helper locator rejects empty, oversized, linked, and unsafe parent state")
+    func persistedHelperLocatorRejectsUnsafeStoreShapes() throws {
+        let root = try privateTemporaryDirectory(prefix: "assemblywright-helper-store-shapes")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let helper = try executableFixture(in: root)
+        let stored = try AssemblywrightDeveloperBridgeStoredConfiguration(
+            helperPath: helper.path,
+            teamIdentifier: "ABCDEFGHIJ"
+        )
+        let validDocument = try JSONEncoder().encode(stored)
+
+        let missing = AssemblywrightDeveloperBridgeConfigurationStore(
+            fileURL: root.appendingPathComponent("missing.json")
+        )
+        #expect(try missing.load() == nil)
+
+        for (name, data) in [
+            ("empty.json", Data()),
+            (
+                "oversized.json",
+                Data(
+                    repeating: 0x20,
+                    count: AssemblywrightDeveloperBridgeConfigurationStore
+                        .maximumDocumentBytes + 1
+                )
+            )
+        ] {
+            let url = root.appendingPathComponent(name)
+            FileManager.default.createFile(atPath: url.path, contents: data)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o600], ofItemAtPath: url.path
+            )
+            let store = AssemblywrightDeveloperBridgeConfigurationStore(fileURL: url)
+            #expect(throws: AssemblywrightDeveloperBridgeConfigurationStoreError.unsafeStore) {
+                _ = try store.load()
+            }
+        }
+
+        let linkedSource = root.appendingPathComponent("linked-source.json")
+        FileManager.default.createFile(atPath: linkedSource.path, contents: validDocument)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600], ofItemAtPath: linkedSource.path
+        )
+        let hardLink = root.appendingPathComponent("hard-link.json")
+        try FileManager.default.linkItem(at: linkedSource, to: hardLink)
+        #expect(throws: AssemblywrightDeveloperBridgeConfigurationStoreError.unsafeStore) {
+            _ = try AssemblywrightDeveloperBridgeConfigurationStore(fileURL: hardLink).load()
+        }
+        let symbolicLink = root.appendingPathComponent("symbolic-link.json")
+        try FileManager.default.createSymbolicLink(
+            at: symbolicLink, withDestinationURL: linkedSource
+        )
+        #expect(throws: AssemblywrightDeveloperBridgeConfigurationStoreError.unsafeStore) {
+            _ = try AssemblywrightDeveloperBridgeConfigurationStore(fileURL: symbolicLink).load()
+        }
+
+        let unsafeDirectory = root.appendingPathComponent("unsafe-parent", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: unsafeDirectory,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: unsafeDirectory.path
+        )
+        let unsafeParentFile = unsafeDirectory.appendingPathComponent("configuration.json")
+        FileManager.default.createFile(atPath: unsafeParentFile.path, contents: validDocument)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600], ofItemAtPath: unsafeParentFile.path
+        )
+        #expect(throws: AssemblywrightDeveloperBridgeConfigurationStoreError.unsafeStore) {
+            _ = try AssemblywrightDeveloperBridgeConfigurationStore(
+                fileURL: unsafeParentFile
+            ).load()
+        }
+        let missingInUnsafeParent = unsafeDirectory.appendingPathComponent("missing.json")
+        #expect(throws: AssemblywrightDeveloperBridgeConfigurationStoreError.unsafeStore) {
+            _ = try AssemblywrightDeveloperBridgeConfigurationStore(
+                fileURL: missingInUnsafeParent
+            ).load()
+        }
+    }
+
+    @MainActor
+    @Test("Invalid persisted helper locator blocks environment fallback")
+    func invalidPersistedHelperLocatorTakesPrecedence() async throws {
+        let root = try privateTemporaryDirectory(prefix: "assemblywright-helper-precedence")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let helper = try executableFixture(in: root)
+        let store = AssemblywrightDeveloperBridgeConfigurationStore(
+            fileURL: root.appendingPathComponent("configuration.json")
+        )
+        FileManager.default.createFile(atPath: store.fileURL.path, contents: Data("{}".utf8))
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600], ofItemAtPath: store.fileURL.path
+        )
+        let launcher = FakeBridgeProcessLauncher(session: FakeBridgeProcessSession(lines: []))
+        let lifecycle = AssemblywrightDeveloperBridgeProcessLifecycle(
+            configurationStore: store,
+            environment: [
+                AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
+                    helper.path,
+                AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
+                    "ABCDEFGHIJ"
+            ],
+            validator: FakeBridgeExecutableValidator(),
+            launcher: launcher,
+            localModelSelectionStore: .init(fileURL: root.appendingPathComponent("model.json")),
+            assemblyLinePendingMutationStore: .init(
+                fileURL: root.appendingPathComponent("pending.json")
+            )
+        )
+
+        lifecycle.start()
+        await Task.yield()
+
+        #expect(lifecycle.bridgeConfigurationState == .invalidStore)
+        #expect(lifecycle.status.errorCode == "developer_bridge_configuration_store_invalid")
+        #expect(lifecycle.setupActionErrorCode == "developer_bridge_configuration_store_invalid")
+        #expect(await launcher.launchCount == 0)
+
+        let unsafeDirectory = root.appendingPathComponent("unsafe-parent", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: unsafeDirectory,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: unsafeDirectory.path
+        )
+        let unsafeParentLauncher = FakeBridgeProcessLauncher(
+            session: FakeBridgeProcessSession(lines: [])
+        )
+        let unsafeParentLifecycle = AssemblywrightDeveloperBridgeProcessLifecycle(
+            configurationStore: .init(
+                fileURL: unsafeDirectory.appendingPathComponent("missing.json")
+            ),
+            environment: [
+                AssemblywrightDeveloperBridgeProcessConfiguration.executableEnvironmentKey:
+                    helper.path,
+                AssemblywrightDeveloperBridgeProcessConfiguration.teamIdentifierEnvironmentKey:
+                    "ABCDEFGHIJ"
+            ],
+            validator: FakeBridgeExecutableValidator(),
+            launcher: unsafeParentLauncher,
+            localModelSelectionStore: .init(
+                fileURL: root.appendingPathComponent("unsafe-parent-model.json")
+            ),
+            assemblyLinePendingMutationStore: .init(
+                fileURL: root.appendingPathComponent("unsafe-parent-pending.json")
+            )
+        )
+        unsafeParentLifecycle.start()
+        await Task.yield()
+        #expect(unsafeParentLifecycle.bridgeConfigurationState == .invalidStore)
+        #expect(
+            unsafeParentLifecycle.status.errorCode
+                == "developer_bridge_configuration_store_invalid"
+        )
+        #expect(await unsafeParentLauncher.launchCount == 0)
+    }
+
+    @MainActor
+    @Test("Owner configuration validates, persists, and starts the exact helper")
+    func ownerConfigurationPersistsAndStartsHelper() async throws {
+        let root = try privateTemporaryDirectory(prefix: "assemblywright-helper-configure")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let helper = try executableFixture(in: root)
+        let store = AssemblywrightDeveloperBridgeConfigurationStore(
+            fileURL: root.appendingPathComponent("private/configuration.json")
+        )
+        let launcher = FakeBridgeProcessLauncher(session: FakeBridgeProcessSession(lines: []))
+        let lifecycle = AssemblywrightDeveloperBridgeProcessLifecycle(
+            configuration: .init(environment: [:]),
+            configurationStore: store,
+            validator: FakeBridgeExecutableValidator(),
+            launcher: launcher,
+            localModelSelectionStore: .init(fileURL: root.appendingPathComponent("model.json")),
+            assemblyLinePendingMutationStore: .init(
+                fileURL: root.appendingPathComponent("pending.json")
+            )
+        )
+
+        #expect(await lifecycle.configureBridge(
+            helperURL: helper,
+            expectedTeamIdentifier: "ABCDEFGHIJ"
+        ))
+        for _ in 0 ..< 100 where await launcher.launchCount == 0 { await Task.yield() }
+
+        #expect(lifecycle.bridgeConfigurationState == .configured)
+        #expect(lifecycle.setupActionErrorCode == nil)
+        #expect(try store.load()?.helperPath == helper.path)
+        #expect(await launcher.launchCount == 1)
+        await lifecycle.stop()
+    }
+
+    @MainActor
+    @Test("Setup lifecycle exposes only strict status, pairing, and rotation documents")
+    func setupLifecycleCommandsAreExactAndBounded() async throws {
+        let root = try privateTemporaryDirectory(prefix: "assemblywright-helper-setup")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let csr = enrollmentCSRData()
+        let enrolled = enrollmentStatusData(status: "enrolled")
+        let installed = enrollmentStatusData(status: "enrollment_installed")
+        let rotated = enrollmentStatusData(status: "certificate_rotation_installed")
+        let invitation = try validInvitationData()
+        let receipt = try validIssuedReceiptData()
+        let launcher = FakeBridgeProcessLauncher(
+            session: FakeBridgeProcessSession(lines: []),
+            restartSession: FakeBridgeProcessSession(lines: []),
+            commandResponses: [enrolled, csr, installed, csr, rotated]
+        )
+        let lifecycle = setupLifecycle(
+            root: root,
+            launcher: launcher
+        )
+
+        #expect(await lifecycle.enrollmentStatus()?.installed == true)
+        #expect(await lifecycle.prepareEnrollment(invitationData: invitation) == csr)
+        #expect(
+            await lifecycle.installEnrollment(receiptData: receipt)?
+                .registryRevision == 3
+        )
+        #expect(
+            await lifecycle.prepareCertificateRotation(invitationData: invitation)
+                == csr
+        )
+        #expect(
+            await lifecycle.installCertificateRotation(receiptData: receipt)?
+                .installed == true
+        )
+        #expect(await launcher.commands.map(\.0) == [
+            AssemblywrightDeveloperBridgeProcessLifecycle.enrollmentStatusArguments,
+            AssemblywrightDeveloperBridgeProcessLifecycle.enrollmentPrepareArguments,
+            AssemblywrightDeveloperBridgeProcessLifecycle.enrollmentInstallArguments,
+            AssemblywrightDeveloperBridgeProcessLifecycle.rotationPrepareArguments,
+            AssemblywrightDeveloperBridgeProcessLifecycle.rotationInstallArguments
+        ])
+        await lifecycle.stop()
+    }
+
+    @MainActor
+    @Test("Setup lifecycle rejects overlapping owner actions without misreporting configuration")
+    func setupLifecycleRejectsConcurrentOwnerActions() async throws {
+        let root = try privateTemporaryDirectory(prefix: "assemblywright-helper-setup-overlap")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let launcher = FakeBridgeProcessLauncher(
+            session: FakeBridgeProcessSession(lines: []),
+            restartSession: FakeBridgeProcessSession(lines: []),
+            commandResponse: enrollmentStatusData(status: "enrolled"),
+            commandDelay: .milliseconds(100)
+        )
+        let lifecycle = setupLifecycle(root: root, launcher: launcher)
+        let first = Task { await lifecycle.enrollmentStatus() }
+        for _ in 0 ..< 100 where await launcher.commands.isEmpty { await Task.yield() }
+
+        #expect(
+            await lifecycle.prepareEnrollment(invitationData: try validInvitationData()) == nil
+        )
+        #expect(lifecycle.setupActionErrorCode == nil)
+        #expect(await first.value?.installed == true)
+        #expect(lifecycle.setupActionErrorCode == nil)
+        await lifecycle.stop()
+    }
+
+    @MainActor
+    @Test("Setup lifecycle rejects secret, path, duplicate, and binding drift in helper output")
+    func setupLifecycleRejectsUnsafeHelperOutput() async throws {
+        let root = try privateTemporaryDirectory(prefix: "assemblywright-helper-output-negative")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let invitation = try validInvitationData()
+        let unsafeStatus = Data(
+            #"{"status":"enrolled","device_id":"22222222-2222-4222-8222-222222222222","device_name":"owner-mac-bridge","master_endpoint":"100.64.23.14:7792","registry_revision":3,"certificate_not_after_ms":4102444800000,"helper_path":"/private/helper"}"#.utf8
+        )
+        let duplicateCSR = Data(
+            #"{"schema_version":1,"status":"enrollment_csr_ready","grant_id":"11111111-1111-4111-8111-111111111111","device_id":"22222222-2222-4222-8222-222222222222","device_id":"22222222-2222-4222-8222-222222222222","csr_pem":"-----BEGIN CERTIFICATE REQUEST-----\nZmFrZQ==\n-----END CERTIFICATE REQUEST-----\n"}"#.utf8
+        )
+        let malformedInstall = Data(
+            #"{"status":"enrollment_installed","secret":"must-not-survive"}"#.utf8
+        )
+        let launcher = FakeBridgeProcessLauncher(
+            session: FakeBridgeProcessSession(lines: []),
+            restartSession: FakeBridgeProcessSession(lines: []),
+            commandResponses: [unsafeStatus, duplicateCSR, malformedInstall]
+        )
+        let lifecycle = setupLifecycle(root: root, launcher: launcher)
+        let receipt = try validIssuedReceiptData()
+
+        #expect(await lifecycle.enrollmentStatus() == nil)
+        #expect(lifecycle.setupActionErrorCode == "invalid_helper_setup_response")
+        #expect(await lifecycle.prepareEnrollment(invitationData: invitation) == nil)
+        #expect(lifecycle.setupActionErrorCode == "invalid_helper_setup_response")
+        #expect(
+            await lifecycle.installEnrollment(receiptData: receipt) == nil
+        )
+        #expect(lifecycle.setupActionErrorCode == "enrollment_install_recovery_required")
+        #expect(!String(describing: lifecycle.status).contains("/private/helper"))
+        await lifecycle.stop()
+    }
+
+    @MainActor
+    @Test("Setup numeric fields reject JSON booleans before NSNumber conversion")
+    func setupNumericFieldsRejectBooleans() async throws {
+        let root = try privateTemporaryDirectory(prefix: "assemblywright-helper-boolean")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let invitation = try validInvitationData()
+        let booleanSchemaCSR = Data(
+            #"{"schema_version":true,"status":"enrollment_csr_ready","grant_id":"11111111-1111-4111-8111-111111111111","device_id":"22222222-2222-4222-8222-222222222222","csr_pem":"-----BEGIN CERTIFICATE REQUEST-----\nZmFrZQ==\n-----END CERTIFICATE REQUEST-----\n"}"#.utf8
+        )
+        let booleanRevision = enrollmentStatusData(
+            status: "enrolled",
+            registryRevisionJSON: "true"
+        )
+        let booleanExpiry = enrollmentStatusData(
+            status: "enrolled",
+            certificateNotAfterJSON: "true"
+        )
+        let launcher = FakeBridgeProcessLauncher(
+            session: FakeBridgeProcessSession(lines: []),
+            restartSession: FakeBridgeProcessSession(lines: []),
+            commandResponses: [booleanSchemaCSR, booleanRevision, booleanExpiry]
+        )
+        let lifecycle = setupLifecycle(root: root, launcher: launcher)
+
+        #expect(await lifecycle.prepareEnrollment(invitationData: invitation) == nil)
+        #expect(lifecycle.setupActionErrorCode == "invalid_helper_setup_response")
+        #expect(await lifecycle.enrollmentStatus() == nil)
+        #expect(lifecycle.setupActionErrorCode == "invalid_helper_setup_response")
+        #expect(await lifecycle.enrollmentStatus() == nil)
+        #expect(lifecycle.setupActionErrorCode == "invalid_helper_setup_response")
+        await lifecycle.stop()
+    }
+
+    @Test("Native one-shot setup allowlist rejects near misses before launch")
+    func nativeSetupCommandAllowlistIsExact() async throws {
+        let root = try privateTemporaryDirectory(prefix: "assemblywright-helper-native-setup")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executable = root.appendingPathComponent("bridge-fixture")
+        let script = "#!/bin/sh\ntest \"$#\" -eq 1 && test \"$1\" = status || exit 64\nread unexpected && exit 65\nprintf '%s\\n' '{\"status\":\"not_enrolled\"}'\n"
+        try Data(script.utf8).write(to: executable, options: .atomic)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700], ofItemAtPath: executable.path
+        )
+        let validated = AssemblywrightDeveloperBridgeValidatedExecutable(
+            executableURL: executable,
+            teamIdentifier: "ABCDEFGHIJ",
+            codeRequirement: "anchor apple generic",
+            cdHash: Data(repeating: 0x11, count: 20)
+        )
+        let launcher = FoundationAssemblywrightDeveloperBridgeProcessLauncher(
+            runningProcessValidator: FakeBridgeRunningProcessValidator()
+        )
+
+        #expect(try await launcher.runCommand(
+            executable: validated,
+            arguments: AssemblywrightDeveloperBridgeProcessLifecycle.enrollmentStatusArguments,
+            input: Data()
+        ) == Data(#"{"status":"not_enrolled"}"#.utf8))
+
+        for (arguments, input) in [
+            (["enrollment", "prepare", "--confirm"], Data("{}".utf8)),
+            (["enrollment", "rotate", "prepare"], Data("{}".utf8)),
+            (["enrollment", "remove", "--confirm"], Data("{}".utf8)),
+            (["status"], Data("{}".utf8)),
+            (["enrollment", "prepare"], Data())
+        ] {
+            await #expect(throws: AssemblywrightDeveloperBridgeProcessError.invalidSnapshot) {
+                _ = try await launcher.runCommand(
+                    executable: validated,
+                    arguments: arguments,
+                    input: input
+                )
+            }
+        }
+    }
+
+    @MainActor
+    @Test("Persisted owner setup drives a real monitor and status process without launch variables")
+    func persistedOwnerSetupNativeProcessE2E() async throws {
+        let root = try privateTemporaryDirectory(prefix: "assemblywright-helper-native-persisted")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executable = root.appendingPathComponent("bridge-fixture")
+        let monitorLine = String(
+            decoding: authenticatedSnapshotData(connectionEpoch: 73),
+            as: UTF8.self
+        ).replacingOccurrences(of: "'", with: "'\"'\"'")
+        let script = """
+        #!/bin/sh
+        if [ "$#" -eq 1 ] && [ "$1" = monitor ]; then
+          printf '%s\n' '\(monitorLine)'
+          while true; do /bin/sleep 1; done
+        fi
+        if [ "$#" -eq 1 ] && [ "$1" = status ]; then
+          read unexpected && exit 65
+          printf '%s\n' '{"status":"not_enrolled"}'
+          exit 0
+        fi
+        exit 64
+        """
+        try Data(script.utf8).write(to: executable, options: .atomic)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700], ofItemAtPath: executable.path
+        )
+        let store = AssemblywrightDeveloperBridgeConfigurationStore(
+            fileURL: root.appendingPathComponent("private/configuration.json")
+        )
+        let firstValidator = RecordingBridgeRunningProcessValidator()
+        let first = AssemblywrightDeveloperBridgeProcessLifecycle(
+            configuration: .init(environment: [:]),
+            configurationStore: store,
+            validator: FakeBridgeExecutableValidator(),
+            launcher: FoundationAssemblywrightDeveloperBridgeProcessLauncher(
+                runningProcessValidator: firstValidator,
+                ownerCommandTimeout: .seconds(2)
+            ),
+            localModelSelectionStore: .init(fileURL: root.appendingPathComponent("model-1.json")),
+            assemblyLinePendingMutationStore: .init(
+                fileURL: root.appendingPathComponent("pending-1.json")
+            )
+        )
+
+        #expect(await first.configureBridge(
+            helperURL: executable,
+            expectedTeamIdentifier: "ABCDEFGHIJ"
+        ))
+        for _ in 0 ..< 200 where first.status.phase != .connected {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(first.status.phase == .connected)
+        #expect(first.status.connectionEpoch == 73)
+        await first.stop()
+        if let processIdentifier = firstValidator.processIdentifier {
+            #expect(!processExists(processIdentifier))
+        }
+
+        let secondValidator = RecordingBridgeRunningProcessValidator()
+        let reloaded = AssemblywrightDeveloperBridgeProcessLifecycle(
+            configurationStore: store,
+            validator: FakeBridgeExecutableValidator(),
+            launcher: FoundationAssemblywrightDeveloperBridgeProcessLauncher(
+                runningProcessValidator: secondValidator,
+                ownerCommandTimeout: .seconds(2)
+            ),
+            localModelSelectionStore: .init(fileURL: root.appendingPathComponent("model-2.json")),
+            assemblyLinePendingMutationStore: .init(
+                fileURL: root.appendingPathComponent("pending-2.json")
+            )
+        )
+        #expect(reloaded.bridgeConfigurationState == .configured)
+        reloaded.start()
+        for _ in 0 ..< 200 where reloaded.status.phase != .connected {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(reloaded.status.phase == .connected)
+        #expect(await reloaded.enrollmentStatus()?.installed == false)
+        for _ in 0 ..< 200 where reloaded.status.phase != .connected {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(reloaded.status.connectionEpoch == 73)
+        await reloaded.stop()
+        if let processIdentifier = secondValidator.processIdentifier {
+            #expect(!processExists(processIdentifier))
+        }
+    }
+
+    @Test("Native install command distinguishes pre-input rejection from post-input ambiguity")
+    func nativeInstallCommandPreservesEffectBoundary() async throws {
+        let root = try privateTemporaryDirectory(prefix: "assemblywright-helper-install-effect")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executable = root.appendingPathComponent("bridge-fixture")
+        let script = "#!/bin/sh\n/bin/cat >/dev/null\nexit 9\n"
+        try Data(script.utf8).write(to: executable, options: .atomic)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700], ofItemAtPath: executable.path
+        )
+        let validated = AssemblywrightDeveloperBridgeValidatedExecutable(
+            executableURL: executable,
+            teamIdentifier: "ABCDEFGHIJ",
+            codeRequirement: "anchor apple generic",
+            cdHash: Data(repeating: 0x11, count: 20)
+        )
+        let input = Data("{}".utf8)
+
+        await #expect(throws: AssemblywrightDeveloperBridgeProcessError.commandOutcomeUnknown) {
+            _ = try await FoundationAssemblywrightDeveloperBridgeProcessLauncher(
+                runningProcessValidator: FakeBridgeRunningProcessValidator()
+            ).runCommand(
+                executable: validated,
+                arguments: AssemblywrightDeveloperBridgeProcessLifecycle
+                    .enrollmentInstallArguments,
+                input: input
+            )
+        }
+        await #expect(throws: AssemblywrightDeveloperBridgeProcessError.invalidExecutableSignature) {
+            _ = try await FoundationAssemblywrightDeveloperBridgeProcessLauncher(
+                runningProcessValidator: FakeBridgeRunningProcessValidator(
+                    error: .invalidExecutableSignature
+                )
+            ).runCommand(
+                executable: validated,
+                arguments: AssemblywrightDeveloperBridgeProcessLifecycle
+                    .enrollmentInstallArguments,
+                input: input
+            )
+        }
+    }
+
+    @MainActor
+    @Test("Cancelled setup install reports recovery and restarts observation")
+    func cancelledSetupInstallRequiresRecovery() async throws {
+        let root = try privateTemporaryDirectory(prefix: "assemblywright-helper-cancel")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let launcher = FakeBridgeProcessLauncher(
+            session: FakeBridgeProcessSession(lines: []),
+            restartSession: FakeBridgeProcessSession(lines: []),
+            commandDelay: .seconds(30)
+        )
+        let lifecycle = setupLifecycle(root: root, launcher: launcher)
+        let receipt = try validIssuedReceiptData()
+        let action = Task {
+            await lifecycle.installEnrollment(receiptData: receipt)
+        }
+        for _ in 0 ..< 100 where await launcher.commands.isEmpty { await Task.yield() }
+
+        action.cancel()
+        _ = await action.value
+        for _ in 0 ..< 100 where await launcher.launchCount == 0 { await Task.yield() }
+
+        #expect(lifecycle.setupActionErrorCode == "enrollment_install_recovery_required")
+        #expect(await launcher.launchCount == 1)
+        await lifecycle.stop()
+    }
+
     @MainActor
     @Test("App helper lifecycle is default inert and owns at most one helper")
     func appHelperLifecycleIsDefaultInertAndSingleOwner() async {
@@ -7744,6 +8380,66 @@ private func mlxJobDocuments(connectionEpoch: UInt64) throws -> FixtureJobDocume
 private func emptyEventBatch() -> Data {
     Data(
         #"{"after_sequence":0,"events":[],"has_more":false,"next_sequence":0,"protocol_version":5,"stream_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}"#.utf8
+    )
+}
+
+private func privateTemporaryDirectory(prefix: String) throws -> URL {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("\(prefix)-\(UUID().uuidString.lowercased())", isDirectory: true)
+    try FileManager.default.createDirectory(
+        at: root,
+        withIntermediateDirectories: false,
+        attributes: [.posixPermissions: 0o700]
+    )
+    return root.resolvingSymlinksInPath().standardizedFileURL
+}
+
+private func executableFixture(in root: URL) throws -> URL {
+    let helper = root.appendingPathComponent("assemblywright-mac-bridge")
+    FileManager.default.createFile(
+        atPath: helper.path,
+        contents: Data("#!/bin/sh\nexit 0\n".utf8)
+    )
+    try FileManager.default.setAttributes(
+        [.posixPermissions: 0o700],
+        ofItemAtPath: helper.path
+    )
+    return helper.standardizedFileURL
+}
+
+private func enrollmentCSRData() -> Data {
+    Data(
+        #"{"schema_version":1,"status":"enrollment_csr_ready","grant_id":"11111111-1111-4111-8111-111111111111","device_id":"22222222-2222-4222-8222-222222222222","csr_pem":"-----BEGIN CERTIFICATE REQUEST-----\nZmFrZQ==\n-----END CERTIFICATE REQUEST-----\n"}"#.utf8
+    )
+}
+
+private func enrollmentStatusData(
+    status: String,
+    registryRevisionJSON: String = "3",
+    certificateNotAfterJSON: String = "4102444800000"
+) -> Data {
+    Data(
+        "{\"status\":\"\(status)\",\"device_id\":\"22222222-2222-4222-8222-222222222222\",\"device_name\":\"owner-mac-bridge\",\"master_endpoint\":\"100.64.23.14:7792\",\"registry_revision\":\(registryRevisionJSON),\"certificate_not_after_ms\":\(certificateNotAfterJSON)}".utf8
+    )
+}
+
+@MainActor
+private func setupLifecycle(
+    root: URL,
+    launcher: FakeBridgeProcessLauncher
+) -> AssemblywrightDeveloperBridgeProcessLifecycle {
+    AssemblywrightDeveloperBridgeProcessLifecycle(
+        configuration: .init(
+            executableURL: root.appendingPathComponent("assemblywright-mac-bridge"),
+            expectedTeamIdentifier: "ABCDEFGHIJ"
+        ),
+        configurationStore: .init(fileURL: root.appendingPathComponent("configuration.json")),
+        validator: FakeBridgeExecutableValidator(),
+        launcher: launcher,
+        localModelSelectionStore: .init(fileURL: root.appendingPathComponent("model.json")),
+        assemblyLinePendingMutationStore: .init(
+            fileURL: root.appendingPathComponent("pending.json")
+        )
     )
 }
 

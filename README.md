@@ -209,8 +209,12 @@ transport, its startup validation, and read-only release readiness and evidence
 inspection. It holds no conversation, model, tool, memory, scheduler, plugin, or
 repository authority.
 
-**`apps/mac`** — a SwiftUI Developer Mode client. The app supervises only the
-exact separately signed bridge helper; the helper keeps the Secure Enclave
+**`apps/mac`** — a SwiftUI Developer Mode client. Its Connection card selects the
+separately signed bridge helper, pairs through public copy/paste documents, shows
+helper/identity/Windows readiness separately, and provides exact certificate recovery.
+Only the helper path and independently supplied Apple team identifier are stored;
+ceremony documents remain in memory. The app supervises only the exact validated
+helper; the helper keeps the Secure Enclave
 Keychain identity and the outbound mTLS session, directly supervises the pinned
 agent, and forwards authenticated metadata pages into a durable cursor. The
 enrolled key and mTLS session never leave the helper. The helper also strictly

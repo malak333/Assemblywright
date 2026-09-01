@@ -308,6 +308,8 @@ struct AssemblyLineOwnerView: View {
         Text("Build with Assemblywright")
           .font(.largeTitle.bold())
 
+        DeveloperModeSetupView(model: developerBridge)
+
         GroupBox(AssemblyLineOwnerPresentation.newProjectTitle) {
           VStack(alignment: .leading, spacing: 10) {
             TextField("https://github.com/owner/repository", text: $projectURL)

@@ -2,6 +2,33 @@
 
 These notes capture durable facts for future agents working on this repository.
 
+## Owner Connection Setup
+
+- Normal Mac product startup uses `developer-bridge-configuration-v1.json` under
+  owner-private Application Support instead of requiring hidden launch variables. The
+  file contains only the separately signed helper path and independently supplied Apple
+  team identifier. Environment configuration remains an explicit development/test seam.
+- The setup file is bounded, duplicate-free, no-follow, owner-only, and atomically
+  published with file and directory fsync. Unsafe stored state blocks supervision and
+  never falls back to ambient environment configuration.
+- Every supervision, status, enrollment, and rotation command revalidates the helper's
+  Apple signature, fixed identifier, entitlements, expected team, CDHash, and running
+  process. The helper remains separately Xcode-provisioned and is not bundled.
+- The Mac UI keeps invitation, CSR reply, and certificate receipt text in memory only.
+  The raw enrollment or rotation grant stays in the stopped Windows pairing process;
+  helper setup, installed identity, authenticated connection, and Windows-authoritative
+  projections are separate readiness states.
+- Once an enrollment or rotation install command receives its public receipt on stdin,
+  cancellation, nonzero exit, timeout, or malformed output is effect-ambiguous and must
+  surface forward recovery rather than a fresh-install retry. Pre-stdin helper identity
+  rejection remains a specific pre-effect failure.
+- After a successful rotation install, retain the validated public `grant_id` in memory
+  until the UI renders the exact Windows `rotate-recover-acknowledge` command. Do not
+  clear the receipt and replace that binding with a placeholder.
+- A configured/paired/connected card is not execution, release, installation, or
+  production-readiness evidence. Live pairing and certificate rotation remain separate
+  two-device proof boundaries.
+
 ## Local Model Selection
 
 - The only owner-selectable model is the designated standard-profile Mac MLX

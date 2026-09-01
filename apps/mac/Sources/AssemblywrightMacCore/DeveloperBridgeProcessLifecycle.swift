@@ -1,4 +1,5 @@
 import Combine
+import CoreFoundation
 import Darwin
 import Foundation
 import Security
@@ -11,6 +12,37 @@ public enum AssemblywrightDeveloperBridgeAppPhase: String, Equatable, Sendable {
     case maintenance
     case paused
     case stopped
+}
+
+public enum AssemblywrightDeveloperBridgeConfigurationState: Equatable, Sendable {
+    case notConfigured
+    case configured
+    case invalidStore
+}
+
+public struct AssemblywrightDeveloperBridgeEnrollmentStatus: Equatable, Sendable {
+    public let installed: Bool
+    public let deviceID: String?
+    public let deviceName: String?
+    public let masterEndpoint: String?
+    public let registryRevision: UInt64?
+    public let certificateNotAfterMilliseconds: UInt64?
+
+    public init(
+        installed: Bool,
+        deviceID: String? = nil,
+        deviceName: String? = nil,
+        masterEndpoint: String? = nil,
+        registryRevision: UInt64? = nil,
+        certificateNotAfterMilliseconds: UInt64? = nil
+    ) {
+        self.installed = installed
+        self.deviceID = deviceID
+        self.deviceName = deviceName
+        self.masterEndpoint = masterEndpoint
+        self.registryRevision = registryRevision
+        self.certificateNotAfterMilliseconds = certificateNotAfterMilliseconds
+    }
 }
 
 public struct AssemblywrightDeveloperBridgeAppStatus: Equatable, Sendable {
@@ -72,6 +104,22 @@ public struct AssemblywrightDeveloperBridgeProcessConfiguration: Equatable, Send
     public let executableURL: URL?
     public let expectedTeamIdentifier: String?
     public let eventRelayConfiguration: AssemblywrightMacDeveloperEventRelayConfiguration?
+
+    public init(
+        executableURL: URL,
+        expectedTeamIdentifier: String,
+        eventRelayConfiguration: AssemblywrightMacDeveloperEventRelayConfiguration? = nil
+    ) {
+        guard Self.isValidTeamIdentifier(expectedTeamIdentifier) else {
+            self.executableURL = nil
+            self.expectedTeamIdentifier = nil
+            self.eventRelayConfiguration = nil
+            return
+        }
+        self.executableURL = executableURL.standardizedFileURL
+        self.expectedTeamIdentifier = expectedTeamIdentifier
+        self.eventRelayConfiguration = eventRelayConfiguration
+    }
 
     public init(environment: [String: String] = ProcessInfo.processInfo.environment) {
         guard let value = environment[Self.executableEnvironmentKey], !value.isEmpty,
@@ -172,7 +220,7 @@ public struct AssemblywrightDeveloperBridgeProcessConfiguration: Equatable, Send
         eventRelayConfiguration = relayConfiguration
     }
 
-    private static func isValidTeamIdentifier(_ value: String) -> Bool {
+    static func isValidTeamIdentifier(_ value: String) -> Bool {
         value.utf8.count == 10 && value.utf8.allSatisfy({
             (0x41 ... 0x5a).contains($0) || (0x30 ... 0x39).contains($0)
         })
@@ -439,21 +487,34 @@ public struct FoundationAssemblywrightDeveloperBridgeProcessLauncher:
         let assemblyLinePlanningAction = AssemblywrightMacAssemblyLinePlanningAction.allCases
             .first(where: { $0.helperArguments == arguments })
         let assemblyLinePlanning = assemblyLinePlanningAction != nil
+        let setupCommand = AssemblywrightDeveloperBridgeProcessLifecycle
+            .setupHelperArguments.contains(arguments)
+        let setupStatus = arguments
+            == AssemblywrightDeveloperBridgeProcessLifecycle.enrollmentStatusArguments
+        let effectfulSetupInstall = arguments
+            == AssemblywrightDeveloperBridgeProcessLifecycle.enrollmentInstallArguments
+            || arguments
+                == AssemblywrightDeveloperBridgeProcessLifecycle.rotationInstallArguments
         let inputLimit = approvedFeatureEnqueue
             ? AssemblywrightMacFeatureConveyorApprovedFeatureDraft.maximumRequestBytes
             : localModelSelection
                 ? AssemblywrightMacLocalModelSelectionControl.maximumFrameBytes
                 : assemblyLinePlanning
                     ? AssemblywrightMacAssemblyLineOwnerControl.maximumRequestBytes
-            : 8 * 1_024
+                    : setupCommand
+                        ? AssemblywrightMacEnrollmentCoordinator.maximumDocumentBytes
+                        : 8 * 1_024
         let outputLimit = approvedFeatureEnqueue
             ? AssemblywrightMacFeatureConveyorOwnerControl.maximumReceiptBytes
             : assemblyLinePlanning
                 ? AssemblywrightMacAssemblyLineOwnerControl.maximumResponseBytes
-            : 8 * 1_024
+                : setupCommand
+                    ? AssemblywrightMacEnrollmentCoordinator.maximumDocumentBytes
+                    : 8 * 1_024
         guard (ownerActions.contains(arguments) || approvedFeatureEnqueue || localModelSelection
-                || assemblyLinePlanning),
-              !input.isEmpty, input.count <= inputLimit else {
+                || assemblyLinePlanning || setupCommand),
+              input.count <= inputLimit,
+              setupStatus ? input.isEmpty : !input.isEmpty else {
             throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
         }
         let process = Process()
@@ -548,6 +609,9 @@ public struct FoundationAssemblywrightDeveloperBridgeProcessLauncher:
             if assemblyLinePlanning, inputDelivered,
                error as? AssemblywrightDeveloperBridgeProcessError
                 != .commandRejectedBeforeEffect {
+                throw AssemblywrightDeveloperBridgeProcessError.commandOutcomeUnknown
+            }
+            if effectfulSetupInstall, inputDelivered {
                 throw AssemblywrightDeveloperBridgeProcessError.commandOutcomeUnknown
             }
             if assemblyLinePlanning, !inputDelivered,
@@ -766,6 +830,22 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
     nonisolated public static let maximumBufferedBytes = maximumLineBytes + 1
     nonisolated public static let proofBoundary =
         "Read-only observation shows bounded Windows-authoritative Feature Conveyor and activation readiness. Authoring and owner actions are separate, explicitly confirmed signed-helper operations; observation does not enable authority and stores no token, command, path, raw evidence, credential, or provider output."
+    nonisolated public static let enrollmentStatusArguments = ["status"]
+    nonisolated public static let enrollmentPrepareArguments = ["enrollment", "prepare"]
+    nonisolated public static let enrollmentInstallArguments = ["enrollment", "install"]
+    nonisolated public static let rotationPrepareArguments = [
+        "enrollment", "rotate", "prepare", "--confirm"
+    ]
+    nonisolated public static let rotationInstallArguments = [
+        "enrollment", "rotate", "install", "--confirm"
+    ]
+    nonisolated static let setupHelperArguments = [
+        enrollmentStatusArguments,
+        enrollmentPrepareArguments,
+        enrollmentInstallArguments,
+        rotationPrepareArguments,
+        rotationInstallArguments
+    ]
 
     @Published public private(set) var status: AssemblywrightDeveloperBridgeAppStatus
     @Published public private(set) var ownerActionInProgress = false
@@ -779,8 +859,13 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
     @Published public private(set) var localModelSelectionState:
         AssemblywrightMacLocalModelSelectionState
     @Published public private(set) var localModelSelectionErrorCode: String?
+    @Published public private(set) var bridgeConfigurationState:
+        AssemblywrightDeveloperBridgeConfigurationState
+    @Published public private(set) var setupActionErrorCode: String?
 
-    private let configuration: AssemblywrightDeveloperBridgeProcessConfiguration
+    private var configuration: AssemblywrightDeveloperBridgeProcessConfiguration
+    private let configurationStore: AssemblywrightDeveloperBridgeConfigurationStore
+    private var configurationStoreLoadFailed: Bool
     private let validator: any AssemblywrightDeveloperBridgeExecutableValidating
     private let launcher: any AssemblywrightDeveloperBridgeProcessLaunching
     private let localModelSelectionStore: AssemblywrightMacLocalModelSelectionStore
@@ -795,7 +880,9 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
         AssemblywrightMacPendingAssemblyLinePlanningMutation?
 
     public init(
-        configuration: AssemblywrightDeveloperBridgeProcessConfiguration = .init(),
+        configuration explicitConfiguration: AssemblywrightDeveloperBridgeProcessConfiguration? = nil,
+        configurationStore: AssemblywrightDeveloperBridgeConfigurationStore = .init(),
+        environment: [String: String]? = nil,
         validator: any AssemblywrightDeveloperBridgeExecutableValidating =
             SecurityAssemblywrightDeveloperBridgeExecutableValidator(),
         launcher: any AssemblywrightDeveloperBridgeProcessLaunching =
@@ -804,7 +891,38 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
         assemblyLinePendingMutationStore:
             AssemblywrightMacAssemblyLinePendingMutationStore = .init()
     ) {
+        self.configurationStore = configurationStore
+        let configuration: AssemblywrightDeveloperBridgeProcessConfiguration
+        let configurationState: AssemblywrightDeveloperBridgeConfigurationState
+        var configurationLoadFailed = false
+        if let explicitConfiguration {
+            configuration = explicitConfiguration
+            configurationState = explicitConfiguration.executableURL == nil
+                ? .notConfigured : .configured
+        } else {
+            do {
+                if let stored = try configurationStore.load() {
+                    configuration = stored.processConfiguration
+                    configurationState = .configured
+                } else if let environment {
+                    configuration = .init(environment: environment)
+                    configurationState = configuration.executableURL == nil
+                        ? .notConfigured : .configured
+                } else {
+                    configuration = .init(environment: [:])
+                    configurationState = .notConfigured
+                }
+            } catch {
+                configuration = .init(environment: [:])
+                configurationState = .invalidStore
+                configurationLoadFailed = true
+            }
+        }
         self.configuration = configuration
+        bridgeConfigurationState = configurationState
+        configurationStoreLoadFailed = configurationLoadFailed
+        setupActionErrorCode = configurationLoadFailed
+            ? "developer_bridge_configuration_store_invalid" : nil
         self.validator = validator
         self.launcher = launcher
         self.localModelSelectionStore = localModelSelectionStore
@@ -849,7 +967,12 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
             ? "assembly_line_pending_store_invalid"
             : loadedAssemblyLinePendingMutation == nil
                 ? nil : "assembly_line_reconciliation_required"
-        if selectionStoreLoadFailed {
+        if configurationLoadFailed {
+            status = .init(
+                phase: .masterOffline,
+                errorCode: "developer_bridge_configuration_store_invalid"
+            )
+        } else if selectionStoreLoadFailed {
             status = .init(
                 phase: .masterOffline,
                 errorCode: "local_model_selection_store_invalid"
@@ -873,6 +996,13 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
 
     public func start() {
         guard task == nil, session == nil else { return }
+        guard !configurationStoreLoadFailed else {
+            status = .init(
+                phase: .masterOffline,
+                errorCode: "developer_bridge_configuration_store_invalid"
+            )
+            return
+        }
         guard !localModelSelectionStoreLoadFailed else {
             status = .init(
                 phase: .masterOffline,
@@ -975,6 +1105,122 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
             try? await Task.sleep(for: .seconds(3_600))
         }
         await stop()
+    }
+
+    @discardableResult
+    public func configureBridge(
+        helperURL: URL,
+        expectedTeamIdentifier: String
+    ) async -> Bool {
+        guard !ownerActionInProgress else { return false }
+        ownerActionInProgress = true
+        setupActionErrorCode = nil
+        defer { ownerActionInProgress = false }
+        do {
+            let stored = try AssemblywrightDeveloperBridgeStoredConfiguration(
+                helperPath: helperURL.standardizedFileURL.path,
+                teamIdentifier: expectedTeamIdentifier
+            )
+            _ = try validator.validate(
+                executableURL: URL(fileURLWithPath: stored.helperPath),
+                expectedTeamIdentifier: stored.teamIdentifier
+            )
+            await stop()
+            guard status.errorCode == nil else {
+                throw AssemblywrightDeveloperBridgeProcessError.teardownFailed
+            }
+            try configurationStore.save(stored)
+            configuration = stored.processConfiguration
+            activeEventRelayConfiguration = configuration.eventRelayConfiguration
+            configurationStoreLoadFailed = false
+            bridgeConfigurationState = .configured
+            status = .init(phase: .starting)
+            start()
+            return true
+        } catch {
+            setupActionErrorCode = Self.setupErrorCode(for: error)
+            if configurationStoreLoadFailed {
+                bridgeConfigurationState = .invalidStore
+                status = .init(
+                    phase: .masterOffline,
+                    errorCode: "developer_bridge_configuration_store_invalid"
+                )
+            } else if configuration.executableURL == nil {
+                bridgeConfigurationState = .notConfigured
+                status = .disabled
+            } else {
+                start()
+            }
+            return false
+        }
+    }
+
+    public func retryBridgeConnection() async {
+        guard !ownerActionInProgress else { return }
+        guard !configurationStoreLoadFailed, configuration.executableURL != nil else {
+            if configurationStoreLoadFailed {
+                setupActionErrorCode = "developer_bridge_configuration_store_invalid"
+            }
+            return
+        }
+        ownerActionInProgress = true
+        defer { ownerActionInProgress = false }
+        setupActionErrorCode = nil
+        await stop()
+        guard status.errorCode == nil else {
+            setupActionErrorCode = "helper_teardown_failed"
+            return
+        }
+        status = .init(phase: .starting)
+        start()
+    }
+
+    public func enrollmentStatus() async -> AssemblywrightDeveloperBridgeEnrollmentStatus? {
+        guard let output = await performSetupHelperCommand(
+            arguments: Self.enrollmentStatusArguments,
+            input: Data(),
+            ambiguityCode: "developer_bridge_status_unavailable"
+        ) else { return nil }
+        do {
+            return try Self.decodeEnrollmentStatus(output, expectedStatus: nil)
+        } catch {
+            setupActionErrorCode = "invalid_helper_setup_response"
+            return nil
+        }
+    }
+
+    public func prepareEnrollment(invitationData: Data) async -> Data? {
+        await prepareEnrollmentDocument(
+            arguments: Self.enrollmentPrepareArguments,
+            invitationData: invitationData
+        )
+    }
+
+    public func installEnrollment(
+        receiptData: Data
+    ) async -> AssemblywrightDeveloperBridgeEnrollmentStatus? {
+        await installEnrollmentDocument(
+            arguments: Self.enrollmentInstallArguments,
+            receiptData: receiptData,
+            expectedStatus: "enrollment_installed"
+        )
+    }
+
+    public func prepareCertificateRotation(invitationData: Data) async -> Data? {
+        await prepareEnrollmentDocument(
+            arguments: Self.rotationPrepareArguments,
+            invitationData: invitationData
+        )
+    }
+
+    public func installCertificateRotation(
+        receiptData: Data
+    ) async -> AssemblywrightDeveloperBridgeEnrollmentStatus? {
+        await installEnrollmentDocument(
+            arguments: Self.rotationInstallArguments,
+            receiptData: receiptData,
+            expectedStatus: "certificate_rotation_installed"
+        )
     }
 
     public func performOwnerAction(
@@ -1235,7 +1481,7 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
     }
 
     private static func isKnownPreEffectAssemblyLineFailure(_ error: Error) -> Bool {
-        switch error as? AssemblywrightDeveloperBridgeProcessError {
+        return switch error as? AssemblywrightDeveloperBridgeProcessError {
         case .commandRejectedBeforeEffect, .commandNotSubmitted, .launchFailed,
             .invalidExecutableSignature:
             true
@@ -1455,6 +1701,210 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
         session = nil
     }
 
+    private func performSetupHelperCommand(
+        arguments: [String],
+        input: Data,
+        ambiguityCode: String
+    ) async -> Data? {
+        guard !ownerActionInProgress else { return nil }
+        guard Self.setupHelperArguments.contains(arguments),
+              !configurationStoreLoadFailed,
+              let executableURL = configuration.executableURL,
+              let expectedTeamIdentifier = configuration.expectedTeamIdentifier else {
+            setupActionErrorCode = configurationStoreLoadFailed
+                ? "developer_bridge_configuration_store_invalid"
+                : "developer_bridge_not_configured"
+            return nil
+        }
+        ownerActionInProgress = true
+        setupActionErrorCode = nil
+        defer { ownerActionInProgress = false }
+        do {
+            await stop()
+            guard status.errorCode == nil else {
+                throw AssemblywrightDeveloperBridgeProcessError.teardownFailed
+            }
+            let validated = try validator.validate(
+                executableURL: executableURL,
+                expectedTeamIdentifier: expectedTeamIdentifier
+            )
+            let output = try await launcher.runCommand(
+                executable: validated,
+                arguments: arguments,
+                input: input
+            )
+            status = .init(phase: .starting)
+            start()
+            return output
+        } catch {
+            setupActionErrorCode = Task.isCancelled
+                || error as? AssemblywrightDeveloperBridgeProcessError == .commandOutcomeUnknown
+                ? ambiguityCode : Self.setupErrorCode(for: error)
+            status = .init(
+                phase: .masterOffline,
+                errorCode: setupActionErrorCode
+            )
+            start()
+            return nil
+        }
+    }
+
+    private func prepareEnrollmentDocument(
+        arguments: [String],
+        invitationData: Data
+    ) async -> Data? {
+        guard !invitationData.isEmpty,
+              invitationData.count <= AssemblywrightMacEnrollmentCoordinator.maximumDocumentBytes
+        else {
+            setupActionErrorCode = "invalid_enrollment_document"
+            return nil
+        }
+        guard let output = await performSetupHelperCommand(
+            arguments: arguments,
+            input: invitationData,
+            ambiguityCode: "enrollment_prepare_recovery_required"
+        ) else { return nil }
+        do {
+            try Self.validateEnrollmentCSR(output, matchingInvitation: invitationData)
+            return output
+        } catch {
+            setupActionErrorCode = "invalid_helper_setup_response"
+            return nil
+        }
+    }
+
+    private func installEnrollmentDocument(
+        arguments: [String],
+        receiptData: Data,
+        expectedStatus: String
+    ) async -> AssemblywrightDeveloperBridgeEnrollmentStatus? {
+        guard !receiptData.isEmpty,
+              receiptData.count <= AssemblywrightMacEnrollmentCoordinator.maximumDocumentBytes
+        else {
+            setupActionErrorCode = "invalid_enrollment_document"
+            return nil
+        }
+        guard let output = await performSetupHelperCommand(
+            arguments: arguments,
+            input: receiptData,
+            ambiguityCode: "enrollment_install_recovery_required"
+        ) else { return nil }
+        do {
+            return try Self.decodeEnrollmentStatus(output, expectedStatus: expectedStatus)
+        } catch {
+            setupActionErrorCode = "enrollment_install_recovery_required"
+            return nil
+        }
+    }
+
+    private static func validateEnrollmentCSR(
+        _ data: Data,
+        matchingInvitation invitationData: Data
+    ) throws {
+        let invitation = try exactJSONObject(
+            invitationData,
+            keys: [
+                "schema_version", "status", "grant_id", "device_id", "device_name", "role",
+                "registry_revision", "expires_at_ms", "capabilities", "master_endpoint",
+                "ca_fingerprint_sha256"
+            ]
+        )
+        let output = try exactJSONObject(
+            data,
+            keys: ["schema_version", "status", "grant_id", "device_id", "csr_pem"]
+        )
+        guard let schema = output["schema_version"] as? NSNumber,
+              CFGetTypeID(schema) != CFBooleanGetTypeID(),
+              schema.uint16Value == 1, schema.doubleValue == 1,
+              output["status"] as? String == "enrollment_csr_ready",
+              let grantID = output["grant_id"] as? String,
+              let deviceID = output["device_id"] as? String,
+              canonicalUUID(grantID), canonicalUUID(deviceID),
+              grantID == invitation["grant_id"] as? String,
+              deviceID == invitation["device_id"] as? String,
+              let csr = output["csr_pem"] as? String,
+              csr.utf8.count <= 32 * 1_024,
+              !csr.contains("\0"),
+              csr.hasPrefix("-----BEGIN CERTIFICATE REQUEST-----\n"),
+              csr.hasSuffix("-----END CERTIFICATE REQUEST-----\n")
+                || csr.hasSuffix("-----END CERTIFICATE REQUEST-----") else {
+            throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
+        }
+    }
+
+    private static func decodeEnrollmentStatus(
+        _ data: Data,
+        expectedStatus: String?
+    ) throws -> AssemblywrightDeveloperBridgeEnrollmentStatus {
+        let preliminary = try exactJSONObject(data, keys: nil)
+        guard let status = preliminary["status"] as? String else {
+            throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
+        }
+        if status == "not_enrolled", expectedStatus == nil {
+            guard Set(preliminary.keys) == ["status"] else {
+                throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
+            }
+            return .init(installed: false)
+        }
+        let allowedStatuses = expectedStatus.map { [$0] } ?? ["enrolled"]
+        guard allowedStatuses.contains(status),
+              Set(preliminary.keys) == [
+                "status", "device_id", "device_name", "master_endpoint",
+                "registry_revision", "certificate_not_after_ms"
+              ],
+              let deviceID = preliminary["device_id"] as? String,
+              canonicalUUID(deviceID),
+              let deviceName = preliminary["device_name"] as? String,
+              !deviceName.isEmpty, deviceName.utf8.count <= 128,
+              deviceName.utf8.allSatisfy({ $0 >= 0x20 && $0 <= 0x7e }),
+              let endpoint = preliminary["master_endpoint"] as? String,
+              validStoredEndpoint(endpoint),
+              let revisionNumber = preliminary["registry_revision"] as? NSNumber,
+              CFGetTypeID(revisionNumber) != CFBooleanGetTypeID(),
+              revisionNumber.doubleValue.rounded(.towardZero) == revisionNumber.doubleValue,
+              revisionNumber.int64Value > 0,
+              let expiryNumber = preliminary["certificate_not_after_ms"] as? NSNumber,
+              CFGetTypeID(expiryNumber) != CFBooleanGetTypeID(),
+              expiryNumber.doubleValue.rounded(.towardZero) == expiryNumber.doubleValue,
+              expiryNumber.int64Value > 0 else {
+            throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
+        }
+        return .init(
+            installed: true,
+            deviceID: deviceID,
+            deviceName: deviceName,
+            masterEndpoint: endpoint,
+            registryRevision: revisionNumber.uint64Value,
+            certificateNotAfterMilliseconds: expiryNumber.uint64Value
+        )
+    }
+
+    private static func exactJSONObject(
+        _ data: Data,
+        keys: Set<String>?
+    ) throws -> [String: Any] {
+        guard data.count <= AssemblywrightMacEnrollmentCoordinator.maximumDocumentBytes else {
+            throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
+        }
+        var scanner = AssemblywrightStrictJSONObjectKeyScanner(data: data)
+        try scanner.validateNoDuplicateObjectKeysRecursively()
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              keys.map({ Set(object.keys) == $0 }) ?? true else {
+            throw AssemblywrightDeveloperBridgeProcessError.invalidSnapshot
+        }
+        return object
+    }
+
+    private static func canonicalUUID(_ value: String) -> Bool {
+        guard let uuid = UUID(uuidString: value) else { return false }
+        return uuid.uuidString.lowercased() == value
+    }
+
+    private static func validStoredEndpoint(_ value: String) -> Bool {
+        !value.isEmpty && value.utf8.count <= 255 && value.contains(":")
+            && value.utf8.allSatisfy({ $0 >= 0x21 && $0 <= 0x7e })
+    }
+
     private func approvedFeatureCommandConfiguration() -> (URL, String)? {
         guard configuration.eventRelayConfiguration.map({
             !$0.fixtureJobsEnabled && !$0.mlxJobsEnabled
@@ -1502,6 +1952,25 @@ public final class AssemblywrightDeveloperBridgeProcessLifecycle: ObservableObje
         case .commandNotSubmitted: "assembly_line_action_rejected"
         case .commandOutcomeUnknown: "assembly_line_reconciliation_required"
         case nil: "helper_unavailable"
+        }
+    }
+
+    private static func setupErrorCode(for error: Error) -> String {
+        if error is AssemblywrightDeveloperBridgeConfigurationStoreError {
+            return "developer_bridge_configuration_rejected"
+        }
+        return switch error as? AssemblywrightDeveloperBridgeProcessError {
+        case .invalidExecutablePath: "invalid_helper_path"
+        case .invalidExecutableSignature: "invalid_helper_signature"
+        case .launchFailed: "helper_launch_failed"
+        case .teardownFailed: "helper_teardown_failed"
+        case .outputTooLarge: "helper_output_too_large"
+        case .invalidSnapshot: "invalid_helper_setup_response"
+        case .helperExited: "helper_exited"
+        case .commandRejectedBeforeEffect, .commandNotSubmitted:
+            "developer_bridge_setup_rejected"
+        case .commandOutcomeUnknown: "developer_bridge_setup_recovery_required"
+        case nil: "developer_bridge_setup_unavailable"
         }
     }
 }

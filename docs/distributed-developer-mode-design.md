@@ -249,10 +249,15 @@ backoff while emitting only allowlisted status. Its bounded reconnect diagnostic
 also closes an accepted session and requires a fresh production handshake with
 a higher master epoch. Live Secure Enclave enrollment
 runs the CLI from an Xcode-provisioned app wrapper with a distinct Keychain
-access group; an ad-hoc SwiftPM executable remains compile-only. The current
-Swift app may supervise that exact separately signed helper only through the
-default-off executable plus independently supplied Apple-team development
-opt-in. It validates the helper's Apple code identity, exact CDHash, and distinct Keychain group, clears
+access group; an ad-hoc SwiftPM executable remains compile-only. The Swift app
+may supervise that exact separately signed helper through an owner-facing
+connection setup that persists only its path and an independently supplied Apple
+team identifier in a strict owner-private locator. Development and test launches
+retain an explicit environment configuration seam, but normal product startup no
+longer depends on hidden launch variables. Unsafe stored configuration blocks
+supervision without falling back to ambient environment. The app validates the
+helper's Apple code identity, exact CDHash, and distinct Keychain group before
+every long-running or one-shot command, clears
 the child environment, accepts only strict bounded redacted monitor snapshots,
 and exposes read-only bridge state. When the independently supplied agent
 executable and data-directory opt-ins are also present, the app sends only
@@ -263,7 +268,11 @@ CDHash, and forwards bounded authenticated Windows event batches into the
 agent's durable cursor. The additional exact fixture opt-in permits only the
 registered synthetic lease/result and cancellation/acknowledgement routes
 through that same helper/agent boundary. The Keychain identity and mTLS
-connection never enter the Rust process. The helper is not bundled and this is
+connection never enter the Rust process. Pairing and rotation use bounded in-memory
+public invitation, CSR reply, and certificate receipt fields; the app persists none
+of those ceremony documents and never receives the Windows-held raw grant. Helper
+setup, installed identity, authenticated connection, and Windows projections are
+separate readiness states. The helper is not bundled and this is
 not unattended background operation or a general production distributed-job
 runtime. Live fixture evidence requires a separately enrolled
 fixture-capability device; an existing `mlx.reasoning` enrollment is not valid
@@ -787,9 +796,11 @@ The owner journey is explicit:
 1. Windows setup validates storage, backup-key custody, service identity, and
    containment, then prints a fixed setup receipt and a short-lived enrollment
    grant.
-2. Mac Connection Setup accepts the master endpoint and grant, displays the
-   master fingerprint and matching verification code, and becomes connected
-   only after Windows confirms the enrollment.
+2. Mac Connection Setup selects and verifies the separately signed helper, accepts
+   the Windows public invitation, returns the public CSR reply, installs only the
+   matching Windows certificate receipt, and becomes connected only after the
+   authenticated Windows handshake succeeds. The endpoint and CA fingerprint come
+   from the strict invitation; the raw grant stays inside the stopped Windows process.
 3. Health and maintenance failures appear in the Mac app with the exact Windows
    CLI action required; administrative authority never silently moves to Mac.
 4. Upgrade enters maintenance mode, verifies a fresh backup and matching
