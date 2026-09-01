@@ -6,6 +6,81 @@ import Testing
 @MainActor
 @Suite("Assemblywright Mac app presentation")
 struct AssemblywrightMacAppTests {
+    @Test("Developer Mode setup separates helper, pairing, and Windows readiness")
+    func developerModeSetupPresentationIsFailClosed() {
+        let missing = DeveloperModeSetupPresentation(
+            configurationState: .notConfigured,
+            bridgeStatus: .disabled,
+            enrollmentInstalled: nil
+        )
+        #expect(missing.setupStatus == DeveloperModeSetupPresentation.setupRequired)
+        #expect(missing.needsSetup)
+        #expect(!missing.canRetry)
+
+        let unpaired = DeveloperModeSetupPresentation(
+            configurationState: .configured,
+            bridgeStatus: .init(phase: .masterOffline, errorCode: "enrollment_not_installed"),
+            enrollmentInstalled: false
+        )
+        #expect(unpaired.setupStatus == DeveloperModeSetupPresentation.helperReady)
+        #expect(unpaired.pairingStatus == DeveloperModeSetupPresentation.pairingRequired)
+        #expect(unpaired.needsPairing)
+        #expect(unpaired.canRetry)
+
+        let connected = DeveloperModeSetupPresentation(
+            configurationState: .configured,
+            bridgeStatus: .init(
+                phase: .connected,
+                deviceID: "11111111-1111-4111-8111-111111111111",
+                masterEndpoint: "100.64.23.14:7792",
+                connectionEpoch: 9
+            ),
+            enrollmentInstalled: true
+        )
+        #expect(connected.connectionStatus == DeveloperModeSetupPresentation.connected)
+        #expect(!connected.needsSetup)
+        #expect(!connected.needsPairing)
+        #expect(!connected.canRetry)
+    }
+
+    @Test("Developer Mode setup mounts bounded pairing and recovery actions")
+    func developerModeSetupWiring() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let setupSource = try String(
+            contentsOf: root.appendingPathComponent(
+                "Sources/AssemblywrightMacApp/DeveloperModeSetupView.swift"
+            ),
+            encoding: .utf8
+        )
+        let ownerSource = try String(
+            contentsOf: root.appendingPathComponent(
+                "Sources/AssemblywrightMacApp/AssemblyLineOwnerView.swift"
+            ),
+            encoding: .utf8
+        )
+
+        for hook in [
+            "developer-mode-save-helper",
+            "developer-mode-check-pairing",
+            "developer-mode-retry-connection",
+            "developer-mode-prepare-enrollment",
+            "developer-mode-install-enrollment"
+        ] {
+            #expect(setupSource.contains(hook))
+        }
+        #expect(setupSource.contains("enrollment rotate-pair"))
+        #expect(setupSource.contains("developer-mode-rotation-acknowledgement"))
+        #expect(setupSource.contains("rotate-recover-acknowledge"))
+        #expect(setupSource.contains("rotationAcknowledgementGrantID"))
+        #expect(!setupSource.contains("--grant-id <grant-id>"))
+        #expect(setupSource.contains("Windows remains authoritative"))
+        #expect(!setupSource.contains("grant_secret"))
+        #expect(ownerSource.contains("DeveloperModeSetupView(model: developerBridge)"))
+    }
+
     @Test("Simple owner flow defaults to Public and auto-run")
     func simpleOwnerFlowDefaults() {
         let presentation = AssemblyLineOwnerPresentation()

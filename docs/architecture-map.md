@@ -596,14 +596,18 @@ DPAPI CA and accepts credentials only through bounded stdin. Installation
 resolves that account to its exact SID and idempotently grants the native
 `SeServiceLogonRight`; failure rolls back the partial service. The Mac bridge
 uses an explicitly configured private-overlay IP and provides authenticated
-health proof. The Swift app has a default-off development lifecycle that may
-supervise only the exact separately Apple-signed bridge helper, validates its
-fixed identifier and distinct Keychain group, clears its environment, and
-renders strict bounded redacted health in a read-only Developer tab. The helper
+health proof. The Swift app has an owner-configured development lifecycle that
+may supervise only the exact separately Apple-signed bridge helper. A strict
+owner-private locator holds only the helper path and independently supplied team
+identifier; unsafe state blocks startup. The app validates the helper's fixed
+identifier, team, CDHash, and distinct Keychain group before supervision and
+bounded pairing/status/recovery commands, clears its environment, and renders
+helper, enrollment, connection, and Windows projection readiness separately. The helper
 may additionally receive only exact agent executable/data paths through bounded
 stdin, then pin, launch, and directly supervise that agent while forwarding
 authenticated metadata pages into its durable cursor. The enrolled key and mTLS
-session stay in the helper. The helper is not bundled. A separate owner-controlled live mode now coordinates a real
+session stay in the helper. Public ceremony documents remain in memory and the helper
+is not bundled. A separate owner-controlled live mode now coordinates a real
 Windows service stop/start and requires the production Swift lifecycle to
 observe Connected, Master Offline, and a fresh Connected state with a higher
 epoch. This adds bounded service-outage recovery evidence, but no discovery,
@@ -612,8 +616,8 @@ unattended reliability.
 It adds no
 general live cross-device reliability claim, supplied-password or
 owner-account remote-mTLS E2E, host hardening, upgrade/backup/restore automation,
-live inference worker, Codex dispatch, repository mutation, or Connection
-Setup UI. The distributed device and Feature Conveyor SQLite data remain
+live inference worker, Codex dispatch, or repository mutation. The distributed
+device and Feature Conveyor SQLite data remain
 bounded kernels inside the Windows master.
 
 `assemblywright-core` is no longer an assistant runtime. It retains only the hardened

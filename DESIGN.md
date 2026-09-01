@@ -64,6 +64,16 @@ repository source is not an installed, signed, identity-provisioned runtime. Des
 or planning approval does not widen
 an existing worker or authorize the UI to claim full-machine readiness.
 
+The Mac app has an owner-facing Developer Mode connection flow. It stores only a
+strict owner-private locator for the separately signed helper and an independently
+supplied Apple team identifier; every supervision, pairing, status, and certificate-
+rotation command revalidates the helper and its running process. Public enrollment
+and rotation documents remain in memory for an explicit two-host copy/paste ceremony.
+The flow reports helper, installed identity, authenticated Windows connection, and
+authoritative projections as separate readiness layers. It does not bundle the helper,
+move enrollment authority off Windows, persist ceremony documents, or turn connection
+health into execution or production readiness.
+
 Full-machine target phase: planning/creation containment has bounded native Windows LocalSystem/AppContainer service proof; execution admission is implemented and effects remain unavailable.
 
 ## Understanding Summary
