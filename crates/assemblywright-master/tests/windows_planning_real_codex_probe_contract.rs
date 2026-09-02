@@ -252,8 +252,9 @@ fn real_codex_probe_environment_and_tool_disable_contracts_are_exact() {
 
 #[test]
 fn every_windows_planning_launch_derives_only_the_child_visible_current_directory() {
-    let runtime = include_str!("../src/planning_runtime.rs");
-    let containment = include_str!("../src/planning_runtime/windows_containment.rs");
+    let runtime = include_str!("../src/planning_runtime.rs").replace("\r\n", "\n");
+    let containment =
+        include_str!("../src/planning_runtime/windows_containment.rs").replace("\r\n", "\n");
     let production = containment
         .split("\n#[cfg(test)]\nmod tests")
         .next()
@@ -294,7 +295,7 @@ fn every_windows_planning_launch_derives_only_the_child_visible_current_director
 
 #[test]
 fn real_codex_probe_disables_cwd_ancestor_project_discovery_for_login_and_exec() {
-    let runtime = include_str!("../src/planning_runtime.rs");
+    let runtime = include_str!("../src/planning_runtime.rs").replace("\r\n", "\n");
 
     let login_start = runtime
         .find("fn native_provider_probe_login_args()")
