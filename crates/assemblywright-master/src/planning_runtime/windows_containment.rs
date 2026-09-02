@@ -1,9 +1,10 @@
 use super::{
-    bounded_reader, verify_executable, CommandError, CommandInvocation, Executable,
-    PlanningEffectControl,
+    bounded_reader, verify_executable, CommandError, CommandInvocation, CommandStderrMode,
+    Executable, PlanningEffectControl,
 };
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
-use std::ffi::{c_void, OsStr};
+use std::ffi::{c_void, OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::mem::{size_of, size_of_val, zeroed};
@@ -14,6 +15,10 @@ use std::path::{Path, PathBuf};
 use std::ptr::{addr_of, null, null_mut};
 use std::sync::{Arc, Mutex};
 use uuid::Uuid;
+use windows_service::service::{
+    ServiceAccess, ServiceConfig, ServiceErrorControl, ServiceStartType, ServiceState, ServiceType,
+};
+use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
 use windows_sys::Win32::Foundation::{
     CloseHandle, GetLastError, LocalFree, ERROR_INSUFFICIENT_BUFFER, HANDLE, HANDLE_FLAG_INHERIT,
     INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT,
@@ -21,8 +26,8 @@ use windows_sys::Win32::Foundation::{
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
     ConvertStringSidToSidW, GetEffectiveRightsFromAclW, GetNamedSecurityInfoW, GetSecurityInfo,
-    NO_MULTIPLE_TRUSTEE, SDDL_REVISION_1, SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN,
-    TRUSTEE_W,
+    SetSecurityInfo, NO_MULTIPLE_TRUSTEE, SDDL_REVISION_1, SE_FILE_OBJECT, TRUSTEE_IS_SID,
+    TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
 };
 #[cfg(test)]
 use windows_sys::Win32::Security::Isolation::DeleteAppContainerProfile;
@@ -31,17 +36,22 @@ use windows_sys::Win32::Security::Isolation::{
 };
 use windows_sys::Win32::Security::{
     AclSizeInformation, CreateRestrictedToken, CreateWellKnownSid, EqualSid, FreeSid, GetAce,
-    GetAclInformation, GetSecurityDescriptorControl, WinLocalSystemSid, ACCESS_ALLOWED_ACE,
-    ACL_SIZE_INFORMATION, CONTAINER_INHERIT_ACE, DACL_SECURITY_INFORMATION, DISABLE_MAX_PRIVILEGE,
-    INHERITED_ACE, OBJECT_INHERIT_ACE, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
+    GetAclInformation, GetSecurityDescriptorControl, GetSecurityDescriptorSacl,
+    GetTokenInformation, IsValidSid, LookupAccountNameW, SetTokenInformation, TokenOwner,
+    TokenUser, WinLocalSystemSid, ACCESS_ALLOWED_ACE, ACL_SIZE_INFORMATION, CONTAINER_INHERIT_ACE,
+    DACL_SECURITY_INFORMATION, DISABLE_MAX_PRIVILEGE, INHERITED_ACE, LABEL_SECURITY_INFORMATION,
+    OBJECT_INHERIT_ACE, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID,
     SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES, SECURITY_MAX_SID_SIZE, SE_DACL_PROTECTED,
-    SID_AND_ATTRIBUTES, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_QUERY,
+    SE_SACL_PROTECTED, SID_AND_ATTRIBUTES, SID_NAME_USE, SYSTEM_MANDATORY_LABEL_ACE,
+    TOKEN_ADJUST_DEFAULT, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_OWNER, TOKEN_QUERY,
+    TOKEN_USER,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, DELETE, FILE_ALL_ACCESS,
-    FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
-    FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_DELETE,
-    FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_TRAVERSE, SYNCHRONIZE,
+    FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
+    FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_TRAVERSE, READ_CONTROL, SYNCHRONIZE,
+    WRITE_OWNER,
 };
 use windows_sys::Win32::System::Com::CoTaskMemFree;
 use windows_sys::Win32::System::Environment::{CreateEnvironmentBlock, DestroyEnvironmentBlock};
@@ -57,7 +67,10 @@ use windows_sys::Win32::System::StationsAndDesktops::{
     GetProcessWindowStation, SetProcessWindowStation, HDESK, HWINSTA,
 };
 use windows_sys::Win32::System::SystemInformation::GetWindowsDirectoryW;
-use windows_sys::Win32::System::SystemServices::{ACCESS_ALLOWED_ACE_TYPE, SE_GROUP_ENABLED};
+use windows_sys::Win32::System::SystemServices::{
+    ACCESS_ALLOWED_ACE_TYPE, SE_GROUP_ENABLED, SYSTEM_MANDATORY_LABEL_ACE_TYPE,
+    SYSTEM_MANDATORY_LABEL_NO_WRITE_UP,
+};
 use windows_sys::Win32::System::Threading::{
     CreateProcessAsUserW, DeleteProcThreadAttributeList, GetCurrentProcess, GetExitCodeProcess,
     InitializeProcThreadAttributeList, OpenProcessToken, ResumeThread, TerminateProcess,
@@ -66,7 +79,10 @@ use windows_sys::Win32::System::Threading::{
     PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
     STARTF_USESTDHANDLES, STARTUPINFOEXW,
 };
-use windows_sys::Win32::UI::Shell::{FOLDERID_ProgramData, SHGetKnownFolderPath, KF_FLAG_DEFAULT};
+use windows_sys::Win32::System::WindowsProgramming::GetComputerNameW;
+use windows_sys::Win32::UI::Shell::{
+    CommandLineToArgvW, FOLDERID_ProgramData, SHGetKnownFolderPath, KF_FLAG_DEFAULT,
+};
 use zeroize::Zeroize;
 
 const PROVIDER_PROFILE: &str = "Assemblywright.Planning.Provider.v1";
@@ -152,6 +168,504 @@ pub(super) struct ProfileBinding {
     runtime_ancestors: Vec<DirectoryBinding>,
     protected_paths: Vec<PathBuf>,
     scope_paths: Vec<(PathBuf, bool)>,
+}
+
+impl ProfileBinding {
+    pub(super) fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub(super) fn sid(&self) -> &str {
+        &self.sid
+    }
+
+    pub(super) fn provisioning_owner_sid(&self) -> &str {
+        &self.provisioning_owner_sid
+    }
+}
+
+pub(super) struct NativeProbeAuthority {
+    service_name: String,
+    config: ServiceConfig,
+    current_token_sid: String,
+    bindings: NativeProbeBindings,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum NativeProbeOpenRejection {
+    ServiceConfiguration,
+    ExecutableCommandBinding,
+    AccountIdentity,
+    ProfileRevalidation,
+    StoppedState,
+    BindingDigest,
+}
+
+impl NativeProbeOpenRejection {
+    pub(super) const fn code(self) -> &'static str {
+        match self {
+            Self::ServiceConfiguration => "native_probe_service_configuration",
+            Self::ExecutableCommandBinding => "native_probe_executable_command_binding",
+            Self::AccountIdentity => "native_probe_account_identity",
+            Self::ProfileRevalidation => "native_probe_profile_revalidation",
+            Self::StoppedState => "native_probe_stopped_state",
+            Self::BindingDigest => "native_probe_binding_digest",
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct NativeProbeBindings {
+    pub service_name_sha256: [u8; 32],
+    pub service_runtime_binding_sha256: [u8; 32],
+    pub service_account_sid: String,
+    pub current_token_sid: String,
+    pub provisioning_owner_sid: String,
+    pub health_endpoint: std::net::SocketAddr,
+}
+
+impl NativeProbeAuthority {
+    pub(super) fn open(
+        service_name: &str,
+        data_dir: &Path,
+        profile: &ProfileBinding,
+    ) -> Result<Self, NativeProbeOpenRejection> {
+        if service_name.is_empty()
+            || service_name.len() > 64
+            || !service_name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            return Err(NativeProbeOpenRejection::ServiceConfiguration);
+        }
+        let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
+            .map_err(|_| NativeProbeOpenRejection::ServiceConfiguration)?;
+        let service = manager
+            .open_service(
+                service_name,
+                ServiceAccess::QUERY_STATUS | ServiceAccess::QUERY_CONFIG,
+            )
+            .map_err(|_| NativeProbeOpenRejection::ServiceConfiguration)?;
+        let config = service
+            .query_config()
+            .map_err(|_| NativeProbeOpenRejection::ServiceConfiguration)?;
+        let current_executable = std::env::current_exe()
+            .and_then(fs::canonicalize)
+            .map_err(|_| NativeProbeOpenRejection::ExecutableCommandBinding)?;
+        let data_dir = fs::canonicalize(data_dir)
+            .map_err(|_| NativeProbeOpenRejection::ExecutableCommandBinding)?;
+        let command = parse_service_launch_command(config.executable_path.as_os_str())
+            .map_err(|_| NativeProbeOpenRejection::ExecutableCommandBinding)?;
+        let health_endpoint = validate_service_launch_command(
+            service_name,
+            &data_dir,
+            &current_executable,
+            &config,
+            &command,
+        )
+        .map_err(|_| NativeProbeOpenRejection::ExecutableCommandBinding)?;
+        let account_name = config
+            .account_name
+            .as_deref()
+            .ok_or(NativeProbeOpenRejection::AccountIdentity)?;
+        let service_account_sid = lookup_account_sid_text(account_name)
+            .map_err(|_| NativeProbeOpenRejection::AccountIdentity)?;
+        let command_account_sid = lookup_account_sid_text(&command[9])
+            .map_err(|_| NativeProbeOpenRejection::AccountIdentity)?;
+        let current_token_sid =
+            current_token_sid_text().map_err(|_| NativeProbeOpenRejection::AccountIdentity)?;
+        let provisioning_owner_sid = profile.provisioning_owner_sid().to_string();
+        if service_account_sid != command_account_sid
+            || service_account_sid != current_token_sid
+            || current_token_sid != provisioning_owner_sid
+        {
+            return Err(NativeProbeOpenRejection::AccountIdentity);
+        }
+        profile
+            .revalidate()
+            .map_err(|_| NativeProbeOpenRejection::ProfileRevalidation)?;
+        require_service_stopped(&service).map_err(|_| NativeProbeOpenRejection::StoppedState)?;
+        let service_name_sha256: [u8; 32] = Sha256::digest(
+            [
+                b"assemblywright.service-name.v1\0".as_slice(),
+                service_name.as_bytes(),
+            ]
+            .concat(),
+        )
+        .into();
+        let service_runtime_binding_sha256 = service_runtime_binding_sha256(
+            service_name,
+            &data_dir,
+            &current_executable,
+            &command,
+            &service_account_sid,
+            &current_token_sid,
+            &provisioning_owner_sid,
+            profile.name(),
+            profile.sid(),
+        )
+        .map_err(|_| NativeProbeOpenRejection::BindingDigest)?;
+        let bindings = NativeProbeBindings {
+            service_name_sha256,
+            service_runtime_binding_sha256,
+            service_account_sid,
+            current_token_sid: current_token_sid.clone(),
+            provisioning_owner_sid,
+            health_endpoint,
+        };
+        Ok(Self {
+            service_name: service_name.to_string(),
+            config,
+            current_token_sid,
+            bindings,
+        })
+    }
+
+    pub(super) fn bindings(&self) -> NativeProbeBindings {
+        self.bindings.clone()
+    }
+
+    pub(super) fn revalidate_service(&self) -> Result<(), u8> {
+        let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)
+            .map_err(|_| 1)?;
+        let service = manager
+            .open_service(
+                &self.service_name,
+                ServiceAccess::QUERY_STATUS | ServiceAccess::QUERY_CONFIG,
+            )
+            .map_err(|_| 2)?;
+        require_service_stopped(&service).map_err(|_| 3)?;
+        let current_config = service.query_config().map_err(|_| 4)?;
+        let current_token_sid = current_token_sid_text().map_err(|_| 5)?;
+        if native_probe_authority_drifted(
+            &self.config,
+            &current_config,
+            &self.current_token_sid,
+            &current_token_sid,
+        ) {
+            return Err(6);
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn codex_windows_environment_path(path: &Path) -> OsString {
+    let units = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    let drive = units.get(4).copied().unwrap_or_default();
+    let local_drive = units.len() >= 7
+        && units[..4] == [b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16]
+        && ((b'A' as u16..=b'Z' as u16).contains(&drive)
+            || (b'a' as u16..=b'z' as u16).contains(&drive))
+        && units[5] == b':' as u16
+        && units[6] == b'\\' as u16;
+    if local_drive {
+        OsString::from_wide(&units[4..])
+    } else {
+        path.as_os_str().to_owned()
+    }
+}
+
+fn child_visible_current_directory(path: &Path) -> OsString {
+    codex_windows_environment_path(path)
+}
+
+fn native_probe_authority_drifted(
+    expected_config: &ServiceConfig,
+    current_config: &ServiceConfig,
+    expected_token_sid: &str,
+    current_token_sid: &str,
+) -> bool {
+    current_config != expected_config || current_token_sid != expected_token_sid
+}
+
+fn require_service_stopped(
+    service: &windows_service::service::Service,
+) -> Result<(), CommandError> {
+    let status = service.query_status().map_err(|_| CommandError::Failed)?;
+    if status.current_state != ServiceState::Stopped
+        || status.process_id.is_some_and(|process_id| process_id != 0)
+    {
+        return Err(CommandError::Failed);
+    }
+    Ok(())
+}
+
+fn parse_service_launch_command(command: &OsStr) -> Result<Vec<OsString>, CommandError> {
+    let command = wide(command);
+    let mut count = 0;
+    let arguments = unsafe { CommandLineToArgvW(command.as_ptr(), &mut count) };
+    if arguments.is_null() {
+        return Err(CommandError::Failed);
+    }
+    if !(1..=32).contains(&count) {
+        unsafe { LocalFree(arguments.cast()) };
+        return Err(CommandError::Failed);
+    }
+    let result = (0..count as usize)
+        .map(|index| {
+            let argument = unsafe { *arguments.add(index) };
+            if argument.is_null() {
+                return Err(CommandError::Failed);
+            }
+            let length = (0..32_768)
+                .find(|offset| unsafe { *argument.add(*offset) } == 0)
+                .ok_or(CommandError::Failed)?;
+            Ok(OsString::from_wide(unsafe {
+                std::slice::from_raw_parts(argument, length)
+            }))
+        })
+        .collect();
+    unsafe { LocalFree(arguments.cast()) };
+    result
+}
+
+fn validate_service_launch_command(
+    service_name: &str,
+    data_dir: &Path,
+    current_executable: &Path,
+    config: &ServiceConfig,
+    command: &[OsString],
+) -> Result<std::net::SocketAddr, CommandError> {
+    if config.service_type != ServiceType::OWN_PROCESS
+        || config.start_type != ServiceStartType::AutoStart
+        || config.error_control != ServiceErrorControl::Normal
+        || config.load_order_group.is_some()
+        || config.tag_id != 0
+        || !config.dependencies.is_empty()
+        || config.display_name != OsStr::new("Assemblywright Developer Mode Master")
+        || (command.len() != 10 && command.len() != 12)
+    {
+        return Err(CommandError::Failed);
+    }
+    let installed_executable = fs::canonicalize(&command[0]).map_err(|_| CommandError::Failed)?;
+    let installed_data_dir = fs::canonicalize(&command[2]).map_err(|_| CommandError::Failed)?;
+    if installed_executable != current_executable
+        || installed_data_dir != data_dir
+        || command[1] != OsStr::new("--data-dir")
+        || command[3] != OsStr::new("service-run")
+        || command[4] != OsStr::new("--service-name")
+        || command[5] != OsStr::new(service_name)
+        || command[6] != OsStr::new("--bind")
+        || command[8] != OsStr::new("--service-identity")
+        || command[9].is_empty()
+    {
+        return Err(CommandError::Failed);
+    }
+    let bind = command[7]
+        .to_string_lossy()
+        .parse::<std::net::SocketAddr>()
+        .map_err(|_| CommandError::Failed)?;
+    if !bind.ip().is_loopback() || bind.port() == 0 {
+        return Err(CommandError::Failed);
+    }
+    match command.len() {
+        10 => {}
+        12 if command[10] == OsStr::new("--remote-bind")
+            && command[11]
+                .to_string_lossy()
+                .parse::<std::net::SocketAddr>()
+                .is_ok_and(|remote| !remote.ip().is_unspecified() && remote.port() != 0) => {}
+        _ => return Err(CommandError::Failed),
+    }
+    Ok(bind)
+}
+
+fn current_token_sid_text() -> Result<String, CommandError> {
+    let mut token = null_mut();
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        return Err(CommandError::Failed);
+    }
+    let token = OwnedHandle::new(token)?;
+    let mut bytes = 0;
+    unsafe { GetTokenInformation(token.raw(), TokenUser, null_mut(), 0, &mut bytes) };
+    if bytes < size_of::<TOKEN_USER>() as u32 {
+        return Err(CommandError::Failed);
+    }
+    let mut buffer = vec![0usize; (bytes as usize).div_ceil(size_of::<usize>())];
+    if unsafe {
+        GetTokenInformation(
+            token.raw(),
+            TokenUser,
+            buffer.as_mut_ptr().cast(),
+            bytes,
+            &mut bytes,
+        )
+    } == 0
+    {
+        return Err(CommandError::Failed);
+    }
+    let user = unsafe { &*(buffer.as_ptr().cast::<TOKEN_USER>()) };
+    sid_to_text(user.User.Sid)
+}
+
+fn current_process_is_local_system() -> Result<bool, ()> {
+    let current = current_token_sid_text().map_err(|_| ())?;
+    let current = StringSid::parse_canonical(&current).map_err(|_| ())?;
+    let system = system_sid()?;
+    Ok(unsafe { EqualSid(current.raw(), system.raw()) } != 0)
+}
+
+fn lookup_account_sid_text(account_name: &OsStr) -> Result<String, CommandError> {
+    let account_name = canonicalize_lookup_account_name(account_name)?;
+    let account_name = wide(&account_name);
+    let mut sid_bytes = 0;
+    let mut domain_units = 0;
+    let mut account_kind: SID_NAME_USE = 0;
+    unsafe {
+        LookupAccountNameW(
+            null(),
+            account_name.as_ptr(),
+            null_mut(),
+            &mut sid_bytes,
+            null_mut(),
+            &mut domain_units,
+            &mut account_kind,
+        )
+    };
+    if unsafe { GetLastError() } != ERROR_INSUFFICIENT_BUFFER || sid_bytes == 0 {
+        return Err(CommandError::Failed);
+    }
+    let mut sid = vec![0u8; sid_bytes as usize];
+    let mut domain = vec![0u16; domain_units as usize];
+    if unsafe {
+        LookupAccountNameW(
+            null(),
+            account_name.as_ptr(),
+            sid.as_mut_ptr().cast(),
+            &mut sid_bytes,
+            domain.as_mut_ptr(),
+            &mut domain_units,
+            &mut account_kind,
+        )
+    } == 0
+    {
+        return Err(CommandError::Failed);
+    }
+    sid_to_text(sid.as_mut_ptr().cast())
+}
+
+fn canonicalize_lookup_account_name(account_name: &OsStr) -> Result<OsString, CommandError> {
+    let units = account_name.encode_wide().collect::<Vec<_>>();
+    if units.is_empty() || units.contains(&0) {
+        return Err(CommandError::Failed);
+    }
+    if units.starts_with(&[b'.' as u16, b'\\' as u16]) {
+        let mut computer = vec![0u16; 256];
+        let mut length = computer.len() as u32;
+        if unsafe { GetComputerNameW(computer.as_mut_ptr(), &mut length) } == 0
+            || length == 0
+            || length as usize >= computer.len()
+        {
+            return Err(CommandError::Failed);
+        }
+        computer.truncate(length as usize);
+        return canonicalize_local_account_name(&units, &computer);
+    }
+    if units.first() == Some(&(b'.' as u16)) {
+        return Err(CommandError::Failed);
+    }
+    Ok(account_name.to_os_string())
+}
+
+fn canonicalize_local_account_name(
+    account_name: &[u16],
+    computer_name: &[u16],
+) -> Result<OsString, CommandError> {
+    let prefix = [b'.' as u16, b'\\' as u16];
+    if !account_name.starts_with(&prefix)
+        || computer_name.is_empty()
+        || computer_name
+            .iter()
+            .any(|unit| *unit == 0 || *unit == b'\\' as u16 || *unit == b'/' as u16)
+    {
+        return Err(CommandError::Failed);
+    }
+    let name = &account_name[prefix.len()..];
+    if name.is_empty()
+        || name.len() > 256
+        || name == [b'.' as u16]
+        || name == [b'.' as u16, b'.' as u16]
+        || name
+            .last()
+            .is_some_and(|unit| *unit == b' ' as u16 || *unit == b'.' as u16)
+        || name.iter().copied().any(invalid_local_account_unit)
+    {
+        return Err(CommandError::Failed);
+    }
+    let mut canonical = Vec::with_capacity(computer_name.len() + 1 + name.len());
+    canonical.extend_from_slice(computer_name);
+    canonical.push(b'\\' as u16);
+    canonical.extend_from_slice(name);
+    Ok(OsString::from_wide(&canonical))
+}
+
+fn invalid_local_account_unit(unit: u16) -> bool {
+    unit < 0x20
+        || [
+            b'"', b'/', b'\\', b'[', b']', b':', b';', b'|', b'=', b',', b'+', b'*', b'?', b'<',
+            b'>',
+        ]
+        .into_iter()
+        .map(u16::from)
+        .any(|invalid| unit == invalid)
+}
+
+fn sid_to_text(sid: PSID) -> Result<String, CommandError> {
+    if sid.is_null() {
+        return Err(CommandError::Failed);
+    }
+    let mut text = null_mut();
+    if unsafe { ConvertSidToStringSidW(sid, &mut text) } == 0 || text.is_null() {
+        return Err(CommandError::Failed);
+    }
+    let length = (0..256)
+        .find(|index| unsafe { *text.add(*index) } == 0)
+        .ok_or(CommandError::Failed);
+    let value = length.and_then(|length| {
+        String::from_utf16(unsafe { std::slice::from_raw_parts(text, length) })
+            .map_err(|_| CommandError::Failed)
+    });
+    unsafe { LocalFree(text.cast()) };
+    value
+}
+
+#[allow(clippy::too_many_arguments)]
+fn service_runtime_binding_sha256(
+    service_name: &str,
+    data_dir: &Path,
+    executable_path: &Path,
+    command: &[OsString],
+    service_account_sid: &str,
+    current_token_sid: &str,
+    provisioning_owner_sid: &str,
+    profile_name: &str,
+    profile_sid: &str,
+) -> Result<[u8; 32], CommandError> {
+    let executable_sha256 =
+        Sha256::digest(fs::read(executable_path).map_err(|_| CommandError::Failed)?);
+    let mut digest = Sha256::new();
+    digest.update(b"assemblywright.stopped-exact-service-runtime.v2\0");
+    for value in [
+        service_name,
+        service_account_sid,
+        current_token_sid,
+        provisioning_owner_sid,
+        profile_name,
+        profile_sid,
+    ] {
+        digest.update(value.as_bytes());
+        digest.update([0]);
+    }
+    digest.update(executable_sha256);
+    for value in
+        std::iter::once(data_dir.as_os_str()).chain(command.iter().map(OsString::as_os_str))
+    {
+        for unit in value.encode_wide() {
+            digest.update(unit.to_le_bytes());
+        }
+        digest.update([0, 0]);
+    }
+    Ok(digest.finalize().into())
 }
 
 #[derive(Clone, Debug)]
@@ -341,6 +855,10 @@ pub(super) fn validate_provisioning(
         provider_sid.raw(),
     )
     .map_err(|_| ProvisioningRejection::GithubScope)?;
+    install_provider_low_integrity_labels(provisioning.provider_root, &provider_scope_paths)
+        .map_err(|_| ProvisioningRejection::ProviderScope)?;
+    validate_provider_integrity_scope(provisioning.provider_root, &provider_scope_paths)
+        .map_err(|_| ProvisioningRejection::ProviderScope)?;
     let protected_paths = vec![provisioning.config_path.to_path_buf()];
     let provider = ProfileBinding {
         name: provisioning.provider_profile_name.to_string(),
@@ -456,6 +974,9 @@ impl ProfileBinding {
             own.raw(),
             peer.raw(),
         )?;
+        if self.name == PROVIDER_PROFILE {
+            validate_provider_integrity_scope(&self.scope_root, &self.scope_paths)?;
+        }
         validate_path(
             &self.peer_root,
             true,
@@ -771,6 +1292,7 @@ fn validate_scope(
     own: PSID,
     peer: PSID,
 ) -> Result<(), ()> {
+    let allow_system_owned_children = current_process_is_local_system()?;
     validate_root_allowlist(root, paths)?;
     validate_path(
         root,
@@ -799,10 +1321,416 @@ fn validate_scope(
             Some(peer),
         )?;
         if *writable && directory {
-            validate_writable_tree(path, provisioning_owner, own, peer)?;
+            validate_writable_tree(
+                path,
+                provisioning_owner,
+                own,
+                peer,
+                allow_system_owned_children,
+            )?;
         }
     }
     Ok(())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IntegrityLabelScope {
+    Unlabeled,
+    WritableRoot,
+    WritableChild(bool),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProviderIntegrityState {
+    Unlabeled,
+    Incomplete,
+    Exact,
+}
+
+fn install_provider_low_integrity_labels(root: &Path, paths: &[(PathBuf, bool)]) -> Result<(), ()> {
+    match provider_integrity_state(root, paths)? {
+        ProviderIntegrityState::Exact => return Ok(()),
+        ProviderIntegrityState::Unlabeled | ProviderIntegrityState::Incomplete => {}
+    }
+    let root_guard = IntegrityObject::open(root, true, false)?;
+    validate_integrity_object(&root_guard, IntegrityLabelScope::Unlabeled)?;
+    for (path, writable) in paths {
+        if path.parent() != Some(root) {
+            return Err(());
+        }
+        if *writable {
+            install_writable_integrity_tree(path, true)?;
+        }
+    }
+    root_guard.revalidate_path()?;
+    validate_provider_integrity_scope(root, paths)
+}
+
+fn validate_provider_integrity_scope(root: &Path, paths: &[(PathBuf, bool)]) -> Result<(), ()> {
+    let root_guard = IntegrityObject::open(root, true, false)?;
+    validate_integrity_object(&root_guard, IntegrityLabelScope::Unlabeled)?;
+    for (path, writable) in paths {
+        if path.parent() != Some(root) {
+            return Err(());
+        }
+        if *writable {
+            validate_writable_integrity_tree(path)?;
+        } else {
+            let object = IntegrityObject::open_unknown(path, false)?;
+            validate_integrity_object(&object, IntegrityLabelScope::Unlabeled)?;
+            object.revalidate_path()?;
+        }
+    }
+    root_guard.revalidate_path()?;
+    Ok(())
+}
+
+fn provider_integrity_state(
+    root: &Path,
+    paths: &[(PathBuf, bool)],
+) -> Result<ProviderIntegrityState, ()> {
+    let root_guard = IntegrityObject::open(root, true, false)?;
+    validate_integrity_object(&root_guard, IntegrityLabelScope::Unlabeled)?;
+    let mut observed = None;
+    for (path, writable) in paths {
+        if path.parent() != Some(root) {
+            return Err(());
+        }
+        if !*writable {
+            let object = IntegrityObject::open_unknown(path, false)?;
+            validate_integrity_object(&object, IntegrityLabelScope::Unlabeled)?;
+            object.revalidate_path()?;
+            continue;
+        }
+        observe_writable_integrity_tree(path, &mut observed)?;
+    }
+    root_guard.revalidate_path()?;
+    observed.ok_or(())
+}
+
+fn accumulate_integrity_state(state: &mut Option<ProviderIntegrityState>, labeled: bool) {
+    let current = if labeled {
+        ProviderIntegrityState::Exact
+    } else {
+        ProviderIntegrityState::Unlabeled
+    };
+    *state = Some(match *state {
+        Some(ProviderIntegrityState::Incomplete) => ProviderIntegrityState::Incomplete,
+        Some(expected) if expected != current => ProviderIntegrityState::Incomplete,
+        Some(expected) => expected,
+        None => current,
+    });
+}
+
+fn observe_writable_integrity_tree(
+    path: &Path,
+    state: &mut Option<ProviderIntegrityState>,
+) -> Result<(), ()> {
+    let root = IntegrityObject::open(path, true, false)?;
+    observe_writable_integrity_object(root, true, state)
+}
+
+fn observe_writable_integrity_object(
+    object: IntegrityObject,
+    root: bool,
+    state: &mut Option<ProviderIntegrityState>,
+) -> Result<(), ()> {
+    let scope = if root {
+        IntegrityLabelScope::WritableRoot
+    } else {
+        IntegrityLabelScope::WritableChild(true)
+    };
+    accumulate_integrity_state(state, observe_integrity_object(&object, scope)?);
+    for entry in fs::read_dir(&object.path).map_err(|_| ())? {
+        let path = entry.map_err(|_| ())?.path();
+        let child = IntegrityObject::open_unknown(&path, false)?;
+        let directory = child.directory;
+        accumulate_integrity_state(
+            state,
+            observe_integrity_object(&child, IntegrityLabelScope::WritableChild(directory))?,
+        );
+        if directory {
+            observe_writable_integrity_object(child, false, state)?;
+        } else {
+            child.revalidate_path()?;
+        }
+    }
+    object.revalidate_path()?;
+    Ok(())
+}
+
+fn install_writable_integrity_tree(path: &Path, root: bool) -> Result<(), ()> {
+    let tree = IntegrityTree::collect(path)?;
+    if root && !tree.object.directory {
+        return Err(());
+    }
+    tree.revalidate_paths()?;
+    tree.install_labels()?;
+    tree.validate_labels(root)?;
+    tree.revalidate_paths()?;
+    Ok(())
+}
+
+fn validate_writable_integrity_tree(path: &Path) -> Result<(), ()> {
+    let object = IntegrityObject::open(path, true, false)?;
+    validate_writable_integrity_object(object, true)
+}
+
+fn validate_writable_integrity_object(object: IntegrityObject, root: bool) -> Result<(), ()> {
+    validate_integrity_object(
+        &object,
+        if root {
+            IntegrityLabelScope::WritableRoot
+        } else {
+            IntegrityLabelScope::WritableChild(true)
+        },
+    )?;
+    for entry in fs::read_dir(&object.path).map_err(|_| ())? {
+        let path = entry.map_err(|_| ())?.path();
+        let child = IntegrityObject::open_unknown(&path, false)?;
+        if child.directory {
+            validate_writable_integrity_object(child, false)?;
+        } else {
+            validate_integrity_object(&child, IntegrityLabelScope::WritableChild(false))?;
+            child.revalidate_path()?;
+        }
+    }
+    object.revalidate_path()?;
+    Ok(())
+}
+
+fn install_low_integrity_label(object: &IntegrityObject) -> Result<(), ()> {
+    let sddl = if object.directory {
+        "S:(ML;OICI;NW;;;LW)"
+    } else {
+        "S:(ML;;NW;;;LW)"
+    };
+    let descriptor = LocalSecurityDescriptor::from_sddl(sddl).map_err(|_| ())?;
+    let sacl = descriptor.sacl().map_err(|_| ())?;
+    let status = unsafe {
+        SetSecurityInfo(
+            object.file.as_raw_handle() as HANDLE,
+            SE_FILE_OBJECT,
+            LABEL_SECURITY_INFORMATION,
+            null_mut(),
+            null_mut(),
+            null(),
+            sacl,
+        )
+    };
+    if status != 0 {
+        return Err(());
+    }
+    Ok(())
+}
+
+fn validate_integrity_object(
+    object: &IntegrityObject,
+    scope: IntegrityLabelScope,
+) -> Result<(), ()> {
+    let observed = observe_integrity_object(object, scope)?;
+    match scope {
+        IntegrityLabelScope::Unlabeled if !observed => Ok(()),
+        IntegrityLabelScope::WritableRoot | IntegrityLabelScope::WritableChild(_) if observed => {
+            Ok(())
+        }
+        _ => Err(()),
+    }
+}
+
+fn observe_integrity_object(
+    object: &IntegrityObject,
+    scope: IntegrityLabelScope,
+) -> Result<bool, ()> {
+    let mut sacl = null_mut();
+    let mut descriptor = null_mut();
+    let status = unsafe {
+        GetSecurityInfo(
+            object.file.as_raw_handle() as HANDLE,
+            SE_FILE_OBJECT,
+            LABEL_SECURITY_INFORMATION,
+            null_mut(),
+            null_mut(),
+            null_mut(),
+            &mut sacl,
+            &mut descriptor,
+        )
+    };
+    if status != 0 || descriptor.is_null() {
+        if !descriptor.is_null() {
+            unsafe { LocalFree(descriptor) };
+        }
+        return Err(());
+    }
+    let result = validate_integrity_label_inner(sacl, descriptor, scope);
+    unsafe { LocalFree(descriptor) };
+    result
+}
+
+fn validate_integrity_label_inner(
+    sacl: *mut windows_sys::Win32::Security::ACL,
+    descriptor: *mut c_void,
+    scope: IntegrityLabelScope,
+) -> Result<bool, ()> {
+    if sacl.is_null() {
+        return Ok(false);
+    }
+    let mut control = 0_u16;
+    let mut revision = 0_u32;
+    if unsafe { GetSecurityDescriptorControl(descriptor, &mut control, &mut revision) } == 0
+        || control & SE_SACL_PROTECTED != 0
+    {
+        return Err(());
+    }
+    let mut info: ACL_SIZE_INFORMATION = unsafe { zeroed() };
+    if unsafe {
+        GetAclInformation(
+            sacl,
+            (&mut info as *mut ACL_SIZE_INFORMATION).cast(),
+            size_of::<ACL_SIZE_INFORMATION>() as u32,
+            AclSizeInformation,
+        )
+    } == 0
+    {
+        return Err(());
+    }
+    if info.AceCount == 0 {
+        return Ok(false);
+    }
+    if info.AceCount != 1 {
+        return Err(());
+    }
+    let mut raw: *mut c_void = null_mut();
+    if unsafe { GetAce(sacl, 0, &mut raw) } == 0 || raw.is_null() {
+        return Err(());
+    }
+    let ace = unsafe { &*(raw.cast::<SYSTEM_MANDATORY_LABEL_ACE>()) };
+    if u32::from(ace.Header.AceType) != SYSTEM_MANDATORY_LABEL_ACE_TYPE
+        || ace.Mask != SYSTEM_MANDATORY_LABEL_NO_WRITE_UP
+    {
+        return Err(());
+    }
+    let low = StringSid::parse_canonical("S-1-16-4096").map_err(|_| ())?;
+    let sid = addr_of!(ace.SidStart) as PSID;
+    if unsafe { IsValidSid(sid) } == 0 || unsafe { EqualSid(sid, low.raw()) } == 0 {
+        return Err(());
+    }
+    let flags = u32::from(ace.Header.AceFlags);
+    let inheritance = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
+    let valid_flags = match scope {
+        IntegrityLabelScope::Unlabeled => false,
+        IntegrityLabelScope::WritableRoot => flags == inheritance,
+        IntegrityLabelScope::WritableChild(true) => {
+            flags == inheritance || flags == inheritance | INHERITED_ACE
+        }
+        IntegrityLabelScope::WritableChild(false) => flags == 0 || flags == INHERITED_ACE,
+    };
+    valid_flags.then_some(true).ok_or(())
+}
+
+struct IntegrityObject {
+    path: PathBuf,
+    directory: bool,
+    identity: (u64, u64, u32),
+    file: File,
+}
+
+struct IntegrityTree {
+    object: IntegrityObject,
+    children: Vec<IntegrityTree>,
+}
+
+impl IntegrityTree {
+    fn collect(path: &Path) -> Result<Self, ()> {
+        let object = IntegrityObject::open_unknown(path, true)?;
+        let mut children = Vec::new();
+        if object.directory {
+            for entry in fs::read_dir(&object.path).map_err(|_| ())? {
+                children.push(Self::collect(&entry.map_err(|_| ())?.path())?);
+            }
+        }
+        object.revalidate_path()?;
+        Ok(Self { object, children })
+    }
+
+    fn install_labels(&self) -> Result<(), ()> {
+        install_low_integrity_label(&self.object)?;
+        for child in &self.children {
+            child.install_labels()?;
+        }
+        Ok(())
+    }
+
+    fn validate_labels(&self, root: bool) -> Result<(), ()> {
+        let scope = if root {
+            IntegrityLabelScope::WritableRoot
+        } else {
+            IntegrityLabelScope::WritableChild(self.object.directory)
+        };
+        validate_integrity_object(&self.object, scope)?;
+        for child in &self.children {
+            child.validate_labels(false)?;
+        }
+        Ok(())
+    }
+
+    fn revalidate_paths(&self) -> Result<(), ()> {
+        self.object.revalidate_path()?;
+        for child in &self.children {
+            child.revalidate_paths()?;
+        }
+        Ok(())
+    }
+}
+
+impl IntegrityObject {
+    fn open(path: &Path, directory: bool, write: bool) -> Result<Self, ()> {
+        let object = Self::open_unknown(path, write)?;
+        (object.directory == directory).then_some(object).ok_or(())
+    }
+
+    fn open_unknown(path: &Path, write: bool) -> Result<Self, ()> {
+        super::reject_link(path).map_err(|_| ())?;
+        let file = open_integrity_file(path, write)?;
+        let information = file_information(&file).map_err(|_| ())?;
+        if information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(());
+        }
+        let directory = information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0;
+        let identity = file_identity_from_information(&information);
+        let object = Self {
+            path: path.to_path_buf(),
+            directory,
+            identity,
+            file,
+        };
+        object.revalidate_path()?;
+        Ok(object)
+    }
+
+    fn revalidate_path(&self) -> Result<(), ()> {
+        super::reject_link(&self.path).map_err(|_| ())?;
+        let current = open_integrity_file(&self.path, false)?;
+        let information = file_information(&current).map_err(|_| ())?;
+        let directory = information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0;
+        if information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
+            || directory != self.directory
+            || file_identity_from_information(&information) != self.identity
+        {
+            return Err(());
+        }
+        Ok(())
+    }
+}
+
+fn open_integrity_file(path: &Path, write: bool) -> Result<File, ()> {
+    let access = READ_CONTROL | if write { WRITE_OWNER } else { 0 };
+    let mut options = OpenOptions::new();
+    options
+        .access_mode(access)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS);
+    options.open(path).map_err(|_| ())
 }
 
 fn validate_root_allowlist(root: &Path, paths: &[(PathBuf, bool)]) -> Result<(), ()> {
@@ -868,6 +1796,7 @@ fn validate_writable_tree(
     provisioning_owner: PSID,
     own: PSID,
     peer: PSID,
+    allow_system_owned_children: bool,
 ) -> Result<(), ()> {
     for entry in fs::read_dir(path).map_err(|_| ())? {
         let path = entry.map_err(|_| ())?.path();
@@ -875,13 +1804,19 @@ fn validate_writable_tree(
         validate_path(
             &path,
             directory,
-            AclScope::ProfileWriteChild(directory),
+            AclScope::ProfileWriteChild(directory, allow_system_owned_children),
             provisioning_owner,
             Some(own),
             Some(peer),
         )?;
         if directory {
-            validate_writable_tree(&path, provisioning_owner, own, peer)?;
+            validate_writable_tree(
+                &path,
+                provisioning_owner,
+                own,
+                peer,
+                allow_system_owned_children,
+            )?;
         }
     }
     Ok(())
@@ -894,7 +1829,7 @@ enum AclScope {
     ProfileRead,
     ProfileWriteRoot,
     ProfileWriteFile,
-    ProfileWriteChild(bool),
+    ProfileWriteChild(bool, bool),
 }
 
 fn validate_path(
@@ -1039,7 +1974,7 @@ fn validate_acl_inner(
     peer: Option<PSID>,
 ) -> Result<(), ()> {
     let system = system_sid()?;
-    if !exact_owner_matches(owner, provisioning_owner, system.raw()) {
+    if !exact_owner_matches(scope, owner, provisioning_owner, system.raw()) {
         return Err(());
     }
     let mut control = 0_u16;
@@ -1049,7 +1984,7 @@ fn validate_acl_inner(
     }
     let protected = control & SE_DACL_PROTECTED != 0;
     match scope {
-        AclScope::ProfileWriteChild(_) => {}
+        AclScope::ProfileWriteChild(_, _) => {}
         _ if !protected => return Err(()),
         _ => {}
     }
@@ -1110,8 +2045,13 @@ fn validate_acl_inner(
     validate_principal_presence(scope, principals)
 }
 
-fn exact_owner_matches(observed: PSID, expected: PSID, system: PSID) -> bool {
-    (unsafe { EqualSid(expected, system) } == 0) && (unsafe { EqualSid(observed, expected) } != 0)
+fn exact_owner_matches(scope: AclScope, observed: PSID, expected: PSID, system: PSID) -> bool {
+    if unsafe { EqualSid(expected, system) } != 0 {
+        return false;
+    }
+    (unsafe { EqualSid(observed, expected) } != 0)
+        || (matches!(scope, AclScope::ProfileWriteChild(_, true))
+            && unsafe { EqualSid(observed, system) } != 0)
 }
 
 #[derive(Clone, Copy)]
@@ -1168,7 +2108,7 @@ fn validate_principal_presence(scope: AclScope, principals: PrincipalPresence) -
         AclScope::ProfileRead
         | AclScope::ProfileWriteRoot
         | AclScope::ProfileWriteFile
-        | AclScope::ProfileWriteChild(_)
+        | AclScope::ProfileWriteChild(_, _)
             if !principals.profile || principals.peer =>
         {
             Err(())
@@ -1185,7 +2125,7 @@ fn valid_profile_mask(scope: AclScope, mask: u32) -> bool {
         AclScope::ProfileRead => mask == (FILE_GENERIC_READ | FILE_GENERIC_EXECUTE),
         AclScope::ProfileWriteRoot
         | AclScope::ProfileWriteFile
-        | AclScope::ProfileWriteChild(_) => {
+        | AclScope::ProfileWriteChild(_, _) => {
             mask == (FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE)
         }
         AclScope::Master => false,
@@ -1198,7 +2138,7 @@ fn valid_write_ace_flags(scope: AclScope, protected: bool, flags: u32) -> bool {
             protected && flags == OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE
         }
         AclScope::ProfileWriteFile => protected && flags == 0,
-        AclScope::ProfileWriteChild(directory) if protected => {
+        AclScope::ProfileWriteChild(directory, _) if protected => {
             flags
                 == if directory {
                     OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE
@@ -1206,7 +2146,7 @@ fn valid_write_ace_flags(scope: AclScope, protected: bool, flags: u32) -> bool {
                     0
                 }
         }
-        AclScope::ProfileWriteChild(directory) => {
+        AclScope::ProfileWriteChild(directory, _) => {
             flags
                 == if directory {
                     OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE | INHERITED_ACE
@@ -1248,6 +2188,20 @@ impl LocalSecurityDescriptor {
             lpSecurityDescriptor: self.0,
             bInheritHandle: 0,
         }
+    }
+
+    fn sacl(&self) -> Result<*mut windows_sys::Win32::Security::ACL, CommandError> {
+        let mut present = 0;
+        let mut defaulted = 0;
+        let mut sacl = null_mut();
+        if unsafe { GetSecurityDescriptorSacl(self.0, &mut present, &mut sacl, &mut defaulted) }
+            == 0
+            || present == 0
+            || sacl.is_null()
+        {
+            return Err(CommandError::Failed);
+        }
+        Ok(sacl)
     }
 }
 
@@ -1424,6 +2378,10 @@ pub(super) fn run_command(
     invocation: &CommandInvocation<'_>,
     profile: &ProfileBinding,
 ) -> Result<Vec<u8>, CommandError> {
+    let containment_failure = |stage, status| {
+        invocation.stderr.record_containment_failure(stage, status);
+        CommandError::Failed
+    };
     // Keep independent references to every no-delete ancestry handle until all return paths have
     // terminated/reaped the Job. This prevents a delete-child/rename adversary from replacing a
     // directory after its handle-bound identity and ACL were checked.
@@ -1435,25 +2393,30 @@ pub(super) fn run_command(
     if !control.poll() {
         return Err(CommandError::Cancelled);
     }
-    profile.revalidate().map_err(|_| CommandError::Failed)?;
-    let executable_guard = open_image_guard(executable)?;
-    let token = restricted_token()?;
+    profile
+        .revalidate()
+        .map_err(|_| containment_failure(1, 0))?;
+    let executable_guard = open_image_guard(executable).map_err(|_| containment_failure(2, 0))?;
+    let token = restricted_token(profile.provisioning_owner_sid())
+        .map_err(|_| containment_failure(3, 0))?;
     let appcontainer = ProfileSid::derive_and_match(&profile.name, &profile.sid)
-        .map_err(|_| CommandError::Failed)?;
-    let internet = StringSid::parse(INTERNET_CLIENT_SID)?;
+        .map_err(|_| containment_failure(4, 0))?;
+    let internet = StringSid::parse(INTERNET_CLIENT_SID).map_err(|_| containment_failure(5, 0))?;
     if !control.poll() {
         return Err(CommandError::Cancelled);
     }
-    let private_desktop = PrivateDesktop::create(profile)?;
+    let private_desktop = PrivateDesktop::create(profile).map_err(|_| containment_failure(6, 0))?;
     if !control.poll() {
         return Err(CommandError::Cancelled);
     }
-    profile.revalidate().map_err(|_| CommandError::Failed)?;
-    let (stdin_read, stdin_write) = stdin_pipe()?;
-    let (stdout_read, stdout_write) = stdout_pipe()?;
-    let (stderr_read, stderr_write) = stdout_pipe()?;
+    profile
+        .revalidate()
+        .map_err(|_| containment_failure(7, 0))?;
+    let (stdin_read, stdin_write) = stdin_pipe().map_err(|_| containment_failure(8, 0))?;
+    let (stdout_read, stdout_write) = stdout_pipe().map_err(|_| containment_failure(9, 0))?;
+    let (stderr_read, stderr_write) = stdout_pipe().map_err(|_| containment_failure(10, 0))?;
     let mut inherited = [stdin_read.raw(), stdout_write.raw(), stderr_write.raw()];
-    let mut attributes = AttributeList::new(2)?;
+    let mut attributes = AttributeList::new(2).map_err(|_| containment_failure(11, 0))?;
     let mut capability = SID_AND_ATTRIBUTES {
         Sid: internet.raw(),
         Attributes: SE_GROUP_ENABLED as u32,
@@ -1464,16 +2427,20 @@ pub(super) fn run_command(
         CapabilityCount: 1,
         Reserved: 0,
     };
-    attributes.update(
-        PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES as usize,
-        (&mut security as *mut SECURITY_CAPABILITIES).cast(),
-        size_of::<SECURITY_CAPABILITIES>(),
-    )?;
-    attributes.update(
-        PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
-        inherited.as_mut_ptr().cast(),
-        size_of_val(&inherited),
-    )?;
+    attributes
+        .update(
+            PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES as usize,
+            (&mut security as *mut SECURITY_CAPABILITIES).cast(),
+            size_of::<SECURITY_CAPABILITIES>(),
+        )
+        .map_err(|_| containment_failure(12, 0))?;
+    attributes
+        .update(
+            PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
+            inherited.as_mut_ptr().cast(),
+            size_of_val(&inherited),
+        )
+        .map_err(|_| containment_failure(13, 0))?;
     let mut startup: STARTUPINFOEXW = unsafe { zeroed() };
     startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
     startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
@@ -1482,10 +2449,13 @@ pub(super) fn run_command(
     startup.StartupInfo.hStdError = stderr_write.raw();
     startup.StartupInfo.lpDesktop = private_desktop.startup_name.as_ptr().cast_mut();
     startup.lpAttributeList = attributes.ptr;
-    let mut command_line = command_line(&executable.path, invocation.args)?;
+    let mut command_line =
+        command_line(&executable.path, invocation.args).map_err(|_| containment_failure(14, 0))?;
     let executable_w = wide(executable.path.as_os_str());
-    let current_dir_w = wide(invocation.current_dir.as_os_str());
-    let environment = environment_block(token.raw(), invocation.environment)?;
+    let child_visible_current_dir = child_visible_current_directory(invocation.current_dir);
+    let current_dir_w = wide(child_visible_current_dir.as_os_str());
+    let environment = environment_block(token.raw(), invocation.environment)
+        .map_err(|_| containment_failure(15, 0))?;
     let mut process: PROCESS_INFORMATION = unsafe { zeroed() };
     if unsafe {
         CreateProcessAsUserW(
@@ -1506,16 +2476,23 @@ pub(super) fn run_command(
         )
     } == 0
     {
-        return Err(CommandError::Failed);
+        return Err(containment_failure(16, unsafe { GetLastError() }));
     }
-    let mut suspended = SuspendedProcessGuard::new(process)?;
+    let mut suspended =
+        SuspendedProcessGuard::new(process).map_err(|_| containment_failure(17, 0))?;
     drop(stdin_read);
     drop(stdout_write);
     drop(stderr_write);
-    profile.revalidate().map_err(|_| CommandError::Failed)?;
-    revalidate_image_guard(executable, &executable_guard)?;
-    let job = create_job()?;
+    profile
+        .revalidate()
+        .map_err(|_| containment_failure(18, 0))?;
+    revalidate_image_guard(executable, &executable_guard)
+        .map_err(|_| containment_failure(19, 0))?;
+    let job = create_job().map_err(|_| containment_failure(20, 0))?;
     if unsafe { AssignProcessToJobObject(job.raw(), suspended.process()) } == 0 {
+        invocation
+            .stderr
+            .record_containment_failure(21, unsafe { GetLastError() });
         return Err(CommandError::Failed);
     }
     suspended.mark_job_assigned();
@@ -1524,6 +2501,7 @@ pub(super) fn run_command(
         return Err(CommandError::Cancelled);
     }
     if profile.revalidate().is_err() {
+        invocation.stderr.record_containment_failure(22, 0);
         terminate_job(&job, suspended.process());
         return Err(CommandError::Failed);
     }
@@ -1532,18 +2510,25 @@ pub(super) fn run_command(
         return Err(CommandError::Cancelled);
     }
     if unsafe { ResumeThread(suspended.thread()) } == u32::MAX {
+        invocation
+            .stderr
+            .record_containment_failure(23, unsafe { GetLastError() });
         terminate_job(&job, suspended.process());
         return Err(CommandError::Failed);
     }
     let mut stdin_file = unsafe { File::from_raw_handle(stdin_write.into_raw() as RawHandle) };
     stdin_file
         .write_all(invocation.input)
-        .map_err(|_| CommandError::Failed)?;
+        .map_err(|_| containment_failure(24, 0))?;
     drop(stdin_file);
     let stdout_file = unsafe { File::from_raw_handle(stdout_read.into_raw() as RawHandle) };
-    let output_thread = bounded_reader(stdout_file, invocation.max_output);
+    let output_thread = bounded_reader(
+        stdout_file,
+        invocation.max_output,
+        invocation.stderr.allows_empty_stdout(invocation.args),
+    );
     let stderr_file = unsafe { File::from_raw_handle(stderr_read.into_raw() as RawHandle) };
-    let stderr_thread = discard_reader(stderr_file);
+    let stderr_thread = stderr_reader(stderr_file, &invocation.stderr);
     loop {
         if !control.poll() {
             terminate_job(&job, suspended.process());
@@ -1558,10 +2543,13 @@ pub(super) fn run_command(
                     suspended.process(),
                     output_thread,
                     stderr_thread,
+                    profile,
+                    &invocation.stderr,
                 );
             }
             WAIT_TIMEOUT => {}
             _ => {
+                invocation.stderr.record_containment_failure(25, 0);
                 terminate_job(&job, suspended.process());
                 let _ = output_thread.join();
                 let _ = stderr_thread.join();
@@ -1575,7 +2563,9 @@ fn complete_signaled_process(
     job: OwnedHandle,
     process: HANDLE,
     output_thread: std::thread::JoinHandle<Result<Vec<u8>, CommandError>>,
-    stderr_thread: std::thread::JoinHandle<Result<(), CommandError>>,
+    stderr_thread: StderrDrain,
+    profile: &ProfileBinding,
+    diagnostic: &CommandStderrMode,
 ) -> Result<Vec<u8>, CommandError> {
     let mut exit_code = 0;
     let exit_observed = unsafe { GetExitCodeProcess(process, &mut exit_code) } != 0;
@@ -1584,12 +2574,95 @@ fn complete_signaled_process(
     }
     drop(job);
     let reaped = unsafe { WaitForSingleObject(process, 5_000) } == WAIT_OBJECT_0;
-    let output = output_thread.join().unwrap_or(Err(CommandError::Failed));
-    let stderr_drained = stderr_thread.join().unwrap_or(Err(CommandError::Failed));
-    if !exit_observed || !reaped || stderr_drained.is_err() {
+    let mut output = output_thread.join().unwrap_or(Err(CommandError::Failed));
+    let stderr_drained = stderr_thread.join();
+    if !exit_observed || !reaped {
+        if let Ok(bytes) = &mut output {
+            bytes.zeroize();
+        }
+        diagnostic.record_containment_failure(26, 0);
         return Err(CommandError::Failed);
     }
+    if stderr_drained.is_err() {
+        if let Ok(bytes) = &mut output {
+            bytes.zeroize();
+        }
+        diagnostic.record_containment_failure(29, 0);
+        return Err(CommandError::Failed);
+    }
+    if profile.revalidate().is_err() {
+        if let Ok(bytes) = &mut output {
+            bytes.zeroize();
+        }
+        diagnostic.record_containment_failure(27, 0);
+        return Err(CommandError::Failed);
+    }
+    if output.is_err() {
+        diagnostic.record_containment_failure(28, 0);
+    }
     classify_completed_output(exit_code, output)
+}
+
+enum StderrDrain {
+    Discard(std::thread::JoinHandle<Result<(), CommandError>>),
+    Capture {
+        thread: std::thread::JoinHandle<Result<Vec<u8>, CommandError>>,
+        output: Arc<Mutex<Vec<u8>>>,
+    },
+}
+
+impl StderrDrain {
+    fn join(self) -> Result<(), CommandError> {
+        match self {
+            Self::Discard(thread) => thread.join().unwrap_or(Err(CommandError::Failed)),
+            Self::Capture { thread, output } => {
+                let captured = thread.join().unwrap_or(Err(CommandError::Failed))?;
+                let mut guard = output
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                guard.zeroize();
+                *guard = captured;
+                Ok(())
+            }
+        }
+    }
+}
+
+fn stderr_reader(reader: impl Read + Send + 'static, mode: &CommandStderrMode) -> StderrDrain {
+    match mode {
+        CommandStderrMode::Discard => StderrDrain::Discard(discard_reader(reader)),
+        CommandStderrMode::CaptureBounded { max_bytes, output } => StderrDrain::Capture {
+            thread: bounded_diagnostic_reader(reader, *max_bytes),
+            output: Arc::clone(output),
+        },
+    }
+}
+
+fn bounded_diagnostic_reader(
+    mut reader: impl Read + Send + 'static,
+    max_bytes: usize,
+) -> std::thread::JoinHandle<Result<Vec<u8>, CommandError>> {
+    std::thread::spawn(move || {
+        let mut retained = Vec::with_capacity(max_bytes);
+        let mut buffer = [0_u8; 8192];
+        loop {
+            let count = match reader.read(&mut buffer) {
+                Ok(count) => count,
+                Err(_) => {
+                    buffer.zeroize();
+                    retained.zeroize();
+                    return Err(CommandError::Failed);
+                }
+            };
+            if count == 0 {
+                buffer.zeroize();
+                return Ok(retained);
+            }
+            let remaining = max_bytes.saturating_sub(retained.len());
+            retained.extend_from_slice(&buffer[..count.min(remaining)]);
+            buffer[..count].zeroize();
+        }
+    })
 }
 
 fn discard_reader(
@@ -1643,16 +2716,24 @@ fn revalidate_image_guard(executable: &Executable, file: &File) -> Result<(), Co
 }
 
 fn file_identity(file: &File) -> Result<(u64, u64, u32), CommandError> {
+    Ok(file_identity_from_information(&file_information(file)?))
+}
+
+fn file_information(file: &File) -> Result<BY_HANDLE_FILE_INFORMATION, CommandError> {
     let mut information: BY_HANDLE_FILE_INFORMATION = unsafe { zeroed() };
     if unsafe { GetFileInformationByHandle(file.as_raw_handle() as HANDLE, &mut information) } == 0
     {
         return Err(CommandError::Failed);
     }
-    Ok((
+    Ok(information)
+}
+
+fn file_identity_from_information(information: &BY_HANDLE_FILE_INFORMATION) -> (u64, u64, u32) {
+    (
         u64::from(information.dwVolumeSerialNumber),
         (u64::from(information.nFileIndexHigh) << 32) | u64::from(information.nFileIndexLow),
         information.nNumberOfLinks,
-    ))
+    )
 }
 
 fn terminate_job(job: &OwnedHandle, process: HANDLE) {
@@ -1683,12 +2764,18 @@ fn create_job() -> Result<OwnedHandle, CommandError> {
     Ok(job)
 }
 
-fn restricted_token() -> Result<OwnedHandle, CommandError> {
+fn restricted_token(provisioning_owner_sid: &str) -> Result<OwnedHandle, CommandError> {
+    let restricted = create_restricted_token()?;
+    let _policy = apply_token_default_owner_policy(&restricted, provisioning_owner_sid)?;
+    Ok(restricted)
+}
+
+fn create_restricted_token() -> Result<OwnedHandle, CommandError> {
     let mut current: HANDLE = null_mut();
     if unsafe {
         OpenProcessToken(
             GetCurrentProcess(),
-            TOKEN_ASSIGN_PRIMARY | TOKEN_DUPLICATE | TOKEN_QUERY,
+            TOKEN_ADJUST_DEFAULT | TOKEN_ASSIGN_PRIMARY | TOKEN_DUPLICATE | TOKEN_QUERY,
             &mut current,
         )
     } == 0
@@ -1714,6 +2801,106 @@ fn restricted_token() -> Result<OwnedHandle, CommandError> {
         return Err(CommandError::Failed);
     }
     OwnedHandle::new(restricted)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TokenDefaultOwnerPolicy {
+    ProvisioningOwnerApplied,
+    LocalSystemOwnerApplied,
+}
+
+fn apply_token_default_owner_policy(
+    token: &OwnedHandle,
+    provisioning_owner_sid: &str,
+) -> Result<TokenDefaultOwnerPolicy, CommandError> {
+    let owner = StringSid::parse_canonical(provisioning_owner_sid)?;
+    let system = system_sid().map_err(|_| CommandError::Failed)?;
+    let token_user_is_owner = token_information_sid_matches(token.raw(), TokenUser, owner.raw())?;
+    let token_user_is_system = token_information_sid_matches(token.raw(), TokenUser, system.raw())?;
+    let owner_is_system = unsafe { EqualSid(owner.raw(), system.raw()) } != 0;
+    let policy = select_token_default_owner_policy(
+        token_user_is_owner,
+        token_user_is_system,
+        owner_is_system,
+    )?;
+    let selected_owner = match policy {
+        TokenDefaultOwnerPolicy::ProvisioningOwnerApplied => owner.raw(),
+        TokenDefaultOwnerPolicy::LocalSystemOwnerApplied => system.raw(),
+    };
+    let token_owner = TOKEN_OWNER {
+        Owner: selected_owner,
+    };
+    if unsafe {
+        SetTokenInformation(
+            token.raw(),
+            TokenOwner,
+            (&token_owner as *const TOKEN_OWNER).cast(),
+            size_of::<TOKEN_OWNER>() as u32,
+        )
+    } == 0
+    {
+        return Err(CommandError::Failed);
+    }
+    if !token_information_sid_matches(token.raw(), TokenOwner, selected_owner)? {
+        return Err(CommandError::Failed);
+    }
+    Ok(policy)
+}
+
+fn select_token_default_owner_policy(
+    token_user_is_owner: bool,
+    token_user_is_system: bool,
+    provisioning_owner_is_system: bool,
+) -> Result<TokenDefaultOwnerPolicy, CommandError> {
+    if provisioning_owner_is_system || (token_user_is_owner && token_user_is_system) {
+        return Err(CommandError::Failed);
+    }
+    if token_user_is_owner {
+        Ok(TokenDefaultOwnerPolicy::ProvisioningOwnerApplied)
+    } else if token_user_is_system {
+        Ok(TokenDefaultOwnerPolicy::LocalSystemOwnerApplied)
+    } else {
+        Err(CommandError::Failed)
+    }
+}
+
+fn token_information_sid_matches(
+    token: HANDLE,
+    information_class: windows_sys::Win32::Security::TOKEN_INFORMATION_CLASS,
+    expected: PSID,
+) -> Result<bool, CommandError> {
+    let minimum_bytes = match information_class {
+        TokenUser => size_of::<TOKEN_USER>() as u32,
+        TokenOwner => size_of::<TOKEN_OWNER>() as u32,
+        _ => return Err(CommandError::Failed),
+    };
+    let mut bytes = 0;
+    unsafe { GetTokenInformation(token, information_class, null_mut(), 0, &mut bytes) };
+    if bytes < minimum_bytes {
+        return Err(CommandError::Failed);
+    }
+    let mut buffer = vec![0usize; (bytes as usize).div_ceil(size_of::<usize>())];
+    if unsafe {
+        GetTokenInformation(
+            token,
+            information_class,
+            buffer.as_mut_ptr().cast(),
+            bytes,
+            &mut bytes,
+        )
+    } == 0
+    {
+        return Err(CommandError::Failed);
+    }
+    let observed = match information_class {
+        TokenUser => unsafe { &*(buffer.as_ptr().cast::<TOKEN_USER>()) }.User.Sid,
+        TokenOwner => unsafe { &*(buffer.as_ptr().cast::<TOKEN_OWNER>()) }.Owner,
+        _ => unreachable!("information class was validated before querying the token"),
+    };
+    if observed.is_null() || expected.is_null() {
+        return Err(CommandError::Failed);
+    }
+    Ok(unsafe { EqualSid(observed, expected) } != 0)
 }
 
 fn raw_pipe() -> Result<(OwnedHandle, OwnedHandle), CommandError> {
@@ -1914,21 +3101,26 @@ fn build_environment_block(
     {
         return Err(CommandError::Failed);
     }
-    let mut entries = vec![
-        ("LOCALAPPDATA", local_app_data.to_vec()),
-        ("SystemRoot", system_root.to_vec()),
-    ];
-    let mut github_config_seen = false;
-    for (name, value) in supplied {
-        if *name != OsStr::new("GH_CONFIG_DIR") || github_config_seen {
-            return Err(CommandError::Failed);
+    let mut entries = vec![("SystemRoot", system_root.to_vec())];
+    match supplied {
+        [] => entries.push(("LOCALAPPDATA", local_app_data.to_vec())),
+        [(name, value)] if *name == OsStr::new("GH_CONFIG_DIR") => {
+            entries.push(("LOCALAPPDATA", local_app_data.to_vec()));
+            entries.push(("GH_CONFIG_DIR", environment_value(value)?));
         }
-        let value: Vec<u16> = value.encode_wide().collect();
-        if value.is_empty() || value.contains(&0) {
-            return Err(CommandError::Failed);
+        [codex_home, local_app_data, temporary, temporary_alias]
+            if codex_home.0 == OsStr::new("CODEX_HOME")
+                && local_app_data.0 == OsStr::new("LOCALAPPDATA")
+                && temporary.0 == OsStr::new("TEMP")
+                && temporary_alias.0 == OsStr::new("TMP")
+                && temporary.1 == temporary_alias.1 =>
+        {
+            entries.push(("CODEX_HOME", environment_value(codex_home.1)?));
+            entries.push(("LOCALAPPDATA", environment_value(local_app_data.1)?));
+            entries.push(("TEMP", environment_value(temporary.1)?));
+            entries.push(("TMP", environment_value(temporary_alias.1)?));
         }
-        github_config_seen = true;
-        entries.push(("GH_CONFIG_DIR", value));
+        _ => return Err(CommandError::Failed),
     }
     entries.sort_by(|left, right| {
         left.0
@@ -1947,6 +3139,14 @@ fn build_environment_block(
         return Err(CommandError::Failed);
     }
     Ok(block)
+}
+
+fn environment_value(value: &OsStr) -> Result<Vec<u16>, CommandError> {
+    let value: Vec<u16> = value.encode_wide().collect();
+    if value.is_empty() || value.contains(&0) {
+        return Err(CommandError::Failed);
+    }
+    Ok(value)
 }
 
 struct UserEnvironmentBlock(*mut c_void);
@@ -2465,13 +3665,13 @@ mod tests {
             Err(CommandError::Malformed)
         ));
         assert!(matches!(
-            bounded_reader(std::io::Cursor::new(Vec::new()), 1)
+            bounded_reader(std::io::Cursor::new(Vec::new()), 1, false)
                 .join()
                 .unwrap(),
             Err(CommandError::Malformed)
         ));
         assert!(matches!(
-            bounded_reader(std::io::Cursor::new(vec![1, 2]), 1)
+            bounded_reader(std::io::Cursor::new(vec![1, 2]), 1, false)
                 .join()
                 .unwrap(),
             Err(CommandError::Malformed)
@@ -2499,6 +3699,22 @@ mod tests {
             discard_reader(FailingReader).join().unwrap(),
             Err(CommandError::Failed)
         ));
+    }
+
+    #[test]
+    fn diagnostic_stderr_capture_retains_only_the_fixed_prefix_and_drains_the_rest() {
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let mode = CommandStderrMode::CaptureBounded {
+            max_bytes: 4,
+            output: Arc::clone(&output),
+        };
+        assert!(stderr_reader(std::io::Cursor::new(b"abcdefgh"), &mode)
+            .join()
+            .is_ok());
+        let mut captured = output.lock().unwrap();
+        assert_eq!(captured.as_slice(), b"abcd");
+        captured.zeroize();
+        captured.clear();
     }
 
     #[test]
@@ -2543,11 +3759,60 @@ mod tests {
         let owner = StringSid::parse_canonical("S-1-5-21-1-2-3-1001").unwrap();
         let wrong = StringSid::parse_canonical("S-1-5-21-1-2-3-1002").unwrap();
         let system = system_sid().unwrap();
-        assert!(exact_owner_matches(owner.raw(), owner.raw(), system.raw()));
-        assert!(!exact_owner_matches(wrong.raw(), owner.raw(), system.raw()));
+        assert!(exact_owner_matches(
+            AclScope::Master,
+            owner.raw(),
+            owner.raw(),
+            system.raw()
+        ));
         assert!(!exact_owner_matches(
+            AclScope::Master,
+            wrong.raw(),
+            owner.raw(),
+            system.raw()
+        ));
+        assert!(!exact_owner_matches(
+            AclScope::Master,
             system.raw(),
             system.raw(),
+            system.raw()
+        ));
+        assert!(exact_owner_matches(
+            AclScope::ProfileWriteChild(true, true),
+            system.raw(),
+            owner.raw(),
+            system.raw()
+        ));
+        assert!(exact_owner_matches(
+            AclScope::ProfileWriteChild(false, true),
+            system.raw(),
+            owner.raw(),
+            system.raw()
+        ));
+        assert!(!exact_owner_matches(
+            AclScope::ProfileWriteChild(true, false),
+            system.raw(),
+            owner.raw(),
+            system.raw()
+        ));
+        for scope in [
+            AclScope::Master,
+            AclScope::TraverseOnly,
+            AclScope::ProfileRead,
+            AclScope::ProfileWriteRoot,
+            AclScope::ProfileWriteFile,
+        ] {
+            assert!(!exact_owner_matches(
+                scope,
+                system.raw(),
+                owner.raw(),
+                system.raw()
+            ));
+        }
+        assert!(!exact_owner_matches(
+            AclScope::ProfileWriteChild(true, true),
+            wrong.raw(),
+            owner.raw(),
             system.raw()
         ));
         assert!(StringSid::parse_canonical("s-1-5-21-1-2-3-1001").is_err());
@@ -2677,22 +3942,22 @@ mod tests {
         ));
         assert!(!valid_write_ace_flags(AclScope::ProfileWriteRoot, true, 0));
         assert!(valid_write_ace_flags(
-            AclScope::ProfileWriteChild(false),
+            AclScope::ProfileWriteChild(false, false),
             false,
             INHERITED_ACE
         ));
         assert!(valid_write_ace_flags(
-            AclScope::ProfileWriteChild(true),
+            AclScope::ProfileWriteChild(true, false),
             false,
             inheritance | INHERITED_ACE
         ));
         assert!(!valid_write_ace_flags(
-            AclScope::ProfileWriteChild(false),
+            AclScope::ProfileWriteChild(false, false),
             false,
             0
         ));
         assert!(valid_write_ace_flags(
-            AclScope::ProfileWriteChild(true),
+            AclScope::ProfileWriteChild(true, false),
             true,
             inheritance
         ));
@@ -2702,17 +3967,17 @@ mod tests {
         let created_directory_flags = inheritance | INHERITED_ACE;
         let created_file_flags = INHERITED_ACE;
         assert!(valid_write_ace_flags(
-            AclScope::ProfileWriteChild(true),
+            AclScope::ProfileWriteChild(true, false),
             false,
             created_directory_flags
         ));
         assert!(valid_write_ace_flags(
-            AclScope::ProfileWriteChild(false),
+            AclScope::ProfileWriteChild(false, false),
             false,
             created_file_flags
         ));
         assert!(valid_write_ace_flags(
-            AclScope::ProfileWriteChild(false),
+            AclScope::ProfileWriteChild(false, false),
             true,
             0
         ));
@@ -2722,18 +3987,83 @@ mod tests {
             OBJECT_INHERIT_ACE,
         ] {
             assert!(!valid_write_ace_flags(
-                AclScope::ProfileWriteChild(true),
+                AclScope::ProfileWriteChild(true, false),
                 true,
                 rejected
             ));
         }
         for rejected in [INHERITED_ACE, inheritance, OBJECT_INHERIT_ACE] {
             assert!(!valid_write_ace_flags(
-                AclScope::ProfileWriteChild(false),
+                AclScope::ProfileWriteChild(false, false),
                 true,
                 rejected
             ));
         }
+    }
+
+    #[test]
+    fn provider_integrity_state_tracks_bounded_resumable_migration() {
+        let mut state = None;
+        accumulate_integrity_state(&mut state, false);
+        assert_eq!(state, Some(ProviderIntegrityState::Unlabeled));
+        accumulate_integrity_state(&mut state, true);
+        assert_eq!(state, Some(ProviderIntegrityState::Incomplete));
+        accumulate_integrity_state(&mut state, false);
+        assert_eq!(state, Some(ProviderIntegrityState::Incomplete));
+
+        let mut state = None;
+        accumulate_integrity_state(&mut state, true);
+        assert_eq!(state, Some(ProviderIntegrityState::Exact));
+        accumulate_integrity_state(&mut state, false);
+        assert_eq!(state, Some(ProviderIntegrityState::Incomplete));
+    }
+
+    #[test]
+    fn low_integrity_label_is_confined_to_the_writable_tree() {
+        let root = tempfile::tempdir().unwrap();
+        let immutable = root.path().join("immutable.exe");
+        let writable = root.path().join("writable");
+        let nested = writable.join("nested");
+        let state = nested.join("state.json");
+        fs::write(&immutable, b"immutable").unwrap();
+        fs::create_dir(&writable).unwrap();
+        fs::create_dir(&nested).unwrap();
+        fs::write(&state, b"state").unwrap();
+
+        let paths = vec![(immutable.clone(), false), (writable.clone(), true)];
+        let writable_guard = IntegrityObject::open(&writable, true, false).unwrap();
+        let renamed = root.path().join("renamed");
+        if fs::rename(&writable, &renamed).is_ok() {
+            assert!(writable_guard.revalidate_path().is_err());
+            fs::rename(&renamed, &writable).unwrap();
+        }
+        writable_guard.revalidate_path().unwrap();
+        drop(writable_guard);
+        assert_eq!(
+            provider_integrity_state(root.path(), &paths).unwrap(),
+            ProviderIntegrityState::Unlabeled
+        );
+        let state_guard = IntegrityObject::open(&state, false, true).unwrap();
+        install_low_integrity_label(&state_guard).unwrap();
+        drop(state_guard);
+        assert_eq!(
+            provider_integrity_state(root.path(), &paths).unwrap(),
+            ProviderIntegrityState::Incomplete
+        );
+        install_provider_low_integrity_labels(root.path(), &paths).unwrap();
+        assert_eq!(
+            provider_integrity_state(root.path(), &paths).unwrap(),
+            ProviderIntegrityState::Exact
+        );
+        validate_provider_integrity_scope(root.path(), &paths).unwrap();
+        let immutable_guard = IntegrityObject::open(&immutable, false, false).unwrap();
+        validate_integrity_object(&immutable_guard, IntegrityLabelScope::Unlabeled).unwrap();
+        immutable_guard.revalidate_path().unwrap();
+        drop(immutable_guard);
+
+        let immutable_guard = IntegrityObject::open(&immutable, false, true).unwrap();
+        install_low_integrity_label(&immutable_guard).unwrap();
+        assert!(validate_provider_integrity_scope(root.path(), &paths).is_err());
     }
 
     #[test]
@@ -2769,6 +4099,322 @@ mod tests {
             environment_names(&environment),
             ["GH_CONFIG_DIR", "LOCALAPPDATA", "SystemRoot"]
         );
+    }
+
+    #[test]
+    fn native_codex_probe_environment_is_exactly_five_private_variables() {
+        let environment = build_environment_block(
+            &"C:\\Users\\owner\\AppData\\Local"
+                .encode_utf16()
+                .collect::<Vec<_>>(),
+            &"C:\\Windows".encode_utf16().collect::<Vec<_>>(),
+            &[
+                (OsStr::new("CODEX_HOME"), OsStr::new(r"C:\private\codex")),
+                (OsStr::new("LOCALAPPDATA"), OsStr::new(r"C:\private\local")),
+                (OsStr::new("TEMP"), OsStr::new(r"C:\private\temp")),
+                (OsStr::new("TMP"), OsStr::new(r"C:\private\temp")),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            environment_names(&environment),
+            ["CODEX_HOME", "LOCALAPPDATA", "SystemRoot", "TEMP", "TMP"]
+        );
+        let text = String::from_utf16_lossy(&environment);
+        assert!(!text.contains(r"C:\Users\owner\AppData\Local"));
+    }
+
+    #[test]
+    fn native_codex_probe_environment_rejects_alias_drift_and_extra_names() {
+        let local = "C:\\ambient".encode_utf16().collect::<Vec<_>>();
+        let system = "C:\\Windows".encode_utf16().collect::<Vec<_>>();
+        assert!(build_environment_block(
+            &local,
+            &system,
+            &[
+                (OsStr::new("CODEX_HOME"), OsStr::new(r"C:\private\codex")),
+                (OsStr::new("LOCALAPPDATA"), OsStr::new(r"C:\private\local"),),
+                (OsStr::new("TEMP"), OsStr::new(r"C:\private\temp")),
+                (OsStr::new("TMP"), OsStr::new(r"C:\other")),
+            ]
+        )
+        .is_err());
+        assert!(build_environment_block(
+            &local,
+            &system,
+            &[(OsStr::new("PATH"), OsStr::new(r"C:\forbidden"))]
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn native_probe_service_command_accepts_only_exact_pinned_shape_and_loopback_bind() {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("assemblywright-master.exe");
+        fs::write(&executable, b"pinned master").unwrap();
+        let data = directory.path().join("master");
+        fs::create_dir(&data).unwrap();
+        let executable = fs::canonicalize(executable).unwrap();
+        let data = fs::canonicalize(data).unwrap();
+        let config = ServiceConfig {
+            service_type: ServiceType::OWN_PROCESS,
+            start_type: ServiceStartType::AutoStart,
+            error_control: ServiceErrorControl::Normal,
+            executable_path: PathBuf::from("raw command line is parsed separately"),
+            load_order_group: None,
+            tag_id: 0,
+            dependencies: Vec::new(),
+            account_name: Some(OsString::from(r"MIKE-PC\mike")),
+            display_name: OsString::from("Assemblywright Developer Mode Master"),
+        };
+        let command = [
+            executable.as_os_str(),
+            OsStr::new("--data-dir"),
+            data.as_os_str(),
+            OsStr::new("service-run"),
+            OsStr::new("--service-name"),
+            OsStr::new("AssemblywrightMaster"),
+            OsStr::new("--bind"),
+            OsStr::new("127.0.0.1:7791"),
+            OsStr::new("--service-identity"),
+            OsStr::new(r"MIKE-PC\mike"),
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect::<Vec<_>>();
+        assert_eq!(
+            validate_service_launch_command(
+                "AssemblywrightMaster",
+                &data,
+                &executable,
+                &config,
+                &command,
+            )
+            .unwrap(),
+            "127.0.0.1:7791".parse().unwrap()
+        );
+
+        let mut public_bind = command.clone();
+        public_bind[7] = OsString::from("0.0.0.0:7791");
+        assert!(validate_service_launch_command(
+            "AssemblywrightMaster",
+            &data,
+            &executable,
+            &config,
+            &public_bind,
+        )
+        .is_err());
+        let mut drifted = config.clone();
+        drifted.start_type = ServiceStartType::OnDemand;
+        assert!(!native_probe_authority_drifted(
+            &config,
+            &config,
+            "S-1-5-21-1",
+            "S-1-5-21-1",
+        ));
+        assert!(native_probe_authority_drifted(
+            &config,
+            &drifted,
+            "S-1-5-21-1",
+            "S-1-5-21-1",
+        ));
+        assert!(native_probe_authority_drifted(
+            &config,
+            &config,
+            "S-1-5-21-1",
+            "S-1-5-21-2",
+        ));
+        assert!(validate_service_launch_command(
+            "AssemblywrightMaster",
+            &data,
+            &executable,
+            &drifted,
+            &command,
+        )
+        .is_err());
+        let mut extra = command.clone();
+        extra.push(OsString::from("--unexpected"));
+        assert!(validate_service_launch_command(
+            "AssemblywrightMaster",
+            &data,
+            &executable,
+            &config,
+            &extra,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn native_probe_uses_windows_command_line_parser_for_quoted_service_paths() {
+        let parsed = parse_service_launch_command(OsStr::new(
+            r#""C:\Program Files\Assemblywright\assemblywright-master.exe" --data-dir "C:\ProgramData\Assemblywright Master" service-run"#,
+        ))
+        .unwrap();
+        assert_eq!(
+            parsed,
+            [
+                r"C:\Program Files\Assemblywright\assemblywright-master.exe",
+                "--data-dir",
+                r"C:\ProgramData\Assemblywright Master",
+                "service-run",
+            ]
+            .into_iter()
+            .map(OsString::from)
+            .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn native_probe_open_rejections_are_fixed_content_free_stage_codes() {
+        assert_eq!(
+            [
+                NativeProbeOpenRejection::ServiceConfiguration,
+                NativeProbeOpenRejection::ExecutableCommandBinding,
+                NativeProbeOpenRejection::AccountIdentity,
+                NativeProbeOpenRejection::ProfileRevalidation,
+                NativeProbeOpenRejection::StoppedState,
+                NativeProbeOpenRejection::BindingDigest,
+            ]
+            .map(NativeProbeOpenRejection::code),
+            [
+                "native_probe_service_configuration",
+                "native_probe_executable_command_binding",
+                "native_probe_account_identity",
+                "native_probe_profile_revalidation",
+                "native_probe_stopped_state",
+                "native_probe_binding_digest",
+            ]
+        );
+    }
+
+    #[test]
+    fn scm_local_account_form_is_canonicalized_to_the_computer_name() {
+        let account = OsStr::new(r".\mike").encode_wide().collect::<Vec<_>>();
+        let computer = OsStr::new("MIKE-PC").encode_wide().collect::<Vec<_>>();
+        assert_eq!(
+            canonicalize_local_account_name(&account, &computer).unwrap(),
+            OsString::from(r"MIKE-PC\mike")
+        );
+        assert_eq!(
+            canonicalize_lookup_account_name(OsStr::new(r"MIKE-PC\mike")).unwrap(),
+            OsString::from(r"MIKE-PC\mike")
+        );
+    }
+
+    #[test]
+    fn scm_malformed_relative_account_forms_are_rejected() {
+        let computer = OsStr::new("MIKE-PC").encode_wide().collect::<Vec<_>>();
+        for account in [
+            r".\",
+            r".\.",
+            r".\..",
+            r".\mike\admin",
+            r".\mike.",
+            r".\mi/ke",
+        ] {
+            let account = OsStr::new(account).encode_wide().collect::<Vec<_>>();
+            assert!(canonicalize_local_account_name(&account, &computer).is_err());
+        }
+        for account in ["", ".", "./mike", r"..\mike"] {
+            assert!(canonicalize_lookup_account_name(OsStr::new(account)).is_err());
+        }
+    }
+
+    #[test]
+    fn native_probe_codex_environment_strips_only_local_drive_verbatim_prefix() {
+        assert_eq!(
+            codex_windows_environment_path(Path::new(
+                r"\\?\C:\ProgramData\Assemblywright\planning-runtime\provider\codex-home"
+            )),
+            OsString::from(r"C:\ProgramData\Assemblywright\planning-runtime\provider\codex-home")
+        );
+        assert_eq!(
+            codex_windows_environment_path(Path::new(
+                r"C:\ProgramData\Assemblywright\planning-runtime\provider\temp"
+            )),
+            OsString::from(r"C:\ProgramData\Assemblywright\planning-runtime\provider\temp")
+        );
+        assert_eq!(
+            codex_windows_environment_path(Path::new(r"\\?\UNC\server\share\state")),
+            OsString::from(r"\\?\UNC\server\share\state")
+        );
+        assert_eq!(
+            codex_windows_environment_path(Path::new(r"\\?\Volume{1234}\state")),
+            OsString::from(r"\\?\Volume{1234}\state")
+        );
+    }
+
+    #[test]
+    fn child_visible_current_directory_strips_only_local_drive_verbatim_prefix() {
+        let authoritative =
+            PathBuf::from(r"\\?\C:\ProgramData\Assemblywright\planning-runtime\provider");
+        let authoritative_before = authoritative.clone();
+        assert_eq!(
+            child_visible_current_directory(&authoritative),
+            OsString::from(r"C:\ProgramData\Assemblywright\planning-runtime\provider")
+        );
+        assert_eq!(authoritative, authoritative_before);
+
+        for unchanged in [
+            r"C:\ProgramData\Assemblywright\planning-runtime\provider",
+            r"\\?\UNC\server\share\state",
+            r"\\?\Volume{1234}\state",
+        ] {
+            let authoritative = PathBuf::from(unchanged);
+            let authoritative_before = authoritative.clone();
+            assert_eq!(
+                child_visible_current_directory(&authoritative),
+                authoritative.as_os_str()
+            );
+            assert_eq!(authoritative, authoritative_before);
+        }
+    }
+
+    #[test]
+    fn restricted_child_token_uses_exact_token_user_as_default_owner() {
+        let current_user = current_token_sid_text().unwrap();
+        let token = create_restricted_token().unwrap();
+        if current_user == "S-1-5-18" {
+            let system = system_sid().unwrap();
+            assert_eq!(
+                apply_token_default_owner_policy(&token, "S-1-5-21-1-2-3-1001").unwrap(),
+                TokenDefaultOwnerPolicy::LocalSystemOwnerApplied
+            );
+            assert!(token_information_sid_matches(token.raw(), TokenOwner, system.raw()).unwrap());
+        } else {
+            let expected = StringSid::parse_canonical(&current_user).unwrap();
+            assert_eq!(
+                apply_token_default_owner_policy(&token, &current_user).unwrap(),
+                TokenDefaultOwnerPolicy::ProvisioningOwnerApplied
+            );
+            assert!(token_information_sid_matches(token.raw(), TokenUser, expected.raw()).unwrap());
+            assert!(
+                token_information_sid_matches(token.raw(), TokenOwner, expected.raw()).unwrap()
+            );
+            assert!(apply_token_default_owner_policy(&token, "S-1-5-32-544").is_err());
+        }
+        assert!(apply_token_default_owner_policy(&token, "not-a-sid").is_err());
+    }
+
+    #[test]
+    fn token_default_owner_policy_rejects_every_unexpected_principal_shape() {
+        assert_eq!(
+            select_token_default_owner_policy(true, false, false).unwrap(),
+            TokenDefaultOwnerPolicy::ProvisioningOwnerApplied
+        );
+        assert_eq!(
+            select_token_default_owner_policy(false, true, false).unwrap(),
+            TokenDefaultOwnerPolicy::LocalSystemOwnerApplied
+        );
+        for rejected in [
+            (false, false, false),
+            (true, false, true),
+            (false, true, true),
+            (true, true, false),
+            (true, true, true),
+        ] {
+            assert!(select_token_default_owner_policy(rejected.0, rejected.1, rejected.2).is_err());
+        }
     }
 
     #[test]

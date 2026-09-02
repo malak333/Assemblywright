@@ -72,6 +72,18 @@ identity-scoped profile registration. `STARTF_USESTDHANDLES` launches inherit va
 stdin, stdout, and stderr handles; stderr is drained concurrently and discarded within
 the fixed bound without entering diagnostics or audit.
 
+An explicitly owner-confirmed native diagnostic may exercise the real staged Codex
+only while the exact installed master service is fully stopped. The command validates
+that its executable and data directory match the SCM registration, revalidates the
+complete schema-v4 planning runtime, then uses the same restricted token, fixed
+provider profile/SID, private desktop, exact ACL roots, closed environment, inherited
+handles, deadline, and kill-on-close Job. Exact `login status` gates one fixed Public
+structured request with all tools disabled. The fixed receipt contains only outcome
+categories, numeric exit/diagnostic codes, hashes, and binding identities; no process
+text, prompt, path, token, credential, or specification content may cross the receipt
+boundary. The diagnostic mutates no master planning state and grants no approval or
+effect authority.
+
 ## Understanding Summary
 
 - The primary UX has three actions: New Project, New Feature, and Assembly Line.

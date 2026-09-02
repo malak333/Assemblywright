@@ -64,6 +64,15 @@ repository source is not an installed, signed, identity-provisioned runtime. Des
 or planning approval does not widen
 an existing worker or authorize the UI to claim full-machine readiness.
 
+The owner-confirmed native real-Codex probe is not a deployed provider route. It runs
+only while the exact SCM-bound master service is fully stopped, revalidates the current
+schema-v4 runtime, and uses the unchanged restricted-token provider AppContainer,
+private desktop, exact ACL/environment, inherited handles, deadline, and Job. Exact
+login status gates one fixed Public structured request. The receipt is metadata-only
+(fixed categories, numeric codes, hashes, and binding identities), and the probe writes
+no master planning/approval/effect state. Its result is live diagnostic evidence for
+that exact run, never external-effect or release proof.
+
 The Mac app has an owner-facing Developer Mode connection flow. It stores only a
 strict owner-private locator for the separately signed helper and an independently
 supplied Apple team identifier; every supervision, pairing, status, and certificate-

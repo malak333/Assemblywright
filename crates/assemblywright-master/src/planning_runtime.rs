@@ -9,6 +9,8 @@ use assemblywright_protocol::{
     BrainstormingSpecificationDocument, OrchestratorProfile, ProjectVisibility,
     RepositoryCreationProjection, MAX_BRAINSTORMING_SPECIFICATION_BYTES,
 };
+#[cfg(windows)]
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -20,8 +22,14 @@ use std::io::{Seek, Write};
 use std::path::{Path, PathBuf};
 #[cfg(not(windows))]
 use std::process::{Command, Stdio};
+#[cfg(windows)]
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+#[cfg(any(windows, test))]
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+#[cfg(any(windows, test))]
+use zeroize::Zeroize;
 
 #[cfg(windows)]
 mod windows_containment;
@@ -52,6 +60,18 @@ const MAX_GH_OUTPUT_BYTES: usize = 128 * 1024;
 const MAX_PROVIDER_OUTPUT_BYTES: usize = MAX_BRAINSTORMING_SPECIFICATION_BYTES + 4 * 1024;
 const PROVIDER_ID: &str = "openai.codex";
 const MODEL_ID: &str = "gpt-5.6-sol";
+#[cfg(any(windows, test))]
+const FILE_BACKED_CODEX_AUTH_CONFIG: &str = "cli_auth_credentials_store=\"file\"";
+#[cfg(windows)]
+const NATIVE_PROVIDER_PROBE_PROMPT: &str = "Return one public JSON planning specification for the fixed Assemblywright native Windows planning-containment diagnostic. Use the title 'Assemblywright native planning containment probe', describe only the diagnostic outcome, include one acceptance criterion that the structured response was produced without tools, and include one obligation that this diagnostic grants no repository-creation or execution authority.";
+#[cfg(windows)]
+const NATIVE_PROVIDER_PROBE_MAX_OUTPUT_BYTES: usize = 16 * 1024;
+#[cfg(windows)]
+const NATIVE_PROVIDER_PROBE_DEADLINE: Duration = Duration::from_secs(300);
+#[cfg(any(windows, test))]
+const NATIVE_PROVIDER_PROBE_LOGIN_STDERR_MAX_BYTES: usize = 2 * 1024;
+#[cfg(any(windows, test))]
+const NATIVE_PROVIDER_PROBE_EXEC_STDERR_MAX_BYTES: usize = 4 * 1024;
 
 pub const PLANNING_EFFECT_DEADLINE: Duration = Duration::from_secs(120);
 
@@ -128,6 +148,35 @@ pub struct PlanningRuntime {
     brainstorming: ProcessBrainstormingAdapter,
     github: ProcessGithubCreationAdapter,
     status: PlanningRuntimeStatus,
+}
+
+#[cfg(windows)]
+#[derive(Debug, Serialize)]
+pub struct PlanningProviderNativeProbeReceipt {
+    schema_version: u16,
+    receipt_domain: &'static str,
+    status: &'static str,
+    outcome: &'static str,
+    service_name_sha256: String,
+    service_runtime_binding_sha256: String,
+    binding_revision: u64,
+    provider_profile_name: String,
+    provider_profile_sid: String,
+    service_account_sid: String,
+    current_token_sid: String,
+    provisioning_owner_sid: String,
+    health_endpoint: String,
+    brainstorming_binding_sha256: String,
+    catalog_sha256: String,
+    codex_executable_sha256: String,
+    output_schema_sha256: String,
+    probe_contract_sha256: String,
+    login_exit_code: Option<u32>,
+    login_diagnostic_code: Option<u32>,
+    exec_exit_code: Option<u32>,
+    exec_diagnostic_code: Option<u32>,
+    output_sha256: Option<String>,
+    live_evidence_required: bool,
 }
 
 #[derive(Clone)]
@@ -414,6 +463,305 @@ impl PlanningRuntime {
         self.status
     }
 
+    #[cfg(windows)]
+    pub fn run_provider_native_probe(
+        &self,
+        data_dir: &Path,
+        service_name: &str,
+    ) -> Result<PlanningProviderNativeProbeReceipt, PlanningRuntimeConfigError> {
+        if self.validated_status().is_none() {
+            return Err(PlanningRuntimeConfigError::Boundary(
+                "native_probe_boundary",
+            ));
+        }
+        let data_dir = fs::canonicalize(data_dir)?;
+        let owner_lock_path = data_dir.join("master.owner.lock");
+        reject_link(&owner_lock_path)?;
+        let owner_lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&owner_lock_path)?;
+        owner_lock
+            .try_lock_exclusive()
+            .map_err(|_| PlanningRuntimeConfigError::Boundary("native_probe_authority"))?;
+        let _owner_lock = owner_lock;
+        let database_path = data_dir.join("master.sqlite3");
+        reject_link(&database_path)?;
+        let kernel = MasterKernel::open_planning_runtime_connection(&database_path)?;
+        let (paused, expected_pause_revision) = kernel.planning_effect_pause_snapshot()?;
+        if paused {
+            return Err(PlanningRuntimeConfigError::Boundary(
+                "native_probe_authority",
+            ));
+        }
+        let authority = Arc::new(
+            windows_containment::NativeProbeAuthority::open(
+                service_name,
+                &data_dir,
+                &self.brainstorming.isolation.profile,
+            )
+            .map_err(|reason| PlanningRuntimeConfigError::Boundary(reason.code()))?,
+        );
+        let bindings = authority.bindings();
+        let authority_check = Arc::clone(&authority);
+        let authority_failure = Arc::new(AtomicU8::new(0));
+        let authority_failure_check = Arc::clone(&authority_failure);
+        let continuous_authority: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(move || {
+            let failed = |stage| {
+                let _ = authority_failure_check.compare_exchange(
+                    0,
+                    stage,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                );
+                false
+            };
+            if let Err(stage) = authority_check.revalidate_service() {
+                return failed(10 + stage);
+            }
+            let kernel = match MasterKernel::open_planning_runtime_connection(&database_path) {
+                Ok(kernel) => kernel,
+                Err(_) => return failed(2),
+            };
+            match kernel.planning_effect_pause_snapshot() {
+                Ok((paused, revision)) if !paused && revision == expected_pause_revision => true,
+                Ok(_) => failed(3),
+                Err(_) => failed(4),
+            }
+        });
+        let control = PlanningEffectControl::new(
+            Arc::new(AtomicBool::new(false)),
+            std::time::Instant::now() + NATIVE_PROVIDER_PROBE_DEADLINE,
+        )
+        .with_authority(continuous_authority);
+        let control_diagnostic_code = || {
+            let stage = authority_failure.load(Ordering::Acquire);
+            if stage == 0 {
+                1030
+            } else {
+                1030 + u32::from(stage)
+            }
+        };
+        if !control.poll() {
+            return Err(PlanningRuntimeConfigError::Boundary(
+                "native_probe_authority",
+            ));
+        }
+        let schema_path =
+            self.brainstorming
+                .schema_path
+                .to_str()
+                .ok_or(PlanningRuntimeConfigError::Boundary(
+                    "native_probe_boundary",
+                ))?;
+        let codex_home_environment =
+            windows_containment::codex_windows_environment_path(&self.brainstorming.codex_home);
+        let local_app_data_environment =
+            windows_containment::codex_windows_environment_path(&self.brainstorming.local_app_data);
+        let temporary_environment =
+            windows_containment::codex_windows_environment_path(&self.brainstorming.temporary);
+        let environment = [
+            (OsStr::new("CODEX_HOME"), codex_home_environment.as_os_str()),
+            (
+                OsStr::new("LOCALAPPDATA"),
+                local_app_data_environment.as_os_str(),
+            ),
+            (OsStr::new("TEMP"), temporary_environment.as_os_str()),
+            (OsStr::new("TMP"), temporary_environment.as_os_str()),
+        ];
+        let probe_contract_sha256: [u8; 32] = Sha256::digest(
+            [
+                b"assemblywright.windows-native-provider-probe.v1\0".as_slice(),
+                NATIVE_PROVIDER_PROBE_PROMPT.as_bytes(),
+                self.brainstorming.schema_sha256.as_slice(),
+            ]
+            .concat(),
+        )
+        .into();
+        let base = |outcome,
+                    login_diagnostic: Option<NativeProbeLoginDiagnostic>,
+                    login: ProbePhaseOutcome,
+                    exec: ProbePhaseOutcome,
+                    output_sha256: Option<[u8; 32]>| {
+            PlanningProviderNativeProbeReceipt {
+                schema_version: 1,
+                receipt_domain: "assemblywright.windows-planning-real-codex-probe.v1",
+                status: "planning_provider_native_probe",
+                outcome,
+                service_name_sha256: hex(&bindings.service_name_sha256),
+                service_runtime_binding_sha256: hex(&bindings.service_runtime_binding_sha256),
+                binding_revision: self.status.binding_revision,
+                provider_profile_name: self.brainstorming.isolation.profile.name().to_string(),
+                provider_profile_sid: self.brainstorming.isolation.profile.sid().to_string(),
+                service_account_sid: bindings.service_account_sid.clone(),
+                current_token_sid: bindings.current_token_sid.clone(),
+                provisioning_owner_sid: bindings.provisioning_owner_sid.clone(),
+                health_endpoint: bindings.health_endpoint.to_string(),
+                brainstorming_binding_sha256: hex(&self.status.brainstorming_sha256),
+                catalog_sha256: hex(&self.status.catalog_sha256),
+                codex_executable_sha256: hex(&self.brainstorming.codex.sha256),
+                output_schema_sha256: hex(&self.brainstorming.schema_sha256),
+                probe_contract_sha256: hex(&probe_contract_sha256),
+                login_exit_code: probe_phase_exit_code(login),
+                login_diagnostic_code: login_diagnostic
+                    .map(NativeProbeLoginDiagnostic::code)
+                    .or_else(|| probe_phase_diagnostic_code(login)),
+                exec_exit_code: probe_phase_exit_code(exec),
+                exec_diagnostic_code: probe_phase_diagnostic_code(exec),
+                output_sha256: output_sha256.map(|value| hex(&value)),
+                live_evidence_required: true,
+            }
+        };
+
+        let login_args = native_provider_probe_login_args();
+        let login_stderr = Arc::new(Mutex::new(Vec::new()));
+        let login = run_command(
+            &self.brainstorming.codex,
+            &control,
+            CommandInvocation {
+                current_dir: &self.brainstorming.root,
+                args: &login_args,
+                environment: &environment,
+                input: &[],
+                max_output: 4 * 1024,
+                isolation: &self.brainstorming.isolation,
+                stderr: CommandStderrMode::CaptureBounded {
+                    max_bytes: NATIVE_PROVIDER_PROBE_LOGIN_STDERR_MAX_BYTES,
+                    output: Arc::clone(&login_stderr),
+                },
+            },
+        );
+        let login_diagnostic = native_probe_login_diagnostic(&login_stderr);
+        if !native_probe_post_command_authority_current(
+            self.validated_status().is_some(),
+            control.poll(),
+        ) {
+            return Err(PlanningRuntimeConfigError::Boundary(
+                "native_probe_authority",
+            ));
+        }
+        let (login_phase, login_diagnostic_evidence) = match login {
+            Err(CommandError::Cancelled) => {
+                let mut receipt = base(
+                    "cancelled_during_login",
+                    None,
+                    ProbePhaseOutcome::Error(CommandError::Cancelled),
+                    ProbePhaseOutcome::NotRun,
+                    None,
+                );
+                receipt.login_diagnostic_code = Some(control_diagnostic_code());
+                return Ok(receipt);
+            }
+            Err(error)
+                if login_diagnostic == NativeProbeLoginDiagnostic::ConfigurationLoadFailed =>
+            {
+                (
+                    ProbePhaseOutcome::Error(error),
+                    Some(NativeProbeLoginDiagnostic::ConfigurationLoadFailed),
+                )
+            }
+            Err(error) => {
+                return Ok(base(
+                    "login_failed",
+                    Some(login_diagnostic),
+                    ProbePhaseOutcome::Error(error),
+                    ProbePhaseOutcome::NotRun,
+                    None,
+                ));
+            }
+            Ok(_) => (ProbePhaseOutcome::Success, None),
+        };
+        if self.validated_status().is_none() {
+            return Err(PlanningRuntimeConfigError::Boundary(
+                "native_probe_boundary",
+            ));
+        }
+        if !control.poll() {
+            return Ok(base(
+                "cancelled_before_exec",
+                login_diagnostic_evidence,
+                login_phase,
+                ProbePhaseOutcome::NotRun,
+                None,
+            ));
+        }
+
+        let exec_args = native_provider_probe_exec_args(schema_path);
+        let exec_stderr = Arc::new(Mutex::new(Vec::new()));
+        let exec = run_command(
+            &self.brainstorming.codex,
+            &control,
+            CommandInvocation {
+                current_dir: &self.brainstorming.root,
+                args: &exec_args,
+                environment: &environment,
+                input: NATIVE_PROVIDER_PROBE_PROMPT.as_bytes(),
+                max_output: NATIVE_PROVIDER_PROBE_MAX_OUTPUT_BYTES,
+                isolation: &self.brainstorming.isolation,
+                stderr: CommandStderrMode::CaptureBounded {
+                    max_bytes: NATIVE_PROVIDER_PROBE_EXEC_STDERR_MAX_BYTES,
+                    output: Arc::clone(&exec_stderr),
+                },
+            },
+        );
+        let exec_diagnostic = native_probe_exec_diagnostic(&exec_stderr);
+        if !native_probe_post_command_authority_current(
+            self.validated_status().is_some(),
+            control.poll(),
+        ) {
+            return Err(PlanningRuntimeConfigError::Boundary(
+                "native_probe_authority",
+            ));
+        }
+        match exec {
+            Err(CommandError::Cancelled) => {
+                let mut receipt = base(
+                    "cancelled_during_exec",
+                    login_diagnostic_evidence,
+                    login_phase,
+                    ProbePhaseOutcome::Error(CommandError::Cancelled),
+                    None,
+                );
+                receipt.exec_diagnostic_code = Some(control_diagnostic_code());
+                Ok(receipt)
+            }
+            Err(error) => {
+                let mut receipt = base(
+                    "exec_failed",
+                    login_diagnostic_evidence,
+                    login_phase,
+                    ProbePhaseOutcome::Error(error),
+                    None,
+                );
+                if let Some(diagnostic) = exec_diagnostic {
+                    receipt.exec_diagnostic_code = Some(diagnostic.code());
+                }
+                Ok(receipt)
+            }
+            Ok(output) => {
+                let output_sha256 = <[u8; 32]>::from(Sha256::digest(&output));
+                let specification = strict_decode::<BrainstormingSpecificationDocument>(&output)
+                    .and_then(|value| value.validate().map_err(|_| ()));
+                if specification.is_err() {
+                    return Ok(base(
+                        "structured_output_rejected",
+                        login_diagnostic_evidence,
+                        login_phase,
+                        ProbePhaseOutcome::RejectedOutput,
+                        Some(output_sha256),
+                    ));
+                }
+                Ok(base(
+                    "succeeded",
+                    login_diagnostic_evidence,
+                    login_phase,
+                    ProbePhaseOutcome::Success,
+                    Some(output_sha256),
+                ))
+            }
+        }
+    }
+
     pub fn validated_status(&self) -> Option<PlanningRuntimeStatus> {
         verify_executable(&self.brainstorming.executable).ok()?;
         verify_executable(&self.brainstorming.codex).ok()?;
@@ -611,6 +959,7 @@ impl ProcessBrainstormingAdapter {
                 input: &input,
                 max_output: MAX_PROVIDER_OUTPUT_BYTES,
                 isolation: &self.isolation,
+                stderr: CommandStderrMode::default(),
             },
         )
         .map_err(|error| {
@@ -678,6 +1027,7 @@ impl GithubRepositoryCreationAdapter for ProcessGithubCreationAdapter {
                 input: &[],
                 max_output: MAX_GH_OUTPUT_BYTES,
                 isolation: &self.isolation,
+                stderr: CommandStderrMode::default(),
             },
         ) {
             Ok(output) => parse_github_observation(repository, &output).map(Some),
@@ -694,6 +1044,7 @@ impl GithubRepositoryCreationAdapter for ProcessGithubCreationAdapter {
                         input: &[],
                         max_output: 16 * 1024,
                         isolation: &self.isolation,
+                        stderr: CommandStderrMode::default(),
                     },
                 )
                 .map_err(|_| GithubRepositoryCreationError::Unavailable)?;
@@ -742,6 +1093,7 @@ impl GithubRepositoryCreationAdapter for ProcessGithubCreationAdapter {
                 input: &[],
                 max_output: MAX_GH_OUTPUT_BYTES,
                 isolation: &self.isolation,
+                stderr: CommandStderrMode::default(),
             },
         );
         if matches!(result, Err(CommandError::Cancelled)) {
@@ -791,6 +1143,7 @@ impl GithubRepositoryCreationAdapter for ProcessGithubCreationAdapter {
                 input: &[],
                 max_output: MAX_GH_OUTPUT_BYTES,
                 isolation: &self.isolation,
+                stderr: CommandStderrMode::default(),
             },
         )
         .map_err(|error| match error {
@@ -906,6 +1259,355 @@ enum CommandError {
     Malformed,
 }
 
+#[derive(Default)]
+enum CommandStderrMode {
+    #[default]
+    Discard,
+    #[cfg(any(windows, test))]
+    CaptureBounded {
+        max_bytes: usize,
+        output: Arc<Mutex<Vec<u8>>>,
+    },
+}
+
+impl CommandStderrMode {
+    fn valid_for(&self, _args: &[&str]) -> bool {
+        match self {
+            Self::Discard => true,
+            #[cfg(any(windows, test))]
+            Self::CaptureBounded { max_bytes, output } => {
+                ((*max_bytes == NATIVE_PROVIDER_PROBE_LOGIN_STDERR_MAX_BYTES
+                    && _args == native_provider_probe_login_args())
+                    || (*max_bytes == NATIVE_PROVIDER_PROBE_EXEC_STDERR_MAX_BYTES
+                        && native_provider_probe_exec_args_match(_args)))
+                    && Arc::strong_count(output) > 0
+            }
+        }
+    }
+
+    #[cfg(any(windows, test))]
+    fn allows_empty_stdout(&self, args: &[&str]) -> bool {
+        matches!(
+            self,
+            Self::CaptureBounded { max_bytes, .. }
+                if *max_bytes == NATIVE_PROVIDER_PROBE_LOGIN_STDERR_MAX_BYTES
+                    && args == native_provider_probe_login_args()
+        )
+    }
+
+    #[cfg(windows)]
+    fn record_containment_failure(&self, stage: u8, status: u32) {
+        if let Self::CaptureBounded { max_bytes, output } = self {
+            let mut message =
+                format!("containment setup failed stage={stage} status={status}").into_bytes();
+            message.truncate(*max_bytes);
+            let mut guard = output
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard.zeroize();
+            *guard = message;
+        }
+    }
+}
+
+#[cfg(any(windows, test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NativeProbeLoginDiagnostic {
+    RequirementsFileReadFailed,
+    ConfigFileReadFailed,
+    AuthenticationRequirementsNoUsableLoginMethod,
+    AccessDeniedIo,
+    SystemCodexPathAccessDenied,
+    ProviderCodexHomeAccessDenied,
+    ProviderLocalAppDataAccessDenied,
+    ProviderTempAccessDenied,
+    ProviderRootOrCurrentDirectoryAccessDenied,
+    CodexHomeCanonicalizationFailed,
+    CodexHomeReadFailed,
+    ProcessLaunchAccessDenied,
+    ProcessLaunchFailed,
+    ContainmentStage(u8),
+    NotLoggedIn,
+    ConfigurationLoadFailed,
+    LoginStatusFailed,
+    Other,
+}
+
+#[cfg(any(windows, test))]
+impl NativeProbeLoginDiagnostic {
+    const fn code(self) -> u32 {
+        match self {
+            Self::RequirementsFileReadFailed => 924,
+            Self::ConfigFileReadFailed => 925,
+            Self::AuthenticationRequirementsNoUsableLoginMethod => 926,
+            Self::AccessDeniedIo => 927,
+            Self::SystemCodexPathAccessDenied => 928,
+            Self::ProviderCodexHomeAccessDenied => 929,
+            Self::ProviderLocalAppDataAccessDenied => 930,
+            Self::ProviderTempAccessDenied => 931,
+            Self::ProviderRootOrCurrentDirectoryAccessDenied => 932,
+            Self::CodexHomeCanonicalizationFailed => 933,
+            Self::CodexHomeReadFailed => 934,
+            Self::ProcessLaunchAccessDenied => 935,
+            Self::ProcessLaunchFailed => 936,
+            Self::ContainmentStage(stage) => 960 + stage as u32,
+            Self::NotLoggedIn => 920,
+            Self::ConfigurationLoadFailed => 921,
+            Self::LoginStatusFailed => 922,
+            Self::Other => 923,
+        }
+    }
+}
+
+#[cfg(any(windows, test))]
+fn native_probe_login_diagnostic(stderr: &Arc<Mutex<Vec<u8>>>) -> NativeProbeLoginDiagnostic {
+    let mut guard = stderr
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut bytes = std::mem::take(&mut *guard);
+    drop(guard);
+    let diagnostic = classify_native_probe_login_stderr(&bytes);
+    bytes.zeroize();
+    diagnostic
+}
+
+#[cfg(any(windows, test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NativeProbeExecDiagnostic {
+    ConfigurationLoadFailed,
+    NotLoggedIn,
+    AuthenticationFailed,
+    NetworkUnavailable,
+    CliArgumentRejected,
+    OutputSchemaRejected,
+    ModelUnavailable,
+    SystemCodexPathAccessDenied,
+    ProviderCodexHomeAccessDenied,
+    ProviderLocalAppDataAccessDenied,
+    ProviderTempAccessDenied,
+    ProviderRootOrCurrentDirectoryAccessDenied,
+    CodexHomeCanonicalizationFailed,
+    ExplicitCwdCanonicalizationFailed,
+    ProcessLaunchAccessDenied,
+    ProcessLaunchFailed,
+    ContainmentStage(u8),
+    AccessDeniedIo,
+    Other,
+}
+
+#[cfg(any(windows, test))]
+impl NativeProbeExecDiagnostic {
+    const fn code(self) -> u32 {
+        match self {
+            Self::ConfigurationLoadFailed => 940,
+            Self::NotLoggedIn => 941,
+            Self::AuthenticationFailed => 942,
+            Self::NetworkUnavailable => 943,
+            Self::CliArgumentRejected => 944,
+            Self::OutputSchemaRejected => 945,
+            Self::ModelUnavailable => 946,
+            Self::SystemCodexPathAccessDenied => 947,
+            Self::ProviderCodexHomeAccessDenied => 948,
+            Self::ProviderLocalAppDataAccessDenied => 949,
+            Self::ProviderTempAccessDenied => 950,
+            Self::ProviderRootOrCurrentDirectoryAccessDenied => 951,
+            Self::CodexHomeCanonicalizationFailed => 954,
+            Self::ExplicitCwdCanonicalizationFailed => 955,
+            Self::ProcessLaunchAccessDenied => 956,
+            Self::ProcessLaunchFailed => 957,
+            Self::ContainmentStage(stage) => 990 + stage as u32,
+            Self::AccessDeniedIo => 952,
+            Self::Other => 953,
+        }
+    }
+}
+
+#[cfg(any(windows, test))]
+fn native_probe_exec_diagnostic(stderr: &Arc<Mutex<Vec<u8>>>) -> Option<NativeProbeExecDiagnostic> {
+    let mut guard = stderr
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut bytes = std::mem::take(&mut *guard);
+    drop(guard);
+    let diagnostic = classify_native_probe_exec_stderr(&bytes);
+    bytes.zeroize();
+    diagnostic
+}
+
+#[cfg(any(windows, test))]
+fn classify_native_probe_exec_stderr(stderr: &[u8]) -> Option<NativeProbeExecDiagnostic> {
+    if stderr.is_empty() {
+        None
+    } else if let Some(stage) = native_probe_containment_stage(stderr) {
+        Some(NativeProbeExecDiagnostic::ContainmentStage(stage))
+    } else if ascii_contains_ignore_case(stderr, b"process launch failed status=5") {
+        Some(NativeProbeExecDiagnostic::ProcessLaunchAccessDenied)
+    } else if ascii_contains_ignore_case(stderr, b"process launch failed status=") {
+        Some(NativeProbeExecDiagnostic::ProcessLaunchFailed)
+    } else if native_probe_stderr_contains_access_denied(stderr)
+        && ascii_contains_ignore_case(stderr, b"failed to canonicalize codex_home")
+    {
+        Some(NativeProbeExecDiagnostic::CodexHomeCanonicalizationFailed)
+    } else if native_probe_stderr_contains_access_denied(stderr)
+        && (ascii_contains_ignore_case(stderr, b"failed to canonicalize current directory")
+            || ascii_contains_ignore_case(stderr, b"failed to canonicalize working directory")
+            || ascii_contains_ignore_case(stderr, b"failed to canonicalize cwd"))
+    {
+        Some(NativeProbeExecDiagnostic::ExplicitCwdCanonicalizationFailed)
+    } else if ascii_contains_ignore_case(stderr, b"failed to load configuration")
+        || ascii_contains_ignore_case(stderr, b"error loading configuration")
+        || ascii_contains_ignore_case(stderr, b"configuration load failed")
+    {
+        Some(NativeProbeExecDiagnostic::ConfigurationLoadFailed)
+    } else if ascii_contains_ignore_case(stderr, b"not logged in")
+        || ascii_contains_ignore_case(stderr, b"not authenticated")
+        || ascii_contains_ignore_case(stderr, b"login required")
+    {
+        Some(NativeProbeExecDiagnostic::NotLoggedIn)
+    } else if ascii_contains_ignore_case(stderr, b"unauthorized")
+        || ascii_contains_ignore_case(stderr, b"authentication failed")
+        || ascii_contains_ignore_case(stderr, b"invalid api key")
+        || ascii_contains_ignore_case(stderr, b"status: 401")
+    {
+        Some(NativeProbeExecDiagnostic::AuthenticationFailed)
+    } else if ascii_contains_ignore_case(stderr, b"failed to connect")
+        || ascii_contains_ignore_case(stderr, b"connection error")
+        || ascii_contains_ignore_case(stderr, b"network is unreachable")
+        || ascii_contains_ignore_case(stderr, b"dns error")
+    {
+        Some(NativeProbeExecDiagnostic::NetworkUnavailable)
+    } else if ascii_contains_ignore_case(stderr, b"unexpected argument")
+        || ascii_contains_ignore_case(stderr, b"unrecognized option")
+        || ascii_contains_ignore_case(stderr, b"invalid value")
+    {
+        Some(NativeProbeExecDiagnostic::CliArgumentRejected)
+    } else if ascii_contains_ignore_case(stderr, b"output schema")
+        || ascii_contains_ignore_case(stderr, b"json schema")
+    {
+        Some(NativeProbeExecDiagnostic::OutputSchemaRejected)
+    } else if ascii_contains_ignore_case(stderr, b"model not found")
+        || ascii_contains_ignore_case(stderr, b"model is not available")
+        || ascii_contains_ignore_case(stderr, b"unsupported model")
+    {
+        Some(NativeProbeExecDiagnostic::ModelUnavailable)
+    } else if native_probe_stderr_contains_access_denied(stderr)
+        && ascii_contains_ignore_case(stderr, b"\\ProgramData\\OpenAI\\Codex\\")
+    {
+        Some(NativeProbeExecDiagnostic::SystemCodexPathAccessDenied)
+    } else if native_probe_stderr_contains_access_denied(stderr)
+        && ascii_contains_ignore_case(stderr, b"\\planning-runtime\\provider\\codex-home")
+    {
+        Some(NativeProbeExecDiagnostic::ProviderCodexHomeAccessDenied)
+    } else if native_probe_stderr_contains_access_denied(stderr)
+        && ascii_contains_ignore_case(stderr, b"\\planning-runtime\\provider\\local-app-data")
+    {
+        Some(NativeProbeExecDiagnostic::ProviderLocalAppDataAccessDenied)
+    } else if native_probe_stderr_contains_access_denied(stderr)
+        && ascii_contains_ignore_case(stderr, b"\\planning-runtime\\provider\\temp")
+    {
+        Some(NativeProbeExecDiagnostic::ProviderTempAccessDenied)
+    } else if native_probe_stderr_contains_access_denied(stderr)
+        && (ascii_contains_ignore_case(stderr, b"\\planning-runtime\\provider")
+            || ascii_contains_ignore_case(stderr, b"current working directory"))
+    {
+        Some(NativeProbeExecDiagnostic::ProviderRootOrCurrentDirectoryAccessDenied)
+    } else if native_probe_stderr_contains_access_denied(stderr) {
+        Some(NativeProbeExecDiagnostic::AccessDeniedIo)
+    } else {
+        Some(NativeProbeExecDiagnostic::Other)
+    }
+}
+
+#[cfg(any(windows, test))]
+fn classify_native_probe_login_stderr(stderr: &[u8]) -> NativeProbeLoginDiagnostic {
+    let access_denied = native_probe_stderr_contains_access_denied(stderr);
+    if let Some(stage) = native_probe_containment_stage(stderr) {
+        NativeProbeLoginDiagnostic::ContainmentStage(stage)
+    } else if ascii_contains_ignore_case(stderr, b"process launch failed status=5") {
+        NativeProbeLoginDiagnostic::ProcessLaunchAccessDenied
+    } else if ascii_contains_ignore_case(stderr, b"process launch failed status=") {
+        NativeProbeLoginDiagnostic::ProcessLaunchFailed
+    } else if access_denied
+        && ascii_contains_ignore_case(stderr, b"failed to canonicalize codex_home")
+    {
+        NativeProbeLoginDiagnostic::CodexHomeCanonicalizationFailed
+    } else if access_denied && ascii_contains_ignore_case(stderr, b"failed to read codex_home") {
+        NativeProbeLoginDiagnostic::CodexHomeReadFailed
+    } else if ascii_contains_ignore_case(stderr, b"failed to read requirements file") {
+        NativeProbeLoginDiagnostic::RequirementsFileReadFailed
+    } else if ascii_contains_ignore_case(stderr, b"failed to read config file") {
+        NativeProbeLoginDiagnostic::ConfigFileReadFailed
+    } else if ascii_contains_ignore_case(
+        stderr,
+        b"authentication requirements do not permit any usable login method",
+    ) {
+        NativeProbeLoginDiagnostic::AuthenticationRequirementsNoUsableLoginMethod
+    } else if access_denied && ascii_contains_ignore_case(stderr, b"\\ProgramData\\OpenAI\\Codex\\")
+    {
+        NativeProbeLoginDiagnostic::SystemCodexPathAccessDenied
+    } else if access_denied
+        && ascii_contains_ignore_case(stderr, b"\\planning-runtime\\provider\\codex-home")
+    {
+        NativeProbeLoginDiagnostic::ProviderCodexHomeAccessDenied
+    } else if access_denied
+        && ascii_contains_ignore_case(stderr, b"\\planning-runtime\\provider\\local-app-data")
+    {
+        NativeProbeLoginDiagnostic::ProviderLocalAppDataAccessDenied
+    } else if access_denied
+        && ascii_contains_ignore_case(stderr, b"\\planning-runtime\\provider\\temp")
+    {
+        NativeProbeLoginDiagnostic::ProviderTempAccessDenied
+    } else if access_denied
+        && (ascii_contains_ignore_case(stderr, b"\\planning-runtime\\provider")
+            || ascii_contains_ignore_case(stderr, b"current working directory"))
+    {
+        NativeProbeLoginDiagnostic::ProviderRootOrCurrentDirectoryAccessDenied
+    } else if ascii_contains_ignore_case(stderr, b"failed to load configuration")
+        || ascii_contains_ignore_case(stderr, b"error loading configuration")
+        || ascii_contains_ignore_case(stderr, b"configuration load failed")
+    {
+        NativeProbeLoginDiagnostic::ConfigurationLoadFailed
+    } else if ascii_contains_ignore_case(stderr, b"error checking login status")
+        || ascii_contains_ignore_case(stderr, b"login status request failed")
+        || ascii_contains_ignore_case(stderr, b"authentication status")
+    {
+        NativeProbeLoginDiagnostic::LoginStatusFailed
+    } else if access_denied {
+        NativeProbeLoginDiagnostic::AccessDeniedIo
+    } else if ascii_contains_ignore_case(stderr, b"not logged in")
+        || ascii_contains_ignore_case(stderr, b"not authenticated")
+        || ascii_contains_ignore_case(stderr, b"login required")
+    {
+        NativeProbeLoginDiagnostic::NotLoggedIn
+    } else {
+        NativeProbeLoginDiagnostic::Other
+    }
+}
+
+#[cfg(any(windows, test))]
+fn native_probe_containment_stage(stderr: &[u8]) -> Option<u8> {
+    (1_u8..=32).find(|stage| {
+        ascii_contains_ignore_case(
+            stderr,
+            format!("containment setup failed stage={stage} status=").as_bytes(),
+        )
+    })
+}
+
+#[cfg(any(windows, test))]
+fn native_probe_stderr_contains_access_denied(stderr: &[u8]) -> bool {
+    ascii_contains_ignore_case(stderr, b"access is denied")
+        || ascii_contains_ignore_case(stderr, b"permission denied")
+        || ascii_contains_ignore_case(stderr, b"os error 5")
+}
+
+#[cfg(any(windows, test))]
+fn ascii_contains_ignore_case(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle))
+}
+
 fn planning_provider_diagnostic_code(error: CommandError) -> Option<u32> {
     match error {
         CommandError::Failed => Some(900),
@@ -915,6 +1617,148 @@ fn planning_provider_diagnostic_code(error: CommandError) -> Option<u32> {
     }
 }
 
+#[cfg(any(windows, test))]
+#[derive(Clone, Copy)]
+enum ProbePhaseOutcome {
+    NotRun,
+    Success,
+    RejectedOutput,
+    Error(CommandError),
+}
+
+#[cfg(any(windows, test))]
+fn probe_phase_exit_code(outcome: ProbePhaseOutcome) -> Option<u32> {
+    match outcome {
+        ProbePhaseOutcome::Success | ProbePhaseOutcome::RejectedOutput => Some(0),
+        ProbePhaseOutcome::Error(CommandError::Exited(code)) => Some(code),
+        ProbePhaseOutcome::NotRun
+        | ProbePhaseOutcome::Error(
+            CommandError::Failed | CommandError::Malformed | CommandError::Cancelled,
+        ) => None,
+    }
+}
+
+#[cfg(any(windows, test))]
+fn probe_phase_diagnostic_code(outcome: ProbePhaseOutcome) -> Option<u32> {
+    match outcome {
+        ProbePhaseOutcome::RejectedOutput => Some(901),
+        ProbePhaseOutcome::Error(error) => planning_provider_diagnostic_code(error),
+        ProbePhaseOutcome::NotRun | ProbePhaseOutcome::Success => None,
+    }
+}
+
+#[cfg(any(windows, test))]
+fn native_probe_post_command_authority_current(runtime_valid: bool, control_current: bool) -> bool {
+    runtime_valid && control_current
+}
+
+#[cfg(any(windows, test))]
+fn native_provider_probe_login_args() -> [&'static str; 6] {
+    [
+        "--config",
+        FILE_BACKED_CODEX_AUTH_CONFIG,
+        "--config",
+        "project_root_markers=[]",
+        "login",
+        "status",
+    ]
+}
+
+#[cfg(any(windows, test))]
+fn native_provider_probe_exec_args(output_schema: &str) -> Vec<&str> {
+    vec![
+        "exec",
+        "--strict-config",
+        "--ephemeral",
+        "--ignore-user-config",
+        "--ignore-rules",
+        "--skip-git-repo-check",
+        "--sandbox",
+        "danger-full-access",
+        "--model",
+        MODEL_ID,
+        "--config",
+        FILE_BACKED_CODEX_AUTH_CONFIG,
+        "--config",
+        "project_root_markers=[]",
+        "--config",
+        "model_reasoning_effort=\"high\"",
+        "--config",
+        "model_reasoning_summary=\"none\"",
+        "--config",
+        "model_verbosity=\"low\"",
+        "--config",
+        "features.shell_tool=false",
+        "--config",
+        "features.shell_snapshot=false",
+        "--config",
+        "features.skill_mcp_dependency_install=false",
+        "--config",
+        "features.skill_search=false",
+        "--config",
+        "features.plugins=false",
+        "--config",
+        "features.plugin_sharing=false",
+        "--config",
+        "features.remote_plugin=false",
+        "--config",
+        "features.multi_agent=false",
+        "--config",
+        "features.apps=false",
+        "--config",
+        "features.browser_use=false",
+        "--config",
+        "features.browser_use_external=false",
+        "--config",
+        "features.browser_use_full_cdp_access=false",
+        "--config",
+        "features.in_app_browser=false",
+        "--config",
+        "features.computer_use=false",
+        "--config",
+        "features.image_generation=false",
+        "--config",
+        "features.view_image=false",
+        "--config",
+        "features.hooks=false",
+        "--config",
+        "features.unified_exec=false",
+        "--config",
+        "features.code_mode_host=false",
+        "--config",
+        "features.goals=false",
+        "--config",
+        "features.tool_suggest=false",
+        "--config",
+        "features.tool_call_mcp_elicitation=false",
+        "--config",
+        "skills.include_instructions=false",
+        "--config",
+        "skills.bundled.enabled=false",
+        "--config",
+        "web_search=\"disabled\"",
+        "--config",
+        "tools.web_search=false",
+        "--output-schema",
+        output_schema,
+        "-",
+    ]
+}
+
+#[cfg(any(windows, test))]
+fn native_provider_probe_exec_args_match(args: &[&str]) -> bool {
+    let Some(output_schema_index) = args
+        .iter()
+        .position(|argument| *argument == "--output-schema")
+    else {
+        return false;
+    };
+    let Some(output_schema) = args.get(output_schema_index + 1) else {
+        return false;
+    };
+    args == native_provider_probe_exec_args(output_schema)
+}
+
 struct CommandInvocation<'a> {
     current_dir: &'a Path,
     args: &'a [&'a str],
@@ -922,6 +1766,7 @@ struct CommandInvocation<'a> {
     input: &'a [u8],
     max_output: usize,
     isolation: &'a ProcessIsolation,
+    stderr: CommandStderrMode,
 }
 
 fn run_command(
@@ -929,6 +1774,15 @@ fn run_command(
     control: &PlanningEffectControl,
     invocation: CommandInvocation<'_>,
 ) -> Result<Vec<u8>, CommandError> {
+    if !invocation.stderr.valid_for(invocation.args) {
+        return Err(CommandError::Failed);
+    }
+    #[cfg(windows)]
+    if let Err(error) = invocation.isolation.revalidate() {
+        invocation.stderr.record_containment_failure(30, 0);
+        return Err(error);
+    }
+    #[cfg(not(windows))]
     invocation.isolation.revalidate()?;
     #[cfg(windows)]
     {
@@ -1018,7 +1872,7 @@ fn run_command_portable(
     stdin.write_all(input).map_err(|_| CommandError::Failed)?;
     drop(stdin);
     let stdout = child.stdout.take().ok_or(CommandError::Failed)?;
-    let output_thread = bounded_reader(stdout, max_output);
+    let output_thread = bounded_reader(stdout, max_output, false);
     loop {
         if !control.poll() {
             containment.terminate(&mut child);
@@ -1051,6 +1905,7 @@ fn run_command_portable(
 fn bounded_reader(
     mut reader: impl Read + Send + 'static,
     max: usize,
+    allow_empty: bool,
 ) -> thread::JoinHandle<Result<Vec<u8>, CommandError>> {
     thread::spawn(move || {
         let mut retained = Vec::new();
@@ -1067,7 +1922,7 @@ fn bounded_reader(
                 oversized = true;
             }
         }
-        if oversized || retained.is_empty() {
+        if oversized || (!allow_empty && retained.is_empty()) {
             Err(CommandError::Malformed)
         } else {
             Ok(retained)
@@ -1363,6 +2218,21 @@ fn hex(bytes: &[u8]) -> String {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_reader_allows_empty_output_only_when_explicitly_selected() {
+        assert_eq!(
+            bounded_reader(std::io::Cursor::new(Vec::new()), 1, true)
+                .join()
+                .unwrap()
+                .unwrap(),
+            Vec::<u8>::new(),
+        );
+        assert!(bounded_reader(std::io::Cursor::new(Vec::new()), 1, false)
+            .join()
+            .unwrap()
+            .is_err());
+    }
     use std::os::unix::fs::PermissionsExt;
     use std::sync::atomic::AtomicBool;
     use std::sync::mpsc;
@@ -1391,6 +2261,364 @@ mod tests {
             planning_provider_diagnostic_code(CommandError::Cancelled),
             None
         );
+    }
+
+    #[test]
+    fn native_probe_phase_receipt_codes_distinguish_not_run_success_and_rejection() {
+        assert_eq!(probe_phase_exit_code(ProbePhaseOutcome::NotRun), None);
+        assert_eq!(probe_phase_diagnostic_code(ProbePhaseOutcome::NotRun), None);
+        assert_eq!(probe_phase_exit_code(ProbePhaseOutcome::Success), Some(0));
+        assert_eq!(
+            probe_phase_diagnostic_code(ProbePhaseOutcome::Success),
+            None
+        );
+        assert_eq!(
+            probe_phase_exit_code(ProbePhaseOutcome::RejectedOutput),
+            Some(0)
+        );
+        assert_eq!(
+            probe_phase_diagnostic_code(ProbePhaseOutcome::RejectedOutput),
+            Some(901)
+        );
+        assert_eq!(
+            probe_phase_exit_code(ProbePhaseOutcome::Error(CommandError::Exited(17))),
+            Some(17)
+        );
+        assert_eq!(
+            probe_phase_diagnostic_code(ProbePhaseOutcome::Error(CommandError::Exited(17))),
+            Some(1017)
+        );
+        assert_eq!(
+            probe_phase_diagnostic_code(ProbePhaseOutcome::Error(CommandError::Cancelled)),
+            None
+        );
+    }
+
+    #[test]
+    fn native_probe_post_command_poll_dominates_every_receipt_path() {
+        assert!(native_probe_post_command_authority_current(true, true));
+        for (runtime_valid, control_current) in [(false, true), (true, false), (false, false)] {
+            assert!(!native_probe_post_command_authority_current(
+                runtime_valid,
+                control_current
+            ));
+        }
+    }
+
+    #[test]
+    fn native_probe_codex_invocations_disable_cwd_ancestor_project_discovery() {
+        let login = native_provider_probe_login_args();
+        assert_eq!(
+            login
+                .windows(2)
+                .filter(|pair| pair == &["--config", "project_root_markers=[]"])
+                .count(),
+            1
+        );
+        assert_eq!(&login[4..], &["login", "status"]);
+
+        let exec = native_provider_probe_exec_args("schema.json");
+        assert_eq!(
+            exec.windows(2)
+                .filter(|pair| pair == &["--config", "project_root_markers=[]"])
+                .count(),
+            1
+        );
+        assert!(!exec.contains(&"--cd"));
+    }
+
+    #[test]
+    fn native_login_stderr_classification_is_closed_numeric_and_content_free() {
+        for (stderr, expected) in [
+            (
+                b"FAILED TO READ REQUIREMENTS FILE C:\\ProgramData\\OpenAI\\Codex\\requirements.toml token=private; not logged in"
+                    .as_slice(),
+                NativeProbeLoginDiagnostic::RequirementsFileReadFailed,
+            ),
+            (
+                b"Failed to read config file C:\\ProgramData\\OpenAI\\Codex\\config.toml?secret=private; permission denied; failed to load configuration"
+                    .as_slice(),
+                NativeProbeLoginDiagnostic::ConfigFileReadFailed,
+            ),
+            (
+                b"AUTHENTICATION REQUIREMENTS DO NOT PERMIT ANY USABLE LOGIN METHOD token=private; not logged in"
+                    .as_slice(),
+                NativeProbeLoginDiagnostic::AuthenticationRequirementsNoUsableLoginMethod,
+            ),
+            (
+                b"failed to canonicalize CODEX_HOME: Access is denied. (os error 5)"
+                    .as_slice(),
+                NativeProbeLoginDiagnostic::CodexHomeCanonicalizationFailed,
+            ),
+            (
+                b"failed to read CODEX_HOME: permission denied".as_slice(),
+                NativeProbeLoginDiagnostic::CodexHomeReadFailed,
+            ),
+            (
+                b"C:\\ProgramData\\OpenAI\\Codex\\managed.toml?token=secret: ACCESS IS DENIED"
+                    .as_slice(),
+                NativeProbeLoginDiagnostic::SystemCodexPathAccessDenied,
+            ),
+            (
+                b"C:\\ProgramData\\Assemblywright\\planning-runtime\\provider\\codex-home\\auth.json?token=secret: permission denied"
+                    .as_slice(),
+                NativeProbeLoginDiagnostic::ProviderCodexHomeAccessDenied,
+            ),
+            (
+                b"C:\\ProgramData\\Assemblywright\\planning-runtime\\provider\\local-app-data\\state?token=secret: os error 5"
+                    .as_slice(),
+                NativeProbeLoginDiagnostic::ProviderLocalAppDataAccessDenied,
+            ),
+            (
+                b"C:\\ProgramData\\Assemblywright\\planning-runtime\\provider\\temp\\state?token=secret: access is denied"
+                    .as_slice(),
+                NativeProbeLoginDiagnostic::ProviderTempAccessDenied,
+            ),
+            (
+                b"C:\\ProgramData\\Assemblywright\\planning-runtime\\provider\\other?token=secret: permission denied"
+                    .as_slice(),
+                NativeProbeLoginDiagnostic::ProviderRootOrCurrentDirectoryAccessDenied,
+            ),
+            (
+                b"Current working directory contained token=secret: os error 5".as_slice(),
+                NativeProbeLoginDiagnostic::ProviderRootOrCurrentDirectoryAccessDenied,
+            ),
+            (
+                b"Failed to load configuration C:\\private\\config.toml?token=secret: ACCESS IS DENIED (os error 5)"
+                    .as_slice(),
+                NativeProbeLoginDiagnostic::ConfigurationLoadFailed,
+            ),
+            (
+                b"Failed to load configuration C:\\ProgramData\\OpenAI\\Codex\\config.toml?token=secret"
+                    .as_slice(),
+                NativeProbeLoginDiagnostic::ConfigurationLoadFailed,
+            ),
+            (
+                b"Not logged in. Run codex login.".as_slice(),
+                NativeProbeLoginDiagnostic::NotLoggedIn,
+            ),
+            (
+                b"Failed to load configuration: access denied".as_slice(),
+                NativeProbeLoginDiagnostic::ConfigurationLoadFailed,
+            ),
+            (
+                b"Login status request failed".as_slice(),
+                NativeProbeLoginDiagnostic::LoginStatusFailed,
+            ),
+            (
+                b"unrecognized failure with secret-shaped material".as_slice(),
+                NativeProbeLoginDiagnostic::Other,
+            ),
+            (
+                b"process launch failed status=5".as_slice(),
+                NativeProbeLoginDiagnostic::ProcessLaunchAccessDenied,
+            ),
+            (
+                b"process launch failed status=193".as_slice(),
+                NativeProbeLoginDiagnostic::ProcessLaunchFailed,
+            ),
+        ] {
+            assert_eq!(classify_native_probe_login_stderr(stderr), expected);
+        }
+        assert_eq!(
+            classify_native_probe_login_stderr(
+                b"containment setup failed stage=6 status=5 private material is absent",
+            ),
+            NativeProbeLoginDiagnostic::ContainmentStage(6),
+        );
+        assert_eq!(NativeProbeLoginDiagnostic::ContainmentStage(6).code(), 966);
+        assert_eq!(
+            [
+                NativeProbeLoginDiagnostic::NotLoggedIn.code(),
+                NativeProbeLoginDiagnostic::ConfigurationLoadFailed.code(),
+                NativeProbeLoginDiagnostic::LoginStatusFailed.code(),
+                NativeProbeLoginDiagnostic::Other.code(),
+                NativeProbeLoginDiagnostic::RequirementsFileReadFailed.code(),
+                NativeProbeLoginDiagnostic::ConfigFileReadFailed.code(),
+                NativeProbeLoginDiagnostic::AuthenticationRequirementsNoUsableLoginMethod.code(),
+                NativeProbeLoginDiagnostic::AccessDeniedIo.code(),
+                NativeProbeLoginDiagnostic::SystemCodexPathAccessDenied.code(),
+                NativeProbeLoginDiagnostic::ProviderCodexHomeAccessDenied.code(),
+                NativeProbeLoginDiagnostic::ProviderLocalAppDataAccessDenied.code(),
+                NativeProbeLoginDiagnostic::ProviderTempAccessDenied.code(),
+                NativeProbeLoginDiagnostic::ProviderRootOrCurrentDirectoryAccessDenied.code(),
+                NativeProbeLoginDiagnostic::CodexHomeCanonicalizationFailed.code(),
+                NativeProbeLoginDiagnostic::CodexHomeReadFailed.code(),
+                NativeProbeLoginDiagnostic::ProcessLaunchAccessDenied.code(),
+                NativeProbeLoginDiagnostic::ProcessLaunchFailed.code(),
+            ],
+            [
+                920, 921, 922, 923, 924, 925, 926, 927, 928, 929, 930, 931, 932, 933, 934, 935,
+                936,
+            ]
+        );
+
+        let captured = Arc::new(Mutex::new(
+            b"C:\\ProgramData\\Assemblywright\\planning-runtime\\provider\\temp\\private?token=secret: permission denied"
+                .to_vec(),
+        ));
+        assert_eq!(
+            native_probe_login_diagnostic(&captured),
+            NativeProbeLoginDiagnostic::ProviderTempAccessDenied
+        );
+        assert!(captured.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn only_exact_native_probe_commands_may_capture_bounded_stderr() {
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let mode = CommandStderrMode::CaptureBounded {
+            max_bytes: NATIVE_PROVIDER_PROBE_LOGIN_STDERR_MAX_BYTES,
+            output: Arc::clone(&output),
+        };
+        assert!(mode.valid_for(&native_provider_probe_login_args()));
+        assert!(mode.allows_empty_stdout(&native_provider_probe_login_args()));
+        assert!(!mode.valid_for(&native_provider_probe_exec_args("schema.json")));
+        assert!(!mode.allows_empty_stdout(&native_provider_probe_exec_args("schema.json")));
+
+        let exec_mode = CommandStderrMode::CaptureBounded {
+            max_bytes: NATIVE_PROVIDER_PROBE_EXEC_STDERR_MAX_BYTES,
+            output: Arc::clone(&output),
+        };
+        let exec_args = native_provider_probe_exec_args("schema.json");
+        assert!(exec_mode.valid_for(&exec_args));
+        assert!(!exec_mode.allows_empty_stdout(&exec_args));
+        assert!(!exec_mode.valid_for(&native_provider_probe_login_args()));
+        assert!(!exec_mode.valid_for(&["exec", "-"]));
+        assert!(CommandStderrMode::default().valid_for(&[]));
+
+        let oversized = CommandStderrMode::CaptureBounded {
+            max_bytes: NATIVE_PROVIDER_PROBE_LOGIN_STDERR_MAX_BYTES + 1,
+            output,
+        };
+        assert!(!oversized.valid_for(&native_provider_probe_login_args()));
+    }
+
+    #[test]
+    fn native_exec_stderr_classification_is_closed_numeric_and_content_free() {
+        assert_eq!(
+            classify_native_probe_exec_stderr(
+                b"containment setup failed stage=15 status=87 private material is absent",
+            ),
+            Some(NativeProbeExecDiagnostic::ContainmentStage(15)),
+        );
+        assert_eq!(NativeProbeExecDiagnostic::ContainmentStage(15).code(), 1005);
+        for (stderr, expected) in [
+            (
+                b"Failed to load configuration: private path".as_slice(),
+                Some(NativeProbeExecDiagnostic::ConfigurationLoadFailed),
+            ),
+            (
+                b"Not logged in. Run codex login.".as_slice(),
+                Some(NativeProbeExecDiagnostic::NotLoggedIn),
+            ),
+            (
+                b"request failed: status: 401 token=private".as_slice(),
+                Some(NativeProbeExecDiagnostic::AuthenticationFailed),
+            ),
+            (
+                b"failed to connect: dns error".as_slice(),
+                Some(NativeProbeExecDiagnostic::NetworkUnavailable),
+            ),
+            (
+                b"error: unexpected argument '--private'".as_slice(),
+                Some(NativeProbeExecDiagnostic::CliArgumentRejected),
+            ),
+            (
+                b"invalid output schema at private path".as_slice(),
+                Some(NativeProbeExecDiagnostic::OutputSchemaRejected),
+            ),
+            (
+                b"model is not available for private account".as_slice(),
+                Some(NativeProbeExecDiagnostic::ModelUnavailable),
+            ),
+            (
+                b"failed to canonicalize CODEX_HOME: Access is denied. (os error 5)"
+                    .as_slice(),
+                Some(NativeProbeExecDiagnostic::CodexHomeCanonicalizationFailed),
+            ),
+            (
+                b"failed to canonicalize current directory: permission denied".as_slice(),
+                Some(NativeProbeExecDiagnostic::ExplicitCwdCanonicalizationFailed),
+            ),
+            (
+                b"C:\\ProgramData\\OpenAI\\Codex\\requirements.toml: access is denied"
+                    .as_slice(),
+                Some(NativeProbeExecDiagnostic::SystemCodexPathAccessDenied),
+            ),
+            (
+                b"C:\\ProgramData\\Assemblywright\\planning-runtime\\provider\\codex-home\\auth.json: access is denied"
+                    .as_slice(),
+                Some(NativeProbeExecDiagnostic::ProviderCodexHomeAccessDenied),
+            ),
+            (
+                b"C:\\ProgramData\\Assemblywright\\planning-runtime\\provider\\local-app-data\\state: access is denied"
+                    .as_slice(),
+                Some(NativeProbeExecDiagnostic::ProviderLocalAppDataAccessDenied),
+            ),
+            (
+                b"C:\\ProgramData\\Assemblywright\\planning-runtime\\provider\\temp\\state: access is denied"
+                    .as_slice(),
+                Some(NativeProbeExecDiagnostic::ProviderTempAccessDenied),
+            ),
+            (
+                b"C:\\ProgramData\\Assemblywright\\planning-runtime\\provider: access is denied"
+                    .as_slice(),
+                Some(NativeProbeExecDiagnostic::ProviderRootOrCurrentDirectoryAccessDenied),
+            ),
+            (
+                b"private path: access is denied (os error 5)".as_slice(),
+                Some(NativeProbeExecDiagnostic::AccessDeniedIo),
+            ),
+            (
+                b"unrecognized failure with secret-shaped material".as_slice(),
+                Some(NativeProbeExecDiagnostic::Other),
+            ),
+            (
+                b"process launch failed status=5".as_slice(),
+                Some(NativeProbeExecDiagnostic::ProcessLaunchAccessDenied),
+            ),
+            (
+                b"process launch failed status=193".as_slice(),
+                Some(NativeProbeExecDiagnostic::ProcessLaunchFailed),
+            ),
+            (b"".as_slice(), None),
+        ] {
+            assert_eq!(classify_native_probe_exec_stderr(stderr), expected);
+        }
+        assert_eq!(
+            [
+                NativeProbeExecDiagnostic::ConfigurationLoadFailed.code(),
+                NativeProbeExecDiagnostic::NotLoggedIn.code(),
+                NativeProbeExecDiagnostic::AuthenticationFailed.code(),
+                NativeProbeExecDiagnostic::NetworkUnavailable.code(),
+                NativeProbeExecDiagnostic::CliArgumentRejected.code(),
+                NativeProbeExecDiagnostic::OutputSchemaRejected.code(),
+                NativeProbeExecDiagnostic::ModelUnavailable.code(),
+                NativeProbeExecDiagnostic::SystemCodexPathAccessDenied.code(),
+                NativeProbeExecDiagnostic::ProviderCodexHomeAccessDenied.code(),
+                NativeProbeExecDiagnostic::ProviderLocalAppDataAccessDenied.code(),
+                NativeProbeExecDiagnostic::ProviderTempAccessDenied.code(),
+                NativeProbeExecDiagnostic::ProviderRootOrCurrentDirectoryAccessDenied.code(),
+                NativeProbeExecDiagnostic::CodexHomeCanonicalizationFailed.code(),
+                NativeProbeExecDiagnostic::ExplicitCwdCanonicalizationFailed.code(),
+                NativeProbeExecDiagnostic::AccessDeniedIo.code(),
+                NativeProbeExecDiagnostic::Other.code(),
+                NativeProbeExecDiagnostic::ProcessLaunchAccessDenied.code(),
+                NativeProbeExecDiagnostic::ProcessLaunchFailed.code(),
+            ],
+            [
+                940, 941, 942, 943, 944, 945, 946, 947, 948, 949, 950, 951, 954, 955, 952, 953,
+                956, 957,
+            ]
+        );
+
+        let captured = Arc::new(Mutex::new(b"failed to connect with token=private".to_vec()));
+        assert_eq!(
+            native_probe_exec_diagnostic(&captured),
+            Some(NativeProbeExecDiagnostic::NetworkUnavailable)
+        );
+        assert!(captured.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -1424,6 +2652,7 @@ mod tests {
                     input: b"untrusted planning request",
                     max_output: 64,
                     isolation: &ProcessIsolation::unrestricted_test_runtime(),
+                    stderr: CommandStderrMode::default(),
                 },
             );
             completed_tx.send(()).unwrap();

@@ -32,6 +32,20 @@ before each effect. The exact fixed profile SID is matched before the profile is
 registered idempotently for the current Windows service identity; owner registration
 does not substitute for LocalSystem registration. Provider stdin, stdout, and stderr
 are all valid inherited handles, with stderr drained concurrently and discarded.
+Only the provider's already-DACL-scoped writable roots and descendants receive exact
+inheritable Low/No-Write-Up mandatory labels. Immutable provider assets and their root
+remain unlabeled. Provisioning can resume an interrupted absent-to-exact label migration,
+but rejects every other label shape; mutation is performed through identity-bound
+no-delete handles, and the whole profile is revalidated before provider output returns.
+
+The owner-confirmed real-Codex diagnostic is a separate stopped-service proof seam,
+not a product effect route. It binds the installed service executable/data-directory
+configuration and current schema-v4 runtime, requires the service to remain stopped,
+runs exact login status, and conditionally runs one fixed Public structured request
+through the existing provider AppContainer/private-desktop/Job path. Its output is a
+metadata-only receipt of categories, numeric codes, hashes, and exact profile/runtime
+bindings; process text and structured content are discarded. It creates no planning
+record, approval, GitHub intent, repository, queue item, or execution authority.
 
 Full-machine target phase: planning/creation containment has bounded native Windows LocalSystem/AppContainer service proof; execution admission is implemented and effects remain unavailable.
 

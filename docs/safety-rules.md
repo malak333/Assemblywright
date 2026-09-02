@@ -45,7 +45,12 @@ The inert planning slice additionally requires:
   station/desktop. The GUI-object DACL admits only LocalSystem, the provisioning
   owner, and the exact profile; `Winsta0` is never widened. Codex `LOCALAPPDATA` and
   `TEMP`/`TMP` are distinct validated provider-private writable roots, never ambient
-  owner directories. This grants no implementation authority:
+  owner directories. The authoritative working directory remains the canonical,
+  identity-validated runtime path for every admission and revalidation. Only the
+  child-facing `CreateProcessAsUserW` current-directory value strips an exact
+  extended-length local-drive prefix (`\\?\C:\` to `C:\`); UNC, volume-GUID, and all
+  other path forms remain unchanged and fail closed under the existing launch policy.
+  This grants no implementation authority:
   planning remains schema-bound and all Codex tools stay disabled. Non-Windows
   planning retains the inner `read-only` sandbox.
   Windows schema v4 keeps the master config/locator owner-private under `DataDir` and
@@ -62,6 +67,23 @@ The inert planning slice additionally requires:
   contained provider launch using `STARTF_USESTDHANDLES` must inherit valid stdin,
   stdout, and stderr handles; stderr is drained concurrently and discarded without
   entering diagnostics, audit, or provider output.
+  The provider's four writable roots (`codex-home`, reconciliation, temporary state,
+  and private local application data) carry exact inheritable Low/No-Write-Up
+  mandatory labels so the AppContainer can write only inside its existing exact DACL
+  scope. The provider root, staged executables, configuration, and schema remain
+  unlabeled. Label migration is resumable only across absent or exact labels; malformed,
+  foreign, protected, or immutable-object labels fail closed. Label writes use held,
+  identity-bound no-delete handles, and containment is revalidated after process exit
+  before any captured provider output is accepted.
+  A real-Codex native diagnostic is permitted only after explicit owner confirmation
+  and while the exact SCM-bound master service is fully stopped. It must match the
+  installed executable/data binding, revalidate the complete current runtime, reuse
+  the provider restricted-token AppContainer/private-desktop/ACL/environment/Job path,
+  run exact login status first, and skip the fixed Public structured request on any
+  login failure. Its receipt is restricted to fixed categories, numeric codes, hashes,
+  and exact bindings; process text, prompts, paths, tokens, credentials, and generated
+  content are forbidden. It creates no draft, approval, GitHub intent/effect, queue
+  entry, or execution authority, and is not release proof.
   Production Windows runtime loading remains unavailable until distinct restricted
   planning and GitHub identities/ACLs and atomic containment are provisioned and proved. The Mac UI
   may review and approve frozen specifications, but target effects fail closed;
