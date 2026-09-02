@@ -2869,10 +2869,13 @@ fn token_information_sid_matches(
     information_class: windows_sys::Win32::Security::TOKEN_INFORMATION_CLASS,
     expected: PSID,
 ) -> Result<bool, CommandError> {
-    let minimum_bytes = match information_class {
-        TokenUser => size_of::<TOKEN_USER>() as u32,
-        TokenOwner => size_of::<TOKEN_OWNER>() as u32,
-        _ => return Err(CommandError::Failed),
+    let token_user = information_class == TokenUser;
+    let minimum_bytes = if token_user {
+        size_of::<TOKEN_USER>() as u32
+    } else if information_class == TokenOwner {
+        size_of::<TOKEN_OWNER>() as u32
+    } else {
+        return Err(CommandError::Failed);
     };
     let mut bytes = 0;
     unsafe { GetTokenInformation(token, information_class, null_mut(), 0, &mut bytes) };
@@ -2892,10 +2895,10 @@ fn token_information_sid_matches(
     {
         return Err(CommandError::Failed);
     }
-    let observed = match information_class {
-        TokenUser => unsafe { &*(buffer.as_ptr().cast::<TOKEN_USER>()) }.User.Sid,
-        TokenOwner => unsafe { &*(buffer.as_ptr().cast::<TOKEN_OWNER>()) }.Owner,
-        _ => unreachable!("information class was validated before querying the token"),
+    let observed = if token_user {
+        unsafe { &*(buffer.as_ptr().cast::<TOKEN_USER>()) }.User.Sid
+    } else {
+        unsafe { &*(buffer.as_ptr().cast::<TOKEN_OWNER>()) }.Owner
     };
     if observed.is_null() || expected.is_null() {
         return Err(CommandError::Failed);
