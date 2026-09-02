@@ -330,14 +330,58 @@ Full-machine target phase: planning/creation containment has bounded native Wind
   stdin, stdout, and stderr handles. The adapter drains stderr concurrently to avoid a
   blocked child but discards its bytes within the fixed cap; provider stderr content is
   never returned, audited, or included in diagnostics. Windows extended-length paths
-  remain valid for held-path verification, while environment values consumed by Codex
-  use normalized local-drive strings.
+  remain authoritative for held-path verification. Immediately before the shared
+  `CreateProcessAsUserW` call, only an exact extended-length local-drive working
+  directory is copied into ordinary drive form for the child; the canonical invocation
+  path is not replaced, and UNC or volume-GUID paths are unchanged. Environment values
+  consumed by Codex use the same bounded local-drive normalization.
 - The native Windows planning service E2E installs a disposable LocalSystem master,
   launches the synthetic Codex fixture inside the fixed provider AppContainer, drains
   32 KiB of fixture stderr, verifies the planning response, and removes only its exact
   disposable service and data roots. It keeps the production service untouched. This
   is stronger than source-contract or direct-loopback evidence but does not prove real
   Codex authentication, network/model behavior, production deployment, or GitHub effects.
+- The real-Codex planning diagnostic is deliberately outside the serving product path.
+  An elevated owner-confirmed script stops the exact installed service; the master
+  independently verifies the stopped SCM state, installed executable/data binding,
+  and current schema-v4 runtime before invoking exact `codex login status`. Only a
+  successful login permits one fixed Public structured request through the unchanged
+  provider restricted-token AppContainer/private-desktop/Job boundary and exact five-
+  variable Codex environment. Its metadata-only receipt carries fixed categories,
+  numeric codes, hashes, and binding identities, never process text, paths, prompts,
+  tokens, credentials, or specification content. The script restores and health-checks
+  a service that it stopped. This is exact-run diagnostic evidence, not provider
+  availability, repository creation, publication, release, or usability proof.
+- Codex `login status` can exit successfully while writing the account result to stderr
+  and leaving stdout empty. The native boundary therefore permits empty stdout only for
+  the exact pinned login-status argv after an exit-code-zero process result; structured
+  execution output remains nonempty and strict. Stderr stays bounded, is reduced to a
+  closed numeric classification when needed, and is zeroized rather than retained.
+- Continuous probe authority must distinguish immutable authority from provider-owned
+  writable runtime state. Rewalking the complete profile every 25 ms raced legitimate
+  Codex writes and could cancel a valid call. The proven boundary performs full profile
+  revalidation before launch and after process completion, while the in-flight poll
+  checks only the exact stopped SCM configuration/current identity and the durable
+  unpaused revision. Any of those authority changes still terminates the Job and
+  suppresses output.
+- The 2026-09-02 owner flow is live external-effect evidence for one bounded candidate,
+  not deployment evidence. The native real-Codex receipt succeeded with output digest
+  `69d4374ec77d76b92afec52fdbe05ab06b3bee8085aa4ba308ea6d2775701417`.
+  A separately owner-approved Assemblywright request then created the Public repository
+  `malak333/final-fantasy-tactics-site`; its frozen specification digest was
+  `4399b09c1852315edaffbe2321c0ecd5fbcae572f281246945e7847257ad817c` and its
+  creation-evidence digest was
+  `27471316866f06f81c77d2bf9a63b2253ee622ef188539ef6aa2a9f6bf2f6515`.
+  The exact prior production executable was restored and health-checked afterward.
+  This proves that single brainstorming/approval/creation run only; it does not prove
+  that the candidate is deployed, that arbitrary repositories are supported, or that
+  execution, signing, installation, and two-host release evidence exist.
+- Windows AppContainer write access also depends on mandatory integrity control, not
+  only the DACL. The provider's four writable roots and descendants therefore require
+  exact Low/No-Write-Up labels, while immutable assets and the provider root must remain
+  unlabeled. Provisioning resumes only absent/exact partial migration, holds identity-
+  bound no-delete handles during label mutation, and revalidates the profile after each
+  contained process before accepting output.
 - The native loopback HTTP E2E drives authenticated Public-only provider disclosure,
   exact replay, durable intent, GitHub create/reconciliation, and fixed redacted error
   boundaries with synthetic process adapters. The Windows-only mTLS E2E separately

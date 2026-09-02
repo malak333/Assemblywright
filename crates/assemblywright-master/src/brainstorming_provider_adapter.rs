@@ -674,6 +674,10 @@ fn codex_arguments(configuration: &Configuration) -> Vec<OsString> {
         "--model",
         MODEL_ID,
         "--config",
+        "cli_auth_credentials_store=\"file\"",
+        "--config",
+        "project_root_markers=[]",
+        "--config",
         "model_reasoning_effort=\"high\"",
         "--config",
         "model_reasoning_summary=\"none\"",
@@ -1316,6 +1320,8 @@ mod tests {
         };
         let arguments = codex_arguments(&configuration);
         for required in [
+            "cli_auth_credentials_store=\"file\"",
+            "project_root_markers=[]",
             "features.shell_tool=false",
             "features.skill_search=false",
             "features.plugins=false",
@@ -1331,6 +1337,14 @@ mod tests {
         ] {
             assert!(arguments.iter().any(|argument| argument == required));
         }
+        assert_eq!(
+            arguments
+                .windows(2)
+                .filter(|pair| { pair[0] == "--config" && pair[1] == "project_root_markers=[]" })
+                .count(),
+            1
+        );
+        assert!(!arguments.iter().any(|argument| argument == "--cd"));
         #[cfg(windows)]
         {
             assert!(arguments

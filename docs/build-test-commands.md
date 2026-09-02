@@ -117,6 +117,54 @@ asserts that the production service is untouched. This proves the synthetic nati
 service boundary, not real Codex authentication, network/model quality, GitHub effects,
 production planning configuration, or deployed execution authority.
 
+After the exact production runtime is provisioned, an elevated owner may run the
+real-Codex diagnostic without creating a draft, approval, repository, or queue entry:
+
+```powershell
+cargo test -p assemblywright-master --test windows_planning_real_codex_probe_contract
+
+& .\scripts\windows-planning-real-codex-probe.ps1 `
+  -MasterExe C:\exact\installed\assemblywright-master.exe `
+  -DataDir C:\exact\master\data `
+  -ServiceName AssemblywrightMaster `
+  -Confirm
+```
+
+The script stops the exact installed service, and the native command independently
+requires the service to be fully stopped and bound to that same executable and data
+directory. It then revalidates schema-v4 runtime hashes, ACLs, profile SID, and private
+roots; runs exact `codex login status`; and only on success runs one fixed Public,
+tool-disabled structured request through the same restricted-token AppContainer,
+private desktop, inherited handles, closed five-variable Codex environment, and
+kill-on-close Job. Its four supplied path values use the provider adapter's exact
+Windows local-drive formatting: only `\\?\C:\...`-form local-drive prefixes are
+removed; UNC and all other namespaces remain unchanged. Before each process and after
+it exits, the full runtime and profile boundary are revalidated. While the child runs,
+the 25 ms authority probe checks that the SCM service remains stopped with the exact
+configuration and current token identity and that the durable pause revision remains
+unchanged; drift terminates the Job. It does not repeatedly walk provider-owned
+writable state while Codex is legitimately updating that state. The health endpoint is
+derived and validated from the exact SCM `--bind` before stopping, never caller supplied. The script restarts the service and verifies that preflight-bound health endpoint in `finally` when it
+was initially running, even when the probe emits no receipt. Its receipt contains only fixed outcome categories, numeric
+exit/diagnostic codes, hashes, and exact binding identities. It never includes process
+text, prompts, paths, tokens, or credentials. A successful receipt is live diagnostic
+evidence for that exact run only; it is not GitHub-effect, production availability,
+signed-release, or owner-usability proof.
+
+Before launch, authority-open rejection exposes only one fixed nonsecret cluster code:
+`native_probe_service_configuration`, `native_probe_executable_command_binding`,
+`native_probe_account_identity`, `native_probe_profile_revalidation`,
+`native_probe_stopped_state`, or `native_probe_binding_digest`. These codes never
+include the rejected SCM value, identity, path, command, or process content. Later
+continuous-authority drift remains the generic `native_probe_authority` boundary.
+
+The unit suite covers exact login-status empty-output admission, closed numeric stderr
+classification, zeroization, command allowlisting, path-namespace boundaries, service
+configuration and identity drift, cancellation, and post-command authority dominance.
+The contract test covers the owner-confirmed stop/probe/restart/health sequence. The
+native script is the real Windows process/service E2E; Playwright is inapplicable to
+this non-browser boundary.
+
 The inert Phase-4 containment source slice is covered by native Rust contracts and
 process tests (not Playwright):
 

@@ -40,19 +40,19 @@ fn private_desktop_launch_contract_is_create_only_closed_and_pre_spawn_restored(
         .unwrap();
     assert!(inherited < handle_list);
     assert!(source.contains("startup.StartupInfo.hStdError = stderr_write.raw();"));
-    assert!(source.contains("let stderr_thread = discard_reader(stderr_file);"));
+    assert!(source.contains("let stderr_thread = stderr_reader(stderr_file, &invocation.stderr);"));
 }
 
 #[test]
 fn private_desktop_failure_remains_pre_effect_and_content_free() {
     let source = include_str!("../src/planning_runtime/windows_containment.rs");
-    let private_desktop = source.find("PrivateDesktop::create(profile)?").unwrap();
+    let private_desktop = source.find("PrivateDesktop::create(profile)").unwrap();
     let second_poll = source[private_desktop..]
         .find("if !control.poll()")
         .map(|offset| private_desktop + offset)
         .unwrap();
     let revalidate = source[second_poll..]
-        .find("profile.revalidate()")
+        .find(".revalidate()")
         .map(|offset| second_poll + offset)
         .unwrap();
     let process = source.find("CreateProcessAsUserW(").unwrap();

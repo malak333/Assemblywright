@@ -186,6 +186,13 @@ enum Command {
         #[arg(long)]
         confirm: bool,
     },
+    /// Run the fixed real-Codex probe inside the exact stopped production planning boundary.
+    PlanningProviderNativeProbe {
+        #[arg(long, default_value = DEFAULT_SERVICE_NAME)]
+        service_name: String,
+        #[arg(long)]
+        confirm: bool,
+    },
     /// Manage the Windows enrollment identity and short-lived device grants.
     Enrollment {
         #[command(subcommand)]
@@ -677,6 +684,25 @@ async fn main() -> anyhow::Result<()> {
                 "{{\"status\":\"planning_runtime_validated\",\"live_evidence_required\":true}}"
             );
             Ok(())
+        }
+        Command::PlanningProviderNativeProbe {
+            service_name,
+            confirm,
+        } => {
+            require_operator_confirmation(confirm, "native planning-provider containment probe")?;
+            #[cfg(not(windows))]
+            {
+                let _ = service_name;
+                bail!("native planning-provider containment probe is available only on Windows");
+            }
+            #[cfg(windows)]
+            {
+                let runtime = PlanningRuntime::load(&data_dir)?
+                    .context("planning runtime is not provisioned")?;
+                let receipt = runtime.run_provider_native_probe(&data_dir, &service_name)?;
+                println!("{}", serde_json::to_string(&receipt)?);
+                Ok(())
+            }
         }
         Command::Enrollment { command } => enrollment(&data_dir, command),
         Command::Service { command } => service_command(&data_dir, command).await,
