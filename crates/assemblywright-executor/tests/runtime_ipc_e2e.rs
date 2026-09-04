@@ -74,7 +74,6 @@ fn fixture(root: &std::path::Path, key: &SigningKey) -> ExecutorRuntimeConfig {
         authority_key_id: "master-v1".into(),
         authority_verifying_key: key.verifying_key().to_bytes(),
         receipt_key_id: "executor-receipt-v1".into(),
-        receipt_signing_seed: [31; 32],
         bound_child_epoch_id: child_epoch_id,
         bound_session_id: session_id,
         bound_session_revision: 1,
@@ -131,7 +130,7 @@ fn restart_quarantine_and_stop_without_an_active_child_fail_closed() {
     let key = SigningKey::from_bytes(&[27; 32]);
     let mut quarantined_config = fixture(temp.path(), &key);
     quarantined_config.restart_quarantined = true;
-    let mut runtime = ExecutorRuntime::new(quarantined_config.clone()).unwrap();
+    let mut runtime = ExecutorRuntime::new(quarantined_config.clone(), [31; 32]).unwrap();
     let shutdown = request_object(
         &quarantined_config,
         &key,
@@ -145,7 +144,11 @@ fn restart_quarantine_and_stop_without_an_active_child_fail_closed() {
 
     let second = tempdir().unwrap();
     let config = fixture(second.path(), &key);
-    let mut runtime = ExecutorRuntime::new(config.clone()).unwrap();
+    assert_eq!(
+        ExecutorRuntime::new(config.clone(), [0; 32]).err(),
+        Some(RuntimeError::InvalidConfig)
+    );
+    let mut runtime = ExecutorRuntime::new(config.clone(), [31; 32]).unwrap();
     let stop = request_object(
         &config,
         &key,
@@ -169,6 +172,7 @@ fn restart_quarantine_and_stop_without_an_active_child_fail_closed() {
 
 fn write_config(root: &std::path::Path, config: &ExecutorRuntimeConfig) -> (String, String) {
     let bytes = serde_json::to_vec(config).unwrap();
+    assert!(!String::from_utf8_lossy(&bytes).contains("receipt_signing_seed"));
     let path = root.join("executor-runtime.json");
     fs::write(&path, &bytes).unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
@@ -197,6 +201,7 @@ fn inherited_pipe_accepts_only_signed_exact_authority_shutdown() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+    child.stdin.as_mut().unwrap().write_all(&[31; 32]).unwrap();
     send_frame(child.stdin.as_mut().unwrap(), &request(&config, &key, 7));
     drop(child.stdin.take());
     let mut stdout = child.stdout.take().unwrap();
@@ -227,6 +232,7 @@ fn wrong_authority_revision_quarantines_without_a_response() {
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();
+    child.stdin.as_mut().unwrap().write_all(&[31; 32]).unwrap();
     send_frame(child.stdin.as_mut().unwrap(), &frame);
     drop(child.stdin.take());
     let output = child.wait_with_output().unwrap();

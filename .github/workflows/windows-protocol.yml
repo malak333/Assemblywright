@@ -50,6 +50,10 @@ jobs:
         shell: powershell
         run: ./scripts/windows-owner-evidence-admission.ps1 -Action SelfTest
 
+      - name: Test Windows execution-host service SID boundary
+        shell: powershell
+        run: ./scripts/windows-execution-host-security-e2e.ps1 -Confirm
+
       - name: Test Windows GitHub authentication exit-code handling
         shell: powershell
         run: ./scripts/windows-github-publication-live-control.ps1 -Action SelfTest

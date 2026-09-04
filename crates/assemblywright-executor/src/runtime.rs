@@ -17,6 +17,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 pub const RUNTIME_SCHEMA_VERSION: u16 = 1;
+#[cfg(not(windows))]
 const MAX_FRAME_BYTES: usize = 1024 * 1024;
 const MAX_TERMINATION_WINDOW_MS: u64 = 60_000;
 
@@ -54,7 +55,6 @@ pub struct ExecutorRuntimeConfig {
     pub authority_key_id: String,
     pub authority_verifying_key: [u8; 32],
     pub receipt_key_id: String,
-    pub receipt_signing_seed: [u8; 32],
     pub bound_child_epoch_id: Uuid,
     pub bound_session_id: Uuid,
     pub bound_session_revision: u64,
@@ -189,11 +189,23 @@ pub struct ExecutorRuntime {
 }
 
 impl ExecutorRuntime {
-    pub fn new(config: ExecutorRuntimeConfig) -> Result<Self, RuntimeError> {
+    /// Constructs an active runtime from a protected, out-of-band receipt key.
+    ///
+    /// The receipt seed is deliberately not serializable as part of
+    /// [`ExecutorRuntimeConfig`]. Windows production wiring must inject it only
+    /// after establishing authenticated broker IPC and isolating payload
+    /// processes from the executor service process.
+    pub fn new(
+        config: ExecutorRuntimeConfig,
+        receipt_signing_seed: [u8; 32],
+    ) -> Result<Self, RuntimeError> {
         validate_config(&config)?;
+        if receipt_signing_seed == [0; 32] {
+            return Err(RuntimeError::InvalidConfig);
+        }
         let verifying_key = VerifyingKey::from_bytes(&config.authority_verifying_key)
             .map_err(|_| RuntimeError::InvalidConfig)?;
-        let receipt_key = SigningKey::from_bytes(&config.receipt_signing_seed);
+        let receipt_key = SigningKey::from_bytes(&receipt_signing_seed);
         let policy = ExecutorPolicy::new(
             ExecutorIdentity {
                 platform: config.platform,
@@ -406,7 +418,6 @@ fn validate_config(config: &ExecutorRuntimeConfig) -> Result<(), RuntimeError> {
         || config.runtime_revision == 0
         || config.next_request_sequence == 0
         || config.owner_uid.is_none() && cfg!(unix)
-        || config.receipt_signing_seed == [0; 32]
         || config.bound_authority_revision != config.authority_snapshot.authority_revision
         || config.bound_authority_snapshot_sha256
             != config
@@ -472,6 +483,43 @@ pub fn load_config(
         return Err(RuntimeError::InvalidConfig);
     }
     Ok(config)
+}
+
+/// Validates the complete effect-disabled Windows service bootstrap without
+/// materializing any receipt-signing secret or active execution runtime.
+pub fn validate_service_bootstrap(config: ExecutorRuntimeConfig) -> Result<(), RuntimeError> {
+    validate_config(&config)?;
+    let verifying_key = VerifyingKey::from_bytes(&config.authority_verifying_key)
+        .map_err(|_| RuntimeError::InvalidConfig)?;
+    let bootstrap_only_key = SigningKey::from_bytes(&[1; 32]);
+    ExecutorPolicy::new(
+        ExecutorIdentity {
+            platform: config.platform,
+            executor_id: config.executor_id,
+            executor_revision: config.executor_revision,
+            executor_executable_sha256: config.executor_executable_sha256,
+            broker_id: config.broker_id,
+            broker_revision: config.broker_revision,
+            broker_executable_sha256: config.broker_executable_sha256,
+            protected_control_plane_sha256: config.protected_control_plane_sha256,
+            authority_key_id: config.authority_key_id,
+            authority_verifying_key: verifying_key,
+            receipt_key_id: config.receipt_key_id,
+            receipt_signing_key: bootstrap_only_key,
+            bound_child_epoch_id: config.bound_child_epoch_id,
+            bound_session_id: config.bound_session_id,
+            bound_session_revision: config.bound_session_revision,
+            bound_child_epoch_revision: config.bound_child_epoch_revision,
+            bound_feature_lifecycle_revision: config.bound_feature_lifecycle_revision,
+            bound_authority_revision: config.bound_authority_revision,
+            bound_authority_snapshot_sha256: config.bound_authority_snapshot_sha256,
+            next_action_sequence: config.next_action_sequence,
+        },
+        config.protected_manifest,
+        config.authority_snapshot,
+    )
+    .map(|_| ())
+    .map_err(|_| RuntimeError::InvalidConfig)
 }
 
 fn current_executable_sha256() -> Result<[u8; 32], RuntimeError> {
@@ -564,12 +612,26 @@ fn link_count(_path: &Path, _metadata: &fs::Metadata) -> u64 {
     0
 }
 
+#[cfg(windows)]
+pub fn run_stdio(
+    _config: ExecutorRuntimeConfig,
+    _input: impl Read,
+    _output: impl Write,
+) -> Result<(), RuntimeError> {
+    Err(RuntimeError::InvalidConfig)
+}
+
+#[cfg(not(windows))]
 pub fn run_stdio(
     config: ExecutorRuntimeConfig,
     mut input: impl Read,
     mut output: impl Write,
 ) -> Result<(), RuntimeError> {
-    let mut runtime = ExecutorRuntime::new(config)?;
+    let mut receipt_signing_seed = [0_u8; 32];
+    input
+        .read_exact(&mut receipt_signing_seed)
+        .map_err(|_| RuntimeError::InvalidConfig)?;
+    let mut runtime = ExecutorRuntime::new(config, receipt_signing_seed)?;
     loop {
         let Some(frame) = read_frame(&mut input)? else {
             return if runtime.active.is_some() {
@@ -592,6 +654,7 @@ pub fn run_stdio(
     }
 }
 
+#[cfg(not(windows))]
 fn read_frame(reader: &mut impl Read) -> Result<Option<Vec<u8>>, RuntimeError> {
     let mut length = [0_u8; 4];
     match reader.read_exact(&mut length) {
@@ -610,6 +673,7 @@ fn read_frame(reader: &mut impl Read) -> Result<Option<Vec<u8>>, RuntimeError> {
     Ok(Some(frame))
 }
 
+#[cfg(not(windows))]
 fn write_frame(writer: &mut impl Write, frame: &[u8]) -> Result<(), RuntimeError> {
     let length = u32::try_from(frame.len()).map_err(|_| RuntimeError::Io)?;
     writer

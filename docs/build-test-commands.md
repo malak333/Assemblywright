@@ -210,6 +210,74 @@ authenticated Stop/Emergency intent and FIFO replay behavior. Concurrent active-
 cancellation and restart reconciliation are intentionally not claimed: the one-shot seam
 is proof-only and production dispatch remains disabled until those contracts exist.
 
+The Windows host-security substrate has separate source and native-service coverage:
+
+```sh
+cargo test -p assemblywright-master --test windows_execution_host_security_contract -- --nocapture
+```
+
+```powershell
+& .\scripts\windows-execution-host-provision.ps1 -Mode DryRun
+& .\scripts\windows-execution-host-provision.ps1 -Mode Check
+& .\scripts\windows-execution-host-provision.ps1 -Mode SelfTest
+& .\scripts\windows-execution-host-security-e2e.ps1 -Confirm
+```
+
+`Check` is expected to reject an owner-account or user-local installed master; that is
+evidence that the production substrate is not provisioned, not a reason to weaken the
+contract. `Apply` additionally requires `-ConfirmStoppedServiceCeremony`,
+already-installed stopped Broker/Executor service hosts, and an already stopped
+LocalSystem Master; it deliberately cannot create service hosts. It never starts a
+service or enables effects. The fixed Program Files images and their protected ancestry
+must match the protected release manifest's exact SHA-256 values and one valid exact
+Authenticode signer. Unsigned repository builds therefore keep Apply unavailable. The native E2E
+uses randomized disposable service names and a real LocalService restricted service-SID
+payload: an allowed marker proves execution before protected file overwrite, disk-reserve
+deletion, and master service-reconfiguration attempts are verified unchanged. It then
+queries both protected service objects under bounded CPU/memory pressure and removes
+only its disposable objects. It also invokes the actual production DryRun and Check,
+plus the production provisioner's real disposable SelfTest. SelfTest feeds hostile
+hardlink, symlink, and effects-enabled prestate through the same policy-file,
+disk-reserve, and registry validators used by Apply/Check and proves rejection without
+mutation. It also proves a directory ACE with matching SID/type/rights but missing
+required trusted inheritance is rejected, an inheritable Executor read ACE is rejected,
+and a later-created sibling inherits no Executor read grant. It never targets
+production. Browser E2E is inapplicable.
+
+The same native E2E builds the shipped Broker and Executor binaries, generates
+digest-bound read-only runtime configurations, and installs each binary under a
+randomized disposable SCM name. Both binaries must reach `RUNNING`, expose a
+nonzero process ID, accept SCM Stop, and reach a clean `STOPPED` state. A hostile
+Broker configuration digest, a correctly re-digested but semantically invalid
+runtime schema, and hostile extra Executor argv must fail closed. Broker ServiceMain
+constructs the effect-disabled semantic runtime before reporting `RUNNING`; Executor
+ServiceMain validates the complete semantic bootstrap while deliberately constructing
+no active runtime and holding no receipt-signing secret.
+This proves the inert SCM lifecycle entrypoints only; production Broker IPC,
+dispatch, durable replay, and effect activation remain separate later phases.
+
+SelfTest additionally creates one randomized disabled disposable SCM service and passes
+its valid binding through the real production validators. It then proves extra argv,
+interactive/type drift, demand start drift, failure actions, and trigger persistence all
+reject before cleanup. Production Check/Apply require canonical complete role-specific
+argv, exact own-process/noninteractive disabled service configuration, no dependency/
+trigger/recovery persistence, exact required privileges, and stopped-state rechecks
+around every mutation cluster.
+The restricted Executor has read/execute access only to its immutable executable,
+configuration file, and the required ancestor directories through non-inheriting
+grants; an inheritable exact mutation-rights deny prevents write, delete, permission,
+or ownership changes. The restricted-token payload must fail to read a sibling created
+under the readable ancestor. Other protected storage remains inaccessible, and both
+runtime configuration files must be read-only.
+The serialized Executor configuration contains no receipt-signing seed. Active Windows
+runtime construction remains fail-closed until authenticated Broker IPC supplies that
+secret out of band after payload-to-Executor process access is denied and proved.
+
+The provisioned Job CPU/commit/process values remain activation-attested policy until
+production executor runtime wiring creates and verifies the Windows Job. The allocated
+disk reserve and protected ACL/service-SID boundary are native host mechanisms, but
+repository or disposable E2E success is not signed production deployment proof.
+
 These checks prove strict contracts, inert persistence, authenticated/bounded routes,
 schema migration, strict Mac decoding/transport behavior, and presentation defaults at
 repository-test boundaries. The loopback process E2E drives one exact Private project

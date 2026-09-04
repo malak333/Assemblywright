@@ -28,7 +28,8 @@ thiserror.workspace = true
 uuid.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-windows-sys.workspace = true
+windows-sys = { workspace = true, features = ["Win32_System_Services"] }
+windows-service.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

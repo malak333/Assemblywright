@@ -33,6 +33,45 @@ Before starting a release pass, confirm the claim you intend to make.
   prove that concurrently drained stderr remains content-free and bounded. Keep source
   contracts, unit tests, the synthetic LocalSystem service E2E, a real Codex call, and
   production deployment as separate evidence layers.
+- For the Windows execution-host substrate, run the path-free `DryRun`, then require
+  `Check` to reject any owner-account or user-local Master installation. Never convert
+  that rejection into a readiness claim. `Apply` is owner-only and requires the exact
+  stopped LocalSystem Master plus already-installed stopped Broker/Executor services,
+  distinct Master/Broker service SIDs, the restricted LocalService
+  Executor SID, SYSTEM-owned inheritance-protected ACLs, allocated disk reserve, and
+  a policy digest with effects fixed off. Require the fixed Program Files image names,
+  exact release-manifest SHA-256 values, exact valid Authenticode signer, protected
+  install/image ancestry, and non-sparse/non-compressed reserve. EffectsEnabled must be
+  written and verified as zero before any other Apply mutation; hostile or non-exact
+  pre-existing policy/reserve leaves reject without truncation. Run the disposable
+  native hostile E2E and
+  require an allowed marker from the real restricted-service payload before accepting
+  its file/reserve/service-definition denial assertions. Require its call to the
+  production provisioner's `SelfTest` to prove the real policy-file, disk-reserve, and
+  registry validators reject hostile hardlink, symlink, and effects-enabled fixtures
+  unchanged. Require exact complete role-specific service argv, disabled stopped
+  own-process/noninteractive configuration, no dependencies, triggers, recovery command
+  or actions, exact required privileges, and stopped-state rechecks around every
+  mutation cluster and receipt. SelfTest must prove its valid disposable SCM contract
+  and reject extra argv, type/start, failure-action, trigger, missing trusted
+  inheritance, and inheritable Executor-read drift. Require a later-created sibling
+  canary to remain unreadable by the restricted token. The native E2E
+  must also build and start the actual Broker and Executor service-host entrypoints,
+  require `RUNNING` with a process ID only after Broker runtime construction and full
+  Executor semantic-bootstrap validation, stop them
+  cleanly, and reject hostile digest, correctly re-digested semantic config, and argv
+  starts. Verify the Executor can read/execute only its immutable image/config ancestry
+  through non-inheriting grants, cannot read a later-created sibling, cannot mutate it,
+  and both configs are read-only. Record this as inert lifecycle
+  evidence, not IPC/dispatch evidence.
+  Verify serialized Executor configuration contains no receipt-signing seed and the
+  Windows service constructs no active Executor runtime. Active runtime wiring requires
+  authenticated out-of-band Broker secret injection only after payload-process access
+  to the Executor process is denied and proved.
+  Record the Job CPU/commit/
+  process settings as activation-attested substrate only until production runtime
+  creates and verifies the Job. Neither source tests nor the disposable service proof
+  establish signing, production provisioning, IPC, effect activation, or two-host use.
 - Confirm `docs/feature-conveyor-design.md` still marks the implemented slice
   accurately. The repository kernel is default-inert and exposes the
   owner-token-authenticated loopback read-only

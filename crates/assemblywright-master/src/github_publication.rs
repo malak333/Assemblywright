@@ -45,7 +45,7 @@ const WINDOWS_WORKFLOW_PATH: &str = ".github/workflows/windows-protocol.yml";
 const RELEASE_LOCAL_WORKFLOW_SHA256: &str =
     "51e809a94f59193e213bdff6e49f3a86e612643f094e366055f42f8745026fd7";
 const WINDOWS_WORKFLOW_SHA256: &str =
-    "c8d43b222de5664a6793a6bc9cc3b8cd09d40b43926d80b139ba21dac944a2e1";
+    "4284a27f06f7808179665e3ac0cbd90081e358a6c09b82d188ec6d414652b207";
 const MAX_CONFIG_BYTES: usize = 16 * 1024;
 const MAX_GH_OUTPUT_BYTES: usize = 512 * 1024;
 const COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(25);
