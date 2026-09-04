@@ -152,6 +152,7 @@ fn native_hostile_e2e_is_disposable_bounded_and_does_not_target_production() {
     }
     assert!(!script.contains("sc.exe delete AssemblywrightMaster"));
     assert!(!script.contains("Stop-Service -Name AssemblywrightMaster"));
+    assert!(!script.contains("foreach ($reader in @('S-1-5-19', $realExecutorSid))"));
 }
 
 #[test]

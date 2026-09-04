@@ -326,11 +326,9 @@ try {
             ([Security.Principal.SecurityIdentifier]::new($realExecutorSid)),
             'Write,Delete,ChangePermissions,TakeOwnership', 'Deny'
         )))
-        foreach ($reader in @('S-1-5-19', $realExecutorSid)) {
-            [void]$leafAcl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
-                ([Security.Principal.SecurityIdentifier]::new($reader)), 'ReadAndExecute', 'Allow'
-            )))
-        }
+        [void]$leafAcl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
+            ([Security.Principal.SecurityIdentifier]::new($realExecutorSid)), 'ReadAndExecute', 'Allow'
+        )))
         foreach ($trusted in @('S-1-5-18', 'S-1-5-32-544', $masterSid, $brokerSid)) {
             [void]$leafAcl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule(
                 ([Security.Principal.SecurityIdentifier]::new($trusted)), 'FullControl', 'Allow'
@@ -397,22 +395,22 @@ try {
 
     $payloadText = @"
 `$ErrorActionPreference = 'Continue'
-[IO.File]::WriteAllText('$($marker.Replace("'", "''"))','started',[Text.UTF8Encoding]::new(`$false))
+`$result = 'started'
 try {
     if ([IO.File]::ReadAllText('$($executorReadableFile.Replace("'", "''"))') -ceq '{"schema_version":1}') {
-        [IO.File]::AppendAllText('$($marker.Replace("'", "''"))',';read',[Text.UTF8Encoding]::new(`$false))
+        `$result += ';read'
     }
 } catch {}
 try {
     if ([IO.File]::ReadAllText('$($executorSiblingCanary.Replace("'", "''"))') -ceq 'sibling-secret') {
-        [IO.File]::AppendAllText('$($marker.Replace("'", "''"))',';sibling-read',[Text.UTF8Encoding]::new(`$false))
+        `$result += ';sibling-read'
     }
 } catch {}
 try { [IO.File]::WriteAllText('$($executorReadableFile.Replace("'", "''"))','hostile-overwrite',[Text.UTF8Encoding]::new(`$false)) } catch {}
 try { [IO.File]::WriteAllText('$($protectedFile.Replace("'", "''"))','hostile-overwrite',[Text.UTF8Encoding]::new(`$false)) } catch {}
 try { Remove-Item -LiteralPath '$($reserveFile.Replace("'", "''"))' -Force } catch {}
 try { & sc.exe config '$masterName' start= auto | Out-Null } catch {}
-[IO.File]::AppendAllText('$($marker.Replace("'", "''"))',';attempted',[Text.UTF8Encoding]::new(`$false))
+[IO.File]::WriteAllText('$($marker.Replace("'", "''")),(`$result + ';attempted'),[Text.UTF8Encoding]::new(`$false))
 "@
     [IO.File]::WriteAllText($payload, $payloadText, [Text.UTF8Encoding]::new($false))
     $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
@@ -427,11 +425,18 @@ try { & sc.exe config '$masterName' start= auto | Out-Null } catch {}
     # protected objects, never by that ambiguous service-start status.
     & sc.exe start $featureName 2>&1 | Out-Null
     $deadline = [DateTime]::UtcNow.AddSeconds(40)
-    while (-not (Test-Path -LiteralPath $marker) -and [DateTime]::UtcNow -lt $deadline) {
+    $observedMarker = 'missing'
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if (Test-Path -LiteralPath $marker) {
+            try {
+                $observedMarker = Get-Content -LiteralPath $marker -Raw
+                if ($observedMarker.EndsWith(';attempted', [StringComparison]::Ordinal)) { break }
+            } catch {}
+        }
         Start-Sleep -Milliseconds 100
     }
-    if (-not (Test-Path -LiteralPath $marker) -or (Get-Content -LiteralPath $marker -Raw) -cne 'started;read;attempted') {
-        throw 'The hostile restricted-service payload did not prove execution.'
+    if ($observedMarker -cne 'started;read;attempted') {
+        throw "The hostile restricted-service payload did not prove execution. observed_marker=$observedMarker"
     }
     if ((Get-FileHash -LiteralPath $executorReadableFile -Algorithm SHA256).Hash -cne $executorReadableHash) {
         throw 'The restricted feature token mutated its read-only configuration grant.'
