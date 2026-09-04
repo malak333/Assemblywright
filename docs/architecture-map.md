@@ -49,6 +49,16 @@ record, approval, GitHub intent, repository, queue item, or execution authority.
 
 Full-machine target phase: planning/creation containment has bounded native Windows LocalSystem/AppContainer service proof; execution admission is implemented and effects remain unavailable.
 
+The Windows execution-host source now has an authenticated inert IPC foundation.
+Master produces two independently Ed25519-signed endpoint-bound frames; Broker verifies
+its frame and forwards the byte-exact signed Executor frame. Local-only named pipes
+authenticate exact client/server service SIDs, and Broker/Executor return separate
+path-free, zero-effect acknowledgements signed by out-of-band service keys that Master
+checks against pinned public keys. Append-only hash-chained intent/ack journals preserve
+contiguous sequence and nonce state, recover only the exact pending inert request,
+replay only the original exact acknowledgement, and quarantine every ambiguous restart
+or binding drift. This module is not connected to the product effect dispatcher.
+
 ```mermaid
 flowchart LR
   UI["New Project / New Feature review and approval; queue + auto-run authoritative"] --> MacCore["Strict MacCore projection/mutation and exact-replay recovery"]
@@ -62,7 +72,8 @@ flowchart LR
   Line["Start / Stop / Emergency routes absent"] -.-> Epoch["No session or child epoch issued"]
   Epoch -.-> WinExecutor["Windows executor unavailable"]
   Epoch -.-> MacExecutor["Mac executor unavailable"]
-  WinExecutor -.-> WinBroker["Protected broker unavailable"]
+  WinExecutor -. "independent Master-signed inert frame" .-> WinBroker["Protected broker unavailable"]
+  Master -. "local pipe; signed validation only" .-> WinBroker
   MacExecutor -.-> MacBroker["Protected broker unavailable"]
   WinBroker -.-> Effects["No full-machine effects"]
   MacBroker -.-> Effects

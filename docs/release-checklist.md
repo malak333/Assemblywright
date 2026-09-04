@@ -71,7 +71,24 @@ Before starting a release pass, confirm the claim you intend to make.
   Record the Job CPU/commit/
   process settings as activation-attested substrate only until production runtime
   creates and verifies the Job. Neither source tests nor the disposable service proof
-  establish signing, production provisioning, IPC, effect activation, or two-host use.
+  establish signing, production provisioning, product-routed IPC, effect activation,
+  or two-host use.
+- For the authenticated inert Windows execution IPC foundation, run
+  `windows_execution_ipc_contract`, both Broker/Executor `inert_execution_ipc` suites,
+  `windows_execution_ipc_foundation`, `windows_execution_ipc_source_contract`, and
+  `scripts/windows-execution-ipc-e2e.ps1 -Confirm`. Require independent Master
+  signatures for exact Broker and Executor endpoints, byte-exact Broker forwarding,
+  local-only single-instance pipes, exact peer service-SID token checks, separately
+  pinned service acknowledgement keys, path-free zero-effect acknowledgements, and
+  append-only intent-before-ack state. Reject wrong SID, unsigned/tampered, replay/gap,
+  stale/future, authority/endpoint drift, changed pending requests, and partial
+  journals. Restart may recover only the byte-exact pending inert frame or replay the
+  original completed acknowledgement. Verify service seeds are distinct out-of-band
+  protected 32-byte leaves, are absent from serialized config/argv/environment/output,
+  and the Broker never receives the Executor seed. Record that
+  `UnavailableAssemblyLineEffectDispatcher` remains installed and that this proof does
+  not establish adapter execution, active cancellation, production installation,
+  signing, or live-device use.
 - Confirm `docs/feature-conveyor-design.md` still marks the implemented slice
   accurately. The repository kernel is default-inert and exposes the
   owner-token-authenticated loopback read-only

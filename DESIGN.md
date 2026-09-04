@@ -58,8 +58,19 @@ owner-recorded evidence are unavailable. Source now includes strict signed actio
 checkpoint, and termination contracts plus separate fail-closed executor and broker
 containment crates; their standalone binaries deliberately refuse authority. The
 schema-v21 controller is not an effect route: its persistence API verifies capability-
-pinned Ed25519 receipts, while authenticated executor/broker receipt IPC, host
-termination effects, and installed identities remain cutover gates. This
+pinned Ed25519 receipts, while production routing, host termination effects, and
+installed identities remain cutover gates. Source now includes a separate inert
+Windows named-pipe IPC foundation: the Master signs hop-specific Broker and Executor
+frames independently, the Broker forwards the exact signed Executor bytes, and each
+service returns its own service-secret-signed, path-free zero-effect acknowledgement.
+Local-only pipe mode, canonical service-SID peer checks, identification-only client
+SQOS, bounded frames, pinned public keys, and append-only intent/ack journals fail closed on replay, gaps, stale authority,
+binding drift, or ambiguous restart. Broker and Executor ServiceMain can host this
+foundation only when an optional protected bootstrap names out-of-band secret files;
+the seeds never enter serialized runtime configuration or the Broker-to-Executor
+frame. This validates health and dispatch shape only. The production dispatcher
+remains `UnavailableAssemblyLineEffectDispatcher`, so it grants no Start, Stop,
+Emergency, adapter, process-launch, or resource-reservation effect. This
 repository source is not an installed, signed, identity-provisioned runtime. Design
 or planning approval does not widen
 an existing worker or authorize the UI to claim full-machine readiness.
@@ -167,8 +178,10 @@ to the retained parent handle, and returns either path-free applied evidence or 
 effect-possible reconciliation outcome. Any uncertain completion after entering the
 native create call, including a negative status, is treated as effect-possible and
 quarantines the proof policy. The long-running broker runtime still validates
-and consumes dispatches without executing them until active-effect termination and
-durable reconciliation are wired. The
+and consumes dispatches without executing them. Its authenticated Windows IPC
+foundation durably records intent/ack sequence state and can recover or replay only
+one byte-exact inert request, but active-effect termination and adapter-specific
+durable reconciliation remain unwired. The
 unprivileged executor validates held macOS executable/cwd and signed parent/object
 identities, but macOS spawn remains disabled because a hostile descendant can escape a
 process group with `setsid`/`setpgid` and Darwin exposes no unprivileged Job-Object-like

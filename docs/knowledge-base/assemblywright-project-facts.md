@@ -413,16 +413,24 @@ Full-machine target phase: planning/creation containment has bounded native Wind
   states only when Windows executor, Mac executor, and protected-broker availability are
   all authoritative and available. It rejects `starting` when any execution component is
   unavailable, while the product controls remain visibly disabled until that runtime exists.
-- The broker and executor binaries now implement bounded inherited length-framed stdio
-  runtimes with held no-follow configuration, exact binary/config digests, signed
-  authority/session/replay validation, and fail-closed quarantine. They expose no
-  ambient listener. Broker effects and executor activation receipts remain unavailable,
-  and no four-host installation exists; therefore a genuine two-host Start and the Mac
-  execution buttons remain unavailable.
+- The broker and executor binaries implement bounded inherited length-framed stdio
+  runtimes plus an optional Windows-only inert named-pipe foundation. Windows pipes are
+  single-instance and reject remote clients; both ends prove the exact expected service
+  SID from the connected token, clients permit identification-only impersonation, and
+  servers reject stronger impersonation levels. Master signs Broker and Executor frames independently,
+  Broker forwards the exact Executor bytes, and each service signs its own path-free
+  acknowledgement with a different out-of-band key. Append-only hash-chained journals
+  persist intent before acknowledgement, contiguous sequence/nonce state, exact pending
+  recovery, original-ack replay, and quarantine. No frame or acknowledgement may report
+  an effect. The product effect dispatcher, Broker effects, executor activation
+  receipts, and installed production routing remain unavailable; therefore a genuine
+  two-host Start and the Mac execution buttons remain unavailable.
 
 ## Current Crate Boundaries
 
-- `assemblywright-protocol` — versioned, bounded wire contracts. No I/O, no state.
+- `assemblywright-protocol` — versioned, bounded wire contracts plus the narrowly scoped
+  local Windows pipe primitive and protected append-only IPC journal used by all three
+  Windows execution-host roles. It owns no service key, authority decision, or effect.
 - `assemblywright-executor` — inert-by-default unprivileged full-machine containment
   source. It verifies exact signed action/identity/digest/deadline bindings, rejects
   protected paths and replay/gaps, and validates held macOS executable/cwd plus signed
@@ -431,19 +439,25 @@ Full-machine target phase: planning/creation containment has bounded native Wind
   a kill-on-close Job, and rechecks authority before resume. Its inherited-pipe runtime
   accepts exact signed authority/control frames, supports one active action, and signs
   termination receipts. It has no installed service/client and emits no activation
-  receipt, so product execution cannot be activated.
+  receipt, so product execution cannot be activated. Its optional service bootstrap
+  reads a separate exact 32-byte acknowledgement seed leaf, constructs only the inert
+  IPC validator through a borrowed `Zeroizing` seed buffer on every exit, and never
+  serializes that secret.
 - `assemblywright-broker` — inert-by-default privileged-broker policy and closed adapter
   source. It binds all named protected-control-plane categories into one digest and
   rejects protected descendants, case/link/reparse ambiguity, drift, replay, and
   unknown operations. Its inherited-pipe runtime authenticates exact signed FIFO control
   frames and quarantines ambiguity while keeping production dispatch effect-disabled.
+  Its optional Windows service IPC verifies one endpoint-bound Master frame, forwards
+  only the nested byte-exact independently Master-signed Executor frame, and returns the
+  separate signed zero-effect acknowledgements without learning the Executor seed.
   A dedicated native proof seam implements only Windows `CreateDirectory`: it retains
   every canonical ancestor without delete sharing, creates one absent leaf relative to
   the held parent, returns path-free applied evidence, and quarantines a typed
   reconciliation-required outcome after any uncertainty once the native create call is
   entered; even a negative native status is not treated as proof that no effect occurred. Replace/remove/
-  service adapters remain closed. No root/SYSTEM broker service or master IPC client is
-  installed. The required Windows hosted gate lints and tests both broker and executor
+  service adapters remain closed. No production root/SYSTEM broker service or
+  product-routed Master IPC client is installed. The required Windows hosted gate lints and tests both broker and executor
   packages, so the native create-directory and Job Object E2E suites run for every pull
   request and `main` push; this is exact-commit hosted Windows evidence, not production
   identity, installation, deployment, or live two-host proof.

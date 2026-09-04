@@ -18,8 +18,10 @@ The approved full-machine Assembly Line is only partially implemented and is not
 current execution authority. Protocol v5 and master schema v22 now contain strict
 contracts, planning persistence/routes, and a durable execution-control ledger.
 Schema v21 records Start/Stop/Emergency Pause intent and restart quarantine only;
-without authenticated IPC, verified receipts, and host effects it grants no execution
-authority. It preserves
+without verified production routing and host effects it grants no execution authority.
+The authenticated Windows IPC foundation is deliberately inert: it validates only
+health and dispatch shape, produces zero-effect acknowledgements, and is not an effect
+dispatcher. It preserves
 the legacy schema-v19 Feature Conveyor grant, activation, queue, and restricted-worker
 semantics. No planning record, `creation_pending` repository, feature enqueue,
 auto-run setting, legacy activation, or owner-control receipt widens a worker to the
@@ -52,6 +54,29 @@ other private signing material. The Windows ServiceMain validates only the compl
 effect-disabled semantic bootstrap. An active runtime remains unavailable until a
 later authenticated Broker IPC design can inject the receipt secret out of band and
 prove payload processes cannot read the Executor service process or its handles.
+The optional inert IPC bootstrap may name only protected durable-state and out-of-band
+service-secret files. A secret seed must be exactly 32 nonzero bytes in an ordinary
+single-link protected leaf, is zeroed from bootstrap memory after key construction,
+and must never enter JSON, argv, environment, diagnostics, audit, acknowledgements, or
+the Broker-forwarded Executor frame. Each Master request is independently signed for
+one exact endpoint and binds service identity, session, child epoch, authority,
+contiguous sequence, a Master-generated nonce, and a lifetime no longer than 60 seconds. The
+Broker must forward the exact already-Master-signed Executor bytes. Pipes are
+single-instance and local-only, their DACL admits only SYSTEM and the expected canonical
+`S-1-5-80-*` client service SID, and both client and server prove the peer service SID
+from the connected token. Clients request identification-only SQOS; servers first read
+the bounded message, then reject any stronger impersonation level and treat failure to
+revert impersonation as fatal before handling the frame. IPC state and seed leaves reject traversal, device, ADS, DOS-device,
+and reparse-parent spellings while retaining the exact protected parent handle. Each service
+appends intent before processing and its own signed, path-free
+zero-effect ack after validation. An exact pending request may recover only while the
+signed request is fresh; an exact completed request may return the original ack even
+after expiry because no handler is rerun and no new effect is possible. Any other
+replay, gap, partial journal,
+stale/future frame, endpoint/authority drift, wrong SID, bad signature, or changed
+payload durably quarantines. None of this enables an adapter or replaces the
+unavailable Master effect dispatcher.
+
 Only the fixed Program Files image names bound by exact SHA-256 and one exact valid
 Authenticode signer in the protected release manifest are eligible. Missing signing
 evidence keeps Apply unavailable. EffectsEnabled must be written and verified off before

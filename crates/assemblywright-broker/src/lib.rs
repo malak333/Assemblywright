@@ -12,8 +12,11 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
+pub mod ipc;
 pub mod runtime;
 pub mod startup;
+#[cfg(windows)]
+pub mod windows_execution_ipc;
 #[cfg(windows)]
 pub mod windows_service_host;
 

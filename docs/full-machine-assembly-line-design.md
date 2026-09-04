@@ -1,6 +1,6 @@
 # Full-Machine Assembly Line Design
 
-Status: approved target; reviewed planning/creation and inert execution-control source with Windows effects fail-closed; broker IPC, execution, and live evidence pending; current master is protocol-v5/schema-v22
+Status: approved target; reviewed planning/creation, inert execution-control, and authenticated zero-effect Windows IPC source with effects fail-closed; production routing, execution, and live evidence pending; current master is protocol-v5/schema-v22
 
 This document is the approved replacement target and preserves its required safety
 exception. Strict protocol contracts, schema-v20 Windows planning persistence/routes,
@@ -49,9 +49,15 @@ approval still cannot call GitHub. Feature enqueue requires an exact `created`
 repository with creation evidence and never dispatches work. Auto-run defaults on and
 supports only an exact replay-safe CAS setting change. Authenticated
 Start/Stop/Emergency routes fail closed through an unavailable production dispatcher;
-installed executor/broker services remain unavailable. Their inherited-pipe runtimes
-cannot acquire authority without exact signed configuration, and no privileged effect
-adapter, activation-receipt path, master IPC client, or service identity is wired.
+production executor/broker services remain unavailable. A local Windows IPC foundation
+independently Master-signs bounded hop-specific Broker and Executor frames, requires
+the Broker to forward the byte-exact Executor envelope, verifies exact peer service
+SIDs on local-only named pipes, and accepts separately service-signed path-free
+zero-effect acknowledgements only through pinned public keys. Append-only hash-chained
+intent/ack state provides contiguous sequence/nonce replay protection, byte-exact
+pending recovery, original-ack replay, and durable quarantine on ambiguity. It exposes
+health and dispatch validation only; no privileged effect adapter, activation receipt,
+product Master route, or enabled production service installation is wired.
 
 Planning process creation uses a fresh create-only private window station and desktop
 per call. Their protected DACL contains only LocalSystem, the provisioning owner, and
@@ -302,10 +308,15 @@ does not become a running service. Broker ServiceMain constructs its effect-disa
 semantic runtime before reporting `RUNNING`; Executor ServiceMain validates the full
 semantic bootstrap without creating an active runtime or materializing a signing
 secret. A correctly re-digested schema-invalid config must stop with a service-specific
-failure. Serialized Executor configuration contains no receipt-signing seed. These
-entrypoints intentionally attest inert configuration only; authenticated production
-IPC, out-of-band secret injection after payload isolation, and dispatch are not claimed
-by this substrate phase.
+failure. Serialized Executor configuration contains no receipt-signing seed. When an
+optional protected IPC bootstrap is present, these entrypoints also host one local-only
+service-SID-authenticated named-pipe endpoint. Broker and Executor acknowledgement
+secrets are separate 32-byte protected leaves supplied out of band; only their paths
+and pinned public identities are serialized. The disposable three-service E2E proves a
+valid Master-to-Broker-to-Executor inert roundtrip, wrong SID/unsigned/tampered/gap/
+stale-authority rejection, restart exact-ack replay, and zero effects. This is
+authenticated inert IPC evidence only; product routing, adapter execution, active
+cancellation, signing/install cutover, and effect activation remain separate phases.
 
 The protected policy records concrete Windows Job CPU-rate, commit, and active-process
 limits that the production executor must attest before any effect can activate. The

@@ -70,6 +70,7 @@ fn main() {
         next_action_sequence: 1,
         protected_manifest: manifest,
         authority_snapshot: snapshot,
+        ipc: None,
     };
     let bytes = serde_json::to_vec(&config).unwrap();
     fs::write(output, &bytes).unwrap();

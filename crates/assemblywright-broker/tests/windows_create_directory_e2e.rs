@@ -264,6 +264,7 @@ fn runtime_keeps_dispatch_effect_disabled_and_replay_quarantines() {
         bound_authority_revision: broker.bound_authority_revision,
         next_action_sequence: 1,
         protected_manifest: manifest,
+        ipc: None,
     };
     let target = allowed.join("runtime-created");
     let operation = BrokerOperation::CreateDirectory {

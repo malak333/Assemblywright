@@ -174,6 +174,11 @@ cargo test -p assemblywright-broker --test protected_boundary -- --nocapture
 cargo test -p assemblywright-broker --test windows_create_directory_e2e -- --nocapture
 cargo test -p assemblywright-executor --test process_group_e2e -- --nocapture
 cargo test -p assemblywright-executor --test windows_job_e2e -- --nocapture
+cargo test -p assemblywright-protocol --test windows_execution_ipc_contract -- --nocapture
+cargo test -p assemblywright-master --test windows_execution_ipc_foundation -- --nocapture
+cargo test -p assemblywright-master --test windows_execution_ipc_source_contract -- --nocapture
+cargo test -p assemblywright-broker --test inert_execution_ipc -- --nocapture
+cargo test -p assemblywright-executor --test inert_execution_ipc -- --nocapture
 cargo clippy -p assemblywright-protocol -p assemblywright-broker -p assemblywright-executor --all-targets -- -D warnings
 ```
 
@@ -188,9 +193,10 @@ an adversarial `setsid` escape command is denied before spawn. Process groups ar
 claimed as descendant containment. `windows_job_e2e` must run on the native Windows
 owner host: it launches a real descendant only after suspended-image verification and
 Job assignment, then requires a signed receipt with a signaled root and zero active Job
-processes. Cross-compilation does not prove either native Windows boundary. Installed
-services, a master IPC client, production broker effects, and activation receipts remain
-unavailable. None
+processes. Cross-compilation does not prove either native Windows boundary. The
+authenticated inert Windows IPC foundation is covered separately below. Installed
+production services, product Master routing, production broker effects, and activation
+receipts remain unavailable. None
 of these commands
 prove OS code signatures, dedicated service identities/ACLs, privileged IPC,
 resource reservations, activated Start/Stop/Emergency effects, deployment, or live
@@ -221,6 +227,7 @@ cargo test -p assemblywright-master --test windows_execution_host_security_contr
 & .\scripts\windows-execution-host-provision.ps1 -Mode Check
 & .\scripts\windows-execution-host-provision.ps1 -Mode SelfTest
 & .\scripts\windows-execution-host-security-e2e.ps1 -Confirm
+& .\scripts\windows-execution-ipc-e2e.ps1 -Confirm
 ```
 
 `Check` is expected to reject an owner-account or user-local installed master; that is
@@ -253,8 +260,20 @@ runtime schema, and hostile extra Executor argv must fail closed. Broker Service
 constructs the effect-disabled semantic runtime before reporting `RUNNING`; Executor
 ServiceMain validates the complete semantic bootstrap while deliberately constructing
 no active runtime and holding no receipt-signing secret.
-This proves the inert SCM lifecycle entrypoints only; production Broker IPC,
-dispatch, durable replay, and effect activation remain separate later phases.
+The security E2E invokes the dedicated IPC E2E. That proof creates randomized
+disposable Master, Broker, and restricted Executor SCM services; requires the exact
+service-SID-authenticated local named-pipe roundtrip; verifies independently signed
+Master hop frames and separately signed path-free Broker/Executor acknowledgements;
+rejects wrong SID, unsigned, tampered, sequence-gap, stale, and stale-authority frames;
+restarts Broker/Executor and requires byte-identical acknowledgement replay; and records
+zero effects. The same native exchange requires identification-only client SQOS, exact
+canonical service-SID shape, process exit before deletion, and complete fixture-root
+removal. A delayed-write service scenario proves the server reads a bounded client
+message before binding impersonation to that message. Portable unit tests additionally cover exact pending-intent recovery,
+expired byte-exact completed-ack replay without reprocessing, and partial-journal
+quarantine. This proves only inert health/dispatch validation and
+durable replay. The product dispatcher remains unavailable; adapter execution, active
+cancellation, production deployment, and effect activation remain separate.
 
 SelfTest additionally creates one randomized disabled disposable SCM service and passes
 its valid binding through the real production validators. It then proves extra argv,

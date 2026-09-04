@@ -170,8 +170,8 @@ fn windows_service_hosts_validate_semantic_bootstrap_before_running() {
     let hostile_probe = include_str!(
         "../../assemblywright-executor/examples/windows_restricted_service_hostile_probe.rs"
     );
-    assert!(broker.contains(".and_then(BrokerRuntime::new)"));
-    assert!(executor.contains(".and_then(validate_service_bootstrap)"));
+    assert!(broker.contains("BrokerRuntime::new(loaded.clone())"));
+    assert!(executor.contains("validate_service_bootstrap(loaded.clone())"));
     assert!(!executor_runtime.contains("pub receipt_signing_seed"));
     assert!(!broker_fixture.contains(".canonicalize()"));
     assert!(!executor_fixture.contains("receipt_signing_seed"));
@@ -183,7 +183,7 @@ fn windows_service_hosts_validate_semantic_bootstrap_before_running() {
     assert!(executor_fixture.contains(r#"C:\ProgramData\Assemblywright\authority\master.sqlite3"#));
     assert!(executor_runtime.contains("return Err(RuntimeError::InvalidConfig);"));
     for source in [broker, executor] {
-        let validation = source.find(".and_then(").expect("semantic validation");
+        let validation = source.find("loaded.clone()").expect("semantic validation");
         let running = source
             .find("ServiceState::Running")
             .expect("running status");

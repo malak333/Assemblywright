@@ -457,6 +457,11 @@ try {
         Stop-Job -Job $pressure -ErrorAction SilentlyContinue
         Remove-Job -Job $pressure -Force -ErrorAction SilentlyContinue
     }
+    $ipcReceipt = (@(& (Join-Path $PSScriptRoot 'windows-execution-ipc-e2e.ps1') -Confirm) | Select-Object -Last 1) | ConvertFrom-Json
+    if ($ipcReceipt.status -cne 'windows_execution_ipc_native_e2e_passed' -or
+        -not $ipcReceipt.three_service_scm_roundtrip -or $ipcReceipt.effects_applied -ne 0) {
+        throw 'The native Windows Master-Broker-Executor IPC proof failed.'
+    }
     [ordered]@{
         schema_version = 1
         status = 'windows_execution_host_security_e2e_passed'
@@ -474,6 +479,7 @@ try {
         real_executor_service_host_started_running_and_stopped = $true
         real_service_host_digest_and_argv_rejected = $true
         real_service_host_semantic_config_rejected = $true
+        authenticated_inert_ipc_native_e2e = $true
         hostile_link_prestate_detected = $true
         effects_enabled_drift_detected = $true
         paths_disclosed = $false

@@ -169,6 +169,7 @@ dependencies = [
  "uuid",
  "windows-service",
  "windows-sys 0.61.2",
+ "zeroize",
 ]
 
 [[package]]
@@ -222,6 +223,7 @@ dependencies = [
  "uuid",
  "windows-service",
  "windows-sys 0.61.2",
+ "zeroize",
 ]
 
 [[package]]
@@ -233,6 +235,7 @@ dependencies = [
  "axum",
  "base64",
  "clap",
+ "ed25519-dalek",
  "fs2",
  "getrandom 0.3.4",
  "git2",
@@ -266,11 +269,15 @@ name = "assemblywright-protocol"
 version = "0.1.4"
 dependencies = [
  "ed25519-dalek",
+ "libc",
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "thiserror",
  "uuid",
+ "windows-sys 0.61.2",
+ "zeroize",
 ]
 
 [[package]]
