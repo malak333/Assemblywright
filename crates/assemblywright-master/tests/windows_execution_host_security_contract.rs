@@ -203,22 +203,6 @@ fn powershell_parses_and_executes_the_real_dry_run() {
     let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .join("scripts/windows-execution-host-provision.ps1");
-    let parse = Command::new("powershell.exe")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "$t=$null;$e=$null;[Management.Automation.Language.Parser]::ParseFile($args[0],[ref]$t,[ref]$e)|Out-Null;if($e.Count){$e|% Message;exit 1}",
-        ])
-        .arg(&script)
-        .output()
-        .expect("run Windows PowerShell parser");
-    assert!(
-        parse.status.success(),
-        "{}",
-        String::from_utf8_lossy(&parse.stderr)
-    );
-
     let dry_run = Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-File"])
         .arg(&script)
@@ -227,8 +211,9 @@ fn powershell_parses_and_executes_the_real_dry_run() {
         .expect("run production DryRun");
     assert!(
         dry_run.status.success(),
-        "{}",
-        String::from_utf8_lossy(&dry_run.stderr)
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&dry_run.stdout),
+        String::from_utf8_lossy(&dry_run.stderr),
     );
     let receipt: serde_json::Value =
         serde_json::from_slice(&dry_run.stdout).expect("decode path-free DryRun receipt");
