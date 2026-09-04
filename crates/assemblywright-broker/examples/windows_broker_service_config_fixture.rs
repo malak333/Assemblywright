@@ -10,7 +10,11 @@ fn main() {
     let output = PathBuf::from(args.next().expect("output"));
     let executable = PathBuf::from(args.next().expect("executable"));
     assert!(args.next().is_none());
-    let root = output.parent().unwrap().canonicalize().unwrap();
+    // Preserve the protocol's uppercase drive-letter spelling. Rust's Windows
+    // filesystem canonicalization returns a verbatim `\\?\` path, which is deliberately not
+    // admitted by the wire contract; BrokerRuntime will still open and validate
+    // this existing ordinary root during semantic bootstrap.
+    let root = output.parent().unwrap();
     let path = root.to_string_lossy().into_owned();
     let manifest = ProtectedControlPlanePathManifest {
         schema_version: assemblywright_protocol::FULL_MACHINE_ASSEMBLY_LINE_SCHEMA_VERSION,

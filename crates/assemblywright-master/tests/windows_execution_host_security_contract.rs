@@ -159,12 +159,16 @@ fn windows_service_hosts_validate_semantic_bootstrap_before_running() {
     let broker = include_str!("../../assemblywright-broker/src/windows_service_host.rs");
     let executor = include_str!("../../assemblywright-executor/src/windows_service_host.rs");
     let executor_runtime = include_str!("../../assemblywright-executor/src/runtime.rs");
+    let broker_fixture = include_str!(
+        "../../assemblywright-broker/examples/windows_broker_service_config_fixture.rs"
+    );
     let executor_fixture = include_str!(
         "../../assemblywright-executor/examples/windows_executor_service_config_fixture.rs"
     );
     assert!(broker.contains(".and_then(BrokerRuntime::new)"));
     assert!(executor.contains(".and_then(validate_service_bootstrap)"));
     assert!(!executor_runtime.contains("pub receipt_signing_seed"));
+    assert!(!broker_fixture.contains(".canonicalize()"));
     assert!(!executor_fixture.contains("receipt_signing_seed"));
     assert!(executor_fixture.contains(r#"C:\ProgramData\Assemblywright\authority\master.sqlite3"#));
     assert!(executor_runtime.contains("return Err(RuntimeError::InvalidConfig);"));
