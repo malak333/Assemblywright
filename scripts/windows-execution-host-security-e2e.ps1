@@ -139,7 +139,7 @@ try {
         [void](Invoke-Sc @('sdset', $service.Name, "D:(D;;GA;;;$featureSid)(A;;GA;;;SY)(A;;GA;;;BA)(A;;CCLCSWLOCRRC;;;$($service.Sid))"))
         $sddl = (@(Invoke-Sc @('sdshow', $service.Name)) -join '')
         if ($sddl -notmatch [regex]::Escape("(D;;GA;;;$featureSid)")) {
-            throw 'The hostile feature SID could alter a protected service definition.'
+            throw ("The hostile feature SID could alter a protected service definition. observed_sddl=$sddl")
         }
     }
     New-Item -ItemType Directory -Path $root,$allowedRoot | Out-Null
