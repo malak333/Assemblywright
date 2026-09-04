@@ -759,7 +759,11 @@ function Invoke-SelfTest {
         # single-link validator is exercised against its intended precondition.
         $fixtureImage = Join-Path $scratch 'fixture-service.exe'
         [IO.File]::Copy((Join-Path $env:SystemRoot 'System32\cmd.exe'), $fixtureImage, $false)
-        $validCommand = ('"{0}" /c exit 0' -f $fixtureImage)
+        $validCommand = if ($fixtureImage -match '\s') {
+            ('"{0}" /c exit 0' -f $fixtureImage)
+        } else {
+            ('{0} /c exit 0' -f $fixtureImage)
+        }
         [void](Invoke-Sc @('create', $serviceName, 'binPath=', $validCommand, 'start=', 'disabled', 'error=', 'normal', 'type=', 'own', 'obj=', 'LocalSystem'))
         $serviceCreated = $true
         [void](Invoke-Sc @('privs', $serviceName, 'SeChangeNotifyPrivilege'))
