@@ -278,9 +278,9 @@ try {
         Copy-Item -LiteralPath $builtExecutor -Destination $realExecutorImage
         $realBrokerConfig = Join-Path $allowedRoot 'broker-runtime.json'
         $realExecutorConfig = Join-Path $allowedRoot 'executor-runtime.json'
-        $brokerFixtureOutput = @(& cargo run --quiet --locked -p assemblywright-broker --example windows_broker_service_config_fixture -- $realBrokerConfig $realBrokerImage 2>&1)
+        $brokerFixtureOutput = @(& cargo run --quiet --locked -p assemblywright-broker --example windows_broker_service_config_fixture -- $realBrokerConfig $realBrokerImage)
         if ($LASTEXITCODE -ne 0) { throw 'The disposable Broker service configuration fixture failed.' }
-        $executorFixtureOutput = @(& cargo run --quiet --locked -p assemblywright-executor --example windows_executor_service_config_fixture -- $realExecutorConfig $realExecutorImage 2>&1)
+        $executorFixtureOutput = @(& cargo run --quiet --locked -p assemblywright-executor --example windows_executor_service_config_fixture -- $realExecutorConfig $realExecutorImage)
         if ($LASTEXITCODE -ne 0) { throw 'The disposable Executor service configuration fixture failed.' }
     } finally { Pop-Location }
     # The production loaders require a single-link, read-only configuration on
