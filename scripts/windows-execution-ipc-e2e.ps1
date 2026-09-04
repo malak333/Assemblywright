@@ -35,9 +35,20 @@ function Wait-ServiceState([string]$Name, [string]$Expected, [int]$TimeoutSecond
     do {
         $service = Get-CimInstance Win32_Service -Filter "Name='$Name'" -ErrorAction SilentlyContinue
         if ($null -ne $service -and $service.State -ceq $Expected) { return $service }
+        if (
+            $Expected -ceq 'Running' -and
+            $null -ne $service -and
+            $service.State -ceq 'Stopped' -and
+            ($service.ExitCode -ne 0 -or $service.ServiceSpecificExitCode -ne 0)
+        ) { break }
         Start-Sleep -Milliseconds 100
     } while ([DateTime]::UtcNow -lt $deadline)
-    throw "Service $Name did not reach $Expected."
+    $observed = if ($null -eq $service) {
+        'missing'
+    } else {
+        "state=$($service.State),exit=$($service.ExitCode),service_exit=$($service.ServiceSpecificExitCode),pid=$($service.ProcessId)"
+    }
+    throw "Service $Name did not reach $Expected ($observed)."
 }
 
 function Remove-FixtureService([string]$Name) {
