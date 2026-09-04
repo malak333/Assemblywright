@@ -469,7 +469,10 @@ function Assert-ProtectedAcl {
             $rule.IsInherited -or
             $rule.InheritanceFlags -ne $expectedInheritance -or
             $rule.PropagationFlags -ne $expectedPropagation) {
-            throw 'A protected execution-host ACL contained an unexpected or broad entry.'
+            throw ('A protected execution-host ACL contained an unexpected or broad entry. ' +
+                'identity={0}; kind={1}; rights={2}; inherited={3}; inheritance={4}; propagation={5}.' -f
+                $sid, $kind, [UInt32]$rule.FileSystemRights, $rule.IsInherited,
+                [string]$rule.InheritanceFlags, [string]$rule.PropagationFlags)
         }
         $seen[$key] = $true
     }
