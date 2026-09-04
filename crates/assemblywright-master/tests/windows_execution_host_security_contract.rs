@@ -35,6 +35,7 @@ fn production_execution_host_provisioning_is_fail_closed_and_path_free() {
         "A protected execution-host ACL contained an unexpected or broad entry.",
         "A service-host configuration was not read-only.",
         "Write, Delete, ChangePermissions, TakeOwnership",
+        "[Security.AccessControl.FileSystemRights]::Synchronize",
         "A service definition DACL was not the exact protected contract.",
         "This is deliberately the first mutation.",
         "FileMode]::CreateNew",

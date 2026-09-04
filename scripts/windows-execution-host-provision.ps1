@@ -445,7 +445,10 @@ function Assert-ProtectedAcl {
     $expectedPropagation = [Security.AccessControl.PropagationFlags]::None
     $full = [Security.AccessControl.FileSystemRights]::FullControl
     $mutation = [Security.AccessControl.FileSystemRights]'Write, Delete, ChangePermissions, TakeOwnership'
-    $read = [Security.AccessControl.FileSystemRights]::ReadAndExecute
+    # FileSystemAccessRule persists Allow ReadAndExecute with Synchronize.
+    # Validate the exact native representation rather than the constructor input.
+    $read = [Security.AccessControl.FileSystemRights]::ReadAndExecute -bor
+        [Security.AccessControl.FileSystemRights]::Synchronize
     $expected = @{
         "$FeatureSid|Deny" = if ($ExecutorReadable) { $mutation } else { $full }
         'S-1-5-18|Allow' = $full
