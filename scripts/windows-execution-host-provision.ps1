@@ -96,6 +96,45 @@ function Invoke-Sc {
     return $output
 }
 
+function Assert-ExactServiceDacl {
+    param(
+        [Parameter(Mandatory = $true)][string]$Sddl,
+        [Parameter(Mandatory = $true)][string]$OwnSid,
+        [Parameter(Mandatory = $true)][string]$FeatureSid
+    )
+    $descriptor = [Security.AccessControl.RawSecurityDescriptor]::new($Sddl)
+    if ($null -eq $descriptor.DiscretionaryAcl) {
+        throw 'A service definition lacked its protected DACL.'
+    }
+    [UInt32]$serviceAllAccess = 0x000F01FF
+    [UInt32]$serviceObserve = 0x0002018D
+    $expected = @(
+        @{ Sid = $FeatureSid; Kind = 'AccessDenied'; Mask = $serviceAllAccess },
+        @{ Sid = 'S-1-5-18'; Kind = 'AccessAllowed'; Mask = $serviceAllAccess },
+        @{ Sid = 'S-1-5-32-544'; Kind = 'AccessAllowed'; Mask = $serviceAllAccess },
+        @{ Sid = $OwnSid; Kind = 'AccessAllowed'; Mask = $serviceObserve }
+    )
+    $aces = @($descriptor.DiscretionaryAcl)
+    if ($aces.Count -ne $expected.Count) {
+        throw 'A service definition DACL was not the exact protected contract.'
+    }
+    for ($index = 0; $index -lt $expected.Count; $index += 1) {
+        $ace = $aces[$index]
+        if ($ace -isnot [Security.AccessControl.CommonAce]) {
+            throw 'A service definition DACL contained an unsupported ACE type.'
+        }
+        $sid = $ace.SecurityIdentifier.Value
+        $kind = [string]$ace.AceQualifier
+        if ($sid -cne [string]$expected[$index].Sid -or
+            $kind -cne [string]$expected[$index].Kind -or
+            [UInt32]$ace.AccessMask -ne [UInt32]$expected[$index].Mask -or
+            $ace.AceFlags -ne [Security.AccessControl.AceFlags]::None) {
+            throw ("A service definition DACL was not the exact protected contract. " +
+                "index=$index; identity=$sid; kind=$kind; mask=$([UInt32]$ace.AccessMask); flags=$($ace.AceFlags).")
+        }
+    }
+}
+
 function Assert-ServiceStopped {
     param([Parameter(Mandatory = $true)]$Service)
     if ($null -eq $Service -or $Service.State -cne 'Stopped') {
@@ -495,8 +534,7 @@ function Assert-ServiceContract {
     if ([int]$sidType -ne $ExpectedSidType) { throw 'A service SID type drifted.' }
     $sddl = (@(Invoke-Sc @('sdshow', $Name)) -join '').Trim()
     $ownSid = Get-ServiceSid $Name
-    $expected = "D:(D;;GA;;;$FeatureSid)(A;;GA;;;SY)(A;;GA;;;BA)(A;;CCLCSWLOCRRC;;;$ownSid)"
-    if ($sddl -cne $expected) { throw 'A service definition DACL was not the exact protected contract.' }
+    Assert-ExactServiceDacl $sddl $ownSid $FeatureSid
 }
 
 function Set-ProtectedRegistryAcl {
@@ -773,11 +811,20 @@ function Invoke-SelfTest {
         [void](Invoke-Sc @('create', $serviceName, 'binPath=', $validCommand, 'start=', 'disabled', 'error=', 'normal', 'type=', 'own', 'obj=', 'LocalSystem'))
         $serviceCreated = $true
         [void](Invoke-Sc @('privs', $serviceName, 'SeChangeNotifyPrivilege'))
+        [void](Invoke-Sc @('sidtype', $serviceName, 'unrestricted'))
+        $fixtureSid = Get-ServiceSid $serviceName
+        Set-ServiceSecurity $serviceName $fixtureSid $fixtureSid
         Assert-ProductionServiceBinding (Get-ServiceRecord $serviceName) 'LocalSystem' $fixtureImage $validCommand
         Assert-ServicePersistenceContract $serviceName @('SeChangeNotifyPrivilege')
+        Assert-ServiceContract $serviceName 'LocalSystem' 1 $fixtureSid
+        $reorderedServiceDaclRejected = $false
+        $reorderedSddl = "D:(A;;CCLCSWLOCRRC;;;$fixtureSid)(D;;GA;;;$fixtureSid)(A;;GA;;;SY)(A;;GA;;;BA)"
+        try { Assert-ExactServiceDacl $reorderedSddl $fixtureSid $fixtureSid } catch { $reorderedServiceDaclRejected = $true }
+        if (-not $reorderedServiceDaclRejected) {
+            throw 'The service DACL validator accepted an allow-before-deny descriptor.'
+        }
 
         New-Item -ItemType Directory -Path $readableDirectory | Out-Null
-        $fixtureSid = Get-ServiceSid $serviceName
         Set-ProtectedDirectoryAcl $readableDirectory 'S-1-5-19' 'S-1-5-20' $fixtureSid $true
         [IO.File]::WriteAllText($readableFile, '{"schema_version":1}', [Text.UTF8Encoding]::new($false))
         [IO.File]::WriteAllText($readableSiblingCanary, 'sibling-secret', [Text.UTF8Encoding]::new($false))
@@ -870,6 +917,7 @@ function Invoke-SelfTest {
             hostile_symlink_rejected_unchanged = $true
             effects_enabled_drift_rejected_unchanged = $true
             valid_disposable_service_contract_passed = $true
+            reordered_service_dacl_rejected = $true
             hostile_service_argv_and_persistence_drift_rejected = $true
             executor_readonly_acl_contract_passed = $true
             non_inheritable_acl_drift_rejected = $true

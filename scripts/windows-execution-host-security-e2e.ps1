@@ -46,6 +46,27 @@ function Get-ServiceSid {
     ).Value
 }
 
+function Assert-FeatureServiceDeny {
+    param([string]$Sddl, [string]$FeatureSid)
+    $descriptor = [Security.AccessControl.RawSecurityDescriptor]::new($Sddl)
+    [UInt32]$serviceAllAccess = 0x000F01FF
+    $matching = 0
+    foreach ($ace in $descriptor.DiscretionaryAcl) {
+        if ($ace.SecurityIdentifier.Value -ceq $FeatureSid) {
+            if ($ace -isnot [Security.AccessControl.CommonAce] -or
+                $ace.AceQualifier -ne [Security.AccessControl.AceQualifier]::AccessDenied -or
+                [UInt32]$ace.AccessMask -ne $serviceAllAccess -or
+                $ace.AceFlags -ne [Security.AccessControl.AceFlags]::None) {
+                throw ("The hostile feature SID could alter a protected service definition. observed_sddl=$Sddl")
+            }
+            $matching += 1
+        }
+    }
+    if ($matching -ne 1) {
+        throw ("The hostile feature SID could alter a protected service definition. observed_sddl=$Sddl")
+    }
+}
+
 function Wait-ServiceState {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
@@ -102,6 +123,7 @@ try {
         $selfTest.hostile_symlink_rejected_unchanged -ne $true -or
         $selfTest.effects_enabled_drift_rejected_unchanged -ne $true -or
         $selfTest.valid_disposable_service_contract_passed -ne $true -or
+        $selfTest.reordered_service_dacl_rejected -ne $true -or
         $selfTest.hostile_service_argv_and_persistence_drift_rejected -ne $true -or
         $selfTest.executor_readonly_acl_contract_passed -ne $true -or
         $selfTest.non_inheritable_acl_drift_rejected -ne $true -or
@@ -138,9 +160,7 @@ try {
     )) {
         [void](Invoke-Sc @('sdset', $service.Name, "D:(D;;GA;;;$featureSid)(A;;GA;;;SY)(A;;GA;;;BA)(A;;CCLCSWLOCRRC;;;$($service.Sid))"))
         $sddl = (@(Invoke-Sc @('sdshow', $service.Name)) -join '')
-        if ($sddl -notmatch [regex]::Escape("(D;;GA;;;$featureSid)")) {
-            throw ("The hostile feature SID could alter a protected service definition. observed_sddl=$sddl")
-        }
+        Assert-FeatureServiceDeny $sddl $featureSid
     }
     New-Item -ItemType Directory -Path $root,$allowedRoot | Out-Null
     [IO.File]::WriteAllText($prestate, 'hostile-prestate', [Text.UTF8Encoding]::new($false))
