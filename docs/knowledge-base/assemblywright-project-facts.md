@@ -447,6 +447,63 @@ Full-machine target phase: planning/creation containment has bounded native Wind
   packages, so the native create-directory and Job Object E2E suites run for every pull
   request and `main` push; this is exact-commit hosted Windows evidence, not production
   identity, installation, deployment, or live two-host proof.
+- Windows execution-host provisioning lives in
+  `scripts/windows-execution-host-provision.ps1`. Its service identity model is exact:
+  `AssemblywrightMaster` and `AssemblywrightBroker` run as LocalSystem with distinct
+  unrestricted service SIDs, while `AssemblywrightExecutor` runs as LocalService with a
+  restricted service SID. A service SID is a token capability tag, not an independent
+  logon account. Protected ProgramData storage is SYSTEM-owned, inheritance-disabled,
+  ordinary and single-link; the Executor SID has an explicit deny ACE on storage and
+  service definitions. DryRun/Check are non-mutating and path-free. Apply requires the
+  services already stopped under an explicit ceremony and never starts services or
+  enables effects. The current owner-account/user-local Master must fail Check and is
+  preserved until a separately reviewed cutover.
+  Exact fixed Program Files image filenames, protected ancestor/image ACLs, SHA-256
+  values, and one valid Authenticode signer come from the protected release manifest;
+  unsigned repository builds cannot satisfy Apply. The registry effects gate is the
+  first mutation and must verify zero. Policy/reserve creation uses create-new semantics;
+  existing leaves must already be protected ordinary single-link exact state, and the
+  allocated reserve must also be non-sparse and non-compressed.
+  SCM ImagePath validation is byte-exact for the complete role argv: Master includes
+  its canonical ProgramData authority directory, loopback bind, service mode/name, and
+  identity; Broker/Executor include fixed service-host mode/name/configuration path and
+  manifest digest. All substrate services remain disabled/stopped own-process,
+  noninteractive, dependency/trigger/recovery-free, with exact required privileges.
+  Apply rechecks stopped state around every mutation cluster and before its receipt.
+  The immutable Executor image, config, and required ancestor directories use a
+  narrower exact ACL: read/execute is allowed to the restricted Executor SID while
+  write, delete, permission, and ownership mutation are denied. Ancestor traversal/read
+  and exact-leaf read grants are non-inheriting; trusted full-control and Executor
+  mutation-deny ACEs inherit. The config files must also carry the Windows read-only
+  attribute, and sibling/later-created files receive no Executor read grant; other
+  protected storage remains denied.
+- `scripts/windows-execution-host-security-e2e.ps1` is the native non-browser E2E for
+  that substrate. It creates only randomized disposable services, launches a real
+  hostile payload as LocalService with a restricted service SID, requires an allowed
+  marker, then proves protected file overwrite, disk-reserve deletion, and protected
+  service reconfiguration did not occur. It also requires Master/Broker SCM queries
+  under bounded CPU/memory pressure and self-cleans. It invokes the production
+  provisioner's actual DryRun and Check and adds disposable hostile hardlink, symlink,
+  and effects-enabled drift fixtures. Its call to the production provisioner's
+  `SelfTest` sends those fixture classes through the real leaf and registry validators
+  and requires rejection without mutation. It also uses the real service-binding and
+  persistence validators on a valid randomized disposable SCM service before proving
+  hostile argv, type/start, failure-action, trigger, missing trusted inheritance,
+  inheritable Executor-read drift, and inherited sibling-read exposure reject. The protected
+  E2E also builds and launches the actual Broker and Executor binaries as randomized
+  disposable Windows services. Each must report `RUNNING` with a process ID, accept
+  SCM Stop, and report a clean `STOPPED`; a hostile Broker config digest, a correctly
+  re-digested schema-invalid config, and hostile extra Executor argv must not become
+  running. Broker ServiceMain constructs its semantic runtime before `RUNNING`;
+  Executor ServiceMain validates its full semantic bootstrap without constructing an
+  active runtime. Executor configuration is read-only and contains no receipt-signing
+  seed. Any later active runtime requires authenticated out-of-band Broker injection
+  after payload isolation prevents access to the Executor service process. Both hosts
+  then wait for bounded SCM controls but remain effect-inert: this is
+  not yet production IPC, dispatch, durable replay, or activation evidence.
+  The protected policy's Executor Job CPU/commit/
+  process limits remain activation-attested substrate until production
+  runtime creates and verifies the Job; do not call them an enforced reservation yet.
 - `assemblywright-master` — the durable Windows authority: distributed device
   lifecycle, the default-inert Feature Conveyor repository kernel, enrollment
   identity and mTLS, and the Windows SCM service host. Does not depend on

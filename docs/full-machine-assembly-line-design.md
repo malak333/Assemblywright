@@ -261,6 +261,67 @@ reserved process slots, a bounded private state volume/quota, and memory/CPU pri
 outside executor job limits. Exhausting unreserved host resources may fail a feature,
 but cannot authorize it to consume or rewrite the reservation.
 
+The Windows execution-host security substrate is represented by a dedicated
+idempotent provisioning tool. `DryRun` is non-mutating; `Check` requires the exact
+LocalSystem Master/Broker plus restricted LocalService Executor service-SID model and
+rejects owner-account or user-local deployment; `Apply` requires an elevated explicit
+stopped-service ceremony and never starts a service or enables effects. Master and
+Broker use distinct unrestricted service SIDs in their LocalSystem tokens; these are
+capability tags, not distinct logon accounts. The Executor uses LocalService with a
+restricted service SID, and that exact SID is denied on protected service objects,
+configuration, state, audit, update staging, and the allocated disk reserve. Protected
+receipts contain categories only, never paths or secrets.
+The Executor's immutable launch path and exact configuration are the narrow
+exception to total read denial: the restricted service SID receives read/execute
+only through non-inheriting grants on those exact files and required ancestors while
+an inheritable mutation-rights deny blocks write, delete, permission, and ownership
+changes on current and later descendants. Runtime configurations must also carry the
+Windows read-only attribute. Siblings and later-created files inherit no Executor read
+grant. All other protected storage stays unavailable to that SID until a later bounded
+state/IPC design grants an exact need.
+
+Check and Apply accept only the three fixed filenames below canonical Program Files,
+bind their exact SHA-256 values and one exact valid Authenticode signer through the
+SYSTEM-owned protected release manifest, and verify protected install-root, bin-root,
+manifest, and image ACLs. A source-built unsigned image cannot satisfy Apply. This is
+intentional: production provisioning stays unavailable until signed release evidence
+exists instead of treating a repository build as an installed identity.
+Each SCM ImagePath is a complete canonical role-specific argv: Master binds the fixed
+ProgramData authority directory, loopback bind, service name, mode, and LocalSystem
+identity; Broker and Executor bind their fixed service-host modes, service names,
+configuration paths, and manifest configuration digests. Extra, reordered, alternate,
+remote-bind, or omitted arguments reject. All three substrate services are disabled,
+stopped own-process/noninteractive services with no dependencies, triggers, recovery
+command/actions, or launch protection, and with exact role-specific required privileges.
+This is a pre-activation persistence contract, not permission to start them.
+The Broker and Executor binaries implement the corresponding Windows ServiceMain
+and Stop/Shutdown control-handler lifecycle. Their native E2E starts and stops the
+actual shipped binaries with randomized disposable service names and exact
+digest-bound read-only configurations, then proves hostile digest and argv state
+does not become a running service. Broker ServiceMain constructs its effect-disabled
+semantic runtime before reporting `RUNNING`; Executor ServiceMain validates the full
+semantic bootstrap without creating an active runtime or materializing a signing
+secret. A correctly re-digested schema-invalid config must stop with a service-specific
+failure. Serialized Executor configuration contains no receipt-signing seed. These
+entrypoints intentionally attest inert configuration only; authenticated production
+IPC, out-of-band secret injection after payload isolation, and dispatch are not claimed
+by this substrate phase.
+
+The protected policy records concrete Windows Job CPU-rate, commit, and active-process
+limits that the production executor must attest before any effect can activate. The
+provisioner also installs auditable master/broker IFEO priority settings and allocates a
+LocalSystem-owned, non-sparse, non-compressed disk-reserve file. The registry effects
+gate is written and verified off before any other Apply mutation. Existing policy or
+reserve leaves are accepted only when already ordinary, single-link, protected, and
+byte-exact; otherwise Apply rejects rather than following, truncating, or repairing a
+hostile leaf. The Job values are policy substrate only until the
+production executor creates and verifies the Job; they are not yet an enforced runtime
+reservation and do not make execution available.
+Apply re-reads all three stopped states before and after every mutation cluster and
+before its receipt. It establishes disabled start before SID, DACL, storage,
+reservation, or priority mutation; any drift leaves the effects gate off and yields no
+success receipt.
+
 ## Failure And Recovery
 
 - Brainstorming failure creates neither repository nor feature.
@@ -386,9 +447,12 @@ authority or proof of a later phase:
    target-identity validation with spawn disabled, held-image Windows Job Object source,
    portable hostile filesystem tests, and a proof-only Windows `CreateDirectory` adapter
    with complete held ancestry and explicit effect-possible reconciliation evidence. Its
-   production dispatch remains disabled. Completion still requires protected
-   installed identities/IPC, durable replay restore, the remaining closed adapters,
-   resource reservations, native Windows hostile/process proof, OS code signatures,
+   production dispatch remains disabled. A guarded Windows host-security provisioner,
+   source contract, and disposable hostile native service E2E now define the required
+   service-SID/ACL/resource-policy substrate; an owner-account production service does
+   not satisfy it and remains untouched before a stopped-service cutover. Completion
+   still requires successful production provisioning, protected IPC, durable replay
+   restore, remaining closed adapters, runtime Job enforcement, OS code signatures,
    and owner-recorded deployment evidence. Repository tests are not signed or
    deployed-host proof.
 5. **Assembly Line control:** the simplified UI, queue-empty Start denial, default-on

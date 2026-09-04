@@ -14,6 +14,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 pub mod runtime;
+pub mod startup;
+#[cfg(windows)]
+pub mod windows_service_host;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ExecutorError {
@@ -234,8 +237,14 @@ impl ExecutorPolicy {
         }
         let mut roots = Vec::new();
         for root in protected_manifest.paths() {
-            let canonical = canonical_ordinary(Path::new(root))?;
-            roots.push(compare_path(identity.platform, &canonical)?);
+            #[cfg(windows)]
+            let compared = compare_path(identity.platform, Path::new(root))?;
+            #[cfg(not(windows))]
+            let compared = {
+                let canonical = canonical_ordinary(Path::new(root))?;
+                compare_path(identity.platform, &canonical)?
+            };
+            roots.push(compared);
         }
         if roots.is_empty() {
             return Err(ExecutorError::InvalidIdentity);

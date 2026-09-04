@@ -13,6 +13,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 pub mod runtime;
+pub mod startup;
+#[cfg(windows)]
+pub mod windows_service_host;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum BrokerError {

@@ -33,6 +33,43 @@ effect-disabled; it must retain the complete target ancestry without delete shar
 report any ambiguity after entering the native create call, including a negative native
 status or missing handle, as reconciliation required.
 
+Windows execution-host provisioning is a separate fail-closed authority boundary.
+Dry-run and check accept no service-image or ceremony inputs. Apply requires an elevated
+explicit stopped-service ceremony, preserves the installed master until it already
+conforms to the LocalSystem cutover, never starts a service, and leaves production
+effects disabled; it cannot create a Broker or Executor service host. Distinct
+Master/Broker service SIDs are capability tags inside LocalSystem tokens rather than
+separate logon accounts. The restricted LocalService
+Executor SID must be explicitly denied mutation access on every protected storage and
+service object. Its immutable image/config and required ancestors are the only launch
+exception: each ancestor receives a non-inheriting traversal/read grant, each exact
+leaf receives its own non-inheriting read/execute grant, while inheritable mutation
+denial blocks new descendants and write, delete, permissions, and ownership remain
+denied. The config itself must be read-only. Sibling or later-created files must not
+inherit Executor read access. Other protected storage remains inaccessible.
+The serialized Executor configuration must never contain a receipt-signing seed or
+other private signing material. The Windows ServiceMain validates only the complete
+effect-disabled semantic bootstrap. An active runtime remains unavailable until a
+later authenticated Broker IPC design can inject the receipt secret out of band and
+prove payload processes cannot read the Executor service process or its handles.
+Only the fixed Program Files image names bound by exact SHA-256 and one exact valid
+Authenticode signer in the protected release manifest are eligible. Missing signing
+evidence keeps Apply unavailable. EffectsEnabled must be written and verified off before
+any other mutation. Pre-existing policy or reserve leaves must be ordinary, single-link,
+protected, and exact; symlink, reparse, hardlink, sparse, compressed, or drifted state
+rejects without repair or truncation.
+Every SCM ImagePath must equal its complete canonical role-specific argv, including
+Master data/bind/mode/identity and Broker/Executor service-host configuration digests.
+Extra or reordered arguments reject. Before activation all three services must remain
+disabled, stopped, own-process, noninteractive, dependency/trigger/recovery-free, and
+bound to the exact required-privilege set. Apply rechecks stopped state before and after
+every mutation cluster and before emitting its receipt; drift leaves EffectsEnabled off.
+Exact protected ACL validation includes explicit ownership, no inherited ACEs, no
+propagation flags, the complete exact rights set, inheritable trusted/mutation-deny
+directory ACEs, and a non-inheriting Executor traversal/read ACE only where required.
+Recorded Job CPU/commit/process limits are not an enforced reservation until production
+runtime creates and attests the exact Job; absence or drift must keep activation closed.
+
 The inert planning slice additionally requires:
 
 - New Project visibility defaults to Public and may be changed to Private before
