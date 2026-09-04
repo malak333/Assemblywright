@@ -101,6 +101,7 @@ mod windows_fixture {
                     | "stale"
                     | "stale_authority"
                     | "wrong_sid"
+                    | "localservice_dacl_denied"
             )
         {
             return None;
@@ -225,6 +226,17 @@ mod windows_fixture {
             }
             _ => {}
         }
+        if config.scenario == "localservice_dacl_denied" {
+            use std::os::windows::fs::OpenOptionsExt;
+            const WRITE_DAC: u32 = 0x0004_0000;
+            if std::fs::OpenOptions::new()
+                .access_mode(WRITE_DAC)
+                .open(std::path::Path::new(&config.pipe_name))
+                .is_ok()
+            {
+                return Err(());
+            }
+        }
         let mut response = None;
         for _ in 0..100 {
             let exchange = if config.scenario == "delayed_write" {
@@ -251,7 +263,13 @@ mod windows_fixture {
         }
         let expects_rejection = matches!(
             config.scenario.as_str(),
-            "unsigned" | "tampered" | "gap" | "stale" | "stale_authority" | "wrong_sid"
+            "unsigned"
+                | "tampered"
+                | "gap"
+                | "stale"
+                | "stale_authority"
+                | "wrong_sid"
+                | "localservice_dacl_denied"
         );
         let receipt = if expects_rejection {
             if response.is_some() {

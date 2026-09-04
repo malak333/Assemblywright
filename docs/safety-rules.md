@@ -62,9 +62,13 @@ the Broker-forwarded Executor frame. Each Master request is independently signed
 one exact endpoint and binds service identity, session, child epoch, authority,
 contiguous sequence, a Master-generated nonce, and a lifetime no longer than 60 seconds. The
 Broker must forward the exact already-Master-signed Executor bytes. Pipes are
-single-instance and local-only, their DACL admits only SYSTEM and the expected canonical
-`S-1-5-80-*` client service SID, and both client and server prove the peer service SID
-from the connected token. Clients request identification-only SQOS; servers first read
+single-instance and local-only. Their DACL admits only SYSTEM, the configured canonical
+server service SID, and the expected canonical client service SID; the configured server
+SID is also the explicit object owner. The server must prove its SID is enabled and
+owner-capable in its own process token before creating the pipe. This
+self ACE is required for the restricted Executor token's second access check and does
+not widen peer authentication. Both client and server prove the peer service SID from
+the connected token. Clients request identification-only SQOS; servers first read
 the bounded message, then reject any stronger impersonation level and treat failure to
 revert impersonation as fatal before handling the frame. IPC state and seed leaves reject traversal, device, ADS, DOS-device,
 and reparse-parent spellings while retaining the exact protected parent handle. Each service

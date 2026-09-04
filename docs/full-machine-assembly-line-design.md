@@ -52,7 +52,8 @@ Start/Stop/Emergency routes fail closed through an unavailable production dispat
 production executor/broker services remain unavailable. A local Windows IPC foundation
 independently Master-signs bounded hop-specific Broker and Executor frames, requires
 the Broker to forward the byte-exact Executor envelope, verifies exact peer service
-SIDs on local-only named pipes, and accepts separately service-signed path-free
+SIDs on local-only named pipes, binds every server owner/DACL to its own token-proven service
+SID (including the restricted Executor's required self ACE), and accepts separately service-signed path-free
 zero-effect acknowledgements only through pinned public keys. Append-only hash-chained
 intent/ack state provides contiguous sequence/nonce replay protection, byte-exact
 pending recovery, original-ack replay, and durable quarantine on ambiguity. It exposes

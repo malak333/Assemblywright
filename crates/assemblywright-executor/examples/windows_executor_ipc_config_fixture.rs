@@ -17,6 +17,7 @@ fn main() {
     let seed = PathBuf::from(args.next().expect("seed"));
     let pipe_name = args.next().expect("pipe").into_string().unwrap();
     let broker_sid = args.next().expect("broker sid").into_string().unwrap();
+    let executor_sid = args.next().expect("executor sid").into_string().unwrap();
     assert!(args.next().is_none());
     let root = output.parent().unwrap().to_string_lossy().into_owned();
     let manifest = ProtectedControlPlanePathManifest {
@@ -78,6 +79,7 @@ fn main() {
         authority_snapshot: snapshot,
         ipc: Some(ExecutorIpcBootstrap {
             pipe_name,
+            executor_service_sid: executor_sid,
             expected_broker_service_sid: broker_sid,
             durable_state_path: state,
             ack_seed_path: seed.clone(),

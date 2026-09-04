@@ -18,6 +18,7 @@ fn main() {
     let master_sid = args.next().expect("master sid").into_string().unwrap();
     let executor_pipe = args.next().expect("executor pipe").into_string().unwrap();
     let executor_sid = args.next().expect("executor sid").into_string().unwrap();
+    let broker_sid = args.next().expect("broker sid").into_string().unwrap();
     assert!(args.next().is_none());
     let root = output.parent().unwrap().to_string_lossy().into_owned();
     let manifest = ProtectedControlPlanePathManifest {
@@ -63,6 +64,7 @@ fn main() {
         protected_manifest: manifest,
         ipc: Some(BrokerIpcBootstrap {
             pipe_name,
+            broker_service_sid: broker_sid,
             expected_master_service_sid: master_sid,
             executor_pipe_name: executor_pipe,
             expected_executor_service_sid: executor_sid,

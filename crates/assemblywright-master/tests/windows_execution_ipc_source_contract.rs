@@ -57,6 +57,10 @@ fn ipc_contract_is_local_authenticated_durable_and_inert() {
         "RevertToSelf() } == 0",
         "token_has_sid",
         "validate_service_sid_text",
+        "server_service_sid",
+        "SE_GROUP_ENABLED | SE_GROUP_OWNER",
+        "O:{server_service_sid}D:P",
+        "(A;;GA;;;{server_service_sid})",
         "S-1-5-80-",
         "expected_client_service_sid",
         "expected_server_service_sid",
@@ -97,6 +101,8 @@ fn service_hosts_wire_only_inert_processors_and_out_of_band_secrets() {
     assert!(executor.contains("serve_broker_once"));
     assert!(broker_runtime.contains("pub ack_seed_path: PathBuf"));
     assert!(executor_runtime.contains("pub ack_seed_path: PathBuf"));
+    assert!(broker_runtime.contains("pub broker_service_sid: String"));
+    assert!(executor_runtime.contains("pub executor_service_sid: String"));
     assert!(!broker_runtime.contains("pub ack_signing_seed"));
     assert!(!executor_runtime.contains("pub ack_signing_seed"));
     assert!(!executor_runtime.contains("pub receipt_signing_seed"));
@@ -112,8 +118,14 @@ fn native_e2e_covers_three_services_hostile_frames_restart_and_zero_effects() {
         "AssemblywrightExecutorE2E",
         "'unsigned','tampered','gap','stale','stale_authority'",
         "New-Fixture 'wrong_sid'",
+        "New-Fixture 'localservice_dacl_denied'",
+        "$clientPipe = if ($LocalServiceClient) { $executorPipe }",
+        "$clientServerSid = if ($LocalServiceClient) { $executorSid }",
+        "*$runningMasterSid`:(OI)(CI)F",
         "--scenario replay",
         "restart_exact_ack_replay = $true",
+        "server_self_sid_dacl_binding = $true",
+        "unrelated_localservice_open_and_write_dac_denied = $true",
         "effects_applied = 0",
         "client_impersonation_level = 'identification_only'",
         "New-Fixture 'delayed_write'",

@@ -430,7 +430,12 @@ Full-machine target phase: planning/creation containment has bounded native Wind
 
 - `assemblywright-protocol` — versioned, bounded wire contracts plus the narrowly scoped
   local Windows pipe primitive and protected append-only IPC journal used by all three
-  Windows execution-host roles. It owns no service key, authority decision, or effect.
+  Windows execution-host roles. A pipe server must prove its configured service SID is
+  enabled and owner-capable in its process token, set it as the pipe owner, and include
+  that self SID in the protected DACL; this is
+  what lets the restricted Executor satisfy Windows' restricted-token access check
+  without weakening the separate exact-client-SID authentication. It owns no service
+  key, authority decision, or effect.
 - `assemblywright-executor` — inert-by-default unprivileged full-machine containment
   source. It verifies exact signed action/identity/digest/deadline bindings, rejects
   protected paths and replay/gaps, and validates held macOS executable/cwd plus signed

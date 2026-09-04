@@ -63,6 +63,7 @@ pub struct BrokerRuntimeConfig {
 #[serde(deny_unknown_fields)]
 pub struct BrokerIpcBootstrap {
     pub pipe_name: String,
+    pub broker_service_sid: String,
     pub expected_master_service_sid: String,
     pub executor_pipe_name: String,
     pub expected_executor_service_sid: String,
@@ -317,6 +318,8 @@ fn validate_config(config: &BrokerRuntimeConfig) -> Result<(), RuntimeError> {
     if let Some(ipc) = &config.ipc {
         if ipc.pipe_name.len() > 128
             || ipc.executor_pipe_name.len() > 128
+            || ipc.broker_service_sid.is_empty()
+            || ipc.broker_service_sid.len() > 192
             || ipc.expected_master_service_sid.len() > 192
             || ipc.expected_executor_service_sid.len() > 192
             || ipc.ack_key_id.is_empty()

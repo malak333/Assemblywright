@@ -27,9 +27,9 @@ use windows_sys::Win32::System::Pipes::{
     ImpersonateNamedPipeClient, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,
     PIPE_WAIT,
 };
-use windows_sys::Win32::System::SystemServices::SE_GROUP_ENABLED;
+use windows_sys::Win32::System::SystemServices::{SE_GROUP_ENABLED, SE_GROUP_OWNER};
 use windows_sys::Win32::System::Threading::{
-    OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+    GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -59,18 +59,27 @@ pub fn validate_local_pipe_name(name: &str) -> Result<(), WindowsExecutionPipeEr
     Ok(())
 }
 
-/// Creates one local-only, single-instance pipe and services exactly one
-/// bounded frame from the exact expected client service SID.
+/// Creates one local-only, single-instance pipe bound to the current service
+/// SID and services exactly one bounded frame from the expected client SID.
 pub fn serve_once(
     pipe_name: &str,
+    server_service_sid: &str,
     expected_client_service_sid: &str,
     handler: impl FnOnce(&[u8]) -> Result<Vec<u8>, WindowsExecutionPipeError>,
 ) -> Result<(), WindowsExecutionPipeError> {
     validate_local_pipe_name(pipe_name)?;
+    validate_service_sid_text(server_service_sid)?;
     validate_service_sid_text(expected_client_service_sid)?;
+    if !process_has_sid_with_attributes(
+        unsafe { GetCurrentProcess() },
+        server_service_sid,
+        (SE_GROUP_ENABLED | SE_GROUP_OWNER) as u32,
+    )? {
+        return Err(WindowsExecutionPipeError::WrongPeer);
+    }
     let pipe_name = wide(pipe_name);
     let sddl = wide(&format!(
-        "O:SYD:P(A;;GA;;;SY)(A;;GA;;;{expected_client_service_sid})"
+        "O:{server_service_sid}D:P(A;;GA;;;SY)(A;;GA;;;{server_service_sid})(A;;GA;;;{expected_client_service_sid})"
     ));
     let mut descriptor = std::ptr::null_mut();
     if unsafe {
@@ -246,16 +255,32 @@ fn token_is_identification_only(token: HANDLE) -> Result<bool, WindowsExecutionP
 }
 
 fn process_has_sid(process: HANDLE, expected_sid: &str) -> Result<bool, WindowsExecutionPipeError> {
+    process_has_sid_with_attributes(process, expected_sid, SE_GROUP_ENABLED as u32)
+}
+
+fn process_has_sid_with_attributes(
+    process: HANDLE,
+    expected_sid: &str,
+    required_attributes: u32,
+) -> Result<bool, WindowsExecutionPipeError> {
     let mut token = HANDLE::default();
     if unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) } == 0 {
         return Err(WindowsExecutionPipeError::WrongPeer);
     }
-    let result = token_has_sid(token, expected_sid);
+    let result = token_has_sid_with_attributes(token, expected_sid, required_attributes);
     unsafe { CloseHandle(token) };
     result
 }
 
 fn token_has_sid(token: HANDLE, expected_sid: &str) -> Result<bool, WindowsExecutionPipeError> {
+    token_has_sid_with_attributes(token, expected_sid, SE_GROUP_ENABLED as u32)
+}
+
+fn token_has_sid_with_attributes(
+    token: HANDLE,
+    expected_sid: &str,
+    required_attributes: u32,
+) -> Result<bool, WindowsExecutionPipeError> {
     let sid = sid_from_text(expected_sid)?;
     let mut needed = 0_u32;
     unsafe { GetTokenInformation(token, TokenGroups, std::ptr::null_mut(), 0, &mut needed) };
@@ -283,7 +308,8 @@ fn token_has_sid(token: HANDLE, expected_sid: &str) -> Result<bool, WindowsExecu
     let first = groups.Groups.as_ptr();
     let matched = (0..groups.GroupCount as usize).any(|index| {
         let group = unsafe { &*first.add(index) };
-        group.Attributes & SE_GROUP_ENABLED as u32 != 0 && unsafe { EqualSid(group.Sid, sid) } != 0
+        group.Attributes & required_attributes == required_attributes
+            && unsafe { EqualSid(group.Sid, sid) } != 0
     });
     unsafe { LocalFree(sid) };
     Ok(matched)

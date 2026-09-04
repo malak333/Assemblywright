@@ -63,8 +63,9 @@ installed identities remain cutover gates. Source now includes a separate inert
 Windows named-pipe IPC foundation: the Master signs hop-specific Broker and Executor
 frames independently, the Broker forwards the exact signed Executor bytes, and each
 service returns its own service-secret-signed, path-free zero-effect acknowledgement.
-Local-only pipe mode, canonical service-SID peer checks, identification-only client
-SQOS, bounded frames, pinned public keys, and append-only intent/ack journals fail closed on replay, gaps, stale authority,
+Local-only pipe mode, canonical service-SID peer checks, server-self-SID DACL ownership
+for restricted service tokens, identification-only client SQOS, bounded frames, pinned public keys,
+and append-only intent/ack journals fail closed on replay, gaps, stale authority,
 binding drift, or ambiguous restart. Broker and Executor ServiceMain can host this
 foundation only when an optional protected bootstrap names out-of-band secret files;
 the seeds never enter serialized runtime configuration or the Broker-to-Executor

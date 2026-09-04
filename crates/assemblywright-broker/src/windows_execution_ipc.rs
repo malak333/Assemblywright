@@ -4,10 +4,16 @@ use assemblywright_protocol::windows_execution_pipe::{
 
 pub fn serve_master_once(
     pipe_name: &str,
+    broker_service_sid: &str,
     expected_master_service_sid: &str,
     handler: impl FnOnce(&[u8]) -> Result<Vec<u8>, WindowsExecutionPipeError>,
 ) -> Result<(), WindowsExecutionPipeError> {
-    serve_once(pipe_name, expected_master_service_sid, handler)
+    serve_once(
+        pipe_name,
+        broker_service_sid,
+        expected_master_service_sid,
+        handler,
+    )
 }
 
 pub fn transact_executor(

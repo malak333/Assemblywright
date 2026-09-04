@@ -89,7 +89,12 @@ function Protect-Tree([string]$Root, [string]$BrokerSid, [string]$ExecutorSid) {
     if ($LASTEXITCODE -ne 0) { throw 'Failed to grant the Executor fixture root.' }
 }
 
-function New-Fixture([string]$Scenario, [int]$Index, [bool]$WrongSid = $false) {
+function New-Fixture(
+    [string]$Scenario,
+    [int]$Index,
+    [bool]$WrongSid = $false,
+    [bool]$LocalServiceClient = $false
+) {
     $suffix = "$baseSuffix$Index"
     $masterName = "AssemblywrightMasterE2E$suffix"
     $brokerName = "AssemblywrightBrokerE2E$suffix"
@@ -105,7 +110,8 @@ function New-Fixture([string]$Scenario, [int]$Index, [bool]$WrongSid = $false) {
     Invoke-Sc @('create',$executorName,'binPath=',"`"$executorImage`" --service-host --service-name $executorName --config pending --config-sha256 $('0' * 64)",'start=','demand','obj=','NT AUTHORITY\LocalService') | Out-Null
     $createdServices.Add($executorName)
     Invoke-Sc @('sidtype',$executorName,'restricted') | Out-Null
-    Invoke-Sc @('create',$masterName,'binPath=',"`"$masterFixture`" --service-name $masterName --pipe pending --broker-sid S-1-5-18 --receipt pending --scenario $Scenario",'start=','demand','obj=','LocalSystem') | Out-Null
+    $masterAccount = if ($LocalServiceClient) { 'NT AUTHORITY\LocalService' } else { 'LocalSystem' }
+    Invoke-Sc @('create',$masterName,'binPath=',"`"$masterFixture`" --service-name $masterName --pipe pending --broker-sid S-1-5-18 --receipt pending --scenario $Scenario",'start=','demand','obj=',$masterAccount) | Out-Null
     $createdServices.Add($masterName)
     Invoke-Sc @('sidtype',$masterName,'unrestricted') | Out-Null
     if ($WrongSid) {
@@ -114,13 +120,18 @@ function New-Fixture([string]$Scenario, [int]$Index, [bool]$WrongSid = $false) {
         Invoke-Sc @('sidtype',$wrongName,'unrestricted') | Out-Null
     }
 
-    $masterSid = if ($WrongSid) { Get-ServiceSid $wrongName } else { Get-ServiceSid $masterName }
+    $runningMasterSid = Get-ServiceSid $masterName
+    $masterSid = if ($WrongSid) { Get-ServiceSid $wrongName } else { $runningMasterSid }
     $brokerSid = Get-ServiceSid $brokerName
     $executorSid = Get-ServiceSid $executorName
     Protect-Tree $root $brokerSid $executorSid
     $brokerRoot = Join-Path $root 'broker'
     $executorRoot = Join-Path $root 'executor'
     $receipt = Join-Path (Join-Path $root 'receipt') 'receipt.json'
+    if ($LocalServiceClient) {
+        & icacls.exe (Join-Path $root 'receipt') '/grant' "*$runningMasterSid`:(OI)(CI)F" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Failed to grant the hostile LocalService fixture its receipt path.' }
+    }
     $brokerConfig = Join-Path $brokerRoot 'config.json'
     $brokerState = Join-Path $brokerRoot 'ipc.journal'
     $brokerSeed = Join-Path $brokerRoot 'ack.seed'
@@ -134,15 +145,17 @@ function New-Fixture([string]$Scenario, [int]$Index, [bool]$WrongSid = $false) {
     $brokerPipe = "\\.\pipe\Assemblywright.MasterBroker.$suffix"
     $executorPipe = "\\.\pipe\Assemblywright.BrokerExecutor.$suffix"
 
-    $brokerDigest = (@(& cargo run --quiet --locked -p assemblywright-broker --example windows_broker_ipc_config_fixture -- $brokerConfig $brokerRunImage $executorRunImage $brokerState $brokerSeed $brokerPipe $masterSid $executorPipe $executorSid) | Select-Object -Last 1).Trim()
+    $brokerDigest = (@(& cargo run --quiet --locked -p assemblywright-broker --example windows_broker_ipc_config_fixture -- $brokerConfig $brokerRunImage $executorRunImage $brokerState $brokerSeed $brokerPipe $masterSid $executorPipe $executorSid $brokerSid) | Select-Object -Last 1).Trim()
     if ($LASTEXITCODE -ne 0 -or $brokerDigest -notmatch '^[0-9a-f]{64}$') { throw 'Broker IPC fixture generation failed.' }
-    $executorDigest = (@(& cargo run --quiet --locked -p assemblywright-executor --example windows_executor_ipc_config_fixture -- $executorConfig $executorRunImage $brokerRunImage $executorState $executorSeed $executorPipe $brokerSid) | Select-Object -Last 1).Trim()
+    $executorDigest = (@(& cargo run --quiet --locked -p assemblywright-executor --example windows_executor_ipc_config_fixture -- $executorConfig $executorRunImage $brokerRunImage $executorState $executorSeed $executorPipe $brokerSid $executorSid) | Select-Object -Last 1).Trim()
     if ($LASTEXITCODE -ne 0 -or $executorDigest -notmatch '^[0-9a-f]{64}$') { throw 'Executor IPC fixture generation failed.' }
     & attrib.exe +R $brokerConfig
     & attrib.exe +R $executorConfig
     Invoke-Sc @('config',$brokerName,'binPath=',"`"$brokerRunImage`" --service-host --service-name $brokerName --config `"$brokerConfig`" --config-sha256 $brokerDigest") | Out-Null
     Invoke-Sc @('config',$executorName,'binPath=',"`"$executorRunImage`" --service-host --service-name $executorName --config `"$executorConfig`" --config-sha256 $executorDigest") | Out-Null
-    Invoke-Sc @('config',$masterName,'binPath=',"`"$masterFixture`" --service-name $masterName --pipe $brokerPipe --broker-sid $brokerSid --receipt `"$receipt`" --scenario $Scenario") | Out-Null
+    $clientPipe = if ($LocalServiceClient) { $executorPipe } else { $brokerPipe }
+    $clientServerSid = if ($LocalServiceClient) { $executorSid } else { $brokerSid }
+    Invoke-Sc @('config',$masterName,'binPath=',"`"$masterFixture`" --service-name $masterName --pipe $clientPipe --broker-sid $clientServerSid --receipt `"$receipt`" --scenario $Scenario") | Out-Null
 
     Invoke-Sc @('start',$executorName) | Out-Null
     Wait-ServiceState $executorName 'Running' | Out-Null
@@ -200,12 +213,16 @@ try {
         $index += 1
     }
     New-Fixture 'wrong_sid' $index $true | Out-Null
+    $index += 1
+    New-Fixture 'localservice_dacl_denied' $index $true $true | Out-Null
 
     [ordered]@{
         schema_version = 1
         status = 'windows_execution_ipc_native_e2e_passed'
         three_service_scm_roundtrip = $true
         service_sid_peer_authentication = $true
+        server_self_sid_dacl_binding = $true
+        unrelated_localservice_open_and_write_dac_denied = $true
         client_impersonation_level = 'identification_only'
         delayed_client_write_authenticated = $true
         remote_clients_rejected_by_pipe_mode = $true

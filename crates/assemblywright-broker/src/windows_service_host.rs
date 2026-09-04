@@ -110,6 +110,7 @@ fn service_main(_: Vec<OsString>) {
             let result: Result<(), ()> = loop {
                 let handled = crate::windows_execution_ipc::serve_master_once(
                     &ipc.pipe_name,
+                    &ipc.broker_service_sid,
                     &ipc.expected_master_service_sid,
                     |bytes| {
                         let now = std::time::SystemTime::now()

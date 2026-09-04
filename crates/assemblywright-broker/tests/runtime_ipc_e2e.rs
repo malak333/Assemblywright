@@ -40,10 +40,30 @@ fn ipc_bootstrap_rejects_lexical_escape_from_protected_root() {
     let protected = std::path::PathBuf::from(&config.protected_manifest.ipc_and_enforcement_state);
     config.ipc = Some(BrokerIpcBootstrap {
         pipe_name: r"\\.\pipe\Assemblywright.MasterBroker.Unit".into(),
+        broker_service_sid: "S-1-5-80-11-12-13-14-15".into(),
         expected_master_service_sid: "S-1-5-80-1-2-3-4-5".into(),
         executor_pipe_name: r"\\.\pipe\Assemblywright.BrokerExecutor.Unit".into(),
         expected_executor_service_sid: "S-1-5-80-6-7-8-9-10".into(),
         durable_state_path: protected.join("..").join("outside.journal"),
+        ack_seed_path: protected.join("ack.seed"),
+        ack_key_id: "broker-ack-v1".into(),
+    });
+    assert!(BrokerRuntime::new(config).is_err());
+}
+
+#[test]
+fn ipc_bootstrap_requires_server_self_sid() {
+    let temp = tempdir().unwrap();
+    let key = SigningKey::from_bytes(&[20; 32]);
+    let mut config = fixture(temp.path(), &key);
+    let protected = std::path::PathBuf::from(&config.protected_manifest.ipc_and_enforcement_state);
+    config.ipc = Some(BrokerIpcBootstrap {
+        pipe_name: r"\\.\pipe\Assemblywright.MasterBroker.Unit".into(),
+        broker_service_sid: String::new(),
+        expected_master_service_sid: "S-1-5-80-1-2-3-4-5".into(),
+        executor_pipe_name: r"\\.\pipe\Assemblywright.BrokerExecutor.Unit".into(),
+        expected_executor_service_sid: "S-1-5-80-6-7-8-9-10".into(),
+        durable_state_path: protected.join("ipc.journal"),
         ack_seed_path: protected.join("ack.seed"),
         ack_key_id: "broker-ack-v1".into(),
     });

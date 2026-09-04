@@ -264,6 +264,10 @@ The security E2E invokes the dedicated IPC E2E. That proof creates randomized
 disposable Master, Broker, and restricted Executor SCM services; requires the exact
 service-SID-authenticated local named-pipe roundtrip; verifies independently signed
 Master hop frames and separately signed path-free Broker/Executor acknowledgements;
+requires each pipe owner/DACL to use a configured service SID that is enabled and
+owner-capable in the server process token, including the restricted Executor self-SID
+access check; proves an unrelated LocalService service cannot open the pipe normally or
+for `WRITE_DAC`;
 rejects wrong SID, unsigned, tampered, sequence-gap, stale, and stale-authority frames;
 restarts Broker/Executor and requires byte-identical acknowledgement replay; and records
 zero effects. The same native exchange requires identification-only client SQOS, exact

@@ -73,6 +73,7 @@ pub struct ExecutorRuntimeConfig {
 #[serde(deny_unknown_fields)]
 pub struct ExecutorIpcBootstrap {
     pub pipe_name: String,
+    pub executor_service_sid: String,
     pub expected_broker_service_sid: String,
     pub durable_state_path: PathBuf,
     pub ack_seed_path: PathBuf,
@@ -441,6 +442,8 @@ fn validate_config(config: &ExecutorRuntimeConfig) -> Result<(), RuntimeError> {
     }
     if let Some(ipc) = &config.ipc {
         if ipc.pipe_name.len() > 128
+            || ipc.executor_service_sid.is_empty()
+            || ipc.executor_service_sid.len() > 192
             || ipc.expected_broker_service_sid.len() > 192
             || ipc.ack_key_id.is_empty()
             || ipc.durable_state_path == ipc.ack_seed_path
