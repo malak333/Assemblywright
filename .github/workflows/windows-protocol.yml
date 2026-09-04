@@ -63,11 +63,19 @@ jobs:
       - name: Lint master process, identity, and transport
         run: cargo clippy -p assemblywright-master --all-targets --locked -- -D warnings
 
+      - name: Lint Windows executor and privileged broker
+        run: cargo clippy -p assemblywright-broker -p assemblywright-executor --all-targets --locked -- -D warnings
+
       - name: Test portable protocol contracts
         run: cargo test -p assemblywright-protocol --locked
 
       - name: Test master process, identity, and mTLS transport
         run: cargo test -p assemblywright-master --locked
+
+      - name: Test Windows executor and privileged broker containment
+        run: |
+          cargo test -p assemblywright-broker --locked -- --nocapture
+          cargo test -p assemblywright-executor --locked -- --nocapture
 
       - name: Test real Windows service lifecycle
         env:

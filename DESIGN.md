@@ -160,15 +160,22 @@ broker identities/revisions/executable digests, a digest of the complete protect
 closure, typed action, exact target and parent identities, operation and working-
 directory digests, environment-key names only, deadline, cancellation, effect class,
 and reconciliation strategy. Broker policy rejects protected descendants, case aliases,
-symlinks/reparse points, hard-linked files, drift, gaps, and replay, but all privileged
-adapters remain effect-disabled until held-handle native implementations land. The
+symlinks/reparse points, hard-linked files, drift, gaps, and replay. The first Windows
+`CreateDirectory` adapter now exists only behind a one-shot native proof seam: it holds
+the complete target ancestry without delete sharing, creates one absent leaf relative
+to the retained parent handle, and returns either path-free applied evidence or an
+effect-possible reconciliation outcome. Any uncertain completion after entering the
+native create call, including a negative status, is treated as effect-possible and
+quarantines the proof policy. The long-running broker runtime still validates
+and consumes dispatches without executing them until active-effect termination and
+durable reconciliation are wired. The
 unprivileged executor validates held macOS executable/cwd and signed parent/object
 identities, but macOS spawn remains disabled because a hostile descendant can escape a
 process group with `setsid`/`setpgid` and Darwin exposes no unprivileged Job-Object-like
 reaper. Windows source retains no-reparse path handles, verifies the suspended image,
 assigns a kill-on-close Job, rechecks authority, and only then resumes; it remains
 uninstalled and unavailable through product routes pending native-host proof.
-Broker file replacement, removal, service adapters, OS installation/identity, IPC,
+Broker file replacement, removal, service adapters, OS installation/identity, production IPC,
 durable replay restoration, resource reservations, and master control routes remain
 unavailable.
 

@@ -27,6 +27,12 @@ target scope.
 
 Full-machine target phase: planning/creation containment has bounded native Windows LocalSystem/AppContainer service proof; execution admission is implemented and effects remain unavailable.
 
+A Windows `CreateDirectory` adapter may execute only through
+its dedicated one-shot native proof seam while the long-running broker dispatch stays
+effect-disabled; it must retain the complete target ancestry without delete sharing and
+report any ambiguity after entering the native create call, including a negative native
+status or missing handle, as reconciliation required.
+
 The inert planning slice additionally requires:
 
 - New Project visibility defaults to Public and may be changed to Private before

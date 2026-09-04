@@ -171,24 +171,44 @@ process tests (not Playwright):
 ```sh
 cargo test -p assemblywright-protocol --test execution_containment_contract -- --nocapture
 cargo test -p assemblywright-broker --test protected_boundary -- --nocapture
+cargo test -p assemblywright-broker --test windows_create_directory_e2e -- --nocapture
 cargo test -p assemblywright-executor --test process_group_e2e -- --nocapture
 cargo test -p assemblywright-executor --test windows_job_e2e -- --nocapture
 cargo clippy -p assemblywright-protocol -p assemblywright-broker -p assemblywright-executor --all-targets -- -D warnings
 ```
 
-The first two suites prove strict signature/digest/schema/target/replay rejection at a
-portable repository boundary. On macOS, `process_group_e2e` proves real held
+The protocol and protected-boundary suites prove strict
+signature/digest/schema/target/replay rejection at a portable repository boundary.
+`windows_create_directory_e2e` must run on the native Windows owner host. It exercises
+the proof-only adapter's complete no-delete-share ancestry, handle-relative single-leaf
+creation, path-free result, and effect-possible quarantine boundary; the long-running
+broker dispatch remains effect-disabled. On macOS, `process_group_e2e` proves real held
 parent/object identity checks, rejects replacement before preparation, and proves that
 an adversarial `setsid` escape command is denied before spawn. Process groups are not
 claimed as descendant containment. `windows_job_e2e` must run on the native Windows
 owner host: it launches a real descendant only after suspended-image verification and
 Job assignment, then requires a signed receipt with a signaled root and zero active Job
-processes. Cross-compilation does not prove that native boundary. Installed services,
-a master IPC client, broker effects, and activation receipts remain unavailable. None
+processes. Cross-compilation does not prove either native Windows boundary. Installed
+services, a master IPC client, production broker effects, and activation receipts remain
+unavailable. None
 of these commands
 prove OS code signatures, dedicated service identities/ACLs, privileged IPC,
 resource reservations, activated Start/Stop/Emergency effects, deployment, or live
 two-host use.
+
+The required `Assemblywright Windows Distributed Gate` runs the broker and executor
+Clippy checks plus both native suites on `windows-latest`. Its hosted success proves the
+repository's Windows API and process boundaries for the exact commit; it does not prove
+installation under the production service identities, owner-host deployment, or live
+two-machine operation.
+
+The broker unit/contract matrix covers accepted exact operations, malformed and empty
+leaf names, reserved device aliases, native length overflow, signature/identity/digest
+drift, protected/link/case targets, sequence gaps and replay, deterministic path-free
+post-state binding, and ambiguous post-effect quarantine. Runtime IPC E2E covers
+authenticated Stop/Emergency intent and FIFO replay behavior. Concurrent active-effect
+cancellation and restart reconciliation are intentionally not claimed: the one-shot seam
+is proof-only and production dispatch remains disabled until those contracts exist.
 
 These checks prove strict contracts, inert persistence, authenticated/bounded routes,
 schema migration, strict Mac decoding/transport behavior, and presentation defaults at
@@ -911,14 +931,16 @@ are present:
 rustup toolchain install 1.95.0 --profile minimal --component clippy --component rustfmt
 ```
 
-`.github/workflows/windows-protocol.yml` runs formatting, clippy, the protocol
-and master crates, the master-process E2E, and the elevated Windows SCM service
-lifecycle E2E. The native master tests are the authoritative proof for Windows
-final-DOS-path normalization, alternate-path rejection, POSIX rename/replacement
-revalidation, and held-handle identity comparison; macOS execution cannot prove
+`.github/workflows/windows-protocol.yml` runs formatting; package-scoped clippy and
+tests for the protocol, master, broker, and executor crates; the master-process E2E;
+the native broker create-directory and executor Job Object E2Es; and the elevated
+Windows SCM service lifecycle E2E. The native tests are the authoritative proof for
+Windows final-DOS-path normalization, alternate-path rejection, POSIX
+rename/replacement revalidation, held-handle identity comparison, handle-relative
+directory creation, and Job Object descendant reaping; macOS execution cannot prove
 those Win32 behaviors.
 
-Use the workflow's package-scoped protocol and master clippy commands on
+Use the workflow's package-scoped protocol, master, broker, and executor clippy commands on
 Windows. Do not substitute the macOS/Linux workspace-wide clippy command: the
 workspace also contains Unix-only local transport targets, so that substitution
 fails before it reaches the authoritative Windows protocol/master lanes.
