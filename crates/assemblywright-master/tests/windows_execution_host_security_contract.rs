@@ -109,15 +109,16 @@ fn native_hostile_e2e_is_disposable_bounded_and_does_not_target_production() {
         "The hostile feature SID could alter a protected service definition.",
         "Assert-FeatureServiceDeny $sddl $featureSid",
         "The hostile restricted-service payload did not prove execution.",
+        "windows_restricted_service_hostile_probe",
+        "A restricted service SID cannot execute the system PowerShell image",
         "sc.exe start $featureName",
-        "started;read;attempted",
+        "started;read;service-denied;attempted",
         "The hostile feature token altered a protected file.",
         "The hostile feature token altered the protected disk reserve.",
         "The hostile feature token altered a protected service definition.",
         "The restricted feature token mutated its read-only configuration grant.",
         "executor_configuration_read_allowed_mutation_denied = $true",
         "executor_inherited_sibling_read_denied = $true",
-        ";sibling-read",
         "windows-execution-host-provision.ps1",
         "-Mode DryRun",
         "-Mode Check",
@@ -166,11 +167,19 @@ fn windows_service_hosts_validate_semantic_bootstrap_before_running() {
     let executor_fixture = include_str!(
         "../../assemblywright-executor/examples/windows_executor_service_config_fixture.rs"
     );
+    let hostile_probe = include_str!(
+        "../../assemblywright-executor/examples/windows_restricted_service_hostile_probe.rs"
+    );
     assert!(broker.contains(".and_then(BrokerRuntime::new)"));
     assert!(executor.contains(".and_then(validate_service_bootstrap)"));
     assert!(!executor_runtime.contains("pub receipt_signing_seed"));
     assert!(!broker_fixture.contains(".canonicalize()"));
     assert!(!executor_fixture.contains("receipt_signing_seed"));
+    assert!(hostile_probe.contains("result.push_str(\";attempted\")"));
+    assert!(hostile_probe.contains("result.push_str(\";sibling-read\")"));
+    assert!(hostile_probe
+        .contains("OpenServiceW(manager, service_name.as_ptr(), SERVICE_CHANGE_CONFIG)"));
+    assert!(hostile_probe.contains("open_error != ERROR_ACCESS_DENIED"));
     assert!(executor_fixture.contains(r#"C:\ProgramData\Assemblywright\authority\master.sqlite3"#));
     assert!(executor_runtime.contains("return Err(RuntimeError::InvalidConfig);"));
     for source in [broker, executor] {

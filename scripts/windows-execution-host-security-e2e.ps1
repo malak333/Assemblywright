@@ -21,7 +21,7 @@ $realBrokerName = "AssemblywrightBrokerE2E$suffix"
 $realExecutorName = "AssemblywrightExecutorE2E$suffix"
 $root = Join-Path ([IO.Path]::GetTempPath()) "AssemblywrightHostSecurityE2E-$suffix"
 $allowedRoot = Join-Path ([IO.Path]::GetTempPath()) "AssemblywrightHostSecurityAllowed-$suffix"
-$payload = Join-Path $allowedRoot 'hostile-feature.ps1'
+$probeImage = Join-Path $allowedRoot 'windows-restricted-service-hostile-probe.exe'
 $marker = Join-Path $allowedRoot 'feature-ran.marker'
 $executorReadableRoot = Join-Path $allowedRoot 'executor-launch'
 $executorReadableFile = Join-Path $executorReadableRoot 'executor-readable.json'
@@ -270,12 +270,16 @@ try {
     try {
         & cargo build --locked -p assemblywright-broker -p assemblywright-executor --bins
         if ($LASTEXITCODE -ne 0) { throw 'The disposable service-host binaries did not build.' }
+        & cargo build --locked -p assemblywright-executor --example windows_restricted_service_hostile_probe
+        if ($LASTEXITCODE -ne 0) { throw 'The restricted-service hostile probe did not build.' }
         $builtBroker = Join-Path $repoRoot 'target\debug\assemblywright-broker.exe'
         $builtExecutor = Join-Path $repoRoot 'target\debug\assemblywright-executor.exe'
+        $builtProbe = Join-Path $repoRoot 'target\debug\examples\windows_restricted_service_hostile_probe.exe'
         $realBrokerImage = Join-Path $allowedRoot 'assemblywright-broker-e2e.exe'
         $realExecutorImage = Join-Path $allowedRoot 'assemblywright-executor-e2e.exe'
         Copy-Item -LiteralPath $builtBroker -Destination $realBrokerImage
         Copy-Item -LiteralPath $builtExecutor -Destination $realExecutorImage
+        Copy-Item -LiteralPath $builtProbe -Destination $probeImage
         $realBrokerConfig = Join-Path $allowedRoot 'broker-runtime.json'
         $realExecutorConfig = Join-Path $allowedRoot 'executor-runtime.json'
         $brokerFixtureOutput = @(& cargo run --quiet --locked -p assemblywright-broker --example windows_broker_service_config_fixture -- $realBrokerConfig $realBrokerImage)
@@ -393,28 +397,12 @@ try {
         throw 'The real Executor service host accepted hostile extra argv.'
     }
 
-    $payloadText = @"
-`$ErrorActionPreference = 'Continue'
-`$result = 'started'
-try {
-    if ([IO.File]::ReadAllText('$($executorReadableFile.Replace("'", "''"))') -ceq '{"schema_version":1}') {
-        `$result += ';read'
-    }
-} catch {}
-try {
-    if ([IO.File]::ReadAllText('$($executorSiblingCanary.Replace("'", "''"))') -ceq 'sibling-secret') {
-        `$result += ';sibling-read'
-    }
-} catch {}
-try { [IO.File]::WriteAllText('$($executorReadableFile.Replace("'", "''"))','hostile-overwrite',[Text.UTF8Encoding]::new(`$false)) } catch {}
-try { [IO.File]::WriteAllText('$($protectedFile.Replace("'", "''"))','hostile-overwrite',[Text.UTF8Encoding]::new(`$false)) } catch {}
-try { Remove-Item -LiteralPath '$($reserveFile.Replace("'", "''"))' -Force } catch {}
-try { & sc.exe config '$masterName' start= auto | Out-Null } catch {}
-[IO.File]::WriteAllText('$($marker.Replace("'", "''")),(`$result + ';attempted'),[Text.UTF8Encoding]::new(`$false))
-"@
-    [IO.File]::WriteAllText($payload, $payloadText, [Text.UTF8Encoding]::new($false))
-    $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    $binPath = ('"{0}" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{1}"' -f $powershell, $payload)
+    # A restricted service SID cannot execute the system PowerShell image merely
+    # because its script is readable. Run a repository-owned native probe from
+    # the explicitly allowed root so the marker proves the restricted token ran.
+    $binPath = ('"{0}" "{1}" "{2}" "{3}" "{4}" "{5}" "{6}"' -f
+        $probeImage, $executorReadableFile, $executorSiblingCanary, $protectedFile,
+        $reserveFile, $masterName, $marker)
     [void](Invoke-Sc @('config', $featureName, 'binPath=', $binPath))
     [void](Invoke-Sc @('config', $featureName, 'start=', 'demand'))
     $protectedHash = (Get-FileHash -LiteralPath $protectedFile -Algorithm SHA256).Hash
@@ -435,7 +423,7 @@ try { & sc.exe config '$masterName' start= auto | Out-Null } catch {}
         }
         Start-Sleep -Milliseconds 100
     }
-    if ($observedMarker -cne 'started;read;attempted') {
+    if ($observedMarker -cne 'started;read;service-denied;attempted') {
         throw "The hostile restricted-service payload did not prove execution. observed_marker=$observedMarker"
     }
     if ((Get-FileHash -LiteralPath $executorReadableFile -Algorithm SHA256).Hash -cne $executorReadableHash) {
