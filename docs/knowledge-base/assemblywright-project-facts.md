@@ -2146,6 +2146,11 @@ Full-machine target phase: planning/creation containment has bounded native Wind
   local-peer test retains the real Security.framework audit-token, accepting-requirement,
   hardened-profile rejection boundary. This keeps the ordering test load-independent without
   widening the production timeout or accepting a timeout as identity evidence.
+- Windows `Path::canonicalize` may return a verbatim `\\?\` path even when the protocol
+  deliberately accepts only canonical drive-letter paths. Native fixtures must remove that
+  local filesystem API prefix before constructing signed protocol data, while held-handle
+  validation still canonicalizes and compares the real object. Source-contract fixtures must
+  also normalize checkout CRLF before making line-oriented assertions.
 - A committed-byte proof is not contained merely because its primary executable
   is digest-pinned. Every interpreter and result parser must resolve through a
   fixed validated system identity, and build tools must reject configuration

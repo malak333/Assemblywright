@@ -1164,6 +1164,12 @@ mod windows_post_create_tests {
     };
     use ed25519_dalek::SigningKey;
 
+    fn protocol_path(path: &Path) -> PathBuf {
+        let canonical = path.canonicalize().unwrap();
+        let value = canonical.to_str().unwrap();
+        PathBuf::from(value.strip_prefix(r"\\?\").unwrap_or(value))
+    }
+
     #[test]
     fn leaf_name_validation_covers_empty_reserved_and_ambiguous_boundaries() {
         for rejected in [
@@ -1260,7 +1266,7 @@ mod windows_post_create_tests {
     fn reconciliation_without_observation_is_path_free_and_not_applied() {
         let key = SigningKey::from_bytes(&[40; 32]);
         let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().canonicalize().unwrap();
+        let root = protocol_path(temp.path());
         let target = root.join("unobserved");
         let operation = BrokerOperation::CreateDirectory {
             target: target.to_str().unwrap().into(),
@@ -1387,7 +1393,7 @@ mod windows_post_create_tests {
     #[test]
     fn post_create_verification_failure_is_typed_path_free_and_quarantines() {
         let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().canonicalize().unwrap();
+        let root = protocol_path(temp.path());
         let protected = root.join("protected");
         let allowed = root.join("allowed");
         fs::create_dir(&protected).unwrap();

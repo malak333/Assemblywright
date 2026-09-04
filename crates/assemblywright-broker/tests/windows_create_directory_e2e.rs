@@ -12,9 +12,15 @@ use assemblywright_broker::{
 use assemblywright_protocol::*;
 use ed25519_dalek::SigningKey;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 use uuid::Uuid;
+
+fn protocol_path(path: &Path) -> PathBuf {
+    let canonical = path.canonicalize().unwrap();
+    let value = canonical.to_str().unwrap();
+    PathBuf::from(value.strip_prefix(r"\\?\").unwrap_or(value))
+}
 
 fn identity(key: &SigningKey, manifest_sha256: [u8; 32]) -> BrokerIdentity {
     BrokerIdentity {
@@ -123,7 +129,7 @@ fn fixture() -> (
     std::path::PathBuf,
 ) {
     let temp = tempdir().unwrap();
-    let root = temp.path().canonicalize().unwrap();
+    let root = protocol_path(temp.path());
     let protected = root.join("protected");
     let allowed = root.join("allowed");
     fs::create_dir(&protected).unwrap();
@@ -225,7 +231,7 @@ fn target_race_and_case_alias_fail_closed() {
 #[test]
 fn runtime_keeps_dispatch_effect_disabled_and_replay_quarantines() {
     let temp = tempdir().unwrap();
-    let root = temp.path().canonicalize().unwrap();
+    let root = protocol_path(temp.path());
     let protected = root.join("protected");
     let allowed = root.join("allowed");
     fs::create_dir(&protected).unwrap();

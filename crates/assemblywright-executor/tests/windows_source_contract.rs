@@ -1,6 +1,6 @@
 #[test]
 fn windows_held_handle_image_job_and_failure_order_remain_fail_closed() {
-    let source = include_str!("../src/lib.rs");
+    let source = include_str!("../src/lib.rs").replace("\r\n", "\n");
     let windows = source.find("#[cfg(windows)]\nmod platform").unwrap();
     let windows_source = &source[windows..];
     assert!(windows_source.contains("FILE_FLAG_OPEN_REPARSE_POINT"));
