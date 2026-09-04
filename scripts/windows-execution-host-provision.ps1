@@ -754,7 +754,11 @@ function Invoke-SelfTest {
             throw 'The real registry validator did not reject effects-enabled drift unchanged.'
         }
 
-        $fixtureImage = Join-Path $env:SystemRoot 'System32\cmd.exe'
+        # Windows system executables are commonly hard-linked into WinSxS. Copy
+        # the inert fixture image into the disposable root so the production
+        # single-link validator is exercised against its intended precondition.
+        $fixtureImage = Join-Path $scratch 'fixture-service.exe'
+        [IO.File]::Copy((Join-Path $env:SystemRoot 'System32\cmd.exe'), $fixtureImage, $false)
         $validCommand = ('"{0}" /c exit 0' -f $fixtureImage)
         [void](Invoke-Sc @('create', $serviceName, 'binPath=', $validCommand, 'start=', 'disabled', 'error=', 'normal', 'type=', 'own', 'obj=', 'LocalSystem'))
         $serviceCreated = $true
