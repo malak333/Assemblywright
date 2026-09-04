@@ -88,17 +88,17 @@ function New-Fixture([string]$Scenario, [int]$Index, [bool]$WrongSid = $false) {
     $roots.Add($root)
     New-Item -ItemType Directory -Path $root | Out-Null
 
-    Invoke-Sc @('create',$brokerName,"binPath= `"$brokerImage`" --service-host --service-name $brokerName --config pending --config-sha256 $('0' * 64)",'start= demand','obj= LocalSystem') | Out-Null
+    Invoke-Sc @('create',$brokerName,'binPath=',"`"$brokerImage`" --service-host --service-name $brokerName --config pending --config-sha256 $('0' * 64)",'start=','demand','obj=','LocalSystem') | Out-Null
     $createdServices.Add($brokerName)
     Invoke-Sc @('sidtype',$brokerName,'unrestricted') | Out-Null
-    Invoke-Sc @('create',$executorName,"binPath= `"$executorImage`" --service-host --service-name $executorName --config pending --config-sha256 $('0' * 64)",'start= demand','obj= NT AUTHORITY\LocalService') | Out-Null
+    Invoke-Sc @('create',$executorName,'binPath=',"`"$executorImage`" --service-host --service-name $executorName --config pending --config-sha256 $('0' * 64)",'start=','demand','obj=','NT AUTHORITY\LocalService') | Out-Null
     $createdServices.Add($executorName)
     Invoke-Sc @('sidtype',$executorName,'restricted') | Out-Null
-    Invoke-Sc @('create',$masterName,"binPath= `"$masterFixture`" --service-name $masterName --pipe pending --broker-sid S-1-5-18 --receipt pending --scenario $Scenario",'start= demand','obj= LocalSystem') | Out-Null
+    Invoke-Sc @('create',$masterName,'binPath=',"`"$masterFixture`" --service-name $masterName --pipe pending --broker-sid S-1-5-18 --receipt pending --scenario $Scenario",'start=','demand','obj=','LocalSystem') | Out-Null
     $createdServices.Add($masterName)
     Invoke-Sc @('sidtype',$masterName,'unrestricted') | Out-Null
     if ($WrongSid) {
-        Invoke-Sc @('create',$wrongName,"binPath= `"$masterFixture`" --service-name $wrongName --pipe pending --broker-sid S-1-5-18 --receipt pending --scenario wrong_sid",'start= demand','obj= LocalSystem') | Out-Null
+        Invoke-Sc @('create',$wrongName,'binPath=',"`"$masterFixture`" --service-name $wrongName --pipe pending --broker-sid S-1-5-18 --receipt pending --scenario wrong_sid",'start=','demand','obj=','LocalSystem') | Out-Null
         $createdServices.Add($wrongName)
         Invoke-Sc @('sidtype',$wrongName,'unrestricted') | Out-Null
     }
@@ -129,9 +129,9 @@ function New-Fixture([string]$Scenario, [int]$Index, [bool]$WrongSid = $false) {
     if ($LASTEXITCODE -ne 0 -or $executorDigest -notmatch '^[0-9a-f]{64}$') { throw 'Executor IPC fixture generation failed.' }
     & attrib.exe +R $brokerConfig
     & attrib.exe +R $executorConfig
-    Invoke-Sc @('config',$brokerName,"binPath= `"$brokerRunImage`" --service-host --service-name $brokerName --config `"$brokerConfig`" --config-sha256 $brokerDigest") | Out-Null
-    Invoke-Sc @('config',$executorName,"binPath= `"$executorRunImage`" --service-host --service-name $executorName --config `"$executorConfig`" --config-sha256 $executorDigest") | Out-Null
-    Invoke-Sc @('config',$masterName,"binPath= `"$masterFixture`" --service-name $masterName --pipe $brokerPipe --broker-sid $brokerSid --receipt `"$receipt`" --scenario $Scenario") | Out-Null
+    Invoke-Sc @('config',$brokerName,'binPath=',"`"$brokerRunImage`" --service-host --service-name $brokerName --config `"$brokerConfig`" --config-sha256 $brokerDigest") | Out-Null
+    Invoke-Sc @('config',$executorName,'binPath=',"`"$executorRunImage`" --service-host --service-name $executorName --config `"$executorConfig`" --config-sha256 $executorDigest") | Out-Null
+    Invoke-Sc @('config',$masterName,'binPath=',"`"$masterFixture`" --service-name $masterName --pipe $brokerPipe --broker-sid $brokerSid --receipt `"$receipt`" --scenario $Scenario") | Out-Null
 
     Invoke-Sc @('start',$executorName) | Out-Null
     Wait-ServiceState $executorName 'Running' | Out-Null
@@ -173,7 +173,7 @@ try {
     Wait-ServiceState $valid.Executor 'Running' | Out-Null
     Invoke-Sc @('start',$valid.Broker) | Out-Null
     Wait-ServiceState $valid.Broker 'Running' | Out-Null
-    Invoke-Sc @('config',$valid.Master,"binPath= `"$masterFixture`" --service-name $($valid.Master) --pipe $($valid.BrokerPipe) --broker-sid $($valid.BrokerSid) --receipt `"$($valid.Receipt)`" --scenario replay") | Out-Null
+    Invoke-Sc @('config',$valid.Master,'binPath=',"`"$masterFixture`" --service-name $($valid.Master) --pipe $($valid.BrokerPipe) --broker-sid $($valid.BrokerSid) --receipt `"$($valid.Receipt)`" --scenario replay") | Out-Null
     Invoke-Sc @('start',$valid.Master) | Out-Null
     Wait-ServiceState $valid.Master 'Stopped' | Out-Null
     $replay = Get-Content -Raw -LiteralPath $valid.Receipt | ConvertFrom-Json
