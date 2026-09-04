@@ -222,13 +222,18 @@ impl BrokerRuntime {
                 envelope,
                 operation,
             } => {
-                if envelope.authority_revision != request.authority_revision
-                    || self.policy.admit(&envelope, &operation).is_err()
-                {
+                if envelope.authority_revision != request.authority_revision {
                     return self.quarantine(RuntimeError::Broker);
                 }
-                // The broker deliberately validates and consumes the action but
-                // never executes it until held-handle effect adapters exist.
+                let admission = match self.policy.admit(&envelope, &operation) {
+                    Ok(admission) => admission,
+                    Err(_) => return self.quarantine(RuntimeError::Broker),
+                };
+                // Dispatch remains product-unavailable: this synchronous
+                // runtime cannot truthfully service Stop/EmergencyTerminate
+                // while an effect is active. Native CreateDirectory is exposed
+                // only through the dedicated one-shot proof seam.
+                let _ = admission;
                 BrokerRuntimeResult::ValidatedEffectDisabled
             }
             BrokerRuntimeIntent::Stop | BrokerRuntimeIntent::EmergencyTerminate => {

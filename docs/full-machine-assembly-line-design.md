@@ -25,9 +25,14 @@ Legacy schema-v1 grants reject, and pause/resume or revocation revision changes
 invalidate grants signed against the earlier authority state. Executor restart requires
 the exact authenticated snapshot revision and digest restored from the master ledger;
 an authentic historical unpaused snapshot cannot roll back a durable pause or
-revocation. Broker admission policy is testable, but every
-privileged adapter remains effect-disabled pending held-handle native implementation;
-file replacement/removal and restricted service adapters remain closed. The executor
+revocation. Broker admission policy is testable, and one Windows `CreateDirectory`
+adapter is implemented behind a dedicated one-shot native proof seam. It retains the
+complete canonical ancestry without delete sharing, performs one handle-relative native
+leaf creation, and distinguishes path-free applied evidence from effect-possible
+reconciliation evidence. A negative native status or missing handle after the call is
+effect-possible, never terminal pre-effect proof. The long-running broker runtime remains effect-disabled until
+active-effect termination and durable reconciliation are implemented; file
+replacement/removal and restricted service adapters remain closed. The executor
 holds and revalidates macOS executable/cwd descriptors plus signed parent/object
 identities, but refuses spawn because process-group membership is escapable by hostile
 code. Windows source holds no-reparse executable/cwd chains, verifies the suspended
@@ -375,11 +380,13 @@ authority or proof of a later phase:
    E2E. Windows production loading remains fail-closed until distinct restricted
    planning and GitHub identities/ACLs, atomic Job Object containment, provisioning,
    and native denial proof land. This authorizes no execution.
-4. **Broker containment:** the first inert source slice has landed: strict signed
+4. **Broker containment:** the first source slices have landed: strict signed
    envelopes and receipts, distinct unprivileged executor/privileged broker crates,
-   complete protected-manifest digest binding, effect-disabled typed broker adapters,
-   replay/gap rejection, held macOS target-identity validation with spawn disabled,
-   held-image Windows Job Object source, and portable hostile filesystem tests. Completion still requires protected
+   complete protected-manifest digest binding, replay/gap rejection, held macOS
+   target-identity validation with spawn disabled, held-image Windows Job Object source,
+   portable hostile filesystem tests, and a proof-only Windows `CreateDirectory` adapter
+   with complete held ancestry and explicit effect-possible reconciliation evidence. Its
+   production dispatch remains disabled. Completion still requires protected
    installed identities/IPC, durable replay restore, the remaining closed adapters,
    resource reservations, native Windows hostile/process proof, OS code signatures,
    and owner-recorded deployment evidence. Repository tests are not signed or
@@ -397,7 +404,7 @@ authority or proof of a later phase:
    and real two-host operation are owner-recorded. Only then may the owner explicitly
    activate the new authority and may the UI claim it is available.
 
-Compatibility is fail-closed. The protocol-v5/schema-v20 master preserves existing
+Compatibility is fail-closed. The protocol-v5/schema-v22 master preserves existing
 schema-v19 grants, activation evidence, queue rows, and restricted-worker leases with
 their old meanings. A new
 binary may migrate only exact supported state; records without an unambiguous target

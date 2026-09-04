@@ -436,9 +436,17 @@ Full-machine target phase: planning/creation containment has bounded native Wind
   source. It binds all named protected-control-plane categories into one digest and
   rejects protected descendants, case/link/reparse ambiguity, drift, replay, and
   unknown operations. Its inherited-pipe runtime authenticates exact signed FIFO control
-  frames and quarantines ambiguity, but all privileged adapters remain effect-disabled
-  pending held-handle native implementations. No root/SYSTEM broker service or master
-  IPC client is installed.
+  frames and quarantines ambiguity while keeping production dispatch effect-disabled.
+  A dedicated native proof seam implements only Windows `CreateDirectory`: it retains
+  every canonical ancestor without delete sharing, creates one absent leaf relative to
+  the held parent, returns path-free applied evidence, and quarantines a typed
+  reconciliation-required outcome after any uncertainty once the native create call is
+  entered; even a negative native status is not treated as proof that no effect occurred. Replace/remove/
+  service adapters remain closed. No root/SYSTEM broker service or master IPC client is
+  installed. The required Windows hosted gate lints and tests both broker and executor
+  packages, so the native create-directory and Job Object E2E suites run for every pull
+  request and `main` push; this is exact-commit hosted Windows evidence, not production
+  identity, installation, deployment, or live two-host proof.
 - `assemblywright-master` — the durable Windows authority: distributed device
   lifecycle, the default-inert Feature Conveyor repository kernel, enrollment
   identity and mTLS, and the Windows SCM service host. Does not depend on
@@ -2132,6 +2140,17 @@ Full-machine target phase: planning/creation containment has bounded native Wind
   eight-word `LOCAL_PEERTOKEN` (which includes PID generation) for its own lifetime;
   the fixed 64-token cap avoids unbounded identity state, and new or rejected tokens
   always retain the pre-frame validation boundary.
+- Security.framework audit-token verification can exceed the production forty-five-second
+  bound on a loaded Mac. The core ordering test therefore injects a deterministic rejecting
+  verifier to prove that peer identity is checked before any frame read, while the separate
+  local-peer test retains the real Security.framework audit-token, accepting-requirement,
+  hardened-profile rejection boundary. This keeps the ordering test load-independent without
+  widening the production timeout or accepting a timeout as identity evidence.
+- Windows `Path::canonicalize` may return a verbatim `\\?\` path even when the protocol
+  deliberately accepts only canonical drive-letter paths. Native fixtures must remove that
+  local filesystem API prefix before constructing signed protocol data, while held-handle
+  validation still canonicalizes and compares the real object. Source-contract fixtures must
+  also normalize checkout CRLF before making line-oriented assertions.
 - A committed-byte proof is not contained merely because its primary executable
   is digest-pinned. Every interpreter and result parser must resolve through a
   fixed validated system identity, and build tools must reject configuration

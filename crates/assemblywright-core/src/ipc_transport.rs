@@ -48,6 +48,18 @@ const UNIX_IPC_PEER_IDENTITY_TIMEOUT: Duration =
 const UNIX_IPC_DISPATCH_TIMEOUT: Duration = Duration::from_secs(UNIX_IPC_DISPATCH_TIMEOUT_SECONDS);
 const UNIX_IPC_WRITE_TIMEOUT: Duration = Duration::from_secs(UNIX_IPC_WRITE_TIMEOUT_SECONDS);
 
+#[cfg(target_os = "macos")]
+trait PeerCodeVerifier: Send + Sync {
+    fn verify(&self, token: PeerAuditToken) -> anyhow::Result<()>;
+}
+
+#[cfg(target_os = "macos")]
+impl PeerCodeVerifier for CompiledPeerRequirement {
+    fn verify(&self, token: PeerAuditToken) -> anyhow::Result<()> {
+        CompiledPeerRequirement::verify(self, token)
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FramedRequest {
@@ -116,7 +128,7 @@ pub async fn serve_router_unix_socket_with_peer_identity(
 ) -> anyhow::Result<()> {
     validate_peer_code_requirement(peer_code_requirement, peer_identity_profile)
         .map_err(anyhow::Error::new)?;
-    let requirement = Arc::new(CompiledPeerRequirement::compile(
+    let requirement: Arc<dyn PeerCodeVerifier> = Arc::new(CompiledPeerRequirement::compile(
         peer_code_requirement,
         peer_identity_profile,
     )?);
@@ -143,7 +155,7 @@ pub async fn serve_router_unix_socket_with_peer_identity(
 async fn serve_unix_socket_inner(
     socket_path: &Path,
     app: Router,
-    #[cfg(target_os = "macos")] peer_requirement: Option<Arc<CompiledPeerRequirement>>,
+    #[cfg(target_os = "macos")] peer_requirement: Option<Arc<dyn PeerCodeVerifier>>,
     #[cfg(test)] accepted_connections: Option<Arc<AtomicUsize>>,
 ) -> anyhow::Result<()> {
     let (listener, _cleanup) = bind_secure_unix_listener(socket_path)?;
@@ -257,7 +269,7 @@ fn bind_secure_unix_listener(
 async fn handle_connection(
     mut stream: UnixStream,
     app: Router,
-    #[cfg(target_os = "macos")] peer_requirement: Option<Arc<CompiledPeerRequirement>>,
+    #[cfg(target_os = "macos")] peer_requirement: Option<Arc<dyn PeerCodeVerifier>>,
 ) -> anyhow::Result<()> {
     require_current_euid_peer(&stream)?;
     #[cfg(target_os = "macos")]
@@ -495,6 +507,15 @@ mod tests {
     use serde_json::json;
 
     const TEST_TOKEN: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    #[cfg(target_os = "macos")]
+    struct RejectingPeerCodeVerifier;
+
+    #[cfg(target_os = "macos")]
+    impl PeerCodeVerifier for RejectingPeerCodeVerifier {
+        fn verify(&self, _token: PeerAuditToken) -> anyhow::Result<()> {
+            bail!("peer code identity validation failed (OSStatus -67050)")
+        }
+    }
 
     /// Minimal bearer-protected router standing in for a real consumer's
     /// router. The transport must preserve its middleware and status codes.
@@ -690,18 +711,12 @@ mod tests {
     }
 
     #[cfg(target_os = "macos")]
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn peer_code_identity_is_checked_before_any_frame_read() {
         let (_client, server) = UnixStream::pair().expect("socket pair");
-        let requirement = Arc::new(
-            CompiledPeerRequirement::compile(
-                "identifier \"com.example.assemblywright.never\"",
-                PeerIdentityProfile::AdhocExact,
-            )
-            .expect("compile rejecting requirement"),
-        );
+        let requirement: Arc<dyn PeerCodeVerifier> = Arc::new(RejectingPeerCodeVerifier);
         let result = timeout(
-            UNIX_IPC_PEER_IDENTITY_TIMEOUT + Duration::from_secs(2),
+            Duration::from_secs(2),
             handle_connection(server, test_router_with_auth(TEST_TOKEN), Some(requirement)),
         )
         .await
@@ -711,7 +726,7 @@ mod tests {
     }
 
     #[cfg(target_os = "macos")]
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn local_peer_token_resolves_to_current_valid_code() {
         let (_client, server) = UnixStream::pair().expect("socket pair");
         let token = require_peer_audit_token(&server).expect("retrieve peer audit token");

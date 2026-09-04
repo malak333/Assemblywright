@@ -123,28 +123,28 @@ fn ordinary_create_is_digest_bound_single_use_and_protected_descendant_is_denied
     let key = SigningKey::from_bytes(&[11; 32]);
     let manifest = protected_manifest(&protected);
     let broker = identity(&key, manifest.canonical_sha256().unwrap());
-    let policy = BrokerPolicy::new(broker.clone(), manifest).unwrap();
+    let policy = BrokerPolicy::new(broker.clone(), manifest.clone()).unwrap();
 
     let allowed = allowed_parent.join("created");
     let operation = BrokerOperation::CreateDirectory {
         target: allowed.to_str().unwrap().into(),
     };
     let action = envelope(&key, &broker, &operation, &allowed, None);
-    let admission = policy.admit(&action, &operation).unwrap();
+    let _admission = policy.admit(&action, &operation).unwrap();
     assert_eq!(
         policy.admit(&action, &operation).err().unwrap(),
         BrokerError::Replay
     );
-    assert_eq!(admission.execute(), Err(BrokerError::InvalidOperation));
     assert!(!allowed.exists());
 
+    let protected_policy = BrokerPolicy::new(broker.clone(), manifest).unwrap();
     let protected_target = protected.join("master.sqlite3");
     let protected_operation = BrokerOperation::CreateDirectory {
         target: protected_target.to_str().unwrap().into(),
     };
     let protected_action = envelope(&key, &broker, &protected_operation, &protected_target, None);
     assert_eq!(
-        policy
+        protected_policy
             .admit(&protected_action, &protected_operation)
             .err()
             .unwrap(),
@@ -221,7 +221,7 @@ fn restored_sequence_seed_rejects_stale_and_gapped_actions_without_mutation() {
     let manifest = protected_manifest(&protected);
     let mut broker = identity(&key, manifest.canonical_sha256().unwrap());
     broker.next_action_sequence = 2;
-    let policy = BrokerPolicy::new(broker.clone(), manifest).unwrap();
+    let stale_policy = BrokerPolicy::new(broker.clone(), manifest.clone()).unwrap();
     let target = data.join("never-created");
     let operation = BrokerOperation::CreateDirectory {
         target: target.to_str().unwrap().into(),
@@ -229,16 +229,69 @@ fn restored_sequence_seed_rejects_stale_and_gapped_actions_without_mutation() {
 
     let stale = envelope(&key, &broker, &operation, &target, None);
     assert_eq!(
-        policy.admit(&stale, &operation).err().unwrap(),
+        stale_policy.admit(&stale, &operation).err().unwrap(),
         BrokerError::Replay
     );
+    assert_eq!(
+        stale_policy.admit(&stale, &operation).err().unwrap(),
+        BrokerError::StateUnavailable
+    );
+    let gapped_policy = BrokerPolicy::new(broker.clone(), manifest).unwrap();
     let mut gapped = stale;
     gapped.action_sequence = 3;
     gapped.signature.clear();
     gapped.sign(&key).unwrap();
     assert_eq!(
-        policy.admit(&gapped, &operation).err().unwrap(),
+        gapped_policy.admit(&gapped, &operation).err().unwrap(),
         BrokerError::Replay
     );
     assert!(!target.exists());
+}
+
+#[test]
+fn create_requires_exact_effect_contract_and_one_existing_parent() {
+    let temp = tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let protected = root.join("control-plane");
+    let data = root.join("data");
+    fs::create_dir(&protected).unwrap();
+    fs::create_dir(&data).unwrap();
+    let key = SigningKey::from_bytes(&[14; 32]);
+    let manifest = protected_manifest(&protected);
+    let broker = identity(&key, manifest.canonical_sha256().unwrap());
+    let policy = BrokerPolicy::new(broker.clone(), manifest).unwrap();
+
+    let target = data.join("new");
+    let operation = BrokerOperation::CreateDirectory {
+        target: target.to_str().unwrap().into(),
+    };
+    let mut wrong_cancellation = envelope(&key, &broker, &operation, &target, None);
+    wrong_cancellation.cancellation_behavior = ExecutionCancellationBehavior::ImmediateTerminate;
+    wrong_cancellation.signature.clear();
+    wrong_cancellation.sign(&key).unwrap();
+    assert_eq!(
+        policy.admit(&wrong_cancellation, &operation).err().unwrap(),
+        BrokerError::InvalidOperation
+    );
+
+    let nested = data.join("missing-parent").join("leaf");
+    let nested_operation = BrokerOperation::CreateDirectory {
+        target: nested.to_str().unwrap().into(),
+    };
+    let mut nested_action = envelope(&key, &broker, &operation, &target, None);
+    nested_action.targets[0].canonical_path = nested.to_str().unwrap().into();
+    nested_action.targets[0].canonical_path_sha256 =
+        execution_path_sha256(ExecutionHostPlatform::Macos, nested.to_str().unwrap()).unwrap();
+    nested_action.operation_sha256 = nested_operation.sha256().unwrap();
+    nested_action.signature.clear();
+    nested_action.sign(&key).unwrap();
+    assert_eq!(
+        policy
+            .admit(&nested_action, &nested_operation)
+            .err()
+            .unwrap(),
+        BrokerError::AmbiguousTarget
+    );
+    assert!(!target.exists());
+    assert!(!nested.exists());
 }
