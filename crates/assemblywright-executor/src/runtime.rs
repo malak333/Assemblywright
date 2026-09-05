@@ -65,6 +65,19 @@ pub struct ExecutorRuntimeConfig {
     pub next_action_sequence: u64,
     pub protected_manifest: ProtectedControlPlanePathManifest,
     pub authority_snapshot: ExecutorAuthoritySnapshot,
+    #[serde(default)]
+    pub ipc: Option<ExecutorIpcBootstrap>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutorIpcBootstrap {
+    pub pipe_name: String,
+    pub executor_service_sid: String,
+    pub expected_broker_service_sid: String,
+    pub durable_state_path: PathBuf,
+    pub ack_seed_path: PathBuf,
+    pub ack_key_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -427,6 +440,25 @@ fn validate_config(config: &ExecutorRuntimeConfig) -> Result<(), RuntimeError> {
     {
         return Err(RuntimeError::InvalidConfig);
     }
+    if let Some(ipc) = &config.ipc {
+        if ipc.pipe_name.len() > 128
+            || ipc.executor_service_sid.is_empty()
+            || ipc.executor_service_sid.len() > 192
+            || ipc.expected_broker_service_sid.len() > 192
+            || ipc.ack_key_id.is_empty()
+            || ipc.durable_state_path == ipc.ack_seed_path
+            || !is_protected_ipc_leaf(
+                &ipc.durable_state_path,
+                Path::new(&config.protected_manifest.ipc_and_enforcement_state),
+            )
+            || !is_protected_ipc_leaf(
+                &ipc.ack_seed_path,
+                Path::new(&config.protected_manifest.ipc_and_enforcement_state),
+            )
+        {
+            return Err(RuntimeError::InvalidConfig);
+        }
+    }
     #[cfg(unix)]
     if config.owner_uid != Some(unsafe { libc::geteuid() }) {
         return Err(RuntimeError::InvalidConfig);
@@ -442,6 +474,113 @@ fn validate_config(config: &ExecutorRuntimeConfig) -> Result<(), RuntimeError> {
     #[cfg(not(any(target_os = "macos", windows)))]
     return Err(RuntimeError::InvalidConfig);
     Ok(())
+}
+
+fn is_protected_ipc_leaf(path: &Path, protected_root: &Path) -> bool {
+    if !path.is_absolute()
+        || !protected_root.is_absolute()
+        || path == protected_root
+        || path.file_name().is_none()
+        || path.parent() != Some(protected_root)
+        || path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::CurDir | std::path::Component::ParentDir
+            )
+        })
+        || protected_root.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::CurDir | std::path::Component::ParentDir
+            )
+        })
+    {
+        return false;
+    }
+    #[cfg(windows)]
+    if !has_safe_windows_path_spelling(path) || !has_safe_windows_path_spelling(protected_root) {
+        return false;
+    }
+    true
+}
+
+#[cfg(windows)]
+fn has_safe_windows_path_spelling(path: &Path) -> bool {
+    use std::path::{Component, Prefix};
+
+    let mut components = path.components();
+    if !matches!(
+        components.next(),
+        Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_))
+    ) || !matches!(components.next(), Some(Component::RootDir))
+    {
+        return false;
+    }
+    components.all(|component| match component {
+        Component::Normal(value) => {
+            let value = value.to_string_lossy();
+            let trimmed = value.trim_end_matches(['.', ' ']);
+            let stem = trimmed.split('.').next().unwrap_or_default();
+            !value.contains(':')
+                && trimmed.len() == value.len()
+                && !matches!(
+                    stem.to_ascii_uppercase().as_str(),
+                    "CON"
+                        | "PRN"
+                        | "AUX"
+                        | "NUL"
+                        | "COM1"
+                        | "COM2"
+                        | "COM3"
+                        | "COM4"
+                        | "COM5"
+                        | "COM6"
+                        | "COM7"
+                        | "COM8"
+                        | "COM9"
+                        | "LPT1"
+                        | "LPT2"
+                        | "LPT3"
+                        | "LPT4"
+                        | "LPT5"
+                        | "LPT6"
+                        | "LPT7"
+                        | "LPT8"
+                        | "LPT9"
+                )
+        }
+        _ => false,
+    })
+}
+
+#[cfg(all(test, windows))]
+mod ipc_path_tests {
+    use super::{has_safe_windows_path_spelling, is_protected_ipc_leaf};
+    use std::path::Path;
+
+    #[test]
+    fn rejects_windows_device_ads_and_escape_spellings() {
+        let root = Path::new(r"C:\ProgramData\Assemblywright\ipc");
+        assert!(is_protected_ipc_leaf(
+            Path::new(r"C:\ProgramData\Assemblywright\ipc\executor.journal"),
+            root
+        ));
+        for hostile in [
+            r"C:\ProgramData\Assemblywright\ipc\..\outside",
+            r"C:\ProgramData\Assemblywright\ipc\seed:ads",
+            r"C:\ProgramData\Assemblywright\ipc\NUL",
+            r"\\?\C:\ProgramData\Assemblywright\ipc\seed",
+            r"\\.\C:\ProgramData\Assemblywright\ipc\seed",
+        ] {
+            assert!(
+                !is_protected_ipc_leaf(Path::new(hostile), root),
+                "{hostile}"
+            );
+        }
+        assert!(!has_safe_windows_path_spelling(Path::new(
+            r"C:\ProgramData\Assemblywright\ipc\seed "
+        )));
+    }
 }
 
 pub fn load_config(

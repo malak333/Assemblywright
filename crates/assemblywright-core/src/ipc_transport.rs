@@ -33,6 +33,8 @@ pub const MAX_UNIX_IPC_REQUEST_BODY_BYTES: usize = 1024 * 1024;
 pub const MAX_UNIX_IPC_RESPONSE_BODY_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_UNIX_IPC_RESPONSE_FRAME_BYTES: usize = 12 * 1024 * 1024;
 pub const MAX_UNIX_IPC_CONNECTIONS: usize = 32;
+#[cfg(target_os = "macos")]
+const MAX_UNIX_IPC_PEER_IDENTITY_VERIFICATIONS: usize = 4;
 pub const MAX_UNIX_IPC_PATH_AND_QUERY_BYTES: usize = 8 * 1024;
 pub const MAX_UNIX_IPC_REQUEST_HEADER_VALUE_BYTES: usize = 1024;
 pub const MAX_UNIX_IPC_RESPONSE_CONTENT_TYPE_BYTES: usize = 256;
@@ -57,6 +59,55 @@ trait PeerCodeVerifier: Send + Sync {
 impl PeerCodeVerifier for CompiledPeerRequirement {
     fn verify(&self, token: PeerAuditToken) -> anyhow::Result<()> {
         CompiledPeerRequirement::verify(self, token)
+    }
+}
+
+#[cfg(target_os = "macos")]
+struct PeerIdentityVerification {
+    verifier: Arc<dyn PeerCodeVerifier>,
+    permits: Arc<Semaphore>,
+}
+
+#[cfg(target_os = "macos")]
+impl PeerIdentityVerification {
+    fn new(verifier: Arc<dyn PeerCodeVerifier>) -> Self {
+        Self::with_capacity(verifier, MAX_UNIX_IPC_PEER_IDENTITY_VERIFICATIONS)
+    }
+
+    fn with_capacity(verifier: Arc<dyn PeerCodeVerifier>, capacity: usize) -> Self {
+        assert!(
+            capacity > 0,
+            "peer identity verification capacity must be positive"
+        );
+        Self {
+            verifier,
+            permits: Arc::new(Semaphore::new(capacity)),
+        }
+    }
+
+    async fn verify(
+        self: Arc<Self>,
+        token: PeerAuditToken,
+        deadline: Duration,
+    ) -> anyhow::Result<()> {
+        timeout(deadline, async move {
+            let permit = Arc::clone(&self.permits)
+                .acquire_owned()
+                .await
+                .map_err(|_| anyhow!("Unix IPC peer code identity verifier is unavailable"))?;
+            let verifier = Arc::clone(&self.verifier);
+            tokio::task::spawn_blocking(move || {
+                // spawn_blocking cannot be cancelled. The worker owns the permit
+                // so caller timeout cannot free capacity while native verification
+                // is still running.
+                let _permit = permit;
+                verifier.verify(token)
+            })
+            .await
+            .map_err(|_| anyhow!("Unix IPC peer code identity validation worker failed"))?
+        })
+        .await
+        .map_err(|_| anyhow!("Unix IPC peer code identity validation timed out"))?
     }
 }
 
@@ -160,6 +211,10 @@ async fn serve_unix_socket_inner(
 ) -> anyhow::Result<()> {
     let (listener, _cleanup) = bind_secure_unix_listener(socket_path)?;
     let permits = Arc::new(Semaphore::new(MAX_UNIX_IPC_CONNECTIONS));
+    #[cfg(target_os = "macos")]
+    let peer_verification = peer_requirement
+        .map(PeerIdentityVerification::new)
+        .map(Arc::new);
     let mut shutdown = Box::pin(unix_shutdown_signal());
 
     loop {
@@ -185,14 +240,14 @@ async fn serve_unix_socket_inner(
         }
         let app = app.clone();
         #[cfg(target_os = "macos")]
-        let peer_requirement = peer_requirement.clone();
+        let peer_verification = peer_verification.clone();
         tokio::spawn(async move {
             let _permit = permit;
             if let Err(error) = handle_connection(
                 stream,
                 app,
                 #[cfg(target_os = "macos")]
-                peer_requirement,
+                peer_verification,
             )
             .await
             {
@@ -269,19 +324,15 @@ fn bind_secure_unix_listener(
 async fn handle_connection(
     mut stream: UnixStream,
     app: Router,
-    #[cfg(target_os = "macos")] peer_requirement: Option<Arc<dyn PeerCodeVerifier>>,
+    #[cfg(target_os = "macos")] peer_verification: Option<Arc<PeerIdentityVerification>>,
 ) -> anyhow::Result<()> {
     require_current_euid_peer(&stream)?;
     #[cfg(target_os = "macos")]
-    if let Some(requirement) = peer_requirement {
+    if let Some(peer_verification) = peer_verification {
         let token = require_peer_audit_token(&stream)?;
-        timeout(
-            UNIX_IPC_PEER_IDENTITY_TIMEOUT,
-            tokio::task::spawn_blocking(move || requirement.verify(token)),
-        )
-        .await
-        .map_err(|_| anyhow!("Unix IPC peer code identity validation timed out"))?
-        .map_err(|_| anyhow!("Unix IPC peer code identity validation worker failed"))??;
+        peer_verification
+            .verify(token, UNIX_IPC_PEER_IDENTITY_TIMEOUT)
+            .await?;
     }
     let request_frame = read_frame(&mut stream, MAX_UNIX_IPC_REQUEST_FRAME_BYTES).await?;
     require_client_write_eof(&mut stream).await?;
@@ -505,6 +556,10 @@ fn insert_optional_header(
 mod tests {
     use super::*;
     use serde_json::json;
+    #[cfg(target_os = "macos")]
+    use std::collections::HashSet;
+    #[cfg(target_os = "macos")]
+    use std::sync::{Condvar, Mutex};
 
     const TEST_TOKEN: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
     #[cfg(target_os = "macos")]
@@ -514,6 +569,123 @@ mod tests {
     impl PeerCodeVerifier for RejectingPeerCodeVerifier {
         fn verify(&self, _token: PeerAuditToken) -> anyhow::Result<()> {
             bail!("peer code identity validation failed (OSStatus -67050)")
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[derive(Default)]
+    struct BlockingVerificationState {
+        started: Vec<PeerAuditToken>,
+        released: HashSet<PeerAuditToken>,
+        active: usize,
+        maximum_active: usize,
+    }
+
+    #[cfg(target_os = "macos")]
+    #[derive(Default)]
+    struct BlockingPeerCodeVerifier {
+        state: Mutex<BlockingVerificationState>,
+        changed: Condvar,
+    }
+
+    #[cfg(target_os = "macos")]
+    impl BlockingPeerCodeVerifier {
+        async fn wait_for_started(&self, token: PeerAuditToken) {
+            timeout(Duration::from_secs(2), async {
+                loop {
+                    if self
+                        .state
+                        .lock()
+                        .expect("blocking verifier state")
+                        .started
+                        .contains(&token)
+                    {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("identity verifier must start");
+        }
+
+        async fn wait_for_started_count(&self, count: usize) -> PeerAuditToken {
+            timeout(Duration::from_secs(2), async {
+                loop {
+                    if let Some(token) = self
+                        .state
+                        .lock()
+                        .expect("blocking verifier state")
+                        .started
+                        .get(count.saturating_sub(1))
+                        .copied()
+                    {
+                        return token;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("identity verifier must start")
+        }
+
+        fn release(&self, token: PeerAuditToken) {
+            self.state
+                .lock()
+                .expect("blocking verifier state")
+                .released
+                .insert(token);
+            self.changed.notify_all();
+        }
+
+        fn started(&self, token: PeerAuditToken) -> bool {
+            self.state
+                .lock()
+                .expect("blocking verifier state")
+                .started
+                .contains(&token)
+        }
+
+        fn maximum_active(&self) -> usize {
+            self.state
+                .lock()
+                .expect("blocking verifier state")
+                .maximum_active
+        }
+
+        async fn wait_until_idle(&self) {
+            timeout(Duration::from_secs(2), async {
+                loop {
+                    if self.state.lock().expect("blocking verifier state").active == 0 {
+                        return;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("identity verifier workers must finish");
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    impl PeerCodeVerifier for BlockingPeerCodeVerifier {
+        fn verify(&self, token: PeerAuditToken) -> anyhow::Result<()> {
+            let mut state = self.state.lock().expect("blocking verifier state");
+            state.started.push(token);
+            state.active += 1;
+            state.maximum_active = state.maximum_active.max(state.active);
+            self.changed.notify_all();
+            let (mut state, wait) = self
+                .changed
+                .wait_timeout_while(state, Duration::from_secs(2), |state| {
+                    !state.released.contains(&token)
+                })
+                .expect("blocking verifier state");
+            state.active -= 1;
+            if wait.timed_out() && !state.released.contains(&token) {
+                bail!("test identity verifier release timed out");
+            }
+            Ok(())
         }
     }
 
@@ -547,6 +719,7 @@ mod tests {
     #[test]
     fn concurrency_contract_remains_bounded() {
         assert_eq!(MAX_UNIX_IPC_CONNECTIONS, 32);
+        assert_eq!(MAX_UNIX_IPC_PEER_IDENTITY_VERIFICATIONS, 4);
         assert_eq!(UNIX_IPC_DISPATCH_TIMEOUT_SECONDS, 620);
     }
 
@@ -711,13 +884,119 @@ mod tests {
     }
 
     #[cfg(target_os = "macos")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn timed_out_identity_workers_retain_bounded_permits_without_convoying_distinct_tokens() {
+        let verifier = Arc::new(BlockingPeerCodeVerifier::default());
+        let verifier_trait: Arc<dyn PeerCodeVerifier> = verifier.clone();
+        let verification = Arc::new(PeerIdentityVerification::with_capacity(verifier_trait, 2));
+        let first_token = [1; 8];
+        let second_token = [2; 8];
+        let waiting_token = [3; 8];
+
+        let first =
+            tokio::spawn(Arc::clone(&verification).verify(first_token, Duration::from_millis(40)));
+        verifier.wait_for_started(first_token).await;
+        assert!(first
+            .await
+            .expect("first verification task")
+            .expect_err("blocked first verification must time out")
+            .to_string()
+            .contains("timed out"));
+
+        let second =
+            tokio::spawn(Arc::clone(&verification).verify(second_token, Duration::from_millis(40)));
+        verifier.wait_for_started(second_token).await;
+        assert!(second
+            .await
+            .expect("second verification task")
+            .expect_err("blocked second verification must time out")
+            .to_string()
+            .contains("timed out"));
+
+        verifier.release(waiting_token);
+        let waiting = Arc::clone(&verification)
+            .verify(waiting_token, Duration::from_millis(40))
+            .await
+            .expect_err("all retained permits must bound later verification");
+        assert!(waiting.to_string().contains("timed out"), "{waiting}");
+        assert!(!verifier.started(waiting_token));
+
+        verifier.release(first_token);
+        Arc::clone(&verification)
+            .verify(waiting_token, Duration::from_secs(1))
+            .await
+            .expect("released capacity permits distinct token verification");
+        assert_eq!(verifier.maximum_active(), 2);
+
+        verifier.release(second_token);
+        verifier.wait_until_idle().await;
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn peer_frame_is_not_dispatched_before_identity_success() {
+        let verifier = Arc::new(BlockingPeerCodeVerifier::default());
+        let verifier_trait: Arc<dyn PeerCodeVerifier> = verifier.clone();
+        let verification = Arc::new(PeerIdentityVerification::with_capacity(verifier_trait, 1));
+        let dispatched = Arc::new(AtomicUsize::new(0));
+        let route_dispatched = Arc::clone(&dispatched);
+        let app = Router::new().route(
+            "/health",
+            axum::routing::get(move || {
+                let route_dispatched = Arc::clone(&route_dispatched);
+                async move {
+                    route_dispatched.fetch_add(1, Ordering::SeqCst);
+                    axum::http::StatusCode::OK
+                }
+            }),
+        );
+        let (mut client, server) = UnixStream::pair().expect("socket pair");
+        let request = json!({
+            "version": UNIX_IPC_FRAME_VERSION,
+            "method": "GET",
+            "path": "/health",
+            "authorization": null,
+            "accept": null,
+            "content_type": null,
+            "body_base64": ""
+        });
+        write_frame(&mut client, request.to_string().as_bytes())
+            .await
+            .expect("write request before identity success");
+        client.shutdown().await.expect("half-close client");
+
+        let handler = tokio::spawn(handle_connection(server, app, Some(verification)));
+        let token = verifier.wait_for_started_count(1).await;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert_eq!(dispatched.load(Ordering::SeqCst), 0);
+
+        verifier.release(token);
+        handler
+            .await
+            .expect("connection handler task")
+            .expect("verified request succeeds");
+        assert_eq!(dispatched.load(Ordering::SeqCst), 1);
+        let response = read_frame(&mut client, MAX_UNIX_IPC_RESPONSE_FRAME_BYTES)
+            .await
+            .expect("read verified response");
+        let response: FramedResponse =
+            serde_json::from_slice(&response).expect("decode verified response");
+        assert_eq!(response.status, 200);
+    }
+
+    #[cfg(target_os = "macos")]
     #[tokio::test(flavor = "current_thread")]
     async fn peer_code_identity_is_checked_before_any_frame_read() {
         let (_client, server) = UnixStream::pair().expect("socket pair");
         let requirement: Arc<dyn PeerCodeVerifier> = Arc::new(RejectingPeerCodeVerifier);
+        let verification = Arc::new(PeerIdentityVerification::new(requirement));
         let result = timeout(
             Duration::from_secs(2),
-            handle_connection(server, test_router_with_auth(TEST_TOKEN), Some(requirement)),
+            handle_connection(
+                server,
+                test_router_with_auth(TEST_TOKEN),
+                Some(verification),
+            ),
         )
         .await
         .expect("identity rejection must complete within the bounded identity timeout")

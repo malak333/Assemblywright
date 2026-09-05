@@ -173,7 +173,13 @@ cargo test -p assemblywright-protocol --test execution_containment_contract -- -
 cargo test -p assemblywright-broker --test protected_boundary -- --nocapture
 cargo test -p assemblywright-broker --test windows_create_directory_e2e -- --nocapture
 cargo test -p assemblywright-executor --test process_group_e2e -- --nocapture
+cargo test -p assemblywright-executor --lib -- --nocapture
 cargo test -p assemblywright-executor --test windows_job_e2e -- --nocapture
+cargo test -p assemblywright-protocol --test windows_execution_ipc_contract -- --nocapture
+cargo test -p assemblywright-master --test windows_execution_ipc_foundation -- --nocapture
+cargo test -p assemblywright-master --test windows_execution_ipc_source_contract -- --nocapture
+cargo test -p assemblywright-broker --test inert_execution_ipc -- --nocapture
+cargo test -p assemblywright-executor --test inert_execution_ipc -- --nocapture
 cargo clippy -p assemblywright-protocol -p assemblywright-broker -p assemblywright-executor --all-targets -- -D warnings
 ```
 
@@ -188,9 +194,18 @@ an adversarial `setsid` escape command is denied before spawn. Process groups ar
 claimed as descendant containment. `windows_job_e2e` must run on the native Windows
 owner host: it launches a real descendant only after suspended-image verification and
 Job assignment, then requires a signed receipt with a signaled root and zero active Job
-processes. Cross-compilation does not prove either native Windows boundary. Installed
-services, a master IPC client, production broker effects, and activation receipts remain
-unavailable. None
+processes. It also queries the live Job's CPU hard cap, aggregate commit cap, and
+active-process limit. Executor library tests cover host-capacity derivation and
+exact-limit matching, including native page alignment and large-memory arithmetic;
+Windows-only tests exercise current-host and awkward-capacity Job round trips,
+tampered Job limits, and bounded
+process-limit rejection. Run the library suite on Windows as well as macOS: a macOS
+pass cannot execute its Windows-only tests. These checks do not authenticate the
+protected provisioned policy or prove installed disk/priority reservations.
+Cross-compilation does not prove either native Windows boundary. The
+authenticated inert Windows IPC foundation is covered separately below. Installed
+production services, product Master routing, production broker effects, and activation
+receipts remain unavailable. None
 of these commands
 prove OS code signatures, dedicated service identities/ACLs, privileged IPC,
 resource reservations, activated Start/Stop/Emergency effects, deployment, or live
@@ -221,6 +236,7 @@ cargo test -p assemblywright-master --test windows_execution_host_security_contr
 & .\scripts\windows-execution-host-provision.ps1 -Mode Check
 & .\scripts\windows-execution-host-provision.ps1 -Mode SelfTest
 & .\scripts\windows-execution-host-security-e2e.ps1 -Confirm
+& .\scripts\windows-execution-ipc-e2e.ps1 -Confirm
 ```
 
 `Check` is expected to reject an owner-account or user-local installed master; that is
@@ -253,8 +269,27 @@ runtime schema, and hostile extra Executor argv must fail closed. Broker Service
 constructs the effect-disabled semantic runtime before reporting `RUNNING`; Executor
 ServiceMain validates the complete semantic bootstrap while deliberately constructing
 no active runtime and holding no receipt-signing secret.
-This proves the inert SCM lifecycle entrypoints only; production Broker IPC,
-dispatch, durable replay, and effect activation remain separate later phases.
+The security E2E invokes the dedicated IPC E2E, including delayed response consumption
+and a stalled reader that must fail within the five-second delivery deadline. First
+and last pipe errors plus SCM exit codes distinguish the original rejection from
+later retries after a service stops. That proof creates randomized
+disposable Master, Broker, and restricted Executor SCM services; requires the exact
+service-SID-authenticated local named-pipe roundtrip; verifies independently signed
+Master hop frames and separately signed path-free Broker/Executor acknowledgements;
+requires each pipe owner/DACL to use a configured service SID that is enabled and
+owner-capable in the server process token, including the restricted Executor self-SID
+access check; proves an unrelated LocalService service cannot open the pipe normally or
+for `WRITE_DAC`;
+rejects wrong SID, unsigned, tampered, sequence-gap, stale, and stale-authority frames;
+restarts Broker/Executor and requires byte-identical acknowledgement replay; and records
+zero effects. The same native exchange requires identification-only client SQOS, exact
+canonical service-SID shape, process exit before deletion, and complete fixture-root
+removal. A delayed-write service scenario proves the server reads a bounded client
+message before binding impersonation to that message. Portable unit tests additionally cover exact pending-intent recovery,
+expired byte-exact completed-ack replay without reprocessing, and partial-journal
+quarantine. This proves only inert health/dispatch validation and
+durable replay. The product dispatcher remains unavailable; adapter execution, active
+cancellation, production deployment, and effect activation remain separate.
 
 SelfTest additionally creates one randomized disabled disposable SCM service and passes
 its valid binding through the real production validators. It then proves extra argv,
@@ -370,6 +405,17 @@ cargo run -p assemblywright-cli -- release live-device-runbook
 swift test --disable-sandbox --package-path apps/mac
 swift build --disable-sandbox --package-path apps/mac
 ```
+
+When the owner is running the distribution app, run packaging validation against a
+separate output directory. The guard protects the exact app and bundled-core paths;
+it should not require stopping the owner's app for an unrelated repository gate:
+
+```sh
+ASSEMBLYWRIGHT_DISTRIBUTION_DIR="$PWD/target/distribution-validation" \
+  ./scripts/release-local.sh
+```
+
+This produces separate validation artifacts and does not update the running app.
 
 ## Windows Repository Onboarding
 
@@ -1366,3 +1412,35 @@ swift test --disable-sandbox --package-path apps/mac --filter DeveloperBridgeTes
 ```
 
 These are repository and native-boundary checks, not Windows deployment, signing, notarization, live-device, or release proof.
+
+
+## Windows execution and IPC hardening coverage
+
+The `unit-testing-test-generate` workflow was applied to the testable policy,
+verification, framing, and recovery boundaries below. Coverage is assessed by
+behavior and failure mode; no line-coverage percentage is claimed. The
+`e2e-testing` workflow uses the real native boundaries for this slice. There is
+no browser surface, so Playwright, browser matrices, and visual regression are
+not applicable.
+
+| Phase | Focused unit and negative coverage | Native E2E and CI coverage |
+| --- | --- | --- |
+| Windows Job resource limits | `windows_resource_policy_derivation_is_bounded_and_fail_closed` and `resource_policy_attestation_rejects_every_limit_and_flag_drift`: minimum/maximum capacity, page alignment, overflow, invalid telemetry, and each queried limit/flag | Native Job tamper/rounding/process-limit tests and `windows_job_e2e`; Windows distributed gate |
+| Provisioner resource policy | Production `SelfTest` exercises exact large-memory arithmetic, awkward page alignment, and invalid capacity/page inputs | `windows-execution-host-security-e2e.ps1` runs SelfTest plus restricted service SID, protected storage/reserve, and real service-host checks in Windows CI |
+| Authenticated IPC delivery and replay | `windows_execution_ipc_contract`: strict framing/signatures, stale/binding drift, journal intent/ack/replay, partial-state quarantine | `windows-execution-ipc-e2e.ps1`: real three-service named pipes, hostile peer access, delayed/stalled readers, exact timeout diagnostics, restart replay, cleanup; invoked by host-security E2E |
+| Mac peer verification | `timed_out_identity_workers_retain_bounded_permits_without_convoying_distinct_tokens`, `peer_frame_is_not_dispatched_before_identity_success`, exact success-cache and rejecting-verifier tests | Real audit-token verification, `local_relay_e2e`, native snapshot E2E, and macOS release-local gate |
+| Planning/PTY test startup | Readiness is separate from existing behavior deadlines; timeout/cancellation paths retain child cleanup | Master tests plus restricted-worker, GitHub-publication, and restart-recovery controller self-tests in release-local |
+
+Test fixtures use disposable directories/services and bounded fake verifiers where
+needed to control failure timing; real OS checks remain separate. The native
+Windows run passed 465 tests with 13 explicitly ignored fixtures/elevated tests,
+plus the full IPC and host-security suites. A fresh, hash-verified Mac worktree
+passed the canonical local gate with 483 Rust and 198 Swift tests. These results
+cover the implementation bytes validated locally; publication additionally
+requires both protected GitHub checks on the current PR and merged SHA.
+
+Each later phase must repeat the documentation, knowledge-base, unit/E2E,
+independent-review, and publication checklist in
+[`development-agent-workflow.md`](development-agent-workflow.md#feature-and-phase-closeout).
+Production adapter execution, active-effect recovery, installed policy binding,
+signed service cutover, and owner UI proof remain separate uncompleted milestones.

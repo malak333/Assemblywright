@@ -1,6 +1,6 @@
 # Full-Machine Assembly Line Design
 
-Status: approved target; reviewed planning/creation and inert execution-control source with Windows effects fail-closed; broker IPC, execution, and live evidence pending; current master is protocol-v5/schema-v22
+Status: approved target; reviewed planning/creation, inert execution-control, and authenticated zero-effect Windows IPC source with effects fail-closed; production routing, execution, and live evidence pending; current master is protocol-v5/schema-v22
 
 This document is the approved replacement target and preserves its required safety
 exception. Strict protocol contracts, schema-v20 Windows planning persistence/routes,
@@ -37,9 +37,9 @@ holds and revalidates macOS executable/cwd descriptors plus signed parent/object
 identities, but refuses spawn because process-group membership is escapable by hostile
 code. Windows source holds no-reparse executable/cwd chains, verifies the suspended
 image, assigns a kill-on-close Job, and rechecks authority before resume. It remains
-uninstalled and unavailable through product routes pending native Windows proof. Repository
-tests are not OS code-signing, service installation, dedicated identity/ACL, Windows
-native execution, resource-reservation, or live two-host proof.
+uninstalled and unavailable through product routes pending installed-host activation proof.
+Repository tests and disposable native fixtures are not signed production deployment,
+installed resource-reservation, or live two-host proof.
 
 The deployed Windows planning lane remains effect-free. Source now contains bounded
 Public-only cloud disclosure, provider invocation, frozen owner approval, durable
@@ -49,9 +49,16 @@ approval still cannot call GitHub. Feature enqueue requires an exact `created`
 repository with creation evidence and never dispatches work. Auto-run defaults on and
 supports only an exact replay-safe CAS setting change. Authenticated
 Start/Stop/Emergency routes fail closed through an unavailable production dispatcher;
-installed executor/broker services remain unavailable. Their inherited-pipe runtimes
-cannot acquire authority without exact signed configuration, and no privileged effect
-adapter, activation-receipt path, master IPC client, or service identity is wired.
+production executor/broker services remain unavailable. A local Windows IPC foundation
+independently Master-signs bounded hop-specific Broker and Executor frames, requires
+the Broker to forward the byte-exact Executor envelope, verifies exact peer service
+SIDs on local-only named pipes, binds every server owner/DACL to its own token-proven service
+SID (including the restricted Executor's required self ACE), and accepts separately service-signed path-free
+zero-effect acknowledgements only through pinned public keys. Append-only hash-chained
+intent/ack state provides contiguous sequence/nonce replay protection, byte-exact
+pending recovery, original-ack replay, and durable quarantine on ambiguity. It exposes
+health and dispatch validation only; no privileged effect adapter, activation receipt,
+product Master route, or enabled production service installation is wired.
 
 Planning process creation uses a fresh create-only private window station and desktop
 per call. Their protected DACL contains only LocalSystem, the provisioning owner, and
@@ -302,10 +309,18 @@ does not become a running service. Broker ServiceMain constructs its effect-disa
 semantic runtime before reporting `RUNNING`; Executor ServiceMain validates the full
 semantic bootstrap without creating an active runtime or materializing a signing
 secret. A correctly re-digested schema-invalid config must stop with a service-specific
-failure. Serialized Executor configuration contains no receipt-signing seed. These
-entrypoints intentionally attest inert configuration only; authenticated production
-IPC, out-of-band secret injection after payload isolation, and dispatch are not claimed
-by this substrate phase.
+failure. Serialized Executor configuration contains no receipt-signing seed. When an
+optional protected IPC bootstrap is present, these entrypoints also host one local-only
+service-SID-authenticated named-pipe endpoint. Broker and Executor acknowledgement
+secrets are separate 32-byte protected leaves supplied out of band; only their paths
+and pinned public identities are serialized. The disposable three-service E2E proves a
+valid Master-to-Broker-to-Executor inert roundtrip, wrong SID/unsigned/tampered/gap/
+stale-authority rejection, restart exact-ack replay, and zero effects. Reply delivery
+retains the server pipe until client close, with a five-second deadline and native
+delayed-reader/stalled-reader coverage; disconnecting early must not discard an ack.
+This is
+authenticated inert IPC evidence only; product routing, adapter execution, active
+cancellation, signing/install cutover, and effect activation remain separate phases.
 
 The protected policy records concrete Windows Job CPU-rate, commit, and active-process
 limits that the production executor must attest before any effect can activate. The
@@ -314,9 +329,13 @@ LocalSystem-owned, non-sparse, non-compressed disk-reserve file. The registry ef
 gate is written and verified off before any other Apply mutation. Existing policy or
 reserve leaves are accepted only when already ordinary, single-link, protected, and
 byte-exact; otherwise Apply rejects rather than following, truncating, or repairing a
-hostile leaf. The Job values are policy substrate only until the
-production executor creates and verifies the Job; they are not yet an enforced runtime
-reservation and do not make execution available.
+hostile leaf. The bounded Windows spawn path now installs and queries matching
+host-derived CPU/commit/process limits before child resume. The commit cap is rounded
+down to the native page size before setting and exact attestation, with a second query after
+Job assignment and a final query under the authority lock. Its numeric attestation
+does not authenticate the protected policy file, disk reserve, service priorities, or
+installed identities. Those production bindings remain mandatory before activation;
+the source enforcement alone is not an installed control-plane reservation.
 Apply re-reads all three stopped states before and after every mutation cluster and
 before its receipt. It establishes disabled start before SID, DACL, storage,
 reservation, or priority mutation; any drift leaves the effects gate off and yields no
@@ -452,15 +471,16 @@ authority or proof of a later phase:
    service-SID/ACL/resource-policy substrate; an owner-account production service does
    not satisfy it and remains untouched before a stopped-service cutover. Completion
    still requires successful production provisioning, protected IPC, durable replay
-   restore, remaining closed adapters, runtime Job enforcement, OS code signatures,
-   and owner-recorded deployment evidence. Repository tests are not signed or
-   deployed-host proof.
+   restore, remaining closed adapters, binding of runtime Jobs to the protected policy,
+   OS code signatures, and owner-recorded deployment evidence. Repository tests are
+   not signed or deployed-host proof.
 5. **Assembly Line control:** the simplified UI, queue-empty Start denial, default-on
    auto-run, single-active child epochs, Stop, Emergency Pause, reconnect, resume, and
    reconciliation states land with native cross-process E2E. The current UI observes
    the authoritative queue and performs only the default-on CAS auto-run setting with
-   exact restart-safe reconciliation; brainstorming and Start/Stop/Emergency remain
-   disabled and the effect routes are absent. Full-machine
+   exact restart-safe reconciliation. Start/Stop/Emergency routes exist behind an
+   unavailable production dispatcher and reject before decoding or mutation; the
+   corresponding owner controls remain disabled. Full-machine
    activation remains default-off.
 6. **Cutover and live evidence:** exact signed releases are deployed through the
    owner-only stopped-service ceremony. Windows migration/rollback, GitHub creation,

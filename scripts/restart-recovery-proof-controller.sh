@@ -551,9 +551,22 @@ PTY_READER
   pty_expect="$scratch/pty-receipt-expect.tcl"
   cat <<'EXPECT' >"$pty_expect"
 log_user 0
-set timeout 10
+proc abort_fixture {} {
+  set fixture_pid [exp_pid]
+  catch {exec kill -TERM $fixture_pid}
+  after 100
+  catch {exec kill -KILL $fixture_pid}
+  catch {close}
+  catch {wait}
+}
+set timeout 240
 spawn -noecho env PTY_MODE=$env(PTY_MODE) $env(PTY_READER)
-expect -re {assemblywright_restart_recovery_pty_ready}
+expect {
+  -re {assemblywright_restart_recovery_pty_ready} {}
+  timeout { abort_fixture; exit 4 }
+  eof { catch {wait}; exit 5 }
+}
+set timeout 10
 if {$env(PTY_MODE) eq "signal"} {
   exec kill -TERM [exp_pid]
 } else {
@@ -561,10 +574,13 @@ if {$env(PTY_MODE) eq "signal"} {
 }
 expect {
   -re $env(PTY_EXPECTED_MARKER) {}
-  timeout { exit 2 }
-  eof { exit 3 }
+  timeout { abort_fixture; exit 2 }
+  eof { catch {wait}; exit 3 }
 }
-expect eof
+expect {
+  eof {}
+  timeout { abort_fixture; exit 6 }
+}
 wait
 exit 0
 EXPECT

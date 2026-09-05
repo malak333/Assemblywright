@@ -413,37 +413,125 @@ Full-machine target phase: planning/creation containment has bounded native Wind
   states only when Windows executor, Mac executor, and protected-broker availability are
   all authoritative and available. It rejects `starting` when any execution component is
   unavailable, while the product controls remain visibly disabled until that runtime exists.
-- The broker and executor binaries now implement bounded inherited length-framed stdio
-  runtimes with held no-follow configuration, exact binary/config digests, signed
-  authority/session/replay validation, and fail-closed quarantine. They expose no
-  ambient listener. Broker effects and executor activation receipts remain unavailable,
-  and no four-host installation exists; therefore a genuine two-host Start and the Mac
-  execution buttons remain unavailable.
+- The broker and executor binaries implement bounded inherited length-framed stdio
+  runtimes plus an optional Windows-only inert named-pipe foundation. Windows pipes are
+  single-instance and reject remote clients; both ends prove the exact expected service
+  SID from the connected token, clients permit identification-only impersonation, and
+  servers reject stronger impersonation levels. Master signs Broker and Executor frames independently,
+  Broker forwards the exact Executor bytes, and each service signs its own path-free
+  acknowledgement with a different out-of-band key. Append-only hash-chained journals
+  persist intent before acknowledgement, contiguous sequence/nonce state, exact pending
+  recovery, original-ack replay, and quarantine. No frame or acknowledgement may report
+  an effect. The product effect dispatcher, Broker effects, executor activation
+  receipts, and installed production routing remain unavailable; therefore a genuine
+  two-host Start and the Mac execution buttons remain unavailable.
+
+## Packaging While The Owner App Is Running
+
+- `package-distribution.sh` refuses to overwrite the exact bundle whose app or bundled
+  core executable is running. Use a separate `ASSEMBLYWRIGHT_DISTRIBUTION_DIR` for
+  `release-local.sh` to validate packaging without stopping or replacing the owner app.
+  Passing that gate validates the separate artifacts; it does not deploy them or prove
+  the running app's UI, Windows connection, signing/notarization, or live behavior.
+
+## Windows Host Diagnostic, 2026-09-04
+
+- A read-only inspection through the existing Remote Desktop session showed
+  `AssemblywrightMaster` running with Automatic startup, an owner-account logon,
+  and an executable under the owner profile. Its properties were cancelled without
+  applying changes. This does not satisfy the protected Program Files and LocalSystem
+  production contract. The diagnostic did not establish checkout parity, image hashes,
+  schema/queue/pause state, migration backups, protected ACLs, or signed cutover evidence;
+  it is not a deployment or activation receipt.
+
+## Native Process Fixture Startup
+
+- The master's exited-parent/stdout-descendant test measures its ten-second return
+  bound from the actual descendant PID marker, after a separately bounded fixture
+  startup allowance. Slow macOS executable loading must not consume the behavior
+  window. Readiness and early completion can race, so receipt of completion requires
+  another marker check and must not cause a second channel receive. Timeout cleanup
+  still cancels, terminates the known descendant, and joins the worker; the success
+  path proves the thirty-second stdout holder was reaped. This is test timing only,
+  not a change to production planning deadlines.
+- The restricted-worker, GitHub-publication, and restart-recovery controllers' PTY
+  self-tests wait for explicit reader readiness before sending synthetic receipt
+  bytes. Their separate startup allowance does not widen the ten-second receipt/exit
+  checks or the production reader deadline.
+  Startup, receipt, and exit timeouts close and reap the fixture rather than silently
+  advancing to a potentially blocking wait.
+- A missing MLX backend marker does not by itself establish a shutdown failure.
+  On 2026-09-04, the relay SIGTERM test failed before sending SIGTERM; a temporary
+  diagnostic captured `Unix IPC peer code identity validation timed out` and client
+  `UnexpectedEof`. The 45-second production identity boundary correctly rejected
+  the connection. The isolated snapshot/restart test passed, but the reproduced
+  identity timeout still left the full local gate failed. Do not count such a run
+  as shutdown proof or widen the production identity deadline to make the test pass.
 
 ## Current Crate Boundaries
 
-- `assemblywright-protocol` — versioned, bounded wire contracts. No I/O, no state.
+- Windows named-pipe servers must retain a buffered reply until its reader closes.
+  Immediate `DisconnectNamedPipe` can discard unread bytes; see the
+  [Windows API contract](https://learn.microsoft.com/en-us/windows/win32/api/namedpipeapi/nf-namedpipeapi-disconnectnamedpipe).
+  The inert IPC transport polls for client close with a five-second limit, preserving
+  single-instance ownership without an unbounded flush. A hostile LocalService SCM
+  fixture cannot assume traversal through the owner checkout. Stage its exact
+  hash-verified executable beneath a protected system temporary directory and
+  grant only its generated service SID non-inheriting root and image RX, with
+  receipt writes confined to a separate disposable subtree. Keep the pipe DACL
+  unchanged so the native result exercises pipe denial after successful launch. In a failing native run, the
+  first `client_read` error was 233, while later retries only reported `client_open`
+  error 2 after the Broker stopped. Keep first/last operation errors and SCM exit
+  codes when diagnosing this boundary; the final retry alone can hide the cause.
+  A response-reader timeout occurs after processing and may leave both durable acks
+  and readable buffered output. Its proof must identify the exact timeout and verify
+  retained-frame replay, not claim rejection before acknowledgement.
+
+- `assemblywright-protocol` — versioned, bounded wire contracts plus the narrowly scoped
+  local Windows pipe primitive and protected append-only IPC journal used by all three
+  Windows execution-host roles. A pipe server must prove its configured service SID is
+  enabled and owner-capable in its process token, set it as the pipe owner, and include
+  that self SID in the protected DACL; this is
+  what lets the restricted Executor satisfy Windows' restricted-token access check
+  without weakening the separate exact-client-SID authentication. It owns no service
+  key, authority decision, or effect.
 - `assemblywright-executor` — inert-by-default unprivileged full-machine containment
   source. It verifies exact signed action/identity/digest/deadline bindings, rejects
   protected paths and replay/gaps, and validates held macOS executable/cwd plus signed
   parent/object identities. Mac spawn is disabled because process groups are escapable;
   Windows source retains no-reparse path handles, verifies the suspended image, assigns
-  a kill-on-close Job, and rechecks authority before resume. Its inherited-pipe runtime
+  a kill-on-close Job, and rechecks authority before resume. The Windows spawn path
+  derives CPU, aggregate commit, and active-process caps from current host capacity,
+  rounding commit down to the native page size before setting the Job. Windows can
+  round an unaligned requested limit down, so accepting drift instead of aligning
+  the policy would weaken exact attestation. Provisioner arithmetic must select
+  64-bit overloads explicitly to handle hosts whose ten-percent reserve exceeds Int32.
+  The spawn path
+  configures and queries them before creating the suspended child, then queries again
+  after assignment and under the authority lock immediately before resume. Numeric
+  attestation fails on drift; it does not prove protected policy-file binding, disk
+  reservation, service priority, or installed identity. Its inherited-pipe runtime
   accepts exact signed authority/control frames, supports one active action, and signs
   termination receipts. It has no installed service/client and emits no activation
-  receipt, so product execution cannot be activated.
+  receipt, so product execution cannot be activated. Its optional service bootstrap
+  reads a separate exact 32-byte acknowledgement seed leaf, constructs only the inert
+  IPC validator through a borrowed `Zeroizing` seed buffer on every exit, and never
+  serializes that secret.
 - `assemblywright-broker` — inert-by-default privileged-broker policy and closed adapter
   source. It binds all named protected-control-plane categories into one digest and
   rejects protected descendants, case/link/reparse ambiguity, drift, replay, and
   unknown operations. Its inherited-pipe runtime authenticates exact signed FIFO control
   frames and quarantines ambiguity while keeping production dispatch effect-disabled.
+  Its optional Windows service IPC verifies one endpoint-bound Master frame, forwards
+  only the nested byte-exact independently Master-signed Executor frame, and returns the
+  separate signed zero-effect acknowledgements without learning the Executor seed.
   A dedicated native proof seam implements only Windows `CreateDirectory`: it retains
   every canonical ancestor without delete sharing, creates one absent leaf relative to
   the held parent, returns path-free applied evidence, and quarantines a typed
   reconciliation-required outcome after any uncertainty once the native create call is
   entered; even a negative native status is not treated as proof that no effect occurred. Replace/remove/
-  service adapters remain closed. No root/SYSTEM broker service or master IPC client is
-  installed. The required Windows hosted gate lints and tests both broker and executor
+  service adapters remain closed. No production root/SYSTEM broker service or
+  product-routed Master IPC client is installed. The required Windows hosted gate lints and tests both broker and executor
   packages, so the native create-directory and Job Object E2E suites run for every pull
   request and `main` push; this is exact-commit hosted Windows evidence, not production
   identity, installation, deployment, or live two-host proof.
@@ -477,6 +565,20 @@ Full-machine target phase: planning/creation containment has bounded native Wind
   mutation-deny ACEs inherit. The config files must also carry the Windows read-only
   attribute, and sibling/later-created files receive no Executor read grant; other
   protected storage remains denied.
+- The 2026-09-04 owner-host validation used a SHA-256-verified disposable source
+  snapshot through the owner-authenticated SSH control connection; both dirty owner
+  checkouts and the installed owner-account Master were preserved. The native
+  protocol, Master, Broker, and Executor Clippy checks passed. Their all-target
+  native Rust suites passed 465 tests (13 explicitly ignored fixtures/elevated tests),
+  including Job descendant containment and exact host/unaligned resource-limit
+  roundtrips. The full IPC suite and combined
+  execution-host-security E2E passed with fixture cleanup: service-SID/ACL denial,
+  provisioner DryRun/Check/SelfTest, bounded resource pressure, real service-host
+  startup/stop, hostile config rejection, delayed/stalled delivery, and exact durable
+  acknowledgement replay. These are disposable native proofs only. The installed
+  owner-account/user-local image is unsigned, and no code-signing certificate was
+  found in the inspected Windows user or machine stores; the signed Program Files
+  production cutover and product effect routing remain unavailable.
 - `scripts/windows-execution-host-security-e2e.ps1` is the native non-browser E2E for
   that substrate. It creates only randomized disposable services, launches a real
   hostile payload as LocalService with a restricted service SID, requires an allowed
@@ -2197,6 +2299,26 @@ Full-machine target phase: planning/creation containment has bounded native Wind
   eight-word `LOCAL_PEERTOKEN` (which includes PID generation) for its own lifetime;
   the fixed 64-token cap avoids unbounded identity state, and new or rejected tokens
   always retain the pre-frame validation boundary.
+  Never hold the success-cache mutex across Security.framework: a Tokio timeout
+  cannot cancel an already running blocking verifier, so a slow call would retain
+  that lock after timeout and stall unrelated tokens. Cache lookup and insertion
+  use separate short locks; a per-server four-permit gate bounds native verification,
+  and each blocking worker owns its permit through completion. Capacity waiting
+  and verification share the existing forty-five-second deadline. Deterministic
+  tests cover retained permits after caller timeout and no pre-identity dispatch.
+  A live `codesign` sample on the owner Mac also showed `CFBundleCreate` directory
+  enumeration dominating startup: the accumulated `target/debug/deps` contained
+  813,450 entries, mostly split-debug object files, and a plain directory scan
+  took over 21 seconds. Reproduce identity-sensitive gates in a fresh detached
+  worktree with a hash-verified overlay of current tracked bytes; preserve the
+  owner checkout, active app, and old build artifacts. This isolates build-cache
+  pressure without weakening peer verification or widening production deadlines.
+  The hash-verified fresh overlay then passed all 16 focused core IPC tests, all
+  ten native agent relay tests in 4.14 seconds, and the complete canonical
+  `./scripts/release-local.sh` gate, including 483 Rust tests, native snapshot E2E,
+  package verification, unsigned launch checks, and 198 Swift tests. This is local
+  repository evidence; the unchanged running owner app, locked-screen UI check,
+  signed deployment, and active-effect production milestones remain distinct.
 - Security.framework audit-token verification can exceed the production forty-five-second
   bound on a loaded Mac. The core ordering test therefore injects a deterministic rejecting
   verifier to prove that peer identity is checked before any frame read, while the separate
@@ -2248,3 +2370,12 @@ Full-machine target phase: planning/creation containment has bounded native Wind
   builds, installed-image source provenance, active-effect crash recovery, SCM
   retry policy, Feature 6 control streaming, signing, notarization, or
   production readiness.
+
+- The Windows execution and IPC hardening closeout maps the explicitly requested
+  `unit-testing-test-generate` and `e2e-testing` workflows to policy edge cases,
+  real Windows SCM/Job/named-pipe tests, native Mac audit-token/relay tests, and
+  controller process fixtures. The coverage ledger in
+  `docs/build-test-commands.md` records each phase and its CI lane; no browser
+  surface or line-coverage percentage is claimed. Repeat the repository's
+  per-phase closeout checklist for subsequent features, and verify protected
+  hosted checks on the current publication SHA before claiming GitHub closeout.

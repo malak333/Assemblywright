@@ -374,20 +374,38 @@ function Set-ProtectedFileAcl {
     Set-Acl -LiteralPath $Path -AclObject $acl
 }
 
-function Get-ResourcePolicy {
-    $computer = Get-CimInstance Win32_ComputerSystem
-    $processors = [int]$computer.NumberOfLogicalProcessors
-    $memory = [UInt64]$computer.TotalPhysicalMemory
-    if ($processors -lt 1 -or $memory -lt 2147483648) {
+function Get-ResourcePolicyForCapacity {
+    param(
+        [Parameter(Mandatory = $true)][UInt32]$LogicalProcessors,
+        [Parameter(Mandatory = $true)][UInt64]$TotalPhysicalMemoryBytes,
+        [Parameter(Mandatory = $true)][UInt32]$SystemPageSize
+    )
+    if ($LogicalProcessors -lt 1 -or $TotalPhysicalMemoryBytes -lt 2147483648) {
         throw 'The host cannot retain the minimum control-plane resource headroom.'
     }
-    $cpuRate = if ($processors -eq 1) { 5000 } else { 9000 }
-    $memoryReserve = [UInt64][Math]::Max(1073741824, [Math]::Floor($memory * 0.10))
+    if ($SystemPageSize -eq 0 -or
+        ($SystemPageSize -band ($SystemPageSize - 1)) -ne 0) {
+        throw 'The host reported an invalid system page size for the executor commit limit.'
+    }
+    $cpuRate = if ($LogicalProcessors -eq 1) { 5000 } else { 9000 }
+    [UInt64]$proportionalMemoryReserve = [UInt64][Decimal]::Floor(
+        ([Decimal]$TotalPhysicalMemoryBytes) / [Decimal]10
+    )
+    [UInt64]$memoryReserve = 1073741824
+    if ($proportionalMemoryReserve -gt $memoryReserve) {
+        $memoryReserve = $proportionalMemoryReserve
+    }
+    [UInt64]$unroundedCommitLimit = $TotalPhysicalMemoryBytes - $memoryReserve
+    [UInt64]$pageSizeBytes = $SystemPageSize
+    [UInt64]$executorCommitLimit = $unroundedCommitLimit - ($unroundedCommitLimit % $pageSizeBytes)
+    if ($executorCommitLimit -eq 0) {
+        throw 'The host cannot retain a page-aligned executor commit limit.'
+    }
     return [ordered]@{
         schema_version = 1
         windows_executor_job_required = $true
         executor_cpu_rate_hard_cap = $cpuRate
-        executor_commit_limit_bytes = $memory - $memoryReserve
+        executor_commit_limit_bytes = $executorCommitLimit
         executor_active_process_limit = 128
         control_plane_reserved_logical_processors = 1
         control_plane_reserved_commit_bytes = $memoryReserve
@@ -395,6 +413,14 @@ function Get-ResourcePolicy {
         control_plane_disk_reserve_bytes = $diskReserveBytes
         effect_activation_requires_exact_policy_attestation = $true
     }
+}
+
+function Get-ResourcePolicy {
+    $computer = Get-CimInstance Win32_ComputerSystem
+    return Get-ResourcePolicyForCapacity `
+        -LogicalProcessors ([UInt32]$computer.NumberOfLogicalProcessors) `
+        -TotalPhysicalMemoryBytes ([UInt64]$computer.TotalPhysicalMemory) `
+        -SystemPageSize ([UInt32][Environment]::SystemPageSize)
 }
 
 function Set-ControlPlanePriority {
@@ -770,6 +796,50 @@ function Invoke-SelfTest {
     $serviceName = "AssemblywrightHostValidatorE2E$($suffix.Substring(0,12))"
     $serviceCreated = $false
     try {
+        $largeMemoryPolicy = Get-ResourcePolicyForCapacity `
+            -LogicalProcessors 16 `
+            -TotalPhysicalMemoryBytes ([UInt64]68719476736) `
+            -SystemPageSize 4096
+        if ([UInt64]$largeMemoryPolicy.control_plane_reserved_commit_bytes -ne [UInt64]6871947673 -or
+            [UInt64]$largeMemoryPolicy.executor_commit_limit_bytes -ne [UInt64]61847527424) {
+            throw 'The resource policy did not preserve UInt64 precision for a large-memory host.'
+        }
+        $awkwardCapacityPolicy = Get-ResourcePolicyForCapacity `
+            -LogicalProcessors 16 `
+            -TotalPhysicalMemoryBytes ([UInt64]68719489081) `
+            -SystemPageSize 4096
+        if ([UInt64]$awkwardCapacityPolicy.control_plane_reserved_commit_bytes -ne [UInt64]6871948908 -or
+            [UInt64]$awkwardCapacityPolicy.executor_commit_limit_bytes -ne [UInt64]61847539712 -or
+            ([UInt64]$awkwardCapacityPolicy.executor_commit_limit_bytes % [UInt64]4096) -ne 0) {
+            throw 'The resource policy did not round an awkward-capacity commit limit down to a page boundary.'
+        }
+        $undersizedHostRejected = $false
+        try {
+            [void](Get-ResourcePolicyForCapacity `
+                -LogicalProcessors 1 `
+                -TotalPhysicalMemoryBytes ([UInt64]2147483647) `
+                -SystemPageSize 4096)
+        } catch {
+            $undersizedHostRejected = $_.Exception.Message -ceq `
+                'The host cannot retain the minimum control-plane resource headroom.'
+        }
+        if (-not $undersizedHostRejected) {
+            throw 'The resource policy accepted a host without minimum control-plane headroom.'
+        }
+        $invalidPageSizeRejected = $false
+        try {
+            [void](Get-ResourcePolicyForCapacity `
+                -LogicalProcessors 16 `
+                -TotalPhysicalMemoryBytes ([UInt64]68719476736) `
+                -SystemPageSize 3000)
+        } catch {
+            $invalidPageSizeRejected = $_.Exception.Message -ceq `
+                'The host reported an invalid system page size for the executor commit limit.'
+        }
+        if (-not $invalidPageSizeRejected) {
+            throw 'The resource policy accepted a non-power-of-two system page size.'
+        }
+
         New-Item -ItemType Directory -Path $scratch | Out-Null
         [IO.File]::WriteAllText($original, 'hostile-prestate', [Text.UTF8Encoding]::new($false))
         & fsutil.exe hardlink create $hardlink $original | Out-Null

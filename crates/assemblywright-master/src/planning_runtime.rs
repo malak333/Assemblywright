@@ -2234,7 +2234,7 @@ mod tests {
             .is_err());
     }
     use std::os::unix::fs::PermissionsExt;
-    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc;
     use std::sync::Arc;
     use std::time::Instant;
@@ -2623,6 +2623,13 @@ mod tests {
 
     #[test]
     fn exited_parent_cannot_leave_stdout_inheriting_descendant_or_block_return() {
+        // Loader contention can delay a disposable provider before its first
+        // instruction. The behavior under test begins only after the provider
+        // has forked the stdout-inheriting descendant.
+        const PROVIDER_STARTUP_CEILING: Duration = Duration::from_secs(240);
+        const POST_READY_RETURN_CEILING: Duration = Duration::from_secs(10);
+        const CONTROL_CLEANUP_SLACK: Duration = Duration::from_secs(5);
+
         let directory = tempfile::tempdir().unwrap();
         let executable_path = directory.path().join("adversarial-provider");
         fs::write(
@@ -2633,9 +2640,11 @@ mod tests {
         fs::set_permissions(&executable_path, fs::Permissions::from_mode(0o700)).unwrap();
         let expected = hex(&Sha256::digest(fs::read(&executable_path).unwrap()));
         let executable = load_executable(&executable_path, &expected).unwrap();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let startup_deadline = Instant::now() + PROVIDER_STARTUP_CEILING;
         let control = PlanningEffectControl::new(
-            Arc::new(AtomicBool::new(false)),
-            Instant::now() + Duration::from_secs(5),
+            cancelled.clone(),
+            startup_deadline + POST_READY_RETURN_CEILING + CONTROL_CLEANUP_SLACK,
         );
 
         let working_directory = directory.path().to_path_buf();
@@ -2658,14 +2667,56 @@ mod tests {
             completed_tx.send(()).unwrap();
             output
         });
-        if completed_rx.recv_timeout(Duration::from_secs(10)).is_err() {
-            if let Ok(pid) = fs::read_to_string(&descendant_path) {
-                if let Ok(pid) = pid.parse::<i32>() {
-                    unsafe { libc::kill(pid, libc::SIGKILL) };
+        let mut completion_received = false;
+        while !descendant_path.exists() && Instant::now() < startup_deadline {
+            match completed_rx.try_recv() {
+                Ok(()) => {
+                    completion_received = true;
+                    break;
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    let worker_panicked = worker.join().is_err();
+                    panic!(
+                        "run_command worker disconnected before descendant readiness; worker_panicked={worker_panicked}"
+                    );
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        if !descendant_path.exists() {
+            if completion_received {
+                let output = worker.join().unwrap();
+                panic!(
+                    "run_command returned before creating the inheriting descendant: {output:?}"
+                );
+            }
+            cancelled.store(true, Ordering::Release);
+            let _ = worker.join();
+            panic!("provider did not create the inheriting descendant before the startup ceiling");
+        }
+        if !completion_received {
+            match completed_rx.recv_timeout(POST_READY_RETURN_CEILING) {
+                Ok(()) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    let worker_panicked = worker.join().is_err();
+                    panic!(
+                        "run_command worker disconnected after descendant readiness; worker_panicked={worker_panicked}"
+                    );
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    cancelled.store(true, Ordering::Release);
+                    if let Ok(pid) = fs::read_to_string(&descendant_path) {
+                        if let Ok(pid) = pid.parse::<i32>() {
+                            unsafe { libc::kill(pid, libc::SIGKILL) };
+                        }
+                    }
+                    let _ = worker.join();
+                    panic!(
+                        "run_command did not return within the post-readiness ceiling while the 30-second descendant held stdout"
+                    );
                 }
             }
-            let _ = worker.join();
-            panic!("run_command did not return while the 30-second descendant held stdout");
         }
         let output = worker.join().unwrap().unwrap();
         assert_eq!(output, b"complete");

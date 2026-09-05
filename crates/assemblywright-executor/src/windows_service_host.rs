@@ -1,4 +1,7 @@
+use crate::ipc::{load_ack_seed, InertExecutorIpc};
 use crate::runtime::{load_config, validate_service_bootstrap, RuntimeError};
+use assemblywright_protocol::windows_execution_pipe::WindowsExecutionPipeError;
+use ed25519_dalek::VerifyingKey;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::sync::{mpsc, OnceLock};
@@ -53,10 +56,7 @@ fn service_main(_: Vec<OsString>) {
         1,
         Duration::from_secs(30),
     ));
-    if load_config(&config.config, config.digest)
-        .and_then(validate_service_bootstrap)
-        .is_err()
-    {
+    let Ok(loaded) = load_config(&config.config, config.digest) else {
         let _ = status.set_service_status(service_status(
             ServiceState::Stopped,
             ServiceControlAccept::empty(),
@@ -65,6 +65,70 @@ fn service_main(_: Vec<OsString>) {
             Duration::ZERO,
         ));
         return;
+    };
+    if validate_service_bootstrap(loaded.clone()).is_err() {
+        let _ = status.set_service_status(service_status(
+            ServiceState::Stopped,
+            ServiceControlAccept::empty(),
+            ServiceExitCode::ServiceSpecific(1),
+            0,
+            Duration::ZERO,
+        ));
+        return;
+    }
+    let expects_ipc = loaded.ipc.is_some();
+    let ipc_bootstrap = loaded.ipc.clone().and_then(|ipc| {
+        let seed = load_ack_seed(&ipc.ack_seed_path).ok()?;
+        let authority_key = VerifyingKey::from_bytes(&loaded.authority_verifying_key).ok()?;
+        let runtime = InertExecutorIpc::open(
+            &ipc.durable_state_path,
+            loaded.executor_id,
+            loaded.bound_authority_revision,
+            loaded.next_request_sequence,
+            loaded.authority_key_id,
+            authority_key,
+            ipc.ack_key_id.clone(),
+            &seed,
+        )
+        .ok()?;
+        Some((ipc, runtime))
+    });
+    if expects_ipc && ipc_bootstrap.is_none() {
+        let _ = status.set_service_status(service_status(
+            ServiceState::Stopped,
+            ServiceControlAccept::empty(),
+            ServiceExitCode::ServiceSpecific(2),
+            0,
+            Duration::ZERO,
+        ));
+        return;
+    }
+    let (ipc_done_tx, ipc_done_rx) = mpsc::channel();
+    if let Some((ipc, mut runtime)) = ipc_bootstrap {
+        std::thread::spawn(move || {
+            let result: Result<(), u32> = loop {
+                let handled = crate::windows_execution_ipc::serve_broker_once(
+                    &ipc.pipe_name,
+                    &ipc.executor_service_sid,
+                    &ipc.expected_broker_service_sid,
+                    |bytes| {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map_err(|_| WindowsExecutionPipeError::InvalidFrame)?
+                            .as_millis() as u64;
+                        let ack = runtime
+                            .handle(bytes, now)
+                            .map_err(|_| WindowsExecutionPipeError::InvalidFrame)?;
+                        ack.encode_frame()
+                            .map_err(|_| WindowsExecutionPipeError::InvalidFrame)
+                    },
+                );
+                if let Err(error) = handled {
+                    break Err(error.service_diagnostic_code());
+                }
+            };
+            let _ = ipc_done_tx.send(result);
+        });
     }
     if status
         .set_service_status(service_status(
@@ -78,7 +142,22 @@ fn service_main(_: Vec<OsString>) {
     {
         return;
     }
-    let _ = rx.recv();
+    loop {
+        if rx.recv_timeout(Duration::from_millis(100)).is_ok() {
+            break;
+        }
+        if let Ok(result) = ipc_done_rx.try_recv() {
+            let diagnostic = result.err().unwrap_or(3);
+            let _ = status.set_service_status(service_status(
+                ServiceState::Stopped,
+                ServiceControlAccept::empty(),
+                ServiceExitCode::ServiceSpecific(diagnostic),
+                0,
+                Duration::ZERO,
+            ));
+            return;
+        }
+    }
     let _ = status.set_service_status(service_status(
         ServiceState::StopPending,
         ServiceControlAccept::empty(),

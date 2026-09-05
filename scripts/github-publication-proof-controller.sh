@@ -512,17 +512,34 @@ PTY_READER
   chmod 700 "$pty_reader"
   pty_expect="$scratch/pty.expect"
   cat <<'EXPECT' >"$pty_expect"
-set timeout 10
+proc abort_fixture {} {
+  set fixture_pid [exp_pid]
+  catch {exec kill -TERM $fixture_pid}
+  after 100
+  catch {exec kill -KILL $fixture_pid}
+  catch {close}
+  catch {wait}
+}
+set timeout 240
 spawn -noecho env PTY_MODE=$env(PTY_MODE) $env(PTY_READER)
-expect -re {assemblywright_github_publication_pty_ready}
+expect {
+  -re {assemblywright_github_publication_pty_ready} {}
+  timeout { abort_fixture; exit 4 }
+  eof { catch {wait}; exit 5 }
+}
+set timeout 10
 send -- "$env(PTY_RECEIPT)\r"
 expect {
   -re $env(PTY_EXPECT) {}
-  timeout { exit 2 }
-  eof { exit 3 }
+  timeout { abort_fixture; exit 2 }
+  eof { catch {wait}; exit 3 }
 }
-expect eof
+expect {
+  eof {}
+  timeout { abort_fixture; exit 6 }
+}
 wait
+exit 0
 EXPECT
   long_receipt="$(python3 -c 'print("x" * 2182, end="")')"
   pty_output="$(PTY_MODE=success PTY_READER="$pty_reader" PTY_RECEIPT="$long_receipt" \

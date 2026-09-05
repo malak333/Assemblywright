@@ -72,6 +72,9 @@ MASTER_REVIEW_OUTPUT_SCHEMA="crates/assemblywright-master/resources/review-outpu
 MASTER_PUBLICATION="crates/assemblywright-master/src/publication.rs"
 MASTER_GITHUB_PUBLICATION="crates/assemblywright-master/src/github_publication.rs"
 MASTER_SERVICE_E2E="crates/assemblywright-master/tests/windows_service_lifecycle_e2e.rs"
+WINDOWS_EXECUTION_IPC_PROTOCOL_E2E="crates/assemblywright-protocol/tests/windows_execution_ipc_contract.rs"
+WINDOWS_EXECUTION_IPC_SOURCE_E2E="crates/assemblywright-master/tests/windows_execution_ipc_source_contract.rs"
+WINDOWS_EXECUTION_IPC_NATIVE_E2E="scripts/windows-execution-ipc-e2e.ps1"
 AGENT_E2E="crates/assemblywright-agent/tests/local_relay_e2e.rs"
 AGENT_LOCAL_CODING_E2E="crates/assemblywright-agent/tests/local_coding_admission.rs"
 CLI_NAMING_E2E="crates/assemblywright-cli/tests/naming_contract_e2e.rs"
@@ -434,7 +437,7 @@ require_text "knowledge base planning Codex Windows sandbox split" "$KB" \
   'On Windows its inner sandbox is `danger-full-access`'
 
 FULL_MACHINE_PHASE_MARKER="Full-machine target phase: planning/creation containment has bounded native Windows LocalSystem/AppContainer service proof; execution admission is implemented and effects remain unavailable."
-FULL_MACHINE_PENDING_STATUS="Status: approved target; reviewed planning/creation and inert execution-control source with Windows effects fail-closed; broker IPC, execution, and live evidence pending; current master is protocol-v5/schema-v22"
+FULL_MACHINE_PENDING_STATUS="Status: approved target; reviewed planning/creation, inert execution-control, and authenticated zero-effect Windows IPC source with effects fail-closed; production routing, execution, and live evidence pending; current master is protocol-v5/schema-v22"
 
 for false_claim in \
   "Status: implemented and active" \
@@ -1500,5 +1503,16 @@ require_text "master exporter label matches the Mac" "$MASTER_PROCESS" "$mac_exp
 require_text "safety rules fail closed" "$SAFETY_RULES" "fail"
 require_text "agent workflow roles" "$AGENT_WORKFLOW" "assemblywright-"
 require_text "agents build commands pointer" "$AGENTS" "docs/build-test-commands.md"
+require_file "$WINDOWS_EXECUTION_IPC_PROTOCOL_E2E"
+require_file "$WINDOWS_EXECUTION_IPC_SOURCE_E2E"
+require_file "$WINDOWS_EXECUTION_IPC_NATIVE_E2E"
+require_text "build docs inert Windows IPC command" "$BUILD_DOCS" \
+  "windows-execution-ipc-e2e.ps1 -Confirm"
+require_text "safety local-only Windows IPC" "$SAFETY_RULES" \
+  "single-instance and local-only"
+require_text "knowledge base inert Windows IPC" "$KB" \
+  "optional Windows-only inert named-pipe foundation"
+require_text "full-machine design inert Windows IPC" "$FULL_MACHINE_ASSEMBLY_LINE_DESIGN" \
+  "authenticated zero-effect Windows IPC source"
 
 printf 'Assemblywright release docs drift smoke: ok\n'

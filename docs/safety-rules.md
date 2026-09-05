@@ -18,8 +18,10 @@ The approved full-machine Assembly Line is only partially implemented and is not
 current execution authority. Protocol v5 and master schema v22 now contain strict
 contracts, planning persistence/routes, and a durable execution-control ledger.
 Schema v21 records Start/Stop/Emergency Pause intent and restart quarantine only;
-without authenticated IPC, verified receipts, and host effects it grants no execution
-authority. It preserves
+without verified production routing and host effects it grants no execution authority.
+The authenticated Windows IPC foundation is deliberately inert: it validates only
+health and dispatch shape, produces zero-effect acknowledgements, and is not an effect
+dispatcher. It preserves
 the legacy schema-v19 Feature Conveyor grant, activation, queue, and restricted-worker
 semantics. No planning record, `creation_pending` repository, feature enqueue,
 auto-run setting, legacy activation, or owner-control receipt widens a worker to the
@@ -52,6 +54,41 @@ other private signing material. The Windows ServiceMain validates only the compl
 effect-disabled semantic bootstrap. An active runtime remains unavailable until a
 later authenticated Broker IPC design can inject the receipt secret out of band and
 prove payload processes cannot read the Executor service process or its handles.
+The optional inert IPC bootstrap may name only protected durable-state and out-of-band
+service-secret files. A secret seed must be exactly 32 nonzero bytes in an ordinary
+single-link protected leaf, is zeroed from bootstrap memory after key construction,
+and must never enter JSON, argv, environment, diagnostics, audit, acknowledgements, or
+the Broker-forwarded Executor frame. Each Master request is independently signed for
+one exact endpoint and binds service identity, session, child epoch, authority,
+contiguous sequence, a Master-generated nonce, and a lifetime no longer than 60 seconds. The
+Broker must forward the exact already-Master-signed Executor bytes. Pipes are
+single-instance and local-only. Their DACL admits only SYSTEM, the configured canonical
+server service SID, and the expected canonical client service SID; the configured server
+SID is also the explicit object owner. The server must prove its SID is enabled and
+owner-capable in its own process token before creating the pipe. This
+self ACE is required for the restricted Executor token's second access check and does
+not widen peer authentication. Both client and server prove the peer service SID from
+the connected token. Clients request identification-only SQOS; servers first read
+the bounded message, then reject any stronger impersonation level and treat failure to
+revert impersonation as fatal before handling the frame. IPC state and seed leaves reject traversal, device, ADS, DOS-device,
+and reparse-parent spellings while retaining the exact protected parent handle. Each service
+appends intent before processing and its own signed, path-free
+zero-effect ack after validation. An exact pending request may recover only while the
+signed request is fresh; an exact completed request may return the original ack even
+after expiry because no handler is rerun and no new effect is possible. Any other
+replay, gap, partial journal,
+stale/future frame, endpoint/authority drift, wrong SID, bad signature, or changed
+payload durably quarantines. After writing a reply, the server retains the pipe and
+its single-instance ownership until the client closes after reading the complete
+frame. A non-consuming close check has a five-second deadline; a stalled reader
+fails closed without an unbounded buffer flush. Failure diagnostics contain fixed
+operation categories and numeric OS/service codes, never frames, paths, or secrets.
+Delivery timeout does not undo processing or a durable acknowledgement. Treat its
+delivery outcome as uncertain and reconcile only through exact retained-frame replay;
+never report it as rejection before acknowledgement or rerun the completed handler.
+None of this enables an adapter or replaces the
+unavailable Master effect dispatcher.
+
 Only the fixed Program Files image names bound by exact SHA-256 and one exact valid
 Authenticode signer in the protected release manifest are eligible. Missing signing
 evidence keeps Apply unavailable. EffectsEnabled must be written and verified off before
@@ -69,6 +106,17 @@ propagation flags, the complete exact rights set, inheritable trusted/mutation-d
 directory ACEs, and a non-inheriting Executor traversal/read ACE only where required.
 Recorded Job CPU/commit/process limits are not an enforced reservation until production
 runtime creates and attests the exact Job; absence or drift must keep activation closed.
+The bounded Windows process spawn path derives the same numeric limits from current
+host capacity: a 50% CPU hard cap on one logical processor, 90% otherwise, aggregate
+Job commit capped at physical memory minus the greater of 1 GiB or 10%, rounded down
+to the native memory-page size, and 128 active processes. Zero logical processors,
+less than 2 GiB physical memory, zero or non-power-of-two page size, arithmetic or
+native-size overflow, failed Job configuration, or any queried limit/flag drift reject
+before resume. The unnamed non-inherited Job retains kill-on-close and disallows
+breakaway; limits are queried after configuration, after assignment, and inside the
+authority-locked resume operation. These local checks do not load or authenticate the
+protected provisioned policy and do not attest disk reserve, priority, service identity,
+or guaranteed host-wide headroom. Production activation remains unavailable.
 
 The inert planning slice additionally requires:
 
@@ -1215,6 +1263,11 @@ For the approved target, these additional rules are release requirements:
   `LOCAL_PEERTOKEN` value, including PID generation, for one server lifetime and at
   most 64 tokens. A new token, a full cache, a poisoned cache, or any failed check
   must still perform or fail the bounded pre-frame identity decision.
+  Cache locks must cover only lookup or insertion, never native Security.framework
+  verification. Each server permits at most four concurrent blocking verifiers.
+  The worker retains its permit until native verification returns, including after
+  the caller times out; waiting for capacity shares the same forty-five-second
+  deadline. No request frame is read or dispatched before identity succeeds.
   The agent cursor may store only stream ID, sequence, and update time.
 - By default the long-running helper may request only authenticated MacBridge health, the
   exact bounded Feature Conveyor observation route, and the metadata event

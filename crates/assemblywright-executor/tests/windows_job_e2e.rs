@@ -353,6 +353,10 @@ fn suspended_child_and_descendant_are_reaped_by_kill_on_close_job() {
     let marker_value = fs::read_to_string(&marker).unwrap();
     assert!(marker_value.contains("root="));
     assert!(marker_value.contains("descendant="));
+    let resource_limits = process.attest_windows_job_resource_limits().unwrap();
+    assert!(matches!(resource_limits.cpu_rate_hard_cap, 5_000 | 9_000));
+    assert!(resource_limits.commit_limit_bytes >= 1024 * 1024 * 1024);
+    assert_eq!(resource_limits.active_process_limit, 128);
     let termination = process
         .terminate(
             ExecutionTerminationMode::EmergencyPause,

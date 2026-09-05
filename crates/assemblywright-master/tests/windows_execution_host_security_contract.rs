@@ -17,6 +17,18 @@ fn production_execution_host_provisioning_is_fail_closed_and_path_free() {
         "NT AUTHORITY\\SYSTEM",
         "fsutil.exe hardlink list",
         "control_plane_reserved_commit_bytes",
+        "Get-ResourcePolicyForCapacity",
+        "[UInt64][Decimal]::Floor",
+        "-TotalPhysicalMemoryBytes ([UInt64]68719476736)",
+        "[UInt64]61847527424",
+        "-TotalPhysicalMemoryBytes ([UInt64]68719489081)",
+        "[UInt64]61847539712",
+        "The resource policy did not preserve UInt64 precision for a large-memory host.",
+        "The resource policy did not round an awkward-capacity commit limit down to a page boundary.",
+        "The resource policy accepted a host without minimum control-plane headroom.",
+        "The resource policy accepted a non-power-of-two system page size.",
+        "-SystemPageSize ([UInt32][Environment]::SystemPageSize)",
+        "$unroundedCommitLimit - ($unroundedCommitLimit % $pageSizeBytes)",
         "control_plane_reserved_process_slots",
         "control_plane_disk_reserve_bytes",
         "The control-plane disk reserve was sparse or compressed.",
@@ -74,6 +86,7 @@ fn production_execution_host_provisioning_is_fail_closed_and_path_free() {
         "Password",
         "cmd.exe /c",
         "powershell.exe -Command",
+        "[Math]::Max(1073741824",
     ] {
         assert!(
             !script.contains(forbidden),
@@ -170,8 +183,8 @@ fn windows_service_hosts_validate_semantic_bootstrap_before_running() {
     let hostile_probe = include_str!(
         "../../assemblywright-executor/examples/windows_restricted_service_hostile_probe.rs"
     );
-    assert!(broker.contains(".and_then(BrokerRuntime::new)"));
-    assert!(executor.contains(".and_then(validate_service_bootstrap)"));
+    assert!(broker.contains("BrokerRuntime::new(loaded.clone())"));
+    assert!(executor.contains("validate_service_bootstrap(loaded.clone())"));
     assert!(!executor_runtime.contains("pub receipt_signing_seed"));
     assert!(!broker_fixture.contains(".canonicalize()"));
     assert!(!executor_fixture.contains("receipt_signing_seed"));
@@ -183,7 +196,7 @@ fn windows_service_hosts_validate_semantic_bootstrap_before_running() {
     assert!(executor_fixture.contains(r#"C:\ProgramData\Assemblywright\authority\master.sqlite3"#));
     assert!(executor_runtime.contains("return Err(RuntimeError::InvalidConfig);"));
     for source in [broker, executor] {
-        let validation = source.find(".and_then(").expect("semantic validation");
+        let validation = source.find("loaded.clone()").expect("semantic validation");
         let running = source
             .find("ServiceState::Running")
             .expect("running status");

@@ -13,8 +13,11 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
+pub mod ipc;
 pub mod runtime;
 pub mod startup;
+#[cfg(windows)]
+pub mod windows_execution_ipc;
 #[cfg(windows)]
 pub mod windows_service_host;
 
@@ -192,6 +195,87 @@ pub struct OwnedExecution {
     receipt_key_id: String,
     receipt_signing_key: SigningKey,
     process: platform::ContainedProcess,
+}
+
+#[cfg(any(windows, test))]
+const GIBIBYTE: u64 = 1024 * 1024 * 1024;
+#[cfg(any(windows, test))]
+const MINIMUM_HOST_MEMORY_BYTES: u64 = 2 * GIBIBYTE;
+#[cfg(any(windows, test))]
+const MINIMUM_CONTROL_PLANE_MEMORY_RESERVE_BYTES: u64 = GIBIBYTE;
+#[cfg(any(windows, test))]
+const DEFAULT_ACTIVE_PROCESS_LIMIT: u32 = 128;
+
+#[cfg(any(windows, test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WindowsResourcePolicy {
+    cpu_rate_hard_cap: u32,
+    commit_limit_bytes: u64,
+    active_process_limit: u32,
+}
+
+#[cfg(any(windows, test))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WindowsResourcePolicyObservation {
+    limit_flags: u32,
+    cpu_control_flags: u32,
+    cpu_rate_hard_cap: u32,
+    commit_limit_bytes: u64,
+    active_process_limit: u32,
+}
+
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowsJobResourceLimits {
+    pub cpu_rate_hard_cap: u32,
+    pub commit_limit_bytes: u64,
+    pub active_process_limit: u32,
+}
+
+#[cfg(any(windows, test))]
+fn derive_windows_resource_policy(
+    logical_processors: u32,
+    total_physical_memory_bytes: u64,
+    page_size_bytes: u64,
+) -> Result<WindowsResourcePolicy, ExecutorError> {
+    if logical_processors == 0
+        || total_physical_memory_bytes < MINIMUM_HOST_MEMORY_BYTES
+        || !page_size_bytes.is_power_of_two()
+    {
+        return Err(ExecutorError::ContainmentFailed);
+    }
+    let memory_reserve =
+        MINIMUM_CONTROL_PLANE_MEMORY_RESERVE_BYTES.max(total_physical_memory_bytes / 10);
+    let unaligned_commit_limit = total_physical_memory_bytes
+        .checked_sub(memory_reserve)
+        .ok_or(ExecutorError::ContainmentFailed)?;
+    let commit_limit_bytes = unaligned_commit_limit - (unaligned_commit_limit % page_size_bytes);
+    if commit_limit_bytes == 0 {
+        return Err(ExecutorError::ContainmentFailed);
+    }
+    Ok(WindowsResourcePolicy {
+        cpu_rate_hard_cap: if logical_processors == 1 {
+            5_000
+        } else {
+            9_000
+        },
+        commit_limit_bytes,
+        active_process_limit: DEFAULT_ACTIVE_PROCESS_LIMIT,
+    })
+}
+
+#[cfg(any(windows, test))]
+fn resource_policy_observation_matches(
+    expected: WindowsResourcePolicy,
+    observed: WindowsResourcePolicyObservation,
+    expected_limit_flags: u32,
+    expected_cpu_control_flags: u32,
+) -> bool {
+    observed.limit_flags == expected_limit_flags
+        && observed.cpu_control_flags == expected_cpu_control_flags
+        && observed.cpu_rate_hard_cap == expected.cpu_rate_hard_cap
+        && observed.commit_limit_bytes == expected.commit_limit_bytes
+        && observed.active_process_limit == expected.active_process_limit
 }
 
 impl ExecutorPolicy {
@@ -663,6 +747,13 @@ impl<'a> ExecutorAdmission<'a> {
 }
 
 impl OwnedExecution {
+    #[cfg(windows)]
+    pub fn attest_windows_job_resource_limits(
+        &self,
+    ) -> Result<WindowsJobResourceLimits, ExecutorError> {
+        self.process.attest_windows_job_resource_limits()
+    }
+
     pub fn terminate(
         mut self,
         mode: ExecutionTerminationMode,
@@ -1428,14 +1519,21 @@ mod platform {
     };
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicAccountingInformation,
-        JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
-        TerminateJobObject, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
-        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JobObjectCpuRateControlInformation, JobObjectExtendedLimitInformation,
+        QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
+        JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_CPU_RATE_CONTROL_INFORMATION,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_CPU_RATE_CONTROL_ENABLE,
+        JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
+        JOB_OBJECT_LIMIT_JOB_MEMORY, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    use windows_sys::Win32::System::SystemInformation::{
+        GetSystemInfo, GlobalMemoryStatusEx, MEMORYSTATUSEX, SYSTEM_INFO,
     };
     use windows_sys::Win32::System::Threading::{
-        CreateProcessW, QueryFullProcessImageNameW, ResumeThread, TerminateProcess,
-        WaitForSingleObject, CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT,
-        PROCESS_INFORMATION, PROCESS_NAME_WIN32, STARTUPINFOW,
+        CreateProcessW, GetActiveProcessorCount, QueryFullProcessImageNameW, ResumeThread,
+        TerminateProcess, WaitForSingleObject, ALL_PROCESSOR_GROUPS, CREATE_NO_WINDOW,
+        CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, PROCESS_INFORMATION, PROCESS_NAME_WIN32,
+        STARTUPINFOW,
     };
 
     const FAILURE_EXIT_CODE: u32 = 0xA55E_0001;
@@ -1452,6 +1550,7 @@ mod platform {
     pub(super) struct ContainedProcess {
         process: OwnedHandle,
         job: OwnedHandle,
+        resource_policy: WindowsResourcePolicy,
     }
 
     #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1523,6 +1622,125 @@ mod platform {
         Ok(prepared)
     }
 
+    fn host_resource_policy() -> Result<WindowsResourcePolicy, ExecutorError> {
+        let logical_processors = unsafe { GetActiveProcessorCount(ALL_PROCESSOR_GROUPS) };
+        let mut memory: MEMORYSTATUSEX = unsafe { zeroed() };
+        memory.dwLength = size_of::<MEMORYSTATUSEX>() as u32;
+        if unsafe { GlobalMemoryStatusEx(&mut memory) } == 0 {
+            return Err(ExecutorError::ContainmentFailed);
+        }
+        let mut system: SYSTEM_INFO = unsafe { zeroed() };
+        unsafe { GetSystemInfo(&mut system) };
+        derive_windows_resource_policy(
+            logical_processors,
+            memory.ullTotalPhys,
+            u64::from(system.dwPageSize),
+        )
+    }
+
+    fn configure_and_attest_job_resource_policy(
+        job: HANDLE,
+        policy: WindowsResourcePolicy,
+    ) -> Result<(), ExecutorError> {
+        let commit_limit = usize::try_from(policy.commit_limit_bytes)
+            .map_err(|_| ExecutorError::ContainmentFailed)?;
+        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+            | JOB_OBJECT_LIMIT_JOB_MEMORY;
+        limits.BasicLimitInformation.ActiveProcessLimit = policy.active_process_limit;
+        limits.JobMemoryLimit = commit_limit;
+        if unsafe {
+            SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                &limits as *const _ as *const c_void,
+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        } == 0
+        {
+            return Err(ExecutorError::ContainmentFailed);
+        }
+
+        let mut cpu: JOBOBJECT_CPU_RATE_CONTROL_INFORMATION = unsafe { zeroed() };
+        cpu.ControlFlags =
+            JOB_OBJECT_CPU_RATE_CONTROL_ENABLE | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP;
+        cpu.Anonymous.CpuRate = policy.cpu_rate_hard_cap;
+        if unsafe {
+            SetInformationJobObject(
+                job,
+                JobObjectCpuRateControlInformation,
+                &cpu as *const _ as *const c_void,
+                size_of::<JOBOBJECT_CPU_RATE_CONTROL_INFORMATION>() as u32,
+            )
+        } == 0
+        {
+            return Err(ExecutorError::ContainmentFailed);
+        }
+        attest_job_resource_policy(job, policy)
+    }
+
+    fn attest_job_resource_policy(
+        job: HANDLE,
+        expected: WindowsResourcePolicy,
+    ) -> Result<(), ExecutorError> {
+        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
+        let mut limits_length = 0_u32;
+        if unsafe {
+            QueryInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                &mut limits as *mut _ as *mut c_void,
+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                &mut limits_length,
+            )
+        } == 0
+            || limits_length != size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32
+        {
+            return Err(ExecutorError::ContainmentFailed);
+        }
+
+        let mut cpu: JOBOBJECT_CPU_RATE_CONTROL_INFORMATION = unsafe { zeroed() };
+        let mut cpu_length = 0_u32;
+        if unsafe {
+            QueryInformationJobObject(
+                job,
+                JobObjectCpuRateControlInformation,
+                &mut cpu as *mut _ as *mut c_void,
+                size_of::<JOBOBJECT_CPU_RATE_CONTROL_INFORMATION>() as u32,
+                &mut cpu_length,
+            )
+        } == 0
+            || cpu_length != size_of::<JOBOBJECT_CPU_RATE_CONTROL_INFORMATION>() as u32
+        {
+            return Err(ExecutorError::ContainmentFailed);
+        }
+
+        let observed = WindowsResourcePolicyObservation {
+            limit_flags: limits.BasicLimitInformation.LimitFlags,
+            cpu_control_flags: cpu.ControlFlags,
+            cpu_rate_hard_cap: unsafe { cpu.Anonymous.CpuRate },
+            commit_limit_bytes: u64::try_from(limits.JobMemoryLimit)
+                .map_err(|_| ExecutorError::ContainmentFailed)?,
+            active_process_limit: limits.BasicLimitInformation.ActiveProcessLimit,
+        };
+        let expected_limit_flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+            | JOB_OBJECT_LIMIT_JOB_MEMORY;
+        let expected_cpu_control_flags =
+            JOB_OBJECT_CPU_RATE_CONTROL_ENABLE | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP;
+        if resource_policy_observation_matches(
+            expected,
+            observed,
+            expected_limit_flags,
+            expected_cpu_control_flags,
+        ) {
+            Ok(())
+        } else {
+            Err(ExecutorError::ContainmentFailed)
+        }
+    }
+
     pub(super) fn spawn<F>(
         prepared: &PreparedProcess,
         operation: &UnprivilegedProcessOperation,
@@ -1533,19 +1751,8 @@ mod platform {
     {
         prepared.revalidate()?;
         let job = owned_handle(unsafe { CreateJobObjectW(null(), null()) })?;
-        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        if unsafe {
-            SetInformationJobObject(
-                raw_handle(&job),
-                JobObjectExtendedLimitInformation,
-                &limits as *const _ as *const c_void,
-                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-            )
-        } == 0
-        {
-            return Err(ExecutorError::ContainmentFailed);
-        }
+        let resource_policy = host_resource_policy()?;
+        configure_and_attest_job_resource_policy(raw_handle(&job), resource_policy)?;
         let executable_path = prepared.executable.final_path()?;
         let cwd_path = prepared.working_directory.final_path()?;
         let mut command_line = windows_command_line(&executable_path, &operation.arguments)?;
@@ -1580,6 +1787,7 @@ mod platform {
             thread: Some(unsafe { OwnedHandle::from_raw_handle(process.hThread as RawHandle) }),
             job: Some(job),
             assigned: false,
+            resource_policy,
         };
 
         let actual_image = query_process_image_path(guard.process_raw()?)?;
@@ -1595,7 +1803,9 @@ mod platform {
         }
         guard.assigned = true;
         prepared.revalidate()?;
+        attest_job_resource_policy(guard.job_raw()?, resource_policy)?;
         let mut resume = || {
+            attest_job_resource_policy(guard.job_raw()?, resource_policy)?;
             if unsafe { ResumeThread(guard.thread_raw()?) } == 1 {
                 Ok(())
             } else {
@@ -1607,6 +1817,17 @@ mod platform {
     }
 
     impl ContainedProcess {
+        pub(super) fn attest_windows_job_resource_limits(
+            &self,
+        ) -> Result<WindowsJobResourceLimits, ExecutorError> {
+            attest_job_resource_policy(raw_handle(&self.job), self.resource_policy)?;
+            Ok(WindowsJobResourceLimits {
+                cpu_rate_hard_cap: self.resource_policy.cpu_rate_hard_cap,
+                commit_limit_bytes: self.resource_policy.commit_limit_bytes,
+                active_process_limit: self.resource_policy.active_process_limit,
+            })
+        }
+
         pub(super) fn terminate(
             &mut self,
             _mode: ExecutionTerminationMode,
@@ -1775,6 +1996,7 @@ mod platform {
         thread: Option<OwnedHandle>,
         job: Option<OwnedHandle>,
         assigned: bool,
+        resource_policy: WindowsResourcePolicy,
     }
 
     impl SuspendedChildGuard {
@@ -1806,7 +2028,11 @@ mod platform {
                 .ok_or(ExecutorError::ContainmentFailed)?;
             let job = self.job.take().ok_or(ExecutorError::ContainmentFailed)?;
             self.thread.take();
-            Ok(ContainedProcess { process, job })
+            Ok(ContainedProcess {
+                process,
+                job,
+                resource_policy: self.resource_policy,
+            })
         }
     }
 
@@ -2089,6 +2315,208 @@ mod platform {
                 ExecutorError::UnsafePath
             );
         }
+
+        #[test]
+        fn native_job_attestation_rejects_missing_and_tampered_resource_limits() {
+            let policy = WindowsResourcePolicy {
+                cpu_rate_hard_cap: 5_000,
+                commit_limit_bytes: GIBIBYTE,
+                active_process_limit: 2,
+            };
+            let job = owned_handle(unsafe { CreateJobObjectW(null(), null()) }).unwrap();
+            assert_eq!(
+                attest_job_resource_policy(raw_handle(&job), policy),
+                Err(ExecutorError::ContainmentFailed)
+            );
+            configure_and_attest_job_resource_policy(raw_handle(&job), policy).unwrap();
+
+            let mut tampered: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
+            tampered.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+                | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+                | JOB_OBJECT_LIMIT_JOB_MEMORY;
+            tampered.BasicLimitInformation.ActiveProcessLimit = 3;
+            tampered.JobMemoryLimit = GIBIBYTE as usize;
+            assert_ne!(
+                unsafe {
+                    SetInformationJobObject(
+                        raw_handle(&job),
+                        JobObjectExtendedLimitInformation,
+                        &tampered as *const _ as *const c_void,
+                        size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                    )
+                },
+                0
+            );
+            assert_eq!(
+                attest_job_resource_policy(raw_handle(&job), policy),
+                Err(ExecutorError::ContainmentFailed)
+            );
+        }
+
+        #[test]
+        fn native_host_and_unaligned_resource_policies_match_fresh_job_observations() {
+            let host_policy = host_resource_policy().unwrap();
+            let unaligned_policy =
+                derive_windows_resource_policy(2, 20 * GIBIBYTE + 4096, 4096).unwrap();
+            let mut results = Vec::new();
+            for (label, policy) in [("host", host_policy), ("unaligned", unaligned_policy)] {
+                let job = owned_handle(unsafe { CreateJobObjectW(null(), null()) }).unwrap();
+                let configured = configure_and_attest_job_resource_policy(raw_handle(&job), policy);
+
+                let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
+                let mut limits_length = 0_u32;
+                assert_ne!(
+                    unsafe {
+                        QueryInformationJobObject(
+                            raw_handle(&job),
+                            JobObjectExtendedLimitInformation,
+                            &mut limits as *mut _ as *mut c_void,
+                            size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                            &mut limits_length,
+                        )
+                    },
+                    0
+                );
+                let mut cpu: JOBOBJECT_CPU_RATE_CONTROL_INFORMATION = unsafe { zeroed() };
+                let mut cpu_length = 0_u32;
+                assert_ne!(
+                    unsafe {
+                        QueryInformationJobObject(
+                            raw_handle(&job),
+                            JobObjectCpuRateControlInformation,
+                            &mut cpu as *mut _ as *mut c_void,
+                            size_of::<JOBOBJECT_CPU_RATE_CONTROL_INFORMATION>() as u32,
+                            &mut cpu_length,
+                        )
+                    },
+                    0
+                );
+                let observed = WindowsResourcePolicyObservation {
+                    limit_flags: limits.BasicLimitInformation.LimitFlags,
+                    cpu_control_flags: cpu.ControlFlags,
+                    cpu_rate_hard_cap: unsafe { cpu.Anonymous.CpuRate },
+                    commit_limit_bytes: limits.JobMemoryLimit as u64,
+                    active_process_limit: limits.BasicLimitInformation.ActiveProcessLimit,
+                };
+                results.push((label, policy, configured, observed));
+            }
+
+            for (label, expected, configured, observed) in results {
+                assert_eq!(
+                    configured,
+                    Ok(()),
+                    "{label} resource policy mismatch: expected={expected:?}, observed={observed:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn native_job_active_process_limit_rejects_excess_process_assignment() {
+            let policy = WindowsResourcePolicy {
+                cpu_rate_hard_cap: 5_000,
+                commit_limit_bytes: GIBIBYTE,
+                active_process_limit: 2,
+            };
+            let job = owned_handle(unsafe { CreateJobObjectW(null(), null()) }).unwrap();
+            configure_and_attest_job_resource_policy(raw_handle(&job), policy).unwrap();
+            let mut first_process = suspended_test_process();
+            let mut second_process = suspended_test_process();
+            let mut excess_process = suspended_test_process();
+            assert_ne!(
+                unsafe { AssignProcessToJobObject(raw_handle(&job), first_process.raw()) },
+                0
+            );
+            assert_ne!(
+                unsafe { AssignProcessToJobObject(raw_handle(&job), second_process.raw()) },
+                0
+            );
+            assert_eq!(
+                unsafe { AssignProcessToJobObject(raw_handle(&job), excess_process.raw()) },
+                0
+            );
+            attest_job_resource_policy(raw_handle(&job), policy).unwrap();
+            excess_process.terminate_and_assert_reaped();
+            assert_ne!(
+                unsafe { TerminateJobObject(raw_handle(&job), FAILURE_EXIT_CODE) },
+                0
+            );
+            first_process.assert_reaped();
+            second_process.assert_reaped();
+        }
+
+        struct TestSuspendedProcess {
+            process: OwnedHandle,
+            _thread: OwnedHandle,
+            reaped: bool,
+        }
+
+        impl TestSuspendedProcess {
+            fn raw(&self) -> HANDLE {
+                raw_handle(&self.process)
+            }
+
+            fn terminate_and_assert_reaped(&mut self) {
+                if unsafe { WaitForSingleObject(self.raw(), 0) } != WAIT_OBJECT_0 {
+                    assert_ne!(
+                        unsafe { TerminateProcess(self.raw(), FAILURE_EXIT_CODE) },
+                        0
+                    );
+                }
+                self.assert_reaped();
+            }
+
+            fn assert_reaped(&mut self) {
+                assert_eq!(
+                    unsafe { WaitForSingleObject(self.raw(), FAILURE_REAP_TIMEOUT_MS) },
+                    WAIT_OBJECT_0
+                );
+                self.reaped = true;
+            }
+        }
+
+        impl Drop for TestSuspendedProcess {
+            fn drop(&mut self) {
+                if !self.reaped {
+                    unsafe {
+                        TerminateProcess(self.raw(), FAILURE_EXIT_CODE);
+                        WaitForSingleObject(self.raw(), FAILURE_REAP_TIMEOUT_MS);
+                    }
+                }
+            }
+        }
+
+        fn suspended_test_process() -> TestSuspendedProcess {
+            let executable = std::env::current_exe().unwrap();
+            let executable = executable.to_str().unwrap();
+            let wide_executable = wide(executable).unwrap();
+            let mut command_line =
+                windows_command_line(executable, &["--help".to_string()]).unwrap();
+            let mut startup: STARTUPINFOW = unsafe { zeroed() };
+            startup.cb = size_of::<STARTUPINFOW>() as u32;
+            let mut process: PROCESS_INFORMATION = unsafe { zeroed() };
+            assert_ne!(
+                unsafe {
+                    CreateProcessW(
+                        wide_executable.as_ptr(),
+                        command_line.as_mut_ptr(),
+                        null(),
+                        null(),
+                        0,
+                        CREATE_SUSPENDED | CREATE_NO_WINDOW,
+                        null(),
+                        null(),
+                        &startup,
+                        &mut process,
+                    )
+                },
+                0
+            );
+            TestSuspendedProcess {
+                process: unsafe { OwnedHandle::from_raw_handle(process.hProcess as RawHandle) },
+                _thread: unsafe { OwnedHandle::from_raw_handle(process.hThread as RawHandle) },
+                reaped: false,
+            }
+        }
     }
 }
 
@@ -2122,6 +2550,116 @@ mod platform {
             _forced_window: Duration,
         ) -> Result<TerminationEvidence, ExecutorError> {
             Err(ExecutorError::ContainmentFailed)
+        }
+    }
+}
+
+#[cfg(test)]
+mod resource_policy_tests {
+    use super::*;
+
+    #[test]
+    fn windows_resource_policy_derivation_is_bounded_and_fail_closed() {
+        assert_eq!(
+            derive_windows_resource_policy(0, 16 * GIBIBYTE, 4096),
+            Err(ExecutorError::ContainmentFailed)
+        );
+        assert_eq!(
+            derive_windows_resource_policy(1, MINIMUM_HOST_MEMORY_BYTES - 1, 4096),
+            Err(ExecutorError::ContainmentFailed)
+        );
+        assert_eq!(
+            derive_windows_resource_policy(1, 2 * GIBIBYTE, 0),
+            Err(ExecutorError::ContainmentFailed)
+        );
+        assert_eq!(
+            derive_windows_resource_policy(1, 2 * GIBIBYTE, 3),
+            Err(ExecutorError::ContainmentFailed)
+        );
+        assert_eq!(
+            derive_windows_resource_policy(1, 2 * GIBIBYTE, 1_u64 << 63),
+            Err(ExecutorError::ContainmentFailed)
+        );
+        assert_eq!(
+            derive_windows_resource_policy(1, 2 * GIBIBYTE, 4096).unwrap(),
+            WindowsResourcePolicy {
+                cpu_rate_hard_cap: 5_000,
+                commit_limit_bytes: GIBIBYTE,
+                active_process_limit: 128,
+            }
+        );
+        let awkward_total = 20 * GIBIBYTE + 4096;
+        let unaligned_commit = awkward_total - (awkward_total / 10);
+        assert_eq!(
+            derive_windows_resource_policy(2, awkward_total, 4096).unwrap(),
+            WindowsResourcePolicy {
+                cpu_rate_hard_cap: 9_000,
+                commit_limit_bytes: unaligned_commit - (unaligned_commit % 4096),
+                active_process_limit: 128,
+            }
+        );
+        let maximum_commit = u64::MAX - (u64::MAX / 10);
+        assert_eq!(
+            derive_windows_resource_policy(2, u64::MAX, 4096).unwrap(),
+            WindowsResourcePolicy {
+                cpu_rate_hard_cap: 9_000,
+                commit_limit_bytes: maximum_commit - (maximum_commit % 4096),
+                active_process_limit: 128,
+            }
+        );
+        assert_eq!(
+            derive_windows_resource_policy(2, 20 * GIBIBYTE, 4096).unwrap(),
+            WindowsResourcePolicy {
+                cpu_rate_hard_cap: 9_000,
+                commit_limit_bytes: 18 * GIBIBYTE,
+                active_process_limit: 128,
+            }
+        );
+    }
+
+    #[test]
+    fn resource_policy_attestation_rejects_every_limit_and_flag_drift() {
+        let expected = WindowsResourcePolicy {
+            cpu_rate_hard_cap: 9_000,
+            commit_limit_bytes: 8 * GIBIBYTE,
+            active_process_limit: 128,
+        };
+        let exact = WindowsResourcePolicyObservation {
+            limit_flags: 0x2208,
+            cpu_control_flags: 0x5,
+            cpu_rate_hard_cap: 9_000,
+            commit_limit_bytes: 8 * GIBIBYTE,
+            active_process_limit: 128,
+        };
+        assert!(resource_policy_observation_matches(
+            expected, exact, 0x2208, 0x5
+        ));
+
+        for drifted in [
+            WindowsResourcePolicyObservation {
+                limit_flags: exact.limit_flags & !0x8,
+                ..exact
+            },
+            WindowsResourcePolicyObservation {
+                cpu_control_flags: exact.cpu_control_flags & !0x4,
+                ..exact
+            },
+            WindowsResourcePolicyObservation {
+                cpu_rate_hard_cap: 8_999,
+                ..exact
+            },
+            WindowsResourcePolicyObservation {
+                commit_limit_bytes: exact.commit_limit_bytes - 1,
+                ..exact
+            },
+            WindowsResourcePolicyObservation {
+                active_process_limit: exact.active_process_limit - 1,
+                ..exact
+            },
+        ] {
+            assert!(!resource_policy_observation_matches(
+                expected, drifted, 0x2208, 0x5
+            ));
         }
     }
 }

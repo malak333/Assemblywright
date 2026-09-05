@@ -57,6 +57,7 @@ fn main() {
         bound_authority_revision: 1,
         next_action_sequence: 1,
         protected_manifest: manifest,
+        ipc: None,
     };
     let bytes = serde_json::to_vec(&config).unwrap();
     fs::write(output, &bytes).unwrap();

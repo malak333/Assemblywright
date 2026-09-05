@@ -6,6 +6,10 @@ use std::collections::{BTreeSet, HashSet};
 use std::net::SocketAddr;
 use uuid::Uuid;
 
+pub mod execution_ipc_state;
+#[cfg(windows)]
+pub mod windows_execution_pipe;
+
 pub const PROTOCOL_VERSION: u16 = 5;
 pub const MAX_DEVICE_NAME_BYTES: usize = 128;
 pub const MAX_CAPABILITIES_PER_DEVICE: usize = 64;
@@ -100,8 +104,14 @@ pub const MAX_EXECUTION_TARGETS: usize = 32;
 pub const MAX_EXECUTION_ENVIRONMENT_KEYS: usize = 64;
 pub const MAX_EXECUTION_IDENTITY_BYTES: usize = 128;
 pub const MAX_EXECUTION_PATH_BYTES: usize = 4 * 1024;
+pub const WINDOWS_EXECUTION_IPC_SCHEMA_VERSION: u16 = 1;
+pub const MAX_WINDOWS_EXECUTION_IPC_FRAME_BYTES: usize = 96 * 1024;
+pub const MAX_WINDOWS_EXECUTION_IPC_PAYLOAD_BYTES: usize = 64 * 1024;
 const EXECUTION_ACTION_SIGNATURE_DOMAIN: &[u8] = b"assemblywright.execution-action-envelope.v1\0";
 const EXECUTION_RECEIPT_SIGNATURE_DOMAIN: &[u8] = b"assemblywright.execution-receipt.v1\0";
+const WINDOWS_EXECUTION_CONTROL_SIGNATURE_DOMAIN: &[u8] =
+    b"assemblywright.windows-execution-control.v1\0";
+const WINDOWS_EXECUTION_ACK_SIGNATURE_DOMAIN: &[u8] = b"assemblywright.windows-execution-ack.v1\0";
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
 pub enum ProtocolError {
@@ -2175,6 +2185,370 @@ impl ExecutionActionEnvelope {
                 message: error.to_string(),
             })?;
         let mut bytes = EXECUTION_ACTION_SIGNATURE_DOMAIN.to_vec();
+        bytes.extend(canonical_json_bytes(&value)?);
+        Ok(bytes)
+    }
+}
+
+/// One authenticated local Windows control-plane hop. The broker frame and the
+/// executor frame are independently signed by the Windows master. A broker may
+/// carry the executor frame only as these exact bytes; it cannot mint or alter
+/// executor authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowsExecutionIpcEndpoint {
+    MasterToBroker,
+    MasterToExecutor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowsExecutionControlKind {
+    Health,
+    ValidateDispatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WindowsExecutionControlFrame {
+    pub schema_version: u16,
+    pub endpoint: WindowsExecutionIpcEndpoint,
+    pub frame_id: Uuid,
+    pub request_sequence: u64,
+    pub nonce: Uuid,
+    pub master_id: Uuid,
+    pub service_id: Uuid,
+    pub session_id: Uuid,
+    pub session_revision: u64,
+    pub child_epoch_id: Uuid,
+    pub child_epoch_revision: u64,
+    pub feature_lifecycle_revision: u64,
+    pub authority_revision: u64,
+    pub issued_at_ms: u64,
+    pub expires_at_ms: u64,
+    pub kind: WindowsExecutionControlKind,
+    /// SHA-256 of a separately master-signed executor frame. It is all zeroes
+    /// when `forwarded_executor_frame` is absent.
+    pub forwarded_executor_frame_sha256: [u8; 32],
+    /// Present only on a broker ValidateDispatch frame. These immutable bytes
+    /// must decode as a matching MasterToExecutor ValidateDispatch frame.
+    pub forwarded_executor_frame: Vec<u8>,
+    pub signer_key_id: String,
+    pub signature: Vec<u8>,
+}
+
+impl WindowsExecutionControlFrame {
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        let decoded = decode_strict_and_validate_frame(
+            "windows_execution_control_frame",
+            frame,
+            MAX_WINDOWS_EXECUTION_IPC_FRAME_BYTES,
+            Self::validate,
+        )?;
+        let canonical =
+            serde_json::to_vec(&decoded).map_err(|error| ProtocolError::Serialization {
+                field: "windows_execution_control_frame",
+                message: error.to_string(),
+            })?;
+        if canonical != frame {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        Ok(decoded)
+    }
+
+    pub fn encode_frame(&self) -> Result<Vec<u8>, ProtocolError> {
+        self.validate()?;
+        serde_json::to_vec(self).map_err(|error| ProtocolError::Serialization {
+            field: "windows_execution_control_frame",
+            message: error.to_string(),
+        })
+    }
+
+    pub fn sign(&mut self, key: &SigningKey) -> Result<(), ProtocolError> {
+        self.validate_shape(false)?;
+        self.signature = key.sign(&self.signing_bytes()?).to_bytes().to_vec();
+        self.validate()
+    }
+
+    pub fn verify_signature(&self, key: &VerifyingKey) -> Result<(), ProtocolError> {
+        self.validate()?;
+        let signature = Signature::from_slice(&self.signature)
+            .map_err(|_| ProtocolError::InvalidFullMachineAssemblyLine)?;
+        key.verify(&self.signing_bytes()?, &signature)
+            .map_err(|_| ProtocolError::InvalidFullMachineAssemblyLine)
+    }
+
+    pub fn validate_at(&self, now_ms: u64) -> Result<(), ProtocolError> {
+        self.validate()?;
+        if now_ms < self.issued_at_ms || now_ms >= self.expires_at_ms {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        Ok(())
+    }
+
+    pub fn forwarded_executor(&self) -> Result<Option<Self>, ProtocolError> {
+        self.validate()?;
+        if self.forwarded_executor_frame.is_empty() {
+            return Ok(None);
+        }
+        let executor = Self::decode_frame(&self.forwarded_executor_frame)?;
+        if executor.endpoint != WindowsExecutionIpcEndpoint::MasterToExecutor
+            || executor.kind != WindowsExecutionControlKind::ValidateDispatch
+            || executor.master_id != self.master_id
+            || executor.session_id != self.session_id
+            || executor.session_revision != self.session_revision
+            || executor.child_epoch_id != self.child_epoch_id
+            || executor.child_epoch_revision != self.child_epoch_revision
+            || executor.feature_lifecycle_revision != self.feature_lifecycle_revision
+            || executor.authority_revision != self.authority_revision
+            || executor.issued_at_ms != self.issued_at_ms
+            || executor.expires_at_ms != self.expires_at_ms
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        Ok(Some(executor))
+    }
+
+    pub fn canonical_sha256(&self) -> Result<[u8; 32], ProtocolError> {
+        canonical_sha256("windows_execution_control_frame", self, Self::validate)
+    }
+
+    fn validate_shape(&self, require_signature: bool) -> Result<(), ProtocolError> {
+        if self.schema_version != WINDOWS_EXECUTION_IPC_SCHEMA_VERSION
+            || self.request_sequence == 0
+            || self.session_revision == 0
+            || self.child_epoch_revision == 0
+            || self.feature_lifecycle_revision == 0
+            || self.authority_revision == 0
+            || self.issued_at_ms == 0
+            || self.expires_at_ms <= self.issued_at_ms
+            || self.expires_at_ms - self.issued_at_ms > 60_000
+            || (require_signature && self.signature.len() != 64)
+            || (!require_signature && !self.signature.is_empty())
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        for (field, id) in [
+            ("windows_execution_frame_id", self.frame_id),
+            ("windows_execution_nonce", self.nonce),
+            ("windows_execution_master_id", self.master_id),
+            ("windows_execution_service_id", self.service_id),
+            ("windows_execution_session_id", self.session_id),
+            ("windows_execution_child_epoch_id", self.child_epoch_id),
+        ] {
+            validate_uuid(field, id)?;
+        }
+        validate_identifier(
+            "windows_execution_signer_key_id",
+            &self.signer_key_id,
+            MAX_EXECUTION_IDENTITY_BYTES,
+        )?;
+        if self.forwarded_executor_frame.len() > MAX_WINDOWS_EXECUTION_IPC_PAYLOAD_BYTES {
+            return Err(ProtocolError::FrameTooLarge {
+                field: "forwarded_executor_frame",
+                maximum: MAX_WINDOWS_EXECUTION_IPC_PAYLOAD_BYTES,
+            });
+        }
+        let has_forward = !self.forwarded_executor_frame.is_empty();
+        let forwarded_sha256: [u8; 32] = Sha256::digest(&self.forwarded_executor_frame).into();
+        if has_forward
+            != (self.endpoint == WindowsExecutionIpcEndpoint::MasterToBroker
+                && self.kind == WindowsExecutionControlKind::ValidateDispatch)
+            || (!has_forward && self.forwarded_executor_frame_sha256 != [0; 32])
+            || (has_forward && self.forwarded_executor_frame_sha256 != forwarded_sha256)
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        validate_serialized_limit(
+            "windows_execution_control_frame",
+            self,
+            MAX_WINDOWS_EXECUTION_IPC_FRAME_BYTES,
+        )
+    }
+
+    fn validate(&self) -> Result<(), ProtocolError> {
+        self.validate_shape(true)
+    }
+
+    fn signing_bytes(&self) -> Result<Vec<u8>, ProtocolError> {
+        let mut unsigned = self.clone();
+        unsigned.signature.clear();
+        let value =
+            serde_json::to_value(&unsigned).map_err(|error| ProtocolError::Serialization {
+                field: "windows_execution_control_frame",
+                message: error.to_string(),
+            })?;
+        let mut bytes = WINDOWS_EXECUTION_CONTROL_SIGNATURE_DOMAIN.to_vec();
+        bytes.extend(canonical_json_bytes(&value)?);
+        Ok(bytes)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowsExecutionAckStatus {
+    HealthyEffectDisabled,
+    DispatchValidatedEffectDisabled,
+}
+
+/// A path-free service acknowledgement. Only metadata and digests cross the
+/// local control-plane boundary; payloads, paths, output, and secrets cannot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WindowsExecutionAck {
+    pub schema_version: u16,
+    pub endpoint: WindowsExecutionIpcEndpoint,
+    pub ack_id: Uuid,
+    pub frame_id: Uuid,
+    pub request_sequence: u64,
+    pub authority_revision: u64,
+    pub frame_sha256: [u8; 32],
+    pub status: WindowsExecutionAckStatus,
+    pub effects_applied: u32,
+    pub signer_key_id: String,
+    pub signature: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WindowsBrokerForwardedAcks {
+    pub schema_version: u16,
+    pub broker_ack: WindowsExecutionAck,
+    /// Exact Executor acknowledgement bytes. The Broker does not re-sign or
+    /// reinterpret them; the Master verifies the pinned Executor key.
+    pub executor_ack_frame: Vec<u8>,
+}
+
+impl WindowsBrokerForwardedAcks {
+    pub fn encode_frame(&self) -> Result<Vec<u8>, ProtocolError> {
+        self.validate()?;
+        serde_json::to_vec(self).map_err(|error| ProtocolError::Serialization {
+            field: "windows_broker_forwarded_acks",
+            message: error.to_string(),
+        })
+    }
+
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "windows_broker_forwarded_acks",
+            frame,
+            MAX_WINDOWS_EXECUTION_IPC_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    fn validate(&self) -> Result<(), ProtocolError> {
+        self.broker_ack.validate()?;
+        if self.schema_version != WINDOWS_EXECUTION_IPC_SCHEMA_VERSION
+            || self.executor_ack_frame.len() > MAX_WINDOWS_EXECUTION_IPC_FRAME_BYTES
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        if !self.executor_ack_frame.is_empty() {
+            let ack = WindowsExecutionAck::decode_frame(&self.executor_ack_frame)?;
+            if ack.endpoint != WindowsExecutionIpcEndpoint::MasterToExecutor
+                || ack.effects_applied != 0
+            {
+                return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl WindowsExecutionAck {
+    pub fn sign(&mut self, key: &SigningKey) -> Result<(), ProtocolError> {
+        self.validate_shape(false)?;
+        self.signature = key.sign(&self.signing_bytes()?).to_bytes().to_vec();
+        self.validate()
+    }
+
+    pub fn verify_for(
+        &self,
+        frame: &WindowsExecutionControlFrame,
+        expected_key_id: &str,
+        key: &VerifyingKey,
+    ) -> Result<(), ProtocolError> {
+        self.validate()?;
+        let signature = Signature::from_slice(&self.signature)
+            .map_err(|_| ProtocolError::InvalidFullMachineAssemblyLine)?;
+        key.verify(&self.signing_bytes()?, &signature)
+            .map_err(|_| ProtocolError::InvalidFullMachineAssemblyLine)?;
+        let expected_status = match frame.kind {
+            WindowsExecutionControlKind::Health => WindowsExecutionAckStatus::HealthyEffectDisabled,
+            WindowsExecutionControlKind::ValidateDispatch => {
+                WindowsExecutionAckStatus::DispatchValidatedEffectDisabled
+            }
+        };
+        if self.endpoint != frame.endpoint
+            || self.frame_id != frame.frame_id
+            || self.request_sequence != frame.request_sequence
+            || self.authority_revision != frame.authority_revision
+            || self.frame_sha256 != frame.canonical_sha256()?
+            || self.status != expected_status
+            || self.signer_key_id != expected_key_id
+            || self.effects_applied != 0
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        Ok(())
+    }
+
+    pub fn encode_frame(&self) -> Result<Vec<u8>, ProtocolError> {
+        self.validate()?;
+        serde_json::to_vec(self).map_err(|error| ProtocolError::Serialization {
+            field: "windows_execution_ack",
+            message: error.to_string(),
+        })
+    }
+
+    pub fn decode_frame(frame: &[u8]) -> Result<Self, ProtocolError> {
+        decode_strict_and_validate_frame(
+            "windows_execution_ack",
+            frame,
+            MAX_WINDOWS_EXECUTION_IPC_FRAME_BYTES,
+            Self::validate,
+        )
+    }
+
+    fn validate_shape(&self, require_signature: bool) -> Result<(), ProtocolError> {
+        if self.schema_version != WINDOWS_EXECUTION_IPC_SCHEMA_VERSION
+            || self.ack_id.is_nil()
+            || self.frame_id.is_nil()
+            || self.request_sequence == 0
+            || self.authority_revision == 0
+            || self.frame_sha256 == [0; 32]
+            || self.effects_applied != 0
+            || (require_signature && self.signature.len() != 64)
+            || (!require_signature && !self.signature.is_empty())
+        {
+            return Err(ProtocolError::InvalidFullMachineAssemblyLine);
+        }
+        validate_identifier(
+            "windows_execution_ack_signer_key_id",
+            &self.signer_key_id,
+            MAX_EXECUTION_IDENTITY_BYTES,
+        )?;
+        validate_serialized_limit(
+            "windows_execution_ack",
+            self,
+            MAX_WINDOWS_EXECUTION_IPC_FRAME_BYTES,
+        )
+    }
+
+    fn validate(&self) -> Result<(), ProtocolError> {
+        self.validate_shape(true)
+    }
+
+    fn signing_bytes(&self) -> Result<Vec<u8>, ProtocolError> {
+        let mut unsigned = self.clone();
+        unsigned.signature.clear();
+        let value =
+            serde_json::to_value(&unsigned).map_err(|error| ProtocolError::Serialization {
+                field: "windows_execution_ack",
+                message: error.to_string(),
+            })?;
+        let mut bytes = WINDOWS_EXECUTION_ACK_SIGNATURE_DOMAIN.to_vec();
         bytes.extend(canonical_json_bytes(&value)?);
         Ok(bytes)
     }

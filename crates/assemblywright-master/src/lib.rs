@@ -78,6 +78,7 @@ use uuid::Uuid;
 
 use fs2::FileExt;
 
+pub mod execution_ipc;
 mod github_publication;
 mod identity;
 mod integration;
@@ -88,6 +89,8 @@ mod result_artifact;
 mod review_provider;
 mod snapshot;
 pub mod validation_containment;
+#[cfg(windows)]
+pub mod windows_execution_ipc;
 
 #[cfg(windows)]
 pub use github_publication::github_publication_launcher_exit_code;
