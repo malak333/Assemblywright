@@ -29,7 +29,10 @@ uuid.workspace = true
 zeroize.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true, features = ["Win32_System_Services"] }
+windows-sys = { workspace = true, features = [
+  "Win32_System_Services",
+  "Win32_System_SystemInformation",
+] }
 windows-service.workspace = true
 
 [dev-dependencies]

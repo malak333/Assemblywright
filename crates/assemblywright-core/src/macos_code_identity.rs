@@ -90,14 +90,16 @@ impl CompiledPeerRequirement {
     }
 
     pub(crate) fn verify(&self, token: PeerAuditToken) -> anyhow::Result<()> {
-        // LOCAL_PEERTOKEN includes the process-id generation. Holding this bounded
-        // server-lifetime cache lock across the first Security.framework check both
-        // prevents duplicate slow checks and keeps a new token fail closed.
-        let mut verified_tokens = self
+        // LOCAL_PEERTOKEN includes the process-id generation. This bounded
+        // server-lifetime cache stores only exact successful identities. Keep the
+        // lock outside Security.framework so one slow foreign lookup cannot convoy
+        // otherwise independent peer verification.
+        if self
             .verified_tokens
             .lock()
-            .map_err(|_| anyhow!("peer code identity cache is unavailable"))?;
-        if verified_tokens.contains(&token) {
+            .map_err(|_| anyhow!("peer code identity cache is unavailable"))?
+            .contains(&token)
+        {
             return Ok(());
         }
         let token_data = OwnedCf::new(unsafe {
@@ -167,7 +169,10 @@ impl CompiledPeerRequirement {
         if self.profile == PeerIdentityProfile::DeveloperIdHardened {
             require_hardened_runtime(code.as_type())?;
         }
-        verified_tokens.remember(token);
+        self.verified_tokens
+            .lock()
+            .map_err(|_| anyhow!("peer code identity cache is unavailable"))?
+            .remember(token);
         Ok(())
     }
 }

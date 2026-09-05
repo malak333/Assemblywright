@@ -188,24 +188,33 @@ identities, but macOS spawn remains disabled because a hostile descendant can es
 process group with `setsid`/`setpgid` and Darwin exposes no unprivileged Job-Object-like
 reaper. Windows source retains no-reparse path handles, verifies the suspended image,
 assigns a kill-on-close Job, rechecks authority, and only then resumes; it remains
-uninstalled and unavailable through product routes pending native-host proof.
-Broker file replacement, removal, service adapters, OS installation/identity, production IPC,
-durable replay restoration, resource reservations, and master control routes remain
-unavailable.
+uninstalled and unavailable through product routes pending installed-host activation proof.
+The Windows spawn path also derives bounded CPU, aggregate Job commit, and active-
+process limits from host capacity, rounds the commit cap down to the native page size,
+installs them before creating the suspended child,
+and queries the exact limits again after assignment and inside the authority-locked
+resume operation. This runtime enforcement is not a protected policy-file binding or
+proof that installed control-plane reservations exist.
+Broker file replacement, removal, service adapters, signed OS installation/identity,
+production effect dispatch, active-effect replay restoration, and control-plane resource
+reservations remain unavailable. Authenticated master control routes exist behind the
+unavailable effect dispatcher; their existence grants no host effect.
 
 The implemented schema-v20 slice is deliberately inert. Project approval records an
 effect-free `creation_pending` intent (Public by default, with Private selectable) and
 does not call GitHub. A feature can enter the new FIFO only after the repository is
 `created` with creation evidence. Auto-run is stored as default-on and may be changed
 through a compare-and-set request, but it cannot start work. Every runtime component
-in the Assembly Line availability projection is `unavailable`, and no Start, Stop, or
-Emergency Pause effect route exists.
+in the Assembly Line availability projection is `unavailable`; Start, Stop, and
+Emergency Pause routes reject while the production effect dispatcher remains unavailable.
 
-Schema v21 adds the durable execution-control ledger without activating it. Start
-admission, FIFO child-epoch state, authority revocation, checkpoint/termination
-evidence, replay safety, and restart quarantine are represented in master-owned state.
-No HTTP or host IPC route invokes those APIs, and no executor or broker is installed;
-therefore this persistence cannot launch or terminate a process.
+Schema v21 adds the durable execution-control ledger without activating it. Schema v22
+adds once-only dispatch claims and signed activation receipts. Start admission, FIFO
+child-epoch state, authority revocation, checkpoint/termination evidence, replay safety,
+and restart quarantine are represented in master-owned state. Authenticated local and
+distributed control routes call an explicit dispatcher boundary, but production installs
+the unavailable dispatcher and rejects those routes before decoding or mutation.
+The separate inert host IPC cannot launch or terminate a feature process.
 
 The master library also contains a catalog-bound, idempotent planning-effect
 coordinator exercised only through private fake-adapter unit tests. It records pre-call intent,

@@ -8,8 +8,9 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle};
 use std::path::Path;
 use std::time::Duration;
 use windows_sys::Win32::Foundation::{
-    CloseHandle, LocalFree, ERROR_INSUFFICIENT_BUFFER, ERROR_PIPE_CONNECTED, GENERIC_READ,
-    GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE,
+    CloseHandle, LocalFree, ERROR_BROKEN_PIPE, ERROR_INSUFFICIENT_BUFFER, ERROR_PIPE_CONNECTED,
+    ERROR_PIPE_NOT_CONNECTED, ERROR_SEM_TIMEOUT, GENERIC_READ, GENERIC_WRITE, HANDLE,
+    INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
@@ -24,8 +25,8 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 use windows_sys::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, GetNamedPipeServerProcessId,
-    ImpersonateNamedPipeClient, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,
-    PIPE_WAIT,
+    ImpersonateNamedPipeClient, PeekNamedPipe, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
+    PIPE_TYPE_BYTE, PIPE_WAIT,
 };
 use windows_sys::Win32::System::SystemServices::{SE_GROUP_ENABLED, SE_GROUP_OWNER};
 use windows_sys::Win32::System::Threading::{
@@ -38,10 +39,53 @@ pub enum WindowsExecutionPipeError {
     InvalidBinding,
     #[error("Windows execution pipe I/O failed")]
     Io,
+    #[error("Windows execution pipe {operation} failed with native code {native_code:?}")]
+    IoOperation {
+        operation: &'static str,
+        native_code: Option<i32>,
+    },
     #[error("Windows execution pipe peer service SID did not match")]
     WrongPeer,
     #[error("Windows execution pipe frame is invalid")]
     InvalidFrame,
+}
+
+const RESPONSE_DELIVERY_TIMEOUT: Duration = Duration::from_secs(5);
+
+impl WindowsExecutionPipeError {
+    /// Returns a path-free diagnostic suitable for a Windows service-specific
+    /// exit code. The high byte identifies the pipe operation and the low
+    /// 24 bits retain ordinary Win32 error codes without exposing IPC data.
+    #[doc(hidden)]
+    pub fn service_diagnostic_code(&self) -> u32 {
+        let (operation, native_code) = match self {
+            Self::InvalidBinding => (0, 1),
+            Self::Io => (0, 2),
+            Self::WrongPeer => (0, 3),
+            Self::InvalidFrame => (0, 4),
+            Self::IoOperation {
+                operation,
+                native_code,
+            } => (
+                match *operation {
+                    "server_create" => 1,
+                    "server_connect" => 2,
+                    "server_read" => 3,
+                    "server_write" => 4,
+                    "client_open" => 5,
+                    "client_write" => 6,
+                    "client_read" => 7,
+                    "server_delivery_wait" => 8,
+                    _ => 15,
+                },
+                native_code
+                    .and_then(|code| u32::try_from(code).ok())
+                    .filter(|code| *code <= 0x00FF_FFFF)
+                    .unwrap_or(0x00FF_FFFF),
+            ),
+        };
+        0xA000_0000 | (operation << 24) | native_code
+    }
 }
 
 pub fn validate_local_pipe_name(name: &str) -> Result<(), WindowsExecutionPipeError> {
@@ -110,22 +154,32 @@ pub fn serve_once(
             &security,
         )
     };
+    let create_error = (raw == INVALID_HANDLE_VALUE).then(std::io::Error::last_os_error);
     unsafe { LocalFree(descriptor) };
-    if raw == INVALID_HANDLE_VALUE {
-        return Err(WindowsExecutionPipeError::Io);
+    if let Some(error) = create_error {
+        return Err(io_error("server_create", &error));
     }
     let mut pipe = unsafe { File::from_raw_handle(raw as _) };
-    let connected = unsafe { ConnectNamedPipe(raw, std::ptr::null_mut()) } != 0
-        || std::io::Error::last_os_error().raw_os_error() == Some(ERROR_PIPE_CONNECTED as i32);
+    let connect_result = unsafe { ConnectNamedPipe(raw, std::ptr::null_mut()) };
+    let connect_error = (connect_result == 0).then(std::io::Error::last_os_error);
+    let connected = connect_result != 0
+        || connect_error
+            .as_ref()
+            .and_then(std::io::Error::raw_os_error)
+            == Some(ERROR_PIPE_CONNECTED as i32);
     if !connected {
-        return Err(WindowsExecutionPipeError::Io);
+        return Err(io_error(
+            "server_connect",
+            connect_error.as_ref().expect("failed connection error"),
+        ));
     }
-    let request = read_frame(&mut pipe)?;
+    let request = read_frame(&mut pipe, "server_read")?;
     if !impersonated_client_has_sid(raw, expected_client_service_sid)? {
         return Err(WindowsExecutionPipeError::WrongPeer);
     }
     let response = handler(&request)?;
-    write_frame(&mut pipe, &response)?;
+    write_frame(&mut pipe, &response, "server_write")?;
+    await_response_reader_close(raw, RESPONSE_DELIVERY_TIMEOUT)?;
     unsafe { DisconnectNamedPipe(raw) };
     Ok(())
 }
@@ -141,6 +195,7 @@ pub fn transact(
         pipe_name,
         expected_server_service_sid,
         request,
+        Duration::ZERO,
         Duration::ZERO,
     )
 }
@@ -158,7 +213,34 @@ pub fn transact_with_write_delay_for_native_test(
     if write_delay > Duration::from_secs(5) {
         return Err(WindowsExecutionPipeError::InvalidBinding);
     }
-    transact_inner(pipe_name, expected_server_service_sid, request, write_delay)
+    transact_inner(
+        pipe_name,
+        expected_server_service_sid,
+        request,
+        write_delay,
+        Duration::ZERO,
+    )
+}
+
+/// Native service-test seam for proving the server retains a completed
+/// response until a delayed client has read the entire frame.
+#[doc(hidden)]
+pub fn transact_with_response_read_delay_for_native_test(
+    pipe_name: &str,
+    expected_server_service_sid: &str,
+    request: &[u8],
+    response_read_delay: Duration,
+) -> Result<Vec<u8>, WindowsExecutionPipeError> {
+    if response_read_delay > Duration::from_secs(10) {
+        return Err(WindowsExecutionPipeError::InvalidBinding);
+    }
+    transact_inner(
+        pipe_name,
+        expected_server_service_sid,
+        request,
+        Duration::ZERO,
+        response_read_delay,
+    )
 }
 
 fn transact_inner(
@@ -166,6 +248,7 @@ fn transact_inner(
     expected_server_service_sid: &str,
     request: &[u8],
     write_delay: Duration,
+    response_read_delay: Duration,
 ) -> Result<Vec<u8>, WindowsExecutionPipeError> {
     validate_local_pipe_name(pipe_name)?;
     validate_service_sid_text(expected_server_service_sid)?;
@@ -177,7 +260,7 @@ fn transact_inner(
         .share_mode(FILE_SHARE_NONE)
         .custom_flags(SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION)
         .open(Path::new(pipe_name))
-        .map_err(|_| WindowsExecutionPipeError::Io)?;
+        .map_err(|error| io_error("client_open", &error))?;
     let raw = pipe.as_raw_handle() as HANDLE;
     let mut server_pid = 0_u32;
     if unsafe { GetNamedPipeServerProcessId(raw, &mut server_pid) } == 0 || server_pid == 0 {
@@ -195,8 +278,49 @@ fn transact_inner(
     if !write_delay.is_zero() {
         std::thread::sleep(write_delay);
     }
-    write_frame(&mut pipe, request)?;
-    read_frame(&mut pipe)
+    write_frame(&mut pipe, request, "client_write")?;
+    if !response_read_delay.is_zero() {
+        std::thread::sleep(response_read_delay);
+    }
+    read_frame(&mut pipe, "client_read")
+}
+
+fn await_response_reader_close(
+    pipe: HANDLE,
+    timeout: Duration,
+) -> Result<(), WindowsExecutionPipeError> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if unsafe {
+            PeekNamedPipe(
+                pipe,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        } == 0
+        {
+            let error = std::io::Error::last_os_error();
+            return match error.raw_os_error() {
+                Some(code)
+                    if code == ERROR_BROKEN_PIPE as i32
+                        || code == ERROR_PIPE_NOT_CONNECTED as i32 =>
+                {
+                    Ok(())
+                }
+                _ => Err(io_error("server_delivery_wait", &error)),
+            };
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(WindowsExecutionPipeError::IoOperation {
+                operation: "server_delivery_wait",
+                native_code: Some(ERROR_SEM_TIMEOUT as i32),
+            });
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 fn impersonated_client_has_sid(
@@ -361,11 +485,14 @@ fn validate_service_sid_text(value: &str) -> Result<(), WindowsExecutionPipeErro
     Ok(())
 }
 
-fn read_frame(reader: &mut impl Read) -> Result<Vec<u8>, WindowsExecutionPipeError> {
+fn read_frame(
+    reader: &mut impl Read,
+    operation: &'static str,
+) -> Result<Vec<u8>, WindowsExecutionPipeError> {
     let mut length = [0_u8; 4];
     reader
         .read_exact(&mut length)
-        .map_err(|_| WindowsExecutionPipeError::Io)?;
+        .map_err(|error| io_error(operation, &error))?;
     let length = u32::from_be_bytes(length) as usize;
     if length == 0 || length > MAX_WINDOWS_EXECUTION_IPC_FRAME_BYTES {
         return Err(WindowsExecutionPipeError::InvalidFrame);
@@ -373,11 +500,15 @@ fn read_frame(reader: &mut impl Read) -> Result<Vec<u8>, WindowsExecutionPipeErr
     let mut frame = vec![0_u8; length];
     reader
         .read_exact(&mut frame)
-        .map_err(|_| WindowsExecutionPipeError::Io)?;
+        .map_err(|error| io_error(operation, &error))?;
     Ok(frame)
 }
 
-fn write_frame(writer: &mut impl Write, frame: &[u8]) -> Result<(), WindowsExecutionPipeError> {
+fn write_frame(
+    writer: &mut impl Write,
+    frame: &[u8],
+    operation: &'static str,
+) -> Result<(), WindowsExecutionPipeError> {
     if frame.is_empty() || frame.len() > MAX_WINDOWS_EXECUTION_IPC_FRAME_BYTES {
         return Err(WindowsExecutionPipeError::InvalidFrame);
     }
@@ -385,7 +516,14 @@ fn write_frame(writer: &mut impl Write, frame: &[u8]) -> Result<(), WindowsExecu
         .write_all(&(frame.len() as u32).to_be_bytes())
         .and_then(|_| writer.write_all(frame))
         .and_then(|_| writer.flush())
-        .map_err(|_| WindowsExecutionPipeError::Io)
+        .map_err(|error| io_error(operation, &error))
+}
+
+fn io_error(operation: &'static str, error: &std::io::Error) -> WindowsExecutionPipeError {
+    WindowsExecutionPipeError::IoOperation {
+        operation,
+        native_code: error.raw_os_error(),
+    }
 }
 
 fn wide(value: &str) -> Vec<u16> {
@@ -397,7 +535,7 @@ fn wide(value: &str) -> Vec<u16> {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_service_sid_text;
+    use super::{validate_service_sid_text, WindowsExecutionPipeError};
 
     #[test]
     fn accepts_only_canonical_service_sid_shape() {
@@ -413,5 +551,25 @@ mod tests {
         ] {
             assert!(validate_service_sid_text(hostile).is_err(), "{hostile}");
         }
+    }
+
+    #[test]
+    fn service_diagnostic_codes_are_path_free_and_operation_exact() {
+        assert_eq!(
+            WindowsExecutionPipeError::IoOperation {
+                operation: "client_read",
+                native_code: Some(233),
+            }
+            .service_diagnostic_code(),
+            0xA700_00E9
+        );
+        assert_eq!(
+            WindowsExecutionPipeError::IoOperation {
+                operation: "server_delivery_wait",
+                native_code: Some(121),
+            }
+            .service_diagnostic_code(),
+            0xA800_0079
+        );
     }
 }

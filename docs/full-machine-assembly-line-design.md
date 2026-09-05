@@ -37,9 +37,9 @@ holds and revalidates macOS executable/cwd descriptors plus signed parent/object
 identities, but refuses spawn because process-group membership is escapable by hostile
 code. Windows source holds no-reparse executable/cwd chains, verifies the suspended
 image, assigns a kill-on-close Job, and rechecks authority before resume. It remains
-uninstalled and unavailable through product routes pending native Windows proof. Repository
-tests are not OS code-signing, service installation, dedicated identity/ACL, Windows
-native execution, resource-reservation, or live two-host proof.
+uninstalled and unavailable through product routes pending installed-host activation proof.
+Repository tests and disposable native fixtures are not signed production deployment,
+installed resource-reservation, or live two-host proof.
 
 The deployed Windows planning lane remains effect-free. Source now contains bounded
 Public-only cloud disclosure, provider invocation, frozen owner approval, durable
@@ -315,7 +315,10 @@ service-SID-authenticated named-pipe endpoint. Broker and Executor acknowledgeme
 secrets are separate 32-byte protected leaves supplied out of band; only their paths
 and pinned public identities are serialized. The disposable three-service E2E proves a
 valid Master-to-Broker-to-Executor inert roundtrip, wrong SID/unsigned/tampered/gap/
-stale-authority rejection, restart exact-ack replay, and zero effects. This is
+stale-authority rejection, restart exact-ack replay, and zero effects. Reply delivery
+retains the server pipe until client close, with a five-second deadline and native
+delayed-reader/stalled-reader coverage; disconnecting early must not discard an ack.
+This is
 authenticated inert IPC evidence only; product routing, adapter execution, active
 cancellation, signing/install cutover, and effect activation remain separate phases.
 
@@ -326,9 +329,13 @@ LocalSystem-owned, non-sparse, non-compressed disk-reserve file. The registry ef
 gate is written and verified off before any other Apply mutation. Existing policy or
 reserve leaves are accepted only when already ordinary, single-link, protected, and
 byte-exact; otherwise Apply rejects rather than following, truncating, or repairing a
-hostile leaf. The Job values are policy substrate only until the
-production executor creates and verifies the Job; they are not yet an enforced runtime
-reservation and do not make execution available.
+hostile leaf. The bounded Windows spawn path now installs and queries matching
+host-derived CPU/commit/process limits before child resume. The commit cap is rounded
+down to the native page size before setting and exact attestation, with a second query after
+Job assignment and a final query under the authority lock. Its numeric attestation
+does not authenticate the protected policy file, disk reserve, service priorities, or
+installed identities. Those production bindings remain mandatory before activation;
+the source enforcement alone is not an installed control-plane reservation.
 Apply re-reads all three stopped states before and after every mutation cluster and
 before its receipt. It establishes disabled start before SID, DACL, storage,
 reservation, or priority mutation; any drift leaves the effects gate off and yields no
@@ -464,15 +471,16 @@ authority or proof of a later phase:
    service-SID/ACL/resource-policy substrate; an owner-account production service does
    not satisfy it and remains untouched before a stopped-service cutover. Completion
    still requires successful production provisioning, protected IPC, durable replay
-   restore, remaining closed adapters, runtime Job enforcement, OS code signatures,
-   and owner-recorded deployment evidence. Repository tests are not signed or
-   deployed-host proof.
+   restore, remaining closed adapters, binding of runtime Jobs to the protected policy,
+   OS code signatures, and owner-recorded deployment evidence. Repository tests are
+   not signed or deployed-host proof.
 5. **Assembly Line control:** the simplified UI, queue-empty Start denial, default-on
    auto-run, single-active child epochs, Stop, Emergency Pause, reconnect, resume, and
    reconciliation states land with native cross-process E2E. The current UI observes
    the authoritative queue and performs only the default-on CAS auto-run setting with
-   exact restart-safe reconciliation; brainstorming and Start/Stop/Emergency remain
-   disabled and the effect routes are absent. Full-machine
+   exact restart-safe reconciliation. Start/Stop/Emergency routes exist behind an
+   unavailable production dispatcher and reject before decoding or mutation; the
+   corresponding owner controls remain disabled. Full-machine
    activation remains default-off.
 6. **Cutover and live evidence:** exact signed releases are deployed through the
    owner-only stopped-service ceremony. Windows migration/rollback, GitHub creation,

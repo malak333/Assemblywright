@@ -78,7 +78,15 @@ signed request is fresh; an exact completed request may return the original ack 
 after expiry because no handler is rerun and no new effect is possible. Any other
 replay, gap, partial journal,
 stale/future frame, endpoint/authority drift, wrong SID, bad signature, or changed
-payload durably quarantines. None of this enables an adapter or replaces the
+payload durably quarantines. After writing a reply, the server retains the pipe and
+its single-instance ownership until the client closes after reading the complete
+frame. A non-consuming close check has a five-second deadline; a stalled reader
+fails closed without an unbounded buffer flush. Failure diagnostics contain fixed
+operation categories and numeric OS/service codes, never frames, paths, or secrets.
+Delivery timeout does not undo processing or a durable acknowledgement. Treat its
+delivery outcome as uncertain and reconcile only through exact retained-frame replay;
+never report it as rejection before acknowledgement or rerun the completed handler.
+None of this enables an adapter or replaces the
 unavailable Master effect dispatcher.
 
 Only the fixed Program Files image names bound by exact SHA-256 and one exact valid
@@ -98,6 +106,17 @@ propagation flags, the complete exact rights set, inheritable trusted/mutation-d
 directory ACEs, and a non-inheriting Executor traversal/read ACE only where required.
 Recorded Job CPU/commit/process limits are not an enforced reservation until production
 runtime creates and attests the exact Job; absence or drift must keep activation closed.
+The bounded Windows process spawn path derives the same numeric limits from current
+host capacity: a 50% CPU hard cap on one logical processor, 90% otherwise, aggregate
+Job commit capped at physical memory minus the greater of 1 GiB or 10%, rounded down
+to the native memory-page size, and 128 active processes. Zero logical processors,
+less than 2 GiB physical memory, zero or non-power-of-two page size, arithmetic or
+native-size overflow, failed Job configuration, or any queried limit/flag drift reject
+before resume. The unnamed non-inherited Job retains kill-on-close and disallows
+breakaway; limits are queried after configuration, after assignment, and inside the
+authority-locked resume operation. These local checks do not load or authenticate the
+protected provisioned policy and do not attest disk reserve, priority, service identity,
+or guaranteed host-wide headroom. Production activation remains unavailable.
 
 The inert planning slice additionally requires:
 
@@ -1244,6 +1263,11 @@ For the approved target, these additional rules are release requirements:
   `LOCAL_PEERTOKEN` value, including PID generation, for one server lifetime and at
   most 64 tokens. A new token, a full cache, a poisoned cache, or any failed check
   must still perform or fail the bounded pre-frame identity decision.
+  Cache locks must cover only lookup or insertion, never native Security.framework
+  verification. Each server permits at most four concurrent blocking verifiers.
+  The worker retains its permit until native verification returns, including after
+  the caller times out; waiting for capacity shares the same forty-five-second
+  deadline. No request frame is read or dispatched before identity succeeds.
   The agent cursor may store only stream ID, sequence, and update time.
 - By default the long-running helper may request only authenticated MacBridge health, the
   exact bounded Feature Conveyor observation route, and the metadata event

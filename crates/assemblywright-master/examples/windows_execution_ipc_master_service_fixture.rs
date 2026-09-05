@@ -94,6 +94,8 @@ mod windows_fixture {
                 scenario.as_str(),
                 "valid"
                     | "delayed_write"
+                    | "delayed_read"
+                    | "stalled_read"
                     | "replay"
                     | "unsigned"
                     | "tampered"
@@ -238,13 +240,31 @@ mod windows_fixture {
             }
         }
         let mut response = None;
+        let mut first_exchange_error = None;
+        let mut last_exchange_error = None;
+        let mut exchange_attempts = 0_u32;
         for _ in 0..100 {
+            exchange_attempts += 1;
             let exchange = if config.scenario == "delayed_write" {
                 assemblywright_master::windows_execution_ipc::transact_service_with_write_delay_for_native_test(
                     &config.pipe_name,
                     &config.broker_sid,
                     &request,
                     Duration::from_millis(500),
+                )
+            } else if config.scenario == "delayed_read" {
+                assemblywright_protocol::windows_execution_pipe::transact_with_response_read_delay_for_native_test(
+                    &config.pipe_name,
+                    &config.broker_sid,
+                    &request,
+                    Duration::from_millis(500),
+                )
+            } else if config.scenario == "stalled_read" {
+                assemblywright_protocol::windows_execution_pipe::transact_with_response_read_delay_for_native_test(
+                    &config.pipe_name,
+                    &config.broker_sid,
+                    &request,
+                    Duration::from_secs(6),
                 )
             } else {
                 assemblywright_master::windows_execution_ipc::transact_service(
@@ -258,8 +278,27 @@ mod windows_fixture {
                     response = Some(bytes);
                     break;
                 }
-                Err(_) => std::thread::sleep(Duration::from_millis(50)),
+                Err(error) => {
+                    let error = format!("{error:?}");
+                    first_exchange_error.get_or_insert_with(|| error.clone());
+                    last_exchange_error = Some(error);
+                    std::thread::sleep(Duration::from_millis(50));
+                }
             }
+        }
+        if response.is_none() {
+            let _ = std::fs::write(
+                config.receipt.with_extension("failure.txt"),
+                format!(
+                    "attempts={exchange_attempts}; first={}; last={}",
+                    first_exchange_error
+                        .as_deref()
+                        .unwrap_or("no_exchange_result"),
+                    last_exchange_error
+                        .as_deref()
+                        .unwrap_or("no_exchange_result")
+                ),
+            );
         }
         let expects_rejection = matches!(
             config.scenario.as_str(),
@@ -271,7 +310,40 @@ mod windows_fixture {
                 | "wrong_sid"
                 | "localservice_dacl_denied"
         );
-        let receipt = if expects_rejection {
+        let receipt = if config.scenario == "stalled_read" {
+            let (broker_ack_id, executor_ack_id, effects_applied) = if let Some(response) = response
+            {
+                let response =
+                    WindowsBrokerForwardedAcks::decode_frame(&response).map_err(|_| ())?;
+                foundation
+                    .verify_ack(&broker, &response.broker_ack)
+                    .map_err(|_| ())?;
+                let executor_ack = WindowsExecutionAck::decode_frame(&response.executor_ack_frame)
+                    .map_err(|_| ())?;
+                foundation
+                    .verify_ack(&executor, &executor_ack)
+                    .map_err(|_| ())?;
+                (
+                    Some(response.broker_ack.ack_id),
+                    Some(executor_ack.ack_id),
+                    response.broker_ack.effects_applied + executor_ack.effects_applied,
+                )
+            } else {
+                (None, None, 0)
+            };
+            Receipt {
+                schema_version: 1,
+                status: "windows_execution_ipc_delivery_timeout_observed",
+                scenario: config.scenario.clone(),
+                broker_ack_id,
+                executor_ack_id,
+                broker_frame_sha256: Some(broker.canonical_sha256().map_err(|_| ())?),
+                executor_frame_sha256: Some(executor.canonical_sha256().map_err(|_| ())?),
+                issued_at_ms: issued,
+                effects_applied,
+                rejected_before_ack: false,
+            }
+        } else if expects_rejection {
             if response.is_some() {
                 return Err(());
             }
@@ -302,12 +374,36 @@ mod windows_fixture {
                 let prior = prior.as_ref().ok_or(())?;
                 let broker_ack_id = response.broker_ack.ack_id.to_string();
                 let executor_ack_id = executor_ack.ack_id.to_string();
-                if prior.get("broker_ack_id").and_then(|v| v.as_str())
-                    != Some(broker_ack_id.as_str())
-                    || prior.get("executor_ack_id").and_then(|v| v.as_str())
-                        != Some(executor_ack_id.as_str())
-                {
-                    return Err(());
+                match (
+                    prior.get("broker_ack_id").and_then(|v| v.as_str()),
+                    prior.get("executor_ack_id").and_then(|v| v.as_str()),
+                ) {
+                    (Some(prior_broker), Some(prior_executor)) => {
+                        if prior_broker != broker_ack_id || prior_executor != executor_ack_id {
+                            return Err(());
+                        }
+                    }
+                    (None, None)
+                        if prior.get("status").and_then(|value| value.as_str())
+                            == Some("windows_execution_ipc_delivery_timeout_observed") =>
+                    {
+                        if prior.get("broker_frame_sha256")
+                            != Some(
+                                &serde_json::to_value(broker.canonical_sha256().map_err(|_| ())?)
+                                    .map_err(|_| ())?,
+                            )
+                            || prior.get("executor_frame_sha256")
+                                != Some(
+                                    &serde_json::to_value(
+                                        executor.canonical_sha256().map_err(|_| ())?,
+                                    )
+                                    .map_err(|_| ())?,
+                                )
+                        {
+                            return Err(());
+                        }
+                    }
+                    _ => return Err(()),
                 }
             }
             Receipt {

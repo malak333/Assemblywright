@@ -50,7 +50,7 @@ fn ipc_contract_is_local_authenticated_durable_and_inert() {
         "FILE_FLAG_FIRST_PIPE_INSTANCE",
         "ImpersonateNamedPipeClient",
         "GetNamedPipeServerProcessId",
-        "let request = read_frame(&mut pipe)?;",
+        "let request = read_frame(&mut pipe, \"server_read\")?;",
         "SECURITY_SQOS_PRESENT",
         "SECURITY_IDENTIFICATION",
         "SecurityIdentification",
@@ -64,14 +64,30 @@ fn ipc_contract_is_local_authenticated_durable_and_inert() {
         "S-1-5-80-",
         "expected_client_service_sid",
         "expected_server_service_sid",
+        "PeekNamedPipe",
+        "RESPONSE_DELIVERY_TIMEOUT",
+        "await_response_reader_close",
     ] {
         assert!(pipe.contains(required), "missing pipe contract: {required}");
     }
     assert!(
-        pipe.find("let request = read_frame(&mut pipe)?;").unwrap()
+        pipe.find("let request = read_frame(&mut pipe, \"server_read\")?;")
+            .unwrap()
             < pipe
                 .find("impersonated_client_has_sid(raw, expected_client_service_sid)")
                 .unwrap()
+    );
+    assert!(
+        pipe.find("write_frame(&mut pipe, &response, \"server_write\")")
+            .unwrap()
+            < pipe
+                .find("await_response_reader_close(raw, RESPONSE_DELIVERY_TIMEOUT)")
+                .unwrap()
+    );
+    assert!(
+        pipe.find("await_response_reader_close(raw, RESPONSE_DELIVERY_TIMEOUT)")
+            .unwrap()
+            < pipe.find("unsafe { DisconnectNamedPipe(raw) }").unwrap()
     );
     assert!(master.contains("UnavailableAssemblyLineEffectDispatcher"));
     assert!(!protocol.contains("ShutdownAcceptedNoEffects"));
@@ -94,10 +110,10 @@ fn service_hosts_wire_only_inert_processors_and_out_of_band_secrets() {
         fs::read_to_string(repo().join("crates/assemblywright-executor/src/runtime.rs"))
             .expect("executor runtime");
     assert!(broker.contains("InertBrokerIpc::open"));
-    assert!(broker.contains("&*seed"));
+    assert!(broker.contains("&seed,"));
     assert!(broker.contains("transact_executor"));
     assert!(executor.contains("InertExecutorIpc::open"));
-    assert!(executor.contains("&*seed"));
+    assert!(executor.contains("&seed,"));
     assert!(executor.contains("serve_broker_once"));
     assert!(broker_runtime.contains("pub ack_seed_path: PathBuf"));
     assert!(executor_runtime.contains("pub ack_seed_path: PathBuf"));
@@ -122,6 +138,11 @@ fn native_e2e_covers_three_services_hostile_frames_restart_and_zero_effects() {
         "$clientPipe = if ($LocalServiceClient) { $executorPipe }",
         "$clientServerSid = if ($LocalServiceClient) { $executorSid }",
         "*$runningMasterSid`:(OI)(CI)F",
+        "Copy-Item -LiteralPath $masterFixture -Destination $masterRunImage",
+        "*$runningMasterSid`:(RX)",
+        "LocalService Master fixture copy did not preserve exact executable bytes",
+        "Join-Path $env:SystemRoot 'Temp'",
+        "$systemTempFixture",
         "--scenario replay",
         "restart_exact_ack_replay = $true",
         "server_self_sid_dacl_binding = $true",
@@ -130,6 +151,13 @@ fn native_e2e_covers_three_services_hostile_frames_restart_and_zero_effects() {
         "client_impersonation_level = 'identification_only'",
         "New-Fixture 'delayed_write'",
         "delayed_client_write_authenticated = $true",
+        "New-Fixture 'delayed_read'",
+        "delayed_response_reader_authenticated = $true",
+        "New-Fixture 'stalled_read'",
+        "stalled_response_reader_timed_out = $true",
+        "windows_execution_ipc_delivery_timeout_observed",
+        "A8000079",
+        "stalled_reader_restart_exact_ack_replay = $true",
         "Remove-FixtureService",
         "Fixture root remained after cleanup",
     ] {

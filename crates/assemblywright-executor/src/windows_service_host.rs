@@ -88,7 +88,7 @@ fn service_main(_: Vec<OsString>) {
             loaded.authority_key_id,
             authority_key,
             ipc.ack_key_id.clone(),
-            &*seed,
+            &seed,
         )
         .ok()?;
         Some((ipc, runtime))
@@ -106,7 +106,7 @@ fn service_main(_: Vec<OsString>) {
     let (ipc_done_tx, ipc_done_rx) = mpsc::channel();
     if let Some((ipc, mut runtime)) = ipc_bootstrap {
         std::thread::spawn(move || {
-            let result: Result<(), ()> = loop {
+            let result: Result<(), u32> = loop {
                 let handled = crate::windows_execution_ipc::serve_broker_once(
                     &ipc.pipe_name,
                     &ipc.executor_service_sid,
@@ -123,8 +123,8 @@ fn service_main(_: Vec<OsString>) {
                             .map_err(|_| WindowsExecutionPipeError::InvalidFrame)
                     },
                 );
-                if handled.is_err() {
-                    break Err(());
+                if let Err(error) = handled {
+                    break Err(error.service_diagnostic_code());
                 }
             };
             let _ = ipc_done_tx.send(result);
@@ -146,11 +146,12 @@ fn service_main(_: Vec<OsString>) {
         if rx.recv_timeout(Duration::from_millis(100)).is_ok() {
             break;
         }
-        if ipc_done_rx.try_recv().is_ok() {
+        if let Ok(result) = ipc_done_rx.try_recv() {
+            let diagnostic = result.err().unwrap_or(3);
             let _ = status.set_service_status(service_status(
                 ServiceState::Stopped,
                 ServiceControlAccept::empty(),
-                ServiceExitCode::ServiceSpecific(3),
+                ServiceExitCode::ServiceSpecific(diagnostic),
                 0,
                 Duration::ZERO,
             ));

@@ -20,7 +20,13 @@ $masterFixture = Join-Path $PSScriptRoot '..\target\debug\examples\windows_execu
 
 function Invoke-Sc([string[]]$Arguments) {
     $output = @(& sc.exe @Arguments 2>&1)
-    if ($LASTEXITCODE -ne 0) { throw "SCM command failed: $($Arguments[0])" }
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+        if ($Arguments[0] -ceq 'start' -and $Arguments.Count -eq 2) {
+            throw "SCM start failed for service $($Arguments[1]) (exit=$exitCode): $($output -join ' ')"
+        }
+        throw "SCM command failed: $($Arguments[0]) (exit=$exitCode)"
+    }
     return $output
 }
 
@@ -100,7 +106,12 @@ function New-Fixture(
     $brokerName = "AssemblywrightBrokerE2E$suffix"
     $executorName = "AssemblywrightExecutorE2E$suffix"
     $wrongName = "AssemblywrightMasterE2EW$suffix"
-    $root = Join-Path ([IO.Path]::GetTempPath()) "AssemblywrightExecutionIpcE2E-$suffix"
+    $fixtureTemp = if ($LocalServiceClient) {
+        Join-Path $env:SystemRoot 'Temp'
+    } else {
+        [IO.Path]::GetTempPath()
+    }
+    $root = Join-Path $fixtureTemp "AssemblywrightExecutionIpcE2E-$suffix"
     $roots.Add($root)
     New-Item -ItemType Directory -Path $root | Out-Null
 
@@ -125,6 +136,19 @@ function New-Fixture(
     $brokerSid = Get-ServiceSid $brokerName
     $executorSid = Get-ServiceSid $executorName
     Protect-Tree $root $brokerSid $executorSid
+    $masterRunImage = $masterFixture
+    if ($LocalServiceClient) {
+        $masterRunImage = Join-Path $root 'assemblywright-master-fixture.exe'
+        Copy-Item -LiteralPath $masterFixture -Destination $masterRunImage
+        if (
+            (Get-FileHash -LiteralPath $masterFixture -Algorithm SHA256).Hash -cne
+            (Get-FileHash -LiteralPath $masterRunImage -Algorithm SHA256).Hash
+        ) { throw 'LocalService Master fixture copy did not preserve exact executable bytes.' }
+        & icacls.exe $root '/grant' "*$runningMasterSid`:(RX)" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Failed to grant LocalService Master root traversal.' }
+        & icacls.exe $masterRunImage '/grant:r' "*$runningMasterSid`:(RX)" | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Failed to grant LocalService Master fixture execution.' }
+    }
     $brokerRoot = Join-Path $root 'broker'
     $executorRoot = Join-Path $root 'executor'
     $receipt = Join-Path (Join-Path $root 'receipt') 'receipt.json'
@@ -155,7 +179,7 @@ function New-Fixture(
     Invoke-Sc @('config',$executorName,'binPath=',"`"$executorRunImage`" --service-host --service-name $executorName --config `"$executorConfig`" --config-sha256 $executorDigest") | Out-Null
     $clientPipe = if ($LocalServiceClient) { $executorPipe } else { $brokerPipe }
     $clientServerSid = if ($LocalServiceClient) { $executorSid } else { $brokerSid }
-    Invoke-Sc @('config',$masterName,'binPath=',"`"$masterFixture`" --service-name $masterName --pipe $clientPipe --broker-sid $clientServerSid --receipt `"$receipt`" --scenario $Scenario") | Out-Null
+    Invoke-Sc @('config',$masterName,'binPath=',"`"$masterRunImage`" --service-name $masterName --pipe $clientPipe --broker-sid $clientServerSid --receipt `"$receipt`" --scenario $Scenario") | Out-Null
 
     Invoke-Sc @('start',$executorName) | Out-Null
     Wait-ServiceState $executorName 'Running' | Out-Null
@@ -163,13 +187,39 @@ function New-Fixture(
     Wait-ServiceState $brokerName 'Running' | Out-Null
     Invoke-Sc @('start',$masterName) | Out-Null
     Wait-ServiceState $masterName 'Stopped' | Out-Null
-    if (-not (Test-Path -LiteralPath $receipt -PathType Leaf)) { throw "Scenario $Scenario emitted no receipt." }
+    if (-not (Test-Path -LiteralPath $receipt -PathType Leaf)) {
+        $failurePath = [IO.Path]::ChangeExtension($receipt, 'failure.txt')
+        $failure = if (Test-Path -LiteralPath $failurePath -PathType Leaf) {
+            Get-Content -LiteralPath $failurePath -Raw
+        } else { 'no_exchange_diagnostic' }
+        $brokerStatus = Get-CimInstance Win32_Service -Filter "Name='$brokerName'" -ErrorAction SilentlyContinue
+        $executorStatus = Get-CimInstance Win32_Service -Filter "Name='$executorName'" -ErrorAction SilentlyContinue
+        $brokerDiagnostic = if ($null -eq $brokerStatus) { 'missing' } else {
+            $serviceExitHex = '0x{0:X8}' -f [uint32]$brokerStatus.ServiceSpecificExitCode
+            "state=$($brokerStatus.State),exit=$($brokerStatus.ExitCode),service_exit=$($brokerStatus.ServiceSpecificExitCode)/$serviceExitHex,pid=$($brokerStatus.ProcessId)"
+        }
+        $executorDiagnostic = if ($null -eq $executorStatus) { 'missing' } else {
+            $serviceExitHex = '0x{0:X8}' -f [uint32]$executorStatus.ServiceSpecificExitCode
+            "state=$($executorStatus.State),exit=$($executorStatus.ExitCode),service_exit=$($executorStatus.ServiceSpecificExitCode)/$serviceExitHex,pid=$($executorStatus.ProcessId)"
+        }
+        throw "Scenario $Scenario emitted no receipt: $failure; broker=[$brokerDiagnostic]; executor=[$executorDiagnostic]"
+    }
     $result = Get-Content -Raw -LiteralPath $receipt | ConvertFrom-Json
     if ($result.effects_applied -ne 0) { throw "Scenario $Scenario reported an effect." }
-    if ($Scenario -in @('valid','replay','delayed_write')) {
+    if ($Scenario -in @('valid','replay','delayed_write','delayed_read')) {
         if ($result.status -cne 'windows_execution_ipc_inert_roundtrip_passed' -or $result.rejected_before_ack) {
             throw "Scenario $Scenario failed the inert roundtrip."
         }
+    } elseif ($Scenario -ceq 'stalled_read') {
+        $brokerStatus = Get-CimInstance Win32_Service -Filter "Name='$brokerName'" -ErrorAction SilentlyContinue
+        $deliveryTimeoutCode = [Convert]::ToUInt32('A8000079', 16)
+        if (
+            $result.status -cne 'windows_execution_ipc_delivery_timeout_observed' -or
+            $result.rejected_before_ack -or
+            $null -eq $brokerStatus -or
+            $brokerStatus.State -cne 'Stopped' -or
+            [uint32]$brokerStatus.ServiceSpecificExitCode -ne $deliveryTimeoutCode
+        ) { throw 'Stalled response reader did not produce the exact bounded Broker delivery timeout.' }
     } elseif ($result.status -cne 'windows_execution_ipc_rejected' -or -not $result.rejected_before_ack) {
         throw "Scenario $Scenario did not reject before acknowledgement."
     }
@@ -177,6 +227,7 @@ function New-Fixture(
         Master = $masterName; Broker = $brokerName; Executor = $executorName
         Receipt = $receipt; Root = $root; BrokerAck = $result.broker_ack_id
         ExecutorAck = $result.executor_ack_id; BrokerPipe = $brokerPipe; BrokerSid = $brokerSid
+        BrokerFrame = $result.broker_frame_sha256; ExecutorFrame = $result.executor_frame_sha256
     }
 }
 
@@ -207,7 +258,34 @@ try {
     }
 
     New-Fixture 'delayed_write' 1 | Out-Null
-    $index = 2
+    New-Fixture 'delayed_read' 2 | Out-Null
+    $stalled = New-Fixture 'stalled_read' 3
+    Invoke-Sc @('start',$stalled.Broker) | Out-Null
+    Wait-ServiceState $stalled.Broker 'Running' | Out-Null
+    Invoke-Sc @('config',$stalled.Master,'binPath=',"`"$masterFixture`" --service-name $($stalled.Master) --pipe $($stalled.BrokerPipe) --broker-sid $($stalled.BrokerSid) --receipt `"$($stalled.Receipt)`" --scenario replay") | Out-Null
+    Invoke-Sc @('start',$stalled.Master) | Out-Null
+    Wait-ServiceState $stalled.Master 'Stopped' | Out-Null
+    $stalledReplay = Get-Content -Raw -LiteralPath $stalled.Receipt | ConvertFrom-Json
+    if (
+        $stalledReplay.status -cne 'windows_execution_ipc_inert_roundtrip_passed' -or
+        $stalledReplay.rejected_before_ack -or
+        (Compare-Object @($stalled.BrokerFrame) @($stalledReplay.broker_frame_sha256)) -or
+        (Compare-Object @($stalled.ExecutorFrame) @($stalledReplay.executor_frame_sha256)) -or
+        ($null -ne $stalled.BrokerAck -and $stalledReplay.broker_ack_id -cne $stalled.BrokerAck) -or
+        ($null -ne $stalled.ExecutorAck -and $stalledReplay.executor_ack_id -cne $stalled.ExecutorAck)
+    ) { throw 'Stalled-reader restart did not recover the exact durable frame acknowledgements.' }
+    Invoke-Sc @('stop',$stalled.Broker) | Out-Null
+    Wait-ServiceState $stalled.Broker 'Stopped' | Out-Null
+    Invoke-Sc @('start',$stalled.Broker) | Out-Null
+    Wait-ServiceState $stalled.Broker 'Running' | Out-Null
+    Invoke-Sc @('start',$stalled.Master) | Out-Null
+    Wait-ServiceState $stalled.Master 'Stopped' | Out-Null
+    $stalledReplayAgain = Get-Content -Raw -LiteralPath $stalled.Receipt | ConvertFrom-Json
+    if (
+        $stalledReplayAgain.broker_ack_id -cne $stalledReplay.broker_ack_id -or
+        $stalledReplayAgain.executor_ack_id -cne $stalledReplay.executor_ack_id
+    ) { throw 'Stalled-reader durable acknowledgement IDs changed after restart replay.' }
+    $index = 4
     foreach ($scenario in @('unsigned','tampered','gap','stale','stale_authority')) {
         New-Fixture $scenario $index | Out-Null
         $index += 1
@@ -225,6 +303,9 @@ try {
         unrelated_localservice_open_and_write_dac_denied = $true
         client_impersonation_level = 'identification_only'
         delayed_client_write_authenticated = $true
+        delayed_response_reader_authenticated = $true
+        stalled_response_reader_timed_out = $true
+        stalled_reader_restart_exact_ack_replay = $true
         remote_clients_rejected_by_pipe_mode = $true
         unsigned_tampered_gap_stale_authority_rejected = $true
         restart_exact_ack_replay = $true
@@ -236,7 +317,9 @@ try {
         try { Remove-FixtureService $name } catch { $cleanupFailures.Add($_.Exception.Message) }
     }
     foreach ($root in $roots) {
-        if ($root -like "$([IO.Path]::GetTempPath())AssemblywrightExecutionIpcE2E-*") {
+        $userTempFixture = "$([IO.Path]::GetTempPath())AssemblywrightExecutionIpcE2E-*"
+        $systemTempFixture = "$(Join-Path $env:SystemRoot 'Temp')\AssemblywrightExecutionIpcE2E-*"
+        if ($root -like $userTempFixture -or $root -like $systemTempFixture) {
             try {
                 Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction Stop
                 if (Test-Path -LiteralPath $root) {
