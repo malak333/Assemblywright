@@ -130,6 +130,9 @@ run cargo clippy --workspace --all-targets -- -D warnings
 run cargo test --workspace
 run cargo test --workspace -- --ignored
 run cargo build --workspace
+run python3 scripts/developer-build-tests.py
+run python3 scripts/developer-connection-tests.py
+run python3 scripts/developer-connection-e2e.py
 run ./scripts/mac-local-coding-snapshot-e2e.sh
 run ./scripts/release-cargo-package.sh
 run ./scripts/package-distribution.sh --check

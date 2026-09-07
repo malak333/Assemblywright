@@ -2424,3 +2424,58 @@ Full-machine target phase: planning/creation containment has bounded native Wind
 - A local-model developer mode must validate `--model-url` as loopback before
   collecting project context. Accepting an arbitrary URL contradicts that mode even
   if the control server itself is loopback-only.
+
+## Developer project chat and reviewed repair escalation
+
+- Project questions belong in project chat, not the feature queue. Chat may use an
+  explicitly selected Windows or Mac local model and retains actual model attribution,
+  but it has no file, command, queue, or approval authority.
+- A completed saved diagnosis can prepare a frozen repair proposal for the first
+  failed feature. Preparation is zero-write. Only explicit owner approval of exact
+  displayed before/after bytes permits one application attempt, including a marked
+  protected-test correction. Drift or ambiguous recovery requires a new proposal.
+- Escalation preserves the three-attempt ordinary repair history and each file's
+  earliest feature baseline. Validation and independent Codex review remain required
+  before success or auto-run advancement.
+- Model repair summaries are not proof that proposed bytes implement the claimed
+  behavior. Native Tk tests must realize/update the window before asserting geometry,
+  and widget lookup must traverse the actual nested hierarchy or bind stable semantic
+  identifiers. A withdrawn window may report height 1, and shallow tree searches can
+  miss a visible nested Input card.
+- On 2026-09-07 the owner saw the repaired modal with pinned Close/action controls
+  and applied proposal 4. Its unchanged command ran 24 tests and failed the two Tk
+  test patterns above. Codex review did not run and the feature did not advance.
+  Treat modal visibility, proposal application, validation, review, and queue advance
+  as separate evidence layers.
+
+- When upgrading the developer Codex reviewer, run
+  `scripts/developer-review-catalog-e2e.py --codex-executable <absolute-path>`.
+  Checking only feature flags missed the current `sleep_tool` default; the opt-in
+  loopback E2E verifies the actual outgoing tool catalog without real inference or
+  account credentials. Executable hashing prevents changes during a runner lifetime;
+  it does not replace rechecking a newly configured runtime.
+  Both installed CLIs passed with zero outgoing tools: Mac Codex 0.153.4 and Windows
+  Codex 0.148. The explicit Windows platform profile omits four flags unavailable in
+  that older CLI while retaining every supported tool-disable setting. Its probe
+  captured one loopback-fixture request and made no real model call. Rerun the actual
+  catalog probe whenever either configured CLI is upgraded.
+- A failed SQLite commit for Emergency Pause must leave a volatile latch active.
+  Start remains rejected until the owner can complete a durable transition; an error
+  response is not evidence that execution admission stayed open. This boundary now
+  has a focused regression.
+- Chat and planning completion need a bounded handoff between provider return and
+  the published terminal state. If persistence fails while the process stays alive,
+  retain the completion in memory; ordinary status GET polling reports
+  `recovery_pending` or `planning_recovery_pending` and retries the exact completion
+  without a second provider call. That cache is deliberately not restart-durable.
+  Process startup marks pending chat/planning work interrupted, discards the lost
+  completion, and requires a new owner retry. Never claim provider non-reexecution
+  across a process restart.
+- Auto-run advancement requires validation success and independent review approval.
+  The seven-script Cargo E2E wrapper now includes validation-failure and reviewer-
+  rejection cases and proves the same feature remains the queue frontier after
+  restart. A completed command or provider call alone cannot advance the queue.
+- The isolated publication candidate passed 44 focused Rust tests on Mac and the
+  same 44 on native Windows, 235 Swift tests, strict developer Clippy, and all seven
+  native Windows developer process E2Es. The final full local gate and exact-SHA
+  hosted publication checks remain separate evidence.

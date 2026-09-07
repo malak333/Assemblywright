@@ -28,12 +28,20 @@ private final class DeveloperHTTPFixture: URLProtocol, @unchecked Sendable {
 
 @Suite("Developer runner client", .serialized)
 @MainActor
-struct DeveloperRunnerClientTests {
+final class DeveloperRunnerClientTests {
+  private var configurationFiles: [URL] = []
+
+  deinit {
+    for file in configurationFiles { try? FileManager.default.removeItem(at: file) }
+  }
+
   private func snapshot(_ revision: Int, mode: String = "supervised_developer") -> Data {
     Data("""
       {"mode":"\(mode)","host":"fixture-windows","workspace_root":"fixture",
        "revision":\(revision),"auto_run":true,"emergency_paused":false,
-       "running":false,"queue":[]}
+       "running":false,"queue":[],"review_required":true,"review_provider":"openai.codex",
+       "review_model":"gpt-5.6-sol","planning_required":true,"planning_provider":"openai.codex",
+       "planning_model":"gpt-5.6-sol","planning_running":false,"planning_sessions":[]}
       """.utf8)
   }
 
@@ -41,7 +49,7 @@ struct DeveloperRunnerClientTests {
     let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try JSONSerialization.data(withJSONObject: ["endpoint": endpoint, "token": "fixture-token"])
       .write(to: path)
-    defer { try? FileManager.default.removeItem(at: path) }
+    configurationFiles.append(path)
     let config = URLSessionConfiguration.ephemeral
     config.protocolClasses = [DeveloperHTTPFixture.self]
     return DeveloperRunnerModel(configurationPath: path.path, session: URLSession(configuration: config))

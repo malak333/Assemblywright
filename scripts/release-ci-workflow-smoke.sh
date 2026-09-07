@@ -28,6 +28,19 @@ require_file "$WORKFLOW"
 require_file "$WINDOWS_PROTOCOL_WORKFLOW"
 require_file "$LOCAL_GATE"
 
+# The broad master Cargo gate must include every native developer workflow on both hosts.
+DEVELOPER_E2E="crates/assemblywright-master/tests/developer_workflow_e2e.rs"
+require_file "$DEVELOPER_E2E"
+for script in developer-runner-e2e.py developer-runner-repair-e2e.py \
+  developer-runner-review-e2e.py developer-runner-planning-e2e.py \
+  developer-runner-model-target-e2e.py developer-runner-chat-e2e.py \
+  developer-runner-escalation-e2e.py; do
+  require_file "scripts/$script"
+  require_text "$script" "$DEVELOPER_E2E"
+done
+require_text "ASSEMBLYWRIGHT_DEVELOPER_REVIEW_FIXTURE" "$DEVELOPER_E2E"
+require_text "developer_review_fixture" "$DEVELOPER_E2E"
+
 require_text "name: Assemblywright Release Local Gate" "$WORKFLOW"
 require_text "pull_request:" "$WORKFLOW"
 require_text "push:" "$WORKFLOW"
@@ -100,6 +113,9 @@ expected_local_gate_commands=(
   "run cargo test --workspace"
   "run cargo test --workspace -- --ignored"
   "run cargo build --workspace"
+  "run python3 scripts/developer-build-tests.py"
+  "run python3 scripts/developer-connection-tests.py"
+  "run python3 scripts/developer-connection-e2e.py"
   "run ./scripts/mac-local-coding-snapshot-e2e.sh"
   "run ./scripts/release-cargo-package.sh"
   "run ./scripts/package-distribution.sh --check"

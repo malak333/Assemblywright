@@ -3050,11 +3050,15 @@ struct DeveloperBridgeTests {
 
     @Test("One-shot helper escalates to KILL when a hung child ignores TERM")
     func oneShotOwnerCommandKillsTermIgnoringHang() async throws {
-        try await assertHostileOneShotHelperIsReaped(
-            script: "#!/usr/bin/perl\n$SIG{TERM} = 'IGNORE';\nselect undef, undef, undef, 0.1;\nclose STDOUT;\nwhile (1) {}\n",
-            minimumDuration: .milliseconds(700),
-            commandTimeout: .milliseconds(300)
+        let termMarker = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "assemblywright-owner-command-term-\(UUID().uuidString)"
         )
+        defer { try? FileManager.default.removeItem(at: termMarker) }
+        try await assertHostileOneShotHelperIsReaped(
+            script: "#!/bin/sh\ntrap 'printf term > \"\(termMarker.path)\"' TERM\nexec 1>&-\nwhile :; do :; done\n",
+            commandTimeout: .seconds(1)
+        )
+        #expect(try Data(contentsOf: termMarker) == Data("term".utf8))
     }
 
     @Test("Supervisor rejects malformed health, cancels, and reconnects")
@@ -9140,7 +9144,6 @@ private func ownerControlDataWithActiveFeature(
 
 private func assertHostileOneShotHelperIsReaped(
     script: String,
-    minimumDuration: Duration = .zero,
     commandTimeout: Duration = .milliseconds(100)
 ) async throws {
     let projection = try AssemblywrightMacFeatureConveyorOwnerControlProjection.decodeStrict(
@@ -9186,7 +9189,6 @@ private func assertHostileOneShotHelperIsReaped(
         #expect(error is AssemblywrightDeveloperBridgeProcessError)
     }
     let duration = started.duration(to: .now)
-    #expect(duration >= minimumDuration)
     #expect(duration < .seconds(2))
     let processIdentifier = try #require(validator.processIdentifier)
     #expect(!processExists(processIdentifier))

@@ -1455,14 +1455,25 @@ coverage. It does not activate the protected production dispatcher.
 cargo test -p assemblywright-master --bin assemblywright-developer
 cargo build -p assemblywright-master --bin assemblywright-developer
 python3 scripts/developer-runner-e2e.py --binary target/debug/assemblywright-developer
+python3 scripts/developer-runner-repair-e2e.py --binary target/debug/assemblywright-developer
+python3 scripts/developer-runner-review-e2e.py --binary target/debug/assemblywright-developer
+python3 scripts/developer-runner-planning-e2e.py --binary target/debug/assemblywright-developer
+python3 scripts/developer-runner-model-target-e2e.py --binary target/debug/assemblywright-developer
+python3 scripts/developer-runner-chat-e2e.py --binary target/debug/assemblywright-developer
+python3 scripts/developer-runner-escalation-e2e.py --binary target/debug/assemblywright-developer
+python3 scripts/developer-build-tests.py
+python3 scripts/developer-connection-tests.py
+python3 scripts/developer-connection-e2e.py
 swift test --disable-sandbox --package-path apps/mac --filter DeveloperRunnerClientTests
 ./scripts/developer-build.py --build
 ```
 
-The native fixture-model HTTP/process E2E is invoked by the master package
-integration test `developer_workflow_e2e`. Both the canonical local release gate
-and the required Windows distributed gate run it through their existing Cargo
-test commands, with `python3` on Mac and `python` on Windows. Swift client tests run with the full Swift package. Use
+The master package integration test `developer_workflow_e2e` invokes all seven
+native fixture-model HTTP/process scripts: base runner, ordinary repair, independent
+review, planning, model targets, chat, and escalation. Both the canonical local
+release gate and the required Windows distributed gate run that wrapper through
+their existing Cargo workspace tests, using `python3` on Mac and `python` on
+Windows. Swift client tests run with the full Swift package. Use
 `docs/developer-build-testing.md` for the scenario matrix, limitations, and
 closeout evidence; `docs/developer-build.md` describes owner use and the separate
 live local-model demonstration.
