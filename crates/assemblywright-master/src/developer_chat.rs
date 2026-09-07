@@ -2059,7 +2059,11 @@ mod tests {
         )
         .unwrap();
 
-        let (files, omitted) = collect_project_files(directory.path(), None).unwrap();
+        // Production passes the canonical project root. Windows hosted runners
+        // may expose TEMP through an 8.3 alias while file handles resolve to the
+        // long path, so preserve that same precondition in this fixture.
+        let root = fs::canonicalize(directory.path()).unwrap();
+        let (files, omitted) = collect_project_files(&root, None).unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path, "main.rs");
         assert!(files[0].content.contains("pub fn value"));

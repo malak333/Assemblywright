@@ -1,5 +1,14 @@
 # Assemblywright Project Facts
 
+## Windows temporary-path fixtures
+
+Windows hosted runners can expose TEMP/TMP through an 8.3 alias while open-file
+handles resolve to the long path. Fixtures for project-grounding containment must
+pass a canonical root, matching the production project resolver. A native A/B run
+reproduced zero admitted files with the raw alias and passed all 44 developer tests
+after canonicalizing the fixture root. Preserve the containment comparison rather
+than relaxing it to accommodate a test-only path mismatch.
+
 These notes capture durable facts for future agents working on this repository.
 
 ## Owner Connection Setup

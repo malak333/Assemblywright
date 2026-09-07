@@ -113,6 +113,14 @@ replaced with direct TERM-delivery and process-reaping evidence; the full 235-te
 Swift suite passed afterward. Signing, notarization, protected production deployment,
 and browser testing are outside this developer-build slice.
 
+The first hosted Windows run caught a grounding fixture that passed a raw temporary
+path, although production canonicalizes project roots before traversal. The fixture
+now canonicalizes that root, preserving containment checks when Windows TEMP uses
+a short-path alias. Native Windows A/B validation with distinct 8.3 TEMP/TMP paths
+reproduced the old failure and passed all 44 tests with the corrected fixture.
+Independent review approved the test-only correction; the final commit still requires both hosted gates. This
+fixture change does not alter the deployed developer runtime.
+
 The developer Mac bundle and Windows runner were rebuilt and the supervised
 connection restarted. Authenticated status returned idle with five retained queue
 items; their IDs, feature statuses, and checkpoints were unchanged. Both temperature
