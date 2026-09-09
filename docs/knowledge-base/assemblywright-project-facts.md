@@ -2,6 +2,151 @@
 
 These notes capture durable facts for future agents working on this repository.
 
+## Developer chat incident diagnosis
+
+- The generated project directory and the runner-owned publication checkout are
+  separate. An absent scratch-directory Git remote does not mean the project has
+  no saved Assemblywright GitHub connection. Models must not initialize Git,
+  invent commit identity, or extract application credentials to bypass the
+  connected publication workflow.
+- Tool commands labeled `bash` can execute in Windows PowerShell. Establish the
+  actual shell before explaining syntax; inference on Mac does not relocate
+  execution. Windows PowerShell 5.1 rejects `&&` and Unix `rm -rf` syntax.
+- A tool mutation quarantine is evidence of unreviewable changes, not necessarily
+  broken implementation. In the investigated case, all six current reviewed
+  files still matched and 44 native Windows tests passed; `.git` alone appeared
+  in the mutation ledger. These observations cannot restore review approval.
+- Check implicit runtime repository housekeeping as well as recorded commands
+  when diagnosing `.git` drift. Keep configuration/hooks covered by mutation
+  evidence; do not exempt the entire directory to hide a false positive.
+- For this repair's regressions and proof boundaries, see
+  [Developer chat and tool reliability](../developer-chat-tool-reliability.md).
+
+## Developer Project Chat History
+
+- The installed read-only Swift check uses `ASSEMBLYWRIGHT_DEVELOPER_LIVE_CONFIG`
+  and `installedWindowsHistoryReopensExactConversationsWithoutSending`; it opens
+  existing conversations through the real model without inference or mutations.
+  Wire messages carry sequence IDs within an exact project/chat snapshot. Swift
+  captures that enclosing chat ID for repair actions; the wire message itself
+  does not repeat `chat_id`.
+
+- History admission uses a 256 MiB logical ledger for transcripts, pending
+  reservations and historical chat-bound tool evidence. Each admitted request
+  reserves 64 MiB for action/recovery evidence plus 512 KiB for its serialized
+  terminal message; action count and row sizes enforce that allowance. Physical
+  terminal-write failure keeps the pending reservation and blocks new work until
+  restart recovery. SQLite physical overhead and migration backups are separate.
+- Legacy chat migration preserves original request and repair-provenance hashes
+  and retains exact old rows in SQLite backup tables. Compatibility verification
+  recognizes legacy digests; migration never rewrites historical evidence to look
+  like a new request. Malformed legacy JSON aborts the transaction.
+
+- The owner approved separate titled chats grouped by project, New Chat, rename,
+  and reopening saved conversations. The accepted design is
+  `docs/developer-chat-history-design.md`. Windows remains the history authority;
+  Mac selection and session drafts are keyed by project and immutable chat ID.
+- A conversation is distinct from an inference request, feature or planning
+  session. Creating, selecting or renaming it does not start work or reset the
+  project's tool permission mode. The existing shared inference gate still
+  permits only one active local request; browsing must retain an exact active
+  chat/request Stop target.
+- Retained legacy history maps to Previous conversation. Saved transcript
+  pagination is separate from the bounded prompt window; messages previously
+  discarded by the old history limit are not reconstructible. Repair diagnosis
+  and tool approval must retain exact project/chat/request provenance.
+- Swift guards asynchronous results with both selection and a navigation token:
+  checking only project/chat IDs misses an A-to-B-to-A navigation race. Rendered
+  send and approval actions also capture their chat identity before dispatch.
+- Unit and loopback HTTP tests live in `DeveloperChatHistoryTests.swift`; native
+  runner/process coverage is `scripts/developer-runner-chat-history-e2e.py`.
+  Use Windows execution and installed Mac checks for the real platform boundary;
+  prototype browser interaction is not native app validation.
+- In the observed Mac test environment, mixing AppKit fixture-window tests with
+  subprocess HTTP tests can exit the host with status zero before the async cases
+  finish. An exit code alone is insufficient evidence; require the Swift Testing
+  final summary. The local gate runs the two native window tests in one process
+  and all remaining tests in a complementary process, without omitting cases.
+
+## Developer GitHub Publication
+
+- The owner authorized and completed the `malak333/inches-feet-demo` repository
+  setup follow-up: initial `main`, reviewed `codex/repository-setup` PR #1, and
+  `Windows Python validation` bound to GitHub Actions app ID 15368. Protected main
+  requires up-to-date checks and pull requests, including administrators; force
+  pushes/deletion are disabled. Setup merged at
+  `9457efcf10b2a217284fffe3eea7fa2824d44743`; PR and final-main hosted checks passed,
+  and the merge parents/full tree matched the reviewed scaffold.
+- Windows GitHub authentication was observed working in that follow-up, and the
+  idle Developer project connection was saved with automatic merge enabled.
+  Six queue entries/evidence were preserved. Only README/CI scaffolding was
+  published, not existing local application code. Evidence is under
+  `target/inches-feet-repository-setup/` and the target repository's PR #1.
+- For personal-repository classic protection, send the app-bound `checks` field
+  without also sending `contexts`; the current API rejects both together. Omit
+  organization-only bypass allowance objects. Verify returned administrator
+  enforcement and absence of bypass allowances instead of weakening the policy.
+- A reported connection failure was verified as an invalid Windows GitHub CLI
+  credential for `malak333`: both active authentication and `gh api user` failed
+  with HTTP 401. Installed Git/gh availability does not establish authentication.
+- Developer setup now has a separate accepted design in
+  `docs/developer-github-setup-design.md`: owner-completed device authorization,
+  repository discovery, and explicit account/name/visibility-bound creation.
+  A cached account cannot authorize creation; verify the confirmed account at
+  effect time and bind verified receipts to the immutable repository ID.
+- Cancellation can race gh credential storage. Observe the live account on every
+  sign-in exit, preserve ambiguous operation metadata for reconciliation, and never
+  persist device codes, access tokens, or raw authentication output in app history.
+- Creating a repository and initializing a README does not publish project files,
+  configure required checks, or make a historical local feature remotely merged.
+- GitHub's REST repository response can name `main` as `default_branch` for an
+  empty repository with no branch. Repository discovery must verify actual
+  `isEmpty` and `defaultBranchRef` observations, rather than infer readiness from
+  the configured branch name or repository size.
+- Empty existing repositories are valid collision/reconciliation observations;
+  they cannot be marked as successful initialized creation. Keep that distinction
+  consistent in the durable Rust record and Swift receipt decoder.
+- The GitHub setup extension was installed with six queue entries and their
+  evidence unchanged. Final Mac/Windows unit and native setup/publication fixtures
+  passed; high-risk review approved the slice. The installed account refresh still
+  observed an expired Windows login. Browser authorization and reopening the locked
+  Mac app remain owner steps; fixture success is not live account/repository proof.
+- The setup slice's broad local gate failed the separate Mac
+  `authenticated_uds_mlx_success_and_cancellation_are_separate_and_bounded` relay
+  test on frame-prefix `UnexpectedEof` (9 passed/1 failed). The installed Swift
+  runner and GitHub setup observations passed against Windows; this does not make
+  that broad gate green or substitute for final visual inspection.
+
+- The owner selected automatic per-feature branch, commit, push, pull request,
+  required checks, and normal merge for explicitly connected Developer projects.
+  The accepted contract is `docs/developer-github-publication-design.md`.
+- The Developer reviewer packet contains cumulative changed files and original
+  content hashes. `project_context` is bounded and may truncate; it must never be
+  used as a complete publication manifest. A private base checkout plus exactly
+  the approved cumulative edits determines the commit, with original-byte checks.
+- Production publication is tied to its separately provisioned fixed repository
+  policy. A Developer project connection does not activate that policy or supply
+  production readiness evidence.
+- A push, PR URL, merge request, or merge-queue admission is not completion.
+  Required checks and the merge request must bind the reviewed head; success needs
+  verified merged state and remote-base reconciliation. Ambiguous effects retain
+  the queue frontier and require explicit reconciliation.
+- Legacy local success is historical validation/review evidence only. Connecting
+  GitHub must not retroactively upload it. Native fixture success is separate from
+  live GitHub authentication, protected checks, and a real external merge.
+- Developer state uses `queue_v10` and backs up v9 before migration. Every feature
+  admission freezes its publication selection, including automatic advancement and
+  repair/escalation. Stop and Emergency Pause retain late remote receipts but still
+  require reconciliation before local success or queue advancement.
+- Git normalization and clean filters cannot silently change reviewed bytes. Native
+  fixtures must seed identical bytes across platforms, independently of Windows
+  text-file newline translation and the host's global Git settings.
+- The publication slice was installed with six queue entries and their selected
+  evidence hashes preserved. Installed API support and Git/gh availability were
+  observed. Mac/Windows publication fixtures passed; this is not live GitHub proof.
+  The broad local gate failed the separate agent relay shutdown backend-marker
+  test. The locked Mac prevented visual confirmation; reopening loads the controls.
+
 ## Owner Connection Setup
 
 - Normal Mac product startup uses `developer-bridge-configuration-v1.json` under
@@ -260,7 +405,7 @@ Full-machine target phase: planning/creation containment has bounded native Wind
   requires exact adapter reconciliation or owner resolution; it is never blindly retried.
 - This is approved target architecture with a reviewed planning/creation source slice
   that remains effect-free on Windows until capability separation is proved. The
-  current protocol-v5/schema-v22 master preserves schema-v19 restricted-worker grants,
+  current protocol-v5/schema-v23 master preserves schema-v19 restricted-worker grants,
   queues, and activation meanings until native hostile-boundary tests, deployment, and
   owner-recorded two-host evidence complete an explicit execution cutover.
 
@@ -394,6 +539,80 @@ Full-machine target phase: planning/creation containment has bounded native Wind
 
 ## Schema-v22 Fail-Closed Execution Activation Controller
 
+- Execution status has a separate strict read-only projection at
+  `/v1/assembly-line/execution-status` and
+  `/v1/distributed/assembly-line/execution-status`. It preserves the existing owner
+  projection and supplies an optional exact Start binding only when the current
+  runtime, capability, and stopped nonempty queue agree. Distributed access still
+  requires the exact designated authenticated Mac owner bridge. An available planning
+  provider or healthy stored capability alone cannot populate Start admission.
+- Schema v23 adds a separate checkpointed-resume admission and immutable successor
+  child epoch. The exact old child, completed checkpoint history, two-host termination,
+  state/queue/pause revisions, and live capability must agree; resume never implicitly
+  clears Emergency Pause. The original schema-v22 control-slice test results are
+  historical evidence and do not validate this continuation.
+- The Windows executor's earlier `CreateProcessW` path inherits its service token.
+  A Job bounds descendants but does not separate service identity or receipt-key
+  access. Active service integration must use a distinct restricted payload token
+  and protect process/thread ownership, handles, and key-file access in addition to
+  Job containment.
+- Protected installed host policy and mutable execution epochs are separate. A
+  new feature or resumed checkpoint must receive signed fresh epoch authority without
+  rewriting installed configuration or restarting services per feature. The old
+  process boundary must be proved empty before accepting the next epoch.
+- The VM-backed Mac containment candidate is documented in
+  `docs/assembly-line-production-integration-design.md`. Its reversible source and
+  preflight are not a provisioned guest, installed root broker, or live two-host proof.
+- On 2026-09-05 the owner changed the immediate goal to a working end-to-end
+  developer build and explicitly deferred security hardening. The separate
+  `assemblywright-developer` binary in the master package owns Windows SQLite queue
+  and checkpoint state; the Mac developer app uses SSH-forwarded loopback HTTP and
+  the existing local Qwen model. It does real file application and validation under
+  the owner account without pretending the production capability gate is available.
+  See `docs/developer-build.md` and `scripts/developer-build.py`.
+- The supervised developer queue spans projects. Resume retries the first unfinished
+  item, so changing the new-feature project field does not bypass an earlier failure.
+  Remove marks a queued, failed, or paused item as removed while the runner is idle;
+  the Mac hides it and the runner skips it without starting another feature. Its
+  saved files, checkpoint, and results remain, including after restart. Removal is
+  authenticated and serialized with Start; completed and active items cannot be removed.
+- The supervised developer repair flow is separate from Resume. An owner can repair
+  the first failed queue item using the exact observed attempt count, current files,
+  saved error, original request, and unchanged validation command. Windows reserves
+  each of at most three repair attempts durably before generation. Counters and prior
+  checkpoint/results survive restarts; Stop and Emergency Pause retain their meaning.
+  Repair preserves existing conventional tests and recognized validation input paths,
+  including descendants of named directories. This bounded guard does not discover
+  every indirect input of an arbitrary command; retain original tests and relevant
+  native checks as independent evidence of intended behavior.
+- Supervised developer features can select Mac or Windows for local generation.
+  Windows still owns queue state, file application, and validation. The model
+  computer is persisted per feature and reused for repairs; unavailable targets
+  fail without fallback. `queue_v4` prevents older binaries from silently ignoring
+  Windows selections. Configured model choices do not imply current health, and
+  choosing two computers across a queue does not make feature execution parallel.
+- Native Windows developer validation needs an explicitly quoted `cmd.exe /d /s /c`
+  command tail: normal Windows argv escaping changes embedded Python command quotes.
+  Flushing generated files on Windows requires a write-capable handle; opening a
+  read-only handle and calling `sync_all` produces access denied after the write.
+  The prepared checkpoint lets a retry recognize an already-written file by digest.
+- Production milestone 5 depends on the Windows effect runtime and macOS hostile-descendant
+  containment. The auto-run setting is not FIFO advancement, a termination receipt is
+  not an action-success receipt, and a control-intent digest is not evidence of an
+  executed checkpoint. Track remaining production work in
+  `docs/assembly-line-control-readiness.md`.
+- Execution acknowledgements bind the request ID and canonical request digest.
+  Replaying an accepted Start must return its acknowledgement without creating a
+  second dispatch; a newer owner lifecycle does not erase the original acceptance.
+  New checkpoint receipts require current running authority and ordered evidence,
+  while byte-exact historical receipts remain idempotent. Emergency Pause supersedes
+  Stop without allowing late Stop evidence to restore a checkpoint-paused state.
+- A 404 during exact execution reconciliation is not evidence that the original
+  request had no effect. Runtime loss can hide a previously used route; preserve the
+  pending bytes until an acknowledgement binds their request ID and digest.
+- The milestone-5 app/helper requires the new execution-status endpoint. Deploy it
+  together with its matching master; an older master causes observation to fail
+  closed even though the outer protocol remains v5.
 - The Windows master migrates backup-first from schema 20 or 21 to schema 22 and preserves
   planning and legacy Feature Conveyor meanings. It durably records provisioned
   execution capabilities, Start sessions, one FIFO child epoch, authority revisions,
@@ -2379,3 +2598,369 @@ Full-machine target phase: planning/creation containment has bounded native Wind
   surface or line-coverage percentage is claimed. Repeat the repository's
   per-phase closeout checklist for subsequent features, and verify protected
   hosted checks on the current publication SHA before claiming GitHub closeout.
+
+### Project questions and feature requests
+
+The owner requested a separate Windows-local project chat on 2026-09-06 after a
+“How do I open the GUI?” question submitted through Add a feature triggered code
+generation and validation. The developer chat must preserve this distinction:
+project questions read code/results and maintain project-specific Windows history;
+feature requests enter the supervised execution queue. Chat has no tool, file-edit,
+or queue-control authority. The initial Windows model candidate is Qwen3.5-9B
+Q4_K_M with a native 262,144-token context; local-ai-windows owns installation and
+independent evaluation. Allocating a context slot alone does not prove useful
+full-context operation.
+
+The side-chat composer uses a native SwiftUI `TextEditor` so Shift+Enter inserts
+a newline at the selection without submitting the draft. Keep sending on the
+explicit Send question action. Its native hosting-window keyboard test verifies
+selection replacement, cursor insertion, binding updates, and retained focus.
+
+The owner's later 2026-09-06 UI simplification removes the Generate code on
+Mac/Windows picker. New GUI features use Mac generation; project conversations
+continue using the Windows Qwen3.5-9B Q4_K_M server with one 262,144-token slot.
+Existing queue items retain their recorded targets for checkpoint/repair continuity.
+
+
+## Supervised developer review requirement (2026-09-06)
+
+- The protected production reviewer implementation was separate from the developer
+  runner. Earlier developer `succeeded` records meant validation passed, without
+  independent model approval; retain their historical evidence rather than
+  retroactively claiming review.
+- The owner requires the developer runner to gate future success and auto-run on
+  fixed OpenAI/Codex `gpt-5.6-sol` high review. Local models implement and repair;
+  the cloud reviewer only evaluates a bounded candidate packet. Windows remains
+  the queue/evidence authority. See `docs/developer-build.md` for configuration,
+  review failure handling, and current verification.
+- Windows has native Codex CLI 0.148.0 signed in through ChatGPT. A direct tool-free
+  synthetic review rejected subtraction that passed a zero-only addition test.
+  This is provider-call evidence; it does not by itself prove queue gating.
+- The later developer-runner integration passed real Codex rejection of a bug
+  missed by validation, one fixture local-model repair, and fresh approval in
+  58.86 seconds. The installed binary passed a separate positive real-review case
+  in 22.5 seconds. These are bounded provider/runner proofs; implementation-model
+  repair quality and general review quality remain separate.
+- The installed queue_v5 migration preserved all five owner items and marked four
+  earlier successes `legacy_unreviewed`. New success requires validation plus
+  exact-candidate approval. Native Windows review E2E covers cancellation, file
+  drift, malformed replies, and restart; the Mac view rejects older runners that
+  cannot advertise the fixed required reviewer. See the developer-build evidence
+  section for test counts and visual/provenance limitations.
+
+## Developer feature brainstorming requirement (2026-09-06)
+
+The owner expected the installed brainstorming skill to run when adding a feature.
+The earlier developer form sent a free-text implementation request directly to the
+local model; production planning and post-code review did not supply the skill's
+interactive gates. The requested developer behavior is a fixed ChatGPT/Codex
+planning conversation before enqueue: answer questions, confirm understanding and
+NFR assumptions, compare and select an approach, confirm design sections, then
+approve saved documents. The local implementation and later repairs/review must
+receive the same approved documents. Questions about using an existing project
+remain in Windows-local project chat.
+
+The runtime uses a bundled copy of `brainstorming/SKILL.md`, with its hash bound to
+planning packets and approved feature metadata. It does not load a general plugin
+or ambient installed-skills runtime. Windows retains the draft, approvals, and
+documents; authenticated, revision-bound owner actions control each gate. Legacy
+queue entries retain their actual prior planning history. The developer planning
+surface does not activate the protected production planning/publication lifecycle.
+
+### Developer brainstorming closeout evidence (2026-09-06)
+
+The developer GUI now requires fixed ChatGPT/Codex brainstorming before new queue
+admission. Questions, confirmed requirements and assumptions, selected approach,
+confirmed design, decisions, and the approved documents are durable Windows state.
+The approved document bytes follow initial local generation, repair, and final
+code review. Saved sessions can be reopened and revised; revisions invalidate
+later confirmations. Direct new enqueue cannot bypass planning. Existing queue
+history migrates to `queue_v6` and remains explicitly `legacy_unplanned`.
+
+A real disposable case completed planning, Mac-local implementation, Windows
+validation, and real Codex rejection/repair/approval. The reviewer caught missing
+run instructions; one local repair resolved the finding, and 17 tests passed.
+The installed update preserved all five prior owner queue entries. Native Windows
+E2Es, 25 focused Rust tests, 12 Swift tests with live network observers, and seven
+launcher tests passed. The full local gate failed two existing agent relay cases
+(socket-startup timeout and unexpected EOF), so this is not a full release pass.
+Native visual acceptance remains unverified because the Mac was locked.
+
+## Developer background connection requirement (2026-09-06)
+
+The owner expected Tailscale connectivity to be sufficient to open the developer
+app without keeping a Windows SSH terminal open. Tailscale supplies the private
+network; SSH still carries the loopback runner and Mac-model forwards. The new
+developer-only LaunchAgent owns a dedicated SSH master, pinned Windows host
+record, restricted app-specific identity, and runner channel. It persists beyond
+app/terminal closure and retries transport loss without replaying queue controls,
+planning answers, or chat requests. Windows remains the durable queue authority;
+restarting the runner never grants a new Start/Resume frontier.
+
+The Mac models reload rotated connection credentials on each request and clear
+stale actionable projections when observation fails. Healthy SSH plus unavailable
+HTTP is treated as uncertainty, not permission to terminate a potentially active
+Windows runner. Maintenance uses an exclusive lease and authenticated idle
+shutdown. First migration cancels only the old app forwards, preserves unrelated
+SSH sessions, and records ownership so a later stop/start cannot misidentify an
+unrelated old master as the app connection. Configuration changes are validated
+and authenticated before stopping the known-good connection.
+
+Mac-model availability is a separate supervised resource. The connection helper
+may invoke the configured controller's exact `start` operation only after the fixed
+`127.0.0.1:8080` listener positively refuses a connection. A reachable listener,
+including HTTP loading/busy/error behavior, and uncertain timeout/reset failures do
+not authorize another start. The controller wrapper is bounded and cancelled with
+the supervisor; recovery permits at most four starts per continuous outage with a
+capped retry delay, resetting the budget only after a reachable listener. Start
+admission and recheck use the launcher's maintenance lock until the controller exits
+or the listener accepts TCP, including while HTTP is still loading. Recovery does not stop a
+shared model, start after an observed supervisor shutdown signal, restart the Windows
+runner, replay a chat or owner action, or select a fallback.
+The connection log records a fixed admission event before process creation; audit
+failure prevents the start. It keeps only fixed recovery event names as evidence.
+
+This is developer owner usability, not signed production bridge installation,
+hostile process containment, or a new conversation/scheduling runtime. See
+`docs/developer-build.md` for setup, recovery, and separately recorded live proof.
+
+Live background-connection closeout passed: the final installed helper recovered
+its dedicated SSH connection in 3.65 seconds and recovered after supervisor
+termination in 3.80 seconds. Explicit stop/immediate start and launch without a
+legacy SSH socket passed. All five original queue items stayed unchanged, and
+the fault proof sent no mutating HTTP requests. Windows-to-Mac model health
+through the dedicated reverse forward returned HTTP 200. Focused coverage passed
+17 launcher tests, ten connection tests, native process/socket E2E, and sixteen
+Swift tests with the live Windows observer. Independent high-risk review approved
+the final changes. The full local gate still failed two existing Mac agent relay
+cases; native visual acceptance and production signing remain separate.
+
+## Project chat attachment requirement (2026-09-07)
+
+The owner requested screenshots and other attachments in the developer side chat.
+The selected scope supports explicitly chosen single-frame images and small UTF-8
+text/source files, plus clipboard image paste. The Mac prepares bounded JPEGs and
+removes metadata; Windows independently validates attachments, isolates durable
+history by project, and binds idempotent retries to their exact bytes. Image input
+requires confirmed vision capability on the Windows-local model; there is no cloud
+fallback or implicit tool/file execution. The Windows Qwen3.5 9B configuration needs
+its matching pinned projector, run on CPU to preserve the selected 262K context
+and the RTX 3080's limited remaining VRAM. PDFs are outside this initial slice.
+
+The projector is now installed and the runtime reports vision enabled, one slot,
+and 262,144 tokens. Native Windows chat E2E and a live authenticated attachment
+conversation passed, including reading `ORBIT 482` from a saved image on a
+follow-up. The first combined question answered only the image's color; image
+delivery is proven, while general screenshot-answer quality is not guaranteed.
+The five owner queue entries remained unchanged. The Mac attachment controls are
+compiled/tested; native visual clicking remains unverified because computer-use
+was unavailable. Details and proof boundaries are in `docs/developer-build.md`.
+The full local gate passed Clippy and all ten Mac relay tests, then stopped at the
+separate executor source-contract assertion missing the literal `restart ambiguity`.
+Those executor files were outside the attachment change; this is not a green full
+repository release result. No commit or push was requested for this slice.
+
+
+## Developer chat diagnosis and reviewed repair escalation
+
+- A feature's model computer and the project-chat model are separate choices. The
+  September 7 exhausted GUI feature used Mac AI; Windows AI diagnosed it afterward.
+  Switching chat providers alone does not grant project-write authority.
+- Ordinary repairs preserve existing tests and have three lifetime attempts. A
+  completed chat diagnosis can feed a separately approved, one-attempt escalation
+  with exact before/after review, including explicitly identified test corrections.
+  Windows remains the queue, file, validation, and history owner.
+- Model diagnoses must be checked against current source. The temperature GUI test
+  checked `tk.Entry` against a `ttk.Entry` and searched only two descendant levels,
+  while the modern layout nested the input and button more deeply. Changing the
+  class name alone would not fix the test. Preserve useful behavior assertions.
+- The shared project chat records actual model attribution and binds repair handoff
+  to a saved answer's request ID and content digest. Chat and attachments remain
+  untrusted references; only the explicit proposal approval can authorize changes.
+- Developer state advances to `queue_v7`, preserving old state before migration,
+  so an older runner cannot ignore pending escalation approval semantics.
+- A reviewer saying only tests changed can indicate incorrect baseline evidence.
+  In the temperature GUI case, repeated no-op repairs replaced the original
+  absent-file baseline with the final GUI hash. Review must preserve the earliest
+  baseline and the latest implementation hash across the complete feature history.
+  Correct the evidence and rerun validation/review; do not bypass a rejected review
+  or make cosmetic source edits solely to force a different hash.
+- `queue_v8` records the cumulative-evidence invariant. Legacy escalation records
+  can have replaced their final ordinary-repair edits with proposal edits before
+  application. Recovery requires matching saved pre-escalation evidence and exact
+  project-byte checks; review approval must be renewed after reconstruction.
+- A model's repair summary is not proof that the displayed edits implement its
+  claims. One GUI draft claimed button-contrast and card-label fixes that were
+  absent from the diff. Its added geometry test also failed because Tk geometry
+  strings include position offsets and a withdrawn window may still report 1x1.
+  Check exact edits and exercise realized widget bounds and actual style values;
+  counting theme keys or widgets does not prove clipping or contrast is fixed.
+- A Mac model selected for project chat can still be text-only at runtime. The
+  `qwen36-local` launcher used `--no-mmproj`; loading the matching projector must
+  make `/props.modalities.vision` true while preserving the selected slot/context.
+  Retained image attachments also require vision on subsequent chat messages.
+  Keep the capability rejection rather than silently dropping those images.
+- Hidden Tk roots can report 1x1 even when a larger geometry was configured.
+  Native Windows SSH sessions can also leave descendants unmapped after updates.
+  Verify minimum size against Tk's requested content dimensions in deterministic
+  tests, and check actual rendering in an interactive Mac session separately.
+  Resolve ttk colors through the explicit widget value or `Style.lookup`; an
+  empty `cget('background')` can mean inheritance rather than a missing color.
+- Test a proposed repair in a disposable copy before approval. A ready local-model
+  proposal is not proof of a working correction. Directly editing an applied
+  feature and pressing Resume does not reconcile its recorded expected hashes;
+  use a fresh exact proposal to preserve cumulative validation/review evidence.
+
+- Install a missing Windows GUI dependency through the exact interpreter used by
+  the saved validation command (`python -m pip` from that interpreter). In the
+  inches/feet case, missing PySide6 hid nine GUI tests: the 33 reported tests
+  included one import failure, while dependency-correct discovery ran 41 tests.
+  Passing all 41 is validation evidence, separate from Codex review approval; the
+  reviewer can still identify requirement, precision, documentation, or GUI
+  coverage gaps without authorizing success.
+
+- A passing GUI test run can still miss an approved presentation requirement. The
+  live reviewer caught unused success/error colors after 26 tests passed. Status
+  updates must change both the existing StringVar and the actual label style,
+  with tests for error/success transitions, recovery, and effective contrast.
+  Supplying complete independently tested reference candidates helped the local
+  model produce an exact working proposal after abbreviated diagnoses failed.
+
+- Python float parsing accepts NaN and infinity. GUI validation must check
+  finiteness both after parsing and after arithmetic, since finite inputs can
+  overflow during conversion. Keep errors distinct from success, verify recovery
+  to normal inputs, and bound very long finite result text for readable display.
+
+
+## Developer AI model settings (2026-09-07)
+
+The developer gear icon selects separate orchestrator and reviewer model/effort
+pairs. Windows owns the persisted defaults and validates settings revisions and
+idle state. Planning sessions and queued features pin their choices; changing a
+default never relabels historical results. The configured Codex home's visible
+model catalog supplies options, with a bundled catalog for missing cache. Model
+and reasoning selection changes argv and packet evidence, never cloud tools or
+implementation authority. ChatGPT web-only model names are not Codex capabilities.
+Use the settings process E2E plus native Swift settings tests for this boundary;
+fixture catalog/model tests do not establish live account entitlement.
+
+An existing feature showing Sol after Settings was changed to Spark is retaining
+its saved reviewer, not failing to save defaults. Use the feature card's **Change
+reviewer…** action to explicitly update that feature, then **Resume**. Windows
+binds the change to observed state, checkpoint, and old model/effort while idle;
+files, approved plans, repair budgets, and review history survive. The next review
+must use the new pair and fresh validation; saving never starts work or relabels
+old evidence. Succeeded features remain immutable. Queue schema v9 retains
+reviewer-selection history and prevents older runners from dropping it; migration
+keeps the prior v8 state as a backup. Tool-effect and interrupted-application
+quarantines must be resolved before changing reviewers.
+
+If Resume reports an exact candidate binding mismatch after a successful reviewer
+change, the reviewer response failed verification; that error alone does not mean
+account usage is exhausted or work is still running. A live Spark reproduction
+matched the saved packet but returned the wrong reviewed-file mapping. Supply all
+response bindings, especially the ordered path/content fingerprints, as explicit
+host-generated opaque values to copy. Keep strict acceptance checks and report
+only fixed mismatch categories. Resume revalidates and reviews without consuming
+another local repair attempt; it must never reinterpret a malformed approval as
+success.
+
+## Developer app tools and local-ai-mac reuse
+
+The owner approved OpenCode-backed tools and per-project Ask for approval,
+Approve for me, and Full access controls for the **Developer app**, documented in
+[`developer-tool-access-design.md`](../developer-tool-access-design.md).
+Both local inference models execute project tools on Windows; selecting Mac AI
+does not move a Windows project's Python dependencies to the Mac.
+
+The installed local-ai-mac OpenCode 1.18.23 configuration already enables shell/file
+tools, webfetch/websearch, and blanket permission `allow`. Its wrapper sets
+`OPENCODE_ENABLE_EXA=1` and disables external skill discovery. Assemblywright's
+direct completion API does not inherit those capabilities. OpenCode blanket
+approval is not the proposed middle mode's risk policy. Use a separate developer
+runtime/configuration instead of importing the owner's unrestricted configuration.
+
+The pinned Windows installer is `scripts/developer-opencode-install.ps1`; it
+checks the publisher archive SHA-256 and version, records the executable digest,
+and installs no service. The launcher accepts an explicit `--opencode-executable`
+path. Runtime and installed-app proofs are separate from successful provisioning.
+
+The connection supervisor must compare the status model/effort fields with the
+Windows-owned AI settings. Hardcoding the original Sol defaults mislabels a
+healthy runner as unavailable after the owner selects Spark or another supported
+model. Legacy runners without settings retain the legacy Sol check; observation
+must not mutate the owner selection.
+
+### Developer tool configuration and evidence limits
+
+OpenCode `--pure` alone does not exclude project custom tool modules. The pinned
+Developer runtime disables project configuration discovery, rejects existing
+project/ancestor OpenCode configuration and extension directories before spawning,
+and validates the resolved global and build-agent permissions before inference.
+OpenCode 1.18.23 derives explicit build-agent deny entries for the disabled
+`task`, `skill`, `lsp`, `question`, and `todowrite` tools; exact validation must
+accept those derived denies while rejecting additional permission grants.
+
+Keep actual OpenCode/scripted-model tests separate from real local-model tests.
+The native process suite proves permission decisions, package installation,
+Windows descendant cancellation, web fetching, and evidence invalidation. A real
+local-model smoke proves that each configured inference provider can dispatch
+tools, but neither proof establishes every generated feature's correctness.
+
+## Cloud-disclosure sanitization and secret-shape detection
+
+When planning or review responses from cloud models contain text matching secret
+patterns, the master rejects them with `"Cloud request contains secret-shaped
+text"`. The detection lives in `crates/assemblywright-master/src/developer_review.rs`
+and covers:
+
+| Pattern category | Examples |
+|---|---|
+| PEM blocks | `-----BEGIN RSA PRIVATE KEY-----` |
+| Auth headers | `Bearer <token>`, `Basic <credentials>` |
+| GitHub tokens | `ghp_<40 chars>`, `github_pat_<80 chars>` |
+| NPM tokens | `npm_<20 chars>` |
+| Slack tokens | `xoxb-<50 chars>`, `xoxp-<50 chars>` |
+| OpenAI keys | `sk-<17 chars>`, `sk-live-<12 chars>` |
+| AWS keys | `AKIA` followed by 16 alphanumeric chars |
+| JWT tokens | `eyJ<base64>.<base64>.<signature>` with 3 segments |
+| Sensitive assignments | `api_key = <value>`, `password: <value>`, `secret is <value>` |
+| URL credentials | `https://user:pass@host.com` |
+
+The `contains_secret_shape()` function checks all categories. The
+`sanitize_cloud_text()` pipeline strips matched secrets before re-checking,
+allowing legitimate planning prose that happens to reference these patterns.
+
+### When to use sanitization
+
+Use `sanitize_and_validate_cloud_text()` (or `sanitize_cloud_text()` + `validate_cloud_text()`) for
+**AI-generated responses** going to the cloud provider. The planning output path
+calls `validate_provider_output_texts_sanitized()` which sanitizes every text
+field before checking.
+
+Use `validate_cloud_text()` directly for **user-provided input** such as planning
+packets, review packets, and context files — these must be rejected if they
+contain secret shapes; they should never be sanitized.
+
+### Common pitfall
+
+The `redact_sensitive_assignments()` function trims whitespace from the value
+string before collecting token characters. If a pattern like `api_key = value`
+is used, the space after `=` is leading whitespace and must be skipped before
+checking if the value has at least 6 characters.
+
+### Testing
+
+Unit tests in `developer_review::tests::sanitization_redacts_secrets_from_cloud_text`
+verify that real secret patterns are redacted. Tests in
+`developer_review::tests::sanitization_allows_planning_prose_without_secrets`
+verify that normal planning prose passes. Tests in
+`developer_review::tests::sanitization_preserves_non_secret_tokens` verify that
+short or non-secret prefixes are not falsely flagged.
+
+### Integration with planning
+
+The planning packet's `canonical_bytes()` calls `cloud_text()` which checks
+`validate_cloud_text()` for user input. The provider output path calls
+`validate_provider_output_texts_sanitized()` which sanitizes before checking.
+Both paths use the same `contains_secret_shape()` detector for consistency.
