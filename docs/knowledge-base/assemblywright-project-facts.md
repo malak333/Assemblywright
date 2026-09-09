@@ -2487,4 +2487,63 @@ Full-machine target phase: planning/creation containment has bounded native Wind
 - The isolated publication candidate passed 44 focused Rust tests on Mac and the
   same 44 on native Windows, 235 Swift tests, strict developer Clippy, and all seven
   native Windows developer process E2Es. The final full local gate and exact-SHA
+
+## Cloud-disclosure sanitization and secret-shape detection
+
+When planning responses from cloud models contain text matching secret
+patterns, the master rejects them with `"Cloud request contains secret-shaped
+text"`. The detection lives in `crates/assemblywright-master/src/developer_review.rs`
+and covers:
+
+| Pattern category | Examples |
+|---|---|
+| PEM blocks | `-----BEGIN RSA PRIVATE KEY-----` |
+| Auth headers | `Bearer <token>`, `Basic <credentials>` |
+| GitHub tokens | `ghp_<40 chars>`, `github_pat_<80 chars>` |
+| NPM tokens | `npm_<20 chars>` |
+| Slack tokens | `xoxb-<50 chars>`, `xoxp-<50 chars>` |
+| OpenAI keys | `sk-<17 chars>`, `sk-live-<12 chars>` |
+| AWS keys | `AKIA` followed by 16 alphanumeric chars |
+| JWT tokens | `eyJ<base64>.<base64>.<signature>` with 3 segments |
+| Sensitive assignments | `api_key = <value>`, `password: <value>`, `secret is <value>` |
+| URL credentials | `https://user:pass@host.com` |
+
+The `contains_secret_shape()` function checks all categories. The
+`sanitize_cloud_text()` pipeline strips matched secrets before re-checking,
+allowing legitimate planning prose that happens to reference these patterns.
+
+### When to use sanitization
+
+Use `sanitize_and_validate_cloud_text()` for
+**AI-generated responses** going to the cloud provider. The planning output path
+calls `validate_provider_output_texts_sanitized()` which sanitizes every text
+field before checking.
+
+Use `validate_cloud_text()` directly for **user-provided input** such as planning
+packets, review packets, and context files — these must be rejected if they
+contain secret shapes; they should never be sanitized.
+
+### Common pitfall
+
+The `redact_sensitive_assignments()` function trims whitespace from the value
+string before collecting token characters. If a pattern like `api_key = value`
+is used, the space after `=` is leading whitespace and must be skipped before
+checking if the value has at least 6 characters.
+
+### Testing
+
+Unit tests in `developer_review::tests::sanitization_redacts_secrets_from_cloud_text`
+verify that real secret patterns are redacted. Tests in
+`developer_review::tests::sanitization_allows_planning_prose_without_secrets`
+verify that normal planning prose passes. Tests in
+`developer_review::tests::sanitization_preserves_non_secret_tokens` verify that
+short or non-secret prefixes are not falsely flagged.
+
+### Integration with planning
+
+The planning packet's `canonical_bytes()` calls `cloud_text()` which checks
+`validate_cloud_text()` for user input (strict, no sanitization). The provider
+output path calls `validate_provider_output_texts_sanitized()` which sanitizes
+before checking. Both paths use the same `contains_secret_shape()` detector for
+consistency.
   hosted publication checks remain separate evidence.
