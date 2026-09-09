@@ -594,7 +594,7 @@ The application enforces every transition. Return exactly the supplied schema an
 Ask at most one question. Do not claim owner confirmation, approval, enqueue, implementation, validation, or external proof.
 For understanding, provide 5-7 summary bullets, all five explicit non-functional assumption fields, and no unresolved open questions.
 For approaches, provide exactly 2-3 viable approaches, exactly one recommendation, concrete tradeoffs, and preserve prior confirmed understanding.
-For design_section, provide one section no longer than 300 words and a complete running decision log. Do not return ready.
+For design_section, provide one section no longer than 300 words and a complete running decision log. Do not return ready. Each design_section must have a unique case-insensitive id (e.g., "architecture", "data-model", "error-handling"). Do not reuse an id across sections.
 For ready, do so only after every supplied design section is owner-confirmed; return a complete decision log and explicit implementation plan.
 Populate fields according to this exact matrix; every field not listed as populated must use the stated empty value:
 - question: question=one object; understanding_summary=[], assumptions=null, open_questions=[], approaches=[], design_section=null, design_complete=false, decision_log=[], implementation_plan=null.
