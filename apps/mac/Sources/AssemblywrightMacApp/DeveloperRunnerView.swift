@@ -268,6 +268,26 @@ struct DeveloperRunnerView: View {
         HStack(alignment: .firstTextBaseline) {
           Text("Build with Assemblywright").font(.largeTitle.bold())
           Spacer()
+          Button(action: {
+            if let url = URL(string: "https://github.com/malak333/Assemblywright") {
+              NSWorkspace.shared.open(url)
+            }
+          }) {
+            Image(systemName: "github").font(.title2)
+              .foregroundStyle(.primary)
+          }
+          .buttonStyle(.plain)
+          .help("Open Assemblywright on GitHub")
+          .accessibilityIdentifier("developer-github-link")
+          Button(action: {
+            // Open settings
+          }) {
+            Image(systemName: "gearshape").font(.title2)
+              .foregroundStyle(.primary)
+          }
+          .buttonStyle(.plain)
+          .help("Settings")
+          .accessibilityIdentifier("developer-settings")
           Text("Developer build").font(.caption.bold()).padding(7).background(
             .orange.opacity(0.15), in: Capsule())
         }
