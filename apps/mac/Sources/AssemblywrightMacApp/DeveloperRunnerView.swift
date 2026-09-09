@@ -245,6 +245,7 @@ struct DeveloperRunnerView: View {
   @State private var repairFeature: DeveloperRunnerFeature?
   @State private var showingEscalation = false
   @State private var escalationFeatureId: String?
+  @State private var showingSettings = false
   @AppStorage("developerChatProject") private var chatProject = ""
   @AppStorage("developerChatRepairFeature") private var chatRepairFeature = ""
 
@@ -279,9 +280,7 @@ struct DeveloperRunnerView: View {
           .buttonStyle(.plain)
           .help("Open Assemblywright on GitHub")
           .accessibilityIdentifier("developer-github-link")
-          Button(action: {
-            // Open settings
-          }) {
+          Button(action: { showingSettings = true }) {
             Image(systemName: "gearshape").font(.title2)
               .foregroundStyle(.primary)
           }
@@ -438,13 +437,14 @@ struct DeveloperRunnerView: View {
         }
       }.padding(28)
     }.frame(minWidth: 650, minHeight: 680)
-      DeveloperProjectChatView(configurationPath: configurationPath,
-        projects: Array(Set(model.snapshot?.queue.map(\.project) ?? [])).sorted(),
-        runner: model)
+      DeveloperChatHistoryView(configurationPath: configurationPath, runner: model)
         .frame(minWidth: 340, idealWidth: 420, maxWidth: 560)
     }.frame(minWidth: 1000, minHeight: 680)
       .task { await model.observe() }
     .task { await connection.observe() }
+      .sheet(isPresented: $showingSettings) {
+        DeveloperRunnerSettingsView(configurationPath: configurationPath)
+      }
       .sheet(isPresented: $showingEscalation) {
         if let escalationFeatureId {
           DeveloperRepairEscalationView(configurationPath: configurationPath, runner: model,
