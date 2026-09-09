@@ -1065,6 +1065,245 @@ pub(crate) fn validate_cloud_text(value: &str) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn sanitize_and_validate_cloud_text(value: &str) -> Result<()> {
+    let sanitized = sanitize_cloud_text(value);
+    if contains_secret_shape(&sanitized) {
+        bail!("Cloud request contains secret-shaped text");
+    }
+    Ok(())
+}
+
+pub(crate) fn sanitize_cloud_text(value: &str) -> String {
+    let mut result = value.to_string();
+    for _ in 0..20 {
+        let before = result.clone();
+        result = redact_prefixed_token(result, "sk-", 17);
+        result = redact_prefixed_token(result, "sk-live-", 12);
+        result = redact_prefixed_token(result, "ghp_", 20);
+        result = redact_prefixed_token(result, "github_pat_", 10);
+        result = redact_prefixed_token(result, "npm-", 20);
+        result = redact_prefixed_token(result, "xoxb-", 10);
+        result = redact_prefixed_token(result, "xoxp-", 10);
+        result = redact_aws_keys(result);
+        result = redact_jwt_tokens(result);
+        result = redact_bearer_auth(result);
+        result = redact_basic_auth(result);
+        result = redact_sensitive_assignments(result);
+        result = redact_url_credentials(result);
+        result = redact_pem_blocks(result);
+        if result == before {
+            break;
+        }
+    }
+    result
+}
+
+fn redact_prefixed_token(input: String, prefix: &str, min_suffix_len: usize) -> String {
+    let mut result = String::new();
+    let mut last_end = 0;
+    for (offset, _) in input.match_indices(prefix) {
+        let after_prefix = offset + prefix.len();
+        let token_chars: String = input[after_prefix..]
+            .bytes()
+            .take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+            .map(|b| b as char)
+            .collect();
+        if token_chars.len() >= min_suffix_len {
+            result.push_str(&input[last_end..offset]);
+            result.push_str("[REDACTED_TOKEN]");
+            last_end = after_prefix + token_chars.len();
+        }
+    }
+    result.push_str(&input[last_end..]);
+    result
+}
+
+fn redact_aws_keys(input: String) -> String {
+    let mut result = String::new();
+    let mut last_end = 0;
+    for (offset, _) in input.match_indices("AKIA") {
+        let after = offset + 4;
+        let key_chars: String = input[after..]
+            .bytes()
+            .take(16)
+            .filter(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+            .map(|b| b as char)
+            .collect();
+        if key_chars.len() == 16 {
+            result.push_str(&input[last_end..offset]);
+            result.push_str("AKIA[REDACTED]");
+            last_end = after + 16;
+        }
+    }
+    result.push_str(&input[last_end..]);
+    result
+}
+
+fn redact_jwt_tokens(input: String) -> String {
+    let mut result = String::new();
+    let mut last_end = 0;
+    for (offset, _) in input.match_indices("eyJ") {
+        let candidate = &input[offset..];
+        let segments: Vec<&str> = candidate.splitn(3, '.').collect();
+        if segments.len() == 3 && segments[0].len() >= 8 && segments[1].len() >= 8 {
+            let sig_len = segments[2]
+                .bytes()
+                .take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+                .count();
+            if sig_len >= 8 {
+                result.push_str(&input[last_end..offset]);
+                result.push_str("REDACTED.JWT.TOKEN");
+                let space_pos = candidate[1..].find(' ').map(|p| p + 1);
+                last_end = space_pos.unwrap_or(candidate.len());
+            }
+        }
+    }
+    result.push_str(&input[last_end..]);
+    result
+}
+
+fn redact_bearer_auth(input: String) -> String {
+    redact_auth_header(input, "Bearer ")
+}
+
+fn redact_basic_auth(input: String) -> String {
+    redact_auth_header(input, "Basic ")
+}
+
+fn redact_auth_header(input: String, prefix: &str) -> String {
+    let mut result = String::new();
+    let mut last_end = 0;
+    for (offset, _) in input.match_indices(prefix) {
+        let after = offset + prefix.len();
+        let token_chars: String = input[after..]
+            .chars()
+            .take_while(|c| !c.is_ascii_whitespace())
+            .collect();
+        if token_chars.len() >= 6 {
+            result.push_str(&input[last_end..offset]);
+            result.push_str("[REDACTED_AUTH]");
+            last_end = after + token_chars.len();
+        }
+    }
+    result.push_str(&input[last_end..]);
+    result
+}
+
+fn redact_sensitive_assignments(input: String) -> String {
+    const NAMES: &[&str] = &[
+        "api_key",
+        "apikey",
+        "access_token",
+        "auth_token",
+        "token",
+        "secret",
+        "password",
+        "authorization",
+    ];
+    let mut result = input;
+    for name in NAMES {
+        let mut lower = result.to_ascii_lowercase();
+        while let Some(pos) = lower.find(name) {
+            let before = lower[..pos].bytes().next_back();
+            let boundary = before.is_none_or(|b| !b.is_ascii_alphanumeric() && b != b'_');
+            if !boundary {
+                break;
+            }
+            let suffix = lower[pos + name.len()..].trim_start();
+            let (value_start, delimiter_len) = if let Some(rest) = suffix.strip_prefix('=') {
+                (Some(rest), 1)
+            } else if let Some(rest) = suffix.strip_prefix(':') {
+                (Some(rest), 1)
+            } else if let Some(rest) = suffix.strip_prefix(" is ") {
+                (Some(rest), 4)
+            } else {
+                (None, 0)
+            };
+            if let Some(value_str) = value_start {
+                let value_chars: String = value_str
+                    .trim_start()
+                    .chars()
+                    .take_while(|c| {
+                        !c.is_ascii_whitespace()
+                            && !matches!(c, '\'' | '"' | ';')
+                    })
+                    .collect();
+                if value_chars.len() >= 6 {
+                    let leading_ws = value_str.len() - value_str.trim_start().len();
+                    let full_match_start = pos + name.len() + delimiter_len + leading_ws;
+                    let full_match_end = full_match_start + value_chars.len();
+                    result.replace_range(full_match_start..full_match_end, "REDACTED");
+                    lower = result.to_ascii_lowercase();
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+    }
+    result
+}
+
+fn redact_url_credentials(input: String) -> String {
+    let mut result = String::new();
+    let mut last_end = 0;
+    for (offset, _) in input.match_indices("://") {
+        let after = offset + 3;
+        let credential_section: String = input[after..]
+            .chars()
+            .take_while(|c| !matches!(c, '/' | '?' | '#' | ' '))
+            .collect();
+        if credential_section.contains('@') {
+            let at_pos = credential_section.find('@').unwrap();
+            let host_part = &credential_section[at_pos + 1..];
+            result.push_str(&input[last_end..offset]);
+            result.push_str(&format!("://{}", host_part));
+            last_end = after + credential_section.len();
+        }
+    }
+    result.push_str(&input[last_end..]);
+    result
+}
+
+fn redact_pem_blocks(input: String) -> String {
+    let mut result = input;
+    loop {
+        let start_pattern = result
+            .match_indices("-----BEGIN ")
+            .filter(|&(_, p)| {
+                p.starts_with("RSA ")
+                    || p.starts_with("DSA ")
+                    || p.starts_with("EC ")
+                    || p == "-----BEGIN CERTIFICATE-----"
+                    || p == "-----BEGIN PUBLIC KEY-----"
+                    || p == "-----BEGIN PRIVATE KEY-----"
+                    || p == "-----BEGIN OPENSSH PRIVATE KEY-----"
+            })
+            .next();
+        let end_pattern = result
+            .match_indices("-----END ")
+            .filter(|&(_, p)| {
+                p.starts_with("RSA ")
+                    || p.starts_with("DSA ")
+                    || p.starts_with("EC ")
+                    || p == "-----END CERTIFICATE-----"
+                    || p == "-----END PUBLIC KEY-----"
+                    || p == "-----END PRIVATE KEY-----"
+                    || p == "-----END OPENSSH PRIVATE KEY-----"
+            })
+            .next();
+        match (start_pattern, end_pattern) {
+            (Some((start, _)), Some((end, _))) if end > start => {
+                let label = &result[start..start + 16];
+                result.replace_range(start..=end + 10, &format!("{}...REDACTED...", label));
+            }
+            _ => break,
+        }
+    }
+    result
+}
+
 fn sensitive_path(path: &str) -> bool {
     path.split('/').any(|component| {
         let lower = component.to_ascii_lowercase();
@@ -1377,5 +1616,49 @@ mod tests {
         assert!(windows_arguments
             .iter()
             .any(|argument| argument == "--strict-config"));
+    }
+
+    #[test]
+    fn sanitization_redacts_secrets_from_cloud_text() {
+        let cases = [
+            "Use the key sk-abcdefghij1234567890 for authentication",
+            "Bearer eyJhbGciOiJIUzI1NiJ9.test.signature123",
+            "AKIAIOSFODNN7EXAMPLE1 is the AWS key",
+            "github_pat_abcdefghij1234567890abcdefghij1234567890",
+            "https://user:pass@host.com/path",
+            "api_key = supersecretvalue123",
+        ];
+        for case in cases {
+            let original = case;
+            let sanitized = sanitize_cloud_text(case);
+            assert!(!contains_secret_shape(&sanitized), 
+                "Failed to sanitize: {} -> {} (still secret-shaped)", original, sanitized);
+        }
+    }
+
+    #[test]
+    fn sanitization_allows_planning_prose_without_secrets() {
+        let cases = [
+            "The implementation should follow a layered architecture with clear separation of concerns",
+            "Use dependency injection for the service layer to improve testability",
+            "The validation command is python -m unittest discover -s tests",
+            "Consider using a feature flag for the new authentication flow",
+        ];
+        for case in cases {
+            assert!(validate_cloud_text(case).is_ok(), "False positive for: {}", case);
+        }
+    }
+
+    #[test]
+    fn sanitization_preserves_non_secret_tokens() {
+        let cases = [
+            "The variable name is sk_test_123",
+            "Use the sk-prefix for configuration",
+            "The AKIA string is not a valid AWS key",
+        ];
+        for case in cases {
+            let sanitized = sanitize_cloud_text(case);
+            assert!(!contains_secret_shape(&sanitized), "Failed to sanitize: {} -> {}", case, sanitized);
+        }
     }
 }

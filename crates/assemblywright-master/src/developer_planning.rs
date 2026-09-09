@@ -3,7 +3,7 @@
 //! Codex may propose the next bounded planning artifact. Only this module advances
 //! the durable gates, and only the owner-facing HTTP mutation may confirm them.
 
-use crate::developer_review::{hex_digest, validate_cloud_text, MODEL_ID, PROVIDER_ID};
+use crate::developer_review::{hex_digest, sanitize_and_validate_cloud_text, validate_cloud_text, MODEL_ID, PROVIDER_ID};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -732,7 +732,7 @@ fn validate_output(packet: &PlanningPacket, output: &PlanningProviderOutput) -> 
     {
         bail!("Planning response is not bound to the exact request");
     }
-    validate_provider_output_texts(output)?;
+    validate_provider_output_texts_sanitized(output)?;
     let expected: &[&str] = match packet.expected_response.as_str() {
         "question_or_understanding" => &["question", "understanding"],
         "approaches" => &["approaches"],
@@ -849,13 +849,13 @@ fn validate_output(packet: &PlanningPacket, output: &PlanningProviderOutput) -> 
     Ok(())
 }
 
-fn validate_provider_output_texts(output: &PlanningProviderOutput) -> Result<()> {
+fn validate_provider_output_texts_sanitized(output: &PlanningProviderOutput) -> Result<()> {
     if let Some(question) = &output.question {
-        cloud_text(&question.text, 2_000)?;
-        validate_cloud_texts(&question.choices, 500)?;
+        sanitize_cloud_text(&question.text, 2_000)?;
+        sanitize_cloud_texts(&question.choices, 500)?;
     }
-    validate_cloud_texts(&output.understanding_summary, 2_000)?;
-    validate_cloud_texts(&output.open_questions, 2_000)?;
+    sanitize_cloud_texts(&output.understanding_summary, 2_000)?;
+    sanitize_cloud_texts(&output.open_questions, 2_000)?;
     if let Some(assumptions) = &output.assumptions {
         for value in [
             &assumptions.performance,
@@ -864,26 +864,26 @@ fn validate_provider_output_texts(output: &PlanningProviderOutput) -> Result<()>
             &assumptions.reliability_availability,
             &assumptions.maintenance_ownership,
         ] {
-            cloud_text(value, 2_000)?;
+            sanitize_cloud_text(value, 2_000)?;
         }
-        validate_cloud_texts(&assumptions.other, 2_000)?;
+        sanitize_cloud_texts(&assumptions.other, 2_000)?;
     }
     for approach in &output.approaches {
-        cloud_text(&approach.title, 200)?;
-        cloud_text(&approach.summary, 2_000)?;
-        validate_cloud_texts(&approach.tradeoffs, 2_000)?;
+        sanitize_cloud_text(&approach.title, 200)?;
+        sanitize_cloud_text(&approach.summary, 2_000)?;
+        sanitize_cloud_texts(&approach.tradeoffs, 2_000)?;
     }
     if let Some(section) = &output.design_section {
-        cloud_text(&section.title, 200)?;
-        cloud_text(&section.body, 4_000)?;
+        sanitize_cloud_text(&section.title, 200)?;
+        sanitize_cloud_text(&section.body, 4_000)?;
     }
     for decision in &output.decision_log {
-        cloud_text(&decision.decision, 2_000)?;
-        cloud_text(&decision.reason, 2_000)?;
-        validate_cloud_texts(&decision.alternatives, 2_000)?;
+        sanitize_cloud_text(&decision.decision, 2_000)?;
+        sanitize_cloud_text(&decision.reason, 2_000)?;
+        sanitize_cloud_texts(&decision.alternatives, 2_000)?;
     }
     if let Some(plan) = &output.implementation_plan {
-        cloud_text(plan, 16_000)?;
+        sanitize_cloud_text(plan, 16_000)?;
     }
     Ok(())
 }
@@ -1118,6 +1118,18 @@ fn cloud_text(value: &str, max: usize) -> Result<()> {
 fn validate_cloud_texts(values: &[String], max: usize) -> Result<()> {
     for value in values {
         cloud_text(value, max)?;
+    }
+    Ok(())
+}
+
+fn sanitize_cloud_text(value: &str, max: usize) -> Result<()> {
+    validate_input(value, max, "cloud planning text")?;
+    sanitize_and_validate_cloud_text(value)
+}
+
+fn sanitize_cloud_texts(values: &[String], max: usize) -> Result<()> {
+    for value in values {
+        sanitize_cloud_text(value, max)?;
     }
     Ok(())
 }
