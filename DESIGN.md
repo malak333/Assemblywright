@@ -7,6 +7,15 @@ queue and checkpoints, uses the local model, and executes owner-selected validat
 commands under the existing Windows account. It is separate from the protected
 production runtime described below and does not manufacture its readiness evidence.
 
+The owner-approved developer chat extension keeps project questions separate from
+feature planning and execution. Windows or Mac local AI can answer chat, but only a
+separate, explicit owner action may approve a frozen repair proposal for the first
+failed feature. The proposal binds exact before/after bytes and may include a
+specifically reviewed test correction. Application has one attempt, preserves the
+ordinary repair history, reruns the unchanged validation command, and still requires
+independent Codex approval before success or auto-run advancement. See
+[`docs/developer-chat-repair-design.md`](docs/developer-chat-repair-design.md).
+
 This document is the system-level design. Two documents own the detailed
 accepted designs and take precedence within their scope:
 

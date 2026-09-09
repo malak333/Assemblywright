@@ -36,6 +36,7 @@ getrandom.workspace = true
 git2.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
+image.workspace = true
 assemblywright-protocol = { path = "../assemblywright-protocol", version = "0.1.4" }
 libc.workspace = true
 p256.workspace = true
@@ -46,7 +47,6 @@ rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-tempfile.workspace = true
 thiserror.workspace = true
 time.workspace = true
 tokio.workspace = true
@@ -74,3 +74,6 @@ windows-sys = { workspace = true, features = [
   "Win32_UI_Shell",
 ] }
 windows-service.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

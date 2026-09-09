@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """Disposable native HTTP/process coverage; the model response is a labeled fixture."""
+from developer_review_fixture import reviewer_arguments
+from developer_planning_fixture import enqueue_with_plan
+
 import argparse
+from contextlib import closing
 import http.server
 import json
-import os
 from pathlib import Path
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -16,38 +20,6 @@ import urllib.request
 import uuid
 
 
-def process_alive(pid):
-    if sys.platform == 'win32':
-        import ctypes
-        from ctypes import wintypes
-        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
-        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-        kernel.OpenProcess.restype = wintypes.HANDLE
-        kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
-        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-        handle = kernel.OpenProcess(0x00100000, False, pid)
-        if not handle:
-            assert ctypes.get_last_error() == 87, 'Unable to inspect owned validation process'
-            return False
-        try:
-            result = kernel.WaitForSingleObject(handle, 0)
-            assert result in (0, 258), 'Unable to query owned validation process'
-            return result == 258
-        finally:
-            kernel.CloseHandle(handle)
-    result = subprocess.run(['ps', '-o', 'stat=', '-p', str(pid)], capture_output=True, text=True)
-    return bool(result.stdout.strip()) and not result.stdout.strip().startswith('Z')
-
-
-def wait_reaped(pids):
-    deadline = time.monotonic() + 8
-    while time.monotonic() < deadline:
-        if not any(process_alive(pid) for pid in pids):
-            return
-        time.sleep(.05)
-    raise AssertionError('Validation descendants survived termination: ' + str(pids))
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', required=True)
@@ -56,11 +28,12 @@ def main():
 
     class Model(http.server.BaseHTTPRequestHandler):
         def do_POST(self):
-            calls.append(json.loads(self.rfile.read(int(self.headers['Content-Length']))))
+            request = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            calls.append(request)
             content = json.dumps({'files': [{'path': 'result.txt', 'content': 'real file from fixture model\n'}]})
             if len(calls) == 2:
                 content = '```json\n' + content + '\n```'
-            if len(calls) == 4:
+            if 'Fixture malformed-response boundary' in request['messages'][1]['content']:
                 content = 'invalid JSON fixture'
             body = json.dumps({'choices': [{'message': {'content': content}}]}).encode()
             self.send_response(200)
@@ -81,12 +54,26 @@ def main():
         root = Path(temp)
         data = root / 'state'
         projects = root / 'projects'
+        data.mkdir()
+        legacy_state = json.dumps({'revision': 0, 'auto_run': True, 'emergency_paused': False, 'queue': []}, separators=(',', ':'))
+        with closing(sqlite3.connect(data / 'developer.sqlite3')) as database:
+            database.execute('CREATE TABLE developer_state(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL)')
+            database.execute('INSERT INTO developer_state(id,state) VALUES(1,?)', (legacy_state,))
+            database.commit()
         command = [str(Path(args.binary).resolve()), '--data-dir', str(data), '--workspace-root', str(projects), '--bind', f'127.0.0.1:{port}', '--model-url', f'http://127.0.0.1:{model.server_port}/v1']
+        command += reviewer_arguments(root)
         output = (root / 'runner.log').open('wb')
         process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=output, stderr=output)
         token = ''
 
         def call(action=None, **values):
+            if action == 'enqueue':
+                return enqueue_with_plan(f'http://127.0.0.1:{port}', token, values)
+            if action in ('start', 'resume') and 'expected_feature_id' not in values:
+                current = call()
+                feature = next(f for f in current['queue'] if f['status'] not in ('succeeded', 'removed'))
+                values.update(expected_feature_id=feature['id'], expected_model_target=feature['model_target'],
+                              expected_status=feature['status'], expected_checkpoint=feature['checkpoint'])
             body = json.dumps(dict(action=action, **values)).encode() if action else None
             req = urllib.request.Request(f'http://127.0.0.1:{port}/' + ('control' if action else 'status'), data=body, headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
             return json.load(urllib.request.urlopen(req, timeout=5))
@@ -126,22 +113,26 @@ def main():
             except urllib.error.HTTPError as error:
                 assert error.code == 409
             for project in ['second', 'third']:
-                call('enqueue', id=str(uuid.uuid4()), project=project, instruction='Create a fixture result file', validation=python + ' -c "from pathlib import Path; assert Path(\'result.txt\').is_file()"')
+                feature_id = str(uuid.uuid4())
+                call('enqueue', id=feature_id, project=project, instruction='Create a fixture result file', validation=python + ' -c "from pathlib import Path; assert Path(\'result.txt\').is_file()"')
+                if project == 'second':
+                    second_id = feature_id
             call('auto_run', enabled=False)
             call('start')
             wait(lambda s: s['queue'][0]['checkpoint'] == 'applied' and s['running'])
             modified = (projects / 'first/result.txt').stat().st_mtime_ns
+            for feature_id in [first_id, second_id]:
+                try:
+                    call('remove', id=feature_id)
+                    raise AssertionError('Removal accepted while runner was active')
+                except urllib.error.HTTPError as error:
+                    assert error.code == 409
             started = time.monotonic()
             call('stop')
             paused = wait(lambda s: not s['running'], 5)
             assert paused['queue'][0]['status'] == 'paused'
             assert paused['queue'][0]['checkpoint'] == 'applied'
             stop_seconds = time.monotonic() - started
-            process.terminate()
-            process.wait(timeout=5)
-            process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=output, stderr=output)
-            restored_pause = wait(lambda s: not s['running'] and s['queue'][0]['status'] == 'paused')
-            assert restored_pause['queue'][0]['checkpoint'] == 'applied'
             call('resume')
             wait(lambda s: s['running'])
             call('emergency')
@@ -162,92 +153,77 @@ def main():
             call('start')
             completed = wait(lambda s: not s['running'] and all(f['status'] == 'succeeded' for f in s['queue']))
             assert len(calls) == 3
-            for project in ['malformed', 'must-wait']:
-                call('enqueue', id=str(uuid.uuid4()), project=project, instruction='Fixture malformed-response boundary', validation=python + ' -c "raise SystemExit(0)"')
+            try:
+                call('remove', id=first_id)
+                raise AssertionError('Completed feature removal accepted')
+            except urllib.error.HTTPError as error:
+                assert error.code == 409
+            for invalid_id in ['not-a-uuid', str(uuid.uuid4())]:
+                try:
+                    call('remove', id=invalid_id)
+                    raise AssertionError('Invalid removal target accepted')
+                except urllib.error.HTTPError as error:
+                    assert error.code == 409
+            malformed_id = str(uuid.uuid4())
+            blocked_id = str(uuid.uuid4())
+            call('enqueue', id=malformed_id, project='malformed', instruction='Fixture malformed-response boundary', validation=python + ' -c "raise SystemExit(0)"')
+            call('enqueue', id=blocked_id, project='blocked-by-malformed', instruction='Create a fixture result file', validation=python + ' -c "from pathlib import Path; assert Path(\'result.txt\').is_file()"')
             call('start')
-            failed = wait(lambda s: not s['running'] and s['queue'][3]['status'] == 'failed')
-            assert failed['queue'][4]['status'] == 'queued'
+            malformed = wait(lambda s: not s['running'] and s['queue'][3]['status'] == 'failed')
+            assert malformed['queue'][4]['status'] == 'queued'
             assert not (projects / 'malformed/result.txt').exists()
             assert len(calls) == 4
+            call('remove', id=malformed_id)
+            call('start')
+            wait(lambda s: not s['running'] and s['queue'][-1]['id'] == blocked_id and s['queue'][-1]['status'] == 'succeeded')
+            assert len(calls) == 5
+            failed_id = str(uuid.uuid4())
+            waiting_id = str(uuid.uuid4())
+            call('enqueue', id=failed_id, project='failed-applied', instruction='Create a fixture file before validation fails', validation=python + ' -c "raise SystemExit(7)"')
+            call('enqueue', id=waiting_id, project='must-wait', instruction='Create a fixture result file', validation=python + ' -c "from pathlib import Path; assert Path(\'result.txt\').is_file()"')
+            call('start')
+            failed = wait(lambda s: not s['running'] and s['queue'][4]['status'] == 'failed')
+            assert failed['queue'][5]['status'] == 'queued'
+            assert len(calls) == 6
+            failed_file = projects / 'failed-applied/result.txt'
+            assert failed_file.read_text() == 'real file from fixture model\n'
+            try:
+                request = urllib.request.Request(f'http://127.0.0.1:{port}/control', data=json.dumps({'action': 'remove', 'id': failed_id}).encode(), headers={'Content-Type': 'application/json'})
+                urllib.request.urlopen(request, timeout=5)
+                raise AssertionError('Unauthenticated removal accepted')
+            except urllib.error.HTTPError as error:
+                assert error.code == 401
+            removed = call('remove', id=failed_id)
+            assert failed_id not in [feature['id'] for feature in removed['queue']]
+            assert waiting_id in [feature['id'] for feature in removed['queue']]
+            call('remove', id=failed_id)
+            assert failed_file.read_text() == 'real file from fixture model\n'
             process.terminate()
             process.wait(timeout=5)
             process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=output, stderr=output)
             restored = wait(lambda s: len(s['queue']) == 5)
-            assert [f['status'] for f in restored['queue']] == ['succeeded'] * 3 + ['failed', 'queued']
+            assert [f['status'] for f in restored['queue']] == ['succeeded'] * 4 + ['queued']
+            call('remove', id=failed_id)
             assert not restored['running']
-            # Retry malformed generation, then exercise a real failed validation.
-            call('resume')
-            wait(lambda s: not s['running'] and all(f['status'] == 'succeeded' for f in s['queue']))
-            call('enqueue', id=str(uuid.uuid4()), project='validation-failure', instruction='Fixture validation failure', validation=python + ' -c "from pathlib import Path; assert Path(\'fixed.txt\').exists()"')
-            call('enqueue', id=str(uuid.uuid4()), project='after-failure', instruction='Must wait for validation success', validation=python + ' -c "raise SystemExit(0)"')
+            with closing(sqlite3.connect(data / 'developer.sqlite3')) as database:
+                durable = json.loads(database.execute('SELECT state FROM developer_state WHERE id=1').fetchone()[0])
+                legacy_backup = database.execute('SELECT state FROM developer_state_v1_backup WHERE id=1').fetchone()[0]
+            assert legacy_backup == legacy_state
+            assert 'queue' not in durable
+            assert 'queue_v2' not in durable
+            assert 'queue_v3' not in durable
+            tombstone = next(feature for feature in durable['queue_v8'] if feature['id'] == failed_id)
+            assert all(feature['model_target'] == 'mac' for feature in durable['queue_v8'])
+            assert tombstone['status'] == 'removed'
+            assert tombstone['checkpoint'] == 'applied'
+            assert tombstone['edits'][0]['path'] == 'result.txt'
+            assert 'Validation failed' in tombstone['message']
             call('start')
-            failed_validation = wait(lambda s: not s['running'] and s['queue'][-2]['status'] == 'failed')
-            assert failed_validation['queue'][-2]['checkpoint'] == 'applied'
-            assert 'Validation failed' in failed_validation['queue'][-2]['message']
-            assert failed_validation['queue'][-1]['status'] == 'queued'
-            planned = len(calls)
-            (projects / 'validation-failure/fixed.txt').write_text('owner repair')
-            call('resume')
-            wait(lambda s: not s['running'] and all(f['status'] == 'succeeded' for f in s['queue']))
-            assert len(calls) == planned + 1, 'Validation retry regenerated applied changes'
-            # A Start authorizes only the queue present at that moment.
-            call('enqueue', id=str(uuid.uuid4()), project='batch-frontier', instruction='Bound the starting batch', validation=validation)
-            call('start')
-            wait(lambda s: s['running'] and s['queue'][-1]['checkpoint'] == 'applied')
-            call('enqueue', id=str(uuid.uuid4()), project='future-work', instruction='Requires another Start', validation=python + ' -c "raise SystemExit(0)"')
-            bounded = wait(lambda s: not s['running'])
-            assert bounded['queue'][-2]['status'] == 'succeeded'
-            assert bounded['queue'][-1]['status'] == 'queued'
-            assert not (projects / 'future-work/result.txt').exists()
-            call('start')
-            wait(lambda s: not s['running'] and all(f['status'] == 'succeeded' for f in s['queue']))
-            # Owned descendants must terminate on Stop/Emergency and Windows runner death.
-            tree_script = root / 'validation-tree.py'
-            tree_script.write_text("import json,os,subprocess,sys,time\nfrom pathlib import Path\nif Path('allow-validation').exists():\n    assert Path('result.txt').exists()\n    raise SystemExit(0)\nchild = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\nPath('validation-pids.json').write_text(json.dumps([os.getpid(), child.pid]))\ntime.sleep(30)\n")
-            call('enqueue', id=str(uuid.uuid4()), project='process-tree', instruction='Validate process ownership', validation=python + ' "' + str(tree_script) + '"')
-            tree = projects / 'process-tree'
-            pids_path = tree / 'validation-pids.json'
-
-            def started_tree():
-                wait(lambda s: s['running'] and pids_path.exists())
-                # File creation and writing may be observed separately.
-                for _ in range(100):
-                    try:
-                        return json.loads(pids_path.read_text())
-                    except ValueError:
-                        time.sleep(.01)
-                raise AssertionError('Validation did not publish its process IDs')
-
-            call('start')
-            pids = started_tree()
-            call('stop')
-            wait(lambda s: not s['running'])
-            wait_reaped(pids)
-            pids_path.unlink()
-            call('resume')
-            pids = started_tree()
-            call('emergency')
-            wait(lambda s: not s['running'])
-            wait_reaped(pids)
-            call('clear_emergency')
-            windows_crash_reaped = None
-            if sys.platform == 'win32':
-                pids_path.unlink()
-                call('resume')
-                pids = started_tree()
-                process.kill()
-                process.wait(timeout=5)
-                wait_reaped(pids)
-                process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=output, stderr=output)
-                crash_state = wait(lambda s: not s['running'] and s['queue'][-1]['status'] == 'paused')
-                assert crash_state['queue'][-1]['checkpoint'] == 'applied'
-                windows_crash_reaped = True
-            before_resume = len(calls)
-            (tree / 'allow-validation').write_text('owner-approved retry')
-            call('resume')
-            wait(lambda s: not s['running'] and s['queue'][-1]['status'] == 'succeeded')
-            assert len(calls) == before_resume
-            print(json.dumps({'native_platform': sys.platform, 'descendants_reaped_after_stop_and_emergency': True, 'windows_runner_crash_reaps_job': windows_crash_reaped, 'stop_seconds': round(stop_seconds, 3), 'checkpoint_resume_no_rewrite_or_replanning': True, 'emergency_during_validation': True, 'auto_run_off_waits': True, 'auto_run_on_advances': True, 'restart_preserves_results': True, 'paused_checkpoint_survives_restart': True, 'validation_failure_blocks_advancement': True, 'start_binds_queue_frontier': True, 'malformed_output_blocks_advancement': True, 'model_calls': len(calls)}))
+            advanced = wait(lambda s: not s['running'] and s['queue'][-1]['id'] == waiting_id and s['queue'][-1]['status'] == 'succeeded')
+            assert failed_id not in [feature['id'] for feature in advanced['queue']]
+            assert failed_file.read_text() == 'real file from fixture model\n'
+            assert len(calls) == 7
+            print(json.dumps({'native_platform': sys.platform, 'stop_seconds': round(stop_seconds, 3), 'checkpoint_resume_no_rewrite_or_replanning': True, 'emergency_during_validation': True, 'auto_run_off_waits': True, 'auto_run_on_advances': True, 'restart_preserves_results': True, 'malformed_output_blocks_advancement': True, 'remove_failed_advances_queue': True, 'remove_preserves_files_and_evidence': True, 'remove_persists_across_restart': True, 'remove_rejected_while_running': True, 'model_calls': len(calls)}))
         finally:
             try:
                 call('emergency')

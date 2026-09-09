@@ -5,6 +5,11 @@ struct DeveloperRunnerConfiguration: Decodable {
   let endpoint: String
   let token: String
 }
+struct DeveloperRunnerModelTarget: Decodable, Identifiable {
+  let id: String
+  let name: String
+  let model: String
+}
 struct DeveloperRunnerFeature: Decodable, Identifiable {
   let id: String
   let project: String
@@ -14,6 +19,56 @@ struct DeveloperRunnerFeature: Decodable, Identifiable {
   let checkpoint: String
   let message: String
   let changedFiles: [String]
+  let repairAttempts: Int?
+  let modelTarget: String?
+  var reviewStatus: String? = nil
+  var reviewModel: String? = nil
+  var reviewSummary: String? = nil
+  var reviewAttempts: Int? = nil
+  var planningStatus: String? = nil
+  var escalationCount: Int? = nil
+  var escalationStatus: String? = nil
+
+  var hasApprovedReview: Bool { reviewStatus == "approved" }
+  var resultLabel: String {
+    if status == "succeeded" && !hasApprovedReview { return "Tests passed · not reviewed" }
+    return status.replacingOccurrences(of: "_", with: " ").capitalized
+  }
+  var reviewLabel: String {
+    switch reviewStatus {
+    case "approved": return "Codex review: approved"
+    case "rejected": return "Codex review: changes requested"
+    case "reviewing", "in_progress": return "Codex review: in progress"
+    case "legacy_unreviewed": return "Codex review: not run on this older result"
+    case nil, "not_started", "pending": return "Codex review: pending"
+    default: return "Codex review: approval unavailable"
+    }
+  }
+
+  var modelComputer: String {
+    switch modelTarget ?? "mac" {
+    case "mac": return "Mac"
+    case "windows": return "Windows"
+    default: return "Unavailable model computer"
+    }
+  }
+
+  var startBinding: [String: Any] {
+    ["expected_feature_id": id, "expected_model_target": modelTarget ?? "mac",
+     "expected_status": status, "expected_checkpoint": checkpoint]
+  }
+
+  var requiresEscalationRecovery: Bool {
+    checkpoint.hasPrefix("escalation_") && checkpoint.hasSuffix("_apply_interrupted")
+  }
+
+  var canRemove: Bool { ["queued", "paused", "failed"].contains(status) }
+  var isFinished: Bool { ["succeeded", "removed"].contains(status) }
+  var canRepair: Bool {
+    guard status == "failed", !requiresEscalationRecovery, !["unavailable", "interrupted"].contains(reviewStatus ?? ""), let attempts = repairAttempts
+    else { return false }
+    return attempts >= 0 && attempts < 3
+  }
 }
 struct DeveloperRunnerSnapshot: Decodable {
   let mode: String
@@ -23,7 +78,68 @@ struct DeveloperRunnerSnapshot: Decodable {
   let autoRun: Bool
   let emergencyPaused: Bool
   let running: Bool
+  let chatRunning: Bool?
   let queue: [DeveloperRunnerFeature]
+  let repairLimit: Int?
+  let repairActive: Bool?
+  let modelTargets: [DeveloperRunnerModelTarget]?
+  let reviewRequired: Bool
+  let reviewProvider: String
+  let reviewModel: String
+  let planningRequired: Bool
+  let planningProvider: String
+  let planningModel: String
+  let planningRunning: Bool
+  let planningSessions: [DeveloperPlanningSummary]
+  var escalationRunning: Bool? = nil
+  var chatModelSelection: Bool? = nil
+
+  var hasRequiredPlanner: Bool {
+    planningRequired && planningProvider == "openai.codex" && planningModel == "gpt-5.6-sol"
+  }
+
+  var hasRequiredReviewer: Bool {
+    reviewRequired && reviewProvider == "openai.codex" && reviewModel == "gpt-5.6-sol"
+  }
+
+  var availableModelTargets: [DeveloperRunnerModelTarget] {
+    guard let modelTargets else {
+      return [DeveloperRunnerModelTarget(id: "mac", name: "Mac", model: "Local model")]
+    }
+    return modelTargets.filter { ["mac", "windows"].contains($0.id) && !$0.model.isEmpty }
+  }
+
+  var availableChatModelTargets: [DeveloperRunnerModelTarget] {
+    guard chatModelSelection == true, modelTargets != nil else { return [] }
+    return availableModelTargets
+  }
+
+  func canSelectChatModel(_ id: String) -> Bool {
+    availableChatModelTargets.contains { $0.id == id }
+  }
+
+  func canSelectModel(_ id: String) -> Bool {
+    availableModelTargets.contains { $0.id == id }
+  }
+
+  var visibleQueue: [DeveloperRunnerFeature] { queue.filter { $0.status != "removed" } }
+  var nextFeature: DeveloperRunnerFeature? { queue.first { !$0.isFinished } }
+
+  func canRemove(_ feature: DeveloperRunnerFeature) -> Bool {
+    !running && escalationRunning != true && queue.contains { $0.id == feature.id && $0.canRemove }
+  }
+
+  func canEscalate(_ feature: DeveloperRunnerFeature) -> Bool {
+    !running && !planningRunning && !emergencyPaused && chatRunning != true && escalationRunning == false
+      && nextFeature?.id == feature.id && nextFeature?.status == "failed"
+      && nextFeature?.checkpoint == feature.checkpoint
+  }
+
+  func canRepair(_ feature: DeveloperRunnerFeature) -> Bool {
+    !running && escalationRunning != true && !planningRunning && !emergencyPaused && repairLimit == 3 && repairActive == false
+      && nextFeature?.id == feature.id
+      && nextFeature?.canRepair == true
+  }
 }
 
 @MainActor
@@ -31,13 +147,16 @@ final class DeveloperRunnerModel: ObservableObject {
   @Published var snapshot: DeveloperRunnerSnapshot?
   @Published var error: String?
   @Published var sending = false
-  private let configuration: DeveloperRunnerConfiguration?
+  private let configurationPath: String
+  private var configuration: DeveloperRunnerConfiguration? {
+    try? JSONDecoder().decode(DeveloperRunnerConfiguration.self,
+      from: Data(contentsOf: URL(fileURLWithPath: configurationPath)))
+  }
   private let session: URLSession
+  private var actionError: String?
 
   init(configurationPath: String, session: URLSession? = nil) {
-    configuration = try? JSONDecoder().decode(
-      DeveloperRunnerConfiguration.self,
-      from: Data(contentsOf: URL(fileURLWithPath: configurationPath)))
+    self.configurationPath = configurationPath
     let settings = URLSessionConfiguration.ephemeral
     settings.timeoutIntervalForRequest = 10
     self.session = session ?? URLSession(configuration: settings)
@@ -73,7 +192,10 @@ final class DeveloperRunnerModel: ObservableObject {
     let decoder = JSONDecoder()
     decoder.keyDecodingStrategy = .convertFromSnakeCase
     let snapshot = try decoder.decode(DeveloperRunnerSnapshot.self, from: data)
-    guard snapshot.mode == "supervised_developer" else { throw URLError(.cannotParseResponse) }
+    guard snapshot.mode == "supervised_developer", snapshot.hasRequiredReviewer, snapshot.hasRequiredPlanner else {
+      throw NSError(domain: "Developer runner", code: 3,
+        userInfo: [NSLocalizedDescriptionKey: "Update the Windows developer runner with its launcher. This app requires ChatGPT brainstorming before implementation and Codex review before success."])
+    }
     return snapshot
   }
 
@@ -81,8 +203,11 @@ final class DeveloperRunnerModel: ObservableObject {
     do {
       let observed = try await request(path: "status")
       if observed.revision >= (snapshot?.revision ?? 0) { snapshot = observed }
-      error = nil
-    } catch { self.error = error.localizedDescription }
+      error = actionError
+    } catch {
+      snapshot = nil
+      self.error = error.localizedDescription
+    }
   }
 
   func observe() async {
@@ -101,24 +226,35 @@ final class DeveloperRunnerModel: ObservableObject {
       body["action"] = action
       let updated = try await request(path: "control", body: body)
       if updated.revision >= (snapshot?.revision ?? 0) { snapshot = updated }
+      actionError = nil
       error = nil
-    } catch { self.error = error.localizedDescription }
+    } catch {
+      actionError = error.localizedDescription
+      self.error = actionError
+    }
   }
 }
 
 struct DeveloperRunnerView: View {
+  private let configurationPath: String
   @StateObject private var model: DeveloperRunnerModel
-  @State private var project = "first-project"
-  @State private var instruction = ""
-  @State private var validation = "python -m unittest discover -s tests -v"
+  @StateObject private var connection: DeveloperConnectionModel
   @State private var confirmingStart = false
-  @State private var enqueueID = UUID().uuidString.lowercased()
+  @State private var startFeature: DeveloperRunnerFeature?
+  @State private var confirmingRepair = false
+  @State private var repairFeature: DeveloperRunnerFeature?
+  @State private var showingEscalation = false
+  @State private var escalationFeatureId: String?
+  @AppStorage("developerChatProject") private var chatProject = ""
+  @AppStorage("developerChatRepairFeature") private var chatRepairFeature = ""
 
   init(configurationPath: String) {
+    self.configurationPath = configurationPath
     _model = StateObject(wrappedValue: DeveloperRunnerModel(configurationPath: configurationPath))
+    _connection = StateObject(wrappedValue: DeveloperConnectionModel(configurationPath: configurationPath))
   }
   private var next: DeveloperRunnerFeature? {
-    model.snapshot?.queue.first { $0.status != "succeeded" }
+    model.snapshot?.nextFeature
   }
   private var startLabel: String {
     if let next, ["paused", "failed"].contains(next.status) { return "Resume" }
@@ -126,6 +262,7 @@ struct DeveloperRunnerView: View {
       ? "Start next feature" : "Start"
   }
   var body: some View {
+    HSplitView {
     ScrollView {
       VStack(alignment: .leading, spacing: 22) {
         HStack(alignment: .firstTextBaseline) {
@@ -138,41 +275,17 @@ struct DeveloperRunnerView: View {
           Label("Connected to \(snapshot.host)", systemImage: "checkmark.circle.fill")
             .foregroundStyle(.green)
           Text(
-            "Windows runs your project. The local model prepares changes; your validation command checks them."
+            "Plan features with ChatGPT, then let the Mac implement the approved documents. Windows runs tests and requests Codex review."
           ).foregroundStyle(.secondary)
         } else {
-          ProgressView("Connecting to Windows…")
+          VStack(alignment: .leading, spacing: 6) {
+            Label(connection.title, systemImage: connection.needsAttention ? "exclamationmark.circle" : "network")
+              .foregroundStyle(connection.needsAttention ? .orange : .secondary)
+            Text(connection.message).font(.caption).foregroundStyle(.secondary)
+          }
         }
         if let error = model.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
-        GroupBox("Add a feature") {
-          VStack(alignment: .leading, spacing: 12) {
-            TextField("Project folder on Windows", text: $project)
-            TextField("What should this feature do?", text: $instruction, axis: .vertical)
-              .lineLimit(3...8)
-            TextField("Validation command", text: $validation)
-            HStack {
-              Button("Add to queue") {
-                let values: [String: Any] = [
-                  "id": enqueueID, "project": project, "instruction": instruction,
-                  "validation": validation,
-                ]
-                Task {
-                  await model.send("enqueue", values: values)
-                  if model.error == nil {
-                    instruction = ""
-                    enqueueID = UUID().uuidString.lowercased()
-                  }
-                }
-              }.disabled(
-                model.sending || instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                  || project.isEmpty || validation.isEmpty)
-              Spacer()
-              if let root = model.snapshot?.workspaceRoot {
-                Text(root).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-              }
-            }
-          }.padding(10).textFieldStyle(.roundedBorder)
-        }
+        DeveloperPlanningView(configurationPath: configurationPath, runner: model.snapshot)
         GroupBox("Assembly line") {
           VStack(alignment: .leading, spacing: 14) {
             HStack {
@@ -189,6 +302,12 @@ struct DeveloperRunnerView: View {
               if model.snapshot?.running == true {
                 ProgressView().controlSize(.small)
                 Text("Running")
+              } else if model.snapshot?.escalationRunning == true {
+                ProgressView().controlSize(.small)
+                Text("Preparing repair")
+              } else if model.snapshot?.planningRunning == true {
+                ProgressView().controlSize(.small)
+                Text("Brainstorming")
               } else if model.snapshot?.emergencyPaused == true {
                 Text("Emergency paused").foregroundStyle(.orange)
               } else {
@@ -196,42 +315,97 @@ struct DeveloperRunnerView: View {
               }
             }
             HStack {
-              Button(startLabel) { confirmingStart = true }
+              Button(startLabel) {
+                startFeature = next
+                confirmingStart = true
+              }
                 .buttonStyle(.borderedProminent)
                 .disabled(
-                  next == nil || model.snapshot?.running == true
+                  next == nil || next?.requiresEscalationRecovery == true || model.snapshot?.running == true || model.snapshot?.escalationRunning == true || model.snapshot?.planningRunning == true
                     || model.snapshot?.emergencyPaused == true || model.sending)
               Button("Stop") { Task { await model.send("stop") } }.disabled(
-                model.snapshot?.running != true)
+                model.snapshot?.running != true && model.snapshot?.planningRunning != true && model.snapshot?.escalationRunning != true)
               Button("Emergency Pause", role: .destructive) {
                 Task { await model.send("emergency") }
               }.disabled(model.snapshot == nil)
               if model.snapshot?.emergencyPaused == true {
                 Button("Clear Emergency Pause") { Task { await model.send("clear_emergency") } }
-                  .disabled(model.snapshot?.running == true)
+                  .disabled(model.snapshot?.running == true || model.snapshot?.planningRunning == true || model.snapshot?.escalationRunning == true)
               }
             }
             Text(
-              "Runs under your Windows account. Review the project and validation command before starting. Changes remain in the project folder for review."
+              "Runs under your Windows account. Review the project and validation command before starting. OpenAI/Codex reviews generated code before success. Changes remain in the project folder."
             )
             .font(.caption).foregroundStyle(.secondary)
             Divider()
-            if model.snapshot?.queue.isEmpty != false {
+            if model.snapshot?.visibleQueue.isEmpty != false {
               Text("Add your first feature to begin.").foregroundStyle(.secondary)
             }
-            ForEach(model.snapshot?.queue ?? []) { feature in
+            ForEach(model.snapshot?.visibleQueue ?? []) { feature in
               VStack(alignment: .leading, spacing: 6) {
                 HStack {
                   Text(feature.project).font(.headline)
                   Spacer()
-                  Text(feature.status.replacingOccurrences(of: "_", with: " ").capitalized)
+                  Text(feature.resultLabel)
                     .foregroundStyle(
-                      feature.status == "succeeded"
+                      feature.status == "succeeded" && feature.hasApprovedReview
                         ? .green : feature.status == "failed" ? .red : .primary)
+                  if feature.status == "failed" {
+                    Button("Repair and retry") {
+                      repairFeature = feature
+                      confirmingRepair = true
+                    }
+                    .disabled(model.sending || model.snapshot?.canRepair(feature) != true)
+                    .help("Ask the local model to fix this failure and rerun validation, up to three repair attempts per feature.")
+                    .accessibilityIdentifier("developer-repair-\(feature.id)")
+                  }
+                  if feature.status == "failed" {
+                    Button(feature.escalationStatus == "ready" ? "Review repair…" : "Ask AI to repair…") {
+                      if feature.escalationStatus == "ready" {
+                        escalationFeatureId = feature.id
+                        showingEscalation = true
+                      } else {
+                        chatProject = feature.project
+                        chatRepairFeature = feature.id + ":" + UUID().uuidString
+                      }
+                    }.disabled(model.sending || model.snapshot?.nextFeature?.id != feature.id)
+                      .accessibilityIdentifier("developer-escalate-\(feature.id)")
+                  }
+                  if feature.canRemove {
+                    Button("Remove", role: .destructive) {
+                      Task { await model.send("remove", values: ["id": feature.id]) }
+                    }
+                    .disabled(model.sending || model.snapshot?.canRemove(feature) != true)
+                    .help("Remove from the queue. Saved project files are kept. Stop the runner first if it is running.")
+                    .accessibilityLabel("Remove feature from \(feature.project)")
+                    .accessibilityIdentifier("developer-remove-\(feature.id)")
+                  }
                 }
                 Text(feature.instruction)
+                Text("Model computer: \(feature.modelComputer)")
+                  .font(.caption).foregroundStyle(.secondary)
+                if let attempts = feature.repairAttempts, attempts > 0 {
+                  Text("Repair attempts: \(attempts) of 3")
+                    .font(.caption).foregroundStyle(.secondary)
+                }
+                if let count = feature.escalationCount, count > 0 {
+                  Text("Repair escalations: \(count) · \(feature.escalationStatus ?? "recorded")")
+                    .font(.caption).foregroundStyle(.secondary)
+                }
                 Text("Checkpoint: \(feature.checkpoint.replacingOccurrences(of: "_", with: " "))")
                   .font(.caption).foregroundStyle(.secondary)
+                if feature.planningStatus == "legacy_unplanned" {
+                  Text("Brainstorming: not recorded for this earlier feature").font(.caption).foregroundStyle(.secondary)
+                }
+                Text(feature.reviewLabel).font(.caption)
+                  .foregroundStyle(feature.hasApprovedReview ? .green : .secondary)
+                if let summary = feature.reviewSummary, !summary.isEmpty {
+                  Text(summary).font(.caption).textSelection(.enabled)
+                }
+                if feature.requiresEscalationRecovery {
+                  Text("Repair application was interrupted. Ask AI to inspect the current files and prepare a fresh proposal.")
+                    .font(.callout).foregroundStyle(.orange)
+                }
                 Text(feature.message).font(.caption).textSelection(.enabled)
                 if !feature.changedFiles.isEmpty {
                   Text(feature.changedFiles.joined(separator: " · ")).font(.caption.monospaced())
@@ -243,18 +417,59 @@ struct DeveloperRunnerView: View {
           }.padding(10)
         }
       }.padding(28)
-    }.frame(minWidth: 840, minHeight: 680)
+    }.frame(minWidth: 650, minHeight: 680)
+      DeveloperProjectChatView(configurationPath: configurationPath,
+        projects: Array(Set(model.snapshot?.queue.map(\.project) ?? [])).sorted(),
+        runner: model)
+        .frame(minWidth: 340, idealWidth: 420, maxWidth: 560)
+    }.frame(minWidth: 1000, minHeight: 680)
       .task { await model.observe() }
-      .confirmationDialog(
-        "Run the queued work on Windows?", isPresented: $confirmingStart, titleVisibility: .visible
-      ) {
-        Button(startLabel) {
-          Task { await model.send(startLabel == "Resume" ? "resume" : "start") }
+    .task { await connection.observe() }
+      .sheet(isPresented: $showingEscalation) {
+        if let escalationFeatureId {
+          DeveloperRepairEscalationView(configurationPath: configurationPath, runner: model,
+            featureId: escalationFeatureId, diagnosis: nil, selectedModel: "mac")
         }
+      }
+      .confirmationDialog(
+        "Repair this feature on Windows?", isPresented: $confirmingRepair,
+        titleVisibility: .visible, presenting: repairFeature
+      ) { feature in
+        Button("Repair and retry") {
+          if let attempts = feature.repairAttempts {
+            Task {
+              await model.send("repair", values: ["id": feature.id, "expected_attempts": attempts])
+            }
+          }
+        }
+        .disabled(model.sending || model.snapshot?.canRepair(feature) != true)
         Button("Cancel", role: .cancel) {}
-      } message: {
+      } message: { feature in
         Text(
-          "The local model can change files in the selected project, and Windows will run the validation command. Auto-run continues through the features currently queued after validation passes. Features added later wait for another Start."
+          "The model on \(feature.modelComputer) will use the failure and current files to repair \(feature.project), "
+            + "then rerun the same validation command and Codex review. Up to \(max(0, 3 - (feature.repairAttempts ?? 3))) "
+            + "repair attempts remain. Stop and Emergency Pause stay available. "
+            + "Auto-run advances only after validation and Codex approval."
+        )
+      }
+      .confirmationDialog(
+        "Run the queued work on Windows?", isPresented: $confirmingStart,
+        titleVisibility: .visible, presenting: startFeature
+      ) { feature in
+        Button(["paused", "failed"].contains(feature.status) ? "Resume" : "Start next feature") {
+          Task {
+            await model.send(["paused", "failed"].contains(feature.status) ? "resume" : "start",
+              values: feature.startBinding)
+          }
+        }
+        .disabled(model.sending || model.snapshot?.running == true || model.snapshot?.planningRunning == true
+          || model.snapshot?.emergencyPaused == true
+          || next?.id != feature.id || next?.status != feature.status
+          || next?.checkpoint != feature.checkpoint || next?.modelTarget != feature.modelTarget)
+        Button("Cancel", role: .cancel) {}
+      } message: { feature in
+        Text(
+          "The model on \(feature.modelComputer) prepares \(feature.project). Windows applies changes, runs validation, and sends the feature request and bounded project code to OpenAI/Codex for review. Codex findings can trigger up to three local repairs. Auto-run continues only after validation and reviewer approval."
         )
       }
   }

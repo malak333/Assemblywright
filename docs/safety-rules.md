@@ -11,6 +11,14 @@ That build keeps durable checkpoints and truthful control/results reporting; VM,
 service-SID, and signing prerequisites do not gate it. The production rules below
 continue to govern claims about the protected production runtime.
 
+Project chat remains outside execution authority even when the owner selects a
+different local model or supplies attachments. A saved diagnosis may prepare a
+frozen repair proposal, but only explicit approval of its exact displayed bytes may
+apply it. Changed bytes, stale state, cancellation, or ambiguous recovery invalidate
+that approval. A one-attempt escalation does not reset ordinary repair history or
+relax validation and independent-review gates. See
+[`developer-chat-repair-design.md`](developer-chat-repair-design.md).
+
 ## Policy Defaults
 
 - One authenticated owner holds all authority. Models and workers may propose,

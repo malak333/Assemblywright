@@ -68,3 +68,71 @@ partial run is not a full gate pass. Native visual UI automation also failed whe
 the computer-use bridge closed its pipe; live HTTP client evidence is not a visual
 UI test. Signed installation, protected production execution, and automatic GitHub
 publication of generated projects remain outside this supervised phase.
+
+## Project chat, planning, review, and escalation continuation
+
+The continuation applies the same unit workflow to exact chat/model attribution,
+planning state transitions, attachment bounds, review bindings, proposal lifecycle,
+cumulative baselines, cancellation, stale bytes, migration, and recovery. Its native
+E2E uses Rust/Swift clients, loopback HTTP, real files, Windows processes, SQLite,
+and fixture model/reviewer subprocesses. The `developer_workflow_e2e` Cargo wrapper
+runs all seven scripts on both required CI hosts. Browser E2E and cross-browser
+matrices do not apply because the owner surface is a native Swift application.
+
+Historical focused runs before the 12:50-12:56 owner interaction passed 41 Rust tests,
+244 Swift tests, and seven Windows developer process E2Es. The current isolated
+candidate separately passed 44 Rust tests on Mac, the same 44 tests on native
+Windows, 235 Swift tests, strict developer Clippy, and all seven native Windows
+process E2Es. The Cargo wrapper also ran all seven process E2Es locally, including
+new validation-failure and reviewer-rejection cases that preserve the auto-run
+frontier across restart. The owner screenshots then
+confirmed the repaired sheet's pinned Close and action buttons. The owner applied
+proposal 4, but its 24-test validation failed two tests: a hidden/unrealized Tk
+window height assertion observed height 1, and a shallow/brittle widget-tree search
+could not find the nested Input card. Codex review did not run and the feature did
+not advance. These failures are current acceptance evidence and keep the GUI feature
+open; earlier focused passes do not override them. This is owner-observed native UI
+evidence, not machine-automated screenshot regression coverage.
+
+The continuation also covers two fail-closed recovery regressions. If committing an
+Emergency Pause fails, the runner retains its volatile emergency latch and rejects
+new work rather than presenting a durable acknowledgement. Completed chat and
+planning provider responses are retained in memory when their completion write
+fails. While that runner process remains alive, status GET polling exposes
+`recovery_pending` or `planning_recovery_pending` and retries the exact completion
+without reexecuting the provider. A process restart cannot recover that in-memory
+response: startup records the pending chat or planning call as interrupted and a
+new owner retry may call the provider again.
+
+This evidence satisfies documentation and knowledge capture for the observed state.
+The first complete local gate passed at 17:31 UTC, before the latest recovery changes.
+The final complete local gate passed at 18:17 UTC on 2026-09-07, including the
+recovery and CLI-compatibility corrections. Exact-commit hosted gates remain a
+required publication check. A timing-sensitive existing Swift process fixture was
+replaced with direct TERM-delivery and process-reaping evidence; the full 235-test
+Swift suite passed afterward. Signing, notarization, protected production deployment,
+and browser testing are outside this developer-build slice.
+
+The first hosted Windows run caught a grounding fixture that passed a raw temporary
+path, although production canonicalizes project roots before traversal. The fixture
+now canonicalizes that root, preserving containment checks when Windows TEMP uses
+a short-path alias. Native Windows A/B validation with distinct 8.3 TEMP/TMP paths
+reproduced the old failure and passed all 44 tests with the corrected fixture.
+Independent review approved the test-only correction; the final commit still requires both hosted gates. This
+fixture change does not alter the deployed developer runtime.
+
+The developer Mac bundle and Windows runner were rebuilt and the supervised
+connection restarted. Authenticated status returned idle with five retained queue
+items; their IDs, feature statuses, and checkpoints were unchanged. Both temperature
+GUI/test file hashes matched the pre-update snapshot. During the observation interval
+the proposal metadata changed from escalation 5 unavailable to escalation 6 ready;
+therefore this is not evidence of an entirely unchanged queue snapshot. No repair
+approval was submitted by this closeout. Production `AssemblywrightMaster` runtime
+inputs were unchanged and its service was not redeployed. The Mac bundle uses an
+ad-hoc development signature, not a signed/notarized production installation.
+
+The native catalog probe passed with both installed CLIs and observed zero outgoing
+tools: Mac Codex 0.153.4 and Windows Codex 0.148. The Windows compatibility profile
+omits four flags that its CLI does not define; all supported tool-disabling settings
+remain explicit. The Windows probe captured one loopback-fixture request and made no
+real model call. Rerun the catalog probe whenever either configured CLI is upgraded.

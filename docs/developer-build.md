@@ -7,15 +7,17 @@ presents the queue and controls in the Mac app.
 
 ## Use it
 
-Keep the existing Windows SSH session open. The first build is:
+Configure the app-specific background connection and required Windows Codex
+reviewer paths, then build with:
 
 ```sh
 ./scripts/developer-build.py --build
 ```
 
-Afterward, double-click `Open Assemblywright Developer.command` to reconnect and
-open the app. You can also run `./scripts/developer-build.py`, or open
-`target/developer/Assemblywright Developer.app` when the runner is already connected. The launcher
+Afterward, open `target/developer/Assemblywright Developer.app` directly. You can
+also use `Open Assemblywright Developer.command` or run
+`./scripts/developer-build.py`. The dedicated background connection reconnects
+without requiring an interactive SSH terminal. The launcher
 starts the configured local model if its API is unavailable. It uses the existing
 `local-ai-mac` controller and model; it does not install a new model configuration.
 Run `--help` to change the Windows host, SSH control socket, remote root, or model
@@ -25,14 +27,46 @@ controller. Default connection values reflect the owner's current two-machine se
    Windows workspace root; later features with the same name use that project.
 2. Describe the feature and enter the command that should validate it. For Python
    projects, `python -m unittest discover -s tests -v` is a useful starting point.
-3. Choose **Add to queue**, then **Start**. The confirmation identifies the Windows
-   execution and automatic advancement behavior.
-4. Review each feature's status, checkpoint, changed files, and validation result.
+3. Choose **Brainstorm with ChatGPT**, answer its questions, confirm the requirements
+   and approach, and approve the resulting design documents.
+4. Choose **Approve documents and add to queue**, then **Start**. The confirmation
+   identifies Windows execution, independent cloud review, and automatic advancement.
+5. Review each feature's status, checkpoint, changed files, validation, and review.
    Files remain in the Windows project folder.
 
 This build does not clone, commit, push, or publish repositories. It is a supervised
-implementation-and-validation loop. The existing production setup/planning surface
+implementation, validation, and independent-review loop. The existing production setup/planning surface
 remains available in the original application.
+
+## Planning and project chat
+
+New developer features use the bundled brainstorming workflow with the fixed
+ChatGPT/Codex planner. Windows stores the questions, owner answers, confirmed
+requirements and assumptions, selected approach, design confirmations, decision
+log, and approved documents. Planning cannot write project files, run validation,
+or enqueue itself. Direct enqueue cannot bypass the approval gates; the approved
+documents remain bound to implementation, repair, and review.
+
+Use **Project chat** for questions about an existing project. Select the Windows or
+Mac local model explicitly. Replies retain model attribution in Windows-owned,
+project-specific history and cannot edit files, execute commands, or alter the
+queue. Image and bounded text attachments are untrusted references. Unsupported
+vision, unavailable models, and context limits fail explicitly without fallback.
+
+## Repair a failed feature from chat
+
+The accepted contract is [Developer chat repair escalation](developer-chat-repair-design.md).
+After receiving a useful saved diagnosis, choose **Repair this feature…**, select
+the local model, and prepare a proposal. Preparation does not write files. Review
+the complete before/after bytes and every marked protected test or validation input.
+**Approve and apply** authorizes only that exact proposal; Windows rechecks the
+feature, diagnosis, checkpoint, revision, and current bytes before writing.
+
+Each escalation has one application attempt and does not reset the feature's three
+ordinary repair attempts. Windows runs the original validation command and then a
+fresh independent Codex review. A failed test or rejected/unavailable review stops
+the feature and auto-run. The repair sheet keeps Close and available actions pinned
+while long content scrolls.
 
 ## Controls and checkpoints
 
@@ -49,8 +83,8 @@ remains available in the original application.
   model again or rewriting those files. An owner edit conflicting with the model input or a prepared
   change is preserved and reported. Changed files use synced temporary files and
   atomic replacement to protect existing bytes from interrupted writes.
-- **Auto-run on** advances within the queue present at Start/Resume after the actual
-  validation command exits successfully. New features added during execution wait
+- **Auto-run on** advances within the queue present at Start/Resume after validation
+  succeeds and independent Codex review approves the exact candidate. New features added during execution wait
   for another explicit Start.
   **Auto-run off** leaves the next feature queued for **Start next feature**.
 - A failed model response or validation stops advancement. A retry with no prepared
@@ -85,12 +119,41 @@ common dependency/build directories, and symbolic links. Validation has a 15-min
 limit and a 2 MiB log limit. These are developer usability limits, not a claim of
 hostile-process containment or protected production execution.
 
+## Local model and reviewer runtime setup
+
+Windows model startup is managed independently of the Mac connection supervisor.
+Start the Windows inference service first, then configure `--windows-model-url`
+and `--windows-model`. Reconnection restores the runner channel; it does not start
+that model service. The former `--windows-model-start-script` option never executed
+its script and is no longer offered. Explicit use returns setup guidance; saved
+legacy script paths are accepted for compatibility and removed on settings rewrite.
+An unavailable selected model fails without automatic fallback.
+
+The reviewer executable is hash-bound for each runner lifetime, runs from a separate
+working directory with a cleared environment, and uses strict configuration to
+turn off the supported tool, memory, plugin, browser, and automation features.
+Runtime upgrades require checking these settings against the new CLI:
+
+```sh
+python3 scripts/developer-review-catalog-e2e.py --codex-executable /absolute/path/to/codex
+```
+
+The opt-in native probe reuses the actual reviewer arguments with a temporary home
+and a loopback fixture provider. It rejects any exposed tool catalog and returns no
+model output. It does not use account authentication or call a real model. The
+installed Mac CLI passed with zero tools in its captured request. These controls
+are supervised developer evidence, not a claim of hostile-process containment.
+
 ## Native validation
 
 ```sh
 cargo test -p assemblywright-master --bin assemblywright-developer
 cargo build -p assemblywright-master --bin assemblywright-developer
 python3 scripts/developer-runner-e2e.py --binary target/debug/assemblywright-developer
+python3 scripts/developer-runner-chat-e2e.py --binary target/debug/assemblywright-developer
+python3 scripts/developer-runner-review-e2e.py --binary target/debug/assemblywright-developer
+python3 scripts/developer-runner-planning-e2e.py --binary target/debug/assemblywright-developer
+python3 scripts/developer-runner-escalation-e2e.py --binary target/debug/assemblywright-developer
 swift build --disable-sandbox --package-path apps/mac --product AssemblywrightMacApp
 ```
 
@@ -127,3 +190,32 @@ accessibility state, so this does not claim visual UI automation.
 The working developer phase is published separately from unfinished production
 integration drafts. Signed production installation and hostile containment remain
 separate work.
+
+## Chat repair closeout evidence (2026-09-07)
+
+Historical implementation evidence before the latest owner interaction passed 41
+Rust tests, 244 Swift tests, and seven native Windows developer process E2Es. The
+current isolated publication candidate has separately passed 44 focused Rust tests
+and 235 Swift tests. Its Cargo wrapper ran all seven developer process E2Es locally,
+including validation-failure and reviewer-rejection cases that prove auto-run does
+not advance across failure or restart. Native Windows rerun remains pending. These results cover exact proposal binding, zero-write preparation,
+protected-test approval, cumulative review baselines, cancellation, restart, and
+the validation/review route. The repository's phase checklist is
+[`development-agent-workflow.md`](development-agent-workflow.md); focused results,
+native E2E, full gates, hosted publication, deployment, and owner visual evidence
+remain separate proof layers.
+
+The owner's 12:50-12:56 screenshots confirmed that the repaired modal was visible with
+its Close and action buttons pinned. The owner approved and applied proposal 4.
+The unchanged validation command ran 24 tests and failed two: a hidden/unrealized
+Tk window still reported height 1, and a brittle widget-tree search could not find
+the nested Input card. Codex review did not run, the queue did not advance, and the
+GUI feature remains unresolved. The applied proposal therefore has application and
+owner-observed visual-modal evidence, but no successful validation, independent-review,
+or machine-automated screenshot-regression evidence.
+
+The first complete local gate passed at 17:31. Subsequent recovery fixes have focused
+coverage but still require a final complete local-gate rerun. Native Windows and
+exact-SHA hosted gates also remain pending, so publication closeout is not claimed.
+Production deployment, signing, and notarization do not apply to this supervised
+developer slice.

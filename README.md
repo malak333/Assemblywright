@@ -5,11 +5,14 @@
 ## Working developer build
 
 The owner-selected supervised build connects the Mac app to a Windows queue runner
-and the existing local Qwen model. Enter a project folder, describe a feature, choose
-a validation command, and use **Add to queue → Start**. Stop, Emergency Pause,
-checkpointed Resume, and auto-run operate on real Windows processes and saved files.
+and the configured local models. New features pass through ChatGPT/Codex
+brainstorming and document approval before entering the queue. Stop, Emergency
+Pause, checkpointed Resume, and auto-run operate on real Windows processes and
+saved files; success also requires independent Codex review. Project chat remains
+separate from the queue and can prepare an exact, owner-reviewed repair proposal for
+an exhausted failed feature.
 
-With the Windows SSH session available, run:
+With the app-specific background Windows connection configured, run:
 
 ```sh
 ./scripts/developer-build.py --build
@@ -17,7 +20,9 @@ With the Windows SSH session available, run:
 
 Later launches use `./scripts/developer-build.py`. See
 [`docs/developer-build.md`](docs/developer-build.md) for setup, native tests, and
-the distinction between this developer build and the production target below.
+the distinction between this developer build and the production target below, and
+[`docs/developer-chat-repair-design.md`](docs/developer-chat-repair-design.md) for
+the bounded repair-escalation contract.
 
 Assemblywright is an owner-controlled developer-agent system. A Windows master
 holds durable authority over an owner-approved feature queue; restricted local
