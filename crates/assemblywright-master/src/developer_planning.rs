@@ -172,6 +172,8 @@ pub struct PlanningSession {
     pub requests: Vec<PlanningRequestRecord>,
     #[serde(default)]
     pub history: Vec<PlanningAttemptEvidence>,
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -319,6 +321,8 @@ pub struct PlanningProviderOutput {
     #[serde(default)]
     pub decision_log: Vec<PlanningDecision>,
     pub implementation_plan: Option<String>,
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
 }
 
 pub fn new_session(
@@ -366,6 +370,7 @@ pub fn new_session(
         pending_packet_sha256: None,
         requests: Vec::new(),
         history: Vec::new(),
+        reasoning_effort: None,
     })
 }
 
@@ -1190,6 +1195,7 @@ mod tests {
             design_complete: true,
             decision_log: vec![],
             implementation_plan: Some("Do it".into()),
+            reasoning_effort: None,
         };
         assert!(apply_provider_output(&mut state, &packet, output).is_err());
         assert!(state.running);
@@ -1244,6 +1250,7 @@ mod tests {
             design_complete: false,
             decision_log: vec![],
             implementation_plan: None,
+            reasoning_effort: None,
         };
         assert!(apply_provider_output(&mut state, &packet, output.clone()).is_err());
         output.open_questions.clear();
@@ -1491,6 +1498,7 @@ mod tests {
                 reason: "Reason".into(),
             }],
             implementation_plan: Some("Implement it".into()),
+            reasoning_effort: None,
         };
         assert!(apply_provider_output(&mut state, &packet, output.clone()).is_err());
         output.open_questions.clear();

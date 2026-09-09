@@ -483,9 +483,13 @@ def main():
             journal = cancel_known_old_forwards(connection, args, journal)
             connection.record_connection_ownership(STATE)
             (STATE / MIGRATION_FILE).unlink()
-        elif disruptive:
+        config = write_connection_config(connection, args)
+        if disruptive:
             if loaded or observed is not None:
-                request_shutdown(connection, saved, existing_connection)
+                try:
+                    request_shutdown(connection, saved, config)
+                except SystemExit:
+                    print("Runner shutdown skipped (SSH tunnel unavailable); proceeding with build.")
                 if loaded:
                     stop_supervisor(connection)
             elif args.stop:
@@ -495,7 +499,6 @@ def main():
         if args.stop:
             print("Developer runner and connection stopped. Projects and queue are retained.")
             return
-        config = write_connection_config(connection, args)
         write_runtime(connection, saved, windows_settings, reviewer_settings)
         if args.build:
             build_products(connection, config, args)
