@@ -91,7 +91,7 @@ pub(crate) struct ChatAttachment {
     pub(crate) data_base64: String,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct ChatMessage {
     role: String,
     content: String,
@@ -280,7 +280,7 @@ impl DeveloperChat {
                     load_with(&connection, &project).unwrap_or_default()
                 };
                 if state.messages.is_empty() {
-                    let mut fallback = load_with(&connection, &project).unwrap_or_default();
+                    let fallback = load_with(&connection, &project).unwrap_or_default();
                     if !fallback.messages.is_empty() {
                         state = fallback;
                     }
@@ -295,6 +295,7 @@ impl DeveloperChat {
         }
         let transaction = connection.unchecked_transaction()?;
         for (id, project, conversation_id, state) in interrupted {
+            let legacy_conversation = conversation_id == LEGACY_CONVERSATION_ID;
             transaction.execute(
                 "UPDATE developer_chat_request SET pending=0 WHERE id=?1",
                 [&id],
@@ -305,9 +306,14 @@ impl DeveloperChat {
                  VALUES(?1,?2,?3,?4)
                  ON CONFLICT(id) DO UPDATE
                  SET state=excluded.state, updated_at=excluded.updated_at",
-                (conversation_id, &project, state, current_time),
+                (
+                    &conversation_id,
+                    &project,
+                    serde_json::to_string(&state)?,
+                    current_time,
+                ),
             )?;
-            if conversation_id == LEGACY_CONVERSATION_ID {
+            if legacy_conversation {
                 save_with(&transaction, &project, &state)?;
             }
         }
@@ -591,8 +597,11 @@ impl DeveloperChat {
                  VALUES(?1,?2,?3,?4,?5,1,?6)",
                 (id, project, message, conversation_id, model_target, &payload_sha256),
             )?;
-            let mut state =
-                self.load_with_conversation_in_transaction(&transaction, project, conversation_id)?;
+            let mut state = load_with_conversation_in_transaction(
+                &transaction,
+                project,
+                conversation_id,
+            )?;
             state.messages.push(ChatMessage {
                 role: "user".into(),
                 content: message.into(),
