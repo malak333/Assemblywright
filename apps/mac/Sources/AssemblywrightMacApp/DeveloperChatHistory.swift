@@ -31,6 +31,29 @@ struct DeveloperChatGroup: Identifiable, Equatable {
   var id: String { projectId }
 }
 
+private struct ConversationListResponse: Decodable {
+  let projects: [ConversationProject]
+}
+
+private struct ConversationProject: Decodable {
+  let project: String
+  let conversations: [ConversationSummary]
+}
+
+private struct ConversationSummary: Decodable {
+  let id: String
+  let title: String
+  let messages: [DeveloperChatMessage]
+  let updatedAt: Int64
+  
+  private enum CodingKeys: String, CodingKey {
+    case id
+    case title
+    case messages
+    case updatedAt = "updated_at"
+  }
+}
+
 @MainActor
 final class DeveloperChatHistoryModel: ObservableObject {
   @Published var groups: [DeveloperChatGroup] = []
@@ -52,11 +75,10 @@ final class DeveloperChatHistoryModel: ObservableObject {
     self.session = URLSession(configuration: settings)
   }
   
-  func loadProjects() async {
+  func loadConversations() async {
     guard let configuration, let base = URL(string: configuration.endpoint) else { return }
-    var components = URLComponents(url: base.appendingPathComponent("chat/projects"),
+    let components = URLComponents(url: base.appendingPathComponent("chat/conversations"),
                                    resolvingAgainstBaseURL: false)
-    components?.queryItems = [URLQueryItem(name: "project", value: "")]
     guard let url = components?.url else { return }
     
     var request = URLRequest(url: url)
@@ -64,13 +86,34 @@ final class DeveloperChatHistoryModel: ObservableObject {
     
     do {
       let (data, _) = try await session.data(for: request)
-      struct ProjectList: Decodable { let projects: [String] }
-      let list = try JSONDecoder().decode(ProjectList.self, from: data)
-      groups = list.projects.map { projectId in
-        DeveloperChatGroup(projectId: projectId, conversations: [], isExpanded: false)
+      let list = try JSONDecoder().decode(ConversationListResponse.self, from: data)
+      let loaded = list.projects.map { project in
+        let conversations = project.conversations.compactMap { summary -> DeveloperChatConversation? in
+          guard let id = UUID(uuidString: summary.id) else { return nil }
+          return DeveloperChatConversation(
+            id: id,
+            project: project.project,
+            title: summary.title,
+            messages: summary.messages,
+            updatedAt: Date(timeIntervalSince1970: Double(summary.updatedAt)),
+          )
+        }
+        return DeveloperChatGroup(projectId: project.project, conversations: conversations, isExpanded: true)
       }.sorted(by: { $0.projectId < $1.projectId })
-      activeProject = ""
-      selectedConversationId = nil
+      groups = loaded
+      if let selectedConversationId {
+        let stillExists = loaded.contains {
+          $0.conversations.contains { $0.id == selectedConversationId }
+        }
+        if !stillExists {
+          self.selectedConversationId = loaded.first?.conversations.first?.id
+        }
+      } else {
+        self.selectedConversationId = loaded.first?.conversations.first?.id
+      }
+      if activeProject.isEmpty {
+        activeProject = loaded.first?.projectId ?? ""
+      }
     } catch {
       errorMessage = "Failed to load projects: \(error.localizedDescription)"
     }
@@ -111,6 +154,25 @@ final class DeveloperChatHistoryModel: ObservableObject {
          }) {
         groups[groupIndex].conversations[convIndex].messages = snapshot.messages
         groups[groupIndex].conversations[convIndex].updatedAt = Date()
+      } else if let groupIndex = groups.firstIndex(where: { $0.projectId == activeProject }) {
+        let title = snapshot.messages
+          .first(where: { $0.role == "user" })?
+          .content
+          .trimmingCharacters(in: .whitespacesAndNewlines)
+          .split(separator: "\n")
+          .first
+          .map(String.init)
+          ?? "New conversation"
+        groups[groupIndex].conversations.insert(
+          DeveloperChatConversation(
+            id: conversationId,
+            project: activeProject,
+            title: title,
+            messages: snapshot.messages,
+            updatedAt: Date(),
+          ),
+          at: 0,
+        )
       }
       
       return true
@@ -141,6 +203,11 @@ final class DeveloperChatHistoryModel: ObservableObject {
     
     selectedConversationId = newId
     activeProject = project
+  }
+  
+  func selectConversation(project: String, id: UUID) {
+    activeProject = project
+    selectedConversationId = id
   }
 }
 
@@ -191,7 +258,7 @@ struct DeveloperChatHistoryView: View {
           ForEach(model.groups) { group in
             GroupRow(group: group,
                      selectedId: model.selectedConversationId,
-                     onSelect: { model.selectedConversationId = $0 })
+                     onSelect: model.selectConversation)
           }
         }
       }
@@ -265,7 +332,7 @@ struct DeveloperChatHistoryView: View {
         attachments.append(contentsOf: prepared)
       } catch { /* TODO: handle error */ }
     }
-    .task { await model.loadProjects() }
+    .task { await model.loadConversations() }
   }
   
   private var selectedConversation: DeveloperChatConversation? {
@@ -293,13 +360,13 @@ struct DeveloperChatHistoryView: View {
 private struct GroupRow: View {
   let group: DeveloperChatGroup
   let selectedId: UUID?
-  let onSelect: (UUID) -> Void
+  let onSelect: (String, UUID) -> Void
   
   var body: some View {
     VStack(spacing: 0) {
       Button(action: {
         if group.conversations.isEmpty { return }
-        onSelect(group.conversations[0].id)
+        onSelect(group.projectId, group.conversations[0].id)
       }) {
         HStack {
           Image(systemName: group.isExpanded ? "chevron.down" : "chevron.right")
@@ -332,10 +399,10 @@ private struct GroupRow: View {
 private struct ConversationRow: View {
   let conversation: DeveloperChatConversation
   let isSelected: Bool
-  let onSelect: (UUID) -> Void
+  let onSelect: (String, UUID) -> Void
   
   var body: some View {
-    Button(action: { onSelect(conversation.id) }) {
+    Button(action: { onSelect(conversation.project, conversation.id) }) {
       HStack(alignment: .top, spacing: 8) {
         Image(systemName: conversation.isDraft ? "doc.badge.plus" : "bubble")
           .font(.caption)

@@ -3585,6 +3585,13 @@ async fn status(State(engine): State<Arc<Engine>>, headers: HeaderMap) -> Api {
 #[derive(Deserialize)]
 struct ChatQuery {
     project: String,
+    conversation_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConversationsQuery {
+    project: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -3650,7 +3657,10 @@ async fn chat_status(
             Json(json!({"error":"Unauthorized"})),
         );
     }
-    api(engine.chat.snapshot(&query.project))
+    api(engine.chat.snapshot_with_conversation(
+        &query.project,
+        query.conversation_id.as_deref().unwrap_or("project"),
+    ))
 }
 
 async fn chat_projects(State(engine): State<Arc<Engine>>, headers: HeaderMap) -> Api {
@@ -3661,6 +3671,20 @@ async fn chat_projects(State(engine): State<Arc<Engine>>, headers: HeaderMap) ->
         );
     }
     api(engine.chat.projects())
+}
+
+async fn chat_conversations(
+    State(engine): State<Arc<Engine>>,
+    headers: HeaderMap,
+    Query(query): Query<ConversationsQuery>,
+) -> Api {
+    if authorize(&engine, &headers).is_err() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error":"Unauthorized"})),
+        );
+    }
+    api(engine.chat.conversations(query.project.as_deref()))
 }
 
 async fn chat_start(
@@ -3686,6 +3710,7 @@ async fn chat_start(
             .get("model_target")
             .and_then(Value::as_str)
             .unwrap_or("windows");
+        let conversation_id = request.get("conversation_id").and_then(Value::as_str);
         let attachments: Vec<ChatAttachment> = serde_json::from_value(
             request
                 .get("attachments")
@@ -3724,14 +3749,26 @@ async fn chat_start(
                 })
             })
             .collect();
-        let snapshot = engine.chat.start(
-            project,
-            message,
-            id,
-            model_target,
-            attachments,
-            json!({"features":queue}),
-        )?;
+        let snapshot = if let Some(conversation_id) = conversation_id {
+            engine.chat.start_in_conversation(
+                project,
+                message,
+                id,
+                Some(conversation_id),
+                model_target,
+                attachments,
+                json!({"features":queue}),
+            )?
+        } else {
+            engine.chat.start(
+                project,
+                message,
+                id,
+                model_target,
+                attachments,
+                json!({"features":queue}),
+            )?
+        };
         drop(database);
         Ok(snapshot)
     })();
@@ -4639,6 +4676,7 @@ async fn main() -> Result<()> {
                 .layer(DefaultBodyLimit::max(9 * 1024 * 1024)),
         )
         .route("/chat/projects", get(chat_projects))
+        .route("/chat/conversations", get(chat_conversations))
         .route("/chat/cancel", post(chat_cancel))
         .route(
             "/repair/escalation",

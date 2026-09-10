@@ -14,7 +14,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use uuid::Uuid;
 
@@ -27,6 +27,15 @@ const MAX_TEXT_BYTES: usize = 128 * 1024;
 const MAX_ATTACHMENT_BYTES: usize = 6 * 1024 * 1024;
 const MAX_IMAGE_EDGE: u32 = 1_600;
 const IMAGE_TOKEN_RESERVE: u64 = 4_096;
+const LEGACY_CONVERSATION_ID: &str = "project";
+
+#[derive(Clone, Debug, Serialize)]
+struct ConversationSummary {
+    id: String,
+    title: String,
+    messages: Vec<ChatMessage>,
+    updated_at: i64,
+}
 
 #[derive(Clone)]
 pub(crate) struct ChatModelConfig {
@@ -124,6 +133,7 @@ struct ProjectChat {
 struct ActiveChat {
     id: String,
     project: String,
+    conversation_id: String,
     model_target: String,
     completion_recovery: Option<ChatCompletion>,
 }
@@ -162,6 +172,7 @@ impl DeveloperChat {
                id TEXT PRIMARY KEY,
                project TEXT NOT NULL,
                message TEXT NOT NULL,
+               conversation_id TEXT,
                model_target TEXT NOT NULL,
                pending INTEGER NOT NULL CHECK(pending IN (0,1)),
                payload_sha256 TEXT
@@ -189,15 +200,65 @@ impl DeveloperChat {
                 [],
             )?;
         }
+        if !columns.iter().any(|column| column == "conversation_id") {
+            connection.execute(
+                "ALTER TABLE developer_chat_request ADD COLUMN conversation_id TEXT",
+                [],
+            )?;
+        }
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS developer_chat_conversation(
+               id TEXT PRIMARY KEY,
+               project TEXT NOT NULL,
+               state TEXT NOT NULL,
+               updated_at INTEGER NOT NULL
+             );",
+            [],
+        )?;
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_developer_chat_conversation_project
+             ON developer_chat_conversation(project, updated_at DESC)",
+            [],
+        )?;
+        let current_time = current_time()?;
+        {
+            let mut rows =
+                connection.prepare("SELECT project,state FROM developer_chat_project")?;
+            let projects = rows.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            for row in projects {
+                let (project, encoded) = row?;
+                let has_conversation: Option<i64> = connection
+                    .query_row(
+                        "SELECT 1 FROM developer_chat_conversation WHERE id=?1 AND project=?2",
+                        (LEGACY_CONVERSATION_ID, &project),
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                if has_conversation.is_none() {
+                    let state = load_with(&connection, &project)
+                        .unwrap_or_else(|_| serde_json::from_str(&encoded).unwrap_or_default());
+                    connection.execute(
+                        "INSERT INTO developer_chat_conversation(id,project,state,updated_at) VALUES(?1,?2,?3,?4)",
+                        (
+                            LEGACY_CONVERSATION_ID,
+                            &project,
+                            serde_json::to_string(&state)?,
+                            current_time,
+                        ),
+                    )?;
+                }
+            }
+        }
         let mut interrupted = Vec::new();
         {
             let mut query = connection.prepare(
-                "SELECT r.id,r.project,p.state
+                "SELECT r.id,r.project,COALESCE(r.conversation_id,?1)
                  FROM developer_chat_request r
-                 JOIN developer_chat_project p ON p.project=r.project
                  WHERE r.pending=1 ORDER BY r.id",
             )?;
-            let rows = query.query_map([], |row| {
+            let rows = query.query_map([LEGACY_CONVERSATION_ID], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
@@ -205,26 +266,50 @@ impl DeveloperChat {
                 ))
             })?;
             for row in rows {
-                let (id, project, encoded) = row?;
-                let mut state: ProjectChat = serde_json::from_str(&encoded)?;
+                let (id, project, conversation_id) = row?;
+                let mut state = if let Some(_) = connection
+                    .query_row(
+                        "SELECT 1 FROM developer_chat_conversation WHERE id=?1 AND project=?2",
+                        (&conversation_id, &project),
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .optional()?
+                {
+                    load_with_conversation(&connection, &project, &conversation_id)?
+                } else {
+                    load_with(&connection, &project).unwrap_or_default()
+                };
+                if state.messages.is_empty() {
+                    let mut fallback = load_with(&connection, &project).unwrap_or_default();
+                    if !fallback.messages.is_empty() {
+                        state = fallback;
+                    }
+                }
                 state.pending_request_id = None;
                 state.error = Some(
                     "Runner restarted before the selected local model replied; send the message again with a new request ID."
                         .into(),
                 );
-                interrupted.push((id, project, serde_json::to_string(&state)?));
+                interrupted.push((id, project, conversation_id, serde_json::to_string(&state)?));
             }
         }
         let transaction = connection.unchecked_transaction()?;
-        for (id, project, state) in interrupted {
+        for (id, project, conversation_id, state) in interrupted {
             transaction.execute(
                 "UPDATE developer_chat_request SET pending=0 WHERE id=?1",
                 [&id],
             )?;
+            let state: ProjectChat = serde_json::from_str(&state)?;
             transaction.execute(
-                "UPDATE developer_chat_project SET state=?2 WHERE project=?1",
-                (&project, &state),
+                "INSERT INTO developer_chat_conversation(id,project,state,updated_at)
+                 VALUES(?1,?2,?3,?4)
+                 ON CONFLICT(id) DO UPDATE
+                 SET state=excluded.state, updated_at=excluded.updated_at",
+                (conversation_id, &project, state, current_time),
             )?;
+            if conversation_id == LEGACY_CONVERSATION_ID {
+                save_with(&transaction, &project, &state)?;
+            }
         }
         transaction.commit()?;
         Ok(Arc::new(Self {
@@ -260,23 +345,107 @@ impl DeveloperChat {
         Ok(json!({"projects":projects}))
     }
 
+    pub(crate) fn conversations(&self, project_filter: Option<&str>) -> Result<Value> {
+        let database = self
+            .database
+            .lock()
+            .map_err(|_| anyhow!("chat database lock failed"))?;
+        let mut rows = database.prepare(
+            "SELECT project,id,state,updated_at FROM developer_chat_conversation ORDER BY project, updated_at DESC",
+        )?;
+        let mut groups: std::collections::BTreeMap<String, Vec<ConversationSummary>> =
+            std::collections::BTreeMap::new();
+        let rows = rows.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })?;
+        for row in rows {
+            let (project, id, encoded, updated_at) = row?;
+            if let Some(project_filter) = project_filter {
+                if project_filter != project {
+                    continue;
+                }
+            }
+            let state = serde_json::from_str::<ProjectChat>(&encoded)?;
+            let first_user_message = state
+                .messages
+                .iter()
+                .find(|message| message.role == "user")
+                .map(|message| message.content.trim().to_string())
+                .filter(|text| !text.is_empty())
+                .unwrap_or_default();
+            let title = if first_user_message.is_empty() {
+                if state.messages.is_empty() {
+                    "New conversation".to_string()
+                } else {
+                    "Untitled".to_string()
+                }
+            } else if first_user_message.len() > 52 {
+                format!(
+                    "{}…",
+                    first_user_message.chars().take(52).collect::<String>()
+                )
+            } else {
+                first_user_message
+            };
+            groups
+                .entry(project)
+                .or_default()
+                .push(ConversationSummary {
+                    id,
+                    title,
+                    messages: state.messages,
+                    updated_at,
+                });
+        }
+        let projects = groups
+            .into_iter()
+            .map(|(project, conversations)| {
+                json!({
+                    "project": project,
+                    "conversations": conversations.into_iter().map(|summary| json!({
+                        "id": summary.id,
+                        "title": summary.title,
+                        "messages": summary.messages,
+                        "updated_at": summary.updated_at,
+                    })).collect::<Vec<_>>()
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(json!({"projects":projects}))
+    }
+
     pub(crate) fn is_running(&self) -> bool {
         self.active.lock().is_ok_and(|active| active.is_some())
     }
 
     pub(crate) fn snapshot(&self, project: &str) -> Result<Value> {
+        self.snapshot_with_conversation(project, LEGACY_CONVERSATION_ID)
+    }
+
+    pub(crate) fn snapshot_with_conversation(
+        &self,
+        project: &str,
+        conversation_id: &str,
+    ) -> Result<Value> {
         self.project_path(project)?;
         let recovery_failed = self.retry_cached_completion_for_project(project).is_err();
-        let state = self.load(project)?;
+        let state = self.load_with_conversation(project, conversation_id)?;
         let active = self
             .active
             .lock()
             .map_err(|_| anyhow!("chat state lock failed"))?;
-        let running = active
-            .as_ref()
-            .is_some_and(|active| active.project == project);
+        let running = active.as_ref().is_some_and(|active| {
+            active.project == project && active.conversation_id == conversation_id
+        });
         let recovery_pending = active.as_ref().is_some_and(|active| {
-            active.project == project && active.completion_recovery.is_some()
+            active.project == project
+                && active.conversation_id == conversation_id
+                && active.completion_recovery.is_some()
         });
         let error = if recovery_pending || recovery_failed {
             Some(
@@ -288,7 +457,7 @@ impl DeveloperChat {
         };
         let model_target = active
             .as_ref()
-            .filter(|active| active.project == project)
+            .filter(|active| active.project == project && active.conversation_id == conversation_id)
             .map(|active| active.model_target.clone())
             .or_else(|| state.selected_model_target.clone())
             .unwrap_or_else(|| "windows".into());
@@ -317,7 +486,30 @@ impl DeveloperChat {
         attachments: Vec<ChatAttachment>,
         queue_context: Value,
     ) -> Result<Value> {
+        self.start_in_conversation(
+            project,
+            message,
+            id,
+            None,
+            model_target,
+            attachments,
+            queue_context,
+        )
+    }
+
+    pub(crate) fn start_in_conversation(
+        self: &Arc<Self>,
+        project: &str,
+        message: &str,
+        id: &str,
+        conversation_id: Option<&str>,
+        model_target: &str,
+        attachments: Vec<ChatAttachment>,
+        queue_context: Value,
+    ) -> Result<Value> {
         Uuid::parse_str(id).context("Invalid chat request ID")?;
+        let conversation_id = conversation_id.unwrap_or(LEGACY_CONVERSATION_ID);
+        Uuid::parse_str(conversation_id).context("Invalid conversation ID")?;
         let attachments = validate_attachments(attachments)?;
         if message.len() > 16_000 || (message.trim().is_empty() && attachments.is_empty()) {
             bail!("Chat message must be at most 16000 characters and cannot be empty without an attachment");
@@ -330,17 +522,18 @@ impl DeveloperChat {
                 .database
                 .lock()
                 .map_err(|_| anyhow!("chat database lock failed"))?;
-            if let Some((old_project, old_message, old_model_target, old_payload_sha256, pending)) = database
+            if let Some((old_project, old_message, old_model_target, old_payload_sha256, old_conversation_id, pending)) = database
                 .query_row(
-                    "SELECT project,message,model_target,payload_sha256,pending FROM developer_chat_request WHERE id=?1",
-                    [id],
+                    "SELECT project,message,model_target,payload_sha256,COALESCE(conversation_id,?1),pending FROM developer_chat_request WHERE id=?2",
+                    (LEGACY_CONVERSATION_ID, id),
                     |row| {
                         Ok((
                             row.get::<_, String>(0)?,
                             row.get::<_, String>(1)?,
                             row.get::<_, String>(2)?,
                             row.get::<_, Option<String>>(3)?,
-                            row.get::<_, i64>(4)?,
+                            row.get::<_, String>(4)?,
+                            row.get::<_, i64>(5)?,
                         ))
                     },
                 )
@@ -360,11 +553,14 @@ impl DeveloperChat {
                 if !exact {
                     bail!("Chat request ID reused with different contents");
                 }
+                if old_conversation_id != conversation_id {
+                    bail!("Chat request ID reused in a different conversation");
+                }
                 drop(database);
                 if pending == 1 {
-                    self.retry_cached_completion(project, id)?;
+                    self.retry_cached_completion(project, conversation_id, id)?;
                 }
-                return self.snapshot(project);
+                return self.snapshot_with_conversation(project, conversation_id);
             }
         }
         if self.is_running() {
@@ -391,10 +587,12 @@ impl DeveloperChat {
                 bail!("Project chat request history limit reached");
             }
             transaction.execute(
-                "INSERT INTO developer_chat_request(id,project,message,model_target,pending,payload_sha256) VALUES(?1,?2,?3,?4,1,?5)",
-                (id, project, message, model_target, &payload_sha256),
+                "INSERT INTO developer_chat_request(id,project,message,conversation_id,model_target,pending,payload_sha256)
+                 VALUES(?1,?2,?3,?4,?5,1,?6)",
+                (id, project, message, conversation_id, model_target, &payload_sha256),
             )?;
-            let mut state = load_with(&transaction, project)?;
+            let mut state =
+                self.load_with_conversation_in_transaction(&transaction, project, conversation_id)?;
             state.messages.push(ChatMessage {
                 role: "user".into(),
                 content: message.into(),
@@ -415,7 +613,13 @@ impl DeveloperChat {
             state.omitted_messages = 0;
             state.pending_request_id = Some(id.into());
             state.selected_model_target = Some(model_target.into());
-            save_with(&transaction, project, &state)?;
+            save_with_conversation_in_transaction(
+                &transaction,
+                project,
+                conversation_id,
+                &state,
+                current_time()?,
+            )?;
             transaction.commit()?;
         }
         *self
@@ -424,6 +628,7 @@ impl DeveloperChat {
             .map_err(|_| anyhow!("chat state lock failed"))? = Some(ActiveChat {
             id: id.into(),
             project: project.into(),
+            conversation_id: conversation_id.to_owned(),
             model_target: model_target.into(),
             completion_recovery: None,
         });
@@ -431,16 +636,23 @@ impl DeveloperChat {
         let service = self.clone();
         let owned_project = project.to_owned();
         let owned_id = id.to_owned();
+        let owned_conversation = conversation_id.to_owned();
         tokio::spawn(async move {
             let result = service
-                .run_chat(&owned_project, &owned_id, &model, queue_context)
+                .run_chat(&owned_project, &owned_conversation, &model, queue_context)
                 .await;
-            if let Err(error) = service.finish(&owned_project, &owned_id, &model, result) {
+            if let Err(error) = service.finish(
+                &owned_project,
+                &owned_id,
+                &owned_conversation,
+                &model,
+                result,
+            ) {
                 eprintln!("developer chat completion: {error:#}");
             }
             drop(lease);
         });
-        self.snapshot(project)
+        self.snapshot_with_conversation(project, conversation_id)
     }
 
     pub(crate) fn cancel(&self, id: &str) -> Result<Value> {
@@ -453,13 +665,14 @@ impl DeveloperChat {
         if current.id != id {
             bail!("Chat request changed; refresh before stopping it");
         }
+        let conversation_id = current.conversation_id.clone();
         self.cancellation.store(true, Ordering::SeqCst);
         if current.completion_recovery.is_some() {
             current.completion_recovery = Some(ChatCompletion::Failure("Stopped".into()));
         }
         let project = current.project.clone();
         drop(active);
-        self.snapshot(&project)
+        self.snapshot_with_conversation(&project, &conversation_id)
     }
 
     pub(crate) fn cancel_for_emergency(&self) {
@@ -599,7 +812,7 @@ impl DeveloperChat {
     async fn run_chat(
         &self,
         project: &str,
-        id: &str,
+        conversation_id: &str,
         model: &ChatModelConfig,
         queue_context: Value,
     ) -> Result<String> {
@@ -643,13 +856,13 @@ impl DeveloperChat {
                 )
             })?;
         if context_limit < REQUIRED_CONTEXT {
-            self.record_context(project, context_limit, 0, Vec::new(), 0, 0)?;
+            self.record_context(project, conversation_id, context_limit, 0, Vec::new(), 0, 0)?;
             bail!(
                 "{} project chat requires n_ctx >= {REQUIRED_CONTEXT}; server reported {context_limit}",
                 model_target_name(&model.target)
             );
         }
-        let state = self.load(project)?;
+        let state = self.load_with_conversation(project, conversation_id)?;
         let has_images = state.messages.iter().any(|message| {
             message
                 .attachments
@@ -733,6 +946,7 @@ impl DeveloperChat {
             let omitted = initial_messages.saturating_sub(selected_messages.len());
             self.record_context(
                 project,
+                conversation_id,
                 context_limit,
                 tokens,
                 selected_files
@@ -805,7 +1019,6 @@ impl DeveloperChat {
         if self.cancellation.load(Ordering::SeqCst) {
             bail!("Stopped");
         }
-        let _ = id;
         Ok(content.into())
     }
 
@@ -870,6 +1083,7 @@ impl DeveloperChat {
         &self,
         project: &str,
         id: &str,
+        conversation_id: &str,
         model: &ChatModelConfig,
         result: Result<String>,
     ) -> Result<()> {
@@ -881,7 +1095,7 @@ impl DeveloperChat {
                 Err(error) => ChatCompletion::Failure(format!("{error:#}")),
             }
         };
-        let persistence = self.persist_completion(project, id, model, &completion);
+        let persistence = self.persist_completion(project, conversation_id, id, model, &completion);
         let mut active = self
             .active
             .lock()
@@ -900,6 +1114,7 @@ impl DeveloperChat {
     fn persist_completion(
         &self,
         project: &str,
+        conversation_id: &str,
         id: &str,
         model: &ChatModelConfig,
         completion: &ChatCompletion,
@@ -909,7 +1124,8 @@ impl DeveloperChat {
             .lock()
             .map_err(|_| anyhow!("chat database lock failed"))?;
         let transaction = database.transaction()?;
-        let mut state = load_with(&transaction, project)?;
+        let mut state =
+            load_with_conversation_in_transaction(&transaction, project, conversation_id)?;
         let pending = transaction
             .query_row(
                 "SELECT pending FROM developer_chat_request WHERE id=?1 AND project=?2 AND model_target=?3",
@@ -986,7 +1202,13 @@ impl DeveloperChat {
             }
         }
         state.pending_request_id = None;
-        save_with(&transaction, project, &state)?;
+        save_with_conversation_in_transaction(
+            &transaction,
+            project,
+            conversation_id,
+            &state,
+            current_time()?,
+        )?;
         let updated = transaction.execute(
             "UPDATE developer_chat_request SET pending=0 WHERE id=?1 AND pending=1",
             [id],
@@ -998,13 +1220,22 @@ impl DeveloperChat {
         Ok(())
     }
 
-    fn retry_cached_completion(&self, project: &str, id: &str) -> Result<bool> {
+    fn retry_cached_completion(
+        &self,
+        project: &str,
+        conversation_id: &str,
+        id: &str,
+    ) -> Result<bool> {
         let recovery = self
             .active
             .lock()
             .map_err(|_| anyhow!("chat state lock failed"))?
             .as_ref()
-            .filter(|active| active.id == id && active.project == project)
+            .filter(|active| {
+                active.id == id
+                    && active.project == project
+                    && active.conversation_id == conversation_id
+            })
             .and_then(|active| {
                 active
                     .completion_recovery
@@ -1015,50 +1246,58 @@ impl DeveloperChat {
             return Ok(false);
         };
         let model = self.model(&model_target)?.clone();
-        self.persist_completion(project, id, &model, &completion)?;
+        self.persist_completion(project, conversation_id, id, &model, &completion)?;
         let mut active = self
             .active
             .lock()
             .map_err(|_| anyhow!("chat state lock failed"))?;
-        if active
-            .as_ref()
-            .is_some_and(|active| active.id == id && active.project == project)
-        {
+        if active.as_ref().is_some_and(|active| {
+            active.id == id
+                && active.project == project
+                && active.conversation_id == conversation_id
+        }) {
             *active = None;
         }
         Ok(true)
     }
 
     fn retry_cached_completion_for_project(&self, project: &str) -> Result<bool> {
-        let id = self
+        let active = self
             .active
             .lock()
             .map_err(|_| anyhow!("chat state lock failed"))?
             .as_ref()
             .filter(|active| active.project == project && active.completion_recovery.is_some())
-            .map(|active| active.id.clone());
-        let Some(id) = id else {
+            .map(|active| (active.id.clone(), active.conversation_id.clone()));
+        let Some((id, conversation_id)) = active else {
             return Ok(false);
         };
-        self.retry_cached_completion(project, &id)
+        self.retry_cached_completion(project, &conversation_id, &id)
     }
 
     fn record_context(
         &self,
         project: &str,
+        conversation_id: &str,
         limit: u64,
         tokens: u64,
         files: Vec<String>,
         omitted: usize,
         omitted_files: usize,
     ) -> Result<()> {
-        let mut state = self.load(project)?;
+        let mut state = self.load_with_conversation(project, conversation_id)?;
         state.context_limit = Some(limit);
         state.context_tokens = Some(tokens);
         state.context_files = files;
         state.omitted_messages = omitted;
         state.omitted_files = omitted_files;
-        self.save(project, &state)
+        let updated_at = current_time()?;
+        let database = self
+            .database
+            .lock()
+            .map_err(|_| anyhow!("chat database lock failed"))?;
+        save_with_conversation(&database, project, conversation_id, &state, updated_at)?;
+        Ok(())
     }
 
     fn project_path(&self, project: &str) -> Result<PathBuf> {
@@ -1088,12 +1327,34 @@ impl DeveloperChat {
         load_with(&database, project)
     }
 
+    fn load_with_conversation(&self, project: &str, conversation_id: &str) -> Result<ProjectChat> {
+        let database = self
+            .database
+            .lock()
+            .map_err(|_| anyhow!("chat database lock failed"))?;
+        load_with_conversation(&database, project, conversation_id)
+    }
+
     fn save(&self, project: &str, state: &ProjectChat) -> Result<()> {
         let database = self
             .database
             .lock()
             .map_err(|_| anyhow!("chat database lock failed"))?;
         save_with(&database, project, state)
+    }
+
+    fn save_with_conversation(
+        &self,
+        project: &str,
+        conversation_id: &str,
+        state: &ProjectChat,
+        updated_at: i64,
+    ) -> Result<()> {
+        let database = self
+            .database
+            .lock()
+            .map_err(|_| anyhow!("chat database lock failed"))?;
+        save_with_conversation(&database, project, conversation_id, state, updated_at)
     }
 }
 
@@ -1648,6 +1909,13 @@ fn content_sha256(content: &str) -> String {
     format!("{:x}", Sha256::digest(content.as_bytes()))
 }
 
+fn current_time() -> Result<i64> {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("Developer chat system clock moved before Unix epoch")?;
+    Ok(duration.as_secs().try_into()?)
+}
+
 fn chat_response_provenance_sha256(
     project: &str,
     request_id: &str,
@@ -1790,6 +2058,36 @@ fn load_with(connection: &Connection, project: &str) -> Result<ProjectChat> {
         .unwrap_or_else(|| Ok(ProjectChat::default()))
 }
 
+fn load_with_conversation_in_transaction(
+    transaction: &rusqlite::Transaction<'_>,
+    project: &str,
+    conversation_id: &str,
+) -> Result<ProjectChat> {
+    let encoded: Option<String> = transaction
+        .query_row(
+            "SELECT state FROM developer_chat_conversation WHERE id=?1 AND project=?2",
+            (conversation_id, project),
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(encoded) = encoded {
+        return serde_json::from_str(&encoded).map_err(Into::into);
+    }
+    if conversation_id == LEGACY_CONVERSATION_ID {
+        let encoded = transaction
+            .query_row(
+                "SELECT state FROM developer_chat_project WHERE project=?1",
+                [project],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        return encoded
+            .map(|encoded| serde_json::from_str(&encoded).map_err(Into::into))
+            .unwrap_or_else(|| Ok(ProjectChat::default()));
+    }
+    Ok(ProjectChat::default())
+}
+
 fn save_with(connection: &Connection, project: &str, state: &ProjectChat) -> Result<()> {
     let encoded = serde_json::to_string(state)?;
     connection.execute(
@@ -1797,6 +2095,74 @@ fn save_with(connection: &Connection, project: &str, state: &ProjectChat) -> Res
          ON CONFLICT(project) DO UPDATE SET state=excluded.state",
         (project, encoded),
     )?;
+    Ok(())
+}
+
+fn load_with_conversation(
+    connection: &Connection,
+    project: &str,
+    conversation_id: &str,
+) -> Result<ProjectChat> {
+    let encoded: Option<String> = connection
+        .query_row(
+            "SELECT state FROM developer_chat_conversation WHERE id=?1 AND project=?2",
+            (conversation_id, project),
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(encoded) = encoded {
+        return serde_json::from_str(&encoded).map_err(Into::into);
+    }
+    if conversation_id == LEGACY_CONVERSATION_ID {
+        return load_with(connection, project);
+    }
+    Ok(ProjectChat::default())
+}
+
+fn save_with_conversation_in_transaction(
+    transaction: &rusqlite::Transaction<'_>,
+    project: &str,
+    conversation_id: &str,
+    state: &ProjectChat,
+    updated_at: i64,
+) -> Result<()> {
+    let encoded = serde_json::to_string(state)?;
+    transaction.execute(
+        "INSERT INTO developer_chat_conversation(id,project,state,updated_at)
+         VALUES(?1,?2,?3,?4)
+         ON CONFLICT(id) DO UPDATE
+         SET project=excluded.project,state=excluded.state,updated_at=excluded.updated_at",
+        (conversation_id, project, encoded, updated_at),
+    )?;
+    if conversation_id == LEGACY_CONVERSATION_ID {
+        let encoded = serde_json::to_string(state)?;
+        transaction.execute(
+            "INSERT INTO developer_chat_project(project,state) VALUES(?1,?2)
+             ON CONFLICT(project) DO UPDATE SET state=excluded.state",
+            (project, encoded),
+        )?;
+    }
+    Ok(())
+}
+
+fn save_with_conversation(
+    connection: &Connection,
+    project: &str,
+    conversation_id: &str,
+    state: &ProjectChat,
+    updated_at: i64,
+) -> Result<()> {
+    let encoded = serde_json::to_string(state)?;
+    connection.execute(
+        "INSERT INTO developer_chat_conversation(id,project,state,updated_at)
+         VALUES(?1,?2,?3,?4)
+         ON CONFLICT(id) DO UPDATE
+         SET project=excluded.project,state=excluded.state,updated_at=excluded.updated_at",
+        (conversation_id, project, encoded, updated_at),
+    )?;
+    if conversation_id == LEGACY_CONVERSATION_ID {
+        save_with(connection, project, state)?;
+    }
     Ok(())
 }
 
@@ -1863,6 +2229,7 @@ mod tests {
         *service.active.lock().unwrap() = Some(ActiveChat {
             id: request_id.into(),
             project: "project".into(),
+            conversation_id: LEGACY_CONVERSATION_ID.into(),
             model_target: "mac".into(),
             completion_recovery: None,
         });
@@ -1871,6 +2238,7 @@ mod tests {
             .finish(
                 "project",
                 request_id,
+                LEGACY_CONVERSATION_ID,
                 &model,
                 Ok("Use the existing checkpoint.".into()),
             )
@@ -1950,6 +2318,7 @@ mod tests {
         service
             .persist_completion(
                 "project",
+                LEGACY_CONVERSATION_ID,
                 request_id,
                 &model,
                 &ChatCompletion::Response("Use the existing checkpoint.".into()),
