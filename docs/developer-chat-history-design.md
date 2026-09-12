@@ -235,6 +235,10 @@ Current restoration checks:
   native workflow suite now runs the history E2E on both hosted platforms.
 - The Developer app and Windows runner rebuilt successfully and reconnected.
   Queue content and connection/model configuration fingerprints are unchanged.
+  All 139 files in the installed Windows source archive match implementation
+  commit `0159c241e00b6a1f6b1c4254b91678dd4b54821d`. This Developer staging directory
+  is not a Git checkout; source fingerprint parity is verified instead. The
+  production service and its source checkout were not changed.
   The installed Swift history/runner read-only checks pass 2/2. The local model
   became healthy after its initial startup timeout; no fallback was selected.
 - Workspace strict clippy passes after a named migration row type and equivalent
@@ -243,6 +247,33 @@ Current restoration checks:
   `Sky Computer Use native pipe closed before response`; rendered layout remains
   unverified. The original source recovery and native tests are separate evidence.
 
-Final main-branch publication and gate closeout are pending. Historical validation counts
-above apply only to the original September 8 run. The production service remains
-unchanged: this work targets the separately installed Developer app and runner.
+## Restoration closeout
+
+Documentation and safety review: approved. The usage guide, design, safety rules,
+canonical commands and project knowledge base describe the restored behavior and
+its Developer-only boundary. Durable recovery guidance and the distinction between
+master library tests and Developer binary tests are recorded in the knowledge base.
+The unit-testing workflow covers migration, replay, ownership, cancellation,
+recovery, navigation and stale review evidence. E2E uses native Swift/AppKit and
+runner HTTP/process boundaries; the browser preview is not native proof.
+
+Implementation commit `0159c241e00b6a1f6b1c4254b91678dd4b54821d` was pushed and its
+remote branch SHA verified before main publication, preventing another local-only
+loss. This documentation closeout accompanies the fast-forward publication to
+`main`; required Mac and Windows hosted results attach to the final commit and
+must be checked before claiming hosted success.
+
+At source closeout, the full local gate passed its preliminary contracts and strict
+workspace clippy, compiled the workspace, and entered its test run. A complete
+local-gate pass is not claimed by this document. The separately passing feature,
+native Windows and installed Swift checks above are not substitutes for that gate.
+Rendered UI remains unverified because native automation disconnects. Signing,
+notarization and production service deployment are outside this Developer change.
+Historical validation counts above apply only to the original September 8 run.
+
+Raw restoration logs and recovery fingerprints are retained locally under
+`target/chat-history-restoration-original/`. The final Developer installation was
+built from the committed runtime source; this docs-only closeout leaves its binary
+unchanged. The authoritative Developer staging directory is not a Git checkout;
+its 139-file source parity check is recorded above instead of claiming a Git
+fast-forward or a production `AssemblywrightMaster` service deployment.
