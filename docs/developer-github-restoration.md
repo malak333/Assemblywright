@@ -39,10 +39,34 @@ connection tests passed 11 cases plus their native process/socket E2E.
 
 The native GitHub setup and publication E2Es passed on Mac. Final-source Windows
 setup, publication, settings, grouped-chat and repair-escalation E2Es all passed.
-The complete repository gate, hosted checks, and installation are still in progress
-at this checkpoint. No complete-gate or deployment pass is claimed here. Disposable
-Git/CLI fixtures prove native behavior, not live external publication. Production
-signing, notarization and the production service are separate boundaries.
+The complete repository gate and hosted checks were running at this source
+checkpoint. Their final results are recorded with
+[restoration PR #408](https://github.com/malak333/Assemblywright/pull/408), and must
+pass before merge. Disposable Git/CLI fixtures prove native behavior, not live
+external publication. Production signing, notarization and the production service
+are separate boundaries.
+
+## Installed Developer verification
+
+The Mac Developer app and Windows runner were rebuilt from committed source and
+reconnected. All 164 frozen validation source files match implementation commit
+`4199e59addaef5b8d89e929eaa0fa23e1885782c`; all 145 installed Windows runtime source
+files match that same source, and the installed executable matches the build.
+The Developer staging directory is not a Git checkout; this is source fingerprint
+parity, not a claim that the production service checkout was updated.
+
+The owner queue, auto-run/pause state, model configuration and connection destination
+were preserved. A consistent database backup was taken before installation; all 22
+pre-existing non-state tables are unchanged and the v8 migration backup matches the
+exact pre-install state. Both installed Swift read-only tests passed against the
+real Windows `/status` and `/github` endpoints. The setup API confirmed the Windows
+account and returned 23 accessible repositories without creating or publishing one.
+
+The Mac bundle passes strict local signature verification. Rendered UI remains
+unverified because native UI automation disconnected with
+`Sky Computer Use native pipe closed before response`. This is separate from the
+passing Swift behavior, AppKit and installed endpoint tests. No production service,
+signing identity or notarization change is included.
 
 The Cargo wrapper and CI contract now require eleven native Developer workflows,
 including settings, GitHub setup and publication. Raw recovery fingerprints and
