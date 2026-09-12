@@ -212,8 +212,8 @@ def main():
             assert 'queue' not in durable
             assert 'queue_v2' not in durable
             assert 'queue_v3' not in durable
-            tombstone = next(feature for feature in durable['queue_v8'] if feature['id'] == failed_id)
-            assert all(feature['model_target'] == 'mac' for feature in durable['queue_v8'])
+            tombstone = next(feature for feature in durable['queue_v10'] if feature['id'] == failed_id)
+            assert all(feature['model_target'] == 'mac' for feature in durable['queue_v10'])
             assert tombstone['status'] == 'removed'
             assert tombstone['checkpoint'] == 'applied'
             assert tombstone['edits'][0]['path'] == 'result.txt'

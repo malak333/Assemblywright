@@ -1,5 +1,19 @@
 # Assemblywright Design
 
+The owner requested Developer GitHub sign-in, repository discovery, and explicit
+repository creation after a saved Windows login became invalid. The accepted
+[`Developer GitHub setup`](docs/developer-github-setup-design.md) extends the earlier
+publication design with a device-authorization flow, repository picker, and
+account/name/visibility-bound creation. Setup does not upload project files or
+relax feature review, protected-check, or merge requirements.
+
+The owner approved automatic GitHub publication for connected Developer projects:
+one feature branch, an exact reviewed commit, a pull request, required checks, normal
+automatic merge, and verified remote base before queue advancement.
+[`Developer GitHub publication`](docs/developer-github-publication-design.md) owns
+this extension and its recovery rules. Windows retains authority; this does not
+activate production publication or retroactively publish historical local results.
+
 The owner approved project-grouped Developer chat history and one-click New Chat.
 [`Developer chat history`](docs/developer-chat-history-design.md) owns this extension:
 Windows persists immutable conversation IDs, titles and pageable transcripts;

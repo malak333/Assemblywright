@@ -21,6 +21,28 @@ Rendered UI, signing, production deployment and hosted gates are separate checks
 `developer_workflow_e2e.rs` includes the history process test in both Mac and
 Windows Cargo gates; the CI contract verifies that registration.
 
+## Developer GitHub publication and setup
+
+The restored Developer publication extension has native Rust, Swift, HTTP, process,
+and Git coverage:
+
+```sh
+cargo test -p assemblywright-master --bin assemblywright-developer
+cargo build -p assemblywright-master --bin assemblywright-developer --example developer_review_fixture --example developer_github_fixture
+swift test --disable-sandbox --package-path apps/mac --filter 'DeveloperGitHubSetupTests|DeveloperGitHubTests|DeveloperRunnerTests'
+python3 scripts/developer-runner-publication-e2e.py --binary target/debug/assemblywright-developer --github-fixture target/debug/examples/developer_github_fixture
+python3 scripts/developer-runner-github-setup-e2e.py --binary target/debug/assemblywright-developer --github-fixture target/debug/examples/developer_github_fixture
+python3 scripts/developer-runner-settings-e2e.py --binary target/debug/assemblywright-developer
+```
+
+Run the corresponding `.exe` runner and fixture on native Windows. The publication
+fixture uses real local Git and a controlled GitHub CLI fixture; the setup fixture
+uses controlled authentication, repository-discovery, and creation processes. They
+must not be reported as live GitHub account, required-check, hosted-CI, external
+merge, signing, or production-publication proof. See
+[`developer-github-publication-design.md`](developer-github-publication-design.md)
+and [`developer-github-setup-design.md`](developer-github-setup-design.md).
+
 The installed read-only check uses `ASSEMBLYWRIGHT_DEVELOPER_LIVE_CONFIG` and
 `--filter installedWindowsHistoryReopensExactConversationsWithoutSending`.
 It requires saved history and verifies selection without sending messages.
@@ -1495,9 +1517,10 @@ swift test --disable-sandbox --package-path apps/mac --filter DeveloperRunnerCli
 ./scripts/developer-build.py --build
 ```
 
-The master package integration test `developer_workflow_e2e` invokes all seven
+The master package integration test `developer_workflow_e2e` invokes all eleven
 native fixture-model HTTP/process scripts: base runner, ordinary repair, independent
-review, planning, model targets, chat, and escalation. Both the canonical local
+review, planning, model targets, chat, chat history, escalation, settings, GitHub setup,
+and publication. Both the canonical local
 release gate and the required Windows distributed gate run that wrapper through
 their existing Cargo workspace tests, using `python3` on Mac and `python` on
 Windows. Swift client tests run with the full Swift package. Use

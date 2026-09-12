@@ -16,6 +16,14 @@ fn supervised_developer_workflow_runs_native_processes_and_recovers_checkpoints(
             "developer_review_fixture{}",
             std::env::consts::EXE_SUFFIX
         ));
+    let github_fixture = developer_binary
+        .parent()
+        .unwrap()
+        .join("examples")
+        .join(format!(
+            "developer_github_fixture{}",
+            std::env::consts::EXE_SUFFIX
+        ));
     if cfg!(windows) {
         assert!(
             review_fixture.is_file(),
@@ -32,11 +40,21 @@ fn supervised_developer_workflow_runs_native_processes_and_recovers_checkpoints(
         "developer-runner-chat-e2e.py",
         "developer-runner-chat-history-e2e.py",
         "developer-runner-escalation-e2e.py",
+        "developer-runner-settings-e2e.py",
+        "developer-runner-github-setup-e2e.py",
+        "developer-runner-publication-e2e.py",
     ] {
         let mut command = std::process::Command::new(python);
         command
             .arg(root.join("scripts").join(script))
             .args(["--binary", env!("CARGO_BIN_EXE_assemblywright-developer")]);
+        if script.contains("github-setup") || script.contains("publication") {
+            assert!(
+                github_fixture.is_file(),
+                "Build the native GitHub fixture before Developer E2E"
+            );
+            command.arg("--github-fixture").arg(&github_fixture);
+        }
         if cfg!(windows) {
             command.env("ASSEMBLYWRIGHT_DEVELOPER_REVIEW_FIXTURE", &review_fixture);
         }

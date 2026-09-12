@@ -224,11 +224,11 @@ def main():
 
             with closing(sqlite3.connect(data / "developer.sqlite3")) as database:
                 durable = json.loads(database.execute("SELECT state FROM developer_state WHERE id=1").fetchone()[0])
-            assert "queue_v8" in durable
-            durable_repaired = next(f for f in durable["queue_v8"] if f["id"] == repaired_id)
+            assert "queue_v10" in durable
+            durable_repaired = next(f for f in durable["queue_v10"] if f["id"] == repaired_id)
             assert [attempt["outcome"] for attempt in durable_repaired["review_history"]] == ["rejected", "approved"]
             assert all(attempt["decision_sha256"] for attempt in durable_repaired["review_history"])
-            durable_restarted = next(f for f in durable["queue_v8"] if f["id"] == restart_id)
+            durable_restarted = next(f for f in durable["queue_v10"] if f["id"] == restart_id)
             assert durable_restarted["review_pending"] is None
             assert durable_restarted["review_history"][-1]["outcome"] == "interrupted"
             assert durable_restarted["review_history"][-1]["decision_sha256"] is None
@@ -241,7 +241,7 @@ def main():
                 "emergency_review_invalidated": True,
                 "late_approval_rejected_after_file_drift": True,
                 "restart_invalidated_pending_review": True,
-                "durable_queue_schema": "queue_v8",
+                "durable_queue_schema": "queue_v10",
             }))
         finally:
             try:

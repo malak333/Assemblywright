@@ -22,13 +22,16 @@ def reviewer_arguments(root):
             executable.write_text('#!' + sys.executable + '\n' + '''import hashlib,json,sys,time,os
 from pathlib import Path
 from developer_planning_fixture import planning_output
-input_text=sys.stdin.read()
 def evidence(value):
     with Path(__file__).with_name("review-input-evidence.jsonl").open("a") as out:out.write(json.dumps(value)+"\\n")
+model=next((sys.argv[index+1] for index,value in enumerate(sys.argv[:-1]) if value=="--model"),None)
+reasoning_effort=next((value.split("=\\\"",1)[1][:-1] for value in sys.argv if value.startswith("model_reasoning_effort=\\\"") and value.endswith("\\\"")),None)
+evidence({"kind":"argv","model":model,"reasoning_effort":reasoning_effort})
+input_text=sys.stdin.read()
 if "Untrusted canonical planning packet JSON follows:\\n" in input_text:
     raw=input_text.split("Untrusted canonical planning packet JSON follows:\\n",1)[1]
     p=json.loads(raw)
-    evidence({"kind":"planning","packet_sha256":hashlib.sha256(raw.encode()).hexdigest(),"skill_sha256":p.get("skill_sha256"),"skill_present":"Understanding Lock" in input_text and "Turn raw ideas into" in input_text})
+    evidence({"kind":"planning","packet_sha256":hashlib.sha256(raw.encode()).hexdigest(),"skill_sha256":p.get("skill_sha256"),"model_id":p.get("model_id"),"reasoning_effort":p.get("reasoning_effort"),"skill_present":"Understanding Lock" in input_text and "Turn raw ideas into" in input_text})
     Path(__file__).with_name("planning-started.pid").write_text(str(os.getpid()))
     if "[planning:wait]" in p["instruction"]:time.sleep(20)
     if "[planning:malformed]" in p["instruction"]:print("{");sys.exit(0)
@@ -38,7 +41,7 @@ if "Untrusted canonical planning packet JSON follows:\\n" in input_text:
     print(json.dumps(result));sys.exit(0)
 raw=input_text.split("Untrusted canonical review packet JSON follows:\\n",1)[1]
 p=json.loads(raw)
-evidence({"kind":"review","approved_plan_sha256":p.get("approved_plan_sha256"),"approved_plan_text_sha256":hashlib.sha256((p.get("approved_plan") or "").encode()).hexdigest()})
+evidence({"kind":"review","model_id":p.get("model_id"),"reasoning_effort":p.get("reasoning_effort"),"approved_plan_sha256":p.get("approved_plan_sha256"),"approved_plan_text_sha256":hashlib.sha256((p.get("approved_plan") or "").encode()).hexdigest()})
 Path(__file__).with_name("started.pid").write_text(str(os.getpid()))
 instruction=p["instruction"]
 if "[fixture:malformed]" in instruction:
@@ -47,7 +50,7 @@ if "[fixture:wait]" in instruction:time.sleep(20)
 digest="0"*64 if "[fixture:stale]" in instruction else hashlib.sha256(raw.encode()).hexdigest()
 bad=next((f for f in p["files"] if "VALUE = 0" in f["content"]),None) if "[fixture:reject-zero]" in instruction else None
 findings=[{"finding_id":"wrong-value","path":bad["path"],"message":"Implementation must set VALUE to 1 while preserving every other generated file."}] if bad else []
-print(json.dumps({"schema_version":1,"review_packet_sha256":digest,"provider_id":"openai.codex","model_id":"gpt-5.6-sol","decision":"rejected" if findings else "approved","blocking_findings":findings,"non_blocking_findings":[],"validation_evidence_sha256":p["validation_evidence_sha256"],"reviewed_files":[{"path":f["path"],"content_sha256":f["content_sha256"]} for f in p["files"]]}))
+print(json.dumps({"schema_version":1,"review_packet_sha256":digest,"provider_id":"openai.codex","model_id":p["model_id"],"reasoning_effort":p["reasoning_effort"],"decision":"rejected" if findings else "approved","blocking_findings":findings,"non_blocking_findings":[],"validation_evidence_sha256":p["validation_evidence_sha256"],"reviewed_files":[{"path":f["path"],"content_sha256":f["content_sha256"]} for f in p["files"]]}))
 ''')
             executable.chmod(0o700)
     return ['--review-codex-executable', str(executable), '--review-codex-home', str(home)]

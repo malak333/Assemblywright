@@ -278,7 +278,8 @@ def safe_runtime_settings(state):
         raise ValueError("runtime.json must be a direct 0600 file")
     value = json.loads(path.read_text(encoding="utf-8"))
     allowed = {"endpoint", "token", "windows_model_url", "windows_model",
-               "windows_model_start_script", "review_codex_executable", "review_codex_home"}
+               "windows_model_start_script", "review_codex_executable", "review_codex_home",
+               "opencode_executable"}
     if not isinstance(value, dict) or not set(value).issubset(allowed):
         raise ValueError("runtime.json contains unknown settings")
     if value.get("endpoint") not in (None, "http://127.0.0.1:17796"):
@@ -316,6 +317,13 @@ def safe_runtime_settings(state):
             raise ValueError("runtime.json contains an unsafe reviewer path")
     if executable and executable.replace("\\", "/").rsplit("/", 1)[-1].lower() != "codex.exe":
         raise ValueError("runtime.json reviewer executable must be codex.exe")
+    tool_executable = value.get("opencode_executable")
+    if "opencode_executable" in value and (
+            not isinstance(tool_executable, str)
+            or not re.fullmatch(r"[A-Za-z]:[/\\][A-Za-z0-9_/\\.-]+", tool_executable)
+            or tool_executable.replace("\\", "/").rsplit("/", 1)[-1].lower() != "opencode.exe"
+            or any(part in (".", "..") for part in tool_executable.replace("\\", "/").split("/"))):
+        raise ValueError("runtime.json contains an unsafe OpenCode executable path")
     return value
 
 
@@ -328,6 +336,8 @@ def runner_command(config, runtime):
     if runtime.get("review_codex_executable"):
         command += (f" --review-codex-executable {runtime['review_codex_executable']}"
                     f" --review-codex-home {runtime['review_codex_home']}")
+    if runtime.get("opencode_executable"):
+        command += f" --opencode-executable {runtime['opencode_executable']}"
     if not re.fullmatch(r"[A-Za-z0-9_@.:/\\\[\] -]+", command):
         raise ValueError("Runner command contains unsafe characters")
     return command
@@ -357,6 +367,27 @@ def valid_token(value):
     return isinstance(value, str) and re.fullmatch(uuid_pattern + uuid_pattern, value) is not None
 
 
+def valid_status_model_bindings(value):
+    """Observe Windows-owned selections; never choose or change a model here."""
+    settings = value.get("ai_settings")
+    if settings is None:
+        return (value.get("review_model") == "gpt-5.6-sol"
+                and value.get("planning_model") == "gpt-5.6-sol")
+    if not isinstance(settings, dict):
+        return False
+    for role, prefix in (("reviewer", "review"), ("orchestrator", "planning")):
+        selection = settings.get(role)
+        if not isinstance(selection, dict):
+            return False
+        model, effort = selection.get("model"), selection.get("reasoning_effort")
+        if (not isinstance(model, str) or not re.fullmatch(r"gpt-[a-z0-9.-]{1,124}", model)
+                or effort not in ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
+                or value.get(prefix + "_model") != model
+                or value.get(prefix + "_reasoning_effort") != effort):
+            return False
+    return True
+
+
 def authenticated_status(runtime, config):
     endpoint, token = runtime.get("endpoint"), runtime.get("token")
     if endpoint != "http://127.0.0.1:17796" or not valid_token(token):
@@ -369,9 +400,9 @@ def authenticated_status(runtime, config):
     except (OSError, ValueError, urllib.error.HTTPError):
         return None
     if (value.get("mode") != "supervised_developer" or value.get("review_required") is not True
-            or value.get("review_provider") != "openai.codex" or value.get("review_model") != "gpt-5.6-sol"
+            or value.get("review_provider") != "openai.codex"
             or value.get("planning_required") is not True or value.get("planning_provider") != "openai.codex"
-            or value.get("planning_model") != "gpt-5.6-sol"
+            or not valid_status_model_bindings(value)
             or normalize_windows_drive_path(value.get("workspace_root"))
                != expected_workspace_root(config)):
         return None

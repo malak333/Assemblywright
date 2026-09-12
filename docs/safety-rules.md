@@ -1,5 +1,22 @@
 # Safety Rules
 
+The accepted [Developer GitHub setup design](developer-github-setup-design.md)
+permits owner-started device sign-in, bounded repository discovery, and explicitly
+confirmed repository creation. Windows retains credentials and effect authority.
+Creation binds the confirmed account/name/visibility and immutable repository ID;
+device challenges never authorize model actions. Cancellation or unknown credential
+and creation effects require truthful observation and operation-bound recovery.
+Repository creation does not publish project files or bypass publication checks.
+
+The accepted [Developer GitHub publication design](developer-github-publication-design.md)
+permits automatic publication only to the project's explicitly connected repository.
+The Windows Developer runner owns the frozen candidate, derived feature branch,
+required-check verification, normal merge, and remote-base reconciliation. Models
+cannot choose publication destinations or approve effects. No direct base push,
+force push, branch-protection bypass, or automatic replay after an uncertain effect
+is permitted. Connected features cannot succeed or advance until the merge is
+verified. Existing local-only results and production provisioning remain distinct.
+
 The accepted [Developer chat history design](developer-chat-history-design.md)
 adds Windows-owned conversations within each Developer project. Chat IDs and
 project ownership bind request replay, tool approvals, cancellation and repair

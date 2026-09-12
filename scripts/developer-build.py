@@ -86,6 +86,20 @@ def load_saved_runtime(connection):
         raise SystemExit(str(error)) from error
 
 
+def tool_settings(args, saved):
+    executable = getattr(args, "opencode_executable", None)
+    if executable is None:
+        executable = saved.get("opencode_executable")
+    if executable is None:
+        return {}
+    if (not isinstance(executable, str)
+            or not re.fullmatch(r"[A-Za-z]:[/\\][A-Za-z0-9_/\\.-]+", executable)
+            or executable.replace("\\", "/").rsplit("/", 1)[-1].lower() != "opencode.exe"
+            or any(part in (".", "..") for part in executable.replace("\\", "/").split("/"))):
+        raise ValueError("OpenCode must be a simple absolute Windows path to opencode.exe.")
+    return {"opencode_executable": executable}
+
+
 def authenticated_status(connection, runtime, config):
     return connection.authenticated_status(runtime, config) if config is not None else None
 
@@ -94,8 +108,8 @@ def request_shutdown(connection, runtime, config):
     status = authenticated_status(connection, runtime, config)
     if status is None:
         raise SystemExit("The running connection state is unavailable. No process was stopped; reconnect before rebuilding or stopping.")
-    if status.get("running") or status.get("chat_running") or status.get("planning_running"):
-        raise SystemExit("Use Stop, Stop reply, or Cancel brainstorming in the app and wait for work to finish before changing settings, rebuilding, or closing the runner.")
+    if any(status.get(key) for key in ("running", "chat_running", "planning_running", "escalation_running", "tools_running", "github_publication_running", "github_setup_busy")):
+        raise SystemExit("Use Stop, Stop reply, Cancel brainstorming, or cancel GitHub sign-in in the app and wait for work to finish before changing settings, rebuilding, or closing the runner.")
     request = urllib.request.Request(
         runtime["endpoint"] + "/control", method="POST",
         data=json.dumps({"action": "shutdown"}).encode(),
@@ -317,10 +331,10 @@ def write_connection_config(connection, args):
     return connection.validate_config(STATE)
 
 
-def write_runtime(connection, saved, windows_settings, reviewer_settings):
+def write_runtime(connection, saved, windows_settings, reviewer_settings, tools_settings=None):
     retained = {key: saved[key] for key in ("endpoint", "token") if key in saved}
     connection.atomic_json(STATE / "runtime.json",
-                           {**retained, **windows_settings, **reviewer_settings})
+                           {**retained, **windows_settings, **reviewer_settings, **(tools_settings or {})})
     connection.safe_runtime_settings(STATE)
 
 
@@ -416,6 +430,7 @@ def main():
     parser.add_argument("--windows-model-start-script", help=argparse.SUPPRESS)
     parser.add_argument("--review-codex-executable")
     parser.add_argument("--review-codex-home")
+    parser.add_argument("--opencode-executable", help="Pinned Windows opencode.exe for developer app tools")
     parser.add_argument("--build", action="store_true")
     parser.add_argument("--no-open", action="store_true")
     parser.add_argument("--stop", action="store_true")
@@ -430,13 +445,14 @@ def main():
         try:
             windows_settings = windows_model_settings(args, saved)
             reviewer_settings = review_settings(args, saved)
+            tools_settings = tool_settings(args, saved)
         except ValueError as error:
             raise SystemExit(str(error)) from error
         if not reviewer_settings and not args.stop:
             raise SystemExit("Configure the required Codex reviewer before launching or rebuilding. The current runner was left unchanged.")
         setting_keys = ["windows_model_url", "windows_model", "windows_model_start_script",
-                        "review_codex_executable", "review_codex_home"]
-        desired = {**windows_settings, **reviewer_settings}
+                        "review_codex_executable", "review_codex_home", "opencode_executable"]
+        desired = {**windows_settings, **reviewer_settings, **tools_settings}
         settings_changed = any(saved.get(key) != desired.get(key) for key in setting_keys)
         existing_connection = None
         connection_path = STATE / "connection.json"
@@ -455,6 +471,9 @@ def main():
         connection_changed = comparable_existing != validated_desired
         loaded = connection.service_is_loaded()
         observed = authenticated_status(connection, saved, existing_connection)
+        if connection_changed and observed is not None and any(observed.get(key) for key in
+                ("github_publication_unresolved", "github_setup_unresolved")):
+            raise SystemExit("Resolve pending GitHub work before changing the connection destination. The existing connection was retained.")
         try:
             journal = load_migration(connection, args)
             legacy_socket = journal is not None or legacy_migration_candidate(
@@ -471,7 +490,7 @@ def main():
         if migration:
             if journal is None:
                 if any(observed.get(key) for key in
-                       ("running", "chat_running", "planning_running")):
+                       ("running", "chat_running", "planning_running", "escalation_running", "tools_running", "github_publication_running", "github_setup_busy")):
                     raise SystemExit("Stop active work before migrating the legacy connection.")
                 revision = observed.get("revision")
                 if not isinstance(revision, int) or isinstance(revision, bool):
@@ -483,13 +502,9 @@ def main():
             journal = cancel_known_old_forwards(connection, args, journal)
             connection.record_connection_ownership(STATE)
             (STATE / MIGRATION_FILE).unlink()
-        config = write_connection_config(connection, args)
-        if disruptive:
+        elif disruptive:
             if loaded or observed is not None:
-                try:
-                    request_shutdown(connection, saved, config)
-                except SystemExit:
-                    print("Runner shutdown skipped (SSH tunnel unavailable); proceeding with build.")
+                request_shutdown(connection, saved, existing_connection)
                 if loaded:
                     stop_supervisor(connection)
             elif args.stop:
@@ -499,7 +514,8 @@ def main():
         if args.stop:
             print("Developer runner and connection stopped. Projects and queue are retained.")
             return
-        write_runtime(connection, saved, windows_settings, reviewer_settings)
+        config = write_connection_config(connection, args)
+        write_runtime(connection, saved, windows_settings, reviewer_settings, tools_settings)
         if args.build:
             build_products(connection, config, args)
         start_local_model(args)

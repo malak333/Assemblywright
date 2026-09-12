@@ -5,6 +5,7 @@
 //! validation digest, and the exact locally generated files. It never receives a
 //! working directory or a tool surface.
 
+use crate::developer_settings::{validate_model_id, validate_reasoning_effort, DEFAULT_MODEL};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -20,12 +21,15 @@ use std::{
 use tokio::{io::AsyncReadExt, io::AsyncWriteExt, process::Command};
 
 pub const PROVIDER_ID: &str = "openai.codex";
-pub const MODEL_ID: &str = "gpt-5.6-sol";
+pub const MODEL_ID: &str = DEFAULT_MODEL;
 const REVIEW_TIMEOUT: Duration = Duration::from_secs(900);
 const MAX_PACKET_BYTES: usize = 1024 * 1024;
 const MAX_OUTPUT_BYTES: usize = 64 * 1024;
 const MAX_FINDINGS: usize = 64;
 const SCHEMA_FILENAME: &str = "developer-review-output-schema.json";
+const TRUSTED_PACKET_DIGEST_PREFIX: &[u8] = b"\n\nTrusted review_packet_sha256 (copy exactly): ";
+const TRUSTED_BINDING_MARKER: &[u8] = b"\nTrusted host-generated response binding JSON follows:\n";
+const UNTRUSTED_PACKET_MARKER: &[u8] = b"\nUntrusted canonical review packet JSON follows:\n";
 #[cfg(windows)]
 const REVIEW_LAUNCHER_MARKER: &str = "__assemblywright_developer_review_launcher_v1";
 #[cfg(windows)]
@@ -37,7 +41,9 @@ Use no tools. Do not propose or perform file changes. Review only whether the ex
 the immutable approved implementation plan when present, preserve existing behavior, and are adequately exercised by the configured validation command. The validation result is evidence,
 not proof of correctness. Return exactly the supplied JSON schema.
 
-Copy schema_version, review_packet_sha256, provider_id, model_id, validation_evidence_sha256, and reviewed_files exactly.
+The trusted host-generated response binding below supplies schema_version, review_packet_sha256, provider_id, model_id,
+reasoning_effort, validation_evidence_sha256, and the ordered reviewed_files response value. Copy every opaque string and
+the reviewed_files array exactly as supplied. Do not compute, infer, normalize, reorder, or omit any binding value.
 Each finding must use a unique stable identifier, identify one reviewed file, and explain one concrete issue without including
 credentials or source excerpts. Approve only when there are no blocking findings. Reject with at least one blocking finding when
 the candidate is incorrect, incomplete, unsafe, weakens tests, or lacks meaningful coverage for the requested behavior.
@@ -86,10 +92,18 @@ pub fn review_launcher_exit_code() -> Option<i32> {
     let Some(expected_schema_sha256) = arguments.next().and_then(|v| v.into_string().ok()) else {
         return Some(1);
     };
+    let Some(model) = arguments.next().and_then(|v| v.into_string().ok()) else {
+        return Some(1);
+    };
+    let Some(reasoning_effort) = arguments.next().and_then(|v| v.into_string().ok()) else {
+        return Some(1);
+    };
     if arguments.next().is_some()
         || codex_executable.file_name() != Some(OsStr::new("codex.exe"))
         || !valid_digest(&expected_executable_sha256)
         || !valid_digest(&expected_schema_sha256)
+        || validate_model_id(&model).is_err()
+        || validate_reasoning_effort(&reasoning_effort).is_err()
     {
         return Some(1);
     }
@@ -163,7 +177,12 @@ pub fn review_launcher_exit_code() -> Option<i32> {
     };
     let mut command = std::process::Command::new(&codex_executable);
     command
-        .args(codex_arguments(&output_schema, working_directory))
+        .args(codex_arguments(
+            &output_schema,
+            working_directory,
+            &model,
+            &reasoning_effort,
+        ))
         .current_dir(working_directory)
         .env_clear()
         .env("CODEX_HOME", &codex_home)
@@ -189,13 +208,14 @@ const OUTPUT_SCHEMA: &str = r##"{
     "review_packet_sha256":{"$ref":"#/$defs/digest"},
     "provider_id":{"type":"string","const":"openai.codex"},
     "model_id":{"type":"string","const":"gpt-5.6-sol"},
+    "reasoning_effort":{"type":"string","const":"high"},
     "decision":{"type":"string","enum":["approved","rejected"]},
     "blocking_findings":{"type":"array","maxItems":64,"items":{"$ref":"#/$defs/finding"}},
     "non_blocking_findings":{"type":"array","maxItems":64,"items":{"$ref":"#/$defs/finding"}},
     "validation_evidence_sha256":{"$ref":"#/$defs/digest"},
     "reviewed_files":{"type":"array","minItems":1,"maxItems":40,"items":{"$ref":"#/$defs/file"}}
   },
-  "required":["schema_version","review_packet_sha256","provider_id","model_id","decision","blocking_findings","non_blocking_findings","validation_evidence_sha256","reviewed_files"],
+  "required":["schema_version","review_packet_sha256","provider_id","model_id","reasoning_effort","decision","blocking_findings","non_blocking_findings","validation_evidence_sha256","reviewed_files"],
   "$defs":{
     "digest":{"type":"string","pattern":"^[0-9a-f]{64}$"},
     "path":{"type":"string","minLength":1,"maxLength":240},
@@ -203,6 +223,28 @@ const OUTPUT_SCHEMA: &str = r##"{
     "finding":{"type":"object","additionalProperties":false,"properties":{"finding_id":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9][A-Za-z0-9._-]*$"},"path":{"$ref":"#/$defs/path"},"message":{"type":"string","minLength":1,"maxLength":1000}},"required":["finding_id","path","message"]}
   }
 }"##;
+
+fn review_output_schema(model: &str, reasoning_effort: &str) -> Result<String> {
+    validate_model_id(model)?;
+    validate_reasoning_effort(reasoning_effort)?;
+    Ok(OUTPUT_SCHEMA
+        .replacen(
+            "\"model_id\":{\"type\":\"string\",\"const\":\"gpt-5.6-sol\"}",
+            &format!(
+                "\"model_id\":{{\"type\":\"string\",\"const\":{}}}",
+                serde_json::to_string(model)?
+            ),
+            1,
+        )
+        .replacen(
+            "\"reasoning_effort\":{\"type\":\"string\",\"const\":\"high\"}",
+            &format!(
+                "\"reasoning_effort\":{{\"type\":\"string\",\"const\":{}}}",
+                serde_json::to_string(reasoning_effort)?
+            ),
+            1,
+        ))
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -228,6 +270,7 @@ pub struct DeveloperReviewPacket {
     pub validation_evidence_sha256: String,
     pub provider_id: String,
     pub model_id: String,
+    pub reasoning_effort: String,
     pub files: Vec<DeveloperReviewFile>,
 }
 
@@ -245,10 +288,51 @@ impl DeveloperReviewPacket {
         Ok(hex_digest(&self.canonical_bytes()?))
     }
 
+    pub fn legacy_sha256_without_reasoning(&self) -> Result<String> {
+        self.validate()?;
+        if self.model_id != MODEL_ID || self.reasoning_effort != "high" {
+            bail!("Legacy review digest is available only for the former fixed binding");
+        }
+        // Historical hashes used this declaration order, including nested file
+        // fields. A JSON Value would sort keys and change the approved bytes.
+        #[derive(Serialize)]
+        struct LegacyPacket<'a> {
+            schema_version: u16,
+            feature_id: &'a str,
+            project: &'a str,
+            instruction: &'a str,
+            approved_plan_sha256: &'a Option<String>,
+            approved_plan: &'a Option<String>,
+            validation_command: &'a str,
+            validation_evidence_sha256: &'a str,
+            provider_id: &'a str,
+            model_id: &'a str,
+            files: &'a [DeveloperReviewFile],
+        }
+        let bytes = serde_json::to_vec(&LegacyPacket {
+            schema_version: self.schema_version,
+            feature_id: &self.feature_id,
+            project: &self.project,
+            instruction: &self.instruction,
+            approved_plan_sha256: &self.approved_plan_sha256,
+            approved_plan: &self.approved_plan,
+            validation_command: &self.validation_command,
+            validation_evidence_sha256: &self.validation_evidence_sha256,
+            provider_id: &self.provider_id,
+            model_id: &self.model_id,
+            files: &self.files,
+        })?;
+        if bytes.len() > MAX_PACKET_BYTES {
+            bail!("Review packet exceeds 1 MiB disclosure limit");
+        }
+        Ok(hex_digest(&bytes))
+    }
+
     fn validate(&self) -> Result<()> {
         if self.schema_version != 1
             || self.provider_id != PROVIDER_ID
-            || self.model_id != MODEL_ID
+            || validate_model_id(&self.model_id).is_err()
+            || validate_reasoning_effort(&self.reasoning_effort).is_err()
             || self.files.is_empty()
             || self.files.len() > 40
             || self.instruction.trim().is_empty()
@@ -307,6 +391,42 @@ pub struct DeveloperReviewedFile {
     pub content_sha256: String,
 }
 
+#[derive(Serialize)]
+struct TrustedReviewBinding<'a> {
+    schema_version: u16,
+    review_packet_sha256: &'a str,
+    provider_id: &'a str,
+    model_id: &'a str,
+    reasoning_effort: &'a str,
+    validation_evidence_sha256: &'a str,
+    reviewed_files: &'a [DeveloperReviewedFile],
+}
+
+fn build_review_prompt(
+    packet: &DeveloperReviewPacket,
+    canonical: &[u8],
+    packet_sha256: &str,
+) -> Result<Vec<u8>> {
+    let reviewed_files = packet.reviewed_files();
+    let binding = serde_json::to_vec(&TrustedReviewBinding {
+        schema_version: 1,
+        review_packet_sha256: packet_sha256,
+        provider_id: PROVIDER_ID,
+        model_id: &packet.model_id,
+        reasoning_effort: &packet.reasoning_effort,
+        validation_evidence_sha256: &packet.validation_evidence_sha256,
+        reviewed_files: &reviewed_files,
+    })?;
+    let mut prompt = REVIEW_PROMPT.as_bytes().to_vec();
+    prompt.extend_from_slice(TRUSTED_PACKET_DIGEST_PREFIX);
+    prompt.extend_from_slice(packet_sha256.as_bytes());
+    prompt.extend_from_slice(TRUSTED_BINDING_MARKER);
+    prompt.extend_from_slice(&binding);
+    prompt.extend_from_slice(UNTRUSTED_PACKET_MARKER);
+    prompt.extend_from_slice(canonical);
+    Ok(prompt)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DeveloperReviewFinding {
@@ -329,6 +449,7 @@ pub struct DeveloperReviewOutput {
     pub review_packet_sha256: String,
     pub provider_id: String,
     pub model_id: String,
+    pub reasoning_effort: String,
     pub decision: DeveloperReviewDecisionKind,
     pub blocking_findings: Vec<DeveloperReviewFinding>,
     pub non_blocking_findings: Vec<DeveloperReviewFinding>,
@@ -336,18 +457,65 @@ pub struct DeveloperReviewOutput {
     pub reviewed_files: Vec<DeveloperReviewedFile>,
 }
 
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+enum ReviewDecisionValidationError {
+    #[error("Codex decision schema version mismatch")]
+    SchemaVersion,
+    #[error("Codex decision packet digest mismatch")]
+    PacketDigest,
+    #[error("Codex decision provider mismatch")]
+    Provider,
+    #[error("Codex decision model mismatch")]
+    Model,
+    #[error("Codex decision reasoning effort mismatch")]
+    ReasoningEffort,
+    #[error("Codex decision validation evidence mismatch")]
+    ValidationEvidence,
+    #[error("Codex decision reviewed file mapping mismatch")]
+    ReviewedFiles,
+    #[error("Codex decision contains an invalid finding")]
+    InvalidFinding,
+    #[error("Codex decision contradicts its blocking findings")]
+    ContradictoryDecision,
+}
+
 impl DeveloperReviewOutput {
     pub fn validate_exact(&self, packet: &DeveloperReviewPacket) -> Result<()> {
-        if self.schema_version != 1
-            || self.review_packet_sha256 != packet.sha256()?
-            || self.provider_id != PROVIDER_ID
-            || self.model_id != MODEL_ID
-            || self.validation_evidence_sha256 != packet.validation_evidence_sha256
-            || self.reviewed_files != packet.reviewed_files()
-            || self.blocking_findings.len() > MAX_FINDINGS
+        self.validate_exact_category(packet).map_err(Into::into)
+    }
+
+    fn validate_exact_category(
+        &self,
+        packet: &DeveloperReviewPacket,
+    ) -> std::result::Result<(), ReviewDecisionValidationError> {
+        if self.schema_version != 1 {
+            return Err(ReviewDecisionValidationError::SchemaVersion);
+        }
+        let expected_packet_sha256 = packet
+            .sha256()
+            .map_err(|_| ReviewDecisionValidationError::PacketDigest)?;
+        if self.review_packet_sha256 != expected_packet_sha256 {
+            return Err(ReviewDecisionValidationError::PacketDigest);
+        }
+        if self.provider_id != PROVIDER_ID {
+            return Err(ReviewDecisionValidationError::Provider);
+        }
+        if self.model_id != packet.model_id {
+            return Err(ReviewDecisionValidationError::Model);
+        }
+        if self.reasoning_effort != packet.reasoning_effort {
+            return Err(ReviewDecisionValidationError::ReasoningEffort);
+        }
+        if self.validation_evidence_sha256 != packet.validation_evidence_sha256 {
+            return Err(ReviewDecisionValidationError::ValidationEvidence);
+        }
+        if self.reviewed_files != packet.reviewed_files() {
+            return Err(ReviewDecisionValidationError::ReviewedFiles);
+        }
+        if self.blocking_findings.len() > MAX_FINDINGS
             || self.non_blocking_findings.len() > MAX_FINDINGS
         {
-            bail!("Reviewer response is not bound to the exact candidate and validation evidence");
+            return Err(ReviewDecisionValidationError::InvalidFinding);
         }
         let paths = packet
             .files
@@ -372,15 +540,15 @@ impl DeveloperReviewOutput {
                 || finding.message.len() > 1000
                 || contains_secret_shape(&finding.message)
             {
-                bail!("Reviewer response contains an invalid finding");
+                return Err(ReviewDecisionValidationError::InvalidFinding);
             }
         }
         match self.decision {
             DeveloperReviewDecisionKind::Approved if !self.blocking_findings.is_empty() => {
-                bail!("Reviewer approval contains blocking findings")
+                Err(ReviewDecisionValidationError::ContradictoryDecision)
             }
             DeveloperReviewDecisionKind::Rejected if self.blocking_findings.is_empty() => {
-                bail!("Reviewer rejection has no blocking finding")
+                Err(ReviewDecisionValidationError::ContradictoryDecision)
             }
             _ => Ok(()),
         }
@@ -472,22 +640,33 @@ impl DeveloperReviewer {
         let packet_sha256 = packet.sha256().map_err(|_| {
             DeveloperReviewCallError::Unavailable("candidate binding failed".into())
         })?;
-        let mut prompt = REVIEW_PROMPT.as_bytes().to_vec();
-        prompt.extend_from_slice(b"\n\nTrusted review_packet_sha256 (copy exactly): ");
-        prompt.extend_from_slice(packet_sha256.as_bytes());
-        prompt.extend_from_slice(b"\nUntrusted canonical review packet JSON follows:\n");
-        prompt.extend_from_slice(&canonical);
+        let prompt = build_review_prompt(packet, &canonical, &packet_sha256).map_err(|_| {
+            DeveloperReviewCallError::Unavailable("candidate binding failed".into())
+        })?;
+        let schema =
+            review_output_schema(&packet.model_id, &packet.reasoning_effort).map_err(|_| {
+                DeveloperReviewCallError::Unavailable("review selection schema is invalid".into())
+            })?;
+        let schema_filename = format!(
+            "developer-review-output-schema-{}.json",
+            &hex_digest(schema.as_bytes())[..16]
+        );
         let output = self
-            .call_tool_free(&prompt, SCHEMA_FILENAME, OUTPUT_SCHEMA, cancellation)
+            .call_tool_free(
+                &prompt,
+                &schema_filename,
+                &schema,
+                &packet.model_id,
+                &packet.reasoning_effort,
+                cancellation,
+            )
             .await?;
         let decision: DeveloperReviewOutput = serde_json::from_slice(&output).map_err(|_| {
             DeveloperReviewCallError::Unavailable("Codex returned malformed review JSON".into())
         })?;
-        decision.validate_exact(packet).map_err(|_| {
-            DeveloperReviewCallError::Unavailable(
-                "Codex decision did not match the exact candidate binding".into(),
-            )
-        })?;
+        decision
+            .validate_exact_category(packet)
+            .map_err(|category| DeveloperReviewCallError::Unavailable(category.to_string()))?;
         Ok(decision)
     }
 
@@ -496,6 +675,8 @@ impl DeveloperReviewer {
         prompt: &[u8],
         schema_filename: &str,
         schema: &str,
+        model: &str,
+        reasoning_effort: &str,
         cancellation: &AtomicU8,
     ) -> std::result::Result<Vec<u8>, DeveloperReviewCallError> {
         if schema_filename.is_empty()
@@ -507,6 +688,8 @@ impl DeveloperReviewer {
             || prompt.len() > MAX_PACKET_BYTES
             || schema.is_empty()
             || schema.len() > 64 * 1024
+            || validate_model_id(model).is_err()
+            || validate_reasoning_effort(reasoning_effort).is_err()
         {
             return Err(DeveloperReviewCallError::Unavailable(
                 "bounded tool-free request is invalid".into(),
@@ -551,7 +734,12 @@ impl DeveloperReviewer {
         let mut command = {
             let mut command = Command::new(&self.codex_executable);
             command
-                .args(codex_arguments(&output_schema, working_directory))
+                .args(codex_arguments(
+                    &output_schema,
+                    working_directory,
+                    model,
+                    reasoning_effort,
+                ))
                 .current_dir(working_directory)
                 .env_clear()
                 .env("CODEX_HOME", &self.codex_home);
@@ -568,6 +756,8 @@ impl DeveloperReviewer {
                 .arg(&self.codex_home)
                 .arg(&output_schema)
                 .arg(&output_schema_sha256)
+                .arg(model)
+                .arg(reasoning_effort)
                 .current_dir(self.launcher_executable.parent().ok_or_else(|| {
                     DeveloperReviewCallError::Unavailable("review launcher has no parent".into())
                 })?)
@@ -847,16 +1037,29 @@ const NON_WINDOWS_CODEX_ARGUMENTS: &[&str] = &[
     "features.in_app_local_automation=false",
 ];
 
-fn codex_arguments(output_schema: &Path, working_directory: &Path) -> Vec<OsString> {
-    codex_arguments_for_platform(output_schema, working_directory, cfg!(windows))
+fn codex_arguments(
+    output_schema: &Path,
+    working_directory: &Path,
+    model: &str,
+    reasoning_effort: &str,
+) -> Vec<OsString> {
+    codex_arguments_for_platform(
+        output_schema,
+        working_directory,
+        model,
+        reasoning_effort,
+        cfg!(windows),
+    )
 }
 
 fn codex_arguments_for_platform(
     output_schema: &Path,
     working_directory: &Path,
+    model: &str,
+    reasoning_effort: &str,
     windows: bool,
 ) -> Vec<OsString> {
-    CODEX_ARGUMENTS
+    let mut arguments: Vec<OsString> = CODEX_ARGUMENTS
         .iter()
         .copied()
         .chain(
@@ -874,7 +1077,19 @@ fn codex_arguments_for_platform(
             working_directory.as_os_str().to_owned(),
             OsString::from("-"),
         ])
-        .collect()
+        .collect();
+    let model_index = arguments
+        .iter()
+        .position(|argument| argument == MODEL_ID)
+        .expect("fixed model argument");
+    arguments[model_index] = OsString::from(model);
+    let effort_index = arguments
+        .iter()
+        .position(|argument| argument == "model_reasoning_effort=\"high\"")
+        .expect("fixed reasoning argument");
+    arguments[effort_index] =
+        OsString::from(format!("model_reasoning_effort=\"{reasoning_effort}\""));
+    arguments
 }
 
 #[cfg(windows)]
@@ -1458,6 +1673,7 @@ pub fn hex_digest(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     fn packet() -> DeveloperReviewPacket {
         DeveloperReviewPacket {
@@ -1471,12 +1687,42 @@ mod tests {
             validation_evidence_sha256: hex_digest(b"validation"),
             provider_id: PROVIDER_ID.into(),
             model_id: MODEL_ID.into(),
+            reasoning_effort: "high".into(),
             files: vec![DeveloperReviewFile {
                 path: "app.py".into(),
                 before_sha256: None,
                 content_sha256: hex_digest(b"def add(a, b): return a + b\n"),
                 content: "def add(a, b): return a + b\n".into(),
             }],
+        }
+    }
+
+    fn spark_packet() -> DeveloperReviewPacket {
+        let mut packet = packet();
+        packet.model_id = "gpt-5.3-codex-spark".into();
+        packet.reasoning_effort = "high".into();
+        packet.files[0].before_sha256 = Some(hex_digest(b"old app bytes"));
+        packet.files.push(DeveloperReviewFile {
+            path: "tests/test_app.py".into(),
+            before_sha256: Some(hex_digest(b"old test bytes")),
+            content_sha256: hex_digest(b"def test_add(): assert add(1, 2) == 3\n"),
+            content: "def test_add(): assert add(1, 2) == 3\n".into(),
+        });
+        packet
+    }
+
+    fn approved_output(packet: &DeveloperReviewPacket) -> DeveloperReviewOutput {
+        DeveloperReviewOutput {
+            schema_version: 1,
+            review_packet_sha256: packet.sha256().unwrap(),
+            provider_id: PROVIDER_ID.into(),
+            model_id: packet.model_id.clone(),
+            reasoning_effort: packet.reasoning_effort.clone(),
+            decision: DeveloperReviewDecisionKind::Approved,
+            blocking_findings: vec![],
+            non_blocking_findings: vec![],
+            validation_evidence_sha256: packet.validation_evidence_sha256.clone(),
+            reviewed_files: packet.reviewed_files(),
         }
     }
 
@@ -1510,17 +1756,7 @@ mod tests {
     #[test]
     fn output_requires_exact_candidate_and_consistent_decision() {
         let packet = packet();
-        let approved = DeveloperReviewOutput {
-            schema_version: 1,
-            review_packet_sha256: packet.sha256().unwrap(),
-            provider_id: PROVIDER_ID.into(),
-            model_id: MODEL_ID.into(),
-            decision: DeveloperReviewDecisionKind::Approved,
-            blocking_findings: vec![],
-            non_blocking_findings: vec![],
-            validation_evidence_sha256: packet.validation_evidence_sha256.clone(),
-            reviewed_files: packet.reviewed_files(),
-        };
+        let approved = approved_output(&packet);
         approved.validate_exact(&packet).unwrap();
         let mut stale = approved.clone();
         stale.review_packet_sha256 = hex_digest(b"stale");
@@ -1531,10 +1767,172 @@ mod tests {
     }
 
     #[test]
+    fn packet_rejects_invalid_model_and_reasoning_bindings() {
+        let mut invalid_model = packet();
+        invalid_model.model_id = "GPT 5".into();
+        assert!(invalid_model.canonical_bytes().is_err());
+
+        let mut invalid_effort = packet();
+        invalid_effort.reasoning_effort = "extreme".into();
+        assert!(invalid_effort.canonical_bytes().is_err());
+
+        assert!(review_output_schema("GPT 5", "high").is_err());
+        assert!(review_output_schema(MODEL_ID, "extreme").is_err());
+    }
+
+    #[test]
+    fn trusted_prompt_supplies_exact_ordered_spark_response_binding() {
+        let packet = spark_packet();
+        let canonical = packet.canonical_bytes().unwrap();
+        let packet_sha256 = packet.sha256().unwrap();
+        let prompt =
+            String::from_utf8(build_review_prompt(&packet, &canonical, &packet_sha256).unwrap())
+                .unwrap();
+        assert!(prompt.contains(
+            "Copy every opaque string and\nthe reviewed_files array exactly as supplied. Do not compute, infer, normalize, reorder, or omit any binding value."
+        ));
+        assert!(prompt.contains(&format!(
+            "Trusted review_packet_sha256 (copy exactly): {packet_sha256}"
+        )));
+        let binding = prompt
+            .split("Trusted host-generated response binding JSON follows:\n")
+            .nth(1)
+            .unwrap()
+            .split("\nUntrusted canonical review packet JSON follows:\n")
+            .next()
+            .unwrap();
+        let binding: Value = serde_json::from_str(binding).unwrap();
+        assert_eq!(binding["schema_version"], 1);
+        assert_eq!(binding["review_packet_sha256"], packet_sha256);
+        assert_eq!(binding["provider_id"], PROVIDER_ID);
+        assert_eq!(binding["model_id"], "gpt-5.3-codex-spark");
+        assert_eq!(binding["reasoning_effort"], "high");
+        assert_eq!(
+            binding["validation_evidence_sha256"],
+            packet.validation_evidence_sha256
+        );
+        assert_eq!(binding["reviewed_files"][0]["path"], "app.py");
+        assert_eq!(
+            binding["reviewed_files"][0]["content_sha256"],
+            packet.files[0].content_sha256
+        );
+        assert!(binding["reviewed_files"][0].get("before_sha256").is_none());
+        assert_eq!(binding["reviewed_files"][1]["path"], "tests/test_app.py");
+        assert!(prompt.ends_with(std::str::from_utf8(&canonical).unwrap()));
+    }
+
+    #[test]
+    fn exact_validation_reports_fixed_binding_categories_and_accepts_spark() {
+        let packet = spark_packet();
+        let approved = approved_output(&packet);
+        approved.validate_exact_category(&packet).unwrap();
+
+        let mut changed = approved.clone();
+        changed.schema_version = 2;
+        assert_eq!(
+            changed.validate_exact_category(&packet),
+            Err(ReviewDecisionValidationError::SchemaVersion)
+        );
+        let mut changed = approved.clone();
+        changed.review_packet_sha256 = hex_digest(b"other packet");
+        assert_eq!(
+            changed.validate_exact_category(&packet),
+            Err(ReviewDecisionValidationError::PacketDigest)
+        );
+        let mut changed = approved.clone();
+        changed.provider_id = "other.provider".into();
+        assert_eq!(
+            changed.validate_exact_category(&packet),
+            Err(ReviewDecisionValidationError::Provider)
+        );
+        let mut changed = approved.clone();
+        changed.model_id = "gpt-5.6-sol".into();
+        assert_eq!(
+            changed.validate_exact_category(&packet),
+            Err(ReviewDecisionValidationError::Model)
+        );
+        let mut changed = approved.clone();
+        changed.reasoning_effort = "medium".into();
+        assert_eq!(
+            changed.validate_exact_category(&packet),
+            Err(ReviewDecisionValidationError::ReasoningEffort)
+        );
+        let mut changed = approved.clone();
+        changed.validation_evidence_sha256 = hex_digest(b"other validation");
+        assert_eq!(
+            changed.validate_exact_category(&packet),
+            Err(ReviewDecisionValidationError::ValidationEvidence)
+        );
+
+        let mut reordered = approved.clone();
+        reordered.reviewed_files.reverse();
+        assert_eq!(
+            reordered.validate_exact_category(&packet),
+            Err(ReviewDecisionValidationError::ReviewedFiles)
+        );
+        let mut omitted = approved.clone();
+        omitted.reviewed_files.pop();
+        assert_eq!(
+            omitted.validate_exact_category(&packet),
+            Err(ReviewDecisionValidationError::ReviewedFiles)
+        );
+        let mut changed_digest = approved.clone();
+        changed_digest.reviewed_files[0].content_sha256 = packet.files[0]
+            .before_sha256
+            .clone()
+            .expect("fixture has a distinct before digest");
+        assert_eq!(
+            changed_digest.validate_exact_category(&packet),
+            Err(ReviewDecisionValidationError::ReviewedFiles)
+        );
+
+        let mut invalid_finding = approved.clone();
+        invalid_finding
+            .non_blocking_findings
+            .push(DeveloperReviewFinding {
+                finding_id: "bad finding id".into(),
+                path: "app.py".into(),
+                message: "invalid identifier".into(),
+            });
+        assert_eq!(
+            invalid_finding.validate_exact_category(&packet),
+            Err(ReviewDecisionValidationError::InvalidFinding)
+        );
+        let mut contradictory = approved;
+        contradictory
+            .blocking_findings
+            .push(DeveloperReviewFinding {
+                finding_id: "blocking-1".into(),
+                path: "app.py".into(),
+                message: "A concrete blocking finding".into(),
+            });
+        assert_eq!(
+            contradictory.validate_exact_category(&packet),
+            Err(ReviewDecisionValidationError::ContradictoryDecision)
+        );
+    }
+
+    #[test]
+    fn legacy_fixed_review_packet_digest_remains_verifiable_without_weakening_new_binding() {
+        let packet = packet();
+        // Fixed digest of the historical struct-order JSON without reasoning_effort.
+        // Do not derive this through the migration code.
+        assert_eq!(
+            packet.legacy_sha256_without_reasoning().unwrap(),
+            "5876a9a63d6792abaa6aefcb4da9a36aca21ebf75d0283d638bc84175aec0902"
+        );
+        let mut selected = packet;
+        selected.model_id = "gpt-5.6-terra".into();
+        assert!(selected.legacy_sha256_without_reasoning().is_err());
+    }
+
+    #[test]
     fn command_is_fixed_read_only_high_reasoning_and_tool_free() {
         let arguments = codex_arguments_for_platform(
             Path::new("/private/review/developer-review-output-schema.json"),
             Path::new("/private/review"),
+            MODEL_ID,
+            "high",
             false,
         );
         for expected in [
@@ -1574,6 +1972,8 @@ mod tests {
         let windows_arguments = codex_arguments_for_platform(
             Path::new("C:/review/developer-review-output-schema.json"),
             Path::new("C:/review"),
+            MODEL_ID,
+            "high",
             true,
         );
         for unavailable in [
@@ -1607,6 +2007,34 @@ mod tests {
         assert!(windows_arguments
             .iter()
             .any(|argument| argument == "--strict-config"));
+
+        let selected_arguments = codex_arguments_for_platform(
+            Path::new("C:/review/developer-review-output-schema.json"),
+            Path::new("C:/review"),
+            "gpt-5.3-codex-spark",
+            "medium",
+            true,
+        );
+        assert!(selected_arguments
+            .iter()
+            .any(|argument| argument == "gpt-5.3-codex-spark"));
+        assert!(selected_arguments
+            .iter()
+            .any(|argument| argument == "model_reasoning_effort=\"medium\""));
+        assert!(!selected_arguments
+            .iter()
+            .any(|argument| argument == MODEL_ID));
+        assert!(!selected_arguments
+            .iter()
+            .any(|argument| argument == "model_reasoning_effort=\"high\""));
+
+        let schema = review_output_schema("gpt-5.3-codex-spark", "medium").unwrap();
+        let schema: Value = serde_json::from_str(&schema).unwrap();
+        assert_eq!(
+            schema["properties"]["model_id"]["const"],
+            "gpt-5.3-codex-spark"
+        );
+        assert_eq!(schema["properties"]["reasoning_effort"]["const"], "medium");
     }
 
     #[test]

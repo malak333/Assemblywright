@@ -34,12 +34,16 @@ require_file "$DEVELOPER_E2E"
 for script in developer-runner-e2e.py developer-runner-repair-e2e.py \
   developer-runner-review-e2e.py developer-runner-planning-e2e.py \
   developer-runner-model-target-e2e.py developer-runner-chat-e2e.py \
-  developer-runner-chat-history-e2e.py developer-runner-escalation-e2e.py; do
+  developer-runner-chat-history-e2e.py developer-runner-escalation-e2e.py \
+  developer-runner-settings-e2e.py developer-runner-github-setup-e2e.py \
+  developer-runner-publication-e2e.py; do
   require_file "scripts/$script"
   require_text "$script" "$DEVELOPER_E2E"
 done
 require_text "ASSEMBLYWRIGHT_DEVELOPER_REVIEW_FIXTURE" "$DEVELOPER_E2E"
 require_text "developer_review_fixture" "$DEVELOPER_E2E"
+require_text "developer_github_fixture" "$DEVELOPER_E2E"
+require_file "crates/assemblywright-master/examples/developer_github_fixture.rs"
 
 require_text "name: Assemblywright Release Local Gate" "$WORKFLOW"
 require_text "pull_request:" "$WORKFLOW"

@@ -28,6 +28,16 @@ struct DeveloperRunnerFeature: Decodable, Identifiable {
   var planningStatus: String? = nil
   var escalationCount: Int? = nil
   var escalationStatus: String? = nil
+  var publicationStatus: String? = nil
+  var publicationStage: String? = nil
+  var publicationMessage: String? = nil
+  var publicationRepositoryUrl: String? = nil
+  var publicationBaseBranch: String? = nil
+  var publicationBranch: String? = nil
+  var publicationCommitSha: String? = nil
+  var publicationPrUrl: String? = nil
+  var publicationMergedSha: String? = nil
+  var canReconcilePublication: Bool? = nil
 
   var hasApprovedReview: Bool { reviewStatus == "approved" }
   var resultLabel: String {
@@ -94,17 +104,36 @@ struct DeveloperRunnerSnapshot: Decodable {
   var escalationRunning: Bool? = nil
   var chatModelSelection: Bool? = nil
   var chatHistory: Bool? = nil
+  var aiSettings: DeveloperAISettings? = nil
+  var planningReasoningEffort: String? = nil
+  var reviewReasoningEffort: String? = nil
+  var githubPublicationSupported: Bool? = nil
   var githubPublicationRunning: Bool? = nil
   var githubPublicationUnresolved: Bool? = nil
+  var canManageGithubConnections: Bool? = nil
+  var githubConnections: [DeveloperGitHubConnection]? = nil
   var githubSetupBusy: Bool? = nil
   var githubSetupUnresolved: Bool? = nil
 
   var hasRequiredPlanner: Bool {
-    planningRequired && planningProvider == "openai.codex" && planningModel == "gpt-5.6-sol"
+    planningRequired && planningProvider == "openai.codex"
+      && validRoleBinding(model: planningModel, effort: planningReasoningEffort,
+        selection: aiSettings?.orchestrator)
   }
 
   var hasRequiredReviewer: Bool {
-    reviewRequired && reviewProvider == "openai.codex" && reviewModel == "gpt-5.6-sol"
+    reviewRequired && reviewProvider == "openai.codex"
+      && validRoleBinding(model: reviewModel, effort: reviewReasoningEffort,
+        selection: aiSettings?.reviewer)
+  }
+
+  private func validRoleBinding(model: String, effort: String?,
+    selection: DeveloperAISelection?) -> Bool {
+    guard let selection else {
+      return aiSettings == nil && model == "gpt-5.6-sol" && (effort == nil || effort == "high")
+    }
+    return selection.model == model && selection.reasoningEffort == effort
+      && selection.isWellFormed
   }
 
   var availableModelTargets: [DeveloperRunnerModelTarget] {
@@ -137,19 +166,40 @@ struct DeveloperRunnerSnapshot: Decodable {
   var nextFeature: DeveloperRunnerFeature? { queue.first { !$0.isFinished } }
 
   func canRemove(_ feature: DeveloperRunnerFeature) -> Bool {
-    !running && escalationRunning != true && queue.contains { $0.id == feature.id && $0.canRemove }
+    !running && escalationRunning != true && githubPublicationUnresolved != true
+      && githubSetupBusy != true && githubSetupUnresolved != true
+      && queue.contains { $0.id == feature.id && $0.canRemove }
   }
 
   func canEscalate(_ feature: DeveloperRunnerFeature) -> Bool {
     !running && !planningRunning && !emergencyPaused && chatRunning != true && escalationRunning == false
+      && githubPublicationUnresolved != true
+      && githubSetupBusy != true && githubSetupUnresolved != true
       && nextFeature?.id == feature.id && nextFeature?.status == "failed"
       && nextFeature?.checkpoint == feature.checkpoint
   }
 
   func canRepair(_ feature: DeveloperRunnerFeature) -> Bool {
-    !running && escalationRunning != true && !planningRunning && !emergencyPaused && repairLimit == 3 && repairActive == false
+    !running && escalationRunning != true && !planningRunning && !emergencyPaused
+      && githubPublicationUnresolved != true && githubSetupBusy != true && githubSetupUnresolved != true
+      && repairLimit == 3 && repairActive == false
       && nextFeature?.id == feature.id
       && nextFeature?.canRepair == true
+  }
+
+  var canStartFeature: Bool {
+    githubPublicationSupported == true && githubPublicationUnresolved != true
+      && githubSetupBusy != true && githubSetupUnresolved != true
+      && githubConnections != nil && githubConnections?.allSatisfy(\.isUsable) == true
+  }
+
+  var canStop: Bool {
+    running || planningRunning || escalationRunning == true || githubPublicationRunning == true
+      || githubSetupBusy == true
+  }
+
+  func githubConnection(for project: String) -> DeveloperGitHubConnection? {
+    githubConnections?.first { $0.project == project }
   }
 }
 
@@ -173,7 +223,8 @@ final class DeveloperRunnerModel: ObservableObject {
     self.session = session ?? URLSession(configuration: settings)
   }
 
-  private func request(path: String, body: [String: Any]? = nil) async throws
+  private func request(path: String, body: [String: Any]? = nil,
+    timeoutInterval: TimeInterval = 10) async throws
     -> DeveloperRunnerSnapshot
   {
     guard let configuration, let base = URL(string: configuration.endpoint),
@@ -187,6 +238,7 @@ final class DeveloperRunnerModel: ObservableObject {
         ])
     }
     var request = URLRequest(url: base.appendingPathComponent(path))
+    request.timeoutInterval = timeoutInterval
     request.setValue("Bearer \(configuration.token)", forHTTPHeaderField: "Authorization")
     if let body {
       request.httpMethod = "POST"
@@ -244,6 +296,85 @@ final class DeveloperRunnerModel: ObservableObject {
       self.error = actionError
     }
   }
+
+  func saveGitHubConnection(project: String, repositoryURL: String, baseBranch: String,
+    expectedRevision: UInt64) async throws {
+    guard let current = snapshot, current.revision == expectedRevision,
+      current.githubPublicationSupported == true,
+      current.canManageGithubConnections == true, current.githubPublicationUnresolved != true,
+      current.githubSetupBusy != true, current.githubSetupUnresolved != true,
+      DeveloperGitHubPresentation.validProject(project),
+      DeveloperGitHubURL.repository(repositoryURL) != nil,
+      DeveloperGitHubPresentation.validBaseBranch(baseBranch) else {
+      throw githubStateChangedError()
+    }
+    try await sendPublication(DeveloperGitHubRequest.saveConnection(project: project,
+      repositoryURL: repositoryURL, baseBranch: baseBranch, expectedRevision: expectedRevision),
+      expectedRevision: expectedRevision) { updated in
+        DeveloperGitHubAcknowledgement.saved(updated, expectedRevision: expectedRevision,
+          project: project, repositoryURL: repositoryURL, baseBranch: baseBranch)
+      }
+  }
+
+  func disconnectGitHub(project: String, expectedRevision: UInt64) async throws {
+    guard let current = snapshot, current.revision == expectedRevision,
+      current.githubPublicationSupported == true,
+      current.canManageGithubConnections == true, current.githubPublicationUnresolved != true,
+      current.githubSetupBusy != true, current.githubSetupUnresolved != true,
+      current.githubConnection(for: project) != nil else { throw githubStateChangedError() }
+    try await sendPublication(DeveloperGitHubRequest.disconnect(project: project,
+      expectedRevision: expectedRevision), expectedRevision: expectedRevision) { updated in
+        DeveloperGitHubAcknowledgement.disconnected(updated, expectedRevision: expectedRevision,
+          project: project)
+      }
+  }
+
+  func reconcilePublication(_ feature: DeveloperRunnerFeature,
+    expectedRevision: UInt64) async throws {
+    guard let current = snapshot, current.revision == expectedRevision,
+      current.githubPublicationSupported == true, current.githubPublicationUnresolved == true,
+      current.queue.contains(where: { $0.id == feature.id && $0.checkpoint == feature.checkpoint
+        && $0.publicationStatus == "attention" && $0.canReconcilePublication == true })
+      else { throw githubStateChangedError() }
+    try await sendPublication(DeveloperGitHubRequest.reconcile(featureID: feature.id,
+      expectedRevision: expectedRevision, expectedCheckpoint: feature.checkpoint),
+      expectedRevision: expectedRevision) { updated in
+        DeveloperGitHubAcknowledgement.reconciled(updated, expectedRevision: expectedRevision,
+          featureID: feature.id)
+      }
+  }
+
+  private func githubStateChangedError() -> NSError {
+    NSError(domain: "Developer GitHub", code: 2,
+      userInfo: [NSLocalizedDescriptionKey:
+        "The project, feature, or publication state changed. Reload before continuing."])
+  }
+
+  private func sendPublication(_ body: [String: Any], expectedRevision: UInt64,
+    accepts: (DeveloperRunnerSnapshot) -> Bool) async throws {
+    guard !sending else {
+      throw NSError(domain: "Developer GitHub", code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "Wait for the current request to finish."])
+    }
+    sending = true
+    defer { sending = false }
+    do {
+      let updated = try await request(path: "publication", body: body, timeoutInterval: 210)
+      guard updated.revision > expectedRevision,
+        updated.revision >= (snapshot?.revision ?? expectedRevision), accepts(updated) else {
+        throw NSError(domain: "Developer GitHub", code: 3,
+          userInfo: [NSLocalizedDescriptionKey:
+            "Windows did not confirm the requested GitHub state change. Reload before continuing."])
+      }
+      snapshot = updated
+      actionError = nil
+      error = nil
+    } catch {
+      actionError = error.localizedDescription
+      self.error = actionError
+      throw error
+    }
+  }
 }
 
 struct DeveloperRunnerView: View {
@@ -257,6 +388,7 @@ struct DeveloperRunnerView: View {
   @State private var showingEscalation = false
   @State private var escalationFeatureId: String?
   @State private var showingSettings = false
+  @State private var showingGitHub = false
   @AppStorage("developerChatProject") private var chatProject = ""
   @AppStorage("developerChatRepairFeature") private var chatRepairFeature = ""
 
@@ -280,17 +412,13 @@ struct DeveloperRunnerView: View {
         HStack(alignment: .firstTextBaseline) {
           Text("Build with Assemblywright").font(.largeTitle.bold())
           Spacer()
-          Button(action: {
-            if let url = URL(string: "https://github.com/malak333/Assemblywright") {
-              NSWorkspace.shared.open(url)
-            }
-          }) {
-            Image(systemName: "github").font(.title2)
-              .foregroundStyle(.primary)
+          Button { showingGitHub = true } label: {
+            Image(systemName: "arrow.triangle.branch").font(.title2)
           }
           .buttonStyle(.plain)
-          .help("Open Assemblywright on GitHub")
-          .accessibilityIdentifier("developer-github-link")
+          .help("GitHub publication")
+          .accessibilityLabel("GitHub publication")
+          .accessibilityIdentifier("developer-github-publication")
           Button(action: { showingSettings = true }) {
             Image(systemName: "gearshape").font(.title2)
               .foregroundStyle(.primary)
@@ -315,6 +443,14 @@ struct DeveloperRunnerView: View {
           }
         }
         if let error = model.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
+        if model.snapshot != nil && model.snapshot?.githubPublicationSupported != true {
+          Label("Update the Windows developer runner before starting new work. Automatic GitHub publication is unavailable.",
+            systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+        }
+        if model.snapshot?.githubSetupUnresolved == true {
+          Label("GitHub setup needs reconciliation before starting or changing feature work.",
+            systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+        }
         DeveloperPlanningView(configurationPath: configurationPath, runner: model.snapshot)
         GroupBox("Assembly line") {
           VStack(alignment: .leading, spacing: 14) {
@@ -352,9 +488,10 @@ struct DeveloperRunnerView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(
                   next == nil || next?.requiresEscalationRecovery == true || model.snapshot?.running == true || model.snapshot?.escalationRunning == true || model.snapshot?.planningRunning == true
-                    || model.snapshot?.emergencyPaused == true || model.sending)
+                    || model.snapshot?.emergencyPaused == true || model.snapshot?.canStartFeature != true
+                    || model.sending)
               Button("Stop") { Task { await model.send("stop") } }.disabled(
-                model.snapshot?.running != true && model.snapshot?.planningRunning != true && model.snapshot?.escalationRunning != true)
+                model.snapshot?.canStop != true)
               Button("Emergency Pause", role: .destructive) {
                 Task { await model.send("emergency") }
               }.disabled(model.snapshot == nil)
@@ -364,7 +501,7 @@ struct DeveloperRunnerView: View {
               }
             }
             Text(
-              "Runs under your Windows account. Review the project and validation command before starting. OpenAI/Codex reviews generated code before success. Changes remain in the project folder."
+              "Runs under your Windows account. Review the project and validation command before starting. OpenAI/Codex reviews generated code before success. Connected projects publish through a feature branch and merge after required GitHub checks pass."
             )
             .font(.caption).foregroundStyle(.secondary)
             Divider()
@@ -429,6 +566,7 @@ struct DeveloperRunnerView: View {
                 }
                 Text(feature.reviewLabel).font(.caption)
                   .foregroundStyle(feature.hasApprovedReview ? .green : .secondary)
+                DeveloperGitHubFeatureStatus(feature: feature, runner: model)
                 if let summary = feature.reviewSummary, !summary.isEmpty {
                   Text(summary).font(.caption).textSelection(.enabled)
                 }
@@ -457,6 +595,11 @@ struct DeveloperRunnerView: View {
     .task { await connection.observe() }
       .sheet(isPresented: $showingSettings) {
         DeveloperRunnerSettingsView(configurationPath: configurationPath)
+      }
+      .sheet(isPresented: $showingGitHub) {
+        DeveloperGitHubView(runner: model,
+          projects: Array(Set(model.snapshot?.queue.map(\.project) ?? [])).sorted(),
+          configurationPath: configurationPath)
       }
       .sheet(isPresented: $showingEscalation) {
         if let escalationFeatureId {
@@ -497,13 +640,13 @@ struct DeveloperRunnerView: View {
         }
         .disabled(model.sending || model.snapshot?.running == true || model.snapshot?.planningRunning == true
           || model.snapshot?.emergencyPaused == true
+          || model.snapshot?.canStartFeature != true
           || next?.id != feature.id || next?.status != feature.status
           || next?.checkpoint != feature.checkpoint || next?.modelTarget != feature.modelTarget)
         Button("Cancel", role: .cancel) {}
       } message: { feature in
-        Text(
-          "The model on \(feature.modelComputer) prepares \(feature.project). Windows applies changes, runs validation, and sends the feature request and bounded project code to OpenAI/Codex for review. Codex findings can trigger up to three local repairs. Auto-run continues only after validation and reviewer approval."
-        )
+        Text(DeveloperGitHubPresentation.startConfirmation(feature: feature,
+          connection: model.snapshot?.githubConnection(for: feature.project)))
       }
   }
 }
