@@ -72,3 +72,10 @@ The Cargo wrapper and CI contract now require eleven native Developer workflows,
 including settings, GitHub setup and publication. Raw recovery fingerprints and
 validation logs are retained under `target/github-exact-restoration/`; source,
 tests and this record belong in Git so recovery no longer depends on those files.
+
+Post-merge Windows validation exposed a timing race in the publication E2E:
+the verified remote receipt becomes durable before the feature's final local
+completion. The test now waits for the publication worker to finish before
+asserting success, the final checkpoint, and exact remote contents. This preserves
+the cancellation-sensitive two-step completion contract and changes no runtime
+code or installed binary.

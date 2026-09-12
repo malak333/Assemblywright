@@ -78,6 +78,9 @@ These notes capture durable facts for future agents working on this repository.
   and the merge request bind the exact reviewed head; success requires merged state
   and remote-base reconciliation. Ambiguous effects retain the queue frontier for
   explicit observation-only reconciliation.
+- A verified remote receipt is persisted before cancellation-sensitive local
+  feature completion. Native publication tests must wait for the publication
+  worker to finish before asserting the final feature status and checkpoint.
 - Setup uses Windows-owned device authorization, paginated repository discovery,
   and explicit account/name/visibility-bound creation. Cached identity cannot
   authorize creation; verify the live account and bind the receipt to the immutable
