@@ -255,7 +255,9 @@ def main():
             accepted_feature = next(item for item in accepted["queue"] if item["id"] == feature_id)
             assert accepted["github_publication_running"] is True
             assert accepted_feature["checkpoint"] == "publication_reconciling"
-            merged = wait(lambda value: next(item for item in value["queue"] if item["id"] == feature_id)["publication_status"] == "succeeded")
+            # The verified remote receipt is persisted before cancellation-sensitive
+            # local completion. Wait for the worker to finish before asserting it.
+            merged = wait(lambda value: not value["github_publication_running"] and next(item for item in value["queue"] if item["id"] == feature_id)["publication_status"] == "succeeded")
             feature = next(item for item in merged["queue"] if item["id"] == feature_id)
             assert feature["status"] == "succeeded"
             assert feature["checkpoint"] == "publication_merged"
