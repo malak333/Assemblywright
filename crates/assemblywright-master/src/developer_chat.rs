@@ -2992,7 +2992,13 @@ mod tests {
         )
         .unwrap();
 
-        let (files, omitted) = collect_project_files(directory.path(), None).unwrap();
+        // Production project_path canonicalizes the root before grounding. Windows
+        // temporary paths can use an 8.3 alias unlike the opened handle's final path.
+        let root = fs::canonicalize(directory.path()).unwrap();
+        assert!(read_chat_context_file(&root, &root.join("main.rs"))
+            .unwrap()
+            .contains("pub fn value"));
+        let (files, omitted) = collect_project_files(&root, None).unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].path, "main.rs");
         assert!(files[0].content.contains("pub fn value"));

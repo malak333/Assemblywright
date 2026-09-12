@@ -224,6 +224,12 @@ Current restoration checks:
   native history, chat and repair-escalation process E2Es pass on the restored
   source. New migration tests cover the replacement JSON schema, exact old
   request/repair hashes and ownership rejection with rollback.
+- The first hosted Windows run exposed an uncanonicalized temporary-path fixture
+  in the grounding test. The fixture now canonicalizes its root, matching the
+  production project-path admission, before comparing opened file locations.
+  All 78 Developer binary tests pass again on Windows. This test-only correction
+  leaves the installed runtime and its file-access safeguards unchanged; hosted
+  gates must pass on the correction's final commit.
 - Swift history, chat, attachment, runner and repair tests pass. The two AppKit
   window tests pass in a separate process. A full complementary Swift run passed
   243 executed cases with four opt-in cases skipped; subsequent focused checks
