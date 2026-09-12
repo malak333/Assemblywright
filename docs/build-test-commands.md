@@ -1,5 +1,30 @@
 # Build And Test Commands
 
+## Developer chat history restoration
+
+The Developer binary tests exercise this surface; master library tests alone do not.
+
+```sh
+cargo test -p assemblywright-master --bin assemblywright-developer
+cargo build -p assemblywright-master --bin assemblywright-developer --example developer_review_fixture
+env ASSEMBLYWRIGHT_DEVELOPER_REVIEW_FIXTURE=target/debug/examples/developer_review_fixture python3 scripts/developer-runner-chat-history-e2e.py --binary target/debug/assemblywright-developer
+swift test --disable-sandbox --package-path apps/mac --filter 'shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions'
+swift test --disable-sandbox --package-path apps/mac --filter 'DeveloperChatHistory|DeveloperProjectChat|DeveloperChatAttachment|DeveloperRepairEscalation' --skip 'shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions'
+./scripts/developer-build.py --build
+```
+
+AppKit window tests use a separate process from asynchronous HTTP fixtures;
+require the Swift Testing final summary, not just exit zero. The process E2E
+covers migration, persisted chats, separate context, attachments, pagination,
+cancellation and exact approval identity. Repeat on Windows for native evidence.
+Rendered UI, signing, production deployment and hosted gates are separate checks.
+`developer_workflow_e2e.rs` includes the history process test in both Mac and
+Windows Cargo gates; the CI contract verifies that registration.
+
+The installed read-only check uses `ASSEMBLYWRIGHT_DEVELOPER_LIVE_CONFIG` and
+`--filter installedWindowsHistoryReopensExactConversationsWithoutSending`.
+It requires saved history and verifies selection without sending messages.
+
 ## Local Model Selection Focused Validation
 
 ```bash
@@ -73,7 +98,8 @@ cargo test -p assemblywright-protocol --test full_machine_assembly_line_contract
 cargo test -p assemblywright-master --lib planning_effects::tests -- --nocapture
 cargo test -p assemblywright-master --test brainstorming_provider_adapter_e2e -- --nocapture
 cargo test -p assemblywright-master --test assembly_line_planning_http -- --nocapture
-swift test --disable-sandbox --package-path apps/mac
+swift test --disable-sandbox --package-path apps/mac --filter 'shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions'
+swift test --disable-sandbox --package-path apps/mac --skip 'shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions'
 ```
 
 These planning tests bind the sandbox split to the source contract: brainstorming is
@@ -402,7 +428,8 @@ cargo run -p assemblywright-cli -- release live-device-runbook
 ./scripts/release-evidence-doctor.sh --self-test
 ./scripts/release-external-handoff.sh --check
 ./scripts/release-external-handoff.sh --self-test
-swift test --disable-sandbox --package-path apps/mac
+swift test --disable-sandbox --package-path apps/mac --filter 'shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions'
+swift test --disable-sandbox --package-path apps/mac --skip 'shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions'
 swift build --disable-sandbox --package-path apps/mac
 ```
 

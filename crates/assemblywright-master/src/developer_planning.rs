@@ -3,7 +3,9 @@
 //! Codex may propose the next bounded planning artifact. Only this module advances
 //! the durable gates, and only the owner-facing HTTP mutation may confirm them.
 
-use crate::developer_review::{hex_digest, sanitize_and_validate_cloud_text, validate_cloud_text, MODEL_ID, PROVIDER_ID};
+use crate::developer_review::{
+    hex_digest, sanitize_and_validate_cloud_text, validate_cloud_text, MODEL_ID, PROVIDER_ID,
+};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

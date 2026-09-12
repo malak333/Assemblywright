@@ -1,5 +1,15 @@
 # Safety Rules
 
+The accepted [Developer chat history design](developer-chat-history-design.md)
+adds Windows-owned conversations within each Developer project. Chat IDs and
+project ownership bind request replay, tool approvals, cancellation and repair
+diagnoses. Browsing, creating or renaming conversations cannot execute work or
+change project permissions. New request admission reserves bounded terminal and
+recovery evidence capacity before tools can run; admission quotas never discard
+accepted-work evidence. Ambiguous effects remain quarantined and are not replayed.
+Saved transcripts are separate from bounded model context; another chat's messages
+are never implicitly included. Migration preserves retained legacy provenance.
+
 Assemblywright is designed for high autonomy with explicit boundaries. These rules are
 release requirements, not optional UX guidance.
 

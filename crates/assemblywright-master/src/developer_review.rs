@@ -1223,10 +1223,7 @@ fn redact_sensitive_assignments(input: String) -> String {
                 let value_chars: String = value_str
                     .trim_start()
                     .chars()
-                    .take_while(|c| {
-                        !c.is_ascii_whitespace()
-                            && !matches!(c, '\'' | '"' | ';')
-                    })
+                    .take_while(|c| !c.is_ascii_whitespace() && !matches!(c, '\'' | '"' | ';'))
                     .collect();
                 if value_chars.len() >= 6 {
                     let leading_ws = value_str.len() - value_str.trim_start().len();
@@ -1269,30 +1266,24 @@ fn redact_url_credentials(input: String) -> String {
 fn redact_pem_blocks(input: String) -> String {
     let mut result = input;
     loop {
-        let start_pattern = result
-            .match_indices("-----BEGIN ")
-            .filter(|&(_, p)| {
-                p.starts_with("RSA ")
-                    || p.starts_with("DSA ")
-                    || p.starts_with("EC ")
-                    || p == "-----BEGIN CERTIFICATE-----"
-                    || p == "-----BEGIN PUBLIC KEY-----"
-                    || p == "-----BEGIN PRIVATE KEY-----"
-                    || p == "-----BEGIN OPENSSH PRIVATE KEY-----"
-            })
-            .next();
-        let end_pattern = result
-            .match_indices("-----END ")
-            .filter(|&(_, p)| {
-                p.starts_with("RSA ")
-                    || p.starts_with("DSA ")
-                    || p.starts_with("EC ")
-                    || p == "-----END CERTIFICATE-----"
-                    || p == "-----END PUBLIC KEY-----"
-                    || p == "-----END PRIVATE KEY-----"
-                    || p == "-----END OPENSSH PRIVATE KEY-----"
-            })
-            .next();
+        let start_pattern = result.match_indices("-----BEGIN ").find(|&(_, p)| {
+            p.starts_with("RSA ")
+                || p.starts_with("DSA ")
+                || p.starts_with("EC ")
+                || p == "-----BEGIN CERTIFICATE-----"
+                || p == "-----BEGIN PUBLIC KEY-----"
+                || p == "-----BEGIN PRIVATE KEY-----"
+                || p == "-----BEGIN OPENSSH PRIVATE KEY-----"
+        });
+        let end_pattern = result.match_indices("-----END ").find(|&(_, p)| {
+            p.starts_with("RSA ")
+                || p.starts_with("DSA ")
+                || p.starts_with("EC ")
+                || p == "-----END CERTIFICATE-----"
+                || p == "-----END PUBLIC KEY-----"
+                || p == "-----END PRIVATE KEY-----"
+                || p == "-----END OPENSSH PRIVATE KEY-----"
+        });
         match (start_pattern, end_pattern) {
             (Some((start, _)), Some((end, _))) if end > start => {
                 let label = &result[start..start + 16];
@@ -1631,8 +1622,12 @@ mod tests {
         for case in cases {
             let original = case;
             let sanitized = sanitize_cloud_text(case);
-            assert!(!contains_secret_shape(&sanitized), 
-                "Failed to sanitize: {} -> {} (still secret-shaped)", original, sanitized);
+            assert!(
+                !contains_secret_shape(&sanitized),
+                "Failed to sanitize: {} -> {} (still secret-shaped)",
+                original,
+                sanitized
+            );
         }
     }
 
@@ -1645,7 +1640,11 @@ mod tests {
             "Consider using a feature flag for the new authentication flow",
         ];
         for case in cases {
-            assert!(validate_cloud_text(case).is_ok(), "False positive for: {}", case);
+            assert!(
+                validate_cloud_text(case).is_ok(),
+                "False positive for: {}",
+                case
+            );
         }
     }
 
@@ -1658,7 +1657,12 @@ mod tests {
         ];
         for case in cases {
             let sanitized = sanitize_cloud_text(case);
-            assert!(!contains_secret_shape(&sanitized), "Failed to sanitize: {} -> {}", case, sanitized);
+            assert!(
+                !contains_secret_shape(&sanitized),
+                "Failed to sanitize: {} -> {}",
+                case,
+                sanitized
+            );
         }
     }
 }

@@ -1,5 +1,14 @@
 # Assemblywright Design
 
+The owner approved project-grouped Developer chat history and one-click New Chat.
+[`Developer chat history`](docs/developer-chat-history-design.md) owns this extension:
+Windows persists immutable conversation IDs, titles and pageable transcripts;
+Swift provides browsing, selection, rename and per-chat drafts. Existing retained
+history migrates into a Previous conversation for each project. Prompt context
+remains bounded independently of saved history. Chat/request identity binds
+retries, tool approval, cancellation and repair diagnosis; navigation and chat
+creation grant no execution authority. Production authority remains unchanged.
+
 The owner's 2026-09-05 instruction prioritizes a working supervised developer build
 and defers security hardening. [`docs/developer-build.md`](docs/developer-build.md)
 owns that explicitly selected scope: a Windows master-package runner retains the

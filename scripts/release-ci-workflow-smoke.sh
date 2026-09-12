@@ -34,7 +34,7 @@ require_file "$DEVELOPER_E2E"
 for script in developer-runner-e2e.py developer-runner-repair-e2e.py \
   developer-runner-review-e2e.py developer-runner-planning-e2e.py \
   developer-runner-model-target-e2e.py developer-runner-chat-e2e.py \
-  developer-runner-escalation-e2e.py; do
+  developer-runner-chat-history-e2e.py developer-runner-escalation-e2e.py; do
   require_file "scripts/$script"
   require_text "$script" "$DEVELOPER_E2E"
 done
@@ -136,7 +136,8 @@ expected_local_gate_commands=(
   "run ./scripts/release-evidence-doctor.sh --self-test"
   "run ./scripts/release-external-handoff.sh --check"
   "run ./scripts/release-external-handoff.sh --self-test"
-  "run swift test --disable-sandbox --package-path apps/mac"
+  "run swift test --disable-sandbox --package-path apps/mac --filter 'shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions'"
+  "run swift test --disable-sandbox --package-path apps/mac --skip 'shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions'"
   "run swift build --disable-sandbox --package-path apps/mac"
 )
 

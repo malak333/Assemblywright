@@ -30,6 +30,7 @@ fn supervised_developer_workflow_runs_native_processes_and_recovers_checkpoints(
         "developer-runner-planning-e2e.py",
         "developer-runner-model-target-e2e.py",
         "developer-runner-chat-e2e.py",
+        "developer-runner-chat-history-e2e.py",
         "developer-runner-escalation-e2e.py",
     ] {
         let mut command = std::process::Command::new(python);

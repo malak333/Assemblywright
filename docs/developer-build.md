@@ -38,6 +38,32 @@ This build does not clone, commit, push, or publish repositories. It is a superv
 implementation, validation, and independent-review loop. The existing production setup/planning surface
 remains available in the original application.
 
+## Project chat history
+
+The accepted [chat history design](developer-chat-history-design.md) adds a
+**History** browser with conversations grouped by project. Expand a project and
+select a titled chat to reopen and continue it. **New Chat** starts a separate
+topic in the selected project; with no project selected, choose one first. Use
+the pencil button to rename the current chat. The history button gives the
+conversation more room in the side panel, and a wider panel can show both.
+
+Existing retained messages are available as **Previous conversation**. Draft text
+and attachments stay with their chat while navigating during an app session;
+the last selected chat per project is remembered across app launches. Older saved
+messages can be loaded without adding every message to the AI's limited context.
+Messages discarded by the previous retention policy cannot be recovered.
+
+History keeps up to 2,000 chats and 2,000 messages per chat, subject to a 256 MiB
+logical storage limit and reserved space for finishing active work. At capacity,
+new work shows an explicit error and saved history remains available. The full
+[storage and execution bounds](developer-chat-history-design.md#persistence-and-request-binding)
+also cover request receipts, attachments and tool evidence.
+
+While a reply or tool action runs, history remains available. **Return to active
+chat** opens its conversation and **Stop** remains visible. A second reply waits
+for the existing global work gate. Creating a chat keeps the project's access
+mode; the current AI and permission choices remain visible before sending.
+
 ## Planning and project chat
 
 New developer features use the bundled brainstorming workflow with the fixed
@@ -49,9 +75,15 @@ documents remain bound to implementation, repair, and review.
 
 Use **Project chat** for questions about an existing project. Select the Windows or
 Mac local model explicitly. Replies retain model attribution in Windows-owned,
-project-specific history and cannot edit files, execute commands, or alter the
-queue. Image and bounded text attachments are untrusted references. Unsupported
-vision, unavailable models, and context limits fail explicitly without fallback.
+conversation-specific history. When the Developer tool runtime is configured,
+the selected project access mode controls file operations and commands: **Ask**,
+**Approve for me**, or **Full access**. Approvals remain bound to their exact chat
+and request, and chat cannot enqueue or reorder features. Project edits invalidate
+older validation and review evidence before feature work resumes. Without
+the tool runtime, chat uses the local model without tool execution. This is the
+supervised Developer workflow, not activation of the protected production runtime.
+Image and bounded text attachments are untrusted references. Unsupported vision,
+unavailable models, and context limits fail explicitly without fallback.
 
 ## Repair a failed feature from chat
 

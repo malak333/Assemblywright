@@ -159,7 +159,9 @@ if ! command -v swift >/dev/null 2>&1; then
   exit 1
 fi
 
-run swift test --disable-sandbox --package-path apps/mac
+# Keep AppKit windows separate from subprocess HTTP fixtures.
+run swift test --disable-sandbox --package-path apps/mac --filter 'shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions'
+run swift test --disable-sandbox --package-path apps/mac --skip 'shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions'
 run swift build --disable-sandbox --package-path apps/mac
 
 printf '\nAssemblywright local release verification: ok\n'

@@ -30,6 +30,7 @@ struct DeveloperRepairProposal: Decodable {
   var diagnosisSha256: String? = nil
   var chatModelTarget: String? = nil
   var chatModel: String? = nil
+  var chatId: String? = nil
 
   var showsApproveAction: Bool { status == "ready" }
   var showsDiscardAction: Bool { ["ready", "unavailable"].contains(status) }
@@ -180,6 +181,7 @@ struct DeveloperRepairEscalationView: View {
 
   private var diagnosisRequestId: String? { diagnosis?.requestId ?? model.proposal?.chatRequestId }
   private var diagnosisDigest: String? { diagnosis?.contentSha256 ?? model.proposal?.diagnosisSha256 }
+  private var diagnosisChatId: String? { diagnosis?.chatId ?? model.proposal?.chatId }
 
   private func modelLabel(for id: String?) -> String {
     guard let id else { return "Unavailable model computer" }
@@ -316,8 +318,10 @@ struct DeveloperRepairEscalationView: View {
             Button("Approve and apply") {
               guard let binding = proposal.binding, let id = proposal.proposalId else { return }
               Task {
-                await model.send(featureId: featureId, values: ["action": "approve_and_apply",
-                  "proposal_id": id, "expected_checkpoint": binding.checkpoint, "expected_revision": binding.revision])
+                var values: [String: Any] = ["action": "approve_and_apply",
+                  "proposal_id": id, "expected_checkpoint": binding.checkpoint, "expected_revision": binding.revision]
+                if let chatId = proposal.chatId { values["chat_id"] = chatId }
+                await model.send(featureId: featureId, values: values)
               }
             }.buttonStyle(.borderedProminent)
               .disabled(model.sending || feature == nil || runner.snapshot == nil
@@ -329,9 +333,11 @@ struct DeveloperRepairEscalationView: View {
               guard let feature, let state = runner.snapshot, let id = diagnosisRequestId,
                 let digest = diagnosisDigest else { return }
               Task {
-                await model.send(featureId: featureId, values: ["action": "prepare", "expected_checkpoint": feature.checkpoint,
+                var values: [String: Any] = ["action": "prepare", "expected_checkpoint": feature.checkpoint,
                   "expected_revision": state.revision, "model_target": selectedModel,
-                  "chat_request_id": id, "diagnosis_sha256": digest])
+                  "chat_request_id": id, "diagnosis_sha256": digest]
+                if let chatId = diagnosisChatId { values["chat_id"] = chatId }
+                await model.send(featureId: featureId, values: values)
               }
             }.disabled(!canPrepare).accessibilityIdentifier("developer-escalation-prepare")
           }

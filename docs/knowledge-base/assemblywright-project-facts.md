@@ -1,5 +1,58 @@
 # Assemblywright Project Facts
 
+## Developer Project Chat History
+
+- The September 8 history implementation was installed but left uncommitted.
+  The later `cc21f2a` recreation is not the approved original implementation.
+  Recovery uses the thread's original Swift file-change records and the frozen
+  Windows validation archive checked against retained SHA-256 fingerprints.
+  Always run `cargo test -p assemblywright-master --bin assemblywright-developer`:
+  master library tests do not compile or exercise the Developer chat modules.
+
+- The installed read-only Swift check uses `ASSEMBLYWRIGHT_DEVELOPER_LIVE_CONFIG`
+  and `installedWindowsHistoryReopensExactConversationsWithoutSending`; it opens
+  existing conversations through the real model without inference or mutations.
+  Wire messages carry sequence IDs within an exact project/chat snapshot. Swift
+  captures that enclosing chat ID for repair actions; the wire message itself
+  does not repeat `chat_id`.
+
+- History admission uses a 256 MiB logical ledger for transcripts, pending
+  reservations and historical chat-bound tool evidence. Each admitted request
+  reserves 64 MiB for action/recovery evidence plus 512 KiB for its serialized
+  terminal message; action count and row sizes enforce that allowance. Physical
+  terminal-write failure keeps the pending reservation and blocks new work until
+  restart recovery. SQLite physical overhead and migration backups are separate.
+- Legacy chat migration preserves original request and repair-provenance hashes
+  and retains exact old rows in SQLite backup tables. Compatibility verification
+  recognizes legacy digests; migration never rewrites historical evidence to look
+  like a new request. Malformed legacy JSON aborts the transaction.
+
+- The owner approved separate titled chats grouped by project, New Chat, rename,
+  and reopening saved conversations. The accepted design is
+  `docs/developer-chat-history-design.md`. Windows remains the history authority;
+  Mac selection and session drafts are keyed by project and immutable chat ID.
+- A conversation is distinct from an inference request, feature or planning
+  session. Creating, selecting or renaming it does not start work or reset the
+  project's tool permission mode. The existing shared inference gate still
+  permits only one active local request; browsing must retain an exact active
+  chat/request Stop target.
+- Retained legacy history maps to Previous conversation. Saved transcript
+  pagination is separate from the bounded prompt window; messages previously
+  discarded by the old history limit are not reconstructible. Repair diagnosis
+  and tool approval must retain exact project/chat/request provenance.
+- Swift guards asynchronous results with both selection and a navigation token:
+  checking only project/chat IDs misses an A-to-B-to-A navigation race. Rendered
+  send and approval actions also capture their chat identity before dispatch.
+- Unit and loopback HTTP tests live in `DeveloperChatHistoryTests.swift`; native
+  runner/process coverage is `scripts/developer-runner-chat-history-e2e.py`.
+  Use Windows execution and installed Mac checks for the real platform boundary;
+  prototype browser interaction is not native app validation.
+- In the observed Mac test environment, mixing AppKit fixture-window tests with
+  subprocess HTTP tests can exit the host with status zero before the async cases
+  finish. An exit code alone is insufficient evidence; require the Swift Testing
+  final summary. The local gate runs the two native window tests in one process
+  and all remaining tests in a complementary process, without omitting cases.
+
 ## Windows temporary-path fixtures
 
 Windows hosted runners can expose TEMP/TMP through an 8.3 alias while open-file

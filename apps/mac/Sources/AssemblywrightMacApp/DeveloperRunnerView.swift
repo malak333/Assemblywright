@@ -93,6 +93,11 @@ struct DeveloperRunnerSnapshot: Decodable {
   let planningSessions: [DeveloperPlanningSummary]
   var escalationRunning: Bool? = nil
   var chatModelSelection: Bool? = nil
+  var chatHistory: Bool? = nil
+  var githubPublicationRunning: Bool? = nil
+  var githubPublicationUnresolved: Bool? = nil
+  var githubSetupBusy: Bool? = nil
+  var githubSetupUnresolved: Bool? = nil
 
   var hasRequiredPlanner: Bool {
     planningRequired && planningProvider == "openai.codex" && planningModel == "gpt-5.6-sol"
@@ -120,6 +125,12 @@ struct DeveloperRunnerSnapshot: Decodable {
 
   func canSelectModel(_ id: String) -> Bool {
     availableModelTargets.contains { $0.id == id }
+  }
+
+  var canChangeChatAccess: Bool {
+    !running && !planningRunning && chatRunning != true && escalationRunning != true
+      && githubPublicationRunning != true && githubPublicationUnresolved != true
+      && githubSetupBusy != true && githubSetupUnresolved != true && !emergencyPaused
   }
 
   var visibleQueue: [DeveloperRunnerFeature] { queue.filter { $0.status != "removed" } }
@@ -437,8 +448,10 @@ struct DeveloperRunnerView: View {
         }
       }.padding(28)
     }.frame(minWidth: 650, minHeight: 680)
-      DeveloperChatHistoryView(configurationPath: configurationPath, runner: model)
-        .frame(minWidth: 340, idealWidth: 420, maxWidth: 560)
+      DeveloperProjectChatView(configurationPath: configurationPath,
+        projects: Array(Set(model.snapshot?.queue.map(\.project) ?? [])).sorted(),
+        runner: model)
+        .frame(minWidth: 340, idealWidth: 520, maxWidth: .infinity)
     }.frame(minWidth: 1000, minHeight: 680)
       .task { await model.observe() }
     .task { await connection.observe() }

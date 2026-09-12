@@ -55,6 +55,9 @@ struct DeveloperRepairEscalationTests {
     let feature = try #require(state.nextFeature)
     let ready = try proposal()
     #expect(ready.canApprove(feature: feature, runner: state))
+    let chatBound = try proposal(["chat_id": "conversation-1"])
+    #expect(chatBound.chatId == "conversation-1")
+    #expect(chatBound.canApprove(feature: feature, runner: state))
     #expect(ready.files?.first?.protected == true)
     #expect(ready.files?.first?.before?.contains("tk.Entry") == true)
     for blocked in ["running", "chat_running", "planning_running", "emergency_paused", "escalation_running"] {

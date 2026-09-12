@@ -2,6 +2,7 @@
 mod developer_chat;
 mod developer_planning;
 mod developer_review;
+mod developer_tools;
 
 use anyhow::{anyhow, bail, Context, Result};
 use axum::{
@@ -45,6 +46,7 @@ use developer_review::{
     DeveloperReviewFinding, DeveloperReviewOutput, DeveloperReviewPacket, DeveloperReviewer,
     MODEL_ID as REVIEW_MODEL_ID, PROVIDER_ID as REVIEW_PROVIDER_ID,
 };
+use developer_tools::{DeveloperTools, OpenCodeRuntimeConfig, ToolProjectMutation};
 
 const REPAIR_LIMIT: u32 = 3;
 const ESCALATION_LIMIT: u32 = 20;
@@ -78,6 +80,9 @@ struct Args {
     review_codex_executable: PathBuf,
     #[arg(long)]
     review_codex_home: PathBuf,
+    /// Optional OpenCode executable for developer-only project-chat tools.
+    #[arg(long)]
+    opencode_executable: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -128,6 +133,8 @@ struct RepairEscalationProposal {
     binding_revision: u64,
     model_target: String,
     model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    chat_id: Option<String>,
     chat_request_id: String,
     chat_model_target: String,
     chat_model: String,
@@ -151,6 +158,8 @@ struct RepairEscalationEvidence {
     attempt: u32,
     model_target: String,
     model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    chat_id: Option<String>,
     chat_request_id: String,
     diagnosis_sha256: String,
     outcome: String,
@@ -220,6 +229,8 @@ struct Feature {
     planning: Option<ApprovedPlanMetadata>,
     #[serde(default)]
     cumulative_evidence_version: u8,
+    #[serde(default)]
+    tool_workspace_revision: u64,
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Snapshot {
@@ -273,6 +284,7 @@ struct Engine {
     model_targets: Vec<ModelTarget>,
     inference_gate: Arc<InferenceGate>,
     chat: Arc<DeveloperChat>,
+    tools: Arc<DeveloperTools>,
     reviewer: DeveloperReviewer,
 }
 impl Engine {
@@ -571,6 +583,7 @@ impl Engine {
                 "review_summary":f.review_summary,"review_attempts":f.review_attempts,
                 "planning_status":if f.planning.is_some() { "approved" } else { "legacy_unplanned" },
                 "planning":f.planning,
+                "tool_workspace_revision":f.tool_workspace_revision,
                 "changed_files":f.edits.as_ref().map(|e| e.iter().map(|e| &e.path).collect::<Vec<_>>()).unwrap_or_default()
             }))
             .collect();
@@ -596,7 +609,10 @@ impl Engine {
             "repair_limit":REPAIR_LIMIT,"repair_active":repair_active,"model_targets":model_targets,
             "escalation_running":self.escalation_running.load(Ordering::SeqCst),
             "chat_model_selection":true,
-            "chat_running":self.chat.is_running(),
+            "chat_history":true,
+            "chat_running":self.chat.is_running() || self.tools.is_running(),
+            "tools_running":self.tools.is_running(),
+            "tools_need_attention":self.tools.needs_attention(),
             "review_provider":REVIEW_PROVIDER_ID,"review_model":REVIEW_MODEL_ID,"review_required":true}),
         )
     }
@@ -614,6 +630,72 @@ impl Engine {
     }
     fn cancelled(&self) -> bool {
         self.cancellation.load(Ordering::SeqCst) != 0
+    }
+
+    fn reconcile_completed_tool_mutations(&self) -> Result<()> {
+        if self.running.load(Ordering::SeqCst) || self.tools.is_running() || self.chat.is_running()
+        {
+            return Ok(());
+        }
+        let features = self
+            .database
+            .lock()
+            .map_err(|_| anyhow!("state lock failed"))?
+            .state
+            .queue
+            .iter()
+            .filter(|feature| feature.status != "removed")
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut side_targets = std::collections::HashMap::<String, String>::new();
+        for feature in &features {
+            if feature.status != "succeeded" {
+                side_targets
+                    .entry(feature.project.clone())
+                    .or_insert_with(|| feature.id.clone());
+            }
+        }
+        for feature in features.iter().rev() {
+            side_targets
+                .entry(feature.project.clone())
+                .or_insert_with(|| feature.id.clone());
+        }
+        for feature in features {
+            if !self.root.join(&feature.project).exists()
+                && never_started_project_has_no_tool_ledger(&feature)
+            {
+                continue;
+            }
+            let mutations = self
+                .tools
+                .project_mutations(&feature.project, feature.tool_workspace_revision)?;
+            let latest_revision = mutations
+                .last()
+                .map_or(feature.tool_workspace_revision, |mutation| {
+                    mutation.revision
+                });
+            if latest_revision == feature.tool_workspace_revision {
+                continue;
+            }
+            let owned = mutations
+                .iter()
+                .filter(|mutation| match mutation.feature_id.as_deref() {
+                    Some(feature_id) => feature_id == feature.id,
+                    None => side_targets.get(&feature.project) == Some(&feature.id),
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            let edits = owned_tool_mutation_edits(&owned, &feature.id);
+            self.change(|state| {
+                let current = state
+                    .queue
+                    .iter_mut()
+                    .find(|candidate| candidate.id == feature.id)
+                    .context("feature missing")?;
+                reconcile_feature_tool_mutation(current, latest_revision, &edits)
+            })?;
+        }
+        Ok(())
     }
     fn approved_plan_text(&self, feature: &Feature) -> Result<Option<String>> {
         let Some(metadata) = &feature.planning else {
@@ -651,6 +733,7 @@ impl Engine {
         expected_status: Option<&str>,
         expected_checkpoint: Option<&str>,
     ) -> Result<()> {
+        self.reconcile_completed_tool_mutations()?;
         let db = self
             .database
             .lock()
@@ -666,6 +749,9 @@ impl Engine {
         }
         if self.escalation_running.load(Ordering::SeqCst) {
             bail!("Wait for the repair proposal to finish before starting the Assembly Line");
+        }
+        if self.tools.blocks_work() {
+            bail!("Resolve or stop project tool work before starting the Assembly Line");
         }
         let feature = db
             .state
@@ -896,8 +982,19 @@ impl Engine {
                 .project
                 .clone()
         };
-        let handoff = self.chat.repair_handoff(&project, chat_request_id)?;
-        validate_repair_handoff(&handoff, &project, chat_request_id, diagnosis_sha256)?;
+        let chat_id = self
+            .chat
+            .resolve_chat_id(&project, request.chat_id.as_deref())?;
+        let handoff = self
+            .chat
+            .repair_handoff(&project, &chat_id, chat_request_id)?;
+        validate_repair_handoff(
+            &handoff,
+            &project,
+            &chat_id,
+            chat_request_id,
+            diagnosis_sha256,
+        )?;
 
         if self.shutdown.load(Ordering::SeqCst) {
             bail!("Developer runner is shutting down");
@@ -905,6 +1002,7 @@ impl Engine {
         if self.running.load(Ordering::SeqCst)
             || self.planning_running.load(Ordering::SeqCst)
             || self.chat.is_running()
+            || self.tools.blocks_work()
         {
             bail!("Stop active developer work before preparing a repair proposal");
         }
@@ -965,6 +1063,7 @@ impl Engine {
                 binding_revision: state.revision + 1,
                 model_target: model_target.into(),
                 model: target.model.clone(),
+                chat_id: Some(handoff.chat_id.clone()),
                 chat_request_id: handoff.request_id.clone(),
                 chat_model_target: handoff.model_target.clone(),
                 chat_model: handoff.model.clone(),
@@ -1248,6 +1347,7 @@ impl Engine {
                 attempt: proposal.attempt,
                 model_target: proposal.model_target.clone(),
                 model: proposal.model.clone(),
+                chat_id: proposal.chat_id.clone(),
                 chat_request_id: proposal.chat_request_id.clone(),
                 diagnosis_sha256: proposal.diagnosis_sha256.clone(),
                 outcome: outcome.into(),
@@ -1275,11 +1375,12 @@ impl Engine {
         if self.running.load(Ordering::SeqCst)
             || self.planning_running.load(Ordering::SeqCst)
             || self.chat.is_running()
+            || self.tools.blocks_work()
             || self.escalation_running.load(Ordering::SeqCst)
         {
             bail!("Stop active developer work before applying a repair proposal");
         }
-        let (project, chat_request_id) = {
+        let (project, proposal_chat_id, chat_request_id) = {
             let database = self
                 .database
                 .lock()
@@ -1298,9 +1399,25 @@ impl Engine {
                 .as_ref()
                 .filter(|proposal| proposal.proposal_id == proposal_id)
                 .context("Repair proposal not found")?;
-            (feature.project.clone(), proposal.chat_request_id.clone())
+            (
+                feature.project.clone(),
+                proposal.chat_id.clone(),
+                proposal.chat_request_id.clone(),
+            )
         };
-        let handoff = self.chat.repair_handoff(&project, &chat_request_id)?;
+        let chat_id = self
+            .chat
+            .resolve_chat_id(&project, proposal_chat_id.as_deref())?;
+        if request
+            .chat_id
+            .as_deref()
+            .is_some_and(|requested| requested != chat_id)
+        {
+            bail!("Repair proposal belongs to a different conversation");
+        }
+        let handoff = self
+            .chat
+            .repair_handoff(&project, &chat_id, &chat_request_id)?;
 
         self.running
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -1351,6 +1468,7 @@ impl Engine {
             validate_repair_handoff(
                 &handoff,
                 &feature.project,
+                &chat_id,
                 &proposal.chat_request_id,
                 &proposal.diagnosis_sha256,
             )?;
@@ -1419,6 +1537,7 @@ impl Engine {
                 attempt: proposal.attempt,
                 model_target: proposal.model_target.clone(),
                 model: proposal.model.clone(),
+                chat_id: proposal.chat_id.clone(),
                 chat_request_id: proposal.chat_request_id.clone(),
                 diagnosis_sha256: proposal.diagnosis_sha256.clone(),
                 outcome: "approved_to_apply".into(),
@@ -1489,6 +1608,7 @@ impl Engine {
                 attempt: proposal.attempt,
                 model_target: proposal.model_target.clone(),
                 model: proposal.model.clone(),
+                chat_id: proposal.chat_id.clone(),
                 chat_request_id: proposal.chat_request_id.clone(),
                 diagnosis_sha256: proposal.diagnosis_sha256.clone(),
                 outcome: "cancelled".into(),
@@ -1507,6 +1627,9 @@ impl Engine {
             .map_err(|_| anyhow!("state lock failed"))?;
         if self.running.load(Ordering::SeqCst) {
             bail!("Stop the active run before removing a feature");
+        }
+        if self.chat.is_running() || self.tools.blocks_work() {
+            bail!("Stop project chat and resolve project tool actions before removing a feature");
         }
         if self.escalation_running.load(Ordering::SeqCst) {
             bail!("Cancel the active repair proposal before removing a feature");
@@ -1531,6 +1654,7 @@ impl Engine {
             .map_err(|_| anyhow!("state lock failed"))?;
         if self.running.load(Ordering::SeqCst)
             || self.chat.is_running()
+            || self.tools.is_running()
             || self.planning_running.load(Ordering::SeqCst)
             || self.escalation_running.load(Ordering::SeqCst)
         {
@@ -2548,6 +2672,147 @@ fn merge_escalation_review_edits(
     merge_review_edits(current, &proposed)
 }
 
+fn tool_mutation_edits(
+    mutations: &[ToolProjectMutation],
+    expected_feature_id: Option<&str>,
+) -> Result<Vec<Edit>> {
+    let mut edits = Vec::<Edit>::new();
+    let mut indices = std::collections::HashMap::<String, usize>::new();
+    for mutation in mutations {
+        if mutation.feature_id.as_deref() != expected_feature_id {
+            bail!("Tool mutation attribution changed; review the project before retrying");
+        }
+        let unreviewable = mutation
+            .unreviewable_paths
+            .iter()
+            .filter(|path| !is_validation_environment_artifact(path))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !unreviewable.is_empty() {
+            bail!(
+                "Tool session changed files that cannot enter bounded review: {}",
+                unreviewable.join(", ")
+            );
+        }
+        for mutation_edit in &mutation.edits {
+            let after = mutation_edit.after.as_ref().with_context(|| {
+                format!(
+                    "Tool-assisted feature deleted {}; deletion cannot enter bounded review",
+                    mutation_edit.path
+                )
+            })?;
+            if mutation_edit.before_sha256.as_ref().is_some_and(|digest| {
+                digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+            }) {
+                bail!("Tool mutation has an invalid prior-content digest");
+            }
+            let normalized = mutation_edit.path.replace('\\', "/").to_lowercase();
+            if let Some(index) = indices.get(&normalized).copied() {
+                edits[index].content = after.clone();
+            } else {
+                indices.insert(normalized, edits.len());
+                edits.push(Edit {
+                    path: mutation_edit.path.clone(),
+                    content: after.clone(),
+                    before: mutation_edit.before_sha256.clone(),
+                });
+            }
+        }
+    }
+    if edits.len() > 40 {
+        bail!("Tool-assisted feature changed more than 40 reviewable files");
+    }
+    Ok(edits)
+}
+
+fn is_validation_environment_artifact(path: &str) -> bool {
+    matches!(
+        path.replace('\\', "/")
+            .trim_matches('/')
+            .to_ascii_lowercase()
+            .as_str(),
+        ".venv" | "venv" | "node_modules" | "target"
+    )
+}
+
+fn owned_tool_mutation_edits(
+    mutations: &[ToolProjectMutation],
+    feature_id: &str,
+) -> Result<Vec<Edit>> {
+    let mut combined = Vec::new();
+    for mutation in mutations {
+        let expected = mutation.feature_id.as_deref().map(|_| feature_id);
+        let edits = tool_mutation_edits(std::slice::from_ref(mutation), expected)?;
+        if edits.is_empty() {
+            continue;
+        }
+        combined = if combined.is_empty() {
+            edits
+        } else {
+            merge_review_edits(&combined, &edits)?
+        };
+    }
+    Ok(combined)
+}
+
+fn never_started_project_has_no_tool_ledger(feature: &Feature) -> bool {
+    feature.tool_workspace_revision == 0 && feature.edits.is_none() && feature.review_attempts == 0
+}
+
+fn reconcile_feature_tool_mutation(
+    feature: &mut Feature,
+    latest_revision: u64,
+    owned_edits: &Result<Vec<Edit>>,
+) -> Result<()> {
+    feature.tool_workspace_revision = latest_revision;
+    let has_review_evidence = feature.edits.is_some()
+        || feature.review_attempts > 0
+        || feature.status == "succeeded"
+        || checkpoint_has_applied_edits(&feature.checkpoint);
+    if !has_review_evidence {
+        return Ok(());
+    }
+    let edits = match owned_edits {
+        Ok(edits) => edits,
+        Err(error) => {
+            feature.status = "failed".into();
+            feature.checkpoint = "tool_effects_quarantined".into();
+            feature.review_status = "interrupted".into();
+            feature.review_pending = None;
+            feature.review_summary = error.to_string().chars().take(1000).collect();
+            feature.message = format!(
+                "Project tools changed bytes that cannot enter bounded review. {}",
+                feature.review_summary
+            )
+            .chars()
+            .take(4000)
+            .collect();
+            return Ok(());
+        }
+    };
+    if !edits.is_empty() {
+        feature.edits = Some(merge_review_edits(
+            feature.edits.as_deref().unwrap_or_default(),
+            edits,
+        )?);
+    }
+    feature.review_status = "interrupted".into();
+    feature.review_pending = None;
+    feature.review_summary =
+        "Project tools changed the workspace; immutable validation and Codex review must run again."
+            .into();
+    if feature.status == "succeeded" || feature.status == "queued" {
+        feature.status = "paused".into();
+    }
+    feature.checkpoint = if feature.repair_attempts >= REPAIR_LIMIT && feature.status == "failed" {
+        "tool_workspace_changed_requires_proposal".into()
+    } else {
+        "review_tool_workspace_changed".into()
+    };
+    feature.message = feature.review_summary.clone();
+    Ok(())
+}
+
 fn developer_review_packet(
     feature: &Feature,
     project: &Path,
@@ -2726,6 +2991,7 @@ fn finish_escalation_application(
         attempt: proposal.attempt,
         model_target: proposal.model_target.clone(),
         model: proposal.model.clone(),
+        chat_id: proposal.chat_id.clone(),
         chat_request_id: proposal.chat_request_id.clone(),
         diagnosis_sha256: proposal.diagnosis_sha256.clone(),
         outcome: outcome.into(),
@@ -2984,10 +3250,12 @@ fn validate_sha256(value: &str, label: &str) -> Result<()> {
 fn validate_repair_handoff(
     handoff: &ChatRepairHandoff,
     project: &str,
+    chat_id: &str,
     request_id: &str,
     diagnosis_sha256: &str,
 ) -> Result<()> {
     if handoff.project != project
+        || handoff.chat_id != chat_id
         || handoff.request_id != request_id
         || handoff.response_sha256 != diagnosis_sha256
         || hash(handoff.response.as_bytes()) != handoff.response_sha256
@@ -3579,19 +3847,40 @@ async fn status(State(engine): State<Arc<Engine>>, headers: HeaderMap) -> Api {
             Json(json!({"error":"Unauthorized"})),
         );
     }
-    api(engine.snapshot())
+    api(engine
+        .reconcile_completed_tool_mutations()
+        .and_then(|_| engine.snapshot()))
 }
 
 #[derive(Deserialize)]
 struct ChatQuery {
     project: String,
-    conversation_id: Option<String>,
+    chat_id: Option<String>,
+    before: Option<String>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ConversationsQuery {
+struct ChatConversationQuery {
     project: Option<String>,
+    cursor: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChatConversationCreate {
+    id: String,
+    project: String,
+    reuse_chat_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChatConversationRename {
+    project: String,
+    chat_id: String,
+    title: String,
+    expected_revision: u64,
 }
 
 #[derive(Deserialize)]
@@ -3602,6 +3891,7 @@ struct RepairEscalationMutation {
     expected_revision: u64,
     expected_checkpoint: Option<String>,
     model_target: Option<String>,
+    chat_id: Option<String>,
     chat_request_id: Option<String>,
     diagnosis_sha256: Option<String>,
     proposal_id: Option<String>,
@@ -3657,10 +3947,14 @@ async fn chat_status(
             Json(json!({"error":"Unauthorized"})),
         );
     }
-    api(engine.chat.snapshot_with_conversation(
-        &query.project,
-        query.conversation_id.as_deref().unwrap_or("project"),
-    ))
+    api(engine.reconcile_completed_tool_mutations().and_then(|_| {
+        let chat_id = engine
+            .chat
+            .resolve_chat_id(&query.project, query.chat_id.as_deref())?;
+        engine
+            .chat
+            .snapshot_chat(&query.project, &chat_id, query.before.as_deref())
+    }))
 }
 
 async fn chat_projects(State(engine): State<Arc<Engine>>, headers: HeaderMap) -> Api {
@@ -3676,7 +3970,7 @@ async fn chat_projects(State(engine): State<Arc<Engine>>, headers: HeaderMap) ->
 async fn chat_conversations(
     State(engine): State<Arc<Engine>>,
     headers: HeaderMap,
-    Query(query): Query<ConversationsQuery>,
+    Query(query): Query<ChatConversationQuery>,
 ) -> Api {
     if authorize(&engine, &headers).is_err() {
         return (
@@ -3684,7 +3978,46 @@ async fn chat_conversations(
             Json(json!({"error":"Unauthorized"})),
         );
     }
-    api(engine.chat.conversations(query.project.as_deref()))
+    api(engine
+        .chat
+        .list_conversations(query.project.as_deref(), query.cursor.as_deref()))
+}
+
+async fn chat_conversation_create(
+    State(engine): State<Arc<Engine>>,
+    headers: HeaderMap,
+    Json(request): Json<ChatConversationCreate>,
+) -> Api {
+    if authorize(&engine, &headers).is_err() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error":"Unauthorized"})),
+        );
+    }
+    api(engine.chat.create_conversation(
+        &request.id,
+        &request.project,
+        request.reuse_chat_id.as_deref(),
+    ))
+}
+
+async fn chat_conversation_rename(
+    State(engine): State<Arc<Engine>>,
+    headers: HeaderMap,
+    Json(request): Json<ChatConversationRename>,
+) -> Api {
+    if authorize(&engine, &headers).is_err() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error":"Unauthorized"})),
+        );
+    }
+    api(engine.chat.rename_conversation(
+        &request.project,
+        &request.chat_id,
+        &request.title,
+        request.expected_revision,
+    ))
 }
 
 async fn chat_start(
@@ -3699,6 +4032,7 @@ async fn chat_start(
         );
     }
     let result = (|| -> Result<Value> {
+        engine.reconcile_completed_tool_mutations()?;
         let project = request["project"]
             .as_str()
             .context("Missing chat project")?;
@@ -3706,11 +4040,13 @@ async fn chat_start(
             .as_str()
             .context("Missing chat message")?;
         let id = request["id"].as_str().context("Missing chat request ID")?;
+        let chat_id = engine
+            .chat
+            .resolve_chat_id(project, request.get("chat_id").and_then(Value::as_str))?;
         let model_target = request
             .get("model_target")
             .and_then(Value::as_str)
             .unwrap_or("windows");
-        let conversation_id = request.get("conversation_id").and_then(Value::as_str);
         let attachments: Vec<ChatAttachment> = serde_json::from_value(
             request
                 .get("attachments")
@@ -3749,26 +4085,15 @@ async fn chat_start(
                 })
             })
             .collect();
-        let snapshot = if let Some(conversation_id) = conversation_id {
-            engine.chat.start_in_conversation(
-                project,
-                message,
-                id,
-                Some(conversation_id),
-                model_target,
-                attachments,
-                json!({"features":queue}),
-            )?
-        } else {
-            engine.chat.start(
-                project,
-                message,
-                id,
-                model_target,
-                attachments,
-                json!({"features":queue}),
-            )?
-        };
+        let snapshot = engine.chat.start(
+            project,
+            &chat_id,
+            message,
+            id,
+            model_target,
+            attachments,
+            json!({"features":queue}),
+        )?;
         drop(database);
         Ok(snapshot)
     })();
@@ -3788,7 +4113,103 @@ async fn chat_cancel(
     }
     api((|| -> Result<Value> {
         let id = request["id"].as_str().context("Missing chat request ID")?;
-        engine.chat.cancel(id)
+        engine.chat.cancel(
+            request.get("project").and_then(Value::as_str),
+            request.get("chat_id").and_then(Value::as_str),
+            id,
+        )
+    })())
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChatAccessMutation {
+    project: String,
+    chat_id: Option<String>,
+    mode: String,
+    expected_revision: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChatApprovalMutation {
+    project: String,
+    chat_id: Option<String>,
+    request_id: String,
+    approval_id: String,
+    access_revision: u64,
+    decision: String,
+}
+
+async fn chat_access(
+    State(engine): State<Arc<Engine>>,
+    headers: HeaderMap,
+    Json(request): Json<ChatAccessMutation>,
+) -> Api {
+    if authorize(&engine, &headers).is_err() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error":"Unauthorized"})),
+        );
+    }
+    api((|| -> Result<Value> {
+        let database = engine
+            .database
+            .lock()
+            .map_err(|_| anyhow!("state lock failed"))?;
+        if engine.emergency_paused(&database.state) {
+            bail!("Clear Emergency Pause before changing tool access");
+        }
+        let idle = !engine.running.load(Ordering::SeqCst)
+            && !engine.planning_running.load(Ordering::SeqCst)
+            && !engine.escalation_running.load(Ordering::SeqCst)
+            && !engine.chat.is_running();
+        engine.tools.set_access(
+            &request.project,
+            &request.mode,
+            request.expected_revision,
+            idle,
+        )?;
+        drop(database);
+        let chat_id = engine
+            .chat
+            .resolve_chat_id(&request.project, request.chat_id.as_deref())?;
+        engine.chat.snapshot_chat(&request.project, &chat_id, None)
+    })())
+}
+
+async fn chat_approval(
+    State(engine): State<Arc<Engine>>,
+    headers: HeaderMap,
+    Json(request): Json<ChatApprovalMutation>,
+) -> Api {
+    if authorize(&engine, &headers).is_err() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error":"Unauthorized"})),
+        );
+    }
+    api((|| -> Result<Value> {
+        let database = engine
+            .database
+            .lock()
+            .map_err(|_| anyhow!("state lock failed"))?;
+        if engine.emergency_paused(&database.state) {
+            bail!("Clear Emergency Pause before approving a tool action");
+        }
+        let chat_id = engine
+            .chat
+            .resolve_chat_id(&request.project, request.chat_id.as_deref())?;
+        engine.tools.decide(
+            &request.project,
+            Some(&chat_id),
+            &request.request_id,
+            &request.approval_id,
+            request.access_revision,
+            &request.decision,
+        )?;
+        drop(database);
+        engine.chat.snapshot_chat(&request.project, &chat_id, None)
     })())
 }
 
@@ -4139,6 +4560,7 @@ impl Engine {
                             review_history: Vec::new(),
                             planning: Some(metadata),
                             cumulative_evidence_version: 1,
+                            tool_workspace_revision: 0,
                         };
                         session.stage = "enqueued".into();
                         session.revision = session
@@ -4369,8 +4791,11 @@ async fn control(
                     .fetch_max(if emergency { 2 } else { 1 }, Ordering::SeqCst);
                 engine.cancel_planning_call(emergency);
                 engine.cancel_escalation_call(emergency);
+                engine.chat.cancel_active();
+                engine.tools.cancel_active();
                 if emergency {
                     engine.chat.cancel_for_emergency();
+                    engine.tools.cancel_for_emergency();
                 }
                 engine.change(|s| {
                     if emergency {
@@ -4398,6 +4823,7 @@ async fn control(
                 if engine.running.load(Ordering::SeqCst)
                     || engine.planning_running.load(Ordering::SeqCst)
                     || engine.chat.is_running()
+                    || engine.tools.blocks_work()
                     || engine.escalation_running.load(Ordering::SeqCst)
                 {
                     bail!("Wait for active developer work to stop");
@@ -4578,6 +5004,7 @@ async fn main() -> Result<()> {
                 attempt: proposal.attempt,
                 model_target: proposal.model_target.clone(),
                 model: proposal.model.clone(),
+                chat_id: proposal.chat_id.clone(),
                 chat_request_id: proposal.chat_request_id.clone(),
                 diagnosis_sha256: proposal.diagnosis_sha256.clone(),
                 outcome: "interrupted".into(),
@@ -4632,6 +5059,18 @@ async fn main() -> Result<()> {
         &args.data_dir,
     )?;
     let inference_gate = InferenceGate::new();
+    let tool_runtime = args
+        .opencode_executable
+        .clone()
+        .map(|executable| OpenCodeRuntimeConfig {
+            executable,
+            data_dir: args.data_dir.join("opencode"),
+        });
+    let tools = DeveloperTools::open(
+        &args.data_dir.join("developer.sqlite3"),
+        root.clone(),
+        tool_runtime,
+    )?;
     let chat_models = model_targets
         .iter()
         .map(|target| ChatModelConfig {
@@ -4645,6 +5084,7 @@ async fn main() -> Result<()> {
         root.clone(),
         chat_models,
         inference_gate.clone(),
+        tools.clone(),
     )?;
     let engine = Arc::new(Engine {
         database: Mutex::new(Database { connection, state }),
@@ -4663,6 +5103,7 @@ async fn main() -> Result<()> {
         model_targets,
         inference_gate,
         chat,
+        tools,
         reviewer,
     });
     engine.change(|_| Ok(()))?;
@@ -4676,8 +5117,14 @@ async fn main() -> Result<()> {
                 .layer(DefaultBodyLimit::max(9 * 1024 * 1024)),
         )
         .route("/chat/projects", get(chat_projects))
-        .route("/chat/conversations", get(chat_conversations))
+        .route(
+            "/chat/conversations",
+            get(chat_conversations).post(chat_conversation_create),
+        )
+        .route("/chat/rename", post(chat_conversation_rename))
         .route("/chat/cancel", post(chat_cancel))
+        .route("/chat/access", post(chat_access))
+        .route("/chat/approval", post(chat_approval))
         .route(
             "/repair/escalation",
             get(repair_escalation_status).post(repair_escalation_control),
@@ -4729,6 +5176,9 @@ mod tests {
             url: "http://127.0.0.1:1/v1".into(),
             model: "fixture".into(),
         }];
+        let tools =
+            DeveloperTools::open(&database_path, fs::canonicalize(&workspace).unwrap(), None)
+                .unwrap();
         let chat = DeveloperChat::open(
             &database_path,
             fs::canonicalize(&workspace).unwrap(),
@@ -4738,6 +5188,7 @@ mod tests {
                 model: "fixture".into(),
             }],
             inference_gate.clone(),
+            tools.clone(),
         )
         .unwrap();
         let reviewer = DeveloperReviewer::new(codex_executable, codex_home, &data).unwrap();
@@ -4765,6 +5216,7 @@ mod tests {
             model_targets,
             inference_gate,
             chat,
+            tools,
             reviewer,
         });
         engine.change(|_| Ok(())).unwrap();
@@ -4806,6 +5258,7 @@ mod tests {
             review_history: Vec::new(),
             planning: None,
             cumulative_evidence_version: 1,
+            tool_workspace_revision: 0,
         }
     }
 
@@ -4823,6 +5276,7 @@ mod tests {
             binding_revision: 8,
             model_target: "mac".into(),
             model: "mac-coder".into(),
+            chat_id: None,
             chat_request_id: "07fcd785-a83e-4a60-9941-f9150f78b4db".into(),
             chat_model_target: "windows".into(),
             chat_model: "windows-coder".into(),
@@ -4850,6 +5304,7 @@ mod tests {
             attempt: 0,
             model_target: "mac".into(),
             model: "older-model".into(),
+            chat_id: None,
             chat_request_id: "418ab506-8295-4b4c-90c7-30f8dd7dcedd".into(),
             diagnosis_sha256: "0".repeat(64),
             outcome: "approved_to_apply".into(),
@@ -4861,6 +5316,7 @@ mod tests {
             attempt: proposal.attempt,
             model_target: proposal.model_target.clone(),
             model: proposal.model.clone(),
+            chat_id: proposal.chat_id.clone(),
             chat_request_id: proposal.chat_request_id.clone(),
             diagnosis_sha256: proposal.diagnosis_sha256.clone(),
             outcome: "approved_to_apply".into(),
@@ -4868,6 +5324,77 @@ mod tests {
             summary: "approved".into(),
         });
         feature
+    }
+
+    #[tokio::test]
+    async fn status_reconciles_side_chat_mutation_before_exposing_review_evidence() {
+        let (directory, engine) = control_test_engine();
+        engine
+            .change(|state| {
+                let feature = &mut state.queue[0];
+                feature.status = "succeeded".into();
+                feature.review_status = "approved".into();
+                feature.checkpoint = "review_1_approved".into();
+                Ok(())
+            })
+            .unwrap();
+        let mutation = ToolProjectMutation {
+            revision: 1,
+            request_id: Uuid::new_v4().to_string(),
+            feature_id: None,
+            edits: vec![developer_tools::ToolMutationEdit {
+                path: "sidechat.py".into(),
+                before_sha256: None,
+                after: Some("VALUE = 2\n".into()),
+            }],
+            unreviewable_paths: Vec::new(),
+        };
+        let connection =
+            Connection::open(directory.path().join("data").join("developer.sqlite3")).unwrap();
+        connection
+            .execute(
+                "INSERT INTO developer_tool_workspace(project,revision) VALUES('example',1)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO developer_tool_mutation(project,revision,request_id,feature_id,evidence)
+                 VALUES('example',1,?1,NULL,?2)",
+                (
+                    &mutation.request_id,
+                    serde_json::to_string(&mutation).unwrap(),
+                ),
+            )
+            .unwrap();
+
+        let response = status(State(engine.clone()), authorized_headers()).await;
+        assert_eq!(response.0, StatusCode::OK);
+        assert_eq!(response.1["queue"][0]["status"], "paused");
+        assert_eq!(response.1["queue"][0]["review_status"], "interrupted");
+        assert_eq!(
+            response.1["queue"][0]["checkpoint"],
+            "review_tool_workspace_changed"
+        );
+        assert_eq!(response.1["queue"][0]["tool_workspace_revision"], 1);
+        assert!(response.1["queue"][0]["changed_files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|path| path == "sidechat.py"));
+    }
+
+    #[test]
+    fn unreviewable_side_chat_mutation_quarantines_prior_evidence() {
+        let mut feature = feature_with_status("succeeded");
+        feature.review_status = "approved".into();
+        let error = anyhow!("Tool session changed an unreviewable file");
+        reconcile_feature_tool_mutation(&mut feature, 4, &Err(error)).unwrap();
+        assert_eq!(feature.status, "failed");
+        assert_eq!(feature.checkpoint, "tool_effects_quarantined");
+        assert_eq!(feature.review_status, "interrupted");
+        assert_eq!(feature.tool_workspace_revision, 4);
+        assert!(feature.message.contains("cannot enter bounded review"));
     }
 
     #[tokio::test]
@@ -4933,6 +5460,7 @@ mod tests {
                 expected_checkpoint: Some("applied".into()),
                 model_target: Some("mac".into()),
                 chat_request_id: Some("07fcd785-a83e-4a60-9941-f9150f78b4db".into()),
+                chat_id: None,
                 diagnosis_sha256: Some("1".repeat(64)),
                 proposal_id: Some("3680c592-7d0b-4662-95a8-1ec303d08219".into()),
             };
@@ -5190,6 +5718,7 @@ mod tests {
             design_complete: false,
             decision_log: Vec::new(),
             implementation_plan: None,
+            reasoning_effort: None,
         };
         assert!(engine
             .finish_planning_completion(&packet, PlanningCompletion::Output(Box::new(output)))
@@ -5660,6 +6189,7 @@ mod tests {
             windows_model: Some("windows-model".into()),
             review_codex_executable: PathBuf::from("/private/review/codex"),
             review_codex_home: PathBuf::from("/private/review/home"),
+            opencode_executable: None,
         };
         assert!(configured_model_targets(&duplicate).is_err());
         let ipv4 = reqwest::Url::parse("http://127.0.0.1:8080/v1").unwrap();

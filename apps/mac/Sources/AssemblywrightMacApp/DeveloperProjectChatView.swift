@@ -11,6 +11,8 @@ struct DeveloperChatMessage: Decodable {
   var model: String? = nil
   var requestId: String? = nil
   var contentSha256: String? = nil
+  var sequence: UInt64? = nil
+  var chatId: String? = nil
 
   var authorLabel: String {
     if role == "user" { return "You" }
@@ -22,9 +24,91 @@ struct DeveloperChatMessage: Decodable {
   }
 }
 
+enum DeveloperToolAccessMode: String, Codable, CaseIterable, Identifiable {
+  case ask
+  case auto
+  case full
+
+  var id: String { rawValue }
+  var label: String {
+    switch self {
+    case .ask: return "Ask for approval"
+    case .auto: return "Approve for me"
+    case .full: return "Full access"
+    }
+  }
+  var help: String {
+    switch self {
+    case .ask: return "Ask before commands, file changes, installations, or internet access."
+    case .auto: return "Allow project edits and web searches. Ask before commands, installations, URL fetches, or outside-project access."
+    case .full: return "Allow project tools, internet access, and files available to the Windows account."
+    }
+  }
+}
+
+struct DeveloperToolAccess: Decodable {
+  let mode: DeveloperToolAccessMode
+  let revision: UInt64
+  let available: Bool
+  let unavailableReason: String?
+  let executionHost: String
+}
+
+private enum DeveloperJSONValue: Decodable {
+  case string(String)
+  case number(Double)
+  case boolean(Bool)
+  case object([String: DeveloperJSONValue])
+  case array([DeveloperJSONValue])
+  case null
+
+  init(from decoder: Decoder) throws {
+    let value = try decoder.singleValueContainer()
+    if value.decodeNil() { self = .null }
+    else if let decoded = try? value.decode(String.self) { self = .string(decoded) }
+    else if let decoded = try? value.decode(Bool.self) { self = .boolean(decoded) }
+    else if let decoded = try? value.decode(Double.self) { self = .number(decoded) }
+    else if let decoded = try? value.decode([String: DeveloperJSONValue].self) { self = .object(decoded) }
+    else { self = .array(try value.decode([DeveloperJSONValue].self)) }
+  }
+
+  var displayText: String {
+    switch self {
+    case .string(let value): return value
+    case .number(let value):
+      if value.rounded() == value, let integer = Int(exactly: value) { return String(integer) }
+      return String(value)
+    case .boolean(let value): return value ? "true" : "false"
+    case .null: return "null"
+    case .array(let values): return values.map(\.displayText).joined(separator: "\n")
+    case .object(let values):
+      return values.keys.sorted().map { "\($0): \(values[$0]!.displayText)" }.joined(separator: "\n")
+    }
+  }
+}
+
+struct DeveloperToolAction: Decodable, Identifiable {
+  let id: String
+  let requestId: String
+  let tool: String
+  let summary: String
+  let status: String
+  let output: String?
+}
+
+struct DeveloperToolApproval: Decodable {
+  let id: String
+  let requestId: String
+  let summary: String
+  let tool: String
+  fileprivate let details: DeveloperJSONValue
+  let accessRevision: UInt64
+  var detailText: String { details.displayText }
+}
+
 struct DeveloperChatSnapshot: Decodable {
   let project: String
-  let messages: [DeveloperChatMessage]
+  var messages: [DeveloperChatMessage]
   let running: Bool
   let requestId: String?
   let error: String?
@@ -35,136 +119,101 @@ struct DeveloperChatSnapshot: Decodable {
   let omittedFiles: Int?
   var modelTarget: String? = nil
   var model: String? = nil
+  var toolAccess: DeveloperToolAccess? = nil
+  var toolActions: [DeveloperToolAction]? = nil
+  var pendingApproval: DeveloperToolApproval? = nil
+  var chatId: String? = nil
+  var title: String? = nil
+  var revision: UInt64? = nil
+  var historySupported: Bool? = nil
+  var nextBefore: String? = nil
+  var activeChat: DeveloperActiveChat? = nil
 }
 
-@MainActor
-final class DeveloperProjectChatModel: ObservableObject {
-  @Published var snapshot: DeveloperChatSnapshot?
-  @Published var projects: [String] = []
-  @Published var error: String?
-  @Published var sending = false
-  private(set) var project = ""
-  private let configurationPath: String
-  private var configuration: DeveloperRunnerConfiguration? {
-    try? JSONDecoder().decode(DeveloperRunnerConfiguration.self,
-      from: Data(contentsOf: URL(fileURLWithPath: configurationPath)))
-  }
-  private let session: URLSession
-  private var actionError: String?
-  private var pending: (project: String, message: String, attachments: [DeveloperChatAttachment], modelTarget: String, id: String)?
+struct DeveloperChatComposer: View {
+  @Binding var text: String
 
-  init(configurationPath: String) {
-    self.configurationPath = configurationPath
-    let settings = URLSessionConfiguration.ephemeral
-    settings.timeoutIntervalForRequest = 15
-    session = URLSession(configuration: settings)
-  }
-
-  private func requestData(path: String, project: String, body: [String: Any]? = nil) async throws
-    -> Data
-  {
-    guard let configuration, let base = URL(string: configuration.endpoint),
-      ["127.0.0.1", "localhost", "::1"].contains(base.host ?? ""), base.scheme == "http",
-      var components = URLComponents(url: base.appendingPathComponent(path), resolvingAgainstBaseURL: false)
-    else { throw URLError(.badURL) }
-    if body == nil { components.queryItems = [URLQueryItem(name: "project", value: project)] }
-    guard let url = components.url else { throw URLError(.badURL) }
-    var request = URLRequest(url: url)
-    request.setValue("Bearer \(configuration.token)", forHTTPHeaderField: "Authorization")
-    if let body {
-      request.httpMethod = "POST"
-      request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-      request.httpBody = try JSONSerialization.data(withJSONObject: body)
-    }
-    let (data, response) = try await session.data(for: request)
-    guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-      let detail = (try? JSONSerialization.jsonObject(with: data)) as? [String: String]
-      throw NSError(domain: "Project chat", code: 1,
-        userInfo: [NSLocalizedDescriptionKey: detail?["error"] ?? "Project chat is unavailable. Reopen the developer build with its launcher."])
-    }
-    return data
-  }
-
-  private func request(path: String, project: String, body: [String: Any]? = nil) async throws
-    -> DeveloperChatSnapshot
-  {
-    let data = try await requestData(path: path, project: project, body: body)
-    let decoder = JSONDecoder()
-    decoder.keyDecodingStrategy = .convertFromSnakeCase
-    let result = try decoder.decode(DeveloperChatSnapshot.self, from: data)
-    guard result.project == project else { throw URLError(.cannotParseResponse) }
-    return result
-  }
-
-  func observeProjects() async {
-    struct ProjectList: Decodable { let projects: [String] }
-    while !Task.isCancelled {
-      if let data = try? await requestData(path: "chat/projects", project: ""),
-        let list = try? JSONDecoder().decode(ProjectList.self, from: data), !Task.isCancelled {
-        projects = list.projects
-      } else if !Task.isCancelled {
-        projects = []
-      }
-      try? await Task.sleep(for: .seconds(10))
-    }
-  }
-
-  func observe(project selected: String) async {
-    project = selected
-    snapshot = nil
-    error = nil
-    actionError = nil
-    guard !selected.isEmpty else { return }
-    while !Task.isCancelled && project == selected {
-      do {
-        let state = try await request(path: "chat", project: selected)
-        guard !Task.isCancelled && project == selected else { return }
-        snapshot = state
-        error = actionError
-      } catch {
-        if !Task.isCancelled && project == selected {
-          snapshot = nil
-          self.error = error.localizedDescription
+  var body: some View {
+    TextEditor(text: $text)
+      .font(.body)
+      .scrollContentBackground(.hidden)
+      .padding(4)
+      .frame(minHeight: 64, idealHeight: 84, maxHeight: 140)
+      .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 5))
+      .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(.quaternary))
+      .overlay(alignment: .topLeading) {
+        if text.isEmpty {
+          Text("Ask a question about this project")
+            .foregroundStyle(.tertiary)
+            .padding(.horizontal, 9).padding(.vertical, 8)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
         }
       }
-      try? await Task.sleep(for: .seconds(1))
+      .accessibilityLabel("Ask a question about this project")
+      .help("Shift+Enter inserts a new line. Use Send question to send your message.")
+  }
+}
+
+struct DeveloperToolApprovalView: View {
+  let approval: DeveloperToolApproval
+  let project: String
+  let disabled: Bool
+  let decide: (String) -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 7) {
+      Label("Approval required", systemImage: "hand.raised.fill").font(.headline)
+      Text(approval.summary).font(.body)
+      Text("Project: \(project)").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+      Text("Execution computer: Windows").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+      Text(approval.tool).font(.caption.bold()).foregroundStyle(.secondary)
+      Text(approval.detailText)
+        .font(.system(.caption, design: .monospaced))
+        .textSelection(.enabled)
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 5))
+      DeveloperToolApprovalButtons(disabled: disabled, decide: decide)
     }
+    .padding(10)
+    .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 7))
+    .accessibilityIdentifier("developer-chat-tool-approval")
+  }
+}
+
+private struct DeveloperToolApprovalButtons: NSViewRepresentable {
+  let disabled: Bool
+  let decide: (String) -> Void
+
+  final class Coordinator: NSObject {
+    var decide: (String) -> Void
+    init(decide: @escaping (String) -> Void) { self.decide = decide }
+    @objc func approve() { decide("approve") }
+    @objc func deny() { decide("deny") }
   }
 
-  func send(message: String, attachments: [DeveloperChatAttachment] = [], modelTarget: String = "windows") async -> Bool {
-    let selected = project
-    guard ["mac", "windows"].contains(modelTarget), !sending, !selected.isEmpty, (!message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty) else { return false }
-    do { try DeveloperChatAttachment.validateSelection(attachments) }
-    catch { self.error = error.localizedDescription; return false }
-    sending = true
-    defer { sending = false }
-    if pending?.project != selected || pending?.message != message || pending?.attachments != attachments || pending?.modelTarget != modelTarget {
-      pending = (selected, message, attachments, modelTarget, UUID().uuidString.lowercased())
-    }
-    guard let pending else { return false }
-    do {
-      let state = try await request(path: "chat", project: selected,
-        body: ["project": selected, "message": message, "id": pending.id,
-          "attachments": attachments.map(\.wireValue), "model_target": pending.modelTarget])
-      if project == selected { snapshot = state; error = nil; actionError = nil }
-      self.pending = nil
-      return true
-    } catch {
-      if project == selected { actionError = error.localizedDescription; self.error = actionError }
-      return false
-    }
+  func makeCoordinator() -> Coordinator { Coordinator(decide: decide) }
+
+  func makeNSView(context: Context) -> NSStackView {
+    let approve = NSButton(title: "Approve once", target: context.coordinator,
+      action: #selector(Coordinator.approve))
+    approve.bezelStyle = .rounded
+    approve.setAccessibilityIdentifier("developer-chat-approve-tool")
+    let deny = NSButton(title: "Deny", target: context.coordinator,
+      action: #selector(Coordinator.deny))
+    deny.bezelStyle = .rounded
+    deny.setAccessibilityIdentifier("developer-chat-deny-tool")
+    let stack = NSStackView(views: [approve, deny])
+    stack.orientation = .horizontal
+    stack.alignment = .centerY
+    stack.spacing = 8
+    return stack
   }
 
-  func cancel() async {
-    guard let id = snapshot?.requestId else { return }
-    let selected = project
-    do {
-      let state = try await request(path: "chat/cancel", project: selected,
-        body: ["id": id])
-      if project == selected { snapshot = state; error = nil; actionError = nil }
-    } catch {
-      if project == selected { actionError = error.localizedDescription; self.error = actionError }
-    }
+  func updateNSView(_ stack: NSStackView, context: Context) {
+    context.coordinator.decide = decide
+    stack.arrangedSubviews.compactMap { $0 as? NSControl }.forEach { $0.isEnabled = !disabled }
   }
 }
 
@@ -174,9 +223,13 @@ struct DeveloperProjectChatView: View {
   @AppStorage("developerChatRepairFeature") private var requestedRepairFeature = ""
   @FocusState private var questionFocused: Bool
   @AppStorage("developerChatModelTarget") private var selectedModelTarget = "windows"
-  @State private var message = ""
-  @State private var attachments: [DeveloperChatAttachment] = []
-  @State private var attachmentError: String?
+  @AppStorage("developerChatSelections") private var savedSelections = "{}"
+  @AppStorage("developerChatHistoryVisible") private var historyVisible = true
+  @State private var collapsedProjects: Set<String> = []
+  @State private var choosingProject = false
+  @State private var renameTitle = ""
+  @State private var renameBinding: DeveloperChatRenameBinding?
+  @State private var attachmentSelection: DeveloperChatSelection?
   @State private var choosingAttachments = false
   @State private var repairDiagnosis: DeveloperChatMessage?
   @State private var repairFeatureId: String?
@@ -192,36 +245,295 @@ struct DeveloperProjectChatView: View {
     self.runner = runner
   }
 
+  private var selections: [String: String] {
+    (try? JSONDecoder().decode([String: String].self, from: Data(savedSelections.utf8))) ?? [:]
+  }
+  private var selection: DeveloperChatSelection {
+    .init(project: selectedProject, chatId: selections[selectedProject] ?? "")
+  }
+  private var projectNames: [String] {
+    Array(Set(projects + model.projects + model.conversations.map(\.project))).sorted()
+  }
+  private var canSend: Bool {
+    guard let state = runner.snapshot else { return false }
+    return state.chatHistory == true && !selection.chatId.isEmpty && model.selection == selection
+      && model.snapshot?.chatId == selection.chatId && model.snapshot?.historySupported == true
+      && !model.sending && model.activeChat == nil && !state.running && !state.planningRunning
+      && state.chatRunning != true && state.escalationRunning != true && !state.emergencyPaused
+      && state.githubSetupBusy != true && state.githubPublicationRunning != true
+      && state.canSelectChatModel(selectedModelTarget)
+  }
+  private var workIsIdle: Bool {
+    guard let state = runner.snapshot else { return false }
+    return state.canChangeChatAccess && model.activeChat == nil
+  }
+
   var body: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      Text("Project chat").font(.title2.bold())
-      Text("Ask about your code, results, or how to run your project.")
-        .foregroundStyle(.secondary)
-      Picker("Project", selection: $selectedProject) {
-        Text("Choose a project").tag("")
-        ForEach(Array(Set(projects + model.projects)).sorted(), id: \.self) { Text($0).tag($0) }
-      }
-      .accessibilityIdentifier("developer-chat-project")
-      .disabled(model.sending || model.snapshot?.running == true)
-      Picker("AI", selection: $selectedModelTarget) {
-        ForEach(runner.snapshot?.availableChatModelTargets ?? []) { target in
-          Text("\(target.name) AI · \(target.model)").tag(target.id)
+    GeometryReader { geometry in
+      let wide = geometry.size.width >= 740
+      VStack(spacing: 0) {
+        historyHeader(wide: wide)
+        if let active = model.activeChat {
+          HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
+              Text("Reply or action in progress").font(.caption.bold())
+              Text("\(active.project) · \(active.title ?? model.conversations.first { $0.id == active.chatId }?.title ?? "Chat")")
+                .font(.caption).lineLimit(2)
+              if active.selection != selection || historyVisible {
+                Button("Return to active chat") { openChat(active.selection, hideHistory: !wide) }
+                  .font(.caption).accessibilityIdentifier("developer-chat-return-active")
+              }
+            }
+            Spacer(minLength: 4)
+            Button("Stop") { Task { await model.cancel(active) } }
+              .accessibilityLabel("Stop active chat reply or action")
+              .accessibilityIdentifier("developer-chat-stop-active")
+          }.padding(12).background(Color.accentColor.opacity(0.08))
+        }
+        if let error = model.historyError {
+          Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading).padding(10)
+        }
+        Divider()
+        if runner.snapshot?.chatHistory != true {
+          VStack(spacing: 12) {
+            Image(systemName: "bubble.left.and.bubble.right").font(.largeTitle).foregroundStyle(.secondary)
+            Text(runner.snapshot == nil ? "Connecting to project chats…" : "Update the Developer build to use chat history.")
+              .multilineTextAlignment(.center)
+          }.frame(maxWidth: .infinity, maxHeight: .infinity).padding(24)
+        } else {
+          HStack(spacing: 0) {
+            if historyVisible {
+              historyBrowser(wide: wide)
+                .frame(width: wide ? 230 : nil)
+              if wide { Divider() }
+            }
+            if !historyVisible || wide {
+              if !selection.chatId.isEmpty {
+                conversationContent.frame(maxWidth: .infinity, maxHeight: .infinity)
+              } else {
+                VStack(spacing: 14) {
+                  Image(systemName: "bubble.left.and.bubble.right").font(.largeTitle).foregroundStyle(.secondary)
+                  Text("Choose a conversation or start a new chat.").multilineTextAlignment(.center)
+                  Button("Browse history") { historyVisible = true }
+                }.frame(maxWidth: .infinity, maxHeight: .infinity).padding(24)
+              }
+            }
+          }
         }
       }
-      .accessibilityIdentifier("developer-chat-model")
-      .disabled(model.sending || model.snapshot?.running == true)
+      .sheet(isPresented: $choosingProject) {
+        VStack(alignment: .leading, spacing: 18) {
+          HStack {
+            Text("New chat · Choose a project").font(.headline)
+            Spacer()
+            Button("Close") { choosingProject = false }.keyboardShortcut(.cancelAction)
+          }
+          if projectNames.isEmpty { Text("Add a project in the build workspace first.").foregroundStyle(.secondary) }
+          ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+              ForEach(projectNames, id: \.self) { name in
+                Button(name) { choosingProject = false; newChat(in: name, hideHistory: !wide) }
+                  .disabled(model.creating)
+              }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+          }
+        }.padding(24).frame(width: 410, height: 320)
+      }
+    }
+    .sheet(item: $renameBinding) { binding in
+      VStack(alignment: .leading, spacing: 16) {
+        Text("Rename chat").font(.headline)
+        TextField("Chat title", text: $renameTitle).textFieldStyle(.roundedBorder)
+          .accessibilityIdentifier("developer-chat-title-input")
+        if let error = model.error { Text(error).font(.caption).foregroundStyle(.red) }
+        HStack {
+          Button("Cancel") { renameBinding = nil }.keyboardShortcut(.cancelAction)
+          Spacer()
+          Button("Save") {
+            Task {
+              if await model.rename(title: renameTitle, renderedSelection: binding.selection,
+                expectedRevision: binding.revision) { renameBinding = nil }
+            }
+          }.keyboardShortcut(.defaultAction)
+            .disabled(model.renaming || renameTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || renameTitle.count > 80)
+        }
+      }.padding(24).frame(width: 380)
+    }
+    .onChange(of: selection, initial: true) { _, new in
+      model.select(project: new.project, chatId: new.chatId)
+    }
+    .onChange(of: requestedRepairFeature) { _, _ in
+      // The queue's Ask AI shortcut creates a distinct topic and never overwrites
+      // an unsent question in the last opened conversation.
+      if let feature = runner.snapshot?.nextFeature, feature.status == "failed" {
+        let question = "Why did this feature fail, and what exact correction preserves its requirements? Check both the implementation and tests: " + feature.instruction
+        let rememberedChat = selections[feature.project] ?? ""
+        Task {
+          if let created = await model.prepareRepairConversation(project: feature.project,
+            currentChatId: rememberedChat, question: question) {
+            openChat(created, hideHistory: true)
+            questionFocused = true
+          }
+        }
+      }
+    }
+    .task { await model.observeProjects() }
+    .task(id: runner.snapshot?.chatHistory) {
+      if runner.snapshot?.chatHistory == true { await model.observeHistory() }
+    }
+    .task(id: selection) {
+      if !selection.chatId.isEmpty { await model.observe(project: selection.project, chatId: selection.chatId) }
+    }
+  }
+
+  private func historyHeader(wide: Bool) -> some View {
+    HStack(spacing: 10) {
+      Button { historyVisible.toggle() } label: { Image(systemName: "sidebar.left") }
+        .help("Show or hide chat history").accessibilityLabel("Chat history")
+        .accessibilityIdentifier("developer-chat-history-toggle")
+      VStack(alignment: .leading, spacing: 3) {
+        Text(selectedProject.isEmpty ? "Project chat" : selectedProject)
+          .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        Text(model.snapshot?.title ?? model.conversations.first { $0.selection == selection }?.title ?? "Conversations")
+          .font(.headline).lineLimit(1)
+      }
+      Spacer(minLength: 2)
+      if let revision = model.snapshot?.revision, model.snapshot?.chatId == selection.chatId {
+        Button {
+          renameTitle = model.snapshot?.title ?? ""
+          renameBinding = .init(selection: selection, revision: revision)
+        } label: { Image(systemName: "pencil") }
+          .help("Rename chat").accessibilityLabel("Rename chat")
+          .accessibilityIdentifier("developer-chat-rename")
+      }
+      Button {
+        if selectedProject.isEmpty { choosingProject = true }
+        else { newChat(in: selectedProject, hideHistory: !wide) }
+      } label: { Label("New Chat", systemImage: "plus") }
+        .disabled(model.creating || runner.snapshot?.chatHistory != true)
+        .accessibilityIdentifier("developer-chat-new")
+    }.padding(14)
+  }
+
+  private func historyBrowser(wide: Bool) -> some View {
+    ScrollView {
+      LazyVStack(alignment: .leading, spacing: 18) {
+        if !model.historyLoaded && model.historyError == nil { ProgressView("Loading chats…") }
+        if model.historyLoaded && projectNames.isEmpty {
+          Text("Your project conversations will appear here.").foregroundStyle(.secondary)
+        }
+        ForEach(projectNames, id: \.self) { project in
+          VStack(alignment: .leading, spacing: 5) {
+            HStack {
+              Button {
+                if collapsedProjects.contains(project) { collapsedProjects.remove(project) }
+                else { collapsedProjects.insert(project) }
+              } label: {
+                Label(project, systemImage: collapsedProjects.contains(project) ? "chevron.right" : "chevron.down")
+                  .font(.subheadline.bold()).lineLimit(2)
+              }.buttonStyle(.plain).accessibilityLabel("\(project) chats")
+              Spacer(minLength: 4)
+              Button { newChat(in: project, hideHistory: !wide) } label: { Image(systemName: "plus") }
+                .buttonStyle(.plain).disabled(model.creating)
+                .accessibilityLabel("New chat in \(project)")
+            }.padding(.horizontal, 7).padding(.bottom, 5)
+            if !collapsedProjects.contains(project) {
+              let chats = model.conversations.filter { $0.project == project }
+              if chats.isEmpty { Text("No chats loaded").font(.caption).foregroundStyle(.secondary).padding(7) }
+              ForEach(chats) { conversation in
+                Button { openChat(conversation.selection, hideHistory: !wide) } label: {
+                  VStack(alignment: .leading, spacing: 5) {
+                    Text(conversation.title).font(.callout).lineLimit(2)
+                    Text(conversation.updatedDate, style: .relative).font(.caption2).foregroundStyle(.secondary)
+                  }.frame(maxWidth: .infinity, alignment: .leading).padding(9)
+                    .background(conversation.selection == selection ? Color.accentColor.opacity(0.13) : Color.clear,
+                      in: RoundedRectangle(cornerRadius: 7))
+                    .contentShape(Rectangle())
+                }.buttonStyle(.plain)
+                  .accessibilityIdentifier("developer-chat-conversation-\(conversation.id)")
+                  .accessibilityAddTraits(conversation.selection == selection ? [.isSelected] : [])
+              }
+            }
+          }
+        }
+        if model.hasMoreConversations {
+          Button("Load more chats") { Task { await model.loadMoreConversations() } }
+            .disabled(model.loadingHistory).accessibilityIdentifier("developer-chat-more-conversations")
+        }
+      }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
+    }.background(Color(nsColor: .controlBackgroundColor))
+      .accessibilityIdentifier("developer-chat-history")
+  }
+
+  private func openChat(_ selected: DeveloperChatSelection, hideHistory: Bool) {
+    var saved = selections
+    saved[selected.project] = selected.chatId
+    if let data = try? JSONEncoder().encode(saved), let value = String(data: data, encoding: .utf8) {
+      savedSelections = value
+    }
+    selectedProject = selected.project
+    model.select(project: selected.project, chatId: selected.chatId)
+    if hideHistory { historyVisible = false }
+  }
+
+  private func newChat(in project: String, hideHistory: Bool, initialMessage: String? = nil) {
+    let starting = model.selection
+    let token = model.navigationToken
+    Task {
+      if let created = await model.createConversation(project: project), model.selection == starting,
+        model.navigationToken == token {
+        openChat(created, hideHistory: hideHistory)
+        if let initialMessage, model.draft.isEmpty { model.draft.message = initialMessage }
+        questionFocused = true
+      }
+    }
+  }
+
+  @ViewBuilder private var conversationContent: some View {
+    let renderedAccess = model.snapshot?.toolAccess
+    VStack(alignment: .leading, spacing: 12) {
+      HStack(alignment: .top, spacing: 12) {
+        Picker("AI", selection: $selectedModelTarget) {
+          ForEach(runner.snapshot?.availableChatModelTargets ?? []) { target in
+            Text("\(target.name) AI · \(target.model)").tag(target.id)
+          }
+        }
+        .accessibilityIdentifier("developer-chat-model")
+        .disabled(model.sending || model.snapshot?.running == true)
+        Picker("Access", selection: toolAccessSelection(renderedAccess,
+          renderedProject: selectedProject, renderedChatId: selection.chatId)) {
+          ForEach(DeveloperToolAccessMode.allCases) { mode in Text(mode.label).tag(mode) }
+        }
+        .accessibilityIdentifier("developer-chat-tool-access")
+        .disabled(!workIsIdle || model.snapshot?.project != selectedProject
+          || model.snapshot?.toolAccess?.available != true || model.sending
+          || model.changingAccess || model.snapshot?.running == true)
+      }
       if runner.snapshot?.canSelectChatModel(selectedModelTarget) != true {
         Text(runner.snapshot?.chatModelSelection == true
           ? "The selected AI is unavailable. Choose a configured AI."
           : "Update the developer build to enable AI selection in project chat.")
           .font(.caption).foregroundStyle(.secondary)
       }
+      if let access = model.snapshot?.toolAccess {
+        Text("Execution computer: \(access.executionHost == "windows" ? "Windows" : access.executionHost.capitalized) · \(access.mode.help)")
+          .font(.caption).foregroundStyle(.secondary)
+        if !access.available {
+          Text(access.unavailableReason ?? "Tool access is unavailable in this developer build.")
+            .font(.caption).foregroundStyle(.secondary)
+        }
+      }
       Divider()
       ScrollViewReader { proxy in
         ScrollView {
           LazyVStack(alignment: .leading, spacing: 16) {
+            if model.hasEarlierMessages {
+              Button("Load earlier messages") { Task { await model.loadEarlier() } }
+                .disabled(model.loadingEarlier).accessibilityIdentifier("developer-chat-earlier")
+            }
             if model.snapshot?.messages.isEmpty != false {
-              Text("Try “How do I open the GUI?” or “Why did this test fail?”")
+              Text("Start a new topic about this project. Your earlier conversations are in History.")
                 .foregroundStyle(.secondary)
             }
             ForEach(Array((model.snapshot?.messages ?? []).enumerated()), id: \.offset) { index, item in
@@ -231,7 +543,9 @@ struct DeveloperProjectChatView: View {
                 if item.role == "assistant", item.requestId != nil, item.contentSha256 != nil,
                   let feature = runner.snapshot?.nextFeature, feature.project == selectedProject, feature.status == "failed" {
                   Button("Repair this feature…") {
-                    repairDiagnosis = item
+                    var diagnosis = item
+                    diagnosis.chatId = model.snapshot?.chatId
+                    repairDiagnosis = diagnosis
                     repairFeatureId = feature.id
                     showingRepair = true
                   }.disabled(model.sending || runner.snapshot?.canEscalate(feature) != true || model.snapshot?.running == true)
@@ -242,11 +556,47 @@ struct DeveloperProjectChatView: View {
                 }
               }.frame(maxWidth: .infinity, alignment: .leading).id(index)
             }
+            if let approval = model.snapshot?.pendingApproval {
+              DeveloperToolApprovalView(approval: approval, project: selectedProject,
+                disabled: model.resolvingApproval || model.snapshot?.project != selectedProject) {
+                  [renderedProject = selectedProject, renderedChatId = selection.chatId, approvalId = approval.id,
+                    requestId = approval.requestId, accessRevision = approval.accessRevision] decision in
+                  Task { await model.decideApproval(decision, renderedProject: renderedProject, renderedChatId: renderedChatId,
+                    approvalId: approvalId, requestId: requestId, accessRevision: accessRevision) }
+                }
+            }
+            if let actions = model.snapshot?.toolActions, !actions.isEmpty {
+              VStack(alignment: .leading, spacing: 9) {
+                Text("Tool actions").font(.headline)
+                ForEach(actions) { action in
+                  VStack(alignment: .leading, spacing: 3) {
+                    HStack {
+                      Text(action.tool).font(.caption.bold())
+                      Spacer()
+                      Text(action.status.replacingOccurrences(of: "_", with: " ").capitalized)
+                        .font(.caption).foregroundStyle(toolStatusColor(action.status))
+                    }
+                    Text(action.summary).font(.callout)
+                    if let output = action.output, !output.isEmpty {
+                      Text(output)
+                        .font(.system(.caption, design: .monospaced))
+                        .lineLimit(8)
+                        .textSelection(.enabled)
+                    }
+                  }
+                  .padding(8)
+                  .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 5))
+                  .accessibilityIdentifier("developer-chat-tool-action-\(action.id)")
+                }
+              }
+            }
             if model.snapshot?.running == true { ProgressView("\(model.snapshot?.modelTarget == "mac" ? "Mac AI" : "Windows AI") is answering…") }
           }.padding(.vertical, 8)
         }
-        .onChange(of: model.snapshot?.messages.count) { _, count in
-          if let count, count > 0 { proxy.scrollTo(count - 1, anchor: .bottom) }
+        .onChange(of: model.snapshot?.messages.last?.sequence) { _, _ in
+          if let count = model.snapshot?.messages.count, count > 0, !model.loadingEarlier {
+            proxy.scrollTo(count - 1, anchor: .bottom)
+          }
         }
       }
       if let error = model.error ?? model.snapshot?.error {
@@ -270,16 +620,16 @@ struct DeveloperProjectChatView: View {
             .frame(maxHeight: 100)
         }.font(.caption)
       }
-      if let attachmentError {
+      if let attachmentError = model.draft.error {
         Text(attachmentError).font(.callout).foregroundStyle(.red)
       }
-      if !attachments.isEmpty {
+      if !model.draft.attachments.isEmpty {
         ScrollView(.horizontal) {
           HStack(alignment: .top, spacing: 8) {
-            ForEach(Array(attachments.enumerated()), id: \.offset) { index, attachment in
+            ForEach(Array(model.draft.attachments.enumerated()), id: \.offset) { index, attachment in
               VStack(alignment: .leading, spacing: 4) {
                 attachmentPreview(attachment)
-                Button("Remove") { attachments.remove(at: index); attachmentError = nil }
+                Button("Remove") { model.draft.attachments.remove(at: index); model.draft.error = nil }
                   .accessibilityLabel("Remove \(attachment.name)")
                   .disabled(model.sending)
               }.frame(maxWidth: 150)
@@ -288,45 +638,35 @@ struct DeveloperProjectChatView: View {
         }.frame(maxHeight: 125)
       }
       HStack {
-        Button { choosingAttachments = true } label: { Label("Attach…", systemImage: "paperclip") }
+        Button { attachmentSelection = selection; choosingAttachments = true } label: { Label("Attach…", systemImage: "paperclip") }
           .accessibilityIdentifier("developer-chat-attach")
         Button("Paste image") { pasteImage() }
           .accessibilityIdentifier("developer-chat-paste-image")
         Text("Images or text files · up to 4").font(.caption).foregroundStyle(.secondary)
       }.disabled(selectedProject.isEmpty || model.sending || model.snapshot?.running == true)
-      TextField("Ask a question about this project", text: $message, axis: .vertical)
-        .lineLimit(3...7).textFieldStyle(.roundedBorder)
+      DeveloperChatComposer(text: $model.draft.message)
         .accessibilityIdentifier("developer-chat-message")
         .focused($questionFocused)
       HStack {
         Button("Send question") {
-          let submitted = message
-          let submittedAttachments = attachments
-          let submittedProject = selectedProject
+          let submitted = model.draft.message
+          let submittedAttachments = model.draft.attachments
+          let submittedSelection = selection
           let submittedTarget = selectedModelTarget
           Task {
-            if await model.send(message: submitted, attachments: submittedAttachments, modelTarget: submittedTarget),
-              selectedProject == submittedProject, message == submitted, attachments == submittedAttachments {
-              message = ""; attachments = []; attachmentError = nil
+            if await model.send(message: submitted, attachments: submittedAttachments, modelTarget: submittedTarget,
+              renderedSelection: submittedSelection),
+              selection == submittedSelection, model.draft.message == submitted, model.draft.attachments == submittedAttachments {
+              model.draft.message = ""; model.draft.attachments = []; model.draft.error = nil
             }
           }
         }.buttonStyle(.borderedProminent)
-          .disabled(selectedProject.isEmpty || model.snapshot?.project != selectedProject || runner.snapshot?.canSelectChatModel(selectedModelTarget) != true || model.sending
-            || model.snapshot?.running == true || (message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.isEmpty))
+          .disabled(!canSend || (model.draft.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && model.draft.attachments.isEmpty))
           .accessibilityIdentifier("developer-chat-send")
-        if model.snapshot?.running == true {
-          Button("Stop reply") { Task { await model.cancel() } }
-        }
       }
-      Text("Answers stay in chat. Use Repair this feature to review a fix, or Add a feature for new work.")
+      Text("Answers and tool actions stay in chat. Tools run on Windows under the selected access mode. Use Repair this feature to review a failed feature fix, or Add a feature for new work.")
         .font(.caption).foregroundStyle(.secondary)
-    }.padding(20)
-      .onChange(of: requestedRepairFeature) { _, _ in
-        if let feature = runner.snapshot?.nextFeature, feature.project == selectedProject, feature.status == "failed" {
-          message = "Why did this feature fail, and what exact correction preserves its requirements? Check both the implementation and tests: " + feature.instruction
-          questionFocused = true
-        }
-      }
+    }.padding(16)
       .sheet(isPresented: $showingRepair) {
         if let repairFeatureId {
           DeveloperRepairEscalationView(configurationPath: configurationPath, runner: runner,
@@ -335,20 +675,17 @@ struct DeveloperProjectChatView: View {
       }
       .fileImporter(isPresented: $choosingAttachments, allowedContentTypes: [.image, .text, .json, .sourceCode],
         allowsMultipleSelection: true) { result in
+          guard attachmentSelection == selection else { return }
           do {
             let urls = try result.get()
-            guard urls.count + attachments.count <= DeveloperChatAttachment.maximumCount else {
+            guard urls.count + model.draft.attachments.count <= DeveloperChatAttachment.maximumCount else {
               throw AttachmentError("Attach up to four files per message.")
             }
             let prepared = try urls.map { try DeveloperChatAttachment.read($0) }
             try addAttachments(prepared)
-          } catch { attachmentError = error.localizedDescription }
+          } catch { model.draft.error = error.localizedDescription }
         }
-      .onChange(of: selectedProject) { _, _ in
-        message = ""; attachments = []; attachmentError = nil
-      }
-      .task { await model.observeProjects() }
-      .task(id: selectedProject) { await model.observe(project: selectedProject) }
+
   }
 
   @ViewBuilder
@@ -364,10 +701,20 @@ struct DeveloperProjectChatView: View {
   }
 
   private func addAttachments(_ prepared: [DeveloperChatAttachment]) throws {
-    let combined = attachments + prepared
+    let combined = model.draft.attachments + prepared
     try DeveloperChatAttachment.validateSelection(combined)
-    attachments = combined
-    attachmentError = nil
+    model.draft.attachments = combined
+    model.draft.error = nil
+  }
+
+  private func toolAccessSelection(_ access: DeveloperToolAccess?, renderedProject: String, renderedChatId: String)
+    -> Binding<DeveloperToolAccessMode>
+  {
+    Binding(get: { access?.mode ?? .ask }, set: { mode in
+      guard let access else { return }
+      Task { await model.setAccessMode(mode, renderedProject: renderedProject, renderedChatId: renderedChatId,
+        expectedRevision: access.revision) }
+    })
   }
 
   private func pasteImage() {
@@ -380,7 +727,21 @@ struct DeveloperProjectChatView: View {
       } else {
         throw AttachmentError("Copy an image first, then choose Paste image.")
       }
-    } catch { attachmentError = error.localizedDescription }
+    } catch { model.draft.error = error.localizedDescription }
   }
 
+  private func toolStatusColor(_ status: String) -> Color {
+    switch status {
+    case "failed", "denied", "cancelled": return .red
+    case "completed", "succeeded": return .green
+    default: return .secondary
+    }
+  }
+
+}
+
+private struct DeveloperChatRenameBinding: Identifiable {
+  let selection: DeveloperChatSelection
+  let revision: UInt64
+  var id: DeveloperChatSelection { selection }
 }
