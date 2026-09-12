@@ -8,7 +8,8 @@ import uuid
 
 def planning_output(packet, digest):
     result = dict(schema_version=1, planning_packet_sha256=digest,
-                  provider_id='openai.codex', model_id='gpt-5.6-sol', response_kind='question',
+                  provider_id='openai.codex', model_id=packet['model_id'],
+                  reasoning_effort=packet['reasoning_effort'], response_kind='question',
                   question=None, understanding_summary=[], assumptions=None, open_questions=[],
                   approaches=[], design_section=None, design_complete=False,
                   decision_log=[], implementation_plan=None)

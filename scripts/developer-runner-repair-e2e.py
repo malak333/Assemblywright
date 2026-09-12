@@ -289,7 +289,7 @@ def main():
                 backup_v2 = database.execute('SELECT state FROM developer_state_v2_backup WHERE id=1').fetchone()[0]
             assert backup_v2 == legacy_v2
             assert 'queue_v3' not in durable and 'queue_v2' not in durable and 'queue' not in durable
-            loop_feature = next(feature for feature in durable['queue_v8'] if feature['id'] == loop_id)
+            loop_feature = next(feature for feature in durable['queue_v10'] if feature['id'] == loop_id)
             assert loop_feature['model_target'] == 'mac'
             assert loop_feature['validation'] == loop_validation
             assert len(loop_feature['repair_history']) == 2
@@ -298,7 +298,7 @@ def main():
                 assert 'Validation failed' in evidence['prior_message']
                 assert evidence['prior_edits'][0]['path'] == 'app.py'
                 assert len(evidence['prior_edits'][0]['content_hash']) == 64
-            exhausted_feature = next(feature for feature in durable['queue_v8'] if feature['id'] == exhausted_id)
+            exhausted_feature = next(feature for feature in durable['queue_v10'] if feature['id'] == exhausted_id)
             assert exhausted_feature['status'] == 'removed'
             assert exhausted_feature['repair_attempts'] == 3
             assert len(exhausted_feature['repair_history']) == 3

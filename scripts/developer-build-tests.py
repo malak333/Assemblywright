@@ -11,6 +11,7 @@ import json
 from io import BytesIO
 import os
 import socket
+from contextlib import ExitStack
 
 sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location('developer_build', Path(__file__).with_name('developer-build.py'))
@@ -108,6 +109,62 @@ class RunnerMaintenanceAdmissionTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, 'No process was stopped'):
                 launcher.request_shutdown(connection, self.runtime, self.config)
             request.assert_not_called()
+
+    def test_active_github_work_cannot_be_interrupted(self):
+        for key in ('github_publication_running', 'github_setup_busy'):
+            with self.subTest(key=key):
+                connection = SimpleNamespace(authenticated_status=lambda runtime, config: {key: True})
+                with patch.object(launcher.urllib.request, 'urlopen') as request:
+                    with self.assertRaisesRegex(SystemExit, 'GitHub sign-in'):
+                        launcher.request_shutdown(connection, self.runtime, self.config)
+                    request.assert_not_called()
+
+    def test_changed_destination_stops_existing_runner_before_configuration_write(self):
+        for refusal in (None, 'shutdown', 'github_publication_unresolved', 'github_setup_unresolved'):
+            refuse_shutdown = refusal == 'shutdown'
+            unresolved = refusal is not None and refusal.startswith('github_')
+            with self.subTest(refusal=refusal), tempfile.TemporaryDirectory() as temp, ExitStack() as stack:
+                state = Path(temp)
+                (state / 'connection.json').write_text('{}')
+                old_config = {'host': 'mike@old.test'}
+                desired = {'host': 'mike@new.test'}
+                connection = SimpleNamespace(
+                    direct_private_directory=lambda *args, **kwargs: None,
+                    validate_config=lambda state: old_config,
+                    validate_config_payload=lambda *args: desired,
+                    service_is_loaded=lambda: True)
+                stack.enter_context(patch.object(launcher, 'STATE', state))
+                stack.enter_context(patch.object(launcher.sys, 'argv', ['developer-build.py', '--stop', '--host', 'mike@new.test']))
+                for name, value in [('_connection_module', connection), ('load_saved_runtime', {}),
+                    ('authenticated_status', {'revision': 1, **({refusal: True} if unresolved else {})}), ('load_migration', None),
+                    ('legacy_migration_candidate', False), ('preflight_connection', None)]:
+                    stack.enter_context(patch.object(launcher, name, return_value=value))
+                shutdown = stack.enter_context(patch.object(launcher, 'request_shutdown',
+                    side_effect=SystemExit('active work') if refuse_shutdown else None))
+                stop = stack.enter_context(patch.object(launcher, 'stop_supervisor'))
+                write = stack.enter_context(patch.object(launcher, 'write_connection_config'))
+                if unresolved:
+                    with self.assertRaisesRegex(SystemExit, 'Resolve pending GitHub work'):
+                        launcher.main()
+                    shutdown.assert_not_called()
+                    stop.assert_not_called()
+                elif refuse_shutdown:
+                    with self.assertRaisesRegex(SystemExit, 'active work'):
+                        launcher.main()
+                    stop.assert_not_called()
+                else:
+                    launcher.main()
+                    stop.assert_called_once_with(connection)
+                if not unresolved:
+                    shutdown.assert_called_once_with(connection, {}, old_config)
+                write.assert_not_called()
+
+    def test_tool_pin_survives_rebuild_and_rejects_unsafe_paths(self):
+        saved = {'opencode_executable': 'C:/tools/opencode.exe'}
+        self.assertEqual(launcher.tool_settings(SimpleNamespace(), saved), saved)
+        for path in ('opencode.exe', 'C:/tools/../opencode.exe', 'C:/tools/wrong.exe', 'C:/tools/opencode.exe&whoami'):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                launcher.tool_settings(SimpleNamespace(opencode_executable=path), {})
 
     def test_idle_shutdown_is_the_only_control_action(self):
         status = {'running': False, 'chat_running': False, 'planning_running': False}

@@ -1,7 +1,10 @@
 //! Owner-selected supervised developer runner. This is not production execution evidence.
 mod developer_chat;
+mod developer_github_setup;
 mod developer_planning;
+mod developer_publication;
 mod developer_review;
+mod developer_settings;
 mod developer_tools;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -34,23 +37,38 @@ use developer_chat::{
     ChatAttachment, ChatModelConfig, ChatRepairHandoff, DeveloperChat, InferenceGate,
     InferenceLease,
 };
+use developer_github_setup::{
+    AccountRecord, CreationRecord, CreationStart, GithubSetupState, RepositoryRecord,
+};
 use developer_planning::{
     approved_metadata, begin_provider, bind_pending_packet, combined_plan, expected_response,
-    finish_unavailable, invalidate_pending, new_session, provider_prompt, record_request,
-    request_digest, ApprovedPlanMetadata, PlanningContextFile, PlanningPacket,
-    PlanningProviderOutput, PlanningSession, MAX_PLANNING_SESSIONS, PLANNING_OUTPUT_SCHEMA,
-    PLANNING_SCHEMA_FILENAME,
+    finish_unavailable, invalidate_pending, new_session, planning_output_schema, provider_prompt,
+    record_request, request_digest, ApprovedPlanMetadata, PlanningContextFile, PlanningPacket,
+    PlanningProviderOutput, PlanningSession, MAX_PLANNING_SESSIONS,
+};
+use developer_publication::{
+    validate_binding as validate_publication_binding, CandidateFile, GithubAccountObservation,
+    GithubRepositoryLookup, GithubRepositoryObservation, GithubRepositoryPage, GithubSignInOutcome,
+    ProjectBinding, PublicationInput, PublicationRecord, Runtime as PublicationRuntime,
 };
 use developer_review::{
     hex_digest, DeveloperReviewCallError, DeveloperReviewDecisionKind, DeveloperReviewFile,
     DeveloperReviewFinding, DeveloperReviewOutput, DeveloperReviewPacket, DeveloperReviewer,
-    MODEL_ID as REVIEW_MODEL_ID, PROVIDER_ID as REVIEW_PROVIDER_ID,
+    PROVIDER_ID as REVIEW_PROVIDER_ID,
 };
-use developer_tools::{DeveloperTools, OpenCodeRuntimeConfig, ToolProjectMutation};
+use developer_settings::{
+    load_catalog, validate_model_id as validate_ai_model_id, validate_reasoning_effort,
+    validate_selection, AiModelCatalog, AiSelection, DeveloperAiSettings,
+    DEFAULT_MODEL as REVIEW_MODEL_ID, DEFAULT_REASONING_EFFORT,
+};
+use developer_tools::{
+    DeveloperTools, OpenCodeRuntimeConfig, ToolChatRequest, ToolModelConfig, ToolProjectMutation,
+};
 
 const REPAIR_LIMIT: u32 = 3;
 const ESCALATION_LIMIT: u32 = 20;
 const ESCALATION_HISTORY_LIMIT: usize = 80;
+const REVIEWER_SELECTION_HISTORY_LIMIT: usize = 80;
 
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
@@ -59,6 +77,14 @@ struct RepairableValidationFailure(String);
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 struct RepairableReviewRejection(String);
+
+struct ToolFeatureOutcome {
+    edits: Vec<Edit>,
+    application_edits: Vec<Edit>,
+    workspace_revision: u64,
+    applied_to_live_project: bool,
+    model: String,
+}
 
 #[derive(Parser)]
 struct Args {
@@ -80,9 +106,15 @@ struct Args {
     review_codex_executable: PathBuf,
     #[arg(long)]
     review_codex_home: PathBuf,
-    /// Optional OpenCode executable for developer-only project-chat tools.
+    /// Optional OpenCode executable for developer-only project tools.
     #[arg(long)]
     opencode_executable: Option<PathBuf>,
+    /// Optional trusted Git executable for Developer GitHub publication.
+    #[arg(long)]
+    git_executable: Option<PathBuf>,
+    /// Optional trusted GitHub CLI executable for Developer GitHub publication.
+    #[arg(long)]
+    gh_executable: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -190,6 +222,21 @@ struct ReviewAttemptEvidence {
     summary: String,
 }
 #[derive(Clone, Serialize, Deserialize)]
+struct ReviewerSelectionEvidence {
+    revision: u64,
+    prior_model: String,
+    prior_reasoning_effort: String,
+    selected_model: String,
+    selected_reasoning_effort: String,
+}
+#[derive(Clone, Serialize, Deserialize)]
+struct FrozenPublicationFile {
+    path: String,
+    before_sha256: Option<String>,
+    content_sha256: String,
+    content: String,
+}
+#[derive(Clone, Serialize, Deserialize)]
 struct Feature {
     id: String,
     project: String,
@@ -217,6 +264,12 @@ struct Feature {
     model_target: String,
     #[serde(default = "legacy_review_status")]
     review_status: String,
+    #[serde(default = "default_review_model")]
+    review_model: String,
+    #[serde(default = "default_review_reasoning_effort")]
+    review_reasoning_effort: String,
+    #[serde(default)]
+    review_binding_version: u8,
     #[serde(default)]
     review_attempts: u32,
     #[serde(default)]
@@ -226,11 +279,21 @@ struct Feature {
     #[serde(default)]
     review_history: Vec<ReviewAttemptEvidence>,
     #[serde(default)]
+    reviewer_selection_history: Vec<ReviewerSelectionEvidence>,
+    #[serde(default)]
     planning: Option<ApprovedPlanMetadata>,
     #[serde(default)]
     cumulative_evidence_version: u8,
     #[serde(default)]
     tool_workspace_revision: u64,
+    #[serde(default)]
+    publication_selection_frozen: bool,
+    #[serde(default)]
+    publication_binding: Option<ProjectBinding>,
+    #[serde(default)]
+    publication_candidate: Vec<FrozenPublicationFile>,
+    #[serde(default)]
+    publication: Option<PublicationRecord>,
 }
 #[derive(Clone, Default, Serialize, Deserialize)]
 struct Snapshot {
@@ -238,7 +301,9 @@ struct Snapshot {
     auto_run: bool,
     emergency_paused: bool,
     #[serde(
-        rename = "queue_v8",
+        rename = "queue_v10",
+        alias = "queue_v9",
+        alias = "queue_v8",
         alias = "queue_v7",
         alias = "queue_v6",
         alias = "queue_v5",
@@ -249,12 +314,18 @@ struct Snapshot {
     )]
     queue: Vec<Feature>,
     #[serde(default)]
+    github_connections: Vec<ProjectBinding>,
+    #[serde(default)]
     planning_sessions: Vec<PlanningSession>,
+    #[serde(default)]
+    ai_settings: DeveloperAiSettings,
 }
 struct Database {
     connection: Connection,
     state: Snapshot,
+    github_setup: GithubSetupState,
 }
+
 #[derive(Clone)]
 enum PlanningCompletion {
     Output(Box<PlanningProviderOutput>),
@@ -267,16 +338,51 @@ struct PlanningCompletionRecovery {
     completion: PlanningCompletion,
 }
 
+struct PublicationRunningGuard<'a>(&'a AtomicBool);
+
+impl Drop for PublicationRunningGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+fn mutate_database<T>(
+    db: &mut Database,
+    f: impl FnOnce(&mut Snapshot, &mut GithubSetupState) -> Result<T>,
+) -> Result<T> {
+    let mut next_state = db.state.clone();
+    let mut next_setup = db.github_setup.clone();
+    let result = f(&mut next_state, &mut next_setup)?;
+    next_state.revision = next_state
+        .revision
+        .checked_add(1)
+        .context("Revision overflow")?;
+    let data = serde_json::to_string(&next_state)?;
+    {
+        let transaction = db.connection.transaction()?;
+        transaction.execute("INSERT INTO developer_state(id,state) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET state=excluded.state", [data])?;
+        GithubSetupState::persist_in(&transaction, &next_setup)?;
+        transaction.commit()?;
+    }
+    db.state = next_state;
+    db.github_setup = next_setup;
+    Ok(result)
+}
+
 struct Engine {
     database: Mutex<Database>,
     running: AtomicBool,
     cancellation: AtomicU8,
+    tool_cancellation: Arc<AtomicBool>,
     planning_cancellation: Mutex<Option<Arc<AtomicU8>>>,
     planning_running: AtomicBool,
     planning_completion_recovery: Mutex<Option<PlanningCompletionRecovery>>,
     escalation_cancellation: Mutex<Option<Arc<AtomicU8>>>,
     escalation_running: AtomicBool,
     repair_loop_authorized: AtomicBool,
+    publication_running: AtomicBool,
+    publication_connection_running: AtomicBool,
+    publication_cancellation: AtomicU8,
     shutdown: AtomicBool,
     root: PathBuf,
     data: PathBuf,
@@ -286,7 +392,122 @@ struct Engine {
     chat: Arc<DeveloperChat>,
     tools: Arc<DeveloperTools>,
     reviewer: DeveloperReviewer,
+    ai_catalog: AiModelCatalog,
+    publication_runtime: Option<Arc<PublicationRuntime>>,
+    publication_unavailable_reason: Option<String>,
 }
+
+fn default_review_model() -> String {
+    REVIEW_MODEL_ID.into()
+}
+
+fn default_review_reasoning_effort() -> String {
+    DEFAULT_REASONING_EFFORT.into()
+}
+
+fn github_account_record(observation: &GithubAccountObservation) -> AccountRecord {
+    match observation {
+        GithubAccountObservation::SignedIn { login } => AccountRecord {
+            state: "signed_in".into(),
+            login: Some(login.clone()),
+            message: format!("Signed in to GitHub as {login}"),
+        },
+        GithubAccountObservation::SignedOut { message } => AccountRecord {
+            state: "signed_out".into(),
+            login: None,
+            message: (*message).into(),
+        },
+        GithubAccountObservation::Unavailable { message } => AccountRecord {
+            state: "unavailable".into(),
+            login: None,
+            message: (*message).into(),
+        },
+    }
+}
+
+fn github_repository_record(observation: GithubRepositoryObservation) -> RepositoryRecord {
+    RepositoryRecord {
+        name_with_owner: observation.name_with_owner,
+        url: observation.url,
+        visibility: observation.visibility,
+        default_branch: observation.default_branch,
+        can_push: observation.can_push,
+    }
+}
+
+fn record_observed_repository(
+    creation: &mut CreationRecord,
+    observation: &GithubRepositoryObservation,
+) {
+    creation.repository_url = Some(observation.url.clone());
+    creation.repository_id = Some(observation.repository_id);
+    creation.default_branch = Some(observation.default_branch.clone());
+}
+
+fn github_sign_in_completion(outcome: &GithubSignInOutcome) -> (&'static str, &'static str) {
+    if !outcome.credentials_consistent {
+        return (
+            "attention",
+            "Environment credentials mask or obscure the saved GitHub login; reconcile the retained operation after removing the conflict",
+        );
+    }
+    match &outcome.account {
+        GithubAccountObservation::SignedIn { .. } => (
+            "succeeded",
+            "GitHub sign-in completed and the live account was verified",
+        ),
+        GithubAccountObservation::SignedOut { .. } if outcome.cancelled => (
+            "cancelled",
+            "GitHub sign-in was cancelled and no signed-in account was observed",
+        ),
+        GithubAccountObservation::SignedOut { .. } => (
+            "failed",
+            "GitHub sign-in did not produce a verified signed-in account",
+        ),
+        GithubAccountObservation::Unavailable { .. } => (
+            "attention",
+            "GitHub sign-in ended but the live account could not be verified; reconcile the retained operation",
+        ),
+    }
+}
+
+fn apply_github_creation_observation(
+    creation: &mut CreationRecord,
+    observation: Result<GithubRepositoryLookup>,
+) {
+    match observation {
+        Ok(GithubRepositoryLookup::Absent) => {
+            creation.repository_url = None;
+            creation.repository_id = None;
+            creation.default_branch = None;
+            creation.state = "absent".into();
+            creation.message =
+                "The exact GitHub repository target was observed absent; a new operation ID may be used"
+                    .into();
+        }
+        Ok(GithubRepositoryLookup::Present(repository)) => {
+            let exact_identity = repository
+                .name_with_owner
+                .eq_ignore_ascii_case(&creation.name_with_owner)
+                && repository.visibility == creation.visibility;
+            record_observed_repository(creation, &repository);
+            if creation.preflight_absent && creation.command_succeeded && exact_identity {
+                creation.state = "succeeded".into();
+                creation.message =
+                    "Repository creation was verified by immutable GitHub repository identity"
+                        .into();
+            } else {
+                creation.state = "attention".into();
+                creation.message = "The repository exists, but the exact creation effect could not be proved; reconcile without replaying creation".into();
+            }
+        }
+        Err(_) => {
+            creation.state = "attention".into();
+            creation.message = "Repository creation may have changed GitHub, but the exact target could not be observed; reconcile without replaying creation".into();
+        }
+    }
+}
+
 impl Engine {
     fn reserve_escalation_call(&self) -> Result<Arc<AtomicU8>> {
         let mut active = self
@@ -369,9 +590,6 @@ impl Engine {
         packet: &PlanningPacket,
         completion: PlanningCompletion,
     ) -> Result<()> {
-        // An emergency cancellation invalidates a provider reply even when the
-        // emergency state write itself fails. Recovery may only publish an explicit
-        // interrupted result after the owner durably clears the volatile latch.
         let completion = if self.cancellation.load(Ordering::SeqCst) == 2 {
             PlanningCompletion::Unavailable(
                 "Emergency Pause interrupted the planning request; retry after clearing the pause."
@@ -413,13 +631,8 @@ impl Engine {
                 }
             }
         });
-        // Inspect the durable binding before taking the recovery lock. Status snapshots
-        // hold the database lock while reading recovery state, so nesting these locks in
-        // the opposite order would permit a completion/status deadlock.
         let retryable =
             persisted.is_err() && self.planning_packet_is_pending(packet).unwrap_or(true);
-        // Re-sample after the failed transition. Emergency may race the first sample
-        // above; a reply rejected by the live latch must never remain cached as Output.
         let recovery_completion =
             if persisted.is_err() && self.cancellation.load(Ordering::SeqCst) == 2 {
                 PlanningCompletion::Unavailable(
@@ -515,8 +728,36 @@ impl Engine {
         Ok(true)
     }
 
+    fn publication_unresolved(state: &Snapshot) -> bool {
+        state.queue.iter().any(|feature| {
+            feature.publication.as_ref().is_some_and(|publication| {
+                matches!(
+                    publication.status.as_str(),
+                    "pending" | "running" | "attention"
+                )
+            })
+        })
+    }
+
+    fn ensure_publication_barrier_clear(
+        &self,
+        state: &Snapshot,
+        github_setup: &GithubSetupState,
+    ) -> Result<()> {
+        if self.publication_connection_running.load(Ordering::SeqCst) {
+            bail!("Wait for the GitHub setup or connection operation to finish");
+        }
+        if github_setup.blocks_dependent_work() {
+            bail!("Reconcile the unfinished GitHub setup operation before changing developer work");
+        }
+        if self.publication_running.load(Ordering::SeqCst) || Self::publication_unresolved(state) {
+            bail!("Resolve the unfinished GitHub publication before changing developer work");
+        }
+        Ok(())
+    }
+
     fn change<T>(&self, f: impl FnOnce(&mut Snapshot) -> Result<T>) -> Result<T> {
-        self.change_with_commit(f, || {})
+        self.change_database(|state, _github_setup| f(state))
     }
 
     fn change_with_commit<T>(
@@ -524,22 +765,20 @@ impl Engine {
         f: impl FnOnce(&mut Snapshot) -> Result<T>,
         after_commit: impl FnOnce(),
     ) -> Result<T> {
-        let mut db = self
-            .database
-            .lock()
-            .map_err(|_| anyhow!("state lock failed"))?;
-        let mut next = db.state.clone();
-        let result = f(&mut next)?;
-        next.revision += 1;
-        let data = serde_json::to_string(&next)?;
-        db.connection.execute("INSERT INTO developer_state(id,state) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET state=excluded.state", [data])?;
-        db.state = next;
+        let result = self.change(f)?;
         after_commit();
         Ok(result)
     }
 
-    fn emergency_paused(&self, state: &Snapshot) -> bool {
-        state.emergency_paused || self.cancellation.load(Ordering::SeqCst) == 2
+    fn change_database<T>(
+        &self,
+        f: impl FnOnce(&mut Snapshot, &mut GithubSetupState) -> Result<T>,
+    ) -> Result<T> {
+        let mut db = self
+            .database
+            .lock()
+            .map_err(|_| anyhow!("state lock failed"))?;
+        mutate_database(&mut db, f)
     }
     fn feature(
         &self,
@@ -567,25 +806,59 @@ impl Engine {
             .database
             .lock()
             .map_err(|_| anyhow!("state lock failed"))?;
+        let emergency_paused = self.emergency_paused(&db.state);
+        let publication_unresolved = Self::publication_unresolved(&db.state);
+        let github_setup_unresolved = db.github_setup.blocks_dependent_work();
+        let github_setup_busy = self.publication_connection_running.load(Ordering::SeqCst);
+        let reviewer_selection_idle = !self.shutdown.load(Ordering::SeqCst)
+            && !emergency_paused
+            && !publication_unresolved
+            && !github_setup_unresolved
+            && self.developer_work_is_idle();
         let queue: Vec<Value> = db
             .state
             .queue
             .iter()
             .filter(|f| f.status != "removed")
-            .map(|f| json!({
+            .map(|f| {
+                let effective_binding = f.publication_binding.as_ref().or_else(|| {
+                    (!f.publication_selection_frozen && f.status != "succeeded")
+                        .then(|| db.state.github_connections.iter().find(|binding| binding.project == f.project))
+                        .flatten()
+                });
+                let publication_expected = f.publication.is_none() && effective_binding.is_some();
+                json!({
                 "id":f.id,"project":f.project,"instruction":f.instruction,"validation":f.validation,
                 "status":f.status,"checkpoint":f.checkpoint,"message":f.message,
                 "repair_attempts":f.repair_attempts,"model_target":f.model_target,
                 "escalation_count":f.escalation_count,
                 "escalation_status":f.escalation_proposal.as_ref().map(|proposal| proposal.status.as_str()).unwrap_or("idle"),
                 "escalation_active":f.escalation_proposal.as_ref().is_some_and(|proposal| proposal.status == "preparing"),
-                "review_status":f.review_status,"review_model":REVIEW_MODEL_ID,
+                "review_status":f.review_status,"review_model":f.review_model,
+                "review_reasoning_effort":f.review_reasoning_effort,
                 "review_summary":f.review_summary,"review_attempts":f.review_attempts,
+                "can_change_reviewer":reviewer_selection_idle && feature_reviewer_state_is_changeable(f),
                 "planning_status":if f.planning.is_some() { "approved" } else { "legacy_unplanned" },
                 "planning":f.planning,
                 "tool_workspace_revision":f.tool_workspace_revision,
+                "publication_status":f.publication.as_ref().map(|publication| publication.status.as_str()).unwrap_or(if publication_expected { "pending" } else { "local_only" }),
+                "publication_stage":f.publication.as_ref().map(|publication| publication.stage.as_str()).unwrap_or(if publication_expected { "prepare_candidate" } else { "local_only" }),
+                "publication_message":f.publication.as_ref().map(|publication| publication.message.as_str()).unwrap_or(if publication_expected { "GitHub publication starts after validation and independent review" } else { "This feature remains local to the Developer workspace" }),
+                "publication_repository_url":f.publication.as_ref().map(|publication| publication.repository_url.as_str()).or_else(|| effective_binding.map(|binding| binding.repository_url.as_str())),
+                "publication_base_branch":f.publication.as_ref().map(|publication| publication.base_branch.as_str()).or_else(|| effective_binding.map(|binding| binding.base_branch.as_str())),
+                "publication_branch":f.publication.as_ref().map(|publication| publication.feature_branch.as_str()),
+                "publication_commit_sha":f.publication.as_ref().and_then(|publication| publication.commit_sha.as_deref()),
+                "publication_pr_url":f.publication.as_ref().and_then(|publication| publication.pr_url.as_deref()),
+                "publication_merged_sha":f.publication.as_ref().and_then(|publication| publication.merged_sha.as_deref()),
+                "can_reconcile_publication":self.publication_runtime.is_some()
+                    && !emergency_paused
+                    && !self.shutdown.load(Ordering::SeqCst)
+                    && !self.publication_running.load(Ordering::SeqCst)
+                    && !self.publication_connection_running.load(Ordering::SeqCst)
+                    && f.publication.as_ref().is_some_and(|publication| publication.status == "attention"),
                 "changed_files":f.edits.as_ref().map(|e| e.iter().map(|e| &e.path).collect::<Vec<_>>()).unwrap_or_default()
-            }))
+                })
+            })
             .collect();
         let model_targets: Vec<Value> = self
             .model_targets
@@ -596,16 +869,37 @@ impl Engine {
         let planning_running = self.planning_running.load(Ordering::SeqCst);
         let planning_sessions: Vec<Value> = db.state.planning_sessions.iter().map(|session| json!({
             "feature_id":session.feature_id,"project":session.project,"instruction":session.instruction,
-            "stage":session.stage,"revision":session.revision,"running":session.running
+            "stage":session.stage,"revision":session.revision,"running":session.running,
+            "model":session.model,"reasoning_effort":session.reasoning_effort
         })).collect();
         let repair_active = running && db.state.queue.iter().any(|f| f.repair_pending);
+        let github_connections: Vec<Value> = db
+            .state
+            .github_connections
+            .iter()
+            .map(|binding| {
+                json!({
+                    "project":binding.project,
+                    "repository_url":binding.repository_url,
+                    "base_branch":binding.base_branch,
+                    "automatic_merge":true
+                })
+            })
+            .collect();
+        let publication_running = self.publication_running.load(Ordering::SeqCst);
+        let can_manage_github_connections = !publication_unresolved
+            && !github_setup_unresolved
+            && !emergency_paused
+            && !self.shutdown.load(Ordering::SeqCst)
+            && self.developer_work_is_idle();
         Ok(
             json!({"mode":"supervised_developer","host":std::env::var("COMPUTERNAME").unwrap_or_else(|_|"local".into()),
             "workspace_root":self.root,"revision":db.state.revision,"auto_run":db.state.auto_run,
-            "emergency_paused":self.emergency_paused(&db.state),"running":running,"queue":queue,
-            "planning_required":true,"planning_provider":REVIEW_PROVIDER_ID,"planning_model":REVIEW_MODEL_ID,
+            "emergency_paused":emergency_paused,"running":running,"queue":queue,
+            "planning_required":true,"planning_provider":REVIEW_PROVIDER_ID,
+            "planning_model":db.state.ai_settings.orchestrator.model,
+            "planning_reasoning_effort":db.state.ai_settings.orchestrator.reasoning_effort,
             "planning_running":planning_running,"planning_sessions":planning_sessions,
-            "planning_recovery_pending":self.planning_completion_recovery.lock().is_ok_and(|recovery| recovery.is_some()),
             "repair_limit":REPAIR_LIMIT,"repair_active":repair_active,"model_targets":model_targets,
             "escalation_running":self.escalation_running.load(Ordering::SeqCst),
             "chat_model_selection":true,
@@ -613,8 +907,121 @@ impl Engine {
             "chat_running":self.chat.is_running() || self.tools.is_running(),
             "tools_running":self.tools.is_running(),
             "tools_need_attention":self.tools.needs_attention(),
-            "review_provider":REVIEW_PROVIDER_ID,"review_model":REVIEW_MODEL_ID,"review_required":true}),
+            "review_provider":REVIEW_PROVIDER_ID,
+            "review_model":db.state.ai_settings.reviewer.model,
+            "review_reasoning_effort":db.state.ai_settings.reviewer.reasoning_effort,
+            "review_required":true,
+            "feature_reviewer_selection":true,
+            "github_publication_supported":true,
+            "github_publication_available":self.publication_runtime.is_some(),
+            "github_publication_running":publication_running,
+            "github_publication_unresolved":publication_unresolved,
+            "can_manage_github_connections":can_manage_github_connections,
+            "github_publication_message":self.publication_unavailable_reason,
+            "github_connections":github_connections,
+            "github_setup_busy":github_setup_busy,
+            "github_setup_unresolved":github_setup_unresolved,
+            "ai_settings":db.state.ai_settings,
+            "ai_models":self.ai_catalog.models,
+            "ai_catalog_source":self.ai_catalog.source}),
         )
+    }
+
+    fn update_settings(
+        &self,
+        expected_revision: u64,
+        orchestrator: AiSelection,
+        reviewer: AiSelection,
+    ) -> Result<Value> {
+        validate_selection(&self.ai_catalog, &orchestrator)?;
+        validate_selection(&self.ai_catalog, &reviewer)?;
+        {
+            let mut db = self
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?;
+            self.ensure_publication_barrier_clear(&db.state, &db.github_setup)?;
+            if self.running.load(Ordering::SeqCst)
+                || self.planning_running.load(Ordering::SeqCst)
+                || self.escalation_running.load(Ordering::SeqCst)
+                || self.chat.is_running()
+                || self.tools.blocks_work()
+            {
+                bail!("Stop active developer work before changing AI settings");
+            }
+            if db.state.ai_settings.revision != expected_revision {
+                bail!("AI settings revision changed; refresh before saving");
+            }
+            let mut next = db.state.clone();
+            next.ai_settings = DeveloperAiSettings {
+                revision: expected_revision
+                    .checked_add(1)
+                    .context("AI settings revision overflow")?,
+                orchestrator,
+                reviewer,
+            };
+            next.revision = next.revision.checked_add(1).context("Revision overflow")?;
+            let data = serde_json::to_string(&next)?;
+            db.connection.execute("INSERT INTO developer_state(id,state) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET state=excluded.state", [data])?;
+            db.state = next;
+        }
+        self.snapshot()
+    }
+
+    fn update_feature_reviewer(
+        &self,
+        id: &str,
+        expected_revision: u64,
+        expected_checkpoint: &str,
+        expected_model: &str,
+        expected_reasoning_effort: &str,
+        reviewer: AiSelection,
+    ) -> Result<Value> {
+        Uuid::parse_str(id).context("Invalid feature ID")?;
+        validate_selection(&self.ai_catalog, &reviewer)?;
+        {
+            let mut db = self
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?;
+            self.ensure_publication_barrier_clear(&db.state, &db.github_setup)?;
+            if self.shutdown.load(Ordering::SeqCst) {
+                bail!("Developer runner is shutting down");
+            }
+            if self.running.load(Ordering::SeqCst)
+                || self.planning_running.load(Ordering::SeqCst)
+                || self.escalation_running.load(Ordering::SeqCst)
+                || self.chat.is_running()
+                || self.tools.blocks_work()
+            {
+                bail!("Stop active developer work before changing a feature reviewer");
+            }
+            if self.emergency_paused(&db.state) {
+                bail!("Clear Emergency Pause before changing a feature reviewer");
+            }
+            if db.state.revision != expected_revision {
+                bail!("Runner revision changed; refresh before changing the feature reviewer");
+            }
+            let mut next = db.state.clone();
+            let next_revision = next.revision.checked_add(1).context("Revision overflow")?;
+            let feature = next
+                .queue
+                .iter_mut()
+                .find(|feature| feature.id == id)
+                .context("Feature not found")?;
+            if feature.checkpoint != expected_checkpoint
+                || feature.review_model != expected_model
+                || feature.review_reasoning_effort != expected_reasoning_effort
+            {
+                bail!("Feature reviewer binding changed; refresh before saving");
+            }
+            change_feature_reviewer(feature, reviewer, next_revision)?;
+            next.revision = next_revision;
+            let data = serde_json::to_string(&next)?;
+            db.connection.execute("INSERT INTO developer_state(id,state) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET state=excluded.state", [data])?;
+            db.state = next;
+        }
+        self.snapshot()
     }
 
     fn model_target(&self, id: &str) -> Result<&ModelTarget> {
@@ -632,11 +1039,39 @@ impl Engine {
         self.cancellation.load(Ordering::SeqCst) != 0
     }
 
+    fn emergency_paused(&self, state: &Snapshot) -> bool {
+        state.emergency_paused || self.cancellation.load(Ordering::SeqCst) == 2
+    }
+
+    fn developer_work_is_idle(&self) -> bool {
+        !self.running.load(Ordering::SeqCst)
+            && !self.planning_running.load(Ordering::SeqCst)
+            && !self.escalation_running.load(Ordering::SeqCst)
+            && !self.chat.is_running()
+            && !self.tools.blocks_work()
+            && !self.publication_running.load(Ordering::SeqCst)
+            && !self.publication_connection_running.load(Ordering::SeqCst)
+    }
+
     fn reconcile_completed_tool_mutations(&self) -> Result<()> {
-        if self.running.load(Ordering::SeqCst) || self.tools.is_running() || self.chat.is_running()
+        if self.running.load(Ordering::SeqCst)
+            || self.tools.is_running()
+            || self.chat.is_running()
+            || self.publication_running.load(Ordering::SeqCst)
+            || self.publication_connection_running.load(Ordering::SeqCst)
         {
             return Ok(());
         }
+        let database = self
+            .database
+            .lock()
+            .map_err(|_| anyhow!("state lock failed"))?;
+        if Self::publication_unresolved(&database.state)
+            || database.github_setup.blocks_dependent_work()
+        {
+            return Ok(());
+        }
+        drop(database);
         let features = self
             .database
             .lock()
@@ -664,6 +1099,8 @@ impl Engine {
             if !self.root.join(&feature.project).exists()
                 && never_started_project_has_no_tool_ledger(&feature)
             {
+                // Planning may enqueue a brand-new project before the Assembly Line
+                // creates its directory. There can be no project-tool mutation yet.
                 continue;
             }
             let mutations = self
@@ -734,10 +1171,11 @@ impl Engine {
         expected_checkpoint: Option<&str>,
     ) -> Result<()> {
         self.reconcile_completed_tool_mutations()?;
-        let db = self
+        let mut db = self
             .database
             .lock()
             .map_err(|_| anyhow!("state lock failed"))?;
+        self.ensure_publication_barrier_clear(&db.state, &db.github_setup)?;
         if self.shutdown.load(Ordering::SeqCst) {
             bail!("Developer runner is shutting down");
         }
@@ -751,13 +1189,14 @@ impl Engine {
             bail!("Wait for the repair proposal to finish before starting the Assembly Line");
         }
         if self.tools.blocks_work() {
-            bail!("Resolve or stop project tool work before starting the Assembly Line");
+            bail!("Wait for the active project tool action to finish before starting the Assembly Line");
         }
         let feature = db
             .state
             .queue
             .iter()
-            .find(|feature| feature.status != "succeeded" && feature.status != "removed");
+            .find(|feature| feature.status != "succeeded" && feature.status != "removed")
+            .cloned();
         let binding_supplied = expected_feature_id.is_some()
             || expected_model_target.is_some()
             || expected_status.is_some()
@@ -774,7 +1213,7 @@ impl Engine {
             let expected_checkpoint = expected_checkpoint
                 .context("Start or Resume requires the expected checkpoint for a bound feature")?;
             Uuid::parse_str(expected_feature_id).context("Invalid expected feature ID")?;
-            let feature = feature.context("No unfinished feature to start")?;
+            let feature = feature.as_ref().context("No unfinished feature to start")?;
             if feature.id != expected_feature_id
                 || feature.model_target != expected_model_target
                 || feature.status != expected_status
@@ -783,7 +1222,15 @@ impl Engine {
                 bail!("The first queued feature state changed; refresh status before starting");
             }
         }
-        if let Some(feature) = feature {
+        if let Some(feature) = feature.as_ref() {
+            validate_selection(
+                &self.ai_catalog,
+                &AiSelection {
+                    model: feature.review_model.clone(),
+                    reasoning_effort: feature.review_reasoning_effort.clone(),
+                },
+            )
+            .context("Pinned feature reviewer is unavailable")?;
             if escalation_apply_is_quarantined(feature) {
                 bail!("Prepare and explicitly approve a new repair proposal after the interrupted application");
             }
@@ -799,12 +1246,16 @@ impl Engine {
             return Ok(());
         }
         let inference_lease = feature
+            .as_ref()
             .map(|_| {
                 self.inference_gate
                     .try_acquire()
                     .context("Selected local model feature cannot start")
             })
             .transpose()?;
+        if self.publication_connection_running.load(Ordering::SeqCst) {
+            bail!("Wait for the GitHub connection operation to finish");
+        }
         if self
             .running
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -812,11 +1263,75 @@ impl Engine {
         {
             return Ok(());
         }
+        if let Some(feature) = feature
+            .as_ref()
+            .filter(|feature| !feature.publication_selection_frozen)
+        {
+            let mut next = db.state.clone();
+            let binding = next
+                .github_connections
+                .iter()
+                .find(|binding| binding.project == feature.project)
+                .cloned();
+            let current = next
+                .queue
+                .iter_mut()
+                .find(|candidate| candidate.id == feature.id)
+                .context("feature missing")?;
+            if current.status != feature.status || current.checkpoint != feature.checkpoint {
+                self.running.store(false, Ordering::SeqCst);
+                bail!("Feature state changed before its publication destination was frozen");
+            }
+            if let Err(error) = freeze_publication_selection(current, binding) {
+                self.running.store(false, Ordering::SeqCst);
+                return Err(error);
+            }
+            next.revision = next.revision.checked_add(1).context("Revision overflow")?;
+            let data = match serde_json::to_string(&next) {
+                Ok(data) => data,
+                Err(error) => {
+                    self.running.store(false, Ordering::SeqCst);
+                    return Err(error.into());
+                }
+            };
+            if let Err(error) = db.connection.execute("INSERT INTO developer_state(id,state) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET state=excluded.state", [data]) {
+                self.running.store(false, Ordering::SeqCst);
+                return Err(error.into());
+            }
+            db.state = next;
+        }
         self.cancellation.store(0, Ordering::SeqCst);
+        self.tool_cancellation.store(false, Ordering::SeqCst);
         self.repair_loop_authorized.store(false, Ordering::SeqCst);
         drop(db);
         self.launch(inference_lease);
         Ok(())
+    }
+
+    fn freeze_feature_publication(&self, observed: Feature) -> Result<Feature> {
+        if observed.publication_selection_frozen {
+            return Ok(observed);
+        }
+        self.change(|state| {
+            let binding = state
+                .github_connections
+                .iter()
+                .find(|binding| binding.project == observed.project)
+                .cloned();
+            let current = state
+                .queue
+                .iter_mut()
+                .find(|feature| feature.id == observed.id)
+                .context("Feature not found")?;
+            if current.status != observed.status || current.checkpoint != observed.checkpoint {
+                bail!("Feature state changed before its publication destination was frozen");
+            }
+            if current.publication_selection_frozen {
+                bail!("Feature publication selection changed during admission");
+            }
+            freeze_publication_selection(current, binding)?;
+            Ok(current.clone())
+        })
     }
     fn launch(self: &Arc<Self>, inference_lease: Option<InferenceLease>) {
         let engine = self.clone();
@@ -834,11 +1349,15 @@ impl Engine {
             .database
             .lock()
             .map_err(|_| anyhow!("state lock failed"))?;
+        self.ensure_publication_barrier_clear(&db.state, &db.github_setup)?;
         if self.shutdown.load(Ordering::SeqCst) {
             bail!("Developer runner is shutting down");
         }
         if self.running.load(Ordering::SeqCst) {
             bail!("Stop the active run before repairing a feature");
+        }
+        if self.tools.blocks_work() {
+            bail!("Resolve the active or uncertain project tool action before repairing a feature");
         }
         if self.planning_running.load(Ordering::SeqCst) {
             bail!("Wait for brainstorming to finish before repairing a feature");
@@ -892,6 +1411,7 @@ impl Engine {
         )?;
         db.state = next;
         self.cancellation.store(0, Ordering::SeqCst);
+        self.tool_cancellation.store(false, Ordering::SeqCst);
         self.repair_loop_authorized.store(true, Ordering::SeqCst);
         self.running.store(true, Ordering::SeqCst);
         drop(db);
@@ -970,9 +1490,7 @@ impl Engine {
                 .database
                 .lock()
                 .map_err(|_| anyhow!("state lock failed"))?;
-            if self.emergency_paused(&database.state) {
-                bail!("Clear Emergency Pause before preparing a repair proposal");
-            }
+            self.ensure_publication_barrier_clear(&database.state, &database.github_setup)?;
             database
                 .state
                 .queue
@@ -996,6 +1514,17 @@ impl Engine {
             diagnosis_sha256,
         )?;
 
+        let inference_lease = match self.inference_gate.try_acquire() {
+            Ok(lease) => Some(lease),
+            Err(error) => {
+                return Err(error.context("Selected local model repair proposal cannot start"))
+            }
+        };
+        let mut database = self
+            .database
+            .lock()
+            .map_err(|_| anyhow!("state lock failed"))?;
+        self.ensure_publication_barrier_clear(&database.state, &database.github_setup)?;
         if self.shutdown.load(Ordering::SeqCst) {
             bail!("Developer runner is shutting down");
         }
@@ -1006,16 +1535,12 @@ impl Engine {
         {
             bail!("Stop active developer work before preparing a repair proposal");
         }
+        if self.emergency_paused(&database.state) {
+            bail!("Clear Emergency Pause before preparing a repair proposal");
+        }
         let cancellation = self.reserve_escalation_call()?;
-        let inference_lease = match self.inference_gate.try_acquire() {
-            Ok(lease) => Some(lease),
-            Err(error) => {
-                self.release_escalation_call(&cancellation);
-                return Err(error.context("Selected local model repair proposal cannot start"));
-            }
-        };
         let proposal_id = Uuid::new_v4().to_string();
-        let prepared = self.change(|state| {
+        let prepared = mutate_database(&mut database, |state, _github_setup| {
             if state.revision != request.expected_revision {
                 bail!("Runner revision changed; refresh before preparing a repair proposal");
             }
@@ -1079,6 +1604,7 @@ impl Engine {
             });
             Ok(())
         });
+        drop(database);
         if let Err(error) = prepared {
             self.release_escalation_call(&cancellation);
             return Err(error);
@@ -1372,6 +1898,13 @@ impl Engine {
         if self.shutdown.load(Ordering::SeqCst) {
             bail!("Developer runner is shutting down");
         }
+        {
+            let database = self
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?;
+            self.ensure_publication_barrier_clear(&database.state, &database.github_setup)?;
+        }
         if self.running.load(Ordering::SeqCst)
             || self.planning_running.load(Ordering::SeqCst)
             || self.chat.is_running()
@@ -1385,9 +1918,6 @@ impl Engine {
                 .database
                 .lock()
                 .map_err(|_| anyhow!("state lock failed"))?;
-            if self.emergency_paused(&database.state) {
-                bail!("Clear Emergency Pause before applying a repair proposal");
-            }
             let feature = database
                 .state
                 .queue
@@ -1419,18 +1949,32 @@ impl Engine {
             .chat
             .repair_handoff(&project, &chat_id, &chat_request_id)?;
 
+        let inference_lease = match self.inference_gate.try_acquire() {
+            Ok(lease) => lease,
+            Err(error) => return Err(error.context("Repair proposal application cannot start")),
+        };
+        let mut database = self
+            .database
+            .lock()
+            .map_err(|_| anyhow!("state lock failed"))?;
+        self.ensure_publication_barrier_clear(&database.state, &database.github_setup)?;
+        if self.emergency_paused(&database.state) {
+            bail!("Clear Emergency Pause before applying a repair proposal");
+        }
+        if self.planning_running.load(Ordering::SeqCst)
+            || self.chat.is_running()
+            || self.tools.blocks_work()
+            || self.escalation_running.load(Ordering::SeqCst)
+        {
+            bail!("Stop active developer work before applying a repair proposal");
+        }
         self.running
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .map_err(|_| anyhow!("Another developer run started"))?;
-        let inference_lease = match self.inference_gate.try_acquire() {
-            Ok(lease) => lease,
-            Err(error) => {
-                self.running.store(false, Ordering::SeqCst);
-                return Err(error.context("Repair proposal application cannot start"));
-            }
-        };
+        self.cancellation.store(0, Ordering::SeqCst);
+        self.tool_cancellation.store(false, Ordering::SeqCst);
         self.repair_loop_authorized.store(false, Ordering::SeqCst);
-        let applied = self.change(|state| {
+        let applied = mutate_database(&mut database, |state, _github_setup| {
             if state.revision != request.expected_revision {
                 bail!("Runner revision changed; refresh before applying the repair proposal");
             }
@@ -1557,6 +2101,7 @@ impl Engine {
             feature.review_pending = None;
             Ok(())
         });
+        drop(database);
         if let Err(error) = applied {
             self.running.store(false, Ordering::SeqCst);
             return Err(error);
@@ -1576,7 +2121,8 @@ impl Engine {
             .expected_checkpoint
             .as_deref()
             .context("Missing expected checkpoint")?;
-        self.change(|state| {
+        self.change_database(|state, github_setup| {
+            self.ensure_publication_barrier_clear(state, github_setup)?;
             if state.revision != request.expected_revision {
                 bail!("Runner revision changed; refresh before cancelling the repair proposal");
             }
@@ -1625,11 +2171,15 @@ impl Engine {
             .database
             .lock()
             .map_err(|_| anyhow!("state lock failed"))?;
+        self.ensure_publication_barrier_clear(&db.state, &db.github_setup)?;
         if self.running.load(Ordering::SeqCst) {
             bail!("Stop the active run before removing a feature");
         }
         if self.chat.is_running() || self.tools.blocks_work() {
             bail!("Stop project chat and resolve project tool actions before removing a feature");
+        }
+        if self.planning_running.load(Ordering::SeqCst) {
+            bail!("Wait for brainstorming to finish before removing a feature");
         }
         if self.escalation_running.load(Ordering::SeqCst) {
             bail!("Cancel the active repair proposal before removing a feature");
@@ -1657,11 +2207,822 @@ impl Engine {
             || self.tools.is_running()
             || self.planning_running.load(Ordering::SeqCst)
             || self.escalation_running.load(Ordering::SeqCst)
+            || self.publication_running.load(Ordering::SeqCst)
+            || self.publication_connection_running.load(Ordering::SeqCst)
         {
             bail!("Stop active feature and chat work before shutting down");
         }
+        self.publication_cancellation.fetch_max(1, Ordering::SeqCst);
         self.shutdown.store(true, Ordering::SeqCst);
         Ok(())
+    }
+
+    fn github_setup_snapshot(&self) -> Result<Value> {
+        let database = self
+            .database
+            .lock()
+            .map_err(|_| anyhow!("state lock failed"))?;
+        let busy = self.publication_connection_running.load(Ordering::SeqCst);
+        let can_mutate = !self.shutdown.load(Ordering::SeqCst)
+            && !self.emergency_paused(&database.state)
+            && !Self::publication_unresolved(&database.state)
+            && !self.running.load(Ordering::SeqCst)
+            && !self.planning_running.load(Ordering::SeqCst)
+            && !self.escalation_running.load(Ordering::SeqCst)
+            && !self.chat.is_running()
+            && !self.tools.blocks_work()
+            && !self.publication_running.load(Ordering::SeqCst);
+        Ok(database
+            .github_setup
+            .snapshot(database.state.revision, busy, can_mutate))
+    }
+
+    fn ensure_github_setup_action_admitted(
+        &self,
+        database: &Database,
+        expected_revision: u64,
+        allow_unresolved: bool,
+    ) -> Result<()> {
+        if database.state.revision != expected_revision {
+            bail!("Runner revision changed; refresh GitHub setup before continuing");
+        }
+        if self.shutdown.load(Ordering::SeqCst) || self.emergency_paused(&database.state) {
+            bail!("Clear shutdown or Emergency Pause before changing GitHub setup");
+        }
+        if !self.developer_work_is_idle() || Self::publication_unresolved(&database.state) {
+            bail!("Stop developer work and resolve publication before changing GitHub setup");
+        }
+        if !allow_unresolved && database.github_setup.blocks_dependent_work() {
+            bail!("Reconcile the unfinished GitHub setup operation first");
+        }
+        Ok(())
+    }
+
+    fn reserve_github_setup_operation(
+        &self,
+        database: &Database,
+        expected_revision: u64,
+        allow_unresolved: bool,
+    ) -> Result<()> {
+        self.ensure_github_setup_action_admitted(database, expected_revision, allow_unresolved)?;
+        self.publication_connection_running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .map_err(|_| anyhow!("Another GitHub setup or connection operation is running"))?;
+        self.publication_cancellation.store(0, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn release_github_setup_operation(&self) {
+        self.publication_connection_running
+            .store(false, Ordering::SeqCst);
+    }
+
+    async fn refresh_github_account(&self, expected_revision: u64) -> Result<Value> {
+        {
+            let database = self
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?;
+            self.reserve_github_setup_operation(&database, expected_revision, false)?;
+        }
+        let observation = match self.publication_runtime.as_ref() {
+            Some(runtime) => {
+                runtime
+                    .inspect_account(&self.publication_cancellation)
+                    .await
+            }
+            None => Ok(GithubAccountObservation::Unavailable {
+                message: "Trusted Git and GitHub CLI tools are unavailable",
+            }),
+        }
+        .unwrap_or(GithubAccountObservation::Unavailable {
+            message: "GitHub account verification is unavailable",
+        });
+        let result: Result<()> = {
+            let account = github_account_record(&observation);
+            self.change_database(|state, setup| {
+                if state.revision != expected_revision {
+                    bail!("Runner revision changed while refreshing the GitHub account");
+                }
+                setup.reset_repositories_if_account_changed(&account);
+                Ok(())
+            })
+        };
+        self.release_github_setup_operation();
+        result?;
+        self.github_setup_snapshot()
+    }
+
+    async fn list_github_repositories(&self, page: u32, expected_revision: u64) -> Result<Value> {
+        let expected_login = {
+            let database = self
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?;
+            if page == 0
+                || page > 100
+                || page != 1 && page != database.github_setup.repository_page.saturating_add(1)
+            {
+                bail!("Request the first or next GitHub repository page");
+            }
+            let expected_login = database
+                .github_setup
+                .account
+                .login
+                .clone()
+                .filter(|_| database.github_setup.account.state == "signed_in")
+                .context("Sign in to GitHub before listing repositories")?;
+            self.reserve_github_setup_operation(&database, expected_revision, false)?;
+            expected_login
+        };
+        let runtime = self.publication_runtime.as_ref().cloned();
+        let result: Result<()> = async {
+            let runtime = runtime.with_context(|| {
+                self.publication_unavailable_reason
+                    .clone()
+                    .unwrap_or_else(|| "GitHub setup tools are unavailable".into())
+            })?;
+            let page_result = runtime
+                .list_accessible_repositories(page, &self.publication_cancellation)
+                .await?;
+            if !page_result.login.eq_ignore_ascii_case(&expected_login) {
+                bail!("GitHub account changed while listing repositories");
+            }
+            self.store_github_repository_page(expected_revision, page, &expected_login, page_result)
+        }
+        .await;
+        self.release_github_setup_operation();
+        result?;
+        self.github_setup_snapshot()
+    }
+
+    fn store_github_repository_page(
+        &self,
+        expected_revision: u64,
+        page: u32,
+        expected_login: &str,
+        page_result: GithubRepositoryPage,
+    ) -> Result<()> {
+        self.change_database(|state, setup| {
+            if state.revision != expected_revision {
+                bail!("Runner revision changed while listing GitHub repositories");
+            }
+            if setup.account.state != "signed_in"
+                || !setup
+                    .account
+                    .login
+                    .as_deref()
+                    .is_some_and(|login| login.eq_ignore_ascii_case(expected_login))
+            {
+                bail!("GitHub account changed while listing repositories");
+            }
+            setup.repositories = page_result
+                .repositories
+                .into_iter()
+                .map(github_repository_record)
+                .collect();
+            setup.repository_page = page;
+            setup.has_more = page_result.has_more;
+            Ok(())
+        })
+    }
+
+    fn begin_github_sign_in(
+        self: &Arc<Self>,
+        operation_id: &str,
+        expected_revision: u64,
+    ) -> Result<Value> {
+        if self.publication_runtime.is_none() {
+            bail!(self
+                .publication_unavailable_reason
+                .clone()
+                .unwrap_or_else(|| "GitHub setup tools are unavailable".into()));
+        }
+        let prepared = (|| -> Result<()> {
+            let mut database = self
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?;
+            self.reserve_github_setup_operation(&database, expected_revision, false)?;
+            let committed = mutate_database(&mut database, |_state, setup| {
+                if setup.account.state != "signed_out" {
+                    bail!("Refresh a signed-out GitHub account before starting sign-in");
+                }
+                setup.begin_sign_in(operation_id)
+            });
+            if committed.is_err() {
+                self.release_github_setup_operation();
+            }
+            committed
+        })();
+        prepared?;
+        let accepted = self.github_setup_snapshot()?;
+        let engine = self.clone();
+        let operation_id = operation_id.to_owned();
+        tokio::spawn(async move {
+            if let Err(error) = engine.execute_github_sign_in(&operation_id).await {
+                eprintln!("developer GitHub sign-in: {error:#}");
+            }
+            engine.release_github_setup_operation();
+        });
+        Ok(accepted)
+    }
+
+    async fn execute_github_sign_in(&self, operation_id: &str) -> Result<()> {
+        let runtime = self
+            .publication_runtime
+            .as_ref()
+            .cloned()
+            .with_context(|| {
+                self.publication_unavailable_reason
+                    .clone()
+                    .unwrap_or_else(|| "GitHub setup tools are unavailable".into())
+            })?;
+        let outcome = runtime
+            .sign_in(&self.publication_cancellation, |challenge| {
+                if challenge.verification_url != developer_github_setup::DEVICE_VERIFICATION_URL {
+                    bail!("GitHub sign-in returned an unexpected verification URL");
+                }
+                self.change_database(|state, setup| {
+                    if self.publication_cancellation.load(Ordering::SeqCst) != 0
+                        || state.emergency_paused
+                        || self.shutdown.load(Ordering::SeqCst)
+                    {
+                        bail!("GitHub sign-in was cancelled before its challenge was accepted");
+                    }
+                    setup.record_sign_in_challenge(operation_id, &challenge.user_code)
+                })
+            })
+            .await;
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let observation_cancellation = AtomicU8::new(0);
+                let account = runtime
+                    .inspect_account(&observation_cancellation)
+                    .await
+                    .unwrap_or(GithubAccountObservation::Unavailable {
+                        message: "GitHub account truth could not be verified after sign-in stopped",
+                    });
+                self.finish_github_sign_in(
+                    operation_id,
+                    "attention",
+                    "GitHub sign-in stopped without a confirmed process result; reconcile the retained operation",
+                    &account,
+                )?;
+                return Err(
+                    error.context("GitHub sign-in process failed before a confirmed result")
+                );
+            }
+        };
+        self.finish_github_sign_in_outcome(operation_id, &outcome)
+    }
+
+    fn finish_github_sign_in_outcome(
+        &self,
+        operation_id: &str,
+        outcome: &GithubSignInOutcome,
+    ) -> Result<()> {
+        let (state, message) = github_sign_in_completion(outcome);
+        self.finish_github_sign_in(operation_id, state, message, &outcome.account)
+    }
+
+    fn finish_github_sign_in(
+        &self,
+        operation_id: &str,
+        state: &str,
+        message: &str,
+        account: &GithubAccountObservation,
+    ) -> Result<()> {
+        let account = github_account_record(account);
+        self.change_database(|_state, setup| {
+            setup.finish_sign_in(operation_id, state, message, &account)
+        })
+    }
+
+    async fn cancel_github_sign_in(
+        &self,
+        operation_id: &str,
+        expected_revision: u64,
+    ) -> Result<Value> {
+        {
+            let database = self
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?;
+            if database.state.revision != expected_revision {
+                bail!("Runner revision changed; refresh before cancelling GitHub sign-in");
+            }
+            let sign_in = database
+                .github_setup
+                .sign_in
+                .as_ref()
+                .filter(|record| record.operation_id == operation_id)
+                .context("GitHub sign-in operation does not match the retained operation")?;
+            if !matches!(sign_in.state.as_str(), "starting" | "waiting") {
+                bail!("Only an active GitHub sign-in can be cancelled");
+            }
+            if !self.publication_connection_running.load(Ordering::SeqCst) {
+                bail!("GitHub sign-in is not running; reconcile its retained state");
+            }
+            self.publication_cancellation.fetch_max(1, Ordering::SeqCst);
+        }
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while self.publication_connection_running.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .context("GitHub sign-in cancellation did not finish before the deadline")?;
+        let snapshot = self.github_setup_snapshot()?;
+        let state = snapshot["sign_in"]["state"]
+            .as_str()
+            .context("GitHub sign-in completion is missing")?;
+        if !matches!(state, "cancelled" | "succeeded" | "failed" | "attention") {
+            bail!("GitHub sign-in cancellation has no terminal observation");
+        }
+        Ok(snapshot)
+    }
+
+    async fn reconcile_github_sign_in(
+        &self,
+        operation_id: &str,
+        expected_revision: u64,
+    ) -> Result<Value> {
+        {
+            let database = self
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?;
+            let sign_in = database
+                .github_setup
+                .sign_in
+                .as_ref()
+                .filter(|record| record.operation_id == operation_id)
+                .context("GitHub sign-in operation does not match the retained operation")?;
+            if sign_in.state != "attention" {
+                bail!("Only a GitHub sign-in needing attention can be reconciled");
+            }
+            self.reserve_github_setup_operation(&database, expected_revision, true)?;
+        }
+        let runtime = self.publication_runtime.as_ref().cloned();
+        let result = async {
+            let (account, credentials_consistent) = match runtime {
+                Some(runtime) => runtime
+                    .inspect_sign_in_credentials(&self.publication_cancellation)
+                    .await
+                    .unwrap_or((
+                        GithubAccountObservation::Unavailable {
+                            message: "GitHub account verification is unavailable",
+                        },
+                        false,
+                    )),
+                None => (
+                    GithubAccountObservation::Unavailable {
+                        message: "Trusted Git and GitHub CLI tools are unavailable",
+                    },
+                    false,
+                ),
+            };
+            let (state, message) = if !credentials_consistent {
+                (
+                    "attention",
+                    "Environment credentials still mask or obscure the saved GitHub login; reconciliation remains required",
+                )
+            } else {
+                match &account {
+                GithubAccountObservation::SignedIn { .. } => (
+                    "succeeded",
+                    "The retained GitHub sign-in now has a verified live account",
+                ),
+                GithubAccountObservation::SignedOut { .. } => (
+                    "failed",
+                    "The retained GitHub sign-in has no signed-in account",
+                ),
+                GithubAccountObservation::Unavailable { .. } => (
+                    "attention",
+                    "GitHub account verification remains unavailable; reconciliation is still required",
+                ),
+                }
+            };
+            self.finish_github_sign_in(operation_id, state, message, &account)
+        }
+        .await;
+        self.release_github_setup_operation();
+        result?;
+        self.github_setup_snapshot()
+    }
+
+    fn begin_github_repository_creation(
+        self: &Arc<Self>,
+        operation_id: &str,
+        expected_login: &str,
+        name: &str,
+        visibility: &str,
+        expected_revision: u64,
+    ) -> Result<Value> {
+        if self.publication_runtime.is_none() {
+            bail!(self
+                .publication_unavailable_reason
+                .clone()
+                .unwrap_or_else(|| "GitHub setup tools are unavailable".into()));
+        }
+        let start = {
+            let mut database = self
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?;
+            self.reserve_github_setup_operation(&database, expected_revision, false)?;
+            let result = mutate_database(&mut database, |_state, setup| {
+                if setup.account.state != "signed_in"
+                    || !setup
+                        .account
+                        .login
+                        .as_deref()
+                        .is_some_and(|login| login.eq_ignore_ascii_case(expected_login))
+                {
+                    bail!("The confirmed GitHub account changed; refresh before creating");
+                }
+                setup.start_creation(operation_id, expected_login, name, visibility)
+            });
+            if result.is_err() {
+                self.release_github_setup_operation();
+            }
+            result?
+        };
+        let accepted = self.github_setup_snapshot()?;
+        if start == CreationStart::ExistingOperation {
+            self.release_github_setup_operation();
+            return Ok(accepted);
+        }
+        let engine = self.clone();
+        let operation_id = operation_id.to_owned();
+        let expected_login = expected_login.to_owned();
+        let name = name.to_owned();
+        let visibility = visibility.to_owned();
+        tokio::spawn(async move {
+            if let Err(error) = engine
+                .execute_github_repository_creation(
+                    &operation_id,
+                    &expected_login,
+                    &name,
+                    &visibility,
+                )
+                .await
+            {
+                eprintln!("developer GitHub repository creation: {error:#}");
+            }
+            engine.release_github_setup_operation();
+        });
+        Ok(accepted)
+    }
+
+    async fn execute_github_repository_creation(
+        &self,
+        operation_id: &str,
+        expected_login: &str,
+        name: &str,
+        visibility: &str,
+    ) -> Result<()> {
+        let runtime = self
+            .publication_runtime
+            .as_ref()
+            .cloned()
+            .context("GitHub setup tools are unavailable")?;
+        let name_with_owner = format!("{expected_login}/{name}");
+        match runtime
+            .observe_repository(&name_with_owner, &self.publication_cancellation)
+            .await
+        {
+            Ok(GithubRepositoryLookup::Present(observation)) => {
+                return self.update_github_creation(operation_id, |creation| {
+                    record_observed_repository(creation, &observation);
+                    creation.state = "existing".into();
+                    creation.message =
+                        "A repository already exists at the confirmed target; it was not adopted or changed"
+                            .into();
+                    Ok(())
+                });
+            }
+            Ok(GithubRepositoryLookup::Absent) => {
+                self.update_github_creation(operation_id, |creation| {
+                    creation.preflight_absent = true;
+                    creation.message =
+                        "The confirmed repository target was absent; creation is starting".into();
+                    Ok(())
+                })?;
+            }
+            Err(error) => {
+                self.update_github_creation(operation_id, |creation| {
+                    creation.state = "attention".into();
+                    creation.message = "Repository absence could not be verified, so no creation request was authorized; reconcile the retained operation".into();
+                    Ok(())
+                })?;
+                return Err(error.context("GitHub repository preflight was unavailable"));
+            }
+        }
+        let command_result = runtime
+            .create_repository(
+                expected_login,
+                name,
+                visibility,
+                &self.publication_cancellation,
+            )
+            .await;
+        if let Ok(command_succeeded) = command_result {
+            self.update_github_creation(operation_id, |creation| {
+                creation.command_succeeded = command_succeeded;
+                creation.message = if command_succeeded {
+                    "GitHub accepted the creation command; verifying the immutable repository receipt"
+                        .into()
+                } else {
+                    "GitHub did not confirm the creation command; observing the exact target"
+                        .into()
+                };
+                Ok(())
+            })?;
+        }
+        let observation_cancellation = AtomicU8::new(0);
+        let observation = runtime
+            .observe_repository(&name_with_owner, &observation_cancellation)
+            .await;
+        self.finish_github_creation_observation(operation_id, observation)?;
+        command_result
+            .map(|_| ())
+            .context("GitHub repository creation command was unavailable")
+    }
+
+    fn update_github_creation(
+        &self,
+        operation_id: &str,
+        f: impl FnOnce(&mut CreationRecord) -> Result<()>,
+    ) -> Result<()> {
+        self.change_database(|_state, setup| {
+            let creation = setup.creation_mut(operation_id)?;
+            f(creation)
+        })
+    }
+
+    fn finish_github_creation_observation(
+        &self,
+        operation_id: &str,
+        observation: Result<GithubRepositoryLookup>,
+    ) -> Result<()> {
+        self.update_github_creation(operation_id, |creation| {
+            apply_github_creation_observation(creation, observation);
+            Ok(())
+        })
+    }
+
+    async fn reconcile_github_creation(
+        &self,
+        operation_id: &str,
+        expected_revision: u64,
+    ) -> Result<Value> {
+        let name_with_owner = {
+            let database = self
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?;
+            let creation = database
+                .github_setup
+                .active_creation()
+                .filter(|record| record.operation_id == operation_id)
+                .context(
+                    "GitHub repository creation operation does not match the retained operation",
+                )?;
+            if creation.state != "attention" {
+                bail!("Only a GitHub repository creation needing attention can be reconciled");
+            }
+            let name_with_owner = creation.name_with_owner.clone();
+            self.reserve_github_setup_operation(&database, expected_revision, true)?;
+            name_with_owner
+        };
+        let runtime = self.publication_runtime.as_ref().cloned();
+        let result = async {
+            let runtime = runtime.with_context(|| {
+                self.publication_unavailable_reason
+                    .clone()
+                    .unwrap_or_else(|| "GitHub setup tools are unavailable".into())
+            })?;
+            let observation = runtime
+                .observe_repository(&name_with_owner, &self.publication_cancellation)
+                .await;
+            self.finish_github_creation_observation(operation_id, observation)
+        }
+        .await;
+        self.release_github_setup_operation();
+        result?;
+        self.github_setup_snapshot()
+    }
+
+    async fn save_github_connection(
+        &self,
+        project: &str,
+        repository_url: &str,
+        base_branch: &str,
+        expected_revision: u64,
+    ) -> Result<Value> {
+        let runtime = self
+            .publication_runtime
+            .as_ref()
+            .cloned()
+            .with_context(|| {
+                self.publication_unavailable_reason
+                    .clone()
+                    .unwrap_or_else(|| "GitHub publication tools are unavailable".into())
+            })?;
+        {
+            let database = self
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?;
+            if database.state.revision != expected_revision {
+                bail!("Runner revision changed; refresh before saving the GitHub connection");
+            }
+            if self.shutdown.load(Ordering::SeqCst) || self.emergency_paused(&database.state) {
+                bail!("Clear shutdown or Emergency Pause before saving a GitHub connection");
+            }
+            if self.running.load(Ordering::SeqCst)
+                || self.planning_running.load(Ordering::SeqCst)
+                || self.escalation_running.load(Ordering::SeqCst)
+                || self.chat.is_running()
+                || self.tools.blocks_work()
+                || self.publication_running.load(Ordering::SeqCst)
+                || Self::publication_unresolved(&database.state)
+                || database.github_setup.blocks_dependent_work()
+            {
+                bail!("Stop developer work and resolve publication before changing a GitHub connection");
+            }
+            let path = fs::canonicalize(self.root.join(project))
+                .context("GitHub connections require an existing Developer project")?;
+            if !path.starts_with(&self.root) || path == self.root {
+                bail!("GitHub connection project escapes the workspace root");
+            }
+            self.publication_connection_running
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .map_err(|_| anyhow!("Another GitHub connection operation is running"))?;
+            self.publication_cancellation.store(0, Ordering::SeqCst);
+        }
+        let result: Result<()> = async {
+            let binding = runtime
+                .validate_connection(
+                    project,
+                    repository_url,
+                    base_branch,
+                    &self.publication_cancellation,
+                )
+                .await?;
+            self.change_database(|state, _github_setup| {
+                if state.revision != expected_revision {
+                    bail!("Runner revision changed while validating the GitHub connection");
+                }
+                if Self::publication_unresolved(state) {
+                    bail!("Publication became unresolved while validating the GitHub connection");
+                }
+                state
+                    .github_connections
+                    .retain(|current| current.project != project);
+                state.github_connections.push(binding);
+                state
+                    .github_connections
+                    .sort_by(|left, right| left.project.cmp(&right.project));
+                Ok(())
+            })?;
+            Ok(())
+        }
+        .await;
+        self.publication_connection_running
+            .store(false, Ordering::SeqCst);
+        result?;
+        self.snapshot()
+    }
+
+    fn disconnect_github_connection(&self, project: &str, expected_revision: u64) -> Result<Value> {
+        self.publication_connection_running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .map_err(|_| anyhow!("Another GitHub connection operation is running"))?;
+        let result = (|| -> Result<()> {
+            self.change_database(|state, github_setup| {
+                if state.revision != expected_revision {
+                    bail!("Runner revision changed; refresh before disconnecting GitHub");
+                }
+                if self.shutdown.load(Ordering::SeqCst)
+                    || self.emergency_paused(state)
+                    || self.running.load(Ordering::SeqCst)
+                    || self.planning_running.load(Ordering::SeqCst)
+                    || self.escalation_running.load(Ordering::SeqCst)
+                    || self.chat.is_running()
+                    || self.tools.blocks_work()
+                    || self.publication_running.load(Ordering::SeqCst)
+                    || Self::publication_unresolved(state)
+                    || github_setup.blocks_dependent_work()
+                {
+                    bail!(
+                        "Stop developer work and resolve publication before disconnecting GitHub"
+                    );
+                }
+                let before = state.github_connections.len();
+                state
+                    .github_connections
+                    .retain(|binding| binding.project != project);
+                if state.github_connections.len() == before {
+                    bail!("GitHub connection was not found");
+                }
+                Ok(())
+            })?;
+            Ok(())
+        })();
+        self.publication_connection_running
+            .store(false, Ordering::SeqCst);
+        result?;
+        self.snapshot()
+    }
+
+    fn reconcile_publication(
+        self: &Arc<Self>,
+        feature_id: &str,
+        expected_revision: u64,
+        expected_checkpoint: &str,
+    ) -> Result<Value> {
+        Uuid::parse_str(feature_id).context("Invalid feature ID")?;
+        if self.publication_runtime.is_none() {
+            bail!(self
+                .publication_unavailable_reason
+                .clone()
+                .unwrap_or_else(|| "GitHub publication tools are unavailable".into()));
+        }
+        let mut database = self
+            .database
+            .lock()
+            .map_err(|_| anyhow!("state lock failed"))?;
+        if self.publication_connection_running.load(Ordering::SeqCst) {
+            bail!("Wait for the GitHub connection operation to finish");
+        }
+        if database.github_setup.blocks_dependent_work() {
+            bail!("Reconcile the unfinished GitHub setup operation before publication");
+        }
+        self.publication_running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .map_err(|_| anyhow!("Another GitHub publication is running"))?;
+        self.publication_cancellation.store(0, Ordering::SeqCst);
+        let prepared = mutate_database(&mut database, |state, github_setup| {
+            if state.revision != expected_revision {
+                bail!("Runner revision changed; refresh before reconciling publication");
+            }
+            if self.shutdown.load(Ordering::SeqCst) || self.emergency_paused(state) {
+                bail!("Clear shutdown or Emergency Pause before reconciling publication");
+            }
+            if github_setup.blocks_dependent_work() {
+                bail!("Reconcile the unfinished GitHub setup operation before publication");
+            }
+            if self.running.load(Ordering::SeqCst)
+                || self.planning_running.load(Ordering::SeqCst)
+                || self.escalation_running.load(Ordering::SeqCst)
+                || self.chat.is_running()
+                || self.tools.blocks_work()
+            {
+                bail!("Stop other developer work before reconciling publication");
+            }
+            let feature = state
+                .queue
+                .iter_mut()
+                .find(|feature| feature.id == feature_id)
+                .context("Feature not found")?;
+            if feature.checkpoint != expected_checkpoint
+                || expected_checkpoint != "publication_attention"
+            {
+                bail!("Publication checkpoint changed; refresh before reconciling");
+            }
+            publication_input(feature)?;
+            let publication = feature
+                .publication
+                .as_mut()
+                .context("Publication record is missing")?;
+            if publication.status != "attention" {
+                bail!("Only a publication needing attention can be reconciled");
+            }
+            publication.status = "pending".into();
+            publication.message = "Explicit reconciliation is inspecting the existing branch, pull request, checks, and merge".into();
+            feature.status = "running".into();
+            feature.checkpoint = "publication_reconciling".into();
+            feature.message = publication.message.clone();
+            Ok(())
+        });
+        drop(database);
+        if let Err(error) = prepared {
+            self.publication_running.store(false, Ordering::SeqCst);
+            return Err(error);
+        }
+        let accepted = self.snapshot()?;
+        let engine = self.clone();
+        let feature_id = feature_id.to_owned();
+        tokio::spawn(async move {
+            if let Err(error) = engine.execute_publication_reserved(&feature_id).await {
+                eprintln!("developer publication reconciliation: {error:#}");
+            }
+        });
+        Ok(accepted)
     }
     async fn run_queue(&self, mut inference_lease: Option<InferenceLease>) -> Result<()> {
         loop {
@@ -1674,6 +3035,7 @@ impl Engine {
             let Some(feature) = feature else {
                 break;
             };
+            let feature = self.freeze_feature_publication(feature)?;
             if self.cancelled() {
                 self.change(|state| {
                     let current = state
@@ -1741,9 +3103,16 @@ impl Engine {
                             state.revision + 1,
                             "Repair proposal application was interrupted before all approved files were durably recorded. Inspect the workspace and prepare a new proposal; Resume will not replay the remaining edits.",
                         )?;
+                    } else if let Some(publication) = current
+                        .publication
+                        .as_ref()
+                        .filter(|publication| publication.status == "attention")
+                    {
+                        current.status = "failed".into();
+                        current.checkpoint = "publication_attention".into();
+                        current.message = publication.message.clone();
                     } else {
-                        current.status = "paused".into();
-                        current.message = "Stopped. Resume continues from the saved checkpoint; applied files are retained.".into();
+                        pause_after_post_run_cancellation(current);
                     }
                     Ok(())
                 })?;
@@ -1821,7 +3190,22 @@ impl Engine {
                 }
                 break;
             }
-            self.complete_reviewed_feature(&feature.id)?;
+            if let Err(error) = self.complete_reviewed_feature(&feature.id).await {
+                let message = format!("Feature completion failed closed: {error:#}");
+                self.change(|state| {
+                    let current = state
+                        .queue
+                        .iter_mut()
+                        .find(|candidate| candidate.id == feature.id)
+                        .context("feature missing")?;
+                    if current.checkpoint != "publication_attention" {
+                        current.status = "failed".into();
+                        current.message = message.chars().take(4000).collect();
+                    }
+                    Ok(())
+                })?;
+                return Err(error);
+            }
             if feature.repair_pending {
                 self.repair_loop_authorized.store(false, Ordering::SeqCst);
             }
@@ -1838,7 +3222,287 @@ impl Engine {
         Ok(())
     }
 
-    fn complete_reviewed_feature(&self, feature_id: &str) -> Result<()> {
+    async fn run_tool_feature_candidate(
+        &self,
+        feature: &Feature,
+        project: &Path,
+        approved_plan: &str,
+        validation_paths: &[String],
+        protected_repair_inputs: &std::collections::HashMap<String, String>,
+    ) -> Result<ToolFeatureOutcome> {
+        let target = self.model_target(&feature.model_target)?;
+        let model = ToolModelConfig {
+            target: target.id.into(),
+            url: target.url.clone(),
+            model: target.model.clone(),
+        };
+        let mut workspace_revision = self.tools.snapshot(&feature.project)?["workspace_revision"]
+            .as_u64()
+            .context("Tool workspace revision is unavailable")?;
+        let mut edits = Vec::new();
+
+        if feature.repair_pending && repair_needs_environment_preparation(feature) {
+            let result = self
+                .tools
+                .run_chat(ToolChatRequest {
+                    request_id: Uuid::new_v4().to_string(),
+                    project: feature.project.clone(),
+                    chat_id: None,
+                    prompt: tool_environment_prompt(feature)?,
+                    model: model.clone(),
+                    attachments: Vec::new(),
+                    feature_id: Some(feature.id.clone()),
+                    forbidden_write_paths: repair_forbidden_tool_paths(validation_paths),
+                    working_project: None,
+                    cancellation: self.tool_cancellation.clone(),
+                })
+                .await;
+            let mutations = self
+                .tools
+                .project_mutations(&feature.project, workspace_revision)?;
+            workspace_revision = mutations
+                .last()
+                .map_or(workspace_revision, |mutation| mutation.revision);
+            edits = match tool_mutation_edits(&mutations, Some(&feature.id)) {
+                Ok(edits) => edits,
+                Err(error) => {
+                    self.record_tool_candidate_failure(
+                        &feature.id,
+                        workspace_revision,
+                        &[],
+                        false,
+                        &error.to_string(),
+                    )?;
+                    return Err(error);
+                }
+            };
+            if let Some(edit) = edits
+                .iter()
+                .find(|edit| !is_dependency_manifest(&edit.path))
+            {
+                let error = anyhow!(
+                    "Environment preparation changed {} outside the dependency manifest allowlist; effects are quarantined",
+                    edit.path
+                );
+                self.record_tool_candidate_failure(
+                    &feature.id,
+                    workspace_revision,
+                    &edits,
+                    false,
+                    &error.to_string(),
+                )?;
+                return Err(error);
+            }
+            if let Err(error) = result {
+                self.record_tool_candidate_failure(
+                    &feature.id,
+                    workspace_revision,
+                    &edits,
+                    false,
+                    &error.to_string(),
+                )?;
+                return Err(error);
+            }
+            if repair_protected_inputs(project, validation_paths)? != *protected_repair_inputs {
+                let error =
+                    anyhow!("Environment preparation changed a protected test or validation input");
+                self.record_tool_candidate_failure(
+                    &feature.id,
+                    workspace_revision,
+                    &edits,
+                    false,
+                    &error.to_string(),
+                )?;
+                return Err(error);
+            }
+            if let Err(error) = require_project_virtual_environment(project) {
+                self.record_tool_candidate_failure(
+                    &feature.id,
+                    workspace_revision,
+                    &edits,
+                    false,
+                    &error.to_string(),
+                )?;
+                return Err(error);
+            }
+            match self.validate_command(feature, project).await {
+                Ok(_) => {
+                    return Ok(ToolFeatureOutcome {
+                        edits,
+                        application_edits: Vec::new(),
+                        workspace_revision,
+                        applied_to_live_project: true,
+                        model: model.model,
+                    });
+                }
+                Err(error)
+                    if error
+                        .downcast_ref::<RepairableValidationFailure>()
+                        .is_some() => {}
+                Err(error) => {
+                    self.record_tool_candidate_failure(
+                        &feature.id,
+                        workspace_revision,
+                        &edits,
+                        false,
+                        &error.to_string(),
+                    )?;
+                    return Err(error);
+                }
+            }
+        }
+
+        let repair_stage = if feature.repair_pending {
+            Some(RepairStage::create(&self.root, project)?)
+        } else {
+            None
+        };
+        let result = self
+            .tools
+            .run_chat(ToolChatRequest {
+                request_id: Uuid::new_v4().to_string(),
+                project: feature.project.clone(),
+                chat_id: None,
+                prompt: tool_feature_prompt(feature, approved_plan)?,
+                model: model.clone(),
+                attachments: Vec::new(),
+                feature_id: Some(feature.id.clone()),
+                forbidden_write_paths: if feature.repair_pending {
+                    repair_forbidden_tool_paths(validation_paths)
+                } else {
+                    Vec::new()
+                },
+                working_project: repair_stage
+                    .as_ref()
+                    .map(|stage| stage.project_name.clone()),
+                cancellation: self.tool_cancellation.clone(),
+            })
+            .await;
+        let mutations = self
+            .tools
+            .project_mutations(&feature.project, workspace_revision)?;
+        workspace_revision = mutations
+            .last()
+            .map_or(workspace_revision, |mutation| mutation.revision);
+        let live_environment_edits = edits.clone();
+        let candidate_edits = match tool_mutation_edits(&mutations, Some(&feature.id)) {
+            Ok(edits) => edits,
+            Err(error) => {
+                self.record_tool_candidate_failure(
+                    &feature.id,
+                    workspace_revision,
+                    &edits,
+                    repair_stage.is_some(),
+                    &error.to_string(),
+                )?;
+                return Err(error);
+            }
+        };
+        let (combined_edits, stage_application_edits) =
+            tool_review_and_application_edits(&edits, &candidate_edits, repair_stage.is_some())?;
+        edits = combined_edits;
+        if let Err(error) = result {
+            self.record_tool_candidate_failure(
+                &feature.id,
+                workspace_revision,
+                if repair_stage.is_some() {
+                    &live_environment_edits
+                } else {
+                    &edits
+                },
+                repair_stage.is_some(),
+                &error.to_string(),
+            )?;
+            return Err(error);
+        }
+        if self.cancelled() {
+            let error = anyhow!("Stopped");
+            self.record_tool_candidate_failure(
+                &feature.id,
+                workspace_revision,
+                if repair_stage.is_some() {
+                    &live_environment_edits
+                } else {
+                    &edits
+                },
+                repair_stage.is_some(),
+                &error.to_string(),
+            )?;
+            return Err(error);
+        }
+        if let Some(stage) = &repair_stage {
+            let protected_unchanged = (|| -> Result<bool> {
+                Ok(
+                    repair_protected_inputs(stage.project_path(), validation_paths)?
+                        == *protected_repair_inputs
+                        && repair_protected_inputs(project, validation_paths)?
+                            == *protected_repair_inputs,
+                )
+            })();
+            if !matches!(protected_unchanged, Ok(true)) {
+                let detail = protected_unchanged
+                    .err()
+                    .map(|error| format!(" ({error})"))
+                    .unwrap_or_default();
+                let error = anyhow!(
+                    "A protected test or validation input changed during staged tool-assisted repair; no candidate files were applied{detail}"
+                );
+                self.record_tool_candidate_failure(
+                    &feature.id,
+                    workspace_revision,
+                    &live_environment_edits,
+                    true,
+                    &error.to_string(),
+                )?;
+                return Err(error);
+            }
+        }
+        Ok(ToolFeatureOutcome {
+            edits,
+            application_edits: if feature.repair_pending {
+                stage_application_edits
+            } else {
+                Vec::new()
+            },
+            workspace_revision,
+            applied_to_live_project: !feature.repair_pending,
+            model: model.model,
+        })
+    }
+
+    fn record_tool_candidate_failure(
+        &self,
+        feature_id: &str,
+        workspace_revision: u64,
+        live_edits: &[Edit],
+        staged_candidate: bool,
+        reason: &str,
+    ) -> Result<()> {
+        self.change(|state| {
+            let feature = state
+                .queue
+                .iter_mut()
+                .find(|feature| feature.id == feature_id)
+                .context("feature missing")?;
+            quarantine_tool_candidate(
+                feature,
+                workspace_revision,
+                live_edits,
+                staged_candidate,
+                reason,
+            )
+        })
+        .map(|_| ())
+    }
+
+    async fn complete_reviewed_feature(&self, feature_id: &str) -> Result<()> {
+        if !self.prepare_reviewed_completion(feature_id)? {
+            return Ok(());
+        }
+        self.execute_publication(feature_id).await
+    }
+
+    fn prepare_reviewed_completion(&self, feature_id: &str) -> Result<bool> {
         // Keep the durable state lock across the final filesystem rebind and success
         // transition. A review decision alone is never sufficient: the current bytes
         // must still match the exact packet approved by Codex immediately before the
@@ -1886,22 +3550,238 @@ impl Engine {
             db.state = next;
             return Err(error);
         }
-        current.status = "succeeded".into();
-        current.checkpoint = format!("review_{}_approved", current.review_attempts);
-        current.message = "Changes applied, validation passed, and the fixed ChatGPT Codex reviewer approved the exact generated files.".into();
-        current.repair_pending = false;
-        if current.escalation_pending {
-            finish_escalation_application(
-                current,
-                completion_revision,
-                "succeeded",
-                "Repair proposal was applied once, validation passed, and ChatGPT Codex approved the exact files",
-            )?;
+        if !current.publication_selection_frozen {
+            bail!("Feature publication selection was not frozen before implementation");
         }
+        if current.publication_binding.is_none() {
+            current.status = "succeeded".into();
+            current.checkpoint = format!("review_{}_approved", current.review_attempts);
+            current.message = "Changes applied, validation passed, and the fixed ChatGPT Codex reviewer approved the exact generated files. This feature remains local because no GitHub repository was connected when the run started.".into();
+            current.repair_pending = false;
+            if current.escalation_pending {
+                finish_escalation_application(
+                    current,
+                    completion_revision,
+                    "succeeded",
+                    "Repair proposal was applied once, validation passed, and ChatGPT Codex approved the exact files; the feature remains local",
+                )?;
+            }
+            next.revision = completion_revision;
+            let data = serde_json::to_string(&next)?;
+            db.connection.execute("INSERT INTO developer_state(id,state) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET state=excluded.state", [data])?;
+            db.state = next;
+            return Ok(false);
+        }
+        if current.publication.is_some() || !current.publication_candidate.is_empty() {
+            bail!("Publication was already prepared; use explicit reconciliation");
+        }
+        let project = fs::canonicalize(self.root.join(&current.project))?;
+        let approved = current
+            .review_history
+            .iter()
+            .rev()
+            .find(|attempt| attempt.outcome == "approved" && attempt.decision_sha256.is_some())
+            .context("Required Codex review approval evidence is missing")?;
+        let packet = developer_review_packet(
+            current,
+            &project,
+            current
+                .edits
+                .as_deref()
+                .context("Approved review has no generated-file evidence")?,
+            &approved.validation_evidence_sha256,
+        )?;
+        current.publication_candidate = packet
+            .files
+            .iter()
+            .map(|file| FrozenPublicationFile {
+                path: file.path.clone(),
+                before_sha256: file.before_sha256.clone(),
+                content_sha256: file.content_sha256.clone(),
+                content: file.content.clone(),
+            })
+            .collect();
+        let input = publication_input(current)?;
+        current.publication = Some(PublicationRecord::pending(&input)?);
+        current.status = "running".into();
+        current.checkpoint = "publication_pending".into();
+        current.message =
+            "The exact reviewed candidate is ready for automatic GitHub publication".into();
+        current.repair_pending = false;
         next.revision = completion_revision;
         let data = serde_json::to_string(&next)?;
         db.connection.execute("INSERT INTO developer_state(id,state) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET state=excluded.state", [data])?;
         db.state = next;
+        Ok(true)
+    }
+
+    async fn execute_publication(&self, feature_id: &str) -> Result<()> {
+        {
+            let database = self
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?;
+            if self.publication_connection_running.load(Ordering::SeqCst)
+                || database.github_setup.blocks_dependent_work()
+            {
+                bail!("GitHub setup changed before publication admission");
+            }
+            self.publication_running
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .map_err(|_| anyhow!("Another GitHub publication is running"))?;
+            self.publication_cancellation.store(0, Ordering::SeqCst);
+        }
+        self.execute_publication_reserved(feature_id).await
+    }
+
+    async fn execute_publication_reserved(&self, feature_id: &str) -> Result<()> {
+        let _running_guard = PublicationRunningGuard(&self.publication_running);
+        let runtime = match self.publication_runtime.as_ref() {
+            Some(runtime) => runtime.clone(),
+            None => {
+                let reason = self
+                    .publication_unavailable_reason
+                    .as_deref()
+                    .unwrap_or("Git and GitHub CLI are unavailable");
+                self.publication_attention(feature_id, reason)?;
+                bail!(reason.to_owned());
+            }
+        };
+        let prepared = (|| -> Result<(PublicationInput, PublicationRecord)> {
+            let database = self
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?;
+            let feature = database
+                .state
+                .queue
+                .iter()
+                .find(|feature| feature.id == feature_id)
+                .context("Feature not found")?;
+            let input = publication_input(feature)?;
+            let record = feature
+                .publication
+                .clone()
+                .context("Publication record is missing")?;
+            Ok((input, record))
+        })();
+        let (input, mut record) = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.publication_attention(
+                    feature_id,
+                    &format!("GitHub publication evidence needs attention: {error:#}"),
+                )?;
+                return Err(error);
+            }
+        };
+        let result = runtime
+            .publish(
+                &input,
+                &mut record,
+                &self.publication_cancellation,
+                |updated| {
+                    self.change(|state| {
+                        let feature = state
+                            .queue
+                            .iter_mut()
+                            .find(|feature| feature.id == feature_id)
+                            .context("Feature not found")?;
+                        let current = feature
+                            .publication
+                            .as_ref()
+                            .context("Publication record is missing")?;
+                        if current.repository_url != updated.repository_url
+                            || current.feature_branch != updated.feature_branch
+                        {
+                            bail!("Publication binding changed while recording evidence");
+                        }
+                        feature.publication = Some(updated.clone());
+                        feature.status = "running".into();
+                        if feature.checkpoint != "publication_reconciling" {
+                            feature.checkpoint = "publication_pending".into();
+                        }
+                        feature.message = updated.message.clone();
+                        Ok(())
+                    })
+                },
+            )
+            .await;
+        let outcome = match result {
+            Ok(()) => self.finish_publication(feature_id),
+            Err(error) => {
+                let message = format!("GitHub publication needs attention: {error:#}");
+                self.publication_attention(feature_id, &message)?;
+                Err(error)
+            }
+        };
+        outcome
+    }
+
+    fn publication_attention(&self, feature_id: &str, message: &str) -> Result<()> {
+        self.change(|state| {
+            let feature = state
+                .queue
+                .iter_mut()
+                .find(|feature| feature.id == feature_id)
+                .context("Feature not found")?;
+            let publication = feature
+                .publication
+                .as_mut()
+                .context("Publication record is missing")?;
+            publication.status = "attention".into();
+            if publication.stage == "complete" {
+                publication.stage = "verify_remote_base".into();
+            }
+            publication.message = message.chars().take(1000).collect();
+            feature.status = "failed".into();
+            feature.checkpoint = "publication_attention".into();
+            feature.message = publication.message.clone();
+            feature.repair_pending = false;
+            Ok(())
+        })
+    }
+
+    fn finish_publication(&self, feature_id: &str) -> Result<()> {
+        let completed = self.change(|state| {
+            let next_revision = state.revision.checked_add(1).context("Revision overflow")?;
+            let feature = state.queue.iter_mut().find(|feature| feature.id == feature_id).context("Feature not found")?;
+            publication_input(feature)?;
+            let publication = feature.publication.as_mut().context("Publication record is missing")?;
+            publication.validate()?;
+            if publication.status != "succeeded" || publication.stage != "complete" {
+                bail!("GitHub publication did not produce complete merge evidence");
+            }
+            if publication_completion_is_cancelled(
+                &self.publication_cancellation,
+                state.emergency_paused,
+            ) {
+                publication.status = "attention".into();
+                publication.stage = "verify_remote_base".into();
+                publication.message = "Stop or Emergency Pause arrived before local completion was recorded. The verified remote receipt is retained; use explicit reconciliation before queue advancement.".into();
+                feature.status = "failed".into();
+                feature.checkpoint = "publication_attention".into();
+                feature.message = publication.message.clone();
+                return Ok(false);
+            }
+            feature.status = "succeeded".into();
+            feature.checkpoint = "publication_merged".into();
+            feature.message = "The exact reviewed candidate was committed on its feature branch, passed required checks, merged normally, and was verified on the remote base.".into();
+            feature.repair_pending = false;
+            if feature.escalation_pending {
+                finish_escalation_application(
+                    feature,
+                    next_revision,
+                    "succeeded",
+                    "Repair proposal was applied once, independently approved, and verified merged on GitHub",
+                )?;
+                feature.checkpoint = "publication_merged".into();
+            }
+            Ok(true)
+        })?;
+        if !completed {
+            bail!("GitHub publication completion was stopped and requires reconciliation");
+        }
         Ok(())
     }
     async fn run_feature(&self, feature: &Feature) -> Result<()> {
@@ -1926,6 +3806,8 @@ impl Engine {
             }
             Ok(())
         })?;
+        let mut tool_session_applied = false;
+        let mut tool_application_edits = None;
         let mut edits = if feature.escalation_pending {
             feature.edits.clone().unwrap_or_default()
         } else if let Some(edits) = &feature.edits {
@@ -2029,141 +3911,200 @@ impl Engine {
                 )
             };
             let target = self.model_target(&feature.model_target)?;
-            let client = reqwest::Client::builder()
-                .timeout(Duration::from_secs(900))
-                .redirect(reqwest::redirect::Policy::none())
-                .no_proxy()
-                .build()?;
-            let request = client
-                .post(format!(
-                    "{}/chat/completions",
-                    target.url.trim_end_matches('/')
-                ))
-                .json(&json!({
-                    "model":target.model,"temperature":0.1,"max_tokens":8192,
-                    "response_format":{"type":"json_object"},
-                    "chat_template_kwargs":{"enable_thinking":false},
-                    "messages":[{"role":"system","content":system_prompt},
-                        {"role":"user","content":user_prompt}]
-                }))
-                .send();
-            tokio::pin!(request);
-            let response = loop {
-                tokio::select! {
-                    response = &mut request => break response.with_context(|| format!("{} model target request failed", target.name))?,
-                    _ = tokio::time::sleep(Duration::from_millis(100)) => if self.cancelled() { bail!("Stopped"); }
+            if self.tools.available() {
+                self.feature(
+                    &feature.id,
+                    "running",
+                    None,
+                    "Local model is working with project tools",
+                )?;
+                let outcome = self
+                    .run_tool_feature_candidate(
+                        feature,
+                        &project,
+                        plan_context,
+                        &validation_paths,
+                        &protected_repair_inputs,
+                    )
+                    .await?;
+                let ToolFeatureOutcome {
+                    edits: prepared,
+                    application_edits,
+                    workspace_revision,
+                    applied_to_live_project,
+                    model,
+                } = outcome;
+                if feature.repair_pending
+                    && prepared.is_empty()
+                    && feature
+                        .repair_history
+                        .last()
+                        .is_none_or(|attempt| attempt.prior_edits.is_empty())
+                {
+                    bail!("Tool-assisted repair produced no reviewable implementation or environment change");
                 }
-            };
-            let status = response.status();
-            if !status.is_success() {
-                bail!("{} model target returned HTTP {status}", target.name);
-            }
-            let body = response.json::<Value>();
-            tokio::pin!(body);
-            let payload = loop {
-                tokio::select! {
-                    result = &mut body => break result?,
-                    _ = tokio::time::sleep(Duration::from_millis(100)) => if self.cancelled() { bail!("Stopped"); }
+                self.change(|state| {
+                    let current = state
+                        .queue
+                        .iter_mut()
+                        .find(|candidate| candidate.id == feature.id)
+                        .context("feature missing")?;
+                    current.edits = Some(prepared.clone());
+                    current.tool_workspace_revision = workspace_revision;
+                    current.checkpoint = if current.repair_pending {
+                        format!("repair_{}_applied", current.repair_attempts)
+                    } else {
+                        "applied".into()
+                    };
+                    current.message = format!(
+                        "Tool-assisted changes finished with {} model {}; running immutable validation",
+                        model_target_name(target.id),
+                        model
+                    );
+                    Ok(())
+                })?;
+                tool_session_applied = applied_to_live_project;
+                tool_application_edits = Some(application_edits);
+                prepared
+            } else {
+                let client = reqwest::Client::builder()
+                    .timeout(Duration::from_secs(900))
+                    .redirect(reqwest::redirect::Policy::none())
+                    .no_proxy()
+                    .build()?;
+                let request = client
+                    .post(format!(
+                        "{}/chat/completions",
+                        target.url.trim_end_matches('/')
+                    ))
+                    .json(&json!({
+                        "model":target.model,"temperature":0.1,"max_tokens":8192,
+                        "response_format":{"type":"json_object"},
+                        "chat_template_kwargs":{"enable_thinking":false},
+                        "messages":[{"role":"system","content":system_prompt},
+                            {"role":"user","content":user_prompt}]
+                    }))
+                    .send();
+                tokio::pin!(request);
+                let response = loop {
+                    tokio::select! {
+                        response = &mut request => break response.with_context(|| format!("{} model target request failed", target.name))?,
+                        _ = tokio::time::sleep(Duration::from_millis(100)) => if self.cancelled() { bail!("Stopped"); }
+                    }
+                };
+                let status = response.status();
+                if !status.is_success() {
+                    bail!("{} model target returned HTTP {status}", target.name);
                 }
-            };
-            let content = payload["choices"][0]["message"]["content"]
-                .as_str()
-                .context("Model returned no file changes")?;
-            if content.len() > 1024 * 1024 {
-                bail!("Model change set exceeds 1 MiB");
-            }
-            let normalized = content
-                .trim()
-                .strip_prefix("```json")
-                .or_else(|| content.trim().strip_prefix("```"))
-                .and_then(|s| s.trim().strip_suffix("```"))
-                .unwrap_or(content)
-                .trim();
-            let generated: Value = serde_json::from_str(normalized).with_context(|| format!(
+                let body = response.json::<Value>();
+                tokio::pin!(body);
+                let payload = loop {
+                    tokio::select! {
+                        result = &mut body => break result?,
+                        _ = tokio::time::sleep(Duration::from_millis(100)) => if self.cancelled() { bail!("Stopped"); }
+                    }
+                };
+                let content = payload["choices"][0]["message"]["content"]
+                    .as_str()
+                    .context("Model returned no file changes")?;
+                if content.len() > 1024 * 1024 {
+                    bail!("Model change set exceeds 1 MiB");
+                }
+                let normalized = content
+                    .trim()
+                    .strip_prefix("```json")
+                    .or_else(|| content.trim().strip_prefix("```"))
+                    .and_then(|s| s.trim().strip_suffix("```"))
+                    .unwrap_or(content)
+                    .trim();
+                let generated: Value = serde_json::from_str(normalized).with_context(|| format!(
                 "Model did not return valid file JSON ({} bytes; finish reason {}); no files were changed", content.len(), payload["choices"][0]["finish_reason"]))?;
-            let entries = generated["files"]
-                .as_array()
-                .context("Model response has no files array")?;
-            if entries.is_empty() || entries.len() > 40 {
-                bail!("Expected 1 to 40 changed files");
-            }
-            if feature.repair_pending
-                && repair_protected_inputs(&project, &validation_paths)? != protected_repair_inputs
-            {
-                bail!(
+                let entries = generated["files"]
+                    .as_array()
+                    .context("Model response has no files array")?;
+                if entries.is_empty() || entries.len() > 40 {
+                    bail!("Expected 1 to 40 changed files");
+                }
+                if feature.repair_pending
+                    && repair_protected_inputs(&project, &validation_paths)?
+                        != protected_repair_inputs
+                {
+                    bail!(
                     "A protected test or validation input changed while the repair model was running; preserve it and retry"
                 );
-            }
-            let mut edits = Vec::new();
-            let mut seen = std::collections::HashSet::new();
-            for entry in entries {
-                let path = entry["path"].as_str().context("Missing file path")?;
-                let content = entry["content"].as_str().context("Missing file content")?;
-                let full = checked_path(&project, path)?;
-                if !seen.insert(path.to_lowercase()) {
-                    bail!("Duplicate output file");
                 }
-                if feature.repair_pending && is_protected_repair_input(path, &validation_paths) {
-                    match protected_repair_inputs.get(&path.to_lowercase()) {
-                        Some(expected) if hash(content.as_bytes()) == *expected => continue,
-                        Some(_) => bail!(
-                            "Repair cannot modify existing test or validation input {}",
-                            path
-                        ),
-                        None => bail!("Repair cannot create test or validation input {}", path),
+                let mut edits = Vec::new();
+                let mut seen = std::collections::HashSet::new();
+                for entry in entries {
+                    let path = entry["path"].as_str().context("Missing file path")?;
+                    let content = entry["content"].as_str().context("Missing file content")?;
+                    let full = checked_path(&project, path)?;
+                    if !seen.insert(path.to_lowercase()) {
+                        bail!("Duplicate output file");
                     }
-                }
-                let before = if feature.repair_pending {
-                    if let Some(expected) = repair_baseline.get(&path.to_lowercase()) {
-                        if !full.exists() || hash(&fs::read(&full)?) != *expected {
-                            bail!(
+                    if feature.repair_pending && is_protected_repair_input(path, &validation_paths)
+                    {
+                        match protected_repair_inputs.get(&path.to_lowercase()) {
+                            Some(expected) if hash(content.as_bytes()) == *expected => continue,
+                            Some(_) => bail!(
+                                "Repair cannot modify existing test or validation input {}",
+                                path
+                            ),
+                            None => bail!("Repair cannot create test or validation input {}", path),
+                        }
+                    }
+                    let before = if feature.repair_pending {
+                        if let Some(expected) = repair_baseline.get(&path.to_lowercase()) {
+                            if !full.exists() || hash(&fs::read(&full)?) != *expected {
+                                bail!(
                                 "{} changed while the repair model was preparing changes; preserve it and retry",
                                 path
                             );
+                            }
+                            Some(expected.clone())
+                        } else if full.exists() {
+                            bail!(
+                                "{} was not in the repair baseline; preserve it and retry",
+                                path
+                            );
+                        } else {
+                            None
                         }
-                        Some(expected.clone())
                     } else if full.exists() {
-                        bail!(
-                            "{} was not in the repair baseline; preserve it and retry",
-                            path
-                        );
+                        Some(hash(&fs::read(&full)?))
                     } else {
                         None
-                    }
-                } else if full.exists() {
-                    Some(hash(&fs::read(&full)?))
-                } else {
-                    None
-                };
-                edits.push(Edit {
-                    path: path.into(),
-                    content: content.into(),
-                    before,
-                });
+                    };
+                    edits.push(Edit {
+                        path: path.into(),
+                        content: content.into(),
+                        before,
+                    });
+                }
+                if feature.repair_pending && edits.is_empty() {
+                    bail!("Repair proposed no mutable implementation changes");
+                }
+                if self.cancelled() {
+                    bail!("Stopped");
+                }
+                self.change(|s| {
+                    let f = s
+                        .queue
+                        .iter_mut()
+                        .find(|f| f.id == feature.id)
+                        .context("feature missing")?;
+                    f.edits = Some(edits.clone());
+                    f.checkpoint = if f.repair_pending {
+                        format!("repair_{}_prepared", f.repair_attempts)
+                    } else {
+                        "prepared".into()
+                    };
+                    Ok(())
+                })?;
+                edits
             }
-            if feature.repair_pending && edits.is_empty() {
-                bail!("Repair proposed no mutable implementation changes");
-            }
-            if self.cancelled() {
-                bail!("Stopped");
-            }
-            self.change(|s| {
-                let f = s
-                    .queue
-                    .iter_mut()
-                    .find(|f| f.id == feature.id)
-                    .context("feature missing")?;
-                f.edits = Some(edits.clone());
-                f.checkpoint = if f.repair_pending {
-                    format!("repair_{}_prepared", f.repair_attempts)
-                } else {
-                    "prepared".into()
-                };
-                Ok(())
-            })?;
-            edits
         };
-        if !checkpoint_has_applied_edits(&feature.checkpoint) {
+        if !tool_session_applied && !checkpoint_has_applied_edits(&feature.checkpoint) {
             self.feature(&feature.id, "running", None, "Applying saved file changes")?;
             let application_edits = if feature.escalation_pending {
                 validate_current_review_edits(&edits, &project)?;
@@ -2180,7 +4121,9 @@ impl Engine {
                     })
                     .collect::<Vec<_>>()
             } else {
-                edits.clone()
+                tool_application_edits
+                    .clone()
+                    .unwrap_or_else(|| edits.clone())
             };
             for edit in &application_edits {
                 if self.cancelled() {
@@ -2483,6 +4426,7 @@ impl Engine {
             use std::os::unix::process::CommandExt;
             command.as_std_mut().process_group(0);
         }
+        configure_project_environment(&mut command, project)?;
         let mut child = command
             .current_dir(project)
             .stdin(Stdio::null())
@@ -2520,6 +4464,167 @@ impl Engine {
         }
     }
 }
+
+fn configure_project_environment(command: &mut Command, project: &Path) -> Result<()> {
+    let environment = project.join(".venv");
+    if !environment.exists() {
+        return Ok(());
+    }
+    let environment_metadata = fs::symlink_metadata(&environment)?;
+    if environment_metadata.file_type().is_symlink() || !environment_metadata.is_dir() {
+        bail!("Project .venv must be an ordinary directory");
+    }
+    let environment = fs::canonicalize(environment)?;
+    let expected_environment = project.join(".venv");
+    if environment != expected_environment || !environment.starts_with(project) {
+        bail!("Project .venv leaves or redirects within the project");
+    }
+    #[cfg(windows)]
+    let bin = environment.join("Scripts");
+    #[cfg(not(windows))]
+    let bin = environment.join("bin");
+    let bin_metadata =
+        fs::symlink_metadata(&bin).context("Project .venv has no interpreter bin")?;
+    if bin_metadata.file_type().is_symlink() || !bin_metadata.is_dir() {
+        bail!("Project .venv interpreter bin must be an ordinary directory");
+    }
+    let bin = fs::canonicalize(bin)?;
+    if !bin.starts_with(&environment) {
+        bail!("Project .venv interpreter bin leaves the environment");
+    }
+    #[cfg(windows)]
+    let interpreter = bin.join("python.exe");
+    #[cfg(not(windows))]
+    let interpreter = bin.join("python");
+    let interpreter_metadata =
+        fs::metadata(&interpreter).context("Project .venv has no usable Python interpreter")?;
+    if !interpreter_metadata.is_file() {
+        bail!("Project .venv Python interpreter must resolve to a file");
+    }
+    let mut paths = vec![bin];
+    if let Some(existing) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&existing));
+    }
+    command.env("PATH", std::env::join_paths(paths)?);
+    command.env("VIRTUAL_ENV", environment);
+    Ok(())
+}
+
+fn require_project_virtual_environment(project: &Path) -> Result<()> {
+    if !project.join(".venv").exists() {
+        bail!("Dependency preparation did not create the required project-local .venv");
+    }
+    configure_project_environment(&mut Command::new("venv-structure-check"), project)
+}
+
+struct RepairStage {
+    root: PathBuf,
+    project_name: String,
+}
+
+impl RepairStage {
+    fn create(workspace_root: &Path, source: &Path) -> Result<Self> {
+        if !source.starts_with(workspace_root) {
+            bail!("Repair staging source leaves the workspace root");
+        }
+        let project_name = format!("aw-repair-stage-{}", Uuid::new_v4().simple());
+        let root = workspace_root.join(&project_name);
+        fs::create_dir(&root)?;
+        let stage = Self { root, project_name };
+        copy_repair_stage(source, &stage.root)?;
+        Ok(stage)
+    }
+
+    fn project_path(&self) -> &Path {
+        &self.root
+    }
+}
+
+impl Drop for RepairStage {
+    fn drop(&mut self) {
+        if self.project_name.starts_with("aw-repair-stage-")
+            && self.root.file_name().and_then(|name| name.to_str())
+                == Some(self.project_name.as_str())
+        {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+}
+
+fn copy_repair_stage(source: &Path, destination: &Path) -> Result<()> {
+    fn visit(
+        source_root: &Path,
+        source: &Path,
+        destination: &Path,
+        file_count: &mut usize,
+        byte_count: &mut u64,
+        depth: usize,
+    ) -> Result<()> {
+        if depth > 20 {
+            bail!("Repair staging tree exceeds its depth limit");
+        }
+        let mut entries = fs::read_dir(source)?.collect::<std::io::Result<Vec<_>>>()?;
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if [
+                ".git",
+                ".venv",
+                "venv",
+                "target",
+                "node_modules",
+                "__pycache__",
+                "dist",
+            ]
+            .contains(&name.as_str())
+            {
+                continue;
+            }
+            let file_type = entry.file_type()?;
+            if file_type.is_symlink() {
+                continue;
+            }
+            let direct_metadata = fs::symlink_metadata(entry.path())?;
+            if planning_metadata_is_reparse(&direct_metadata) {
+                bail!("Repair staging refuses a Windows reparse point");
+            }
+            let metadata = entry.metadata()?;
+            let relative = entry.path().strip_prefix(source_root)?.to_path_buf();
+            let target = destination.join(relative);
+            if file_type.is_dir() {
+                fs::create_dir_all(&target)?;
+                visit(
+                    source_root,
+                    &entry.path(),
+                    destination,
+                    file_count,
+                    byte_count,
+                    depth + 1,
+                )?;
+            } else if file_type.is_file() {
+                *file_count = file_count
+                    .checked_add(1)
+                    .context("Repair staging count overflow")?;
+                *byte_count = byte_count
+                    .checked_add(metadata.len())
+                    .context("Repair staging size overflow")?;
+                if *file_count > 10_000 || *byte_count > 256 * 1024 * 1024 {
+                    bail!("Repair staging project exceeds its bounded copy limit");
+                }
+                fs::create_dir_all(
+                    target
+                        .parent()
+                        .context("Repair staging file has no parent")?,
+                )?;
+                fs::copy(entry.path(), target)?;
+            }
+        }
+        Ok(())
+    }
+
+    visit(source, source, destination, &mut 0, &mut 0, 0)
+}
+
 fn reserve_repair_attempt(feature: &mut Feature) -> Result<()> {
     if feature.repair_attempts >= REPAIR_LIMIT {
         bail!("Repair attempt limit reached");
@@ -2560,6 +4665,75 @@ fn reserve_repair_attempt(feature: &mut Feature) -> Result<()> {
     Ok(())
 }
 
+fn tool_feature_prompt(feature: &Feature, approved_plan: &str) -> Result<String> {
+    let repair = if feature.repair_pending {
+        let evidence = feature
+            .repair_history
+            .last()
+            .context("Reserved tool-assisted repair has no failure evidence")?;
+        format!(
+            "This is repair attempt {} of {}. Preserve existing tests and every file or directory referenced by the validation command. Do not create or modify conventional test/spec files. Prior failure evidence: {}",
+            feature.repair_attempts,
+            REPAIR_LIMIT,
+            serde_json::to_string(evidence)?
+        )
+    } else {
+        "Implement the feature and add meaningful tests when needed.".into()
+    };
+    Ok(format!(
+        "Implement this approved developer-app feature directly in the selected Windows project using the available project tools. You may inspect and edit project files, run bounded commands, access public internet resources, and install declared dependencies into a project-local environment when required. Never change Assemblywright queue state, approval records, or the immutable validation command. Never weaken, delete, skip, or broadly rewrite tests to make validation pass. Prefer the interpreter or package manager used by the immutable validation command. Run that exact command before finishing when possible; Assemblywright will run it independently and require Codex review before success. Report the files, commands, dependency changes, web resources, and actual outcomes plainly.\n\nOriginal feature: {}\nApproved immutable implementation plan:\n{}\nImmutable validation command: {}\n{}",
+        feature.instruction, approved_plan, feature.validation, repair
+    ))
+}
+
+fn repair_needs_environment_preparation(feature: &Feature) -> bool {
+    let evidence = feature
+        .repair_history
+        .last()
+        .map(|attempt| attempt.prior_message.to_ascii_lowercase())
+        .unwrap_or_default();
+    [
+        "modulenotfounderror",
+        "no module named",
+        "importerror",
+        "cannot find module",
+        "command not found",
+        "is not recognized as an internal or external command",
+        "missing dependency",
+    ]
+    .iter()
+    .any(|marker| evidence.contains(marker))
+}
+
+fn tool_environment_prompt(feature: &Feature) -> Result<String> {
+    let evidence = feature
+        .repair_history
+        .last()
+        .context("Environment preparation requires prior failure evidence")?;
+    Ok(format!(
+        "Prepare only this selected Windows project's dependency environment for the immutable validation command. Diagnose the missing command, module, or declared package from the failure evidence. You may access public package sources, create or update the project-local .venv, install the needed dependency there, and minimally update an existing dependency manifest or lock file. The finished project must contain a usable .venv. After creating it, invoke Python package installation explicitly through `.venv\\Scripts\\python.exe -m pip` on Windows or `.venv/bin/python -m pip` on Unix; never use bare `pip`, `pip3`, or a global Python package install. Do not edit implementation source, tests, validation inputs, or the validation command. Use the same interpreter family named by the validation command and run the exact validation command after preparation. Report the dependency, source, command, and actual outcome.\n\nImmutable validation command: {}\nPrior failure evidence: {}",
+        feature.validation,
+        serde_json::to_string(evidence)?
+    ))
+}
+
+fn is_dependency_manifest(path: &str) -> bool {
+    let normalized = path.replace('\\', "/").to_ascii_lowercase();
+    let name = normalized.rsplit('/').next().unwrap_or_default();
+    name == "pyproject.toml"
+        || name == "poetry.lock"
+        || name == "uv.lock"
+        || name == "pipfile"
+        || name == "pipfile.lock"
+        || name == "package.json"
+        || name == "package-lock.json"
+        || name == "pnpm-lock.yaml"
+        || name == "yarn.lock"
+        || name == "cargo.toml"
+        || name == "cargo.lock"
+        || name.starts_with("requirements") && name.ends_with(".txt")
+}
+
 fn interrupt_pending_review(feature: &mut Feature, summary: &str) -> Result<()> {
     let ReviewPendingEvidence {
         attempt,
@@ -2581,6 +4755,172 @@ fn interrupt_pending_review(feature: &mut Feature, summary: &str) -> Result<()> 
     feature.review_status = "interrupted".into();
     feature.review_summary = summary.chars().take(1000).collect();
     feature.checkpoint = format!("review_{attempt}_interrupted");
+    Ok(())
+}
+
+fn feature_reviewer_state_is_changeable(feature: &Feature) -> bool {
+    matches!(feature.status.as_str(), "queued" | "paused" | "failed")
+        && !feature.publication.as_ref().is_some_and(|publication| {
+            matches!(
+                publication.status.as_str(),
+                "pending" | "running" | "attention"
+            )
+        })
+        && !feature.escalation_pending
+        && feature_reviewer_recovery_is_safe(&feature.checkpoint)
+        && !feature
+            .escalation_proposal
+            .as_ref()
+            .is_some_and(|proposal| {
+                matches!(
+                    proposal.status.as_str(),
+                    "preparing" | "approved" | "applying"
+                )
+            })
+}
+
+fn freeze_publication_selection(
+    feature: &mut Feature,
+    binding: Option<ProjectBinding>,
+) -> Result<()> {
+    if feature.publication_selection_frozen {
+        bail!("Feature publication selection is already frozen");
+    }
+    if let Some(binding) = &binding {
+        validate_publication_binding(binding)?;
+        if binding.project != feature.project {
+            bail!("GitHub connection does not match the feature project");
+        }
+    }
+    feature.publication_selection_frozen = true;
+    feature.publication_binding = binding;
+    Ok(())
+}
+
+fn publication_completion_is_cancelled(cancellation: &AtomicU8, emergency_paused: bool) -> bool {
+    emergency_paused || cancellation.load(Ordering::SeqCst) != 0
+}
+
+fn pause_after_post_run_cancellation(feature: &mut Feature) {
+    if feature.status == "succeeded" {
+        return;
+    }
+    feature.status = "paused".into();
+    feature.message =
+        "Stopped. Resume continues from the saved checkpoint; applied files are retained.".into();
+}
+
+fn feature_reviewer_recovery_is_safe(checkpoint: &str) -> bool {
+    if matches!(
+        checkpoint,
+        "not_started"
+            | "prepared"
+            | "applied"
+            | "validated"
+            | "validation_failed"
+            | "review_binding_changed"
+            | "review_completion_interrupted"
+            | "review_tool_workspace_changed"
+    ) {
+        return true;
+    }
+    let indexed = |prefix: &str, allowed: &[&str]| {
+        checkpoint
+            .strip_prefix(prefix)
+            .and_then(|value| value.split_once('_'))
+            .is_some_and(|(attempt, stage)| {
+                !attempt.is_empty()
+                    && attempt.bytes().all(|byte| byte.is_ascii_digit())
+                    && allowed.contains(&stage)
+            })
+    };
+    indexed(
+        "repair_",
+        &[
+            "reserved",
+            "prepared",
+            "applied",
+            "validated",
+            "validation_failed",
+        ],
+    ) || indexed(
+        "review_",
+        &[
+            "pending",
+            "unavailable",
+            "interrupted",
+            "rejected",
+            "approved",
+        ],
+    ) || indexed(
+        "escalation_",
+        &["applied", "validated", "validation_failed"],
+    )
+}
+
+fn change_feature_reviewer(
+    feature: &mut Feature,
+    reviewer: AiSelection,
+    revision: u64,
+) -> Result<()> {
+    if !feature_reviewer_state_is_changeable(feature) {
+        bail!("Feature reviewer cannot change in its current state");
+    }
+    if feature.review_model == reviewer.model
+        && feature.review_reasoning_effort == reviewer.reasoning_effort
+    {
+        bail!("Feature already uses the selected reviewer");
+    }
+    if feature.reviewer_selection_history.len() >= REVIEWER_SELECTION_HISTORY_LIMIT {
+        bail!("Feature reviewer selection history limit reached");
+    }
+    let prior_model = feature.review_model.clone();
+    let prior_reasoning_effort = feature.review_reasoning_effort.clone();
+    if feature.review_pending.is_some() {
+        interrupt_pending_review(
+            feature,
+            "The feature reviewer changed before its pending decision completed. Resume revalidates the generated files and starts a fresh review attempt.",
+        )?;
+    }
+    if let Some(proposal) = feature
+        .escalation_proposal
+        .as_mut()
+        .filter(|proposal| proposal.status == "ready")
+    {
+        proposal.status = "cancelled".into();
+        proposal.summary = "The feature reviewer changed after this repair proposal was prepared. Prepare a fresh proposal before requesting owner approval.".into();
+        proposal.error = None;
+        proposal.binding_revision = revision;
+        feature.escalation_history.push(RepairEscalationEvidence {
+            proposal_id: proposal.proposal_id.clone(),
+            attempt: proposal.attempt,
+            model_target: proposal.model_target.clone(),
+            model: proposal.model.clone(),
+            chat_id: proposal.chat_id.clone(),
+            chat_request_id: proposal.chat_request_id.clone(),
+            diagnosis_sha256: proposal.diagnosis_sha256.clone(),
+            outcome: "cancelled".into(),
+            proposal_sha256: None,
+            summary: proposal.summary.clone(),
+        });
+    }
+    feature
+        .reviewer_selection_history
+        .push(ReviewerSelectionEvidence {
+            revision,
+            prior_model,
+            prior_reasoning_effort,
+            selected_model: reviewer.model.clone(),
+            selected_reasoning_effort: reviewer.reasoning_effort.clone(),
+        });
+    feature.review_model = reviewer.model;
+    feature.review_reasoning_effort = reviewer.reasoning_effort;
+    feature.review_binding_version = 1;
+    feature.review_pending = None;
+    feature.review_status = "pending".into();
+    feature.review_summary =
+        "Feature reviewer changed. Resume revalidates the current files and starts a fresh independent review without consuming a repair attempt."
+            .into();
     Ok(())
 }
 
@@ -2653,6 +4993,26 @@ fn merge_review_edits(current: &[Edit], applied: &[Edit]) -> Result<Vec<Edit>> {
         bail!("Review requires 1 to 40 cumulative locally generated files");
     }
     Ok(merged)
+}
+
+fn tool_review_and_application_edits(
+    live_environment_edits: &[Edit],
+    candidate_edits: &[Edit],
+    staged_candidate: bool,
+) -> Result<(Vec<Edit>, Vec<Edit>)> {
+    let review_edits = if live_environment_edits.is_empty() {
+        candidate_edits.to_vec()
+    } else if candidate_edits.is_empty() {
+        live_environment_edits.to_vec()
+    } else {
+        merge_review_edits(live_environment_edits, candidate_edits)?
+    };
+    let application_edits = if staged_candidate {
+        candidate_edits.to_vec()
+    } else {
+        Vec::new()
+    };
+    Ok((review_edits, application_edits))
 }
 
 fn merge_escalation_review_edits(
@@ -2753,6 +5113,41 @@ fn owned_tool_mutation_edits(
         };
     }
     Ok(combined)
+}
+
+fn quarantine_tool_candidate(
+    feature: &mut Feature,
+    workspace_revision: u64,
+    live_edits: &[Edit],
+    staged_candidate: bool,
+    reason: &str,
+) -> Result<()> {
+    feature.tool_workspace_revision = workspace_revision;
+    if !live_edits.is_empty() {
+        feature.edits = Some(merge_review_edits(
+            feature.edits.as_deref().unwrap_or_default(),
+            live_edits,
+        )?);
+    }
+    feature.status = "failed".into();
+    feature.review_status = "interrupted".into();
+    feature.review_pending = None;
+    feature.review_summary = reason.chars().take(1000).collect();
+    feature.checkpoint = if staged_candidate {
+        "staged_tool_candidate_quarantined"
+    } else {
+        "tool_effects_quarantined"
+    }
+    .into();
+    feature.message = if staged_candidate {
+        format!("The staged tool candidate was not applied to the live project. {reason}")
+    } else {
+        format!("Project tool effects require inspection. {reason}")
+    }
+    .chars()
+    .take(4000)
+    .collect();
+    Ok(())
 }
 
 fn never_started_project_has_no_tool_ledger(feature: &Feature) -> bool {
@@ -2869,7 +5264,8 @@ fn developer_review_packet(
         validation_command: feature.validation.clone(),
         validation_evidence_sha256: validation_evidence_sha256.into(),
         provider_id: REVIEW_PROVIDER_ID.into(),
-        model_id: REVIEW_MODEL_ID.into(),
+        model_id: feature.review_model.clone(),
+        reasoning_effort: feature.review_reasoning_effort.clone(),
         files,
     })
 }
@@ -2893,10 +5289,90 @@ fn verify_approved_review_binding(feature: &Feature, project: &Path) -> Result<(
         edits,
         &approved.validation_evidence_sha256,
     )?;
-    if rebound.sha256()? != approved.packet_sha256 {
+    let current_sha256 = rebound.sha256()?;
+    let legacy_match = feature.review_binding_version == 0
+        && rebound.legacy_sha256_without_reasoning()? == approved.packet_sha256;
+    if current_sha256 != approved.packet_sha256 && !legacy_match {
         bail!("Generated files changed after ChatGPT Codex approval; validation and review must run again");
     }
     Ok(())
+}
+
+fn publication_input(feature: &Feature) -> Result<PublicationInput> {
+    if !feature.publication_selection_frozen {
+        bail!("Feature publication selection is not frozen");
+    }
+    let binding = feature
+        .publication_binding
+        .clone()
+        .context("Feature has no frozen GitHub repository connection")?;
+    validate_publication_binding(&binding)?;
+    if binding.project != feature.project {
+        bail!("Frozen GitHub connection no longer matches the feature project");
+    }
+    if feature.publication_candidate.is_empty() || feature.publication_candidate.len() > 40 {
+        bail!("Frozen publication candidate is missing or exceeds its file bound");
+    }
+    let approved = feature
+        .review_history
+        .iter()
+        .rev()
+        .find(|attempt| attempt.outcome == "approved" && attempt.decision_sha256.is_some())
+        .context("Required Codex review approval evidence is missing")?;
+    let files = feature
+        .publication_candidate
+        .iter()
+        .map(|file| {
+            if hash(file.content.as_bytes()) != file.content_sha256 {
+                bail!("Frozen publication candidate content changed");
+            }
+            Ok(DeveloperReviewFile {
+                path: file.path.clone(),
+                before_sha256: file.before_sha256.clone(),
+                content_sha256: file.content_sha256.clone(),
+                content: file.content.clone(),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let packet = DeveloperReviewPacket {
+        schema_version: 1,
+        feature_id: feature.id.clone(),
+        project: feature.project.clone(),
+        instruction: feature.instruction.clone(),
+        approved_plan_sha256: feature
+            .planning
+            .as_ref()
+            .map(|plan| plan.plan_sha256.clone()),
+        approved_plan: feature.planning.as_ref().map(combined_plan),
+        validation_command: feature.validation.clone(),
+        validation_evidence_sha256: approved.validation_evidence_sha256.clone(),
+        provider_id: REVIEW_PROVIDER_ID.into(),
+        model_id: feature.review_model.clone(),
+        reasoning_effort: feature.review_reasoning_effort.clone(),
+        files,
+    };
+    let exact = packet.sha256()? == approved.packet_sha256;
+    let legacy = feature.review_binding_version == 0
+        && packet.legacy_sha256_without_reasoning()? == approved.packet_sha256;
+    if !exact && !legacy {
+        bail!("Frozen publication candidate does not match the exact approved review packet");
+    }
+    Ok(PublicationInput {
+        feature_id: feature.id.clone(),
+        title: format!("Developer feature {}", feature.id),
+        body: "Automated publication of an exact validated and independently reviewed Developer candidate.".into(),
+        binding,
+        files: feature
+            .publication_candidate
+            .iter()
+            .map(|file| CandidateFile {
+                path: file.path.clone(),
+                before_sha256: file.before_sha256.clone(),
+                content_sha256: file.content_sha256.clone(),
+                content: file.content.clone(),
+            })
+            .collect(),
+    })
 }
 
 fn review_summary(output: &DeveloperReviewOutput) -> String {
@@ -2941,6 +5417,14 @@ fn remove_feature(state: &mut Snapshot, id: &str) -> Result<bool> {
         .iter_mut()
         .find(|feature| feature.id == id)
         .context("Feature not found")?;
+    if feature.publication.as_ref().is_some_and(|publication| {
+        matches!(
+            publication.status.as_str(),
+            "pending" | "running" | "attention"
+        )
+    }) {
+        bail!("Resolve the unfinished GitHub publication before removing this feature");
+    }
     match feature.status.as_str() {
         "removed" => Ok(false),
         "queued" | "failed" | "paused" => {
@@ -3518,6 +6002,31 @@ fn is_protected_repair_input(relative: &str, validation_paths: &[String]) -> boo
         normalized == *protected || normalized.starts_with(&format!("{protected}/"))
     })
 }
+
+fn repair_forbidden_tool_paths(validation_paths: &[String]) -> Vec<String> {
+    let mut paths = std::collections::BTreeSet::from([
+        "test/**".to_owned(),
+        "tests/**".to_owned(),
+        "spec/**".to_owned(),
+        "specs/**".to_owned(),
+        "**/test/**".to_owned(),
+        "**/tests/**".to_owned(),
+        "**/spec/**".to_owned(),
+        "**/specs/**".to_owned(),
+        "**/__tests__/**".to_owned(),
+        "**/test_*".to_owned(),
+        "**/*_test.*".to_owned(),
+        "**/*.test.*".to_owned(),
+        "**/*_spec.*".to_owned(),
+        "**/*.spec.*".to_owned(),
+    ]);
+    for path in validation_paths {
+        paths.insert(path.clone());
+        paths.insert(format!("{path}/**"));
+    }
+    paths.into_iter().collect()
+}
+
 fn repair_protected_inputs(
     root: &Path,
     validation_paths: &[String],
@@ -3853,6 +6362,254 @@ async fn status(State(engine): State<Arc<Engine>>, headers: HeaderMap) -> Api {
 }
 
 #[derive(Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+enum GithubSetupMutation {
+    RefreshAccount {
+        expected_revision: u64,
+    },
+    ListRepositories {
+        page: u32,
+        expected_revision: u64,
+    },
+    BeginSignIn {
+        operation_id: String,
+        expected_revision: u64,
+    },
+    CancelSignIn {
+        operation_id: String,
+        expected_revision: u64,
+    },
+    ReconcileSignIn {
+        operation_id: String,
+        expected_revision: u64,
+    },
+    CreateRepository {
+        operation_id: String,
+        expected_login: String,
+        name: String,
+        visibility: String,
+        expected_revision: u64,
+    },
+    ReconcileCreation {
+        operation_id: String,
+        expected_revision: u64,
+    },
+}
+
+async fn github_status(State(engine): State<Arc<Engine>>, headers: HeaderMap) -> Api {
+    if authorize(&engine, &headers).is_err() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error":"Unauthorized"})),
+        );
+    }
+    api(engine.github_setup_snapshot())
+}
+
+async fn github_control(
+    State(engine): State<Arc<Engine>>,
+    headers: HeaderMap,
+    Json(raw): Json<Value>,
+) -> Api {
+    if authorize(&engine, &headers).is_err() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error":"Unauthorized"})),
+        );
+    }
+    let request = match serde_json::from_value::<GithubSetupMutation>(raw) {
+        Ok(request) => request,
+        Err(error) => return api(Err(error.into())),
+    };
+    let result = match request {
+        GithubSetupMutation::RefreshAccount { expected_revision } => {
+            engine.refresh_github_account(expected_revision).await
+        }
+        GithubSetupMutation::ListRepositories {
+            page,
+            expected_revision,
+        } => {
+            engine
+                .list_github_repositories(page, expected_revision)
+                .await
+        }
+        GithubSetupMutation::BeginSignIn {
+            operation_id,
+            expected_revision,
+        } => engine.begin_github_sign_in(&operation_id, expected_revision),
+        GithubSetupMutation::CancelSignIn {
+            operation_id,
+            expected_revision,
+        } => {
+            engine
+                .cancel_github_sign_in(&operation_id, expected_revision)
+                .await
+        }
+        GithubSetupMutation::ReconcileSignIn {
+            operation_id,
+            expected_revision,
+        } => {
+            engine
+                .reconcile_github_sign_in(&operation_id, expected_revision)
+                .await
+        }
+        GithubSetupMutation::CreateRepository {
+            operation_id,
+            expected_login,
+            name,
+            visibility,
+            expected_revision,
+        } => engine.begin_github_repository_creation(
+            &operation_id,
+            &expected_login,
+            &name,
+            &visibility,
+            expected_revision,
+        ),
+        GithubSetupMutation::ReconcileCreation {
+            operation_id,
+            expected_revision,
+        } => {
+            engine
+                .reconcile_github_creation(&operation_id, expected_revision)
+                .await
+        }
+    };
+    api(result)
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+enum PublicationMutation {
+    SaveConnection {
+        project: String,
+        repository_url: String,
+        base_branch: String,
+        expected_revision: u64,
+    },
+    Disconnect {
+        project: String,
+        expected_revision: u64,
+    },
+    Reconcile {
+        feature_id: String,
+        expected_revision: u64,
+        expected_checkpoint: String,
+    },
+}
+
+async fn publication_status(State(engine): State<Arc<Engine>>, headers: HeaderMap) -> Api {
+    if authorize(&engine, &headers).is_err() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error":"Unauthorized"})),
+        );
+    }
+    api(engine.snapshot())
+}
+
+async fn publication_control(
+    State(engine): State<Arc<Engine>>,
+    headers: HeaderMap,
+    Json(raw): Json<Value>,
+) -> Api {
+    if authorize(&engine, &headers).is_err() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error":"Unauthorized"})),
+        );
+    }
+    let request = match serde_json::from_value::<PublicationMutation>(raw) {
+        Ok(request) => request,
+        Err(error) => return api(Err(error.into())),
+    };
+    let result = match request {
+        PublicationMutation::SaveConnection {
+            project,
+            repository_url,
+            base_branch,
+            expected_revision,
+        } => {
+            engine
+                .save_github_connection(&project, &repository_url, &base_branch, expected_revision)
+                .await
+        }
+        PublicationMutation::Disconnect {
+            project,
+            expected_revision,
+        } => engine.disconnect_github_connection(&project, expected_revision),
+        PublicationMutation::Reconcile {
+            feature_id,
+            expected_revision,
+            expected_checkpoint,
+        } => engine.reconcile_publication(&feature_id, expected_revision, &expected_checkpoint),
+    };
+    api(result)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SettingsMutation {
+    expected_revision: u64,
+    orchestrator: AiSelection,
+    reviewer: AiSelection,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FeatureReviewerMutation {
+    id: String,
+    expected_revision: u64,
+    expected_checkpoint: String,
+    expected_model: String,
+    expected_reasoning_effort: String,
+    reviewer: AiSelection,
+}
+
+async fn settings_status(State(engine): State<Arc<Engine>>, headers: HeaderMap) -> Api {
+    status(State(engine), headers).await
+}
+
+async fn settings_control(
+    State(engine): State<Arc<Engine>>,
+    headers: HeaderMap,
+    Json(request): Json<SettingsMutation>,
+) -> Api {
+    if authorize(&engine, &headers).is_err() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error":"Unauthorized"})),
+        );
+    }
+    api(engine.update_settings(
+        request.expected_revision,
+        request.orchestrator,
+        request.reviewer,
+    ))
+}
+
+async fn feature_reviewer_control(
+    State(engine): State<Arc<Engine>>,
+    headers: HeaderMap,
+    Json(request): Json<FeatureReviewerMutation>,
+) -> Api {
+    if authorize(&engine, &headers).is_err() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error":"Unauthorized"})),
+        );
+    }
+    api(engine.update_feature_reviewer(
+        &request.id,
+        request.expected_revision,
+        &request.expected_checkpoint,
+        &request.expected_model,
+        &request.expected_reasoning_effort,
+        request.reviewer,
+    ))
+}
+
+#[derive(Deserialize)]
 struct ChatQuery {
     project: String,
     chat_id: Option<String>,
@@ -4058,6 +6815,7 @@ async fn chat_start(
             .database
             .lock()
             .map_err(|_| anyhow!("state lock failed"))?;
+        engine.ensure_publication_barrier_clear(&database.state, &database.github_setup)?;
         if engine.shutdown.load(Ordering::SeqCst) {
             bail!("Developer runner is shutting down");
         }
@@ -4157,13 +6915,11 @@ async fn chat_access(
             .database
             .lock()
             .map_err(|_| anyhow!("state lock failed"))?;
+        engine.ensure_publication_barrier_clear(&database.state, &database.github_setup)?;
         if engine.emergency_paused(&database.state) {
             bail!("Clear Emergency Pause before changing tool access");
         }
-        let idle = !engine.running.load(Ordering::SeqCst)
-            && !engine.planning_running.load(Ordering::SeqCst)
-            && !engine.escalation_running.load(Ordering::SeqCst)
-            && !engine.chat.is_running();
+        let idle = engine.developer_work_is_idle();
         engine.tools.set_access(
             &request.project,
             &request.mode,
@@ -4194,6 +6950,7 @@ async fn chat_approval(
             .database
             .lock()
             .map_err(|_| anyhow!("state lock failed"))?;
+        engine.ensure_publication_barrier_clear(&database.state, &database.github_setup)?;
         if engine.emergency_paused(&database.state) {
             bail!("Clear Emergency Pause before approving a tool action");
         }
@@ -4250,20 +7007,17 @@ impl Engine {
     }
 
     fn planning_mutate(self: &Arc<Self>, raw: Value) -> Result<Value> {
-        let digest = request_digest(&raw)?;
-        let request: PlanningMutation = serde_json::from_value(raw)?;
-        developer_planning::validate_identifier(&request.feature_id)?;
-        developer_planning::validate_identifier(&request.request_id)?;
-
         {
             let database = self
                 .database
                 .lock()
                 .map_err(|_| anyhow!("state lock failed"))?;
-            if self.emergency_paused(&database.state) {
-                bail!("Clear Emergency Pause before brainstorming");
-            }
+            self.ensure_publication_barrier_clear(&database.state, &database.github_setup)?;
         }
+        let digest = request_digest(&raw)?;
+        let request: PlanningMutation = serde_json::from_value(raw)?;
+        developer_planning::validate_identifier(&request.feature_id)?;
+        developer_planning::validate_identifier(&request.request_id)?;
 
         let existing = {
             let database = self
@@ -4277,7 +7031,7 @@ impl Engine {
                 .find(|session| session.feature_id == request.feature_id)
                 .cloned()
         };
-        if let Some(existing) = existing {
+        if let Some(ref existing) = existing {
             if let Some(record) = existing
                 .requests
                 .iter()
@@ -4302,19 +7056,40 @@ impl Engine {
                 | "retry"
         );
         let planning_cancellation = if asynchronous {
+            let database = self
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?;
+            self.ensure_publication_barrier_clear(&database.state, &database.github_setup)?;
             if self.shutdown.load(Ordering::SeqCst) {
                 bail!("Developer runner is shutting down");
             }
-            if self.running.load(Ordering::SeqCst) || self.chat.is_running() {
+            if self.running.load(Ordering::SeqCst)
+                || self.chat.is_running()
+                || self.tools.blocks_work()
+                || self.escalation_running.load(Ordering::SeqCst)
+            {
                 bail!("Stop active developer work before brainstorming");
             }
-            if self.escalation_running.load(Ordering::SeqCst) {
-                bail!("Wait for the repair proposal to finish before brainstorming");
-            }
-            Some(self.reserve_planning_call()?)
+            let selected_orchestrator = if request.action == "start" {
+                database.state.ai_settings.orchestrator.clone()
+            } else {
+                let session = existing.as_ref().context("Planning session not found")?;
+                AiSelection {
+                    model: session.model.clone(),
+                    reasoning_effort: session.reasoning_effort.clone(),
+                }
+            };
+            validate_selection(&self.ai_catalog, &selected_orchestrator)
+                .context("Selected orchestrator is unavailable")?;
+            let cancellation = self.reserve_planning_call()?;
+            drop(database);
+            Some(cancellation)
         } else {
             if request.action == "approve_and_enqueue"
                 && (self.running.load(Ordering::SeqCst)
+                    || self.chat.is_running()
+                    || self.tools.blocks_work()
                     || self.escalation_running.load(Ordering::SeqCst))
             {
                 bail!("Stop active developer work before approving and enqueueing another feature");
@@ -4346,7 +7121,20 @@ impl Engine {
             } else {
                 (Vec::new(), 0)
             };
-            self.change(|state| {
+            let tool_workspace_revision = if request.action == "approve_and_enqueue" {
+                let project_path = self.root.join(&project);
+                if project_path.is_dir() {
+                    self.tools.snapshot(&project)?["workspace_revision"]
+                        .as_u64()
+                        .context("Tool workspace revision is unavailable")?
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+            self.change_database(|state, github_setup| {
+                self.ensure_publication_barrier_clear(state, github_setup)?;
                 if self.emergency_paused(state) {
                     bail!("Clear Emergency Pause before brainstorming");
                 }
@@ -4370,6 +7158,7 @@ impl Engine {
                     }
                     let model_target = request.model_target.as_deref().unwrap_or("mac");
                     self.model_target(model_target)?;
+                    let orchestrator = state.ai_settings.orchestrator.clone();
                     state.planning_sessions.push(new_session(
                         &request.feature_id,
                         &project,
@@ -4382,8 +7171,11 @@ impl Engine {
                             .as_deref()
                             .context("Missing validation command")?,
                         model_target,
+                        &orchestrator.model,
+                        &orchestrator.reasoning_effort,
                     )?);
                 }
+                let selected_reviewer = state.ai_settings.reviewer.clone();
                 let session = state
                     .planning_sessions
                     .iter_mut()
@@ -4526,6 +7318,8 @@ impl Engine {
                     }
                     "approve_and_enqueue" => {
                         let metadata = approved_metadata(session)?;
+                        validate_selection(&self.ai_catalog, &selected_reviewer)
+                            .context("Selected reviewer is unavailable")?;
                         if state
                             .queue
                             .iter()
@@ -4554,13 +7348,21 @@ impl Engine {
                             escalation_history: Vec::new(),
                             model_target: session.model_target.clone(),
                             review_status: "pending".into(),
+                            review_model: selected_reviewer.model,
+                            review_reasoning_effort: selected_reviewer.reasoning_effort,
+                            review_binding_version: 1,
                             review_attempts: 0,
                             review_summary: "Required ChatGPT Codex review has not started".into(),
                             review_pending: None,
                             review_history: Vec::new(),
+                            reviewer_selection_history: Vec::new(),
                             planning: Some(metadata),
                             cumulative_evidence_version: 1,
-                            tool_workspace_revision: 0,
+                            tool_workspace_revision,
+                            publication_selection_frozen: false,
+                            publication_binding: None,
+                            publication_candidate: Vec::new(),
+                            publication: None,
                         };
                         session.stage = "enqueued".into();
                         session.revision = session
@@ -4580,6 +7382,9 @@ impl Engine {
                     skill_sha256: developer_planning::brainstorming_skill_sha256(),
                     revision: session.revision,
                     expected_response: expected,
+                    provider_id: session.provider.clone(),
+                    model_id: session.model.clone(),
+                    reasoning_effort: session.reasoning_effort.clone(),
                     project: session.project.clone(),
                     instruction: session.instruction.clone(),
                     validation: session.validation.clone(),
@@ -4613,13 +7418,23 @@ impl Engine {
                 planning_cancellation.context("Planning cancellation binding missing")?;
             let engine = self.clone();
             tokio::spawn(async move {
-                let result = match provider_prompt(&packet) {
-                    Ok(prompt) => engine
+                let result = match provider_prompt(&packet).and_then(|prompt| {
+                    let schema =
+                        planning_output_schema(&packet.model_id, &packet.reasoning_effort)?;
+                    let filename = format!(
+                        "developer-planning-output-schema-{}.json",
+                        &hex_digest(schema.as_bytes())[..16]
+                    );
+                    Ok((prompt, schema, filename))
+                }) {
+                    Ok((prompt, schema, filename)) => engine
                         .reviewer
                         .call_tool_free(
                             &prompt,
-                            PLANNING_SCHEMA_FILENAME,
-                            PLANNING_OUTPUT_SCHEMA,
+                            &filename,
+                            &schema,
+                            &packet.model_id,
+                            &packet.reasoning_effort,
                             &planning_cancellation,
                         )
                         .await
@@ -4696,7 +7511,18 @@ async fn control(
         );
     }
     let result = (|| -> Result<Value> {
-        match request["action"].as_str().context("Missing action")? {
+        let action = request["action"].as_str().context("Missing action")?;
+        if !matches!(
+            action,
+            "stop" | "emergency" | "shutdown" | "clear_emergency"
+        ) {
+            let database = engine
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?;
+            engine.ensure_publication_barrier_clear(&database.state, &database.github_setup)?;
+        }
+        match action {
             "enqueue" => {
                 let id = request["id"].as_str().context("Missing request ID")?;
                 Uuid::parse_str(id)?;
@@ -4730,7 +7556,8 @@ async fn control(
                 {
                     bail!("Feature description and validation command are required");
                 }
-                engine.change(|s| {
+                engine.change_database(|s, github_setup| {
+                    engine.ensure_publication_barrier_clear(s, github_setup)?;
                     let old = s.queue.iter().find(|f| f.id == id).context(
                         "Mandatory brainstorming, design confirmation, and explicit approve-and-enqueue are required before a new feature can enter the queue",
                     )?;
@@ -4789,6 +7616,10 @@ async fn control(
                 engine
                     .cancellation
                     .fetch_max(if emergency { 2 } else { 1 }, Ordering::SeqCst);
+                engine
+                    .publication_cancellation
+                    .fetch_max(if emergency { 2 } else { 1 }, Ordering::SeqCst);
+                engine.tool_cancellation.store(true, Ordering::SeqCst);
                 engine.cancel_planning_call(emergency);
                 engine.cancel_escalation_call(emergency);
                 engine.chat.cancel_active();
@@ -4825,6 +7656,8 @@ async fn control(
                     || engine.chat.is_running()
                     || engine.tools.blocks_work()
                     || engine.escalation_running.load(Ordering::SeqCst)
+                    || engine.publication_running.load(Ordering::SeqCst)
+                    || engine.publication_connection_running.load(Ordering::SeqCst)
                 {
                     bail!("Wait for active developer work to stop");
                 }
@@ -4833,14 +7666,19 @@ async fn control(
                         s.emergency_paused = false;
                         Ok(())
                     },
-                    || engine.cancellation.store(0, Ordering::SeqCst),
+                    || {
+                        engine.cancellation.store(0, Ordering::SeqCst);
+                        engine.publication_cancellation.store(0, Ordering::SeqCst);
+                        engine.tool_cancellation.store(false, Ordering::SeqCst);
+                    },
                 )?;
             }
             "auto_run" => {
                 let enabled = request["enabled"]
                     .as_bool()
                     .context("Missing enabled value")?;
-                engine.change(|s| {
+                engine.change_database(|s, github_setup| {
+                    engine.ensure_publication_barrier_clear(s, github_setup)?;
                     s.auto_run = enabled;
                     Ok(())
                 })?;
@@ -4862,6 +7700,7 @@ async fn main() -> Result<()> {
         bail!("Developer runner binds only to loopback; use SSH forwarding");
     }
     let model_targets = configured_model_targets(&args)?;
+    let ai_catalog = load_catalog(&args.review_codex_home)?;
     fs::create_dir_all(&args.data_dir)?;
     fs::create_dir_all(&args.workspace_root)?;
     let instance_lock = fs::OpenOptions::new()
@@ -4878,14 +7717,19 @@ async fn main() -> Result<()> {
     }
     let token = fs::read_to_string(&token_path)?;
     let connection = Connection::open(args.data_dir.join("developer.sqlite3"))?;
-    connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS developer_state(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v1_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v2_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v3_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v4_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v5_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v6_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v7_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL);")?;
+    connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS developer_state(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v1_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v2_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v3_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v4_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v5_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v6_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v7_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v8_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v9_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL);")?;
+    let github_setup = GithubSetupState::initialize_and_load(&connection)?;
     let (mut state, loaded_queue_version): (Snapshot, u8) =
         match connection.query_row("SELECT state FROM developer_state WHERE id=1", [], |r| {
             r.get::<_, String>(0)
         }) {
             Ok(data) => {
                 let value: Value = serde_json::from_str(&data)?;
-                let loaded_queue_version = if value.get("queue_v8").is_some() {
+                let loaded_queue_version = if value.get("queue_v10").is_some() {
+                    10
+                } else if value.get("queue_v9").is_some() {
+                    9
+                } else if value.get("queue_v8").is_some() {
                     8
                 } else if value.get("queue_v7").is_some() {
                     7
@@ -4934,6 +7778,18 @@ async fn main() -> Result<()> {
                         [&data],
                     )?;
                 }
+                if value.get("queue_v8").is_some() && value.get("queue_v9").is_none() {
+                    connection.execute(
+                        "INSERT OR IGNORE INTO developer_state_v8_backup(id,state) VALUES(1,?1)",
+                        [&data],
+                    )?;
+                }
+                if value.get("queue_v9").is_some() && value.get("queue_v10").is_none() {
+                    connection.execute(
+                        "INSERT OR IGNORE INTO developer_state_v9_backup(id,state) VALUES(1,?1)",
+                        [&data],
+                    )?;
+                }
                 (serde_json::from_value(value)?, loaded_queue_version)
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => (
@@ -4941,11 +7797,19 @@ async fn main() -> Result<()> {
                     auto_run: true,
                     ..Default::default()
                 },
-                8,
+                10,
             ),
             Err(e) => return Err(e.into()),
         };
     let root = fs::canonicalize(&args.workspace_root)?;
+    validate_ai_model_id(&state.ai_settings.orchestrator.model)
+        .context("Persisted orchestrator model setting is invalid")?;
+    validate_reasoning_effort(&state.ai_settings.orchestrator.reasoning_effort)
+        .context("Persisted orchestrator reasoning setting is invalid")?;
+    validate_ai_model_id(&state.ai_settings.reviewer.model)
+        .context("Persisted reviewer model setting is invalid")?;
+    validate_reasoning_effort(&state.ai_settings.reviewer.reasoning_effort)
+        .context("Persisted reviewer reasoning setting is invalid")?;
     if loaded_queue_version < 7 {
         for feature in &mut state.queue {
             feature.cumulative_evidence_version = 1;
@@ -4985,9 +7849,51 @@ async fn main() -> Result<()> {
         bail!("Persisted cumulative review evidence has an unsupported version");
     }
     let recovery_revision = state.revision.checked_add(1).context("Revision overflow")?;
+    let mut connected_projects = std::collections::BTreeSet::new();
+    for binding in &state.github_connections {
+        validate_publication_binding(binding).context("Persisted GitHub connection is invalid")?;
+        if !connected_projects.insert(binding.project.clone()) {
+            bail!("Persisted GitHub connections contain a duplicate project");
+        }
+    }
     for feature in &mut state.queue {
+        validate_ai_model_id(&feature.review_model)
+            .context("Persisted feature reviewer model binding is invalid")?;
+        validate_reasoning_effort(&feature.review_reasoning_effort)
+            .context("Persisted feature reviewer reasoning binding is invalid")?;
+        if feature.review_binding_version > 1 {
+            bail!("Persisted feature reviewer binding version is unsupported");
+        }
         if !matches!(feature.model_target.as_str(), "mac" | "windows") {
             bail!("Persisted feature has an unknown model target");
+        }
+        if let Some(binding) = &feature.publication_binding {
+            validate_publication_binding(binding)
+                .context("Persisted feature GitHub connection is invalid")?;
+            if !feature.publication_selection_frozen || binding.project != feature.project {
+                bail!("Persisted feature GitHub connection is not frozen to its project");
+            }
+        }
+        if let Some(publication) = feature.publication.as_ref() {
+            publication
+                .validate()
+                .context("Persisted Developer publication is invalid")?;
+            publication_input(feature).context("Persisted publication candidate is invalid")?;
+            let publication = feature.publication.as_mut().unwrap();
+            if matches!(publication.status.as_str(), "pending" | "running") {
+                publication.status = "attention".into();
+                publication.message = "Runner restarted during GitHub publication. Use explicit reconciliation to inspect the existing branch, pull request, checks, and merge; no external effect was replayed.".into();
+                feature.status = "failed".into();
+                feature.checkpoint = "publication_attention".into();
+                feature.message = publication.message.clone();
+            } else if publication.status == "attention" {
+                feature.status = "failed".into();
+                feature.checkpoint = "publication_attention".into();
+                feature.message = publication.message.clone();
+            } else {
+                feature.status = "succeeded".into();
+                feature.checkpoint = "publication_merged".into();
+            }
         }
         if feature
             .escalation_proposal
@@ -5046,6 +7952,10 @@ async fn main() -> Result<()> {
         }
     }
     for session in &mut state.planning_sessions {
+        validate_ai_model_id(&session.model)
+            .context("Persisted planning model binding is invalid")?;
+        validate_reasoning_effort(&session.reasoning_effort)
+            .context("Persisted planning reasoning binding is invalid")?;
         if session.running {
             invalidate_pending(
                 session,
@@ -5058,6 +7968,17 @@ async fn main() -> Result<()> {
         args.review_codex_home,
         &args.data_dir,
     )?;
+    let (publication_runtime, publication_unavailable_reason) = match PublicationRuntime::new(
+        &args.data_dir,
+        args.git_executable.clone(),
+        args.gh_executable.clone(),
+    ) {
+        Ok(runtime) => (Some(Arc::new(runtime)), None),
+        Err(error) => (
+            None,
+            Some(format!("GitHub publication is unavailable: {error:#}")),
+        ),
+    };
     let inference_gate = InferenceGate::new();
     let tool_runtime = args
         .opencode_executable
@@ -5087,15 +8008,23 @@ async fn main() -> Result<()> {
         tools.clone(),
     )?;
     let engine = Arc::new(Engine {
-        database: Mutex::new(Database { connection, state }),
+        database: Mutex::new(Database {
+            connection,
+            state,
+            github_setup,
+        }),
         running: AtomicBool::new(false),
         cancellation: AtomicU8::new(0),
+        tool_cancellation: Arc::new(AtomicBool::new(false)),
         planning_cancellation: Mutex::new(None),
         planning_running: AtomicBool::new(false),
         planning_completion_recovery: Mutex::new(None),
         escalation_cancellation: Mutex::new(None),
         escalation_running: AtomicBool::new(false),
         repair_loop_authorized: AtomicBool::new(false),
+        publication_running: AtomicBool::new(false),
+        publication_connection_running: AtomicBool::new(false),
+        publication_cancellation: AtomicU8::new(0),
         shutdown: AtomicBool::new(false),
         root,
         data: args.data_dir,
@@ -5105,10 +8034,20 @@ async fn main() -> Result<()> {
         chat,
         tools,
         reviewer,
+        ai_catalog,
+        publication_runtime,
+        publication_unavailable_reason,
     });
     engine.change(|_| Ok(()))?;
     let app = Router::new()
         .route("/status", get(status))
+        .route(
+            "/publication",
+            get(publication_status).post(publication_control),
+        )
+        .route("/github", get(github_status).post(github_control))
+        .route("/settings", get(settings_status).post(settings_control))
+        .route("/feature-reviewer", post(feature_reviewer_control))
         .route("/control", post(control))
         .route(
             "/chat",
@@ -5150,6 +8089,7 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     fn control_test_engine() -> (tempfile::TempDir, Arc<Engine>) {
         let dir = tempfile::tempdir().unwrap();
         let workspace = dir.path().join("workspace");
@@ -5169,6 +8109,7 @@ mod tests {
                 "CREATE TABLE developer_state(id INTEGER PRIMARY KEY,state TEXT NOT NULL);",
             )
             .unwrap();
+        let github_setup = GithubSetupState::initialize_and_load(&connection).unwrap();
         let inference_gate = InferenceGate::new();
         let model_targets = vec![ModelTarget {
             id: "mac",
@@ -5191,6 +8132,7 @@ mod tests {
             tools.clone(),
         )
         .unwrap();
+        let ai_catalog = load_catalog(&codex_home).unwrap();
         let reviewer = DeveloperReviewer::new(codex_executable, codex_home, &data).unwrap();
         let engine = Arc::new(Engine {
             database: Mutex::new(Database {
@@ -5200,15 +8142,20 @@ mod tests {
                     queue: vec![feature_with_status("failed")],
                     ..Default::default()
                 },
+                github_setup,
             }),
             running: AtomicBool::new(false),
             cancellation: AtomicU8::new(0),
+            tool_cancellation: Arc::new(AtomicBool::new(false)),
             planning_cancellation: Mutex::new(None),
             planning_running: AtomicBool::new(false),
             planning_completion_recovery: Mutex::new(None),
             escalation_cancellation: Mutex::new(None),
             escalation_running: AtomicBool::new(false),
             repair_loop_authorized: AtomicBool::new(false),
+            publication_running: AtomicBool::new(false),
+            publication_connection_running: AtomicBool::new(false),
+            publication_cancellation: AtomicU8::new(0),
             shutdown: AtomicBool::new(false),
             root: fs::canonicalize(workspace).unwrap(),
             data,
@@ -5218,6 +8165,9 @@ mod tests {
             chat,
             tools,
             reviewer,
+            ai_catalog,
+            publication_runtime: None,
+            publication_unavailable_reason: Some("fixture publication unavailable".into()),
         });
         engine.change(|_| Ok(())).unwrap();
         (dir, engine)
@@ -5227,6 +8177,163 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "Bearer test-token".parse().unwrap());
         headers
+    }
+
+    fn setup_database(revision: u64) -> Database {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE developer_state(\
+                 id INTEGER PRIMARY KEY CHECK(id=1), state TEXT NOT NULL);",
+            )
+            .unwrap();
+        let state = Snapshot {
+            revision,
+            ..Default::default()
+        };
+        connection
+            .execute(
+                "INSERT INTO developer_state(id,state) VALUES(1,?1)",
+                [serde_json::to_string(&state).unwrap()],
+            )
+            .unwrap();
+        let github_setup = GithubSetupState::initialize_and_load(&connection).unwrap();
+        Database {
+            connection,
+            state,
+            github_setup,
+        }
+    }
+
+    #[test]
+    fn github_setup_and_runner_revision_commit_atomically() {
+        let mut database = setup_database(7);
+        let original_state: String = database
+            .connection
+            .query_row("SELECT state FROM developer_state WHERE id=1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let original_setup: String = database
+            .connection
+            .query_row(
+                "SELECT state FROM developer_github_setup WHERE id=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        let rejected: Result<()> = mutate_database(&mut database, |state, setup| {
+            state.auto_run = true;
+            setup.account.state = "untrusted".into();
+            Ok(())
+        });
+        assert!(rejected.is_err());
+        assert_eq!(database.state.revision, 7);
+        assert!(!database.state.auto_run);
+        assert_eq!(database.github_setup.account.state, "unknown");
+        assert_eq!(
+            database
+                .connection
+                .query_row::<String, _, _>(
+                    "SELECT state FROM developer_state WHERE id=1",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap(),
+            original_state
+        );
+        assert_eq!(
+            database
+                .connection
+                .query_row::<String, _, _>(
+                    "SELECT state FROM developer_github_setup WHERE id=1",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap(),
+            original_setup
+        );
+
+        mutate_database(&mut database, |state, setup| {
+            state.auto_run = true;
+            setup.reset_repositories_if_account_changed(&AccountRecord {
+                state: "signed_out".into(),
+                login: None,
+                message: "Sign in to continue".into(),
+            });
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(database.state.revision, 8);
+        assert!(database.state.auto_run);
+        assert_eq!(database.github_setup.account.state, "signed_out");
+        let persisted: String = database
+            .connection
+            .query_row(
+                "SELECT state FROM developer_github_setup WHERE id=1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let persisted: GithubSetupState = serde_json::from_str(&persisted).unwrap();
+        assert_eq!(persisted.account.state, "signed_out");
+    }
+
+    #[test]
+    fn github_setup_requests_reject_unknown_or_ambiguous_fields() {
+        assert!(serde_json::from_value::<GithubSetupMutation>(json!({
+            "action":"refresh_account","expected_revision":4
+        }))
+        .is_ok());
+        for malformed in [
+            json!({"action":"refresh_account","expected_revision":4,"operation_id":"ignored"}),
+            json!({"action":"list_repositories","expected_revision":4}),
+            json!({"action":"create_repository","operation_id":"a8e78ac7-c9a9-47f0-92dc-b35777880967","expected_login":"owner","name":"repo","visibility":"private","expected_revision":4,"connect":true}),
+            json!({"action":"unknown","expected_revision":4}),
+        ] {
+            assert!(serde_json::from_value::<GithubSetupMutation>(malformed).is_err());
+        }
+    }
+
+    #[test]
+    fn github_setup_outcomes_fail_closed_on_ambiguous_identity_or_effect() {
+        let inconsistent = GithubSignInOutcome {
+            account: GithubAccountObservation::SignedIn {
+                login: "owner".into(),
+            },
+            command_succeeded: true,
+            cancelled: false,
+            challenge_seen: true,
+            credentials_consistent: false,
+        };
+        assert_eq!(github_sign_in_completion(&inconsistent).0, "attention");
+
+        let operation = "a8e78ac7-c9a9-47f0-92dc-b35777880967";
+        let mut setup = GithubSetupState::default();
+        setup
+            .start_creation(operation, "owner", "repo", "private")
+            .unwrap();
+        let observed = GithubRepositoryObservation {
+            repository_id: 42,
+            name_with_owner: "owner/repo".into(),
+            url: "https://github.com/owner/repo".into(),
+            visibility: "private".into(),
+            default_branch: "main".into(),
+            can_push: true,
+        };
+        let creation = setup.creation_mut(operation).unwrap();
+        creation.preflight_absent = true;
+        apply_github_creation_observation(
+            creation,
+            Ok(GithubRepositoryLookup::Present(observed.clone())),
+        );
+        assert_eq!(creation.state, "attention");
+
+        creation.command_succeeded = true;
+        apply_github_creation_observation(creation, Ok(GithubRepositoryLookup::Present(observed)));
+        assert_eq!(creation.state, "succeeded");
+        assert_eq!(creation.repository_id, Some(42));
     }
 
     fn feature_with_status(status: &str) -> Feature {
@@ -5252,13 +8359,21 @@ mod tests {
             escalation_history: Vec::new(),
             model_target: "mac".into(),
             review_status: "pending".into(),
+            review_model: REVIEW_MODEL_ID.into(),
+            review_reasoning_effort: DEFAULT_REASONING_EFFORT.into(),
+            review_binding_version: 1,
             review_attempts: 0,
             review_summary: String::new(),
             review_pending: None,
             review_history: Vec::new(),
+            reviewer_selection_history: Vec::new(),
             planning: None,
             cumulative_evidence_version: 1,
             tool_workspace_revision: 0,
+            publication_selection_frozen: false,
+            publication_binding: None,
+            publication_candidate: Vec::new(),
+            publication: None,
         }
     }
 
@@ -5324,6 +8439,216 @@ mod tests {
             summary: "approved".into(),
         });
         feature
+    }
+
+    fn feature_with_publication(status: &str) -> Feature {
+        let mut feature = feature_with_status(status);
+        feature.review_status = "approved".into();
+        feature.review_attempts = 1;
+        feature.publication_selection_frozen = true;
+        feature.publication_binding = Some(ProjectBinding {
+            project: feature.project.clone(),
+            repository_url: "https://github.com/owner/example.git".into(),
+            repository_slug: "owner/example".into(),
+            base_branch: "main".into(),
+            strict_required_checks: true,
+            required_checks: vec![developer_publication::RequiredCheck {
+                context: "build".into(),
+                integration_id: Some(7),
+            }],
+        });
+        feature.publication_candidate = vec![FrozenPublicationFile {
+            path: "result.txt".into(),
+            before_sha256: None,
+            content_sha256: hash(b"saved"),
+            content: "saved".into(),
+        }];
+        let validation_evidence_sha256 = "1".repeat(64);
+        let packet = DeveloperReviewPacket {
+            schema_version: 1,
+            feature_id: feature.id.clone(),
+            project: feature.project.clone(),
+            instruction: feature.instruction.clone(),
+            approved_plan_sha256: None,
+            approved_plan: None,
+            validation_command: feature.validation.clone(),
+            validation_evidence_sha256: validation_evidence_sha256.clone(),
+            provider_id: REVIEW_PROVIDER_ID.into(),
+            model_id: feature.review_model.clone(),
+            reasoning_effort: feature.review_reasoning_effort.clone(),
+            files: vec![DeveloperReviewFile {
+                path: "result.txt".into(),
+                before_sha256: None,
+                content_sha256: hash(b"saved"),
+                content: "saved".into(),
+            }],
+        };
+        feature.review_history.push(ReviewAttemptEvidence {
+            attempt: 1,
+            packet_sha256: packet.sha256().unwrap(),
+            validation_evidence_sha256,
+            outcome: "approved".into(),
+            decision_sha256: Some("2".repeat(64)),
+            blocking_findings: Vec::new(),
+            summary: "approved".into(),
+        });
+        let input = publication_input(&feature).unwrap();
+        feature.publication = Some(PublicationRecord::pending(&input).unwrap());
+        feature
+    }
+
+    #[test]
+    fn publication_request_is_action_specific_and_rejects_unknown_fields() {
+        let save = json!({
+            "action":"save_connection",
+            "project":"example",
+            "repository_url":"https://github.com/owner/example",
+            "base_branch":"main",
+            "expected_revision":7
+        });
+        assert!(matches!(
+            serde_json::from_value::<PublicationMutation>(save.clone()).unwrap(),
+            PublicationMutation::SaveConnection {
+                expected_revision: 7,
+                ..
+            }
+        ));
+        let mut unknown = save;
+        unknown["merge_without_checks"] = Value::Bool(true);
+        assert!(serde_json::from_value::<PublicationMutation>(unknown).is_err());
+        assert!(serde_json::from_value::<PublicationMutation>(json!({
+            "action":"reconcile",
+            "feature_id":"a8e78ac7-c9a9-47f0-92dc-b35777880967",
+            "expected_revision":8
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn frozen_publication_candidate_is_the_exact_approved_cumulative_packet() {
+        let feature = feature_with_publication("running");
+        let input = publication_input(&feature).unwrap();
+        assert_eq!(input.files.len(), 1);
+        assert_eq!(input.files[0].before_sha256, None);
+        assert_eq!(input.files[0].content, "saved");
+
+        let mut tampered = feature;
+        tampered.publication_candidate[0].content = "different".into();
+        assert!(publication_input(&tampered)
+            .unwrap_err()
+            .to_string()
+            .contains("content changed"));
+    }
+
+    #[test]
+    fn unresolved_publication_blocks_queue_mutations_and_requires_reconciliation() {
+        for publication_status in ["pending", "running", "attention"] {
+            let mut feature = feature_with_publication("failed");
+            feature.publication.as_mut().unwrap().status = publication_status.into();
+            if publication_status == "attention" {
+                feature.publication.as_mut().unwrap().stage = "wait_required_checks".into();
+            }
+            let mut state = Snapshot {
+                queue: vec![feature.clone()],
+                ..Default::default()
+            };
+            assert!(Engine::publication_unresolved(&state));
+            assert!(!feature_reviewer_state_is_changeable(&feature));
+            assert!(remove_feature(&mut state, &feature.id).is_err());
+        }
+    }
+
+    #[test]
+    fn publication_selection_freezes_connected_or_local_only_once() {
+        let binding = feature_with_publication("running")
+            .publication_binding
+            .unwrap();
+        let mut connected = feature_with_status("queued");
+        freeze_publication_selection(&mut connected, Some(binding)).unwrap();
+        assert!(connected.publication_selection_frozen);
+        assert!(connected.publication_binding.is_some());
+        assert!(freeze_publication_selection(&mut connected, None).is_err());
+
+        let mut local = feature_with_status("queued");
+        freeze_publication_selection(&mut local, None).unwrap();
+        assert!(local.publication_selection_frozen);
+        assert!(local.publication_binding.is_none());
+    }
+
+    #[test]
+    fn stop_or_emergency_dominates_verified_publication_completion() {
+        let cancellation = AtomicU8::new(0);
+        assert!(!publication_completion_is_cancelled(&cancellation, false));
+        cancellation.store(1, Ordering::SeqCst);
+        assert!(publication_completion_is_cancelled(&cancellation, false));
+        cancellation.store(0, Ordering::SeqCst);
+        assert!(publication_completion_is_cancelled(&cancellation, true));
+    }
+
+    #[test]
+    fn late_stop_does_not_overwrite_durable_publication_success() {
+        let mut feature = feature_with_publication("succeeded");
+        feature.checkpoint = "publication_merged".into();
+        let publication = feature.publication.as_mut().unwrap();
+        publication.status = "succeeded".into();
+        publication.stage = "complete".into();
+        publication.merged_sha = Some("a".repeat(40));
+        let retained_publication = serde_json::to_value(&feature.publication).unwrap();
+
+        pause_after_post_run_cancellation(&mut feature);
+
+        assert_eq!(feature.status, "succeeded");
+        assert_eq!(feature.checkpoint, "publication_merged");
+        assert_eq!(
+            serde_json::to_value(&feature.publication).unwrap(),
+            retained_publication
+        );
+
+        let mut incomplete = feature_with_status("running");
+        pause_after_post_run_cancellation(&mut incomplete);
+        assert_eq!(incomplete.status, "paused");
+    }
+
+    #[test]
+    fn rejected_shutdown_does_not_cancel_active_publication() {
+        let (_dir, engine) = control_test_engine();
+        engine.publication_running.store(true, Ordering::SeqCst);
+        engine.publication_cancellation.store(0, Ordering::SeqCst);
+
+        assert!(engine.begin_shutdown().is_err());
+        assert_eq!(engine.publication_cancellation.load(Ordering::SeqCst), 0);
+        assert!(!engine.shutdown.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn publication_running_clears_when_attention_persistence_fails() {
+        let (_dir, engine) = control_test_engine();
+        let feature = feature_with_publication("failed");
+        let feature_id = feature.id.clone();
+        engine
+            .change(|state| {
+                state.queue[0] = feature;
+                Ok(())
+            })
+            .unwrap();
+        engine
+            .database
+            .lock()
+            .unwrap()
+            .connection
+            .execute_batch(
+                "CREATE TRIGGER reject_publication_write BEFORE UPDATE ON developer_state BEGIN SELECT RAISE(ABORT,'fixture publication write failure'); END;",
+            )
+            .unwrap();
+        engine.publication_running.store(true, Ordering::SeqCst);
+
+        let error = engine
+            .execute_publication_reserved(&feature_id)
+            .await
+            .unwrap_err();
+
+        assert!(format!("{error:#}").contains("fixture publication write failure"));
+        assert!(!engine.publication_running.load(Ordering::SeqCst));
     }
 
     #[tokio::test]
@@ -5527,6 +8852,8 @@ mod tests {
             "Plan the repair",
             "true",
             "mac",
+            REVIEW_MODEL_ID,
+            DEFAULT_REASONING_EFFORT,
         )
         .unwrap();
         record_request(
@@ -5545,6 +8872,9 @@ mod tests {
             skill_sha256: developer_planning::brainstorming_skill_sha256(),
             revision,
             expected_response: expected_response(&session).unwrap().into(),
+            provider_id: REVIEW_PROVIDER_ID.into(),
+            model_id: REVIEW_MODEL_ID.into(),
+            reasoning_effort: DEFAULT_REASONING_EFFORT.into(),
             project: session.project.clone(),
             instruction: session.instruction.clone(),
             validation: session.validation.clone(),
@@ -5637,6 +8967,8 @@ mod tests {
             "Plan another repair",
             "true",
             "mac",
+            REVIEW_MODEL_ID,
+            DEFAULT_REASONING_EFFORT,
         )
         .unwrap();
         record_request(
@@ -5655,6 +8987,9 @@ mod tests {
             skill_sha256: developer_planning::brainstorming_skill_sha256(),
             revision,
             expected_response: expected_response(&session).unwrap().into(),
+            provider_id: REVIEW_PROVIDER_ID.into(),
+            model_id: REVIEW_MODEL_ID.into(),
+            reasoning_effort: DEFAULT_REASONING_EFFORT.into(),
             project: session.project.clone(),
             instruction: session.instruction.clone(),
             validation: session.validation.clone(),
@@ -5718,7 +9053,7 @@ mod tests {
             design_complete: false,
             decision_log: Vec::new(),
             implementation_plan: None,
-            reasoning_effort: None,
+            reasoning_effort: DEFAULT_REASONING_EFFORT.into(),
         };
         assert!(engine
             .finish_planning_completion(&packet, PlanningCompletion::Output(Box::new(output)))
@@ -5760,6 +9095,43 @@ mod tests {
     }
 
     #[test]
+    fn planning_retry_rejects_a_retired_session_pinned_orchestrator() {
+        let (_dir, engine) = control_test_engine();
+        let feature_id = "123faf2a-6a8e-411b-af3e-267d9ea49747";
+        let mut session = new_session(
+            feature_id,
+            "example",
+            "Plan the repair",
+            "true",
+            "mac",
+            REVIEW_MODEL_ID,
+            DEFAULT_REASONING_EFFORT,
+        )
+        .unwrap();
+        session.model = "gpt-retired-planner".into();
+        session.availability = "unavailable".into();
+        session.error = Some("fixture provider unavailable".into());
+        engine
+            .change(|state| {
+                state.planning_sessions.push(session);
+                Ok(())
+            })
+            .unwrap();
+
+        let result = engine.planning_mutate(json!({
+            "action":"retry",
+            "feature_id":feature_id,
+            "request_id":"b35972e8-b6a8-4cb9-96fa-cc7a68d2e8b2",
+            "expected_revision":0,
+        }));
+
+        assert!(
+            format!("{:#}", result.unwrap_err()).contains("Selected orchestrator is unavailable")
+        );
+        assert!(!engine.planning_running.load(Ordering::SeqCst));
+    }
+
+    #[test]
     fn removal_is_a_durable_idempotent_tombstone_for_removable_states() {
         for status in ["queued", "failed", "paused"] {
             let mut state = Snapshot {
@@ -5798,6 +9170,175 @@ mod tests {
         let mut state = Snapshot::default();
         assert!(remove_feature(&mut state, "not-a-uuid").is_err());
         assert!(remove_feature(&mut state, "123faf2a-6a8e-411b-af3e-267d9ea49747").is_err());
+    }
+
+    #[test]
+    fn exhausted_feature_reviewer_change_preserves_work_and_requires_a_fresh_packet() {
+        let project = tempfile::tempdir().unwrap();
+        fs::write(project.path().join("result.txt"), "saved").unwrap();
+        let project_root = fs::canonicalize(project.path()).unwrap();
+        let mut feature = feature_with_status("failed");
+        feature.checkpoint = "review_3_unavailable".into();
+        feature.repair_attempts = REPAIR_LIMIT;
+        feature.repair_history = (1..=REPAIR_LIMIT)
+            .map(|attempt| RepairAttemptEvidence {
+                attempt,
+                prior_checkpoint: format!("repair_{attempt}_applied"),
+                prior_message: format!("repair {attempt} evidence"),
+                prior_edits: Vec::new(),
+            })
+            .collect();
+        feature.review_attempts = 3;
+        feature.review_status = "unavailable".into();
+        feature.review_history.push(ReviewAttemptEvidence {
+            attempt: 3,
+            packet_sha256: "1".repeat(64),
+            validation_evidence_sha256: "2".repeat(64),
+            outcome: "unavailable".into(),
+            decision_sha256: None,
+            blocking_findings: Vec::new(),
+            summary: "provider unavailable".into(),
+        });
+        let preserved = serde_json::to_value((
+            &feature.edits,
+            &feature.repair_history,
+            &feature.review_history,
+            &feature.planning,
+        ))
+        .unwrap();
+
+        change_feature_reviewer(
+            &mut feature,
+            AiSelection {
+                model: "gpt-5.3-codex-spark".into(),
+                reasoning_effort: "high".into(),
+            },
+            42,
+        )
+        .unwrap();
+
+        assert_eq!(feature.status, "failed");
+        assert_eq!(feature.checkpoint, "review_3_unavailable");
+        assert_eq!(feature.repair_attempts, REPAIR_LIMIT);
+        assert!(!feature.repair_pending);
+        assert_eq!(
+            serde_json::to_value((
+                &feature.edits,
+                &feature.repair_history,
+                &feature.review_history,
+                &feature.planning,
+            ))
+            .unwrap(),
+            preserved
+        );
+        assert_eq!(feature.review_status, "pending");
+        assert!(feature.review_pending.is_none());
+        assert_eq!(feature.review_model, "gpt-5.3-codex-spark");
+        assert_eq!(feature.review_reasoning_effort, "high");
+        assert_eq!(feature.reviewer_selection_history.len(), 1);
+        assert_eq!(feature.reviewer_selection_history[0].revision, 42);
+        let packet = developer_review_packet(
+            &feature,
+            &project_root,
+            feature.edits.as_deref().unwrap(),
+            &"3".repeat(64),
+        )
+        .unwrap();
+        assert_eq!(packet.model_id, "gpt-5.3-codex-spark");
+        assert_eq!(packet.reasoning_effort, "high");
+    }
+
+    #[test]
+    fn reviewer_change_rejects_terminal_and_unsafe_escalation_states() {
+        for status in ["running", "succeeded", "removed"] {
+            let mut feature = feature_with_status(status);
+            assert!(change_feature_reviewer(
+                &mut feature,
+                AiSelection {
+                    model: "gpt-5.3-codex-spark".into(),
+                    reasoning_effort: "high".into(),
+                },
+                9,
+            )
+            .is_err());
+        }
+        let mut interrupted = feature_with_status("failed");
+        interrupted.checkpoint = "escalation_1_apply_interrupted".into();
+        assert!(!feature_reviewer_state_is_changeable(&interrupted));
+        for checkpoint in [
+            "staged_tool_candidate_quarantined",
+            "tool_effects_quarantined",
+            "tool_workspace_changed_requires_proposal",
+            "future_recovery_state",
+        ] {
+            let mut quarantined = feature_with_status("failed");
+            quarantined.checkpoint = checkpoint.into();
+            assert!(!feature_reviewer_state_is_changeable(&quarantined));
+        }
+        let mut applying = feature_with_escalation("paused");
+        assert!(!feature_reviewer_state_is_changeable(&applying));
+        applying.escalation_pending = false;
+        applying.escalation_proposal.as_mut().unwrap().status = "applying".into();
+        assert!(!feature_reviewer_state_is_changeable(&applying));
+    }
+
+    #[test]
+    fn reviewer_change_interrupts_pending_review_and_cancels_stale_ready_proposal() {
+        let mut feature = feature_with_escalation("failed");
+        feature.escalation_pending = false;
+        feature.checkpoint = "review_4_pending".into();
+        feature.review_attempts = 4;
+        feature.review_pending = Some(ReviewPendingEvidence {
+            attempt: 4,
+            packet_sha256: "4".repeat(64),
+            validation_evidence_sha256: "5".repeat(64),
+        });
+        feature.escalation_proposal.as_mut().unwrap().status = "ready".into();
+        let review_history_len = feature.review_history.len();
+        let escalation_history_len = feature.escalation_history.len();
+        change_feature_reviewer(
+            &mut feature,
+            AiSelection {
+                model: "gpt-5.3-codex-spark".into(),
+                reasoning_effort: "medium".into(),
+            },
+            17,
+        )
+        .unwrap();
+        assert_eq!(feature.checkpoint, "review_4_interrupted");
+        assert_eq!(feature.review_history.len(), review_history_len + 1);
+        assert_eq!(
+            feature.review_history.last().unwrap().outcome,
+            "interrupted"
+        );
+        assert_eq!(feature.escalation_history.len(), escalation_history_len + 1);
+        assert_eq!(
+            feature.escalation_history.last().unwrap().outcome,
+            "cancelled"
+        );
+        assert_eq!(
+            feature.escalation_proposal.as_ref().unwrap().status,
+            "cancelled"
+        );
+        assert_eq!(feature.review_status, "pending");
+    }
+
+    #[test]
+    fn feature_reviewer_request_is_strict_and_revision_bound() {
+        let value = json!({
+            "id":"a8e78ac7-c9a9-47f0-92dc-b35777880967",
+            "expected_revision":8,
+            "expected_checkpoint":"review_3_unavailable",
+            "expected_model":"gpt-5.6-sol",
+            "expected_reasoning_effort":"high",
+            "reviewer":{"model":"gpt-5.3-codex-spark","reasoning_effort":"high"}
+        });
+        let request: FeatureReviewerMutation = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(request.expected_revision, 8);
+        assert_eq!(request.expected_model, "gpt-5.6-sol");
+        let mut unknown = value;
+        unknown["start"] = Value::Bool(true);
+        assert!(serde_json::from_value::<FeatureReviewerMutation>(unknown).is_err());
     }
 
     #[test]
@@ -6052,7 +9593,7 @@ mod tests {
     }
 
     #[test]
-    fn queue_v8_reads_legacy_state_defaults_and_fails_closed_for_old_parsers() {
+    fn queue_v10_reads_legacy_state_defaults_and_fails_closed_for_old_parsers() {
         let legacy_v1 = r#"{"revision":7,"auto_run":true,"emergency_paused":false,"queue":[]}"#;
         let legacy_v2 = r#"{"revision":8,"auto_run":true,"emergency_paused":false,"queue_v2":[]}"#;
         let legacy_v3 = format!(
@@ -6064,6 +9605,31 @@ mod tests {
         let decoded: Snapshot = serde_json::from_str(legacy_v1).unwrap();
         assert_eq!(decoded.revision, 7);
         assert!(decoded.queue.is_empty());
+        assert_eq!(decoded.ai_settings, DeveloperAiSettings::default());
+        let mut legacy_feature = serde_json::to_value(feature_with_status("queued")).unwrap();
+        let legacy_feature = legacy_feature.as_object_mut().unwrap();
+        legacy_feature.remove("review_model");
+        legacy_feature.remove("review_reasoning_effort");
+        legacy_feature.remove("review_binding_version");
+        legacy_feature.remove("reviewer_selection_history");
+        legacy_feature.remove("publication_selection_frozen");
+        legacy_feature.remove("publication_binding");
+        legacy_feature.remove("publication_candidate");
+        legacy_feature.remove("publication");
+        let legacy_feature: Feature =
+            serde_json::from_value(Value::Object(legacy_feature.clone())).unwrap();
+        assert_eq!(legacy_feature.review_model, REVIEW_MODEL_ID);
+        assert_eq!(
+            legacy_feature.review_reasoning_effort,
+            DEFAULT_REASONING_EFFORT
+        );
+        assert_eq!(legacy_feature.review_binding_version, 0);
+        assert!(legacy_feature.reviewer_selection_history.is_empty());
+        assert!(!legacy_feature.publication_selection_frozen);
+        assert!(legacy_feature.publication_binding.is_none());
+        assert!(legacy_feature.publication_candidate.is_empty());
+        assert!(legacy_feature.publication.is_none());
+        assert!(serde_json::from_str::<Snapshot>(r#"{"revision":1,"auto_run":true,"emergency_paused":false,"queue_v8":[],"ai_settings":{"revision":1,"orchestrator":{"model":"gpt-5.6-sol"}}}"#).is_err());
         assert_eq!(
             serde_json::from_str::<Snapshot>(legacy_v2)
                 .unwrap()
@@ -6096,7 +9662,9 @@ mod tests {
 
         let current = serde_json::to_string(&decoded).unwrap();
         let current_value: Value = serde_json::from_str(&current).unwrap();
-        assert!(current_value.get("queue_v8").is_some());
+        assert!(current_value.get("queue_v10").is_some());
+        assert!(current_value.get("queue_v9").is_none());
+        assert!(current_value.get("queue_v8").is_none());
         assert!(current_value.get("queue_v7").is_none());
         assert!(current_value.get("queue_v6").is_none());
         assert!(current_value.get("queue_v5").is_none());
@@ -6156,6 +9724,20 @@ mod tests {
             queue: Vec<Feature>,
         }
         assert!(serde_json::from_str::<V7Snapshot>(&current).is_err());
+        #[derive(Deserialize)]
+        struct V8Snapshot {
+            #[allow(dead_code)]
+            #[serde(rename = "queue_v8", alias = "queue_v7")]
+            queue: Vec<Feature>,
+        }
+        assert!(serde_json::from_str::<V8Snapshot>(&current).is_err());
+        #[derive(Deserialize)]
+        struct V9Snapshot {
+            #[allow(dead_code)]
+            #[serde(rename = "queue_v9", alias = "queue_v8")]
+            queue: Vec<Feature>,
+        }
+        assert!(serde_json::from_str::<V9Snapshot>(&current).is_err());
     }
 
     #[test]
@@ -6190,6 +9772,8 @@ mod tests {
             review_codex_executable: PathBuf::from("/private/review/codex"),
             review_codex_home: PathBuf::from("/private/review/home"),
             opencode_executable: None,
+            git_executable: None,
+            gh_executable: None,
         };
         assert!(configured_model_targets(&duplicate).is_err());
         let ipv4 = reqwest::Url::parse("http://127.0.0.1:8080/v1").unwrap();
@@ -6197,6 +9781,328 @@ mod tests {
         let distinct_port = reqwest::Url::parse("http://127.0.0.1:8081/v1").unwrap();
         assert!(same_loopback_listener(&ipv4, &ipv6_alias));
         assert!(!same_loopback_listener(&ipv4, &distinct_port));
+    }
+
+    #[test]
+    fn chat_tool_mutations_are_exact_revision_bound_contracts() {
+        let access: ChatAccessMutation = serde_json::from_value(json!({
+            "project":"example",
+            "mode":"ask",
+            "expected_revision":4
+        }))
+        .unwrap();
+        assert_eq!(access.project, "example");
+        assert_eq!(access.mode, "ask");
+        assert_eq!(access.expected_revision, 4);
+        assert!(serde_json::from_value::<ChatAccessMutation>(json!({
+            "project":"example",
+            "mode":"ask",
+            "expected_revision":4,
+            "approved":true
+        }))
+        .is_err());
+
+        let approval: ChatApprovalMutation = serde_json::from_value(json!({
+            "project":"example",
+            "request_id":"8d919ad1-449f-4089-a6ef-2c6ea4806f1e",
+            "approval_id":"44642d68-f970-4480-b31b-49c52826a50d",
+            "access_revision":7,
+            "decision":"deny"
+        }))
+        .unwrap();
+        assert_eq!(approval.decision, "deny");
+        assert_eq!(approval.access_revision, 7);
+        assert!(serde_json::from_value::<ChatApprovalMutation>(json!({
+            "project":"example",
+            "request_id":"8d919ad1-449f-4089-a6ef-2c6ea4806f1e",
+            "approval_id":"44642d68-f970-4480-b31b-49c52826a50d",
+            "access_revision":7,
+            "decision":"approve",
+            "remember":true
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn tool_session_changes_become_exact_review_edits_and_reject_deletions() {
+        let changes = vec![ToolProjectMutation {
+            revision: 3,
+            request_id: "8d919ad1-449f-4089-a6ef-2c6ea4806f1e".into(),
+            feature_id: Some("feature-1".into()),
+            edits: vec![
+                developer_tools::ToolMutationEdit {
+                    path: "App.py".into(),
+                    before_sha256: Some(hash(b"VALUE = 1\n")),
+                    after: Some("VALUE = 2\n".into()),
+                },
+                developer_tools::ToolMutationEdit {
+                    path: "tests/test_app.py".into(),
+                    before_sha256: None,
+                    after: Some("assert True\n".into()),
+                },
+            ],
+            unreviewable_paths: Vec::new(),
+        }];
+        let edits = tool_mutation_edits(&changes, Some("feature-1")).unwrap();
+        assert_eq!(edits.len(), 2);
+        assert_eq!(edits[0].path, "App.py");
+        assert_eq!(edits[0].before, Some(hash(b"VALUE = 1\n")));
+        assert_eq!(edits[0].content, "VALUE = 2\n");
+        assert_eq!(edits[1].path, "tests/test_app.py");
+        assert_eq!(edits[1].before, None);
+
+        let mut deleted = changes.clone();
+        deleted[0].edits[0].after = None;
+        assert!(tool_mutation_edits(&deleted, Some("feature-1"))
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("deletion cannot enter bounded review"));
+        assert!(tool_mutation_edits(&changes, None)
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("attribution changed"));
+        let mut environment = changes.clone();
+        environment[0].unreviewable_paths = vec![".venv".into(), "target".into()];
+        assert_eq!(
+            tool_mutation_edits(&environment, Some("feature-1"))
+                .unwrap()
+                .len(),
+            2
+        );
+        environment[0]
+            .unreviewable_paths
+            .push("build/app.bin".into());
+        assert!(tool_mutation_edits(&environment, Some("feature-1"))
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("cannot enter bounded review"));
+
+        let protected = repair_forbidden_tool_paths(&["qa/acceptance.py".into()]);
+        assert!(protected.contains(&"tests/**".into()));
+        assert!(protected.contains(&"qa/acceptance.py".into()));
+        assert!(protected.contains(&"qa/acceptance.py/**".into()));
+    }
+
+    #[test]
+    fn one_project_tool_mutation_invalidates_every_prior_review_evidence() {
+        let mut first = feature_with_status("succeeded");
+        first.review_status = "approved".into();
+        let mut second = first.clone();
+        second.id = "34a65755-5607-4b1e-a425-7a3763e85950".into();
+        let owned = vec![Edit {
+            path: "sidechat.py".into(),
+            before: None,
+            content: "VALUE = 2\n".into(),
+        }];
+        reconcile_feature_tool_mutation(&mut first, 9, &Ok(owned)).unwrap();
+        reconcile_feature_tool_mutation(&mut second, 9, &Ok(Vec::new())).unwrap();
+        for feature in [&first, &second] {
+            assert_eq!(feature.status, "paused");
+            assert_eq!(feature.review_status, "interrupted");
+            assert_eq!(feature.checkpoint, "review_tool_workspace_changed");
+            assert_eq!(feature.tool_workspace_revision, 9);
+        }
+        assert!(first
+            .edits
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|edit| edit.path == "sidechat.py"));
+        assert!(!second
+            .edits
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|edit| edit.path == "sidechat.py"));
+    }
+
+    #[test]
+    fn never_started_missing_project_does_not_require_a_tool_snapshot() {
+        let mut feature = feature_with_status("queued");
+        feature.edits = None;
+        feature.review_attempts = 0;
+        feature.tool_workspace_revision = 0;
+        assert!(never_started_project_has_no_tool_ledger(&feature));
+
+        feature.tool_workspace_revision = 1;
+        assert!(!never_started_project_has_no_tool_ledger(&feature));
+        feature.tool_workspace_revision = 0;
+        feature.review_attempts = 1;
+        assert!(!never_started_project_has_no_tool_ledger(&feature));
+    }
+
+    #[test]
+    fn validation_uses_only_an_ordinary_project_virtual_environment() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = fs::canonicalize(directory.path()).unwrap();
+        #[cfg(windows)]
+        let bin = project.join(".venv/Scripts");
+        #[cfg(not(windows))]
+        let bin = project.join(".venv/bin");
+        fs::create_dir_all(&bin).unwrap();
+        #[cfg(windows)]
+        fs::write(bin.join("python.exe"), b"fixture").unwrap();
+        #[cfg(not(windows))]
+        fs::write(bin.join("python"), b"fixture").unwrap();
+        let mut command = Command::new("fixture");
+        configure_project_environment(&mut command, &project).unwrap();
+        let environment = command
+            .as_std()
+            .get_envs()
+            .find(|(name, _)| *name == "VIRTUAL_ENV")
+            .and_then(|(_, value)| value)
+            .unwrap();
+        assert_eq!(environment, project.join(".venv"));
+        let configured_path = command
+            .as_std()
+            .get_envs()
+            .find(|(name, _)| *name == "PATH")
+            .and_then(|(_, value)| value)
+            .unwrap();
+        assert_eq!(std::env::split_paths(configured_path).next(), Some(bin));
+
+        #[cfg(unix)]
+        {
+            let escaped = tempfile::tempdir().unwrap();
+            let linked_project = tempfile::tempdir().unwrap();
+            std::os::unix::fs::symlink(escaped.path(), linked_project.path().join(".venv"))
+                .unwrap();
+            let linked_project = fs::canonicalize(linked_project.path()).unwrap();
+            assert!(
+                configure_project_environment(&mut Command::new("fixture"), &linked_project)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("ordinary directory")
+            );
+        }
+    }
+
+    #[test]
+    fn dependency_preparation_requires_a_usable_project_virtual_environment() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = fs::canonicalize(directory.path()).unwrap();
+        assert!(require_project_virtual_environment(&project)
+            .unwrap_err()
+            .to_string()
+            .contains("required project-local .venv"));
+
+        #[cfg(unix)]
+        {
+            let bin = project.join(".venv/bin");
+            fs::create_dir_all(&bin).unwrap();
+            let system_interpreter = project.join("python-fixture");
+            fs::write(&system_interpreter, b"fixture").unwrap();
+            std::os::unix::fs::symlink(&system_interpreter, bin.join("python")).unwrap();
+            require_project_virtual_environment(&project).unwrap();
+        }
+    }
+
+    #[test]
+    fn dependency_environment_detection_and_commands_are_generic_and_project_local() {
+        let mut feature = feature_with_status("failed");
+        feature.repair_history.push(RepairAttemptEvidence {
+            attempt: 1,
+            prior_checkpoint: "validation_failed".into(),
+            prior_message: "ImportError: cannot import name sample from another_package".into(),
+            prior_edits: Vec::new(),
+        });
+        assert!(repair_needs_environment_preparation(&feature));
+        let prompt = tool_environment_prompt(&feature).unwrap();
+        assert!(prompt.contains(".venv\\Scripts\\python.exe -m pip"));
+        assert!(prompt.contains("never use bare `pip`"));
+        assert!(is_dependency_manifest("config/requirements-dev.txt"));
+        assert!(is_dependency_manifest("Cargo.lock"));
+        assert!(!is_dependency_manifest("converter/gui.py"));
+    }
+
+    #[test]
+    fn staged_tool_failure_records_only_live_environment_edits() {
+        let mut feature = feature_with_status("running");
+        feature.edits = None;
+        let environment_edit = Edit {
+            path: "requirements.txt".into(),
+            before: Some(hash(b"old\n")),
+            content: "new\n".into(),
+        };
+        quarantine_tool_candidate(
+            &mut feature,
+            12,
+            std::slice::from_ref(&environment_edit),
+            true,
+            "tool process stopped",
+        )
+        .unwrap();
+        assert_eq!(feature.tool_workspace_revision, 12);
+        assert_eq!(feature.checkpoint, "staged_tool_candidate_quarantined");
+        assert_eq!(feature.review_status, "interrupted");
+        assert_eq!(feature.edits.as_ref().unwrap().len(), 1);
+        assert_eq!(feature.edits.as_ref().unwrap()[0].path, "requirements.txt");
+        assert!(feature.message.contains("was not applied"));
+    }
+
+    #[test]
+    fn staged_repair_applies_only_candidate_bytes_but_reviews_environment_too() {
+        let environment = Edit {
+            path: "requirements.txt".into(),
+            before: Some(hash(b"old\n")),
+            content: "new\n".into(),
+        };
+        let candidate = Edit {
+            path: "converter/core.py".into(),
+            before: Some(hash(b"VALUE = 1\n")),
+            content: "VALUE = 2\n".into(),
+        };
+        let (review, application) = tool_review_and_application_edits(
+            std::slice::from_ref(&environment),
+            std::slice::from_ref(&candidate),
+            true,
+        )
+        .unwrap();
+        assert_eq!(review.len(), 2);
+        assert_eq!(application.len(), 1);
+        assert_eq!(application[0].path, candidate.path);
+        assert!(!application.iter().any(|edit| edit.path == environment.path));
+    }
+
+    #[test]
+    fn tool_assisted_repairs_use_a_disposable_project_copy() {
+        let workspace = tempfile::tempdir().unwrap();
+        let workspace_root = fs::canonicalize(workspace.path()).unwrap();
+        let source = workspace_root.join("project");
+        fs::create_dir_all(source.join("tests")).unwrap();
+        fs::create_dir_all(source.join(".venv/bin")).unwrap();
+        fs::write(source.join("app.py"), b"VALUE = 1\n").unwrap();
+        fs::write(source.join("tests/test_app.py"), b"assert VALUE == 1\n").unwrap();
+        fs::write(source.join(".venv/bin/python"), b"environment\n").unwrap();
+        #[cfg(unix)]
+        {
+            let outside = workspace_root.join("outside");
+            fs::create_dir(&outside).unwrap();
+            fs::write(outside.join("owner.txt"), b"outside\n").unwrap();
+            std::os::unix::fs::symlink(&outside, source.join("external-link")).unwrap();
+        }
+        let source = fs::canonicalize(source).unwrap();
+        let stage_path;
+        {
+            let stage = RepairStage::create(&workspace_root, &source).unwrap();
+            stage_path = stage.project_path().to_path_buf();
+            assert_eq!(fs::read(stage_path.join("app.py")).unwrap(), b"VALUE = 1\n");
+            assert_eq!(
+                fs::read(stage_path.join("tests/test_app.py")).unwrap(),
+                b"assert VALUE == 1\n"
+            );
+            assert!(!stage_path.join(".venv").exists());
+            assert!(!stage_path.join("external-link").exists());
+            fs::write(stage_path.join("tests/test_app.py"), b"weakened\n").unwrap();
+            assert_eq!(
+                fs::read(source.join("tests/test_app.py")).unwrap(),
+                b"assert VALUE == 1\n"
+            );
+        }
+        assert!(!stage_path.exists());
     }
 
     #[test]

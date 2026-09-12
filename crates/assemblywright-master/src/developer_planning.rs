@@ -3,8 +3,13 @@
 //! Codex may propose the next bounded planning artifact. Only this module advances
 //! the durable gates, and only the owner-facing HTTP mutation may confirm them.
 
-use crate::developer_review::{
-    hex_digest, sanitize_and_validate_cloud_text, validate_cloud_text, MODEL_ID, PROVIDER_ID,
+use crate::{
+    developer_review::{
+        hex_digest, sanitize_and_validate_cloud_text, validate_cloud_text, PROVIDER_ID,
+    },
+    developer_settings::{
+        validate_model_id, validate_reasoning_effort, DEFAULT_MODEL, DEFAULT_REASONING_EFFORT,
+    },
 };
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -13,9 +18,38 @@ use std::{collections::BTreeSet, path::Path};
 use uuid::Uuid;
 
 pub const BRAINSTORMING_SKILL: &str = include_str!("brainstorming_skill.md");
-pub const PLANNING_SCHEMA_FILENAME: &str = "developer-planning-output-schema.json";
 pub const MAX_PLANNING_SESSIONS: usize = 100;
 pub const MAX_REQUEST_RECORDS: usize = 10_000;
+
+fn default_ai_model() -> String {
+    DEFAULT_MODEL.into()
+}
+
+fn default_ai_reasoning_effort() -> String {
+    DEFAULT_REASONING_EFFORT.into()
+}
+
+pub fn planning_output_schema(model: &str, reasoning_effort: &str) -> Result<String> {
+    validate_model_id(model)?;
+    validate_reasoning_effort(reasoning_effort)?;
+    Ok(PLANNING_OUTPUT_SCHEMA
+        .replacen(
+            "\"model_id\":{\"type\":\"string\",\"const\":\"gpt-5.6-sol\"}",
+            &format!(
+                "\"model_id\":{{\"type\":\"string\",\"const\":{}}}",
+                serde_json::to_string(model)?
+            ),
+            1,
+        )
+        .replacen(
+            "\"reasoning_effort\":{\"type\":\"string\",\"const\":\"high\"}",
+            &format!(
+                "\"reasoning_effort\":{{\"type\":\"string\",\"const\":{}}}",
+                serde_json::to_string(reasoning_effort)?
+            ),
+            1,
+        ))
+}
 
 pub const PLANNING_OUTPUT_SCHEMA: &str = r##"{
   "$schema":"https://json-schema.org/draft/2020-12/schema",
@@ -25,6 +59,7 @@ pub const PLANNING_OUTPUT_SCHEMA: &str = r##"{
     "planning_packet_sha256":{"$ref":"#/$defs/digest"},
     "provider_id":{"type":"string","const":"openai.codex"},
     "model_id":{"type":"string","const":"gpt-5.6-sol"},
+    "reasoning_effort":{"type":"string","const":"high"},
     "response_kind":{"type":"string","enum":["question","understanding","approaches","design_section","ready"]},
     "question":{"anyOf":[{"type":"null"},{"$ref":"#/$defs/question"}]},
     "understanding_summary":{"type":"array","maxItems":7,"items":{"$ref":"#/$defs/text"}},
@@ -36,7 +71,7 @@ pub const PLANNING_OUTPUT_SCHEMA: &str = r##"{
     "decision_log":{"type":"array","maxItems":32,"items":{"$ref":"#/$defs/decision"}},
     "implementation_plan":{"anyOf":[{"type":"null"},{"type":"string","maxLength":16000}]}
   },
-  "required":["schema_version","planning_packet_sha256","provider_id","model_id","response_kind","question","understanding_summary","assumptions","open_questions","approaches","design_section","design_complete","decision_log","implementation_plan"],
+  "required":["schema_version","planning_packet_sha256","provider_id","model_id","reasoning_effort","response_kind","question","understanding_summary","assumptions","open_questions","approaches","design_section","design_complete","decision_log","implementation_plan"],
   "$defs":{
     "digest":{"type":"string","pattern":"^[0-9a-f]{64}$"},
     "text":{"type":"string","minLength":1,"maxLength":2000},
@@ -143,7 +178,10 @@ pub struct PlanningSession {
     pub running: bool,
     pub availability: String,
     pub provider: String,
+    #[serde(default = "default_ai_model")]
     pub model: String,
+    #[serde(default = "default_ai_reasoning_effort")]
+    pub reasoning_effort: String,
     pub project: String,
     pub instruction: String,
     pub validation: String,
@@ -174,8 +212,6 @@ pub struct PlanningSession {
     pub requests: Vec<PlanningRequestRecord>,
     #[serde(default)]
     pub history: Vec<PlanningAttemptEvidence>,
-    #[serde(default)]
-    pub reasoning_effort: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -186,6 +222,8 @@ pub struct ApprovedPlanMetadata {
     pub plan_sha256: String,
     pub provider: String,
     pub model: String,
+    #[serde(default = "default_ai_reasoning_effort")]
+    pub reasoning_effort: String,
     pub skill_sha256: String,
     pub ready_packet_sha256: String,
     pub ready_output_sha256: String,
@@ -209,6 +247,9 @@ pub struct PlanningPacket {
     pub skill_sha256: String,
     pub revision: u64,
     pub expected_response: String,
+    pub provider_id: String,
+    pub model_id: String,
+    pub reasoning_effort: String,
     pub project: String,
     pub instruction: String,
     pub validation: String,
@@ -231,6 +272,11 @@ impl PlanningPacket {
         if self.skill_sha256 != brainstorming_skill_sha256() {
             bail!("Planning packet brainstorming skill binding is invalid");
         }
+        if self.provider_id != PROVIDER_ID {
+            bail!("Planning packet provider binding is invalid");
+        }
+        validate_model_id(&self.model_id)?;
+        validate_reasoning_effort(&self.reasoning_effort)?;
         validate_project(&self.project)?;
         validate_input(&self.instruction, 16_000, "feature description")?;
         validate_input(&self.validation, 2_000, "validation command")?;
@@ -309,6 +355,7 @@ pub struct PlanningProviderOutput {
     pub planning_packet_sha256: String,
     pub provider_id: String,
     pub model_id: String,
+    pub reasoning_effort: String,
     pub response_kind: String,
     pub question: Option<PlanningQuestion>,
     #[serde(default)]
@@ -323,8 +370,6 @@ pub struct PlanningProviderOutput {
     #[serde(default)]
     pub decision_log: Vec<PlanningDecision>,
     pub implementation_plan: Option<String>,
-    #[serde(default)]
-    pub reasoning_effort: Option<String>,
 }
 
 pub fn new_session(
@@ -333,6 +378,8 @@ pub fn new_session(
     instruction: &str,
     validation: &str,
     model_target: &str,
+    model: &str,
+    reasoning_effort: &str,
 ) -> Result<PlanningSession> {
     validate_identifier(feature_id)?;
     validate_project(project)?;
@@ -341,6 +388,8 @@ pub fn new_session(
     if !matches!(model_target, "mac" | "windows") {
         bail!("Unknown model target");
     }
+    validate_model_id(model)?;
+    validate_reasoning_effort(reasoning_effort)?;
     Ok(PlanningSession {
         schema_version: 1,
         feature_id: feature_id.into(),
@@ -349,7 +398,8 @@ pub fn new_session(
         running: false,
         availability: "available".into(),
         provider: PROVIDER_ID.into(),
-        model: MODEL_ID.into(),
+        model: model.into(),
+        reasoning_effort: reasoning_effort.into(),
         project: project.into(),
         instruction: instruction.into(),
         validation: validation.into(),
@@ -372,7 +422,6 @@ pub fn new_session(
         pending_packet_sha256: None,
         requests: Vec::new(),
         history: Vec::new(),
-        reasoning_effort: None,
     })
 }
 
@@ -629,7 +678,8 @@ pub fn approved_metadata(session: &PlanningSession) -> Result<ApprovedPlanMetada
     }
     if session.schema_version != 1
         || session.provider != PROVIDER_ID
-        || session.model != MODEL_ID
+        || validate_model_id(&session.model).is_err()
+        || validate_reasoning_effort(&session.reasoning_effort).is_err()
         || session.understanding_summary.len() < 5
         || session.understanding_summary.len() > 7
         || !session.open_questions.is_empty()
@@ -708,6 +758,7 @@ pub fn approved_metadata(session: &PlanningSession) -> Result<ApprovedPlanMetada
         plan_sha256: documents.plan_sha256.clone(),
         provider: session.provider.clone(),
         model: session.model.clone(),
+        reasoning_effort: session.reasoning_effort.clone(),
         skill_sha256: brainstorming_skill_sha256(),
         ready_packet_sha256: ready.packet_sha256.clone(),
         ready_output_sha256: ready.output_sha256.clone().unwrap(),
@@ -735,7 +786,8 @@ fn validate_output(packet: &PlanningPacket, output: &PlanningProviderOutput) -> 
     if output.schema_version != 1
         || output.planning_packet_sha256 != packet.sha256()?
         || output.provider_id != PROVIDER_ID
-        || output.model_id != MODEL_ID
+        || output.model_id != packet.model_id
+        || output.reasoning_effort != packet.reasoning_effort
     {
         bail!("Planning response is not bound to the exact request");
     }
@@ -1144,6 +1196,7 @@ fn sanitize_cloud_texts(values: &[String], max: usize) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::developer_review::MODEL_ID;
 
     fn session() -> PlanningSession {
         new_session(
@@ -1152,6 +1205,8 @@ mod tests {
             "Build it",
             "cargo test",
             "mac",
+            MODEL_ID,
+            DEFAULT_REASONING_EFFORT,
         )
         .unwrap()
     }
@@ -1167,6 +1222,9 @@ mod tests {
             skill_sha256: brainstorming_skill_sha256(),
             revision: state.revision,
             expected_response: "question_or_understanding".into(),
+            provider_id: PROVIDER_ID.into(),
+            model_id: MODEL_ID.into(),
+            reasoning_effort: DEFAULT_REASONING_EFFORT.into(),
             project: state.project.clone(),
             instruction: state.instruction.clone(),
             validation: state.validation.clone(),
@@ -1187,6 +1245,7 @@ mod tests {
             planning_packet_sha256: packet.sha256().unwrap(),
             provider_id: PROVIDER_ID.into(),
             model_id: MODEL_ID.into(),
+            reasoning_effort: DEFAULT_REASONING_EFFORT.into(),
             response_kind: "ready".into(),
             question: None,
             understanding_summary: vec![],
@@ -1197,7 +1256,6 @@ mod tests {
             design_complete: true,
             decision_log: vec![],
             implementation_plan: Some("Do it".into()),
-            reasoning_effort: None,
         };
         assert!(apply_provider_output(&mut state, &packet, output).is_err());
         assert!(state.running);
@@ -1214,6 +1272,9 @@ mod tests {
             skill_sha256: brainstorming_skill_sha256(),
             revision: state.revision,
             expected_response: "question_or_understanding".into(),
+            provider_id: PROVIDER_ID.into(),
+            model_id: MODEL_ID.into(),
+            reasoning_effort: DEFAULT_REASONING_EFFORT.into(),
             project: state.project.clone(),
             instruction: state.instruction.clone(),
             validation: state.validation.clone(),
@@ -1242,6 +1303,7 @@ mod tests {
             planning_packet_sha256: packet.sha256().unwrap(),
             provider_id: PROVIDER_ID.into(),
             model_id: MODEL_ID.into(),
+            reasoning_effort: DEFAULT_REASONING_EFFORT.into(),
             response_kind: "understanding".into(),
             question: None,
             understanding_summary: (1..=5).map(|v| format!("item {v}")).collect(),
@@ -1252,7 +1314,6 @@ mod tests {
             design_complete: false,
             decision_log: vec![],
             implementation_plan: None,
-            reasoning_effort: None,
         };
         assert!(apply_provider_output(&mut state, &packet, output.clone()).is_err());
         output.open_questions.clear();
@@ -1271,6 +1332,22 @@ mod tests {
     }
 
     #[test]
+    fn legacy_plan_document_digest_is_unchanged_by_new_reasoning_binding() {
+        let mut state = session();
+        let documents = PlanningDocuments {
+            understanding: "understanding".into(),
+            assumptions: "assumptions".into(),
+            decision_log: "decisions".into(),
+            design: "design".into(),
+            implementation_plan: "plan".into(),
+            plan_sha256: String::new(),
+        };
+        let legacy_digest = documents_digest(&state, &documents).unwrap();
+        state.reasoning_effort = "ultra".into();
+        assert_eq!(documents_digest(&state, &documents).unwrap(), legacy_digest);
+    }
+
+    #[test]
     fn provider_prompt_states_the_exclusive_empty_field_matrix() {
         let state = session();
         let packet = PlanningPacket {
@@ -1280,6 +1357,9 @@ mod tests {
             skill_sha256: brainstorming_skill_sha256(),
             revision: 1,
             expected_response: "question_or_understanding".into(),
+            provider_id: PROVIDER_ID.into(),
+            model_id: MODEL_ID.into(),
+            reasoning_effort: DEFAULT_REASONING_EFFORT.into(),
             project: state.project,
             instruction: state.instruction,
             validation: state.validation,
@@ -1319,6 +1399,9 @@ mod tests {
             skill_sha256: brainstorming_skill_sha256(),
             revision: 1,
             expected_response: "question_or_understanding".into(),
+            provider_id: PROVIDER_ID.into(),
+            model_id: MODEL_ID.into(),
+            reasoning_effort: DEFAULT_REASONING_EFFORT.into(),
             project: "example".into(),
             instruction: "Build it".into(),
             validation: "cargo test".into(),
@@ -1466,6 +1549,9 @@ mod tests {
             skill_sha256: brainstorming_skill_sha256(),
             revision: state.revision,
             expected_response: "design_section_or_ready".into(),
+            provider_id: PROVIDER_ID.into(),
+            model_id: MODEL_ID.into(),
+            reasoning_effort: DEFAULT_REASONING_EFFORT.into(),
             project: state.project.clone(),
             instruction: state.instruction.clone(),
             validation: state.validation.clone(),
@@ -1486,6 +1572,7 @@ mod tests {
             planning_packet_sha256: packet.sha256().unwrap(),
             provider_id: PROVIDER_ID.into(),
             model_id: MODEL_ID.into(),
+            reasoning_effort: DEFAULT_REASONING_EFFORT.into(),
             response_kind: "ready".into(),
             question: None,
             understanding_summary: vec![],
@@ -1500,7 +1587,6 @@ mod tests {
                 reason: "Reason".into(),
             }],
             implementation_plan: Some("Implement it".into()),
-            reasoning_effort: None,
         };
         assert!(apply_provider_output(&mut state, &packet, output.clone()).is_err());
         output.open_questions.clear();

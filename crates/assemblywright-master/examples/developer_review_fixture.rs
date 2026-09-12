@@ -3,6 +3,20 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 fn main() {
+    let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+    let model = arguments
+        .windows(2)
+        .find(|pair| pair[0] == "--model")
+        .map(|pair| pair[1].clone());
+    let reasoning_effort = arguments.iter().find_map(|argument| {
+        argument
+            .strip_prefix("model_reasoning_effort=\"")
+            .and_then(|value| value.strip_suffix('"'))
+            .map(str::to_owned)
+    });
+    append_evidence(
+        json!({"kind":"argv","model":model,"reasoning_effort":reasoning_effort,"arguments":arguments}),
+    );
     let mut input = String::new();
     std::io::stdin()
         .take(2 * 1024 * 1024)
@@ -12,7 +26,7 @@ fn main() {
     {
         let packet: Value = serde_json::from_str(raw).unwrap();
         append_evidence(
-            json!({"kind":"planning","packet_sha256":format!("{:x}", Sha256::digest(raw.as_bytes())),"skill_sha256":packet["skill_sha256"],"skill_present":input.contains("Understanding Lock") && input.contains("Turn raw ideas into")}),
+            json!({"kind":"planning","packet_sha256":format!("{:x}", Sha256::digest(raw.as_bytes())),"skill_sha256":packet["skill_sha256"],"model_id":packet["model_id"],"reasoning_effort":packet["reasoning_effort"],"skill_present":input.contains("Understanding Lock") && input.contains("Turn raw ideas into")}),
         );
         let marker = std::env::current_exe()
             .unwrap()
@@ -44,7 +58,7 @@ fn main() {
         .1;
     let packet: Value = serde_json::from_str(packet_bytes).unwrap();
     append_evidence(
-        json!({"kind":"review","approved_plan_sha256":packet["approved_plan_sha256"],"approved_plan_text_sha256":format!("{:x}", Sha256::digest(packet["approved_plan"].as_str().unwrap_or("").as_bytes()))}),
+        json!({"kind":"review","model_id":packet["model_id"],"reasoning_effort":packet["reasoning_effort"],"approved_plan_sha256":packet["approved_plan_sha256"],"approved_plan_text_sha256":format!("{:x}", Sha256::digest(packet["approved_plan"].as_str().unwrap_or("").as_bytes()))}),
     );
     let mut digest = format!("{:x}", Sha256::digest(packet_bytes.as_bytes()));
     let files: Vec<Value> = packet["files"]
@@ -88,7 +102,7 @@ fn main() {
     } else {
         "rejected"
     };
-    let output = json!({"schema_version":1,"review_packet_sha256":digest,"provider_id":"openai.codex","model_id":"gpt-5.6-sol","decision":decision,"blocking_findings":findings,"non_blocking_findings":[],"validation_evidence_sha256":packet["validation_evidence_sha256"],"reviewed_files":files});
+    let output = json!({"schema_version":1,"review_packet_sha256":digest,"provider_id":"openai.codex","model_id":packet["model_id"],"reasoning_effort":packet["reasoning_effort"],"decision":decision,"blocking_findings":findings,"non_blocking_findings":[],"validation_evidence_sha256":packet["validation_evidence_sha256"],"reviewed_files":files});
     std::io::stdout()
         .write_all(serde_json::to_string(&output).unwrap().as_bytes())
         .unwrap();
@@ -117,6 +131,8 @@ fn planning_output(packet: &Value, digest: String) -> Value {
     };
     let mut result: Value = serde_json::from_str(value).unwrap();
     result["planning_packet_sha256"] = json!(digest);
+    result["model_id"] = packet["model_id"].clone();
+    result["reasoning_effort"] = packet["reasoning_effort"].clone();
     result
 }
 

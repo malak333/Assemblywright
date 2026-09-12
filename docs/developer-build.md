@@ -34,9 +34,44 @@ controller. Default connection values reflect the owner's current two-machine se
 5. Review each feature's status, checkpoint, changed files, validation, and review.
    Files remain in the Windows project folder.
 
-This build does not clone, commit, push, or publish repositories. It is a supervised
-implementation, validation, and independent-review loop. The existing production setup/planning surface
-remains available in the original application.
+The accepted [GitHub publication extension](developer-github-publication-design.md)
+adds automatic publication for projects with a saved GitHub connection: an exact
+reviewed commit on its own feature branch, a pull request, required GitHub checks,
+normal automatic merge, and verified remote base before the queue advances.
+Unconnected projects continue locally and older completed results are not uploaded.
+The protected production setup/planning surface remains separate in the original
+application. Implementation and installed validation are recorded in the GitHub
+publication section below.
+
+## GitHub publication
+
+Use **GitHub** in the Developer app and check the Windows account status first. If
+sign-in is missing or invalid, choose **Sign in**, open the displayed GitHub device
+page, and enter the one-time code. Finish authorization in GitHub; Assemblywright
+does not ask for a password or access token. Windows retains the GitHub CLI login.
+An interrupted or uncertain sign-in offers explicit reconciliation and reports the
+account actually observed; cancellation cannot undo credentials already saved by gh.
+
+Choose a writable repository from the paginated list to fill its URL and initialized
+default branch, or enter an existing GitHub repository URL manually. Save the
+connection while Developer work is idle. The connection publishes subsequent
+successful features through their own branch and pull request, then merges normally
+after the exact required checks pass and verifies the remote base before advancing.
+
+To create a repository, enter its name, explicitly choose **Private** or **Public**,
+and confirm the displayed account, name, and visibility. Creation initializes a
+README under that account. It does not upload project files or automatically connect
+the project. Configure any missing required checks, then save the connection. A
+collision or uncertain creation result offers observation and reconciliation instead
+of blindly sending another creation request. See the
+[GitHub setup design](developer-github-setup-design.md) for recovery details.
+
+The retained September 8 evidence records that `inches-feet-demo` was connected to
+`malak333/inches-feet-demo` on protected `main` with automatic merge enabled after
+[setup PR #1](https://github.com/malak333/inches-feet-demo/pull/1) passed the required
+Windows check and merged. That follow-up initialized README and CI scaffolding only;
+it did not publish historical application files. This is historical evidence for the
+original implementation and must not be treated as current restoration validation.
 
 ## Project chat history
 

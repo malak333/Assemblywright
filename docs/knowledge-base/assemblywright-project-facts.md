@@ -64,6 +64,39 @@ than relaxing it to accommodate a test-only path mismatch.
 
 These notes capture durable facts for future agents working on this repository.
 
+## Developer GitHub Publication
+
+- The owner selected automatic per-feature branch, exact reviewed commit, push,
+  pull request, required checks, and normal merge for explicitly connected Developer
+  projects. Windows owns frozen candidate bytes, repository bindings, publication
+  state, effect recovery, and final remote-base verification.
+- `project_context` is bounded and may truncate. Publication must use a private base
+  checkout plus exactly the review packet's cumulative edits, validating every
+  original hash and the resulting tree. Git conversion or clean filters cannot
+  silently change reviewed bytes.
+- A push, PR URL, merge request, or merge-queue admission is not completion. Checks
+  and the merge request bind the exact reviewed head; success requires merged state
+  and remote-base reconciliation. Ambiguous effects retain the queue frontier for
+  explicit observation-only reconciliation.
+- Setup uses Windows-owned device authorization, paginated repository discovery,
+  and explicit account/name/visibility-bound creation. Cached identity cannot
+  authorize creation; verify the live account and bind the receipt to the immutable
+  repository ID. Device codes, tokens, and raw authentication output are transient.
+- GitHub REST may report `default_branch: main` for an empty repository with no
+  branch. Discovery must verify `isEmpty` and `defaultBranchRef`. Empty existing
+  repositories are valid collision observations but cannot be recorded as successful
+  initialized creation.
+- The September 8 `inches-feet-demo` setup created protected `main` and merged setup
+  PR #1 at `9457efcf10b2a217284fffe3eea7fa2824d44743`, using app-bound `Windows Python
+  validation` (GitHub Actions app ID 15368). Only README and CI scaffolding were
+  published; six Developer queue entries and their evidence were preserved.
+- For personal-repository classic protection, send app-bound `checks` without also
+  sending `contexts`; that API rejected both together. Omit organization-only bypass
+  objects, then verify administrator enforcement and the returned absence of bypass.
+- Retained fixture and installation evidence is historical. Every restored commit
+  still needs current focused/native validation, independent review, hosted checks,
+  and exact remote verification before closeout.
+
 ## Owner Connection Setup
 
 - Normal Mac product startup uses `developer-bridge-configuration-v1.json` under

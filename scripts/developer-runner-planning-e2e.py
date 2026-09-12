@@ -198,12 +198,12 @@ def main():
             with closing(__import__("sqlite3").connect(data / "developer.sqlite3")) as database:
                 durable = json.loads(database.execute(
                     "SELECT state FROM developer_state WHERE id=1").fetchone()[0])
-            assert "queue_v8" in durable and "queue_v5" not in durable
+            assert "queue_v10" in durable and "queue_v5" not in durable
             print(json.dumps({"raw_enqueue_rejected":True, "exact_replay_safe":True,
                 "emergency_invalidated_planning":True, "durable_skill_and_provider_evidence":True,
                 "restart_invalidated_and_retry_cancelled":True,
                 "reparse_context_not_disclosed":True,
-                "approved_plan_reached_initial_repair_and_review":True, "durable_queue_schema":"queue_v8"}))
+                "approved_plan_reached_initial_repair_and_review":True, "durable_queue_schema":"queue_v10"}))
         finally:
             try: api("control", {"action":"emergency"})
             except Exception: pass

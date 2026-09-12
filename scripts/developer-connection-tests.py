@@ -105,6 +105,10 @@ class ConfigurationTests(ConnectionFixture):
              "windows_model": "coder"},
             {"review_codex_executable": "C:/tools/codex.exe&whoami",
              "review_codex_home": "C:/Users/mike/.codex"},
+            {"opencode_executable": "C:/tools/opencode.exe&whoami"},
+            {"opencode_executable": "C:/tools/../opencode.exe"},
+            {"opencode_executable": "C:/tools/opencode.cmd"},
+            {"opencode_executable": None},
         ]
         for value in bad:
             with self.subTest(value=value), tempfile.TemporaryDirectory(dir=Path.home()) as root:
@@ -179,6 +183,22 @@ class AuthenticationTests(ConnectionFixture):
             self.assertTrue(all(request.method == "GET" for request, _ in observed))
             self.assertTrue(all(request.full_url.endswith("/status") for request, _ in observed))
 
+    def test_status_accepts_bound_owner_models_and_rejects_mismatches(self):
+        value = {"review_model": "gpt-5.3-codex-spark", "planning_model": "gpt-6-astra",
+                 "review_reasoning_effort": "high", "planning_reasoning_effort": "low",
+                 "ai_settings": {"reviewer": {"model": "gpt-5.3-codex-spark", "reasoning_effort": "high"},
+                                 "orchestrator": {"model": "gpt-6-astra", "reasoning_effort": "low"}}}
+        self.assertTrue(connection.valid_status_model_bindings(value))
+        value["review_model"] = "gpt-5.6-sol"
+        self.assertFalse(connection.valid_status_model_bindings(value))
+        value["review_model"] = "gpt-5.3-codex-spark"
+        value["planning_reasoning_effort"] = "high"
+        self.assertFalse(connection.valid_status_model_bindings(value))
+        value["ai_settings"] = []
+        self.assertFalse(connection.valid_status_model_bindings(value))
+        self.assertFalse(connection.valid_status_model_bindings(
+            {"review_model": "gpt-5.3-codex-spark", "planning_model": "gpt-6-astra"}))
+
     def test_windows_path_normalization_rejects_aliases_and_wrong_roots(self):
         self.assertEqual(connection.normalize_windows_drive_path(
             r"\\?\C:\a\aw-developer\projects"),
@@ -201,6 +221,7 @@ class AuthenticationTests(ConnectionFixture):
                 "windows_model": "coder",
                 "review_codex_executable": "C:/tools/codex.exe",
                 "review_codex_home": "C:/Users/mike/.codex",
+                "opencode_executable": "C:/tools/opencode.exe",
             }
             runtime.write_text(json.dumps(settings), encoding="utf-8")
             runtime.chmod(0o600)
@@ -210,6 +231,9 @@ class AuthenticationTests(ConnectionFixture):
             self.assertEqual(refreshed["token"], TOKEN)
             self.assertEqual(refreshed["windows_model"], "coder")
             self.assertEqual(refreshed["review_codex_home"], "C:/Users/mike/.codex")
+            self.assertEqual(refreshed["opencode_executable"], "C:/tools/opencode.exe")
+            self.assertIn("--opencode-executable C:/tools/opencode.exe",
+                          connection.runner_command(config, refreshed))
             self.assertEqual(stat.S_IMODE(runtime.stat().st_mode), 0o600)
 
     def test_unowned_runner_recovery_requires_exact_positive_absence(self):

@@ -236,8 +236,8 @@ def main():
                 durable = json.loads(database.execute('SELECT state FROM developer_state WHERE id=1').fetchone()[0])
                 backup_v3 = database.execute('SELECT state FROM developer_state_v3_backup WHERE id=1').fetchone()[0]
             assert backup_v3 == legacy_v3
-            assert 'queue_v8' in durable and 'queue_v4' not in durable and 'queue_v3' not in durable
-            assert next(feature for feature in durable['queue_v8'] if feature['id'] == persisted_id)['model_target'] == 'windows'
+            assert 'queue_v10' in durable and 'queue_v4' not in durable and 'queue_v3' not in durable
+            assert next(feature for feature in durable['queue_v10'] if feature['id'] == persisted_id)['model_target'] == 'windows'
 
             process.terminate()
             process.wait(timeout=5)
@@ -318,7 +318,7 @@ def main():
                 'stale_and_unbound_start_rejected': True,
                 'stale_pre_stop_resume_rejected': True,
                 'queue_v3_migrated_with_exact_backup': True,
-                'queue_v8_restart_preserves_target': True,
+                'queue_v10_restart_preserves_target': True,
             }))
         finally:
             if process.poll() is None:
