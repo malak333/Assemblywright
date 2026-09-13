@@ -7,6 +7,12 @@
 
 use crate::developer_settings::{validate_model_id, validate_reasoning_effort, DEFAULT_MODEL};
 use anyhow::{bail, Context, Result};
+use base64::{
+    engine::general_purpose::{
+        STANDARD as BASE64_STANDARD, STANDARD_NO_PAD as BASE64_STANDARD_NO_PAD,
+    },
+    Engine as _,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -1280,12 +1286,12 @@ pub(crate) fn validate_cloud_text(value: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn sanitize_and_validate_cloud_text(value: &str) -> Result<()> {
+pub(crate) fn sanitize_and_validate_cloud_text(value: &str) -> Result<String> {
     let sanitized = sanitize_cloud_text(value);
     if contains_secret_shape(&sanitized) {
         bail!("Cloud request contains secret-shaped text");
     }
-    Ok(())
+    Ok(sanitized)
 }
 
 pub(crate) fn sanitize_cloud_text(value: &str) -> String {
@@ -1382,7 +1388,15 @@ fn redact_bearer_auth(input: String) -> String {
 }
 
 fn redact_basic_auth(input: String) -> String {
-    redact_auth_header(input, "Basic ")
+    let mut result = String::new();
+    let mut last_end = 0;
+    for (start, end) in basic_auth_ranges(&input) {
+        result.push_str(&input[last_end..start]);
+        result.push_str("[REDACTED_AUTH]");
+        last_end = end;
+    }
+    result.push_str(&input[last_end..]);
+    result
 }
 
 fn redact_auth_header(input: String, prefix: &str) -> String {
@@ -1441,6 +1455,9 @@ fn redact_sensitive_assignments(input: String) -> String {
                     .take_while(|c| !c.is_ascii_whitespace() && !matches!(c, '\'' | '"' | ';'))
                     .collect();
                 if value_chars.len() >= 6 {
+                    if value_chars.eq_ignore_ascii_case("REDACTED") {
+                        break;
+                    }
                     let leading_ws = value_str.len() - value_str.trim_start().len();
                     let full_match_start = pos + name.len() + delimiter_len + leading_ws;
                     let full_match_end = full_match_start + value_chars.len();
@@ -1535,7 +1552,7 @@ fn contains_secret_shape(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
     if lower.contains("-----begin ")
         || lower.contains("bearer ")
-        || lower.contains("basic ")
+        || !basic_auth_ranges(value).is_empty()
         || lower.contains("ghp_")
         || lower.contains("github_pat_")
         || lower.contains("npm_")
@@ -1558,6 +1575,46 @@ fn contains_secret_shape(value: &str) -> bool {
             .unwrap_or_default()
             .contains('@')
     })
+}
+
+fn basic_auth_ranges(value: &str) -> Vec<(usize, usize)> {
+    let lower = value.to_ascii_lowercase();
+    let bytes = value.as_bytes();
+    let mut ranges = Vec::new();
+    for (offset, _) in lower.match_indices("basic") {
+        if offset > 0 {
+            let before = bytes[offset - 1];
+            if before.is_ascii_alphanumeric() || before == b'_' {
+                continue;
+            }
+        }
+        let scheme_end = offset + "basic".len();
+        if scheme_end >= bytes.len() || !bytes[scheme_end].is_ascii_whitespace() {
+            continue;
+        }
+        let mut token_start = scheme_end;
+        while token_start < bytes.len() && bytes[token_start].is_ascii_whitespace() {
+            token_start += 1;
+        }
+        let mut token_end = token_start;
+        while token_end < bytes.len()
+            && (bytes[token_end].is_ascii_alphanumeric()
+                || matches!(bytes[token_end], b'+' | b'/' | b'='))
+        {
+            token_end += 1;
+        }
+        if token_end == token_start {
+            continue;
+        }
+        let candidate = &value[token_start..token_end];
+        let decoded = BASE64_STANDARD
+            .decode(candidate)
+            .or_else(|_| BASE64_STANDARD_NO_PAD.decode(candidate));
+        if decoded.is_ok_and(|decoded| decoded.contains(&b':')) {
+            ranges.push((offset, token_end));
+        }
+    }
+    ranges
 }
 
 fn contains_sensitive_assignment(lower: &str) -> bool {
@@ -1587,13 +1644,15 @@ fn contains_sensitive_assignment(lower: &str) -> bool {
                 return false;
             };
             let value = value.trim_start().trim_start_matches(['\'', '"']);
-            value
+            let candidate = value
                 .bytes()
                 .take_while(|byte| {
                     !byte.is_ascii_whitespace() && !matches!(byte, b'\'' | b'"' | b';')
                 })
-                .count()
-                >= 6
+                .collect::<Vec<_>>();
+            candidate.as_slice() != b"redacted"
+                && candidate.as_slice() != b"[redacted_auth]"
+                && candidate.len() >= 6
         })
     })
 }
@@ -2042,6 +2101,7 @@ mod tests {
         let cases = [
             "Use the key sk-abcdefghij1234567890 for authentication",
             "Bearer eyJhbGciOiJIUzI1NiJ9.test.signature123",
+            "authorization: BaSiC dXNlcjpwYXNzd29yZA==",
             "AKIAIOSFODNN7EXAMPLE1 is the AWS key",
             "github_pat_abcdefghij1234567890abcdefghij1234567890",
             "https://user:pass@host.com/path",
@@ -2066,6 +2126,8 @@ mod tests {
             "Use dependency injection for the service layer to improve testability",
             "The validation command is python -m unittest discover -s tests",
             "Consider using a feature flag for the new authentication flow",
+            "Support basic arithmetic, scientific functions, graphing, and saved history.",
+            "A Basic calculator should remain easy to use.",
         ];
         for case in cases {
             assert!(
@@ -2073,6 +2135,43 @@ mod tests {
                 "False positive for: {}",
                 case
             );
+        }
+    }
+
+    #[test]
+    fn basic_auth_detection_distinguishes_credentials_from_planning_prose() {
+        for prose in [
+            "basic arithmetic",
+            "Basic scientific calculator",
+            "Provide basic capabilities for one project owner.",
+            "Keep basic-authentication disabled.",
+            "NotBasic dTpw is an identifier, not an auth scheme.",
+            "Basic YXJpdGhtZXRpYw== decodes without a credential separator.",
+            "Basic not_base64 is malformed credential material.",
+        ] {
+            assert!(
+                validate_cloud_text(prose).is_ok(),
+                "False positive for: {prose}"
+            );
+            assert_eq!(sanitize_cloud_text(prose), prose);
+        }
+        for credential in [
+            "Basic dXNlcjpwYXNzd29yZA==",
+            "Basic dXNlcjpwYXNzd29yZA",
+            "Basic dTpw",
+            "Basic Og==",
+            "Use Basic dTpw, only in this redaction fixture.",
+            "The literal \"Basic dTpw\" must be redacted.",
+            "First Basic dTpw and second Basic Og== must both be redacted.",
+            "Mixed whitespace BaSiC\tOg== must be redacted.",
+            "authorization used BaSiC dXNlcjpwYXNzd29yZA== inside text",
+        ] {
+            assert!(validate_cloud_text(credential).is_err());
+            let sanitized = sanitize_cloud_text(credential);
+            assert_ne!(sanitized, credential);
+            assert!(!contains_secret_shape(&sanitized));
+            assert!(sanitized.contains("[REDACTED_AUTH]"));
+            assert!(!sanitized.contains("dXNlcjpwYXNzd29yZA=="));
         }
     }
 

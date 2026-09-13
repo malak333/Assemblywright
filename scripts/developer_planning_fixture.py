@@ -20,7 +20,7 @@ def planning_output(packet, digest):
                                   'choices': ['Yes, preserve existing behavior', 'Clarify the scope']}
         else:
             result.update(response_kind='understanding', understanding_summary=[
-                'Implement the requested feature in the selected project.',
+                'Implement the requested feature with its basic capabilities in the selected project.',
                 'Serve the project owner using the existing workflow.',
                 'Preserve existing behavior outside the requested change.',
                 'Use the configured validation command to verify the result.',

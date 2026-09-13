@@ -562,7 +562,7 @@ pub fn expected_response(session: &PlanningSession) -> Result<&'static str> {
 pub fn apply_provider_output(
     session: &mut PlanningSession,
     packet: &PlanningPacket,
-    output: PlanningProviderOutput,
+    mut output: PlanningProviderOutput,
 ) -> Result<()> {
     require_pending(session, packet.revision)?;
     if session.pending_request_id.as_deref() != Some(packet.request_id.as_str())
@@ -570,7 +570,7 @@ pub fn apply_provider_output(
     {
         bail!("Planning completion does not match the pending request and state digest");
     }
-    validate_output(packet, &output)?;
+    validate_output(packet, &mut output)?;
     let response_kind = output.response_kind.clone();
     let output_sha256 = hex_digest(&serde_json::to_vec(&output)?);
     match output.response_kind.as_str() {
@@ -782,7 +782,7 @@ pub fn brainstorming_skill_sha256() -> String {
     hex_digest(BRAINSTORMING_SKILL.as_bytes())
 }
 
-fn validate_output(packet: &PlanningPacket, output: &PlanningProviderOutput) -> Result<()> {
+fn validate_output(packet: &PlanningPacket, output: &mut PlanningProviderOutput) -> Result<()> {
     if output.schema_version != 1
         || output.planning_packet_sha256 != packet.sha256()?
         || output.provider_id != PROVIDER_ID
@@ -908,40 +908,40 @@ fn validate_output(packet: &PlanningPacket, output: &PlanningProviderOutput) -> 
     Ok(())
 }
 
-fn validate_provider_output_texts_sanitized(output: &PlanningProviderOutput) -> Result<()> {
-    if let Some(question) = &output.question {
-        sanitize_cloud_text(&question.text, 2_000)?;
-        sanitize_cloud_texts(&question.choices, 500)?;
+fn validate_provider_output_texts_sanitized(output: &mut PlanningProviderOutput) -> Result<()> {
+    if let Some(question) = &mut output.question {
+        sanitize_cloud_text(&mut question.text, 2_000)?;
+        sanitize_cloud_texts(&mut question.choices, 500)?;
     }
-    sanitize_cloud_texts(&output.understanding_summary, 2_000)?;
-    sanitize_cloud_texts(&output.open_questions, 2_000)?;
-    if let Some(assumptions) = &output.assumptions {
+    sanitize_cloud_texts(&mut output.understanding_summary, 2_000)?;
+    sanitize_cloud_texts(&mut output.open_questions, 2_000)?;
+    if let Some(assumptions) = &mut output.assumptions {
         for value in [
-            &assumptions.performance,
-            &assumptions.scale,
-            &assumptions.security_privacy,
-            &assumptions.reliability_availability,
-            &assumptions.maintenance_ownership,
+            &mut assumptions.performance,
+            &mut assumptions.scale,
+            &mut assumptions.security_privacy,
+            &mut assumptions.reliability_availability,
+            &mut assumptions.maintenance_ownership,
         ] {
             sanitize_cloud_text(value, 2_000)?;
         }
-        sanitize_cloud_texts(&assumptions.other, 2_000)?;
+        sanitize_cloud_texts(&mut assumptions.other, 2_000)?;
     }
-    for approach in &output.approaches {
-        sanitize_cloud_text(&approach.title, 200)?;
-        sanitize_cloud_text(&approach.summary, 2_000)?;
-        sanitize_cloud_texts(&approach.tradeoffs, 2_000)?;
+    for approach in &mut output.approaches {
+        sanitize_cloud_text(&mut approach.title, 200)?;
+        sanitize_cloud_text(&mut approach.summary, 2_000)?;
+        sanitize_cloud_texts(&mut approach.tradeoffs, 2_000)?;
     }
-    if let Some(section) = &output.design_section {
-        sanitize_cloud_text(&section.title, 200)?;
-        sanitize_cloud_text(&section.body, 4_000)?;
+    if let Some(section) = &mut output.design_section {
+        sanitize_cloud_text(&mut section.title, 200)?;
+        sanitize_cloud_text(&mut section.body, 4_000)?;
     }
-    for decision in &output.decision_log {
-        sanitize_cloud_text(&decision.decision, 2_000)?;
-        sanitize_cloud_text(&decision.reason, 2_000)?;
-        sanitize_cloud_texts(&decision.alternatives, 2_000)?;
+    for decision in &mut output.decision_log {
+        sanitize_cloud_text(&mut decision.decision, 2_000)?;
+        sanitize_cloud_text(&mut decision.reason, 2_000)?;
+        sanitize_cloud_texts(&mut decision.alternatives, 2_000)?;
     }
-    if let Some(plan) = &output.implementation_plan {
+    if let Some(plan) = &mut output.implementation_plan {
         sanitize_cloud_text(plan, 16_000)?;
     }
     Ok(())
@@ -1181,12 +1181,13 @@ fn validate_cloud_texts(values: &[String], max: usize) -> Result<()> {
     Ok(())
 }
 
-fn sanitize_cloud_text(value: &str, max: usize) -> Result<()> {
+fn sanitize_cloud_text(value: &mut String, max: usize) -> Result<()> {
     validate_input(value, max, "cloud planning text")?;
-    sanitize_and_validate_cloud_text(value)
+    *value = sanitize_and_validate_cloud_text(value)?;
+    Ok(())
 }
 
-fn sanitize_cloud_texts(values: &[String], max: usize) -> Result<()> {
+fn sanitize_cloud_texts(values: &mut [String], max: usize) -> Result<()> {
     for value in values {
         sanitize_cloud_text(value, max)?;
     }
@@ -1317,9 +1318,23 @@ mod tests {
         };
         assert!(apply_provider_output(&mut state, &packet, output.clone()).is_err());
         output.open_questions.clear();
+        output.understanding_summary[0] =
+            "The provider mentioned Basic dTpw in generated planning text.".into();
+        let mut expected_output = output.clone();
+        expected_output.understanding_summary[0] =
+            "The provider mentioned [REDACTED_AUTH] in generated planning text.".into();
+        let expected_output_sha256 = hex_digest(&serde_json::to_vec(&expected_output).unwrap());
         apply_provider_output(&mut state, &packet, output).unwrap();
         assert_eq!(state.stage, "understanding");
         assert!(!state.running);
+        assert_eq!(
+            state.understanding_summary[0],
+            "The provider mentioned [REDACTED_AUTH] in generated planning text."
+        );
+        assert_eq!(
+            state.history.last().unwrap().output_sha256.as_deref(),
+            Some(expected_output_sha256.as_str())
+        );
     }
 
     #[test]
