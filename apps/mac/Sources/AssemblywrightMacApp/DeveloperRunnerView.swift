@@ -23,11 +23,13 @@ struct DeveloperRunnerFeature: Decodable, Identifiable {
   let modelTarget: String?
   var reviewStatus: String? = nil
   var reviewModel: String? = nil
+  var reviewReasoningEffort: String? = nil
   var reviewSummary: String? = nil
   var reviewAttempts: Int? = nil
   var planningStatus: String? = nil
   var escalationCount: Int? = nil
   var escalationStatus: String? = nil
+  var canChangeReviewer: Bool? = nil
   var publicationStatus: String? = nil
   var publicationStage: String? = nil
   var publicationMessage: String? = nil
@@ -68,8 +70,24 @@ struct DeveloperRunnerFeature: Decodable, Identifiable {
      "expected_status": status, "expected_checkpoint": checkpoint]
   }
 
+  var reviewerSelection: DeveloperAISelection? {
+    guard let reviewModel, let reviewReasoningEffort else { return nil }
+    return DeveloperAISelection(model: reviewModel, reasoningEffort: reviewReasoningEffort)
+  }
+
+  func reviewerChangeBody(revision: UInt64, selection: DeveloperAISelection) -> [String: Any] {
+    ["id": id, "expected_revision": revision, "expected_checkpoint": checkpoint,
+     "expected_model": reviewModel ?? "", "expected_reasoning_effort": reviewReasoningEffort ?? "",
+     "reviewer": selection.requestBody]
+  }
+
   var requiresEscalationRecovery: Bool {
     checkpoint.hasPrefix("escalation_") && checkpoint.hasSuffix("_apply_interrupted")
+  }
+
+  var requiresReviewerRecovery: Bool {
+    requiresEscalationRecovery || ["staged_tool_candidate_quarantined", "tool_effects_quarantined",
+      "tool_workspace_changed_requires_proposal"].contains(checkpoint)
   }
 
   var canRemove: Bool { ["queued", "paused", "failed"].contains(status) }
@@ -105,6 +123,9 @@ struct DeveloperRunnerSnapshot: Decodable {
   var chatModelSelection: Bool? = nil
   var chatHistory: Bool? = nil
   var aiSettings: DeveloperAISettings? = nil
+  var aiModels: [DeveloperAIModel]? = nil
+  var aiCatalogSource: String? = nil
+  var featureReviewerSelection: Bool? = nil
   var planningReasoningEffort: String? = nil
   var reviewReasoningEffort: String? = nil
   var githubPublicationSupported: Bool? = nil
@@ -114,6 +135,23 @@ struct DeveloperRunnerSnapshot: Decodable {
   var githubConnections: [DeveloperGitHubConnection]? = nil
   var githubSetupBusy: Bool? = nil
   var githubSetupUnresolved: Bool? = nil
+
+  var canSaveAISettings: Bool {
+    aiSettings != nil && aiModels?.isEmpty == false && !running && !planningRunning
+      && escalationRunning != true && chatRunning != true
+      && githubPublicationRunning != true && githubPublicationUnresolved != true
+      && githubSetupBusy != true && githubSetupUnresolved != true
+  }
+
+  func canChangeReviewer(_ feature: DeveloperRunnerFeature) -> Bool {
+    featureReviewerSelection == true && canSaveAISettings && !emergencyPaused
+      && feature.reviewerSelection != nil && feature.canRemove && !feature.requiresReviewerRecovery
+      && queue.contains { current in
+        current.id == feature.id && current.canChangeReviewer == true
+          && current.status == feature.status && current.checkpoint == feature.checkpoint
+          && current.reviewerSelection == feature.reviewerSelection
+      }
+  }
 
   var hasRequiredPlanner: Bool {
     planningRequired && planningProvider == "openai.codex"
@@ -297,6 +335,50 @@ final class DeveloperRunnerModel: ObservableObject {
     }
   }
 
+  func refreshAISettings() async throws {
+    let updated = try await request(path: "settings")
+    if updated.revision >= (snapshot?.revision ?? 0) { snapshot = updated }
+  }
+
+  func changeReviewer(_ feature: DeveloperRunnerFeature, revision: UInt64,
+    selection: DeveloperAISelection) async throws {
+    guard !sending, let current = snapshot, current.revision == revision,
+      current.canChangeReviewer(feature), selection.isSupported(by: current.aiModels ?? []) else {
+      throw NSError(domain: "Developer reviewer", code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "The feature or active work changed. Reload before saving the reviewer."])
+    }
+    sending = true
+    defer { sending = false }
+    let updated = try await request(path: "feature-reviewer",
+      body: feature.reviewerChangeBody(revision: revision, selection: selection))
+    let (expectedRevision, overflow) = revision.addingReportingOverflow(1)
+    guard !overflow, updated.revision == expectedRevision,
+      updated.queue.first(where: { $0.id == feature.id })?.reviewerSelection == selection else {
+      throw URLError(.cannotParseResponse)
+    }
+    snapshot = updated
+    actionError = nil
+    error = nil
+  }
+
+  func saveAISettings(_ draft: DeveloperAISettings) async throws {
+    guard !sending, let current = snapshot, current.canSaveAISettings,
+      draft.isSupported(by: current.aiModels ?? []) else {
+      throw NSError(domain: "Developer settings", code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "Wait for active work to finish and select a supported model and reasoning level."])
+    }
+    sending = true
+    defer { sending = false }
+    let updated = try await request(path: "settings", body: draft.requestBody)
+    let (expectedRunnerRevision, runnerOverflow) = current.revision.addingReportingOverflow(1)
+    let (expectedSettingsRevision, settingsOverflow) = draft.revision.addingReportingOverflow(1)
+    guard !runnerOverflow, !settingsOverflow, updated.revision == expectedRunnerRevision,
+      updated.aiSettings?.revision == expectedSettingsRevision,
+      updated.aiSettings?.orchestrator == draft.orchestrator,
+      updated.aiSettings?.reviewer == draft.reviewer else { throw URLError(.cannotParseResponse) }
+    snapshot = updated
+  }
+
   func saveGitHubConnection(project: String, repositoryURL: String, baseBranch: String,
     expectedRevision: UInt64) async throws {
     guard let current = snapshot, current.revision == expectedRevision,
@@ -389,6 +471,7 @@ struct DeveloperRunnerView: View {
   @State private var escalationFeatureId: String?
   @State private var showingSettings = false
   @State private var showingGitHub = false
+  @State private var reviewerFeature: DeveloperRunnerFeature?
   @AppStorage("developerChatProject") private var chatProject = ""
   @AppStorage("developerChatRepairFeature") private var chatRepairFeature = ""
 
@@ -567,6 +650,18 @@ struct DeveloperRunnerView: View {
                 Text(feature.reviewLabel).font(.caption)
                   .foregroundStyle(feature.hasApprovedReview ? .green : .secondary)
                 DeveloperGitHubFeatureStatus(feature: feature, runner: model)
+                if let reviewModel = feature.reviewModel {
+                  HStack {
+                    Text("Reviewer: \(reviewModel) · \(DeveloperAISelection.effortLabel(feature.reviewReasoningEffort ?? "high")) reasoning")
+                      .font(.caption).foregroundStyle(.secondary)
+                    if feature.canRemove {
+                      Button("Change reviewer…") { reviewerFeature = feature }
+                        .disabled(model.sending || model.snapshot?.canChangeReviewer(feature) != true)
+                        .help("Choose the reviewer for this feature's next review. Stop active work first.")
+                        .accessibilityIdentifier("developer-change-reviewer-\(feature.id)")
+                    }
+                  }
+                }
                 if let summary = feature.reviewSummary, !summary.isEmpty {
                   Text(summary).font(.caption).textSelection(.enabled)
                 }
@@ -593,8 +688,11 @@ struct DeveloperRunnerView: View {
     }.frame(minWidth: 1000, minHeight: 680)
       .task { await model.observe() }
     .task { await connection.observe() }
+      .sheet(item: $reviewerFeature) { feature in
+        DeveloperFeatureReviewerView(runner: model, feature: feature)
+      }
       .sheet(isPresented: $showingSettings) {
-        DeveloperRunnerSettingsView(configurationPath: configurationPath)
+        DeveloperSettingsView(runner: model)
       }
       .sheet(isPresented: $showingGitHub) {
         DeveloperGitHubView(runner: model,

@@ -45,6 +45,44 @@ final class DeveloperRunnerClientTests {
       """.utf8)
   }
 
+  private func configuredSnapshot(_ revision: Int, settingsRevision: Int,
+    featureReviewer: DeveloperAISelection? = nil) throws -> Data {
+    let orchestrator = ["model": "gpt-6-astra", "reasoning_effort": "high"]
+    let reviewer = ["model": "gpt-5.3-codex-spark", "reasoning_effort": "high"]
+    var wire: [String: Any] = [
+      "mode": "supervised_developer", "host": "fixture-windows", "workspace_root": "fixture",
+      "revision": revision, "auto_run": true, "emergency_paused": false, "running": false,
+      "chat_running": false, "escalation_running": false, "queue": [],
+      "review_required": true, "review_provider": "openai.codex",
+      "review_model": "gpt-5.3-codex-spark", "review_reasoning_effort": "high",
+      "planning_required": true, "planning_provider": "openai.codex",
+      "planning_model": "gpt-6-astra", "planning_reasoning_effort": "high",
+      "planning_running": false, "planning_sessions": [], "feature_reviewer_selection": true,
+      "ai_settings": ["revision": settingsRevision, "orchestrator": orchestrator,
+        "reviewer": reviewer],
+      "ai_models": [
+        ["id": "gpt-6-astra", "name": "Astra", "reasoning_efforts": ["high"],
+          "default_reasoning_effort": "high"],
+        ["id": "gpt-5.3-codex-spark", "name": "Spark", "reasoning_efforts": ["high"],
+          "default_reasoning_effort": "high"],
+        ["id": "gpt-5.6-sol", "name": "Sol", "reasoning_efforts": ["high"],
+          "default_reasoning_effort": "high"],
+      ],
+    ]
+    if let featureReviewer {
+      wire["queue"] = [[
+        "id": "6b7c48c1-1e3c-4e98-9791-e54a67f0786a", "project": "fixture",
+        "instruction": "Restore the feature", "validation": "true", "status": "failed",
+        "checkpoint": "review_3_unavailable", "message": "Review unavailable",
+        "changed_files": ["app.py"], "repair_attempts": 3, "review_status": "unavailable",
+        "review_model": featureReviewer.model,
+        "review_reasoning_effort": featureReviewer.reasoningEffort,
+        "can_change_reviewer": true,
+      ]]
+    }
+    return try JSONSerialization.data(withJSONObject: wire)
+  }
+
   private func model(endpoint: String = "http://127.0.0.1:17796") throws -> DeveloperRunnerModel {
     let path = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try JSONSerialization.data(withJSONObject: ["endpoint": endpoint, "token": "fixture-token"])
@@ -95,6 +133,66 @@ final class DeveloperRunnerClientTests {
     #expect(client.error == "Clear Emergency Pause")
     #expect(client.snapshot?.revision == 3)
     #expect(!client.sending)
+  }
+
+  @Test func settingsMutationRequiresExactRunnerAndSettingsRevisionAdvance() async throws {
+    let client = try model()
+    DeveloperHTTPFixture.respond { _ in (200, try self.configuredSnapshot(12, settingsRevision: 4)) }
+    await client.refresh()
+    let draft = try #require(client.snapshot?.aiSettings)
+
+    DeveloperHTTPFixture.respond { request in
+      #expect(request.httpMethod == "POST")
+      #expect(request.url?.path == "/settings")
+      return (200, try self.configuredSnapshot(12, settingsRevision: 5))
+    }
+    await #expect(throws: (any Error).self) { try await client.saveAISettings(draft) }
+    #expect(client.snapshot?.revision == 12)
+    #expect(client.snapshot?.aiSettings?.revision == 4)
+
+    DeveloperHTTPFixture.respond { _ in
+      (200, try self.configuredSnapshot(13, settingsRevision: 4))
+    }
+    await #expect(throws: (any Error).self) { try await client.saveAISettings(draft) }
+    #expect(client.snapshot?.revision == 12)
+    #expect(client.snapshot?.aiSettings?.revision == 4)
+
+    DeveloperHTTPFixture.respond { _ in
+      (200, try self.configuredSnapshot(13, settingsRevision: 5))
+    }
+    try await client.saveAISettings(draft)
+    #expect(client.snapshot?.revision == 13)
+    #expect(client.snapshot?.aiSettings?.revision == 5)
+  }
+
+  @Test func reviewerMutationRejectsReplayedSuccessWithoutRevisionAdvance() async throws {
+    let original = DeveloperAISelection(model: "gpt-5.6-sol", reasoningEffort: "high")
+    let requested = DeveloperAISelection(model: "gpt-6-astra", reasoningEffort: "high")
+    let client = try model()
+    DeveloperHTTPFixture.respond { _ in
+      (200, try self.configuredSnapshot(20, settingsRevision: 4, featureReviewer: original))
+    }
+    await client.refresh()
+    let feature = try #require(client.snapshot?.queue.first)
+
+    DeveloperHTTPFixture.respond { request in
+      #expect(request.httpMethod == "POST")
+      #expect(request.url?.path == "/feature-reviewer")
+      return (200, try self.configuredSnapshot(20, settingsRevision: 4,
+        featureReviewer: requested))
+    }
+    await #expect(throws: (any Error).self) {
+      try await client.changeReviewer(feature, revision: 20, selection: requested)
+    }
+    #expect(client.snapshot?.revision == 20)
+    #expect(client.snapshot?.queue.first?.reviewerSelection == original)
+
+    DeveloperHTTPFixture.respond { _ in
+      (200, try self.configuredSnapshot(21, settingsRevision: 4, featureReviewer: requested))
+    }
+    try await client.changeReviewer(feature, revision: 20, selection: requested)
+    #expect(client.snapshot?.revision == 21)
+    #expect(client.snapshot?.queue.first?.reviewerSelection == requested)
   }
 
   @Test(arguments: ["malformed", "wrong-mode", "unauthorized", "transport"])

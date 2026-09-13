@@ -34,6 +34,45 @@ controller. Default connection values reflect the owner's current two-machine se
 5. Review each feature's status, checkpoint, changed files, validation, and review.
    Files remain in the Windows project folder.
 
+## AI settings
+
+Click the **gear icon** at the top right of the developer build. Choose a **Model**
+and **Reasoning** level independently for **Orchestrator** (brainstorming and
+planning) and **Reviewer** (code and validation review), then **Save**. The app
+confirms that Windows saved the choices. Save is unavailable during active work;
+a stale settings revision requires **Reload settings**.
+
+The menu uses the visible model catalog from the Windows Codex authentication
+home, including each model's supported reasoning levels. If its catalog cache is
+absent, the bundled catalog lists GPT-6-Astra, GPT-5.6-Sol, GPT-5.6-Terra,
+GPT-5.6-Luna, GPT-5.5, GPT-5.4-Mini, and GPT-5.3-Codex-Spark. Catalog availability
+does not guarantee account entitlement or provider availability. Models exclusive
+to the ChatGPT website cannot be invoked by the Codex runner. An unavailable
+selected model fails visibly without switching models.
+
+If a model disappears from the catalog, its saved choice remains visible as
+unavailable. Settings still opens so the owner can select a replacement. Existing
+plans, queued reviewer bindings, and historical results are preserved; changing
+defaults does not silently rebind a queued feature whose reviewer is unavailable.
+
+Defaults are Sol with high reasoning for both roles. Saved changes apply to new
+brainstorming sessions and newly queued features. Existing planning sessions and
+queue entries retain their model and reasoning choices when defaults change,
+including after restart. Provider identity, model, and reasoning remain bound to
+each request's evidence. The protected production reviewer setting is separate.
+
+For an existing unfinished feature, click **Change reviewer…** next to its reviewer
+on the feature card. Choose the replacement model and reasoning, then **Save
+reviewer**. This updates only that feature. Stop active work first; if Windows
+state changes while the dialog is open, use **Reload** before saving.
+
+For an unavailable reviewer, select another catalog model and supported reasoning
+level, save, then use **Resume**. Windows validates the current files and requests
+a fresh review. Existing files, approved planning documents, repair attempts, and
+prior review history are kept; a reviewer switch does not consume a local repair
+attempt or start work. Completed features and unsafe interrupted repair
+applications cannot change reviewers.
+
 The accepted [GitHub publication extension](developer-github-publication-design.md)
 adds automatic publication for projects with a saved GitHub connection: an exact
 reviewed commit on its own feature branch, a pull request, required GitHub checks,

@@ -86,9 +86,11 @@ struct DeveloperPlanningSnapshot: Decodable {
   let documents: DeveloperPlanningDocuments?
   let error: String?
   let lastRequestId: String?
+  var reasoningEffort: String? = nil
 
   var hasRequiredPlanner: Bool {
-    schemaVersion == 1 && provider == "openai.codex" && model == "gpt-5.6-sol"
+    schemaVersion == 1 && provider == "openai.codex"
+      && DeveloperAISelection(model: model, reasoningEffort: reasoningEffort ?? "high").isWellFormed
   }
   var canRespond: Bool { hasRequiredPlanner && !running && availability == "available" }
   var currentSection: DeveloperPlanningSection? { designSections.first { !$0.confirmed } }
@@ -291,7 +293,7 @@ struct DeveloperPlanningView: View {
               || project.isEmpty || validation.isEmpty || instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         } else if let state = model.snapshot, state.featureId == selectedId {
           Text(state.instruction).font(.headline).textSelection(.enabled)
-          Text("\(state.project) · ChatGPT/Codex · \(state.model) · implement on \(state.modelTarget == "windows" ? "Windows" : "Mac")")
+          Text("\(state.project) · ChatGPT/Codex · \(state.model) · \(DeveloperAISelection.effortLabel(state.reasoningEffort ?? "high")) reasoning · implement on \(state.modelTarget == "windows" ? "Windows" : "Mac")")
             .font(.caption).foregroundStyle(.secondary)
           if let answers = state.answers, !answers.isEmpty {
             DisclosureGroup("Answers so far") {

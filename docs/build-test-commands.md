@@ -43,6 +43,23 @@ merge, signing, or production-publication proof. See
 [`developer-github-publication-design.md`](developer-github-publication-design.md)
 and [`developer-github-setup-design.md`](developer-github-setup-design.md).
 
+## Developer AI settings
+
+Developer AI settings use native Swift decoding and selection tests plus a real
+runner process, HTTP persistence, and provider-binding E2E:
+
+```sh
+swift test --disable-sandbox --package-path apps/mac --filter DeveloperSettingsTests
+cargo test -p assemblywright-master --bin assemblywright-developer
+cargo build -p assemblywright-master --bin assemblywright-developer
+python3 scripts/developer-runner-settings-e2e.py --binary target/debug/assemblywright-developer
+```
+
+Run the settings E2E on Windows with its native runner and reviewer fixture as
+well. The optional `ASSEMBLYWRIGHT_SETTINGS_LIVE_CHECK=1` Swift test uses
+`ASSEMBLYWRIGHT_DEVELOPER_LIVE_CONFIG` to observe installed settings without saving
+or changing selections. Fixture model calls do not prove account entitlement.
+
 The installed read-only check uses `ASSEMBLYWRIGHT_DEVELOPER_LIVE_CONFIG` and
 `--filter installedWindowsHistoryReopensExactConversationsWithoutSending`.
 It requires saved history and verifies selection without sending messages.
