@@ -2636,3 +2636,21 @@ output path calls `validate_provider_output_texts_sanitized()` which sanitizes
 before checking. Both paths use the same `contains_secret_shape()` detector for
 consistency.
   hosted publication checks remain separate evidence.
+
+## Developer AI settings and reviewer selection
+
+- The Developer gear button opens the owner-facing AI settings sheet. It loads
+  the Windows-owned model catalog and persisted orchestrator and reviewer pairs.
+  Saving requires an idle runner, the unchanged AI-settings revision, and an
+  advertised model and reasoning level for both roles.
+- New settings apply to future planning sessions and newly queued features.
+  Existing features retain their reviewer binding. An idle unfinished feature can
+  use **Change reviewer…**; the request binds the observed runner revision,
+  checkpoint, previous model, and previous reasoning level and does not start work.
+- Missing catalog entries remain visible as unavailable so the owner can recover.
+  Provider failures and stale, malformed, active, publication-busy, or quarantined
+  states fail closed without fallback or implicit rebinding.
+- `DeveloperSettingsTests` covers catalog selection, request binding, stale and
+  busy rejection, and existing-feature reviewer changes. The real runner boundary
+  is `scripts/developer-runner-settings-e2e.py`; its fixture calls do not establish
+  account entitlement or production provider availability.
