@@ -2587,7 +2587,7 @@ and covers:
 | Pattern category | Examples |
 |---|---|
 | PEM blocks | `-----BEGIN RSA PRIVATE KEY-----` |
-| Auth headers | `Bearer <token>`, `Basic <credentials>` |
+| Auth headers | `Bearer <token>`, or case-insensitive `Basic` followed by Base64 credentials that decode to the required user/password separator |
 | GitHub tokens | `ghp_<40 chars>`, `github_pat_<80 chars>` |
 | NPM tokens | `npm_<20 chars>` |
 | Slack tokens | `xoxb-<50 chars>`, `xoxp-<50 chars>` |
@@ -2600,13 +2600,17 @@ and covers:
 The `contains_secret_shape()` function checks all categories. The
 `sanitize_cloud_text()` pipeline strips matched secrets before re-checking,
 allowing legitimate planning prose that happens to reference these patterns.
+`Basic` is treated as an authentication scheme only when the following Base64
+material decodes to credential bytes containing `:`. Ordinary product language
+such as `basic arithmetic` therefore remains valid planning and review text.
 
 ### When to use sanitization
 
-Use `sanitize_and_validate_cloud_text()` for
-**AI-generated responses** going to the cloud provider. The planning output path
-calls `validate_provider_output_texts_sanitized()` which sanitizes every text
-field before checking.
+Use `sanitize_and_validate_cloud_text()` for **AI-generated responses returned by
+the cloud provider before acceptance and persistence**. The planning output path
+calls `validate_provider_output_texts_sanitized()` which replaces every matched
+secret with its redaction marker before response hashing and durable persistence,
+then validates the sanitized text.
 
 Use `validate_cloud_text()` directly for **user-provided input** such as planning
 packets, review packets, and context files — these must be rejected if they
@@ -2627,6 +2631,9 @@ verify that real secret patterns are redacted. Tests in
 verify that normal planning prose passes. Tests in
 `developer_review::tests::sanitization_preserves_non_secret_tokens` verify that
 short or non-secret prefixes are not falsely flagged.
+`developer_review::tests::basic_auth_detection_distinguishes_credentials_from_planning_prose`
+binds the ordinary-prose and credential cases, and the native Developer planning
+fixture carries `basic capabilities` through every planning stage and enqueue.
 
 ### Integration with planning
 
