@@ -37,9 +37,12 @@ struct DeveloperRepairProposal: Decodable {
   var showsStopAction: Bool { status == "preparing" }
   var locksModelSelection: Bool { ["preparing", "ready"].contains(status) }
   var showsPrepareAction: Bool {
-    ["cancelled", "unavailable", "failed", "interrupted"].contains(status)
+    ["none", "cancelled", "unavailable", "failed", "interrupted"].contains(status)
   }
-  var prepareActionTitle: String { showsPrepareAction ? "Prepare fresh repair" : "Prepare repair" }
+  var prepareActionTitle: String {
+    ["cancelled", "unavailable", "failed", "interrupted"].contains(status)
+      ? "Prepare fresh repair" : "Prepare repair"
+  }
 
   var statusMessage: String? {
     switch status {

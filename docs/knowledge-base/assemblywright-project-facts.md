@@ -2535,6 +2535,11 @@ Full-machine target phase: planning/creation containment has bounded native Wind
 - Escalation preserves the three-attempt ordinary repair history and each file's
   earliest feature baseline. Validation and independent Codex review remain required
   before success or auto-run advancement.
+- The repair escalation status endpoint represents an absent proposal as a non-null
+  object with status `none`. Swift must treat that sentinel as the initial
+  **Prepare repair** state; testing only `nil` or terminal retry states removes the
+  owner's sole path to create the frozen proposal while leaving approval correctly
+  unavailable.
 - Model repair summaries are not proof that proposed bytes implement the claimed
   behavior. Native Tk tests must realize/update the window before asserting geometry,
   and widget lookup must traverse the actual nested hierarchy or bind stable semantic
