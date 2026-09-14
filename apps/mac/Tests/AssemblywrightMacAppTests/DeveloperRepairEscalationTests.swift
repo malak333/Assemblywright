@@ -92,6 +92,14 @@ struct DeveloperRepairEscalationTests {
     #expect(!preparing.showsPrepareAction)
     #expect(preparing.locksModelSelection)
 
+    let none = try proposal(["status": "none"])
+    #expect(none.showsPrepareAction)
+    #expect(none.prepareActionTitle == "Prepare repair")
+    #expect(!none.showsApproveAction)
+    #expect(!none.showsDiscardAction)
+    #expect(!none.showsStopAction)
+    #expect(!none.locksModelSelection)
+
     for status in ["approved", "applying", "applied", "validating", "reviewing", "succeeded"] {
       let current = try proposal(["status": status])
       #expect(!current.showsApproveAction)
