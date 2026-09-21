@@ -2796,3 +2796,18 @@ consistency.
   `#[cfg(windows)]` sparse-file scanner fixture and any native Windows execution
   of this Auto AI repair boundary remain separate evidence layers, unproven
   until they are actually run.
+- Swift Testing's `.serialized` trait serializes tests only within that suite;
+  unrelated suites can still run concurrently. The canonical release gate runs
+  AppKit tests, `AssemblywrightMacCoreTests.DeveloperBridgeTests`, and the
+  remaining Swift suites in three separate processes. This preserves every test
+  while preventing lifecycle-heavy actor, subprocess, cancellation, and teardown
+  checks from being starved by unrelated suites on constrained hosted runners.
+  `scripts/swift-test-partition-smoke.sh` rejects duplicate discovery and proves
+  that the two exact AppKit tests, the complete DeveloperBridge suite, and the
+  remaining complement cover the full discovered test set exactly once by
+  evaluating the release commands' exact regular expressions. Its negative
+  fixtures exercise synthetic overlapping selectors so future predicate drift
+  fails before the test commands run. SwiftPM filter matching appends source
+  metadata after Swift Testing identifiers even though discovery displays an
+  identifier ending in `()`; the exact UI selector therefore permits one
+  anchored optional `/.*` suffix after the literal method parentheses.

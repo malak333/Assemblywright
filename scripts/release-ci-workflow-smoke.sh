@@ -7,6 +7,7 @@ cd "$ROOT_DIR"
 WORKFLOW=".github/workflows/release-local.yml"
 WINDOWS_PROTOCOL_WORKFLOW=".github/workflows/windows-protocol.yml"
 LOCAL_GATE="scripts/release-local.sh"
+SWIFT_PARTITION_SMOKE="scripts/swift-test-partition-smoke.sh"
 
 require_file() {
   if [[ ! -f "$1" ]]; then
@@ -27,6 +28,15 @@ require_text() {
 require_file "$WORKFLOW"
 require_file "$WINDOWS_PROTOCOL_WORKFLOW"
 require_file "$LOCAL_GATE"
+require_file "$SWIFT_PARTITION_SMOKE"
+require_text "UI_FILTER_REGEX='^AssemblywrightMacAppTests\.DeveloperProjectChatTests/(shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions)\(\)(/.*)?$'" \
+  "$SWIFT_PARTITION_SMOKE"
+require_text "BRIDGE_FILTER_REGEX='^AssemblywrightMacCoreTests\.DeveloperBridgeTests/'" \
+  "$SWIFT_PARTITION_SMOKE"
+require_text '[[ "$test_id" =~ $ui_filter_regex ]] && ui_match=1' \
+  "$SWIFT_PARTITION_SMOKE"
+require_text '[[ "$test_id" =~ $bridge_filter_regex ]] && bridge_match=1' \
+  "$SWIFT_PARTITION_SMOKE"
 
 # The broad master Cargo gate must include every native developer workflow on both hosts.
 DEVELOPER_E2E="crates/assemblywright-master/tests/developer_workflow_e2e.rs"
@@ -141,8 +151,11 @@ expected_local_gate_commands=(
   "run ./scripts/release-evidence-doctor.sh --self-test"
   "run ./scripts/release-external-handoff.sh --check"
   "run ./scripts/release-external-handoff.sh --self-test"
-  "run swift test --disable-sandbox --package-path apps/mac --filter 'shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions'"
-  "run swift test --disable-sandbox --package-path apps/mac --skip 'shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions'"
+  "run ./scripts/swift-test-partition-smoke.sh --self-test"
+  "run ./scripts/swift-test-partition-smoke.sh"
+  "run swift test --disable-sandbox --package-path apps/mac --filter '^AssemblywrightMacAppTests\.DeveloperProjectChatTests/(shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions)\(\)(/.*)?$'"
+  "run swift test --disable-sandbox --package-path apps/mac --filter '^AssemblywrightMacCoreTests\.DeveloperBridgeTests/'"
+  "run swift test --disable-sandbox --package-path apps/mac --skip '^AssemblywrightMacCoreTests\.DeveloperBridgeTests/|^AssemblywrightMacAppTests\.DeveloperProjectChatTests/(shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions)\(\)(/.*)?$'"
   "run swift build --disable-sandbox --package-path apps/mac"
 )
 
