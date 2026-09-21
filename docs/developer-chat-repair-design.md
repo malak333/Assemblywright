@@ -1,5 +1,10 @@
 # Developer Chat Repair Escalation
 
+The implemented [`Developer Auto AI Repair`](developer-auto-ai-repair-design.md)
+extension adds a separate persistent policy-authorized automatic path. This document
+continues to govern manual chat-derived proposals and their explicit approval
+requirement.
+
 The owner approved this supervised developer-build extension on 2026-09-07 after
 a feature exhausted its three ordinary repair attempts and project chat identified
 a likely test defect. It does not change production authority.

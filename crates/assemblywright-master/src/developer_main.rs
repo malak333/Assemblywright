@@ -33,6 +33,8 @@ use std::{
 use tokio::process::Command;
 use uuid::Uuid;
 
+use assemblywright_master::current_time_ms;
+
 use developer_chat::{
     ChatAttachment, ChatModelConfig, ChatRepairHandoff, DeveloperChat, InferenceGate,
     InferenceLease,
@@ -52,8 +54,9 @@ use developer_publication::{
     ProjectBinding, PublicationInput, PublicationRecord, Runtime as PublicationRuntime,
 };
 use developer_review::{
-    hex_digest, DeveloperReviewCallError, DeveloperReviewDecisionKind, DeveloperReviewFile,
-    DeveloperReviewFinding, DeveloperReviewOutput, DeveloperReviewPacket, DeveloperReviewer,
+    hex_digest, sanitize_and_validate_cloud_text, validate_cloud_text, DeveloperReviewCallError,
+    DeveloperReviewDecisionKind, DeveloperReviewFile, DeveloperReviewFinding,
+    DeveloperReviewOutput, DeveloperReviewPacket, DeveloperReviewer,
     PROVIDER_ID as REVIEW_PROVIDER_ID,
 };
 use developer_settings::{
@@ -66,9 +69,14 @@ use developer_tools::{
 };
 
 const REPAIR_LIMIT: u32 = 3;
-const ESCALATION_LIMIT: u32 = 20;
-const ESCALATION_HISTORY_LIMIT: usize = 80;
+const ESCALATION_LIMIT: u32 = 100;
+const DEFAULT_AUTO_AI_REPAIR_MAX_ESCALATIONS: u32 = 100;
+const ESCALATION_HISTORY_LIMIT: usize = 300;
+const REVIEW_HISTORY_LIMIT: usize = 104;
 const REVIEWER_SELECTION_HISTORY_LIMIT: usize = 80;
+const AUTO_REPAIR_REASON_LIMIT: usize = 1000;
+const CODE_FAILURE_SUMMARY_LIMIT: usize = 4000;
+const AUTO_REPAIR_STEP_ELAPSED_LIMIT_MS: u64 = 24 * 60 * 60 * 1_000;
 
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
@@ -156,7 +164,7 @@ struct RepairEscalationFile {
     protected: bool,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 struct RepairEscalationProposal {
     proposal_id: String,
     attempt: u32,
@@ -182,9 +190,21 @@ struct RepairEscalationProposal {
     applied_paths: Vec<String>,
     #[serde(default)]
     apply_request_id: Option<String>,
+    #[serde(default = "manual_escalation_source")]
+    source: String,
+    #[serde(default)]
+    automatic_epoch: Option<u64>,
+    #[serde(default)]
+    policy_revision: Option<u64>,
+    #[serde(default)]
+    limit_snapshot: Option<u32>,
+    #[serde(default)]
+    project_state_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    review_slot_terminal: bool,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 struct RepairEscalationEvidence {
     proposal_id: String,
     attempt: u32,
@@ -196,7 +216,37 @@ struct RepairEscalationEvidence {
     diagnosis_sha256: String,
     outcome: String,
     proposal_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    candidate_sha256: Option<String>,
     summary: String,
+    #[serde(default = "manual_escalation_source")]
+    source: String,
+    #[serde(default)]
+    automatic_epoch: Option<u64>,
+    #[serde(default)]
+    policy_revision: Option<u64>,
+    #[serde(default)]
+    limit_snapshot: Option<u32>,
+    #[serde(default)]
+    project_state_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    authorization_revision: Option<u64>,
+}
+
+fn manual_escalation_source() -> String {
+    "manual_chat".into()
+}
+
+fn default_auto_repair_lifecycle() -> String {
+    "inactive".into()
+}
+
+fn default_auto_ai_repair_max_escalations() -> u32 {
+    DEFAULT_AUTO_AI_REPAIR_MAX_ESCALATIONS
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn legacy_review_status() -> String {
@@ -235,6 +285,12 @@ struct FrozenPublicationFile {
     before_sha256: Option<String>,
     content_sha256: String,
     content: String,
+    #[serde(default = "legacy_unclassified_review_file")]
+    classification: String,
+}
+
+fn legacy_unclassified_review_file() -> String {
+    "unclassified_legacy".into()
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct Feature {
@@ -260,6 +316,32 @@ struct Feature {
     escalation_proposal: Option<RepairEscalationProposal>,
     #[serde(default)]
     escalation_history: Vec<RepairEscalationEvidence>,
+    #[serde(default)]
+    auto_ai_repair_limit: Option<u32>,
+    #[serde(default = "default_auto_repair_lifecycle")]
+    auto_repair_lifecycle: String,
+    #[serde(default)]
+    auto_repair_reason: String,
+    #[serde(default)]
+    auto_repair_epoch: u64,
+    #[serde(default)]
+    auto_repair_step_started_at_ms: Option<u64>,
+    #[serde(default)]
+    auto_repair_policy_revision: Option<u64>,
+    #[serde(default)]
+    escalation_evidence_reserved: u32,
+    #[serde(default)]
+    review_evidence_reserved: u32,
+    #[serde(default)]
+    last_failure_kind: String,
+    #[serde(default)]
+    last_code_failure_summary: String,
+    #[serde(default)]
+    auto_repair_limit_project_baseline: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    auto_repair_limit_unadmitted_sha256: Option<String>,
+    #[serde(default)]
+    auto_repair_limit_volatile_sha256: Option<String>,
     #[serde(default = "default_model_target")]
     model_target: String,
     #[serde(default = "legacy_review_status")]
@@ -295,13 +377,22 @@ struct Feature {
     #[serde(default)]
     publication: Option<PublicationRecord>,
 }
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Snapshot {
     revision: u64,
     auto_run: bool,
+    #[serde(default)]
+    auto_ai_repair_enabled: bool,
+    #[serde(default = "default_auto_ai_repair_max_escalations")]
+    auto_ai_repair_max_escalations: u32,
+    #[serde(default)]
+    auto_ai_repair_policy_revision: u64,
+    #[serde(default)]
+    auto_ai_repair_last_request_sha256: String,
     emergency_paused: bool,
     #[serde(
-        rename = "queue_v10",
+        rename = "queue_v11",
+        alias = "queue_v10",
         alias = "queue_v9",
         alias = "queue_v8",
         alias = "queue_v7",
@@ -319,6 +410,24 @@ struct Snapshot {
     planning_sessions: Vec<PlanningSession>,
     #[serde(default)]
     ai_settings: DeveloperAiSettings,
+}
+
+impl Default for Snapshot {
+    fn default() -> Self {
+        Self {
+            revision: 0,
+            auto_run: false,
+            auto_ai_repair_enabled: false,
+            auto_ai_repair_max_escalations: DEFAULT_AUTO_AI_REPAIR_MAX_ESCALATIONS,
+            auto_ai_repair_policy_revision: 0,
+            auto_ai_repair_last_request_sha256: String::new(),
+            emergency_paused: false,
+            queue: Vec::new(),
+            github_connections: Vec::new(),
+            planning_sessions: Vec::new(),
+            ai_settings: DeveloperAiSettings::default(),
+        }
+    }
 }
 struct Database {
     connection: Connection,
@@ -346,6 +455,46 @@ impl Drop for PublicationRunningGuard<'_> {
     }
 }
 
+struct RunningStartGuard<'a> {
+    running: &'a AtomicBool,
+    committed: bool,
+}
+
+struct EscalationCallGuard<'a> {
+    engine: &'a Engine,
+    cancellation: Arc<AtomicU8>,
+    released: bool,
+}
+
+impl EscalationCallGuard<'_> {
+    fn release(mut self) {
+        self.engine.release_escalation_call(&self.cancellation);
+        self.released = true;
+    }
+}
+
+impl Drop for EscalationCallGuard<'_> {
+    fn drop(&mut self) {
+        if !self.released {
+            self.engine.release_escalation_call(&self.cancellation);
+        }
+    }
+}
+
+impl RunningStartGuard<'_> {
+    fn commit(&mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for RunningStartGuard<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            self.running.store(false, Ordering::SeqCst);
+        }
+    }
+}
+
 fn mutate_database<T>(
     db: &mut Database,
     f: impl FnOnce(&mut Snapshot, &mut GithubSetupState) -> Result<T>,
@@ -369,8 +518,519 @@ fn mutate_database<T>(
     Ok(result)
 }
 
+fn validate_auto_repair_max(max_escalations: u32) -> Result<()> {
+    if !(1..=ESCALATION_LIMIT).contains(&max_escalations) {
+        bail!("Auto AI repair maximum must be between 1 and {ESCALATION_LIMIT}");
+    }
+    Ok(())
+}
+
+fn bounded_code_failure_summary(value: &str) -> Result<String> {
+    if value.trim().is_empty() {
+        bail!("Automatic repair code-failure evidence is empty");
+    }
+    let bounded = value
+        .chars()
+        .take(CODE_FAILURE_SUMMARY_LIMIT + 1)
+        .collect::<String>();
+    if bounded.chars().count() > CODE_FAILURE_SUMMARY_LIMIT {
+        bail!("Automatic repair code-failure evidence exceeds its bounded limit");
+    }
+    sanitize_and_validate_cloud_text(&bounded)
+        .context("Automatic repair code-failure evidence could not be safely sanitized")
+}
+
+fn durable_failure_summary(value: &str, category: &str, limit: usize) -> String {
+    let bounded = value.chars().take(limit).collect::<String>();
+    sanitize_and_validate_cloud_text(&bounded).unwrap_or_else(|_| {
+        format!(
+            "{category}; sensitive details remain only in the owner-local log (sha256 {})",
+            hash(value.as_bytes())
+        )
+    })
+}
+
+fn set_auto_repair_lifecycle(feature: &mut Feature, lifecycle: &str, reason: &str) -> Result<()> {
+    if !matches!(
+        lifecycle,
+        "inactive" | "running" | "held" | "limit_reached" | "quarantined"
+    ) {
+        bail!("Unknown automatic repair lifecycle");
+    }
+    if reason.len() > AUTO_REPAIR_REASON_LIMIT {
+        bail!("Automatic repair reason exceeds its bounded limit");
+    }
+    feature.auto_repair_lifecycle = lifecycle.into();
+    feature.auto_repair_reason = reason.into();
+    if lifecycle == "running" {
+        start_auto_repair_step(feature)?;
+    } else {
+        feature.auto_repair_step_started_at_ms = None;
+    }
+    Ok(())
+}
+
+fn start_auto_repair_step(feature: &mut Feature) -> Result<()> {
+    start_auto_repair_step_at(feature, current_time_ms()?)
+}
+
+fn start_auto_repair_step_at(feature: &mut Feature, started_at_ms: u64) -> Result<()> {
+    if feature.auto_repair_lifecycle != "running" {
+        bail!("Automatic repair step cannot start outside the running lifecycle");
+    }
+    if started_at_ms == 0 {
+        bail!("Automatic repair step timestamp must be nonzero");
+    }
+    feature.auto_repair_step_started_at_ms = Some(started_at_ms);
+    Ok(())
+}
+
+fn snapshot_feature_auto_repair_limit(
+    feature: &mut Feature,
+    max_escalations: u32,
+    policy_revision: u64,
+) -> Result<bool> {
+    validate_auto_repair_max(max_escalations)?;
+    if let Some(limit) = feature.auto_ai_repair_limit {
+        validate_auto_repair_max(limit)?;
+        if feature.escalation_count > limit {
+            bail!("Persisted repair escalation count exceeds the feature limit snapshot");
+        }
+        return Ok(false);
+    }
+    if feature.escalation_count > max_escalations {
+        bail!("Existing repair escalations exceed the selected feature limit");
+    }
+    feature.auto_ai_repair_limit = Some(max_escalations);
+    feature.auto_repair_policy_revision = Some(policy_revision);
+    Ok(true)
+}
+
+fn arm_auto_repair_at_execution_start(
+    feature: &mut Feature,
+    enabled: bool,
+    max_escalations: u32,
+    policy_revision: u64,
+) -> Result<bool> {
+    let snapshotted =
+        snapshot_feature_auto_repair_limit(feature, max_escalations, policy_revision)?;
+    if !enabled
+        || feature.auto_repair_lifecycle != "inactive"
+        || feature.status != "queued"
+        || feature.checkpoint != "not_started"
+    {
+        return Ok(snapshotted);
+    }
+    feature.auto_repair_policy_revision = Some(policy_revision);
+    feature.auto_repair_epoch = feature
+        .auto_repair_epoch
+        .checked_add(1)
+        .context("Automatic repair epoch overflow")?;
+    set_auto_repair_lifecycle(
+        feature,
+        "running",
+        "Auto AI repair was armed when this queued feature began execution",
+    )?;
+    Ok(true)
+}
+
+fn arm_selected_queued_feature(state: &mut Snapshot, feature_id: &str) -> Result<bool> {
+    let enabled = state.auto_ai_repair_enabled;
+    let max_escalations = state.auto_ai_repair_max_escalations;
+    let policy_revision = state.auto_ai_repair_policy_revision;
+    let feature = state
+        .queue
+        .iter_mut()
+        .find(|candidate| candidate.id == feature_id)
+        .context("feature missing")?;
+    arm_auto_repair_at_execution_start(feature, enabled, max_escalations, policy_revision)
+}
+
+fn reserve_escalation_evidence(feature: &mut Feature) -> Result<()> {
+    let limit = feature
+        .auto_ai_repair_limit
+        .context("Feature has no automatic repair limit snapshot")?;
+    validate_auto_repair_max(limit)?;
+    if feature.escalation_count >= limit || feature.escalation_count >= ESCALATION_LIMIT {
+        set_auto_repair_lifecycle(
+            feature,
+            "limit_reached",
+            &format!(
+                "{} of {} AI escalations used. Automatic repair stopped. Correct the project without AI and revalidate, change the reviewer when applicable, or remove the feature.",
+                feature.escalation_count, limit
+            ),
+        )?;
+        bail!("Repair escalation limit reached");
+    }
+    if feature.escalation_history.len().saturating_add(3) > ESCALATION_HISTORY_LIMIT
+        || feature
+            .escalation_evidence_reserved
+            .checked_add(3)
+            .context("Repair escalation evidence reservation overflow")?
+            > ESCALATION_HISTORY_LIMIT as u32
+    {
+        set_auto_repair_lifecycle(
+            feature,
+            "held",
+            "Automatic repair stopped because its bounded escalation evidence capacity is unavailable. Inspect the feature evidence before resuming.",
+        )?;
+        bail!("Repair escalation evidence capacity reached");
+    }
+    if feature.review_history.len().saturating_add(1) > REVIEW_HISTORY_LIMIT
+        || feature
+            .review_evidence_reserved
+            .checked_add(1)
+            .context("Review evidence reservation overflow")?
+            > REVIEW_HISTORY_LIMIT as u32
+    {
+        set_auto_repair_lifecycle(
+            feature,
+            "held",
+            "Automatic repair stopped because its bounded independent-review evidence capacity is unavailable. Inspect the feature evidence before resuming.",
+        )?;
+        bail!("Independent review evidence capacity reached");
+    }
+    feature.escalation_evidence_reserved += 3;
+    feature.review_evidence_reserved += 1;
+    feature.escalation_count += 1;
+    Ok(())
+}
+
+fn validate_auto_repair_feature(feature: &Feature) -> Result<()> {
+    if let Some(limit) = feature.auto_ai_repair_limit {
+        validate_auto_repair_max(limit)?;
+        if feature.escalation_count > limit {
+            bail!("Persisted repair escalation count exceeds its feature limit");
+        }
+    }
+    if !matches!(
+        feature.auto_repair_lifecycle.as_str(),
+        "inactive" | "running" | "held" | "limit_reached" | "quarantined"
+    ) {
+        bail!("Persisted automatic repair lifecycle is unsupported");
+    }
+    if feature.auto_repair_reason.len() > AUTO_REPAIR_REASON_LIMIT {
+        bail!("Persisted automatic repair reason exceeds its bounded limit");
+    }
+    match (
+        feature.auto_repair_lifecycle.as_str(),
+        feature.auto_repair_step_started_at_ms,
+    ) {
+        ("running", Some(0)) => {
+            bail!("Persisted automatic repair step timestamp is invalid")
+        }
+        ("running", _) | (_, None) => {}
+        (_, Some(_)) => {
+            bail!("Persisted inactive automatic repair has an active step timestamp")
+        }
+    }
+    if feature.escalation_history.len() > ESCALATION_HISTORY_LIMIT
+        || feature.escalation_evidence_reserved > ESCALATION_HISTORY_LIMIT as u32
+        || feature.review_history.len() > REVIEW_HISTORY_LIMIT
+        || feature.review_evidence_reserved > REVIEW_HISTORY_LIMIT as u32
+    {
+        bail!("Persisted automatic repair evidence exceeds its bounded capacity");
+    }
+    if !matches!(
+        feature.last_failure_kind.as_str(),
+        "" | "validation_failure" | "review_rejection" | "operational"
+    ) {
+        bail!("Persisted automatic repair failure classification is unsupported");
+    }
+    if !feature.last_code_failure_summary.is_empty() {
+        let validated = bounded_code_failure_summary(&feature.last_code_failure_summary)?;
+        if validated != feature.last_code_failure_summary {
+            bail!("Persisted automatic repair code-failure evidence is not safely redacted");
+        }
+    }
+    if feature.auto_repair_limit_project_baseline.len() > 80 {
+        bail!("Persisted automatic repair limit baseline exceeds its file bound");
+    }
+    for (path, digest) in &feature.auto_repair_limit_project_baseline {
+        if path.is_empty()
+            || path.contains('\\')
+            || path.contains(':')
+            || Path::new(path)
+                .components()
+                .any(|component| !matches!(component, Component::Normal(_)))
+            || repair_sensitive_path(path)
+        {
+            bail!("Persisted automatic repair limit baseline has an invalid path");
+        }
+        validate_sha256(digest, "automatic repair limit baseline digest")?;
+    }
+    if let Some(digest) = &feature.auto_repair_limit_unadmitted_sha256 {
+        validate_sha256(digest, "automatic repair unadmitted-data digest")?;
+    } else if !feature.auto_repair_limit_project_baseline.is_empty() {
+        bail!("Persisted automatic repair limit baseline has no unadmitted-data binding");
+    }
+    if let Some(digest) = &feature.auto_repair_limit_volatile_sha256 {
+        validate_sha256(digest, "automatic repair volatile-data digest")?;
+    } else if !feature.auto_repair_limit_project_baseline.is_empty() {
+        bail!("Persisted automatic repair limit baseline has no volatile-data binding");
+    }
+    for evidence in &feature.escalation_history {
+        if evidence.authorization_revision.is_some()
+            && (evidence.source != "automatic_failure" || evidence.outcome != "policy_authorized")
+        {
+            bail!("Only automatic policy authorization evidence may carry a runner revision");
+        }
+    }
+    let paused_cancellation_lookalike = feature.status == "paused"
+        && (feature
+            .checkpoint
+            .ends_with("_cancelled_before_authorization")
+            || feature
+                .escalation_proposal
+                .as_ref()
+                .is_some_and(|proposal| {
+                    proposal.source == "automatic_failure" && proposal.status == "cancelled"
+                }));
+    if paused_cancellation_lookalike {
+        validate_paused_preauthorization_cancellation(feature)
+            .context("Persisted paused automatic cancellation is invalid")?;
+    }
+    Ok(())
+}
+
+fn validate_authorization_revision(
+    evidence: &RepairEscalationEvidence,
+    loaded_queue_version: u8,
+    persisted_revision: u64,
+) -> Result<()> {
+    let requires_revision = loaded_queue_version >= 11
+        && evidence.source == "automatic_failure"
+        && evidence.outcome == "policy_authorized";
+    match evidence.authorization_revision {
+        Some(revision)
+            if evidence.source == "automatic_failure"
+                && evidence.outcome == "policy_authorized"
+                && revision > 0
+                && revision <= persisted_revision =>
+        {
+            Ok(())
+        }
+        None if !requires_revision => Ok(()),
+        Some(_) => bail!("Persisted automatic repair policy authorization revision is invalid"),
+        None => bail!("Persisted automatic policy authorization has no runner revision"),
+    }
+}
+
+fn migrate_and_validate_auto_repair_step_timestamp(
+    feature: &mut Feature,
+    now_ms: u64,
+) -> Result<()> {
+    if now_ms == 0 {
+        bail!("Current time is invalid for automatic repair recovery");
+    }
+    if feature.auto_repair_lifecycle == "running" {
+        match feature.auto_repair_step_started_at_ms {
+            Some(0) => bail!("Persisted automatic repair step timestamp is invalid"),
+            Some(started_at_ms) if started_at_ms > now_ms => {
+                bail!("Persisted automatic repair step timestamp is in the future")
+            }
+            Some(_) => {}
+            None => feature.auto_repair_step_started_at_ms = Some(now_ms),
+        }
+    } else if feature.auto_repair_step_started_at_ms.is_some() {
+        bail!("Persisted inactive automatic repair has an active step timestamp");
+    }
+    Ok(())
+}
+
+fn projected_auto_repair_step_elapsed_ms(feature: &Feature, now_ms: u64) -> Option<u64> {
+    if feature.auto_repair_lifecycle != "running" {
+        return None;
+    }
+    feature.auto_repair_step_started_at_ms.map(|started_at_ms| {
+        now_ms
+            .saturating_sub(started_at_ms)
+            .min(AUTO_REPAIR_STEP_ELAPSED_LIMIT_MS)
+    })
+}
+
+fn validate_escalation_build_binding(
+    feature: &Feature,
+    proposal: &RepairEscalationProposal,
+) -> Result<()> {
+    if proposal.feature_id != feature.id {
+        bail!("Repair proposal feature binding changed");
+    }
+    if proposal.source == "automatic_failure" {
+        let active_checkpoint = format!("escalation_{}_preparing", proposal.attempt);
+        if feature.checkpoint != active_checkpoint {
+            bail!("Automatic repair proposal active checkpoint changed");
+        }
+    } else if proposal.feature_checkpoint != feature.checkpoint {
+        bail!("Repair proposal feature binding changed");
+    }
+    Ok(())
+}
+
+fn automatic_code_failure_is_eligible(feature: &Feature) -> bool {
+    matches!(
+        feature.last_failure_kind.as_str(),
+        "validation_failure" | "review_rejection"
+    ) || (feature.last_failure_kind.is_empty()
+        && (feature.checkpoint == "validation_failed"
+            || feature.checkpoint.ends_with("_validation_failed")
+            || feature.checkpoint.starts_with("review_")
+                && feature.checkpoint.ends_with("_rejected")))
+}
+
+fn paused_preauthorization_cancellation_is_resumable(feature: &Feature) -> bool {
+    validate_paused_preauthorization_cancellation(feature).is_ok()
+}
+
+fn validate_paused_preauthorization_cancellation(feature: &Feature) -> Result<()> {
+    let proposal = feature
+        .escalation_proposal
+        .as_ref()
+        .context("Paused automatic cancellation has no proposal evidence")?;
+    if feature.status != "paused"
+        || feature.auto_repair_lifecycle != "inactive"
+        || !automatic_code_failure_is_eligible(feature)
+        || feature.escalation_pending
+        || proposal.source != "automatic_failure"
+        || proposal.status != "cancelled"
+        || proposal.apply_request_id.is_some()
+        || !proposal.applied_paths.is_empty()
+        || feature.checkpoint
+            != format!(
+                "escalation_{}_cancelled_before_authorization",
+                proposal.attempt
+            )
+        || automatic_post_apply_is_ambiguous(feature)
+    {
+        bail!("Paused automatic cancellation recovery binding is invalid");
+    }
+    if feature.escalation_count != proposal.attempt
+        || proposal.limit_snapshot != feature.auto_ai_repair_limit
+        || proposal.policy_revision.is_none()
+        || proposal.policy_revision != feature.auto_repair_policy_revision
+        || proposal
+            .automatic_epoch
+            .and_then(|epoch| epoch.checked_add(1))
+            != Some(feature.auto_repair_epoch)
+    {
+        bail!("Paused automatic cancellation epoch or policy binding is invalid");
+    }
+    let evidence = feature
+        .escalation_history
+        .iter()
+        .filter(|evidence| evidence.proposal_id == proposal.proposal_id)
+        .collect::<Vec<_>>();
+    if evidence.len() != 3
+        || evidence
+            .iter()
+            .filter(|evidence| matches!(evidence.outcome.as_str(), "ready" | "cancelled"))
+            .count()
+            != 1
+        || evidence
+            .iter()
+            .filter(|evidence| evidence.outcome == "authorization_not_run")
+            .count()
+            != 1
+        || evidence
+            .iter()
+            .filter(|evidence| evidence.outcome == "application_not_run")
+            .count()
+            != 1
+        || evidence.iter().any(|evidence| {
+            evidence.attempt != proposal.attempt
+                || evidence.source != proposal.source
+                || evidence.automatic_epoch != proposal.automatic_epoch
+                || evidence.policy_revision != proposal.policy_revision
+                || evidence.limit_snapshot != proposal.limit_snapshot
+                || evidence.project_state_sha256 != proposal.project_state_sha256
+        })
+    {
+        bail!("Paused automatic cancellation terminal evidence is incomplete or duplicated");
+    }
+    if !proposal.review_slot_terminal {
+        bail!("Paused automatic cancellation review slot is not terminal");
+    }
+    let candidate_sha256 = repair_escalation_candidate_sha256(proposal)?;
+    let matching_review = feature
+        .review_history
+        .iter()
+        .filter(|review| {
+            review.attempt == proposal.attempt
+                && review.outcome == "not_run"
+                && review.packet_sha256 == candidate_sha256
+                && review.validation_evidence_sha256 == proposal.diagnosis_sha256
+        })
+        .count();
+    if matching_review != 1 {
+        bail!("Paused automatic cancellation review evidence is missing or duplicated");
+    }
+    Ok(())
+}
+
+fn enable_auto_repair_for_failed_feature(
+    feature: &mut Feature,
+    code_failure_eligible: bool,
+    max_escalations: u32,
+    policy_revision: u64,
+) -> Result<bool> {
+    if matches!(
+        feature.auto_repair_lifecycle.as_str(),
+        "quarantined" | "limit_reached"
+    ) {
+        bail!("Auto AI repair cannot re-arm a quarantined or limit-reached feature");
+    }
+    let resumes_cancelled_proposal = paused_preauthorization_cancellation_is_resumable(feature);
+    let resumes_ordinary_pre_effect = feature.status == "paused"
+        && feature.auto_repair_lifecycle == "held"
+        && automatic_ordinary_pre_effect_checkpoint(feature);
+    if resumes_cancelled_proposal {
+        feature.status = "failed".into();
+    }
+    snapshot_feature_auto_repair_limit(feature, max_escalations, policy_revision)?;
+    // Every accepted off-to-on owner mutation is a new exact authorization.
+    // Rebind even an operationally held feature so a later eligible failure
+    // cannot inherit the prior policy revision. The snapshotted budget and
+    // already-consumed count remain unchanged.
+    feature.auto_repair_policy_revision = Some(policy_revision);
+    feature.auto_repair_epoch = feature
+        .auto_repair_epoch
+        .checked_add(1)
+        .context("Automatic repair epoch overflow")?;
+    if !code_failure_eligible && !resumes_ordinary_pre_effect {
+        set_auto_repair_lifecycle(
+            feature,
+            "held",
+            "Auto AI repair did not start because the retained failure is operational, unavailable, or lacks an exact code-failure classification. Correct the condition and explicitly Resume.",
+        )?;
+        return Ok(false);
+    }
+    set_auto_repair_lifecycle(
+        feature,
+        "running",
+        "Auto AI repair was enabled for this failed feature",
+    )?;
+    if feature.repair_attempts < REPAIR_LIMIT && !feature.repair_pending {
+        reserve_repair_attempt(feature)?;
+    }
+    Ok(true)
+}
+
+/// Exact bounded inputs for one repair-proposal inference call. The optional
+/// inference lease is retained for the entire call so the shared model gate
+/// stays held without otherwise affecting proposal generation.
+struct EscalationProposalInput<'a> {
+    feature_id: &'a str,
+    proposal_id: &'a str,
+    target: &'a ModelTarget,
+    handoff: Option<&'a ChatRepairHandoff>,
+    automatic_failure_summary: Option<&'a str>,
+    cancellation: &'a AtomicU8,
+    inference_lease: Option<InferenceLease>,
+}
+
 struct Engine {
     database: Mutex<Database>,
+    effect_gate: Mutex<()>,
     running: AtomicBool,
     cancellation: AtomicU8,
     tool_cancellation: Arc<AtomicBool>,
@@ -806,6 +1466,10 @@ impl Engine {
             .database
             .lock()
             .map_err(|_| anyhow!("state lock failed"))?;
+        self.snapshot_locked(&db)
+    }
+
+    fn snapshot_locked(&self, db: &Database) -> Result<Value> {
         let emergency_paused = self.emergency_paused(&db.state);
         let publication_unresolved = Self::publication_unresolved(&db.state);
         let github_setup_unresolved = db.github_setup.blocks_dependent_work();
@@ -815,6 +1479,7 @@ impl Engine {
             && !publication_unresolved
             && !github_setup_unresolved
             && self.developer_work_is_idle();
+        let projection_now_ms = current_time_ms().context("System clock is invalid")?;
         let queue: Vec<Value> = db
             .state
             .queue
@@ -827,7 +1492,7 @@ impl Engine {
                         .flatten()
                 });
                 let publication_expected = f.publication.is_none() && effective_binding.is_some();
-                json!({
+                let mut projected = json!({
                 "id":f.id,"project":f.project,"instruction":f.instruction,"validation":f.validation,
                 "status":f.status,"checkpoint":f.checkpoint,"message":f.message,
                 "repair_attempts":f.repair_attempts,"model_target":f.model_target,
@@ -857,7 +1522,30 @@ impl Engine {
                     && !self.publication_connection_running.load(Ordering::SeqCst)
                     && f.publication.as_ref().is_some_and(|publication| publication.status == "attention"),
                 "changed_files":f.edits.as_ref().map(|e| e.iter().map(|e| &e.path).collect::<Vec<_>>()).unwrap_or_default()
-                })
+                });
+                let object = projected.as_object_mut().unwrap();
+                object.insert("auto_ai_repair_limit".into(), json!(f.auto_ai_repair_limit));
+                object.insert("auto_repair_lifecycle".into(), json!(f.auto_repair_lifecycle));
+                object.insert("auto_repair_reason".into(), json!(f.auto_repair_reason));
+                object.insert("auto_repair_epoch".into(), json!(f.auto_repair_epoch));
+                object.insert(
+                    "auto_repair_step_started_at_ms".into(),
+                    json!(f
+                        .auto_repair_step_started_at_ms
+                        .map(|started_at_ms| started_at_ms.min(projection_now_ms))),
+                );
+                if let Some(elapsed_ms) =
+                    projected_auto_repair_step_elapsed_ms(f, projection_now_ms)
+                {
+                    object.insert("auto_repair_step_elapsed_ms".into(), json!(elapsed_ms));
+                }
+                object.insert("last_failure_kind".into(), json!(f.last_failure_kind));
+                object.insert(
+                    "can_revalidate_after_auto_repair_limit".into(),
+                    json!(f.auto_repair_lifecycle == "limit_reached"
+                        && matches!(f.status.as_str(), "failed" | "paused")),
+                );
+                projected
             })
             .collect();
         let model_targets: Vec<Value> = self
@@ -892,8 +1580,7 @@ impl Engine {
             && !emergency_paused
             && !self.shutdown.load(Ordering::SeqCst)
             && self.developer_work_is_idle();
-        Ok(
-            json!({"mode":"supervised_developer","host":std::env::var("COMPUTERNAME").unwrap_or_else(|_|"local".into()),
+        let mut projected = json!({"mode":"supervised_developer","host":std::env::var("COMPUTERNAME").unwrap_or_else(|_|"local".into()),
             "workspace_root":self.root,"revision":db.state.revision,"auto_run":db.state.auto_run,
             "emergency_paused":emergency_paused,"running":running,"queue":queue,
             "planning_required":true,"planning_provider":REVIEW_PROVIDER_ID,
@@ -923,8 +1610,21 @@ impl Engine {
             "github_setup_unresolved":github_setup_unresolved,
             "ai_settings":db.state.ai_settings,
             "ai_models":self.ai_catalog.models,
-            "ai_catalog_source":self.ai_catalog.source}),
-        )
+            "ai_catalog_source":self.ai_catalog.source});
+        let object = projected.as_object_mut().unwrap();
+        object.insert(
+            "auto_ai_repair_enabled".into(),
+            json!(db.state.auto_ai_repair_enabled),
+        );
+        object.insert(
+            "auto_ai_repair_max_escalations".into(),
+            json!(db.state.auto_ai_repair_max_escalations),
+        );
+        object.insert(
+            "auto_ai_repair_policy_revision".into(),
+            json!(db.state.auto_ai_repair_policy_revision),
+        );
+        Ok(projected)
     }
 
     fn update_settings(
@@ -966,6 +1666,230 @@ impl Engine {
             db.state = next;
         }
         self.snapshot()
+    }
+
+    fn update_auto_ai_repair(
+        self: &Arc<Self>,
+        expected_revision: u64,
+        enabled: bool,
+        max_escalations: u32,
+    ) -> Result<Value> {
+        validate_auto_repair_max(max_escalations)?;
+        let request_sha256 = hash(&serde_json::to_vec(&json!({
+            "schema_version": 1,
+            "enabled": enabled,
+            "max_escalations": max_escalations,
+            "expected_revision": expected_revision,
+        }))?);
+        let mut inference_lease = None;
+        let mut start_loop = false;
+        let mut cancel_loop = false;
+        let disabling_transition = if !enabled {
+            let db = self
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?;
+            db.state.revision == expected_revision && db.state.auto_ai_repair_enabled
+        } else {
+            false
+        };
+        let policy_effect_guard = if disabling_transition {
+            Some(
+                self.effect_gate
+                    .lock()
+                    .map_err(|_| anyhow!("effect gate failed"))?,
+            )
+        } else {
+            None
+        };
+        let accepted;
+        {
+            let mut db = self
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?;
+            self.ensure_publication_barrier_clear(&db.state, &db.github_setup)?;
+            if db.state.revision != expected_revision {
+                let exact_replay = expected_revision.checked_add(1) == Some(db.state.revision)
+                    && db.state.auto_ai_repair_enabled == enabled
+                    && db.state.auto_ai_repair_max_escalations == max_escalations
+                    && db.state.auto_ai_repair_last_request_sha256 == request_sha256;
+                if exact_replay {
+                    drop(db);
+                    return self.snapshot();
+                }
+                bail!("Runner revision changed; refresh before changing Auto AI repair");
+            }
+            if db.state.auto_ai_repair_enabled
+                && db.state.auto_ai_repair_max_escalations != max_escalations
+            {
+                bail!("Disable Auto AI repair before changing the maximum escalation limit");
+            }
+            if db.state.auto_ai_repair_enabled == enabled
+                && db.state.auto_ai_repair_max_escalations == max_escalations
+            {
+                drop(db);
+                return self.snapshot();
+            }
+            if self.shutdown.load(Ordering::SeqCst) {
+                bail!("Developer runner is shutting down");
+            }
+            if disabling_transition {
+                self.repair_loop_authorized.store(false, Ordering::SeqCst);
+                self.cancellation.fetch_max(1, Ordering::SeqCst);
+                self.tool_cancellation.store(true, Ordering::SeqCst);
+            }
+            let first =
+                db.state.queue.iter().position(|feature| {
+                    feature.status != "succeeded" && feature.status != "removed"
+                });
+            let enabling = enabled && !db.state.auto_ai_repair_enabled;
+            let automatic_start_eligible = first.is_some_and(|index| {
+                let feature = &db.state.queue[index];
+                !matches!(
+                    feature.auto_repair_lifecycle.as_str(),
+                    "quarantined" | "limit_reached"
+                ) && ((feature.status == "failed" && automatic_code_failure_is_eligible(feature))
+                    || paused_preauthorization_cancellation_is_resumable(feature)
+                    || (feature.status == "paused"
+                        && feature.auto_repair_lifecycle == "held"
+                        && automatic_ordinary_pre_effect_checkpoint(feature)))
+            });
+            if enabling {
+                if self.running.load(Ordering::SeqCst)
+                    || self.planning_running.load(Ordering::SeqCst)
+                    || self.escalation_running.load(Ordering::SeqCst)
+                    || self.chat.is_running()
+                    || self.tools.blocks_work()
+                    || self.publication_running.load(Ordering::SeqCst)
+                    || self.publication_connection_running.load(Ordering::SeqCst)
+                {
+                    bail!("Stop active developer work before enabling Auto AI repair");
+                }
+                if self.emergency_paused(&db.state) {
+                    bail!("Clear Emergency Pause before enabling Auto AI repair");
+                }
+                if automatic_start_eligible {
+                    if first
+                        .is_some_and(|index| db.state.queue[index].repair_attempts < REPAIR_LIMIT)
+                    {
+                        inference_lease = Some(self.inference_gate.try_acquire().context(
+                            "Automatic repair cannot start while another model call is active",
+                        )?);
+                    }
+                    start_loop = true;
+                }
+            }
+            let next_revision = db
+                .state
+                .revision
+                .checked_add(1)
+                .context("Revision overflow")?;
+            let mut next = db.state.clone();
+            next.auto_ai_repair_enabled = enabled;
+            next.auto_ai_repair_max_escalations = max_escalations;
+            next.auto_ai_repair_policy_revision = next_revision;
+            next.auto_ai_repair_last_request_sha256 = request_sha256;
+            if let Some(index) = first {
+                let feature = &mut next.queue[index];
+                if enabling
+                    && matches!(
+                        feature.auto_repair_lifecycle.as_str(),
+                        "quarantined" | "limit_reached"
+                    )
+                {
+                    // The global preference may be enabled for future features,
+                    // but it cannot clear a durable recovery boundary.
+                } else if enabling && automatic_start_eligible {
+                    enable_auto_repair_for_failed_feature(
+                        feature,
+                        true,
+                        max_escalations,
+                        next_revision,
+                    )?;
+                } else if enabling && feature.status == "failed" {
+                    enable_auto_repair_for_failed_feature(
+                        feature,
+                        false,
+                        max_escalations,
+                        next_revision,
+                    )?;
+                } else if !enabled && feature.auto_repair_lifecycle == "running" {
+                    pause_preapply_automatic_proposal_for_disable(
+                        feature,
+                        "Auto AI repair was disabled before proposal authorization. The unapplied proposal was retired without review; Resume revalidates the retained project without replaying proposal generation or writes.",
+                    )?;
+                    persist_automatic_cancellation_intent(
+                        feature,
+                        self.running.load(Ordering::SeqCst),
+                        "Auto AI repair was disabled; cancellation was recorded before active work was signalled",
+                        "Auto AI repair was disabled after project files were applied. Validation or review completion is ambiguous, so ordinary Resume is blocked.",
+                    )?;
+                    cancel_loop = true;
+                }
+            }
+            next.revision = next_revision;
+            let data = serde_json::to_string(&next)?;
+            db.connection.execute(
+                "INSERT INTO developer_state(id,state) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET state=excluded.state",
+                [data],
+            )?;
+            db.state = next;
+            accepted = self.snapshot_locked(&db)?;
+        }
+        let launch_guard = if start_loop {
+            let guard = self
+                .effect_gate
+                .lock()
+                .map_err(|_| anyhow!("effect gate failed"))?;
+            let db = self
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?;
+            let feature_binding_matches = db.state.queue.iter().any(|feature| {
+                feature.status != "succeeded"
+                    && feature.status != "removed"
+                    && feature.auto_repair_lifecycle == "running"
+                    && feature.auto_repair_policy_revision
+                        == Some(db.state.auto_ai_repair_policy_revision)
+            });
+            if db.state.emergency_paused
+                || !db.state.auto_ai_repair_enabled
+                || db.state.auto_ai_repair_policy_revision != expected_revision + 1
+                || !feature_binding_matches
+                || self.cancellation.load(Ordering::SeqCst) >= 2
+            {
+                self.repair_loop_authorized.store(false, Ordering::SeqCst);
+                bail!("Auto AI repair launch was superseded by Emergency Pause or policy drift; the durable state requires explicit reconciliation");
+            }
+            drop(db);
+            Some(guard)
+        } else {
+            None
+        };
+        if cancel_loop {
+            self.repair_loop_authorized.store(false, Ordering::SeqCst);
+            self.cancellation.fetch_max(1, Ordering::SeqCst);
+            self.tool_cancellation.store(true, Ordering::SeqCst);
+            self.cancel_escalation_call(false);
+        } else if start_loop {
+            self.cancellation.store(0, Ordering::SeqCst);
+            self.tool_cancellation.store(false, Ordering::SeqCst);
+            self.repair_loop_authorized.store(true, Ordering::SeqCst);
+            if self
+                .running
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+            {
+                self.repair_loop_authorized.store(false, Ordering::SeqCst);
+                self.cancellation.fetch_max(1, Ordering::SeqCst);
+                bail!("Another developer run started after policy commit; automatic repair is fail-closed and requires explicit reconciliation");
+            }
+            self.launch(inference_lease);
+        }
+        drop(launch_guard);
+        drop(policy_effect_guard);
+        Ok(accepted)
     }
 
     fn update_feature_reviewer(
@@ -1234,10 +2158,14 @@ impl Engine {
             if escalation_apply_is_quarantined(feature) {
                 bail!("Prepare and explicitly approve a new repair proposal after the interrupted application");
             }
+            if feature.auto_repair_lifecycle == "quarantined" {
+                bail!("Automatic repair cannot Resume from a quarantine state");
+            }
             if feature.status == "failed"
                 && feature.repair_attempts > 0
                 && feature.edits.is_none()
                 && !feature.repair_pending
+                && feature.auto_repair_lifecycle != "held"
             {
                 bail!("Use Repair and retry for another bounded model correction");
             }
@@ -1245,8 +2173,63 @@ impl Engine {
         if self.running.load(Ordering::SeqCst) {
             return Ok(());
         }
+        let resumes_at_escalation = feature.as_ref().is_some_and(|feature| {
+            db.state.auto_ai_repair_enabled
+                && feature.repair_attempts >= REPAIR_LIMIT
+                && ((feature.auto_repair_lifecycle == "held" && feature.status == "failed")
+                    || paused_preauthorization_cancellation_is_resumable(feature))
+        });
+        let revalidates_at_limit = feature
+            .as_ref()
+            .is_some_and(|feature| feature.auto_repair_lifecycle == "limit_reached");
+        let limit_recovery_snapshot = if revalidates_at_limit {
+            let expected_revision = db.state.revision;
+            let expected_feature = feature.as_ref().context("feature missing")?.clone();
+            let project = fs::canonicalize(self.root.join(&expected_feature.project))?;
+            if !project.starts_with(&self.root) {
+                bail!("Project escapes the workspace root");
+            }
+            drop(db);
+            if self.cancellation.load(Ordering::SeqCst) != 0 {
+                bail!("Auto AI repair limit recovery was cancelled before project inspection");
+            }
+            let snapshot =
+                admitted_project_snapshot_with_cancellation(&project, Some(&self.cancellation))
+                    .context("Auto AI repair limit recovery is unreviewable")?;
+            db = self
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?;
+            let current = db
+                .state
+                .queue
+                .iter()
+                .find(|candidate| candidate.id == expected_feature.id)
+                .context("feature missing")?;
+            if db.state.revision != expected_revision
+                || db.state.emergency_paused
+                || self.cancellation.load(Ordering::SeqCst) != 0
+                || current.status != expected_feature.status
+                || current.checkpoint != expected_feature.checkpoint
+                || current.auto_repair_lifecycle != "limit_reached"
+                || current.auto_ai_repair_limit != expected_feature.auto_ai_repair_limit
+                || current.escalation_count != expected_feature.escalation_count
+                || current.auto_repair_limit_project_baseline
+                    != expected_feature.auto_repair_limit_project_baseline
+                || current.auto_repair_limit_unadmitted_sha256
+                    != expected_feature.auto_repair_limit_unadmitted_sha256
+                || current.auto_repair_limit_volatile_sha256
+                    != expected_feature.auto_repair_limit_volatile_sha256
+            {
+                bail!("Automatic repair limit recovery changed during project inspection");
+            }
+            Some(snapshot)
+        } else {
+            None
+        };
         let inference_lease = feature
             .as_ref()
+            .filter(|_| !resumes_at_escalation && !revalidates_at_limit)
             .map(|_| {
                 self.inference_gate
                     .try_acquire()
@@ -1263,6 +2246,10 @@ impl Engine {
         {
             return Ok(());
         }
+        let mut running_start = RunningStartGuard {
+            running: &self.running,
+            committed: false,
+        };
         if let Some(feature) = feature
             .as_ref()
             .filter(|feature| !feature.publication_selection_frozen)
@@ -1300,10 +2287,129 @@ impl Engine {
             }
             db.state = next;
         }
+        if revalidates_at_limit {
+            let feature_id = feature.as_ref().unwrap().id.clone();
+            let recovery_snapshot = limit_recovery_snapshot
+                .as_ref()
+                .context("Automatic repair limit recovery snapshot is missing")?;
+            let mut next = db.state.clone();
+            let current = next
+                .queue
+                .iter_mut()
+                .find(|candidate| candidate.id == feature_id)
+                .context("feature missing")?;
+            if current.auto_repair_lifecycle != "limit_reached"
+                || !matches!(current.status.as_str(), "failed" | "paused")
+            {
+                self.running.store(false, Ordering::SeqCst);
+                bail!("Automatic repair limit recovery binding changed");
+            }
+            let recovered_edits = match prepare_limit_recovery_edits(current, recovery_snapshot) {
+                Ok(edits) => edits,
+                Err(error) => {
+                    self.running.store(false, Ordering::SeqCst);
+                    return Err(error);
+                }
+            };
+            current.edits = Some(recovered_edits);
+            current.status = "paused".into();
+            current.checkpoint = "auto_repair_limit_revalidating".into();
+            current.message = "AI escalation limit remains exhausted. Resume is running only the immutable validation command and required independent review; no repair model attempt is authorized.".into();
+            current.review_pending = None;
+            current.review_status = "pending".into();
+            current.review_summary =
+                "Validation-only limit recovery has not started independent review".into();
+            next.revision = next.revision.checked_add(1).context("Revision overflow")?;
+            let data = serde_json::to_string(&next)?;
+            db.connection.execute(
+                "INSERT INTO developer_state(id,state) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET state=excluded.state",
+                [data],
+            )?;
+            db.state = next;
+        }
+        if let Some(feature_id) = feature.as_ref().map(|feature| feature.id.as_str()) {
+            let max_escalations = db.state.auto_ai_repair_max_escalations;
+            let policy_revision = db.state.auto_ai_repair_policy_revision;
+            let policy_enabled = db.state.auto_ai_repair_enabled;
+            let needs_execution_binding = db
+                .state
+                .queue
+                .iter()
+                .find(|candidate| candidate.id == feature_id)
+                .is_some_and(|candidate| {
+                    candidate.auto_ai_repair_limit.is_none()
+                        || (policy_enabled
+                            && candidate.auto_repair_lifecycle == "inactive"
+                            && candidate.status == "queued"
+                            && candidate.checkpoint == "not_started")
+                        || (policy_enabled && candidate.auto_repair_lifecycle == "held")
+                        || (policy_enabled
+                            && paused_preauthorization_cancellation_is_resumable(candidate))
+                });
+            if needs_execution_binding {
+                let mut next = db.state.clone();
+                let current = next
+                    .queue
+                    .iter_mut()
+                    .find(|candidate| candidate.id == feature_id)
+                    .context("feature missing")?;
+                let changed = if policy_enabled
+                    && paused_preauthorization_cancellation_is_resumable(current)
+                {
+                    enable_auto_repair_for_failed_feature(
+                        current,
+                        true,
+                        max_escalations,
+                        policy_revision,
+                    )?
+                } else if current.auto_repair_lifecycle == "held" && policy_enabled {
+                    snapshot_feature_auto_repair_limit(current, max_escalations, policy_revision)?;
+                    current.auto_repair_epoch = current
+                        .auto_repair_epoch
+                        .checked_add(1)
+                        .context("Automatic repair epoch overflow")?;
+                    set_auto_repair_lifecycle(
+                        current,
+                        "running",
+                        "The owner explicitly resumed Auto AI repair after an operational hold",
+                    )?;
+                    true
+                } else {
+                    arm_auto_repair_at_execution_start(
+                        current,
+                        policy_enabled,
+                        max_escalations,
+                        policy_revision,
+                    )?
+                };
+                if !changed {
+                    self.running.store(false, Ordering::SeqCst);
+                    bail!("Feature execution binding did not change as expected");
+                }
+                next.revision = next.revision.checked_add(1).context("Revision overflow")?;
+                let data = serde_json::to_string(&next)?;
+                db.connection.execute(
+                    "INSERT INTO developer_state(id,state) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET state=excluded.state",
+                    [data],
+                )?;
+                db.state = next;
+            }
+        }
         self.cancellation.store(0, Ordering::SeqCst);
         self.tool_cancellation.store(false, Ordering::SeqCst);
-        self.repair_loop_authorized.store(false, Ordering::SeqCst);
+        let automatic_authorized = feature.as_ref().is_some_and(|observed| {
+            db.state.auto_ai_repair_enabled
+                && db
+                    .state
+                    .queue
+                    .iter()
+                    .find(|current| current.id == observed.id)
+                    .is_some_and(|current| current.auto_repair_lifecycle == "running")
+        });
+        self.repair_loop_authorized
+            .store(automatic_authorized, Ordering::SeqCst);
         drop(db);
+        running_start.commit();
         self.launch(inference_lease);
         Ok(())
     }
@@ -1377,7 +2483,10 @@ impl Engine {
         if next.queue[first].id != id {
             bail!("Only the first unfinished feature can be repaired");
         }
+        let max_escalations = next.auto_ai_repair_max_escalations;
+        let policy_revision = next.auto_ai_repair_policy_revision;
         let feature = &mut next.queue[first];
+        snapshot_feature_auto_repair_limit(feature, max_escalations, policy_revision)?;
         if feature.status != "failed" {
             bail!("Only a failed feature can start a new repair attempt");
         }
@@ -1464,6 +2573,11 @@ impl Engine {
     }
 
     fn prepare_escalation(self: &Arc<Self>, request: RepairEscalationMutation) -> Result<Value> {
+        enum ManualEscalationPreparation {
+            Reserved,
+            Rejected(&'static str),
+        }
+
         let model_target = request
             .model_target
             .as_deref()
@@ -1555,18 +2669,14 @@ impl Engine {
             if state.queue[first].id != request.feature_id {
                 bail!("Only the first unfinished feature can be repaired");
             }
+            let max_escalations = state.auto_ai_repair_max_escalations;
+            let policy_revision = state.auto_ai_repair_policy_revision;
             let feature = &mut state.queue[first];
             if feature.status != "failed" || feature.checkpoint != expected_checkpoint {
                 bail!("Failed feature binding changed; refresh before preparing a repair proposal");
             }
             if feature.escalation_pending {
                 bail!("An approved repair escalation is already being applied");
-            }
-            if feature.escalation_history.len() >= ESCALATION_HISTORY_LIMIT {
-                bail!("Repair escalation history limit reached");
-            }
-            if feature.escalation_count >= ESCALATION_LIMIT {
-                bail!("Repair escalation limit reached");
             }
             if feature
                 .escalation_proposal
@@ -1575,11 +2685,59 @@ impl Engine {
             {
                 bail!("Cancel or apply the current repair proposal first");
             }
-            let attempt = feature
-                .escalation_count
-                .checked_add(1)
-                .context("Repair escalation count overflow")?;
-            feature.escalation_count = attempt;
+            snapshot_feature_auto_repair_limit(feature, max_escalations, policy_revision)?;
+
+            let limit = feature
+                .auto_ai_repair_limit
+                .context("Feature has no automatic repair limit snapshot")?;
+            if feature.escalation_count >= limit || feature.escalation_count >= ESCALATION_LIMIT {
+                set_auto_repair_lifecycle(
+                    feature,
+                    "limit_reached",
+                    &format!(
+                        "{} of {} AI escalations used. Automatic repair stopped. Correct the project without AI and revalidate, change the reviewer when applicable, or remove the feature.",
+                        feature.escalation_count, limit
+                    ),
+                )?;
+                return Ok(ManualEscalationPreparation::Rejected(
+                    "Repair escalation limit reached",
+                ));
+            }
+            if feature.escalation_history.len().saturating_add(3) > ESCALATION_HISTORY_LIMIT
+                || feature
+                    .escalation_evidence_reserved
+                    .checked_add(3)
+                    .context("Repair escalation evidence reservation overflow")?
+                    > ESCALATION_HISTORY_LIMIT as u32
+            {
+                set_auto_repair_lifecycle(
+                    feature,
+                    "held",
+                    "Automatic repair stopped because its bounded escalation evidence capacity is unavailable. Inspect the feature evidence before resuming.",
+                )?;
+                return Ok(ManualEscalationPreparation::Rejected(
+                    "Repair escalation evidence capacity reached",
+                ));
+            }
+            if feature.review_history.len().saturating_add(1) > REVIEW_HISTORY_LIMIT
+                || feature
+                    .review_evidence_reserved
+                    .checked_add(1)
+                    .context("Review evidence reservation overflow")?
+                    > REVIEW_HISTORY_LIMIT as u32
+            {
+                set_auto_repair_lifecycle(
+                    feature,
+                    "held",
+                    "Automatic repair stopped because its bounded independent-review evidence capacity is unavailable. Inspect the feature evidence before resuming.",
+                )?;
+                return Ok(ManualEscalationPreparation::Rejected(
+                    "Independent review evidence capacity reached",
+                ));
+            }
+
+            reserve_escalation_evidence(feature)?;
+            let attempt = feature.escalation_count;
             feature.escalation_proposal = Some(RepairEscalationProposal {
                 proposal_id: proposal_id.clone(),
                 attempt,
@@ -1601,27 +2759,41 @@ impl Engine {
                 protected_inputs: std::collections::BTreeMap::new(),
                 applied_paths: Vec::new(),
                 apply_request_id: None,
+                source: manual_escalation_source(),
+                automatic_epoch: None,
+                policy_revision: None,
+                limit_snapshot: feature.auto_ai_repair_limit,
+                project_state_sha256: None,
+                review_slot_terminal: false,
             });
-            Ok(())
+            Ok(ManualEscalationPreparation::Reserved)
         });
         drop(database);
-        if let Err(error) = prepared {
-            self.release_escalation_call(&cancellation);
-            return Err(error);
+        match prepared {
+            Err(error) => {
+                self.release_escalation_call(&cancellation);
+                return Err(error);
+            }
+            Ok(ManualEscalationPreparation::Rejected(message)) => {
+                self.release_escalation_call(&cancellation);
+                return Err(anyhow!(message));
+            }
+            Ok(ManualEscalationPreparation::Reserved) => {}
         }
 
         let engine = self.clone();
         let feature_id = request.feature_id.clone();
         tokio::spawn(async move {
             let result = engine
-                .build_escalation_proposal(
-                    &feature_id,
-                    &proposal_id,
-                    &target,
-                    &handoff,
-                    &cancellation,
+                .build_escalation_proposal(EscalationProposalInput {
+                    feature_id: &feature_id,
+                    proposal_id: &proposal_id,
+                    target: &target,
+                    handoff: Some(&handoff),
+                    automatic_failure_summary: None,
+                    cancellation: &cancellation,
                     inference_lease,
-                )
+                })
                 .await;
             if let Err(error) =
                 engine.finish_escalation_proposal(&feature_id, &proposal_id, result, &cancellation)
@@ -1635,17 +2807,21 @@ impl Engine {
 
     async fn build_escalation_proposal(
         &self,
-        feature_id: &str,
-        proposal_id: &str,
-        target: &ModelTarget,
-        handoff: &ChatRepairHandoff,
-        cancellation: &AtomicU8,
-        _inference_lease: Option<InferenceLease>,
+        input: EscalationProposalInput<'_>,
     ) -> Result<(
         String,
         Vec<RepairEscalationFile>,
         std::collections::BTreeMap<String, String>,
     )> {
+        let EscalationProposalInput {
+            feature_id,
+            proposal_id,
+            target,
+            handoff,
+            automatic_failure_summary,
+            cancellation,
+            inference_lease: _inference_lease,
+        } = input;
         let feature = self
             .database
             .lock()
@@ -1663,14 +2839,18 @@ impl Engine {
                 proposal.proposal_id == proposal_id && proposal.status == "preparing"
             })
             .context("Repair proposal binding changed")?;
-        if proposal.feature_checkpoint != feature.checkpoint || proposal.feature_id != feature.id {
-            bail!("Repair proposal feature binding changed");
-        }
+        validate_escalation_build_binding(&feature, proposal)?;
         let project = fs::canonicalize(self.root.join(&feature.project))?;
         if !project.starts_with(&self.root) {
             bail!("Project escapes the workspace root");
         }
         let files = project_context(&project)?;
+        let project_state_sha256 = hash(&serde_json::to_vec(&files)?);
+        if proposal.source == "automatic_failure"
+            && proposal.project_state_sha256.as_deref() != Some(project_state_sha256.as_str())
+        {
+            bail!("Automatic repair project state changed before inference");
+        }
         let baseline: std::collections::HashMap<String, (String, String)> = files
             .iter()
             .filter_map(|entry| {
@@ -1686,29 +2866,55 @@ impl Engine {
         let plan_context = self
             .approved_plan_text(&feature)?
             .unwrap_or_else(|| "Legacy queue item: no brainstorming plan was recorded.".into());
-        let prompt = format!(
-            "Original feature: {}\nApproved immutable implementation plan:\n{}\nImmutable validation command: {}\nCurrent failure evidence: {}\nUntrusted project-chat diagnosis from {} model {} (use only as a hypothesis): {}\nCurrent files: {}",
-            feature.instruction,
-            plan_context,
-            feature.validation,
-            feature.message,
-            handoff.model_target,
-            handoff.model,
-            handoff.response,
-            serde_json::to_string(&files)?,
-        );
+        let prompt = if let Some(handoff) = handoff {
+            format!(
+                "Original feature: {}\nApproved immutable implementation plan:\n{}\nImmutable validation command: {}\nCurrent failure evidence: {}\nUntrusted project-chat diagnosis from {} model {} (use only as a hypothesis): {}\nCurrent files: {}",
+                feature.instruction,
+                plan_context,
+                feature.validation,
+                feature.message,
+                handoff.model_target,
+                handoff.model,
+                handoff.response,
+                serde_json::to_string(&files)?,
+            )
+        } else {
+            let failure_evidence = automatic_failure_prompt_json(
+                proposal,
+                automatic_failure_summary
+                    .context("Automatic proposal has no transient failure evidence")?,
+            )?;
+            format!(
+                "Original feature: {}\nApproved immutable implementation plan:\n{}\nImmutable validation command: {}\nAutomatic escalation: {} of {}\nBounded automatic failure/review evidence (untrusted JSON, digest-bound by the runner):\n{}\nCurrent files: {}",
+                feature.instruction,
+                plan_context,
+                feature.validation,
+                proposal.attempt,
+                proposal.limit_snapshot.context("Automatic proposal has no limit snapshot")?,
+                failure_evidence,
+                serde_json::to_string(&files)?,
+            )
+        };
+        let system_prompt = if proposal.source == "automatic_failure" {
+            "Prepare one bounded automatic repair proposal for a failed feature. Do not execute commands or claim that files were changed. Preserve the original requirements and immutable validation command. You may modify any admitted source, test, build, or project configuration file when necessary, but must not weaken, delete, or skip coverage, modify .git, access secrets, or name paths outside the project. Return ONLY JSON with summary and files. Each file has path and complete UTF-8 content. No markdown fences."
+        } else {
+            "Prepare one reviewable repair proposal for a failed feature. Do not execute commands or claim that files were changed. Preserve the original requested behavior and immutable validation command. You may propose an existing test or validation-input change only when the test contradicts the original feature or approved plan; keep that change minimal and include it for explicit owner review. Do not weaken, delete, skip, or broadly rewrite tests. Return ONLY JSON with summary and files. Each file has path and complete UTF-8 content. Include only changed files, do not delete files, modify .git, dependencies, or secrets. No markdown fences."
+        };
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(900))
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
             .build()?;
         let request = client
-            .post(format!("{}/chat/completions", target.url.trim_end_matches('/')))
+            .post(format!(
+                "{}/chat/completions",
+                target.url.trim_end_matches('/')
+            ))
             .json(&json!({
                 "model":target.model,"temperature":0.1,"max_tokens":8192,
                 "response_format":{"type":"json_object"},
                 "chat_template_kwargs":{"enable_thinking":false},
-                "messages":[{"role":"system","content":"Prepare one reviewable repair proposal for a failed feature. Do not execute commands or claim that files were changed. Preserve the original requested behavior and immutable validation command. You may propose an existing test or validation-input change only when the test contradicts the original feature or approved plan; keep that change minimal and include it for explicit owner review. Do not weaken, delete, skip, or broadly rewrite tests. Return ONLY JSON with summary and files. Each file has path and complete UTF-8 content. Include only changed files, do not delete files, modify .git, dependencies, or secrets. No markdown fences."},
+                "messages":[{"role":"system","content":system_prompt},
                     {"role":"user","content":prompt}]
             }))
             .send();
@@ -1757,6 +2963,8 @@ impl Engine {
         if summary.trim().is_empty() || summary.len() > 4000 {
             bail!("Repair proposal summary must be 1 to 4000 characters");
         }
+        validate_cloud_text(summary)
+            .context("Repair proposal summary contains secret-shaped text")?;
         let entries = generated["files"]
             .as_array()
             .context("Repair proposal has no files array")?;
@@ -1780,6 +2988,7 @@ impl Engine {
                 .as_str()
                 .context("Missing proposed file content")?;
             let full = checked_path(&project, path)?;
+            validate_repair_file_admission(path, after)?;
             let normalized_path = path.to_lowercase();
             if !seen.insert(normalized_path.clone()) {
                 bail!("Duplicate proposed file");
@@ -1804,7 +3013,7 @@ impl Engine {
                 protected: is_protected_repair_input(path, &validation_paths),
             });
         }
-        if proposed.is_empty() {
+        if proposed.is_empty() && proposal.source != "automatic_failure" {
             bail!("Repair proposal contains no file changes");
         }
         if cancellation.load(Ordering::SeqCst) != 0 {
@@ -1825,11 +3034,14 @@ impl Engine {
         cancellation: &AtomicU8,
     ) -> Result<()> {
         self.change(|state| {
+            let policy_enabled = state.auto_ai_repair_enabled;
             let feature = state
                 .queue
                 .iter_mut()
                 .find(|feature| feature.id == feature_id)
                 .context("Feature not found")?;
+            let feature_epoch = feature.auto_repair_epoch;
+            let feature_lifecycle = feature.auto_repair_lifecycle.clone();
             let proposal = feature
                 .escalation_proposal
                 .as_mut()
@@ -1839,26 +3051,54 @@ impl Engine {
                 return Ok(());
             }
             proposal.binding_revision = state.revision + 1;
-            let outcome = if cancellation.load(Ordering::SeqCst) != 0 {
+            let mut candidate_sha256 = None;
+            let stale_automatic = proposal.source == "automatic_failure"
+                && (proposal.automatic_epoch != Some(feature_epoch)
+                    || feature_lifecycle != "running"
+                    || !policy_enabled);
+            let outcome = if cancellation.load(Ordering::SeqCst) != 0 || stale_automatic {
                 proposal.status = "cancelled".into();
-                proposal.summary = "Repair proposal preparation was cancelled".into();
+                proposal.summary = if stale_automatic {
+                    "Repair proposal completion was retired by a newer automatic-repair policy epoch"
+                        .into()
+                } else {
+                    "Repair proposal preparation was cancelled".into()
+                };
                 proposal.error = None;
                 "cancelled"
             } else {
                 match result {
                     Ok((summary, files, protected_inputs)) => {
-                        proposal.status = "ready".into();
                         proposal.summary = summary;
                         proposal.files = files;
                         proposal.protected_inputs = protected_inputs;
                         proposal.error = None;
-                        "ready"
+                        let digest = repair_escalation_candidate_sha256(proposal)?;
+                        candidate_sha256 = Some(digest.clone());
+                        if proposal.source == "automatic_failure" && proposal.files.is_empty() {
+                            proposal.status = "no_op".into();
+                            "no_op"
+                        } else if proposal.source == "automatic_failure"
+                            && feature.escalation_history.iter().any(|evidence| {
+                                evidence.candidate_sha256.as_deref() == Some(digest.as_str())
+                            })
+                        {
+                            proposal.status = "duplicate".into();
+                            "duplicate"
+                        } else {
+                            proposal.status = "ready".into();
+                            "ready"
+                        }
                     }
                     Err(error) => {
                         proposal.status = "unavailable".into();
                         proposal.summary =
                             "The selected local AI could not prepare a repair proposal".into();
-                        proposal.error = Some(error.to_string().chars().take(1000).collect());
+                        proposal.error = Some(durable_failure_summary(
+                            &error.to_string(),
+                            "Repair proposal generation failed",
+                            1000,
+                        ));
                         "unavailable"
                     }
                 }
@@ -1878,10 +3118,696 @@ impl Engine {
                 diagnosis_sha256: proposal.diagnosis_sha256.clone(),
                 outcome: outcome.into(),
                 proposal_sha256,
+                candidate_sha256,
                 summary: proposal.summary.clone(),
+                source: proposal.source.clone(),
+                automatic_epoch: proposal.automatic_epoch,
+                policy_revision: proposal.policy_revision,
+                limit_snapshot: proposal.limit_snapshot,
+                project_state_sha256: proposal.project_state_sha256.clone(),
+                authorization_revision: None,
             });
+            let automatic_transition = (
+                proposal.source == "automatic_failure",
+                proposal.automatic_epoch,
+                proposal.attempt,
+            );
+            if outcome != "ready" {
+                terminalize_unapplied_escalation(
+                    feature,
+                    outcome,
+                    "authorization_not_run",
+                    outcome,
+                    "Proposal preparation did not produce an authorized application; independent review was not run",
+                )?;
+                if automatic_transition.0
+                    && automatic_transition.1 == Some(feature.auto_repair_epoch)
+                {
+                    feature.status = "failed".into();
+                    feature.escalation_pending = false;
+                    feature.checkpoint =
+                        format!("escalation_{}_{}", automatic_transition.2, outcome);
+                    match outcome {
+                        "no_op" | "duplicate" => set_auto_repair_lifecycle(
+                            feature,
+                            "running",
+                            "The no-op or duplicate candidate consumed its escalation and automatic repair will continue",
+                        )?,
+                        "cancelled" => set_auto_repair_lifecycle(
+                            feature,
+                            "inactive",
+                            "Automatic proposal generation was cancelled after its attempt was reserved",
+                        )?,
+                        "unavailable" => set_auto_repair_lifecycle(
+                            feature,
+                            "held",
+                            "The selected model could not produce a valid automatic repair proposal. Inspect the provider and retained evidence, then explicitly Resume.",
+                        )?,
+                        _ => bail!("Automatic proposal has an unsupported terminal outcome"),
+                    }
+                    feature.message = feature.auto_repair_reason.clone();
+                }
+            } else if feature.auto_repair_lifecycle == "running" {
+                start_auto_repair_step(feature)?;
+            }
             Ok(())
         })
+    }
+
+    fn terminalize_automatic_reservation_preparation_failure(
+        &self,
+        observed: &Feature,
+        at_limit: bool,
+    ) -> Result<()> {
+        self.change(|state| {
+            let current = state
+                .queue
+                .iter_mut()
+                .find(|feature| feature.id == observed.id)
+                .context("Feature not found")?;
+            if current.auto_repair_lifecycle != "running"
+                || current.status != "failed"
+                || current.auto_repair_epoch != observed.auto_repair_epoch
+                || current.auto_repair_policy_revision != observed.auto_repair_policy_revision
+                || current.escalation_count != observed.escalation_count
+                || current.auto_ai_repair_limit != observed.auto_ai_repair_limit
+            {
+                return Ok(());
+            }
+            current.status = "failed".into();
+            current.repair_pending = false;
+            current.last_failure_kind = "operational".into();
+            if at_limit {
+                set_auto_repair_lifecycle(
+                    current,
+                    "limit_reached",
+                    "Automatic repair reached its escalation limit, but the bounded recovery baseline could not be captured. Reduce or correct the unreviewable project data, then retry recovery or remove the feature.",
+                )?;
+            } else {
+                set_auto_repair_lifecycle(
+                    current,
+                    "held",
+                    "Automatic repair could not safely prepare the next bounded escalation. Correct the project or model availability condition, then explicitly Resume.",
+                )?;
+            }
+            Ok(())
+        })
+    }
+
+    fn reserve_automatic_escalation(
+        &self,
+        feature_id: &str,
+    ) -> Result<Option<(String, ModelTarget, u64, String)>> {
+        let observed = self
+            .database
+            .lock()
+            .map_err(|_| anyhow!("state lock failed"))?
+            .state
+            .queue
+            .iter()
+            .find(|feature| feature.id == feature_id)
+            .cloned()
+            .context("Feature not found")?;
+        let at_limit = observed
+            .auto_ai_repair_limit
+            .is_some_and(|limit| observed.escalation_count >= limit);
+        let preparation = (|| -> Result<_> {
+            if self.cancelled() {
+                bail!("Automatic repair escalation preparation was cancelled");
+            }
+            let project = fs::canonicalize(self.root.join(&observed.project))?;
+            if !project.starts_with(&self.root) {
+                bail!("Project escapes the workspace root");
+            }
+            if at_limit {
+                let snapshot = admitted_project_snapshot_with_cancellation(
+                    &project,
+                    Some(&self.cancellation),
+                )?;
+                if self.cancelled() {
+                    bail!("Automatic repair escalation preparation was cancelled");
+                }
+                return Ok((None, None, Some(snapshot)));
+            }
+            let target = self.model_target(&observed.model_target)?.clone();
+            let project_state_sha256 = hash(&serde_json::to_vec(&project_context(&project)?)?);
+            Ok((Some(target), Some(project_state_sha256), None))
+        })();
+        let (target, project_state_sha256, limit_recovery_snapshot) = match preparation {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.terminalize_automatic_reservation_preparation_failure(&observed, at_limit)?;
+                return Err(error);
+            }
+        };
+        let proposal_id = Uuid::new_v4().to_string();
+        let target_for_state = target.clone();
+        let reserved = self.change(|state| {
+            if !state.auto_ai_repair_enabled {
+                return Ok(None);
+            }
+            let policy_revision = state.auto_ai_repair_policy_revision;
+            let feature = state
+                .queue
+                .iter_mut()
+                .find(|feature| feature.id == feature_id)
+                .context("Feature not found")?;
+            if feature.auto_repair_lifecycle != "running" || feature.status != "failed" {
+                return Ok(None);
+            }
+            if feature.auto_repair_epoch != observed.auto_repair_epoch
+                || feature.auto_repair_policy_revision != observed.auto_repair_policy_revision
+                || feature.escalation_count != observed.escalation_count
+                || feature.auto_ai_repair_limit != observed.auto_ai_repair_limit
+                || feature.auto_repair_policy_revision != Some(policy_revision)
+            {
+                bail!("Automatic repair escalation binding changed during preparation");
+            }
+            if feature.repair_attempts < REPAIR_LIMIT {
+                bail!("Ordinary repair attempts must be exhausted before automatic escalation");
+            }
+            let limit = feature
+                .auto_ai_repair_limit
+                .context("Automatic repair feature limit was not snapshotted")?;
+            if feature.escalation_count >= limit {
+                let limit_recovery_snapshot = limit_recovery_snapshot
+                    .as_ref()
+                    .context("Automatic repair limit recovery snapshot is missing")?;
+                feature.auto_repair_limit_project_baseline = limit_recovery_snapshot
+                    .files
+                    .iter()
+                    .map(|(path, (digest, _))| (path.clone(), digest.clone()))
+                    .collect();
+                feature.auto_repair_limit_unadmitted_sha256 =
+                    Some(limit_recovery_snapshot.unadmitted_sha256.clone());
+                feature.auto_repair_limit_volatile_sha256 =
+                    Some(limit_recovery_snapshot.volatile_sha256.clone());
+                let reason = format!(
+                    "{} of {} AI escalations used. Automatic repair stopped. Correct the project without AI and revalidate, change the reviewer when applicable, or remove the feature.",
+                    feature.escalation_count, limit
+                );
+                set_auto_repair_lifecycle(feature, "limit_reached", &reason)?;
+                return Ok(None);
+            }
+            if feature.escalation_history.len().saturating_add(3) > ESCALATION_HISTORY_LIMIT
+                || feature.review_history.len().saturating_add(1) > REVIEW_HISTORY_LIMIT
+                || feature.escalation_evidence_reserved.saturating_add(3)
+                    > ESCALATION_HISTORY_LIMIT as u32
+                || feature.review_evidence_reserved.saturating_add(1)
+                    > REVIEW_HISTORY_LIMIT as u32
+            {
+                set_auto_repair_lifecycle(
+                    feature,
+                    "held",
+                    "Automatic repair stopped because bounded escalation or review evidence capacity is unavailable. Inspect the retained evidence before resuming.",
+                )?;
+                return Ok(None);
+            }
+            if feature.escalation_pending
+                || feature.escalation_proposal.as_ref().is_some_and(|proposal| {
+                    matches!(proposal.status.as_str(), "preparing" | "ready" | "approved" | "applying")
+                })
+            {
+                bail!("Automatic escalation already has active proposal evidence");
+            }
+            let epoch = feature.auto_repair_epoch;
+            let target_for_state = target_for_state
+                .as_ref()
+                .context("Automatic repair model target is missing")?;
+            let project_state_sha256 = project_state_sha256
+                .as_ref()
+                .context("Automatic repair project-state binding is missing")?;
+            let failure_summary = if feature.last_code_failure_summary.is_empty() {
+                bounded_code_failure_summary(&feature.message)?
+            } else {
+                bounded_code_failure_summary(&feature.last_code_failure_summary)?
+            };
+            feature.last_code_failure_summary = failure_summary.clone();
+            let failure_sha256 = hash(failure_summary.as_bytes());
+            reserve_escalation_evidence(feature)?;
+            let attempt = feature.escalation_count;
+            feature.escalation_proposal = Some(RepairEscalationProposal {
+                proposal_id: proposal_id.clone(),
+                attempt,
+                feature_id: feature.id.clone(),
+                feature_checkpoint: feature.checkpoint.clone(),
+                binding_revision: state.revision + 1,
+                model_target: target_for_state.id.into(),
+                model: target_for_state.model.clone(),
+                chat_id: None,
+                chat_request_id: String::new(),
+                chat_model_target: String::new(),
+                chat_model: String::new(),
+                diagnosis: String::new(),
+                diagnosis_sha256: failure_sha256,
+                status: "preparing".into(),
+                summary: format!(
+                    "Automatic AI escalation {attempt} of {limit} is preparing a bounded proposal"
+                ),
+                error: None,
+                files: Vec::new(),
+                protected_inputs: std::collections::BTreeMap::new(),
+                applied_paths: Vec::new(),
+                apply_request_id: None,
+                source: "automatic_failure".into(),
+                automatic_epoch: Some(epoch),
+                policy_revision: Some(policy_revision),
+                limit_snapshot: Some(limit),
+                project_state_sha256: Some(project_state_sha256.clone()),
+                review_slot_terminal: false,
+            });
+            feature.checkpoint = format!("escalation_{attempt}_preparing");
+            feature.message = format!("AI escalation {attempt} of {limit} is preparing repair");
+            start_auto_repair_step(feature)?;
+            Ok(Some((epoch, failure_summary)))
+        })?;
+        match reserved {
+            Some((epoch, failure_summary)) => Ok(Some((
+                proposal_id,
+                target.context("Automatic repair model target is missing")?,
+                epoch,
+                failure_summary,
+            ))),
+            None => Ok(None),
+        }
+    }
+
+    fn finish_automatic_without_application(
+        &self,
+        feature_id: &str,
+        proposal_id: &str,
+        epoch: u64,
+    ) -> Result<bool> {
+        self.change(|state| {
+            let feature = state
+                .queue
+                .iter_mut()
+                .find(|feature| feature.id == feature_id)
+                .context("Feature not found")?;
+            let proposal = feature
+                .escalation_proposal
+                .as_ref()
+                .filter(|proposal| proposal.proposal_id == proposal_id)
+                .context("Automatic proposal not found")?
+                .clone();
+            if proposal.source != "automatic_failure"
+                || proposal.automatic_epoch != Some(epoch)
+                || feature.auto_repair_epoch != epoch
+            {
+                bail!("Late automatic proposal completion was rejected by its epoch binding");
+            }
+            let retryable = matches!(proposal.status.as_str(), "no_op" | "duplicate");
+            if !matches!(proposal.status.as_str(), "no_op" | "duplicate" | "unavailable" | "cancelled") {
+                bail!("Automatic proposal is not terminal without application");
+            }
+            terminalize_unapplied_escalation(
+                feature,
+                &proposal.status,
+                "authorization_not_run",
+                &proposal.status,
+                "No proposal was authorized or applied; independent review was not run",
+            )?;
+            feature.status = "failed".into();
+            feature.escalation_pending = false;
+            if retryable {
+                set_auto_repair_lifecycle(
+                    feature,
+                    "running",
+                    "The no-op or duplicate candidate consumed its escalation and automatic repair will continue",
+                )?;
+            } else if proposal.status == "cancelled" {
+                set_auto_repair_lifecycle(
+                    feature,
+                    "inactive",
+                    "Automatic proposal generation was cancelled after its attempt was reserved",
+                )?;
+            } else {
+                set_auto_repair_lifecycle(
+                    feature,
+                    "held",
+                    "The selected model could not produce a valid automatic repair proposal. Inspect the provider and retained evidence, then explicitly Resume.",
+                )?;
+            }
+            feature.checkpoint = format!("escalation_{}_{}", proposal.attempt, proposal.status);
+            feature.message = feature.auto_repair_reason.clone();
+            Ok(retryable)
+        })
+    }
+
+    fn authorize_automatic_proposal(
+        &self,
+        feature_id: &str,
+        proposal_id: &str,
+        epoch: u64,
+    ) -> Result<()> {
+        let authorization = self.change(|state| {
+            if !state.auto_ai_repair_enabled {
+                bail!("Auto AI repair was disabled before policy authorization");
+            }
+            let policy_revision = state.auto_ai_repair_policy_revision;
+            let feature = state
+                .queue
+                .iter_mut()
+                .find(|feature| feature.id == feature_id)
+                .context("Feature not found")?;
+            let proposal = feature
+                .escalation_proposal
+                .as_ref()
+                .filter(|proposal| proposal.proposal_id == proposal_id)
+                .context("Automatic proposal not found")?
+                .clone();
+            if proposal.status != "ready"
+                || proposal.source != "automatic_failure"
+                || proposal.automatic_epoch != Some(epoch)
+                || feature.auto_repair_epoch != epoch
+                || feature.auto_repair_lifecycle != "running"
+                || proposal.policy_revision != feature.auto_repair_policy_revision
+                || proposal.policy_revision != Some(policy_revision)
+                || proposal.limit_snapshot != feature.auto_ai_repair_limit
+            {
+                bail!("Automatic policy authorization binding changed");
+            }
+            if feature.escalation_count > proposal.limit_snapshot.unwrap_or(0) {
+                bail!("Automatic escalation exceeds its feature limit snapshot");
+            }
+            let proposal_sha256 = repair_escalation_proposal_sha256(&proposal)?;
+            let ready_sha256 = feature
+                .escalation_history
+                .iter()
+                .rev()
+                .find(|evidence| evidence.proposal_id == proposal_id && evidence.outcome == "ready")
+                .and_then(|evidence| evidence.proposal_sha256.as_deref())
+                .context("Ready automatic proposal evidence is missing")?;
+            if ready_sha256 != proposal_sha256 {
+                bail!("Automatic proposal digest changed before policy authorization");
+            }
+            let project = fs::canonicalize(self.root.join(&feature.project))?;
+            if !project.starts_with(&self.root) {
+                bail!("Project escapes the workspace root");
+            }
+            let project_state_sha256 = hash(&serde_json::to_vec(&project_context(&project)?)?);
+            if proposal.project_state_sha256.as_deref() != Some(project_state_sha256.as_str()) {
+                bail!("Project bytes changed before automatic policy authorization");
+            }
+            for file in &proposal.files {
+                validate_repair_file_admission(&file.path, &file.after)?;
+                let path = checked_path(&project, &file.path)?;
+                let current = if path.exists() {
+                    Some(fs::read_to_string(&path).with_context(|| {
+                        format!("Proposed file {} is not UTF-8", file.path)
+                    })?)
+                } else {
+                    None
+                };
+                if current != file.before {
+                    bail!("{} changed after automatic proposal preparation", file.path);
+                }
+            }
+            if proposal.files.is_empty() {
+                bail!("Automatic policy cannot authorize an empty proposal");
+            }
+            merge_escalation_review_edits(
+                feature.edits.as_deref().unwrap_or_default(),
+                &proposal.files,
+                &project,
+            )?;
+            let current = feature.escalation_proposal.as_mut().unwrap();
+            current.status = "approved".into();
+            current.apply_request_id = Some(Uuid::new_v4().to_string());
+            current.binding_revision = state.revision + 1;
+            feature.escalation_history.push(RepairEscalationEvidence {
+                proposal_id: proposal.proposal_id.clone(),
+                attempt: proposal.attempt,
+                model_target: proposal.model_target.clone(),
+                model: proposal.model.clone(),
+                chat_id: None,
+                chat_request_id: String::new(),
+                diagnosis_sha256: proposal.diagnosis_sha256.clone(),
+                outcome: "policy_authorized".into(),
+                proposal_sha256: Some(proposal_sha256),
+                candidate_sha256: Some(repair_escalation_candidate_sha256(&proposal)?),
+                summary: "The enabled Auto AI repair policy authorized these exact proposal bytes for one application attempt".into(),
+                source: proposal.source.clone(),
+                automatic_epoch: proposal.automatic_epoch,
+                policy_revision: proposal.policy_revision,
+                limit_snapshot: proposal.limit_snapshot,
+                project_state_sha256: proposal.project_state_sha256.clone(),
+                authorization_revision: Some(state.revision + 1),
+            });
+            feature.status = "paused".into();
+            feature.checkpoint = format!("escalation_{}_approved", proposal.attempt);
+            feature.message = format!(
+                "AI escalation {} of {} is authorized by the enabled repair policy",
+                proposal.attempt,
+                proposal.limit_snapshot.unwrap_or(ESCALATION_LIMIT)
+            );
+            feature.repair_pending = false;
+            feature.escalation_pending = true;
+            feature.review_status = "pending".into();
+            feature.review_summary = "Required ChatGPT Codex review has not started".into();
+            feature.review_pending = None;
+            start_auto_repair_step(feature)?;
+            Ok(())
+        });
+        if let Err(error) = authorization {
+            let rejection_is_current = self
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?
+                .state
+                .queue
+                .iter()
+                .find(|feature| feature.id == feature_id)
+                .and_then(|feature| {
+                    feature
+                        .escalation_proposal
+                        .as_ref()
+                        .map(|proposal| (feature, proposal))
+                })
+                .is_some_and(|(feature, proposal)| {
+                    proposal.proposal_id == proposal_id
+                        && proposal.status == "ready"
+                        && proposal.source == "automatic_failure"
+                        && proposal.automatic_epoch == Some(epoch)
+                        && feature.auto_repair_epoch == epoch
+                        && feature.auto_repair_lifecycle == "running"
+                });
+            if rejection_is_current {
+                self.change(|state| {
+                    let feature = state
+                        .queue
+                        .iter_mut()
+                        .find(|feature| feature.id == feature_id)
+                        .context("Feature not found")?;
+                    let attempt = feature
+                        .escalation_proposal
+                        .as_ref()
+                        .filter(|proposal| proposal.proposal_id == proposal_id)
+                        .context("Automatic proposal not found")?
+                        .attempt;
+                    terminalize_unapplied_escalation(
+                        feature,
+                        "unavailable",
+                        "authorization_rejected",
+                        "authorization_rejected",
+                        "Automatic proposal authorization rejected workspace, path, or evidence drift; no files were applied and independent review was not run",
+                    )?;
+                    set_auto_repair_lifecycle(
+                        feature,
+                        "held",
+                        "Automatic repair stopped because proposal authorization rejected workspace, path, or evidence drift. Correct the condition and explicitly Resume to reserve a new attempt.",
+                    )?;
+                    feature.status = "failed".into();
+                    feature.checkpoint = format!("escalation_{attempt}_authorization_rejected");
+                    feature.message = feature.auto_repair_reason.clone();
+                    Ok(())
+                })?;
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    async fn prepare_next_automatic_escalation(&self, feature_id: &str) -> Result<bool> {
+        loop {
+            let already_at_limit = self
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?
+                .state
+                .queue
+                .iter()
+                .find(|feature| feature.id == feature_id)
+                .and_then(|feature| {
+                    feature
+                        .auto_ai_repair_limit
+                        .map(|limit| feature.escalation_count >= limit)
+                })
+                .unwrap_or(false);
+            if already_at_limit {
+                let reserved = self.reserve_automatic_escalation(feature_id)?;
+                if reserved.is_some() {
+                    bail!("Automatic repair limit preflight unexpectedly reserved model work");
+                }
+                return Ok(false);
+            }
+            let cancellation = self.reserve_escalation_call()?;
+            let escalation_call = EscalationCallGuard {
+                engine: self,
+                cancellation: cancellation.clone(),
+                released: false,
+            };
+            let inference_lease = match self.inference_gate.try_acquire() {
+                Ok(lease) => Some(lease),
+                Err(error) => {
+                    self.change(|state| {
+                        let feature = state
+                            .queue
+                            .iter_mut()
+                            .find(|feature| feature.id == feature_id)
+                            .context("Feature not found")?;
+                        set_auto_repair_lifecycle(
+                            feature,
+                            "held",
+                            "Automatic repair could not acquire the shared model gate. Explicitly Resume after other model work finishes.",
+                        )
+                    })?;
+                    return Err(error.context("Automatic repair model gate is unavailable"));
+                }
+            };
+            let reserved = self.reserve_automatic_escalation(feature_id);
+            let Some((proposal_id, target, epoch, failure_summary)) = reserved? else {
+                escalation_call.release();
+                return Ok(false);
+            };
+            let result = self
+                .build_escalation_proposal(EscalationProposalInput {
+                    feature_id,
+                    proposal_id: &proposal_id,
+                    target: &target,
+                    handoff: None,
+                    automatic_failure_summary: Some(&failure_summary),
+                    cancellation: &cancellation,
+                    inference_lease,
+                })
+                .await;
+            self.finish_escalation_proposal(feature_id, &proposal_id, result, &cancellation)?;
+            escalation_call.release();
+            let status = self
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?
+                .state
+                .queue
+                .iter()
+                .find(|feature| feature.id == feature_id)
+                .and_then(|feature| feature.escalation_proposal.as_ref())
+                .filter(|proposal| proposal.proposal_id == proposal_id)
+                .map(|proposal| proposal.status.clone())
+                .context("Automatic proposal completion disappeared")?;
+            if status == "ready" {
+                if let Err(error) =
+                    self.authorize_automatic_proposal(feature_id, &proposal_id, epoch)
+                {
+                    self.change(|state| {
+                        let feature = state
+                            .queue
+                            .iter_mut()
+                            .find(|feature| feature.id == feature_id)
+                            .context("Feature not found")?;
+                        if feature.auto_repair_epoch == epoch {
+                            set_auto_repair_lifecycle(
+                                feature,
+                                "held",
+                                "Automatic repair stopped because proposal authorization detected workspace, path, evidence, or capacity drift. Inspect retained evidence before resuming.",
+                            )?;
+                            feature.status = "failed".into();
+                            feature.message = feature.auto_repair_reason.clone();
+                        }
+                        Ok(())
+                    })?;
+                    return Err(error);
+                }
+                return Ok(true);
+            }
+            if !self.finish_automatic_without_application(feature_id, &proposal_id, epoch)? {
+                return Ok(false);
+            }
+        }
+    }
+
+    fn resume_automatic_after_restart(self: &Arc<Self>) -> Result<()> {
+        let observed = {
+            let database = self
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?;
+            if !database.state.auto_ai_repair_enabled {
+                return Ok(());
+            }
+            database
+                .state
+                .queue
+                .iter()
+                .find(|feature| feature.status != "succeeded" && feature.status != "removed")
+                .filter(|feature| feature.auto_repair_lifecycle == "running")
+                .cloned()
+        };
+        let Some(mut feature) = observed else {
+            return Ok(());
+        };
+        if let Some(proposal) = feature
+            .escalation_proposal
+            .as_ref()
+            .filter(|proposal| proposal.source == "automatic_failure" && proposal.status == "ready")
+        {
+            let proposal_id = proposal.proposal_id.clone();
+            let epoch = proposal
+                .automatic_epoch
+                .context("Restartable automatic proposal has no epoch")?;
+            if let Err(error) = self.authorize_automatic_proposal(&feature.id, &proposal_id, epoch)
+            {
+                self.change(|state| {
+                    let current = state
+                        .queue
+                        .iter_mut()
+                        .find(|current| current.id == feature.id)
+                        .context("Feature not found")?;
+                    set_auto_repair_lifecycle(
+                        current,
+                        "quarantined",
+                        "A ready automatic proposal did not match its exact restart bindings. Inspect the workspace; it was not applied.",
+                    )?;
+                    current.status = "failed".into();
+                    current.message = current.auto_repair_reason.clone();
+                    Ok(())
+                })?;
+                return Err(error.context("Automatic repair restart reconciliation failed"));
+            }
+            feature = self
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?
+                .state
+                .queue
+                .iter()
+                .find(|current| current.id == feature.id)
+                .cloned()
+                .context("Feature not found")?;
+        }
+        if !matches!(feature.status.as_str(), "failed" | "queued" | "paused")
+            || (feature.status == "paused" && !feature.escalation_pending)
+        {
+            return Ok(());
+        }
+        self.running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .map_err(|_| anyhow!("Another developer run started during restart recovery"))?;
+        self.cancellation.store(0, Ordering::SeqCst);
+        self.tool_cancellation.store(false, Ordering::SeqCst);
+        self.repair_loop_authorized.store(true, Ordering::SeqCst);
+        self.launch(None);
+        Ok(())
     }
 
     fn approve_escalation(self: &Arc<Self>, request: RepairEscalationMutation) -> Result<Value> {
@@ -2039,6 +3965,7 @@ impl Engine {
                 bail!("A protected test or validation input changed after proposal preparation");
             }
             for file in &proposal.files {
+                validate_repair_file_admission(&file.path, &file.after)?;
                 let path = checked_path(&project_root, &file.path)?;
                 let current = if path.exists() {
                     Some(
@@ -2086,9 +4013,16 @@ impl Engine {
                 diagnosis_sha256: proposal.diagnosis_sha256.clone(),
                 outcome: "approved_to_apply".into(),
                 proposal_sha256: Some(approved_proposal_sha256),
+                candidate_sha256: Some(repair_escalation_candidate_sha256(proposal)?),
                 summary:
                     "Owner approved these exact repair proposal bytes for one application attempt"
                         .into(),
+                source: proposal.source.clone(),
+                automatic_epoch: proposal.automatic_epoch,
+                policy_revision: proposal.policy_revision,
+                limit_snapshot: proposal.limit_snapshot,
+                project_state_sha256: proposal.project_state_sha256.clone(),
+                authorization_revision: None,
             });
             feature.status = "paused".into();
             feature.checkpoint = format!("escalation_{}_approved", proposal.attempt);
@@ -2149,18 +4083,13 @@ impl Engine {
             proposal.summary = "Repair proposal was cancelled without changing files".into();
             proposal.error = None;
             proposal.binding_revision = state.revision + 1;
-            feature.escalation_history.push(RepairEscalationEvidence {
-                proposal_id: proposal.proposal_id.clone(),
-                attempt: proposal.attempt,
-                model_target: proposal.model_target.clone(),
-                model: proposal.model.clone(),
-                chat_id: proposal.chat_id.clone(),
-                chat_request_id: proposal.chat_request_id.clone(),
-                diagnosis_sha256: proposal.diagnosis_sha256.clone(),
-                outcome: "cancelled".into(),
-                proposal_sha256: None,
-                summary: proposal.summary.clone(),
-            });
+            terminalize_unapplied_escalation(
+                feature,
+                "cancelled",
+                "authorization_not_run",
+                "cancelled",
+                "Independent review was not run because the repair proposal was cancelled before application",
+            )?;
             Ok(())
         })?;
         self.cancel_escalation_call(false);
@@ -3027,15 +4956,60 @@ impl Engine {
     async fn run_queue(&self, mut inference_lease: Option<InferenceLease>) -> Result<()> {
         loop {
             let feature = self.change(|s| {
-                Ok(s.queue
+                let selected = s
+                    .queue
                     .iter()
                     .find(|f| f.status != "succeeded" && f.status != "removed")
-                    .cloned())
+                    .map(|feature| feature.id.clone());
+                if let Some(feature_id) = selected.as_deref() {
+                    let should_bind = s.queue.iter().any(|feature| {
+                        feature.id == feature_id
+                            && feature.status == "queued"
+                            && feature.checkpoint == "not_started"
+                            && feature.auto_repair_lifecycle == "inactive"
+                    });
+                    if should_bind {
+                        if s.emergency_paused || self.cancellation.load(Ordering::SeqCst) != 0 {
+                            bail!(
+                                "Emergency Pause or cancellation blocks queued feature admission"
+                            );
+                        }
+                        arm_selected_queued_feature(s, feature_id)?;
+                    }
+                }
+                Ok(selected.and_then(|feature_id| {
+                    s.queue
+                        .iter()
+                        .find(|feature| feature.id == feature_id)
+                        .cloned()
+                }))
             })?;
             let Some(feature) = feature else {
                 break;
             };
+            if feature.auto_repair_lifecycle == "running" {
+                let policy_enabled = self
+                    .database
+                    .lock()
+                    .map_err(|_| anyhow!("state lock failed"))?
+                    .state
+                    .auto_ai_repair_enabled;
+                self.repair_loop_authorized
+                    .store(policy_enabled, Ordering::SeqCst);
+            }
             let feature = self.freeze_feature_publication(feature)?;
+            if feature.status == "failed"
+                && feature.auto_repair_lifecycle == "running"
+                && feature.repair_attempts >= REPAIR_LIMIT
+                && !feature.repair_pending
+                && !feature.escalation_pending
+                && automatic_code_failure_is_eligible(&feature)
+            {
+                if self.prepare_next_automatic_escalation(&feature.id).await? {
+                    continue;
+                }
+                break;
+            }
             if self.cancelled() {
                 self.change(|state| {
                     let current = state
@@ -3043,7 +5017,16 @@ impl Engine {
                         .iter_mut()
                         .find(|candidate| candidate.id == feature.id)
                         .context("feature missing")?;
-                    if current.escalation_pending
+                    if automatic_post_apply_is_ambiguous(current)
+                        && (feature.auto_repair_lifecycle == "running"
+                            || current.auto_repair_lifecycle == "quarantined")
+                    {
+                        quarantine_automatic_post_apply(
+                            current,
+                            state.revision + 1,
+                            "Automatic repair was cancelled after project files were applied. Validation or review completion is ambiguous; inspect retained evidence because ordinary Resume cannot replay this attempt.",
+                        )?;
+                    } else if current.escalation_pending
                         && (current.checkpoint.ends_with("_approved")
                             || current.checkpoint.ends_with("_applying"))
                     {
@@ -3062,12 +5045,17 @@ impl Engine {
                 })?;
                 break;
             }
-            let active_inference_lease = match inference_lease.take() {
-                Some(lease) => lease,
-                None => match self.inference_gate.try_acquire() {
-                    Ok(lease) => lease,
-                    Err(_) => {
-                        self.change(|state| {
+            let validation_only_limit_recovery =
+                feature.checkpoint == "auto_repair_limit_revalidating";
+            let active_inference_lease = if validation_only_limit_recovery {
+                None
+            } else {
+                Some(match inference_lease.take() {
+                    Some(lease) => lease,
+                    None => match self.inference_gate.try_acquire() {
+                        Ok(lease) => lease,
+                        Err(_) => {
+                            self.change(|state| {
                             let current = state
                                 .queue
                                 .iter_mut()
@@ -3076,9 +5064,10 @@ impl Engine {
                             current.message = "A local model is answering project chat. Start this feature after the reply finishes.".into();
                             Ok(())
                         })?;
-                        break;
-                    }
-                },
+                            break;
+                        }
+                    },
+                })
             };
             let result = self.run_feature(&feature).await;
             drop(active_inference_lease);
@@ -3089,7 +5078,16 @@ impl Engine {
                         .iter_mut()
                         .find(|candidate| candidate.id == feature.id)
                         .context("feature missing")?;
-                    if current.escalation_pending
+                    if automatic_post_apply_is_ambiguous(current)
+                        && (feature.auto_repair_lifecycle == "running"
+                            || current.auto_repair_lifecycle == "quarantined")
+                    {
+                        quarantine_automatic_post_apply(
+                            current,
+                            state.revision + 1,
+                            "Automatic repair was interrupted after project files were applied. Validation or review completion is ambiguous; inspect retained evidence because ordinary Resume cannot replay this attempt.",
+                        )?;
+                    } else if current.escalation_pending
                         && (current.checkpoint.ends_with("_approved")
                             || current.checkpoint.ends_with("_applying"))
                     {
@@ -3120,10 +5118,9 @@ impl Engine {
             }
             if let Err(error) = result {
                 let escalation_attempt = feature.escalation_pending;
-                let repairable_validation = feature.repair_pending
-                    && error
-                        .downcast_ref::<RepairableValidationFailure>()
-                        .is_some();
+                let repairable_validation = error
+                    .downcast_ref::<RepairableValidationFailure>()
+                    .is_some();
                 let review_rejection = error.downcast_ref::<RepairableReviewRejection>().is_some();
                 let reserved_next = self.change(|s| {
                     let next_revision = s.revision + 1;
@@ -3134,16 +5131,50 @@ impl Engine {
                         .context("feature missing")?;
                     current.status = "failed".into();
                     let latest_error = format!("{error:#}");
+                    let code_failure = repairable_validation || review_rejection;
+                    let durable_error = if code_failure {
+                        let bounded_error = latest_error
+                            .chars()
+                            .take(CODE_FAILURE_SUMMARY_LIMIT)
+                            .collect::<String>();
+                        bounded_code_failure_summary(&bounded_error).unwrap_or_else(|_| {
+                            durable_failure_summary(
+                                &latest_error,
+                                "Validation or independent review failed",
+                                CODE_FAILURE_SUMMARY_LIMIT,
+                            )
+                        })
+                    } else {
+                        durable_failure_summary(
+                            &latest_error,
+                            "Developer operation failed",
+                            CODE_FAILURE_SUMMARY_LIMIT,
+                        )
+                    };
+                    if code_failure {
+                        current.last_code_failure_summary = durable_error.clone();
+                    }
                     current.message =
-                        if repairable_validation && current.repair_attempts >= REPAIR_LIMIT {
-                            format!("Repair stopped after {REPAIR_LIMIT} attempts.\n{latest_error}")
+                        if repairable_validation
+                            && !escalation_attempt
+                            && current.repair_attempts >= REPAIR_LIMIT
+                        {
+                            format!("Repair stopped after {REPAIR_LIMIT} attempts.\n{durable_error}")
                         } else {
-                            latest_error.clone()
+                            durable_error.clone()
                         }
                         .chars()
                         .take(4000)
                         .collect();
                     current.repair_pending = false;
+                    current.last_failure_kind = if repairable_validation {
+                        "validation_failure"
+                    } else if review_rejection {
+                        "review_rejection"
+                    } else {
+                        "operational"
+                    }
+                    .into();
                     if escalation_attempt {
                         if current.checkpoint.ends_with("_approved")
                             || current.checkpoint.ends_with("_applying")
@@ -3157,7 +5188,7 @@ impl Engine {
                                 &project,
                                 next_revision,
                                 &format!(
-                                    "Repair proposal application did not complete: {latest_error}. Inspect the workspace and prepare a new proposal; Resume will not replay remaining edits."
+                                    "Repair proposal application did not complete: {durable_error}. Inspect the workspace and prepare a new proposal; Resume will not replay remaining edits."
                                 ),
                             )?;
                         } else {
@@ -3165,7 +5196,7 @@ impl Engine {
                                 current,
                                 next_revision,
                                 "failed",
-                                &latest_error,
+                                &durable_error,
                             )?;
                         }
                     }
@@ -3182,10 +5213,34 @@ impl Engine {
                         reserve_repair_attempt(current)?;
                         Ok(true)
                     } else {
+                        if current.auto_repair_lifecycle == "running" && !code_failure {
+                            set_auto_repair_lifecycle(
+                                current,
+                                "held",
+                                "Automatic repair stopped on an operational failure. Inspect the retained evidence and explicitly Resume when the condition is corrected.",
+                            )?;
+                        }
                         Ok(false)
                     }
                 })?;
                 if reserved_next {
+                    continue;
+                }
+                let automatic_continue = {
+                    let database = self
+                        .database
+                        .lock()
+                        .map_err(|_| anyhow!("state lock failed"))?;
+                    database.state.auto_ai_repair_enabled
+                        && (repairable_validation || review_rejection)
+                        && database
+                            .state
+                            .queue
+                            .iter()
+                            .find(|current| current.id == feature.id)
+                            .is_some_and(|current| current.auto_repair_lifecycle == "running")
+                };
+                if automatic_continue {
                     continue;
                 }
                 break;
@@ -3201,6 +5256,13 @@ impl Engine {
                     if current.checkpoint != "publication_attention" {
                         current.status = "failed".into();
                         current.message = message.chars().take(4000).collect();
+                    }
+                    if current.auto_repair_lifecycle == "running" {
+                        set_auto_repair_lifecycle(
+                            current,
+                            "held",
+                            "Automatic repair stopped because reviewed completion failed. Inspect the retained validation and review evidence, correct the operational condition, then explicitly Resume.",
+                        )?;
                     }
                     Ok(())
                 })?;
@@ -3539,11 +5601,21 @@ impl Engine {
             verify_approved_review_binding(current, &project)
         })();
         if let Err(error) = binding_result {
-            current.status = "failed".into();
-            current.review_status = "interrupted".into();
-            current.review_summary = "Generated files changed after ChatGPT Codex approval. Resume revalidates the current bytes and starts a fresh review.".into();
-            current.checkpoint = "review_binding_changed".into();
-            current.message = current.review_summary.clone();
+            if current.auto_repair_lifecycle == "running" {
+                quarantine_automatic_post_apply(
+                    current,
+                    completion_revision,
+                    "Generated files changed after ChatGPT Codex approval. Automatic repair stopped at an ambiguous post-review binding boundary; prepare a fresh owner-approved proposal after inspection.",
+                )?;
+                current.review_status = "interrupted".into();
+                current.review_summary = current.message.clone();
+            } else {
+                current.status = "failed".into();
+                current.review_status = "interrupted".into();
+                current.review_summary = "Generated files changed after ChatGPT Codex approval. Resume revalidates the current bytes and starts a fresh review.".into();
+                current.checkpoint = "review_binding_changed".into();
+                current.message = current.review_summary.clone();
+            }
             next.revision = completion_revision;
             let data = serde_json::to_string(&next)?;
             db.connection.execute("INSERT INTO developer_state(id,state) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET state=excluded.state", [data])?;
@@ -3566,6 +5638,11 @@ impl Engine {
                     "Repair proposal was applied once, validation passed, and ChatGPT Codex approved the exact files; the feature remains local",
                 )?;
             }
+            set_auto_repair_lifecycle(
+                current,
+                "inactive",
+                "Automatic repair completed after immutable validation and independent Codex approval",
+            )?;
             next.revision = completion_revision;
             let data = serde_json::to_string(&next)?;
             db.connection.execute("INSERT INTO developer_state(id,state) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET state=excluded.state", [data])?;
@@ -3599,6 +5676,7 @@ impl Engine {
                 before_sha256: file.before_sha256.clone(),
                 content_sha256: file.content_sha256.clone(),
                 content: file.content.clone(),
+                classification: file.classification.clone(),
             })
             .collect();
         let input = publication_input(current)?;
@@ -3608,6 +5686,11 @@ impl Engine {
         current.message =
             "The exact reviewed candidate is ready for automatic GitHub publication".into();
         current.repair_pending = false;
+        set_auto_repair_lifecycle(
+            current,
+            "inactive",
+            "Automatic repair completed after immutable validation and independent Codex approval; publication remains independently gated",
+        )?;
         next.revision = completion_revision;
         let data = serde_json::to_string(&next)?;
         db.connection.execute("INSERT INTO developer_state(id,state) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET state=excluded.state", [data])?;
@@ -3738,6 +5821,13 @@ impl Engine {
             feature.checkpoint = "publication_attention".into();
             feature.message = publication.message.clone();
             feature.repair_pending = false;
+            if feature.auto_repair_lifecycle == "running" {
+                set_auto_repair_lifecycle(
+                    feature,
+                    "held",
+                    "Automatic repair stopped because GitHub publication requires explicit reconciliation",
+                )?;
+            }
             Ok(())
         })
     }
@@ -3777,6 +5867,11 @@ impl Engine {
                 )?;
                 feature.checkpoint = "publication_merged".into();
             }
+            set_auto_repair_lifecycle(
+                feature,
+                "inactive",
+                "Automatic repair and independently gated publication completed",
+            )?;
             Ok(true)
         })?;
         if !completed {
@@ -4039,6 +6134,7 @@ impl Engine {
                     let path = entry["path"].as_str().context("Missing file path")?;
                     let content = entry["content"].as_str().context("Missing file content")?;
                     let full = checked_path(&project, path)?;
+                    validate_repair_file_admission(path, content)?;
                     if !seen.insert(path.to_lowercase()) {
                         bail!("Duplicate output file");
                     }
@@ -4104,7 +6200,7 @@ impl Engine {
                 edits
             }
         };
-        if !tool_session_applied && !checkpoint_has_applied_edits(&feature.checkpoint) {
+        if !tool_session_applied && !checkpoint_reuses_retained_edits(&feature.checkpoint) {
             self.feature(&feature.id, "running", None, "Applying saved file changes")?;
             let application_edits = if feature.escalation_pending {
                 validate_current_review_edits(&edits, &project)?;
@@ -4125,9 +6221,70 @@ impl Engine {
                     .clone()
                     .unwrap_or_else(|| edits.clone())
             };
+            if !feature.escalation_pending
+                && feature.repair_pending
+                && feature.auto_repair_lifecycle == "running"
+            {
+                self.change(|state| {
+                    let policy_enabled = state.auto_ai_repair_enabled;
+                    let current = state
+                        .queue
+                        .iter_mut()
+                        .find(|candidate| candidate.id == feature.id)
+                        .context("feature missing")?;
+                    begin_automatic_ordinary_repair_application(
+                        current,
+                        policy_enabled,
+                        feature.auto_repair_epoch,
+                        feature.repair_attempts,
+                    )
+                })?;
+            }
             for edit in &application_edits {
+                let effect_guard = self
+                    .effect_gate
+                    .lock()
+                    .map_err(|_| anyhow!("effect gate failed"))?;
                 if self.cancelled() {
                     bail!("Stopped");
+                }
+                if feature.auto_repair_lifecycle == "running" {
+                    let database = self
+                        .database
+                        .lock()
+                        .map_err(|_| anyhow!("state lock failed"))?;
+                    let current = database
+                        .state
+                        .queue
+                        .iter()
+                        .find(|candidate| candidate.id == feature.id)
+                        .context("feature missing")?;
+                    let proposal_matches = if feature.escalation_pending {
+                        let expected = feature
+                            .escalation_proposal
+                            .as_ref()
+                            .context("Automatic escalation proposal binding is missing")?;
+                        current
+                            .escalation_proposal
+                            .as_ref()
+                            .is_some_and(|proposal| {
+                                proposal.proposal_id == expected.proposal_id
+                                    && proposal.automatic_epoch == Some(feature.auto_repair_epoch)
+                                    && matches!(proposal.status.as_str(), "approved" | "applying")
+                            })
+                    } else {
+                        current.repair_pending == feature.repair_pending
+                            && current.repair_attempts == feature.repair_attempts
+                    };
+                    if !database.state.auto_ai_repair_enabled
+                        || current.auto_repair_lifecycle != "running"
+                        || current.auto_repair_epoch != feature.auto_repair_epoch
+                        || current.auto_repair_policy_revision
+                            != Some(database.state.auto_ai_repair_policy_revision)
+                        || !proposal_matches
+                    {
+                        bail!("Automatic repair effect binding changed before file application");
+                    }
                 }
                 apply_edit(&project, edit)?;
                 if feature.escalation_pending {
@@ -4137,34 +6294,10 @@ impl Engine {
                             .iter_mut()
                             .find(|candidate| candidate.id == feature.id)
                             .context("feature missing")?;
-                        current.edits = Some(merge_review_edits(
-                            current.edits.as_deref().unwrap_or_default(),
-                            std::slice::from_ref(edit),
-                        )?);
-                        let proposal = current
-                            .escalation_proposal
-                            .as_mut()
-                            .filter(|proposal| {
-                                proposal.status == "approved" || proposal.status == "applying"
-                            })
-                            .context("Approved repair proposal evidence is missing")?;
-                        if !proposal.files.iter().any(|file| file.path == edit.path) {
-                            bail!("Applied file is outside the approved repair proposal");
-                        }
-                        if !proposal.applied_paths.iter().any(|path| path == &edit.path) {
-                            proposal.applied_paths.push(edit.path.clone());
-                        }
-                        proposal.status = "applying".into();
-                        proposal.binding_revision = state.revision + 1;
-                        current.checkpoint = format!("escalation_{}_applying", proposal.attempt);
-                        current.message = format!(
-                            "Applied {} of {} explicitly approved repair files",
-                            proposal.applied_paths.len(),
-                            proposal.files.len()
-                        );
-                        Ok(())
+                        record_escalation_file_application(current, edit, state.revision + 1)
                     })?;
                 }
+                drop(effect_guard);
             }
             let applied_checkpoint = if feature.escalation_pending {
                 let attempt = feature
@@ -4197,6 +6330,9 @@ impl Engine {
                     }
                     proposal.status = "applied".into();
                     proposal.binding_revision = state.revision + 1;
+                }
+                if automatic_escalation_is_running(current) {
+                    start_auto_repair_step(current)?;
                 }
                 Ok(current.edits.clone().unwrap_or_default())
             })?;
@@ -4232,11 +6368,19 @@ impl Engine {
             developer_review_packet(&durable_feature, project, edits, validation_evidence_sha256)?;
         let packet_sha256 = packet.sha256()?;
         let pending = self.change(|state| {
+            let policy_enabled = state.auto_ai_repair_enabled;
             let current = state
                 .queue
                 .iter_mut()
                 .find(|candidate| candidate.id == feature.id)
                 .context("feature missing")?;
+            if feature.auto_repair_lifecycle == "running"
+                && (current.auto_repair_epoch != feature.auto_repair_epoch
+                    || current.auto_repair_lifecycle != "running"
+                    || !policy_enabled)
+            {
+                bail!("Automatic repair review was cancelled by a newer policy epoch");
+            }
             if let Some(pending) = &current.review_pending {
                 if pending.packet_sha256 != packet_sha256
                     || pending.validation_evidence_sha256 != validation_evidence_sha256
@@ -4248,6 +6392,16 @@ impl Engine {
                 current.review_summary =
                     "ChatGPT Codex is reviewing the exact validated generated files".into();
                 return Ok(pending.clone());
+            }
+            if current.review_history.len() >= REVIEW_HISTORY_LIMIT {
+                if current.auto_repair_lifecycle == "running" {
+                    set_auto_repair_lifecycle(
+                        current,
+                        "held",
+                        "Automatic repair stopped because the bounded independent-review history is full",
+                    )?;
+                }
+                bail!("Independent review history limit reached");
             }
             let attempt = current
                 .review_attempts
@@ -4265,6 +6419,9 @@ impl Engine {
                 "ChatGPT Codex is reviewing the exact validated generated files".into();
             current.checkpoint = format!("review_{attempt}_pending");
             current.message = current.review_summary.clone();
+            if current.auto_repair_lifecycle == "running" {
+                start_auto_repair_step(current)?;
+            }
             Ok(pending)
         })?;
 
@@ -4337,22 +6494,45 @@ impl Engine {
             Ok(_) | Err(_) => {
                 let summary = "Generated files changed while ChatGPT Codex was reviewing. Resume revalidates the current bytes and starts a fresh review.";
                 self.change(|state| {
+                    let binding_revision = state.revision + 1;
                     let current = state
                         .queue
                         .iter_mut()
                         .find(|candidate| candidate.id == feature.id)
                         .context("feature missing")?;
-                    interrupt_pending_review(current, summary)?;
+                    if current.auto_repair_lifecycle == "running" {
+                        quarantine_automatic_post_apply(current, binding_revision, summary)?;
+                    } else {
+                        interrupt_pending_review(current, summary)?;
+                    }
                     Ok(())
                 })?;
                 bail!(summary)
             }
         };
-        decision.validate_exact(&rebound)?;
+        if let Err(error) = decision.validate_exact(&rebound) {
+            let summary = "The Codex review receipt did not match the exact trusted packet. Automatic repair stopped with applied bytes retained; prepare a fresh owner-approved proposal after inspection.";
+            self.change(|state| {
+                let binding_revision = state.revision + 1;
+                let current = state
+                    .queue
+                    .iter_mut()
+                    .find(|candidate| candidate.id == feature.id)
+                    .context("feature missing")?;
+                if current.auto_repair_lifecycle == "running" {
+                    quarantine_automatic_post_apply(current, binding_revision, summary)?;
+                } else if current.review_pending.is_some() {
+                    interrupt_pending_review(current, summary)?;
+                }
+                Ok(())
+            })?;
+            return Err(error.context(summary));
+        }
         let decision_sha256 = decision.sha256()?;
         let approved = decision.decision == DeveloperReviewDecisionKind::Approved;
         let summary = review_summary(&decision);
         let decision_recorded = self.change(|state| {
+            let policy_enabled = state.auto_ai_repair_enabled;
             let current = state
                 .queue
                 .iter_mut()
@@ -4365,6 +6545,17 @@ impl Engine {
                 != Some(packet_sha256.as_str())
             {
                 bail!("Review binding changed before decision was recorded");
+            }
+            if feature.auto_repair_lifecycle == "running"
+                && (current.auto_repair_epoch != feature.auto_repair_epoch
+                    || current.auto_repair_lifecycle != "running"
+                    || !policy_enabled)
+            {
+                interrupt_pending_review(
+                    current,
+                    "A newer Auto AI repair policy epoch cancelled this review before its decision became durable.",
+                )?;
+                return Ok(false);
             }
             if self.cancelled() {
                 interrupt_pending_review(
@@ -4426,7 +6617,80 @@ impl Engine {
             use std::os::unix::process::CommandExt;
             command.as_std_mut().process_group(0);
         }
+        let limit_unadmitted_binding = if feature.checkpoint == "auto_repair_limit_revalidating" {
+            let current =
+                admitted_project_snapshot_with_cancellation(project, Some(&self.cancellation))?;
+            let expected = feature
+                .auto_repair_limit_unadmitted_sha256
+                .as_deref()
+                .context("Automatic repair limit has no unadmitted-data binding")?;
+            if current.unadmitted_sha256 != expected {
+                bail!("Unadmitted project data changed before limit-recovery validation");
+            }
+            let expected_volatile = feature
+                .auto_repair_limit_volatile_sha256
+                .as_deref()
+                .context("Automatic repair limit has no volatile-data binding")?;
+            if current.volatile_sha256 != expected_volatile {
+                bail!(
+                    "Build, cache, or dependency output changed before limit-recovery validation"
+                );
+            }
+            Some((current.unadmitted_sha256, current.volatile_sha256))
+        } else {
+            None
+        };
         configure_project_environment(&mut command, project)?;
+        let spawn_guard = self
+            .effect_gate
+            .lock()
+            .map_err(|_| anyhow!("effect gate failed"))?;
+        if self.cancelled() {
+            bail!("Validation was cancelled before process creation");
+        }
+        {
+            let database = self
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?;
+            if database.state.emergency_paused {
+                bail!("Emergency Pause blocks validation process creation");
+            }
+            if feature.auto_repair_lifecycle == "running" {
+                let current = database
+                    .state
+                    .queue
+                    .iter()
+                    .find(|candidate| candidate.id == feature.id)
+                    .context("feature missing")?;
+                if !database.state.auto_ai_repair_enabled
+                    || current.auto_repair_lifecycle != "running"
+                    || current.auto_repair_epoch != feature.auto_repair_epoch
+                    || current.auto_repair_policy_revision
+                        != Some(database.state.auto_ai_repair_policy_revision)
+                {
+                    bail!("Automatic repair validation binding changed before process creation");
+                }
+            } else if limit_unadmitted_binding.is_some() {
+                let current = database
+                    .state
+                    .queue
+                    .iter()
+                    .find(|candidate| candidate.id == feature.id)
+                    .context("feature missing")?;
+                if current.auto_repair_lifecycle != "limit_reached"
+                    || current.checkpoint != "auto_repair_limit_revalidating"
+                    || current.auto_repair_limit_project_baseline
+                        != feature.auto_repair_limit_project_baseline
+                    || current.auto_repair_limit_unadmitted_sha256
+                        != feature.auto_repair_limit_unadmitted_sha256
+                    || current.auto_repair_limit_volatile_sha256
+                        != feature.auto_repair_limit_volatile_sha256
+                {
+                    bail!("Limit-recovery snapshot binding changed before process creation");
+                }
+            }
+        }
         let mut child = command
             .current_dir(project)
             .stdin(Stdio::null())
@@ -4434,6 +6698,7 @@ impl Engine {
             .stderr(log)
             .kill_on_drop(true)
             .spawn()?;
+        drop(spawn_guard);
         let pid = child.id().context("Validation process has no ID")?;
         let started = std::time::Instant::now();
         loop {
@@ -4445,11 +6710,24 @@ impl Engine {
                 bail!("Validation stopped or exceeded its time/output limit");
             }
             if let Some(status) = child.try_wait()? {
+                let terminal_limit_binding = if limit_unadmitted_binding.is_some() {
+                    Some(self.refresh_limit_recovery_volatile_binding(feature, project)?)
+                } else {
+                    None
+                };
                 if status.success() {
                     let mut evidence = Sha256::new();
                     evidence.update(b"assemblywright.developer-validation.v1\0");
                     evidence.update(feature.id.as_bytes());
                     evidence.update(feature.validation.as_bytes());
+                    if let Some((unadmitted_sha256, _)) = &limit_unadmitted_binding {
+                        evidence.update(b"\0limit_unadmitted_sha256=");
+                        evidence.update(unadmitted_sha256.as_bytes());
+                    }
+                    if let Some(volatile_sha256) = &terminal_limit_binding {
+                        evidence.update(b"\0limit_volatile_sha256=");
+                        evidence.update(volatile_sha256.as_bytes());
+                    }
                     evidence.update(b"exit_status=0");
                     return Ok(format!("{:x}", evidence.finalize()));
                 }
@@ -4462,6 +6740,55 @@ impl Engine {
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
+    }
+
+    fn refresh_limit_recovery_volatile_binding(
+        &self,
+        feature: &Feature,
+        project: &Path,
+    ) -> Result<String> {
+        let snapshot =
+            admitted_project_snapshot_with_cancellation(project, Some(&self.cancellation))
+                .context("Limit-recovery validation left an unreviewable project state")?;
+        let mut post_validation = feature.clone();
+        post_validation.auto_repair_limit_volatile_sha256 = Some(snapshot.volatile_sha256.clone());
+        let reconciled = reconcile_limit_recovery_edits(&post_validation, &snapshot)?;
+        if hash(&serde_json::to_vec(&reconciled)?)
+            != hash(&serde_json::to_vec(
+                feature.edits.as_deref().unwrap_or_default(),
+            )?)
+        {
+            bail!(
+                "Validation changed admitted project data outside the owner-approved recovery set"
+            );
+        }
+        let volatile_sha256 = snapshot.volatile_sha256.clone();
+        self.change(|state| {
+            let current = state
+                .queue
+                .iter_mut()
+                .find(|candidate| candidate.id == feature.id)
+                .context("feature missing")?;
+            if current.auto_repair_lifecycle != "limit_reached"
+                || current.checkpoint != "auto_repair_limit_revalidating"
+                || current.auto_repair_limit_project_baseline
+                    != feature.auto_repair_limit_project_baseline
+                || current.auto_repair_limit_unadmitted_sha256
+                    != feature.auto_repair_limit_unadmitted_sha256
+                || current.auto_repair_limit_volatile_sha256
+                    != feature.auto_repair_limit_volatile_sha256
+                || hash(&serde_json::to_vec(
+                    current.edits.as_deref().unwrap_or_default(),
+                )?) != hash(&serde_json::to_vec(
+                    feature.edits.as_deref().unwrap_or_default(),
+                )?)
+            {
+                bail!("Limit-recovery binding changed after validation");
+            }
+            current.auto_repair_limit_volatile_sha256 = Some(volatile_sha256.clone());
+            Ok(())
+        })?;
+        Ok(volatile_sha256)
     }
 }
 
@@ -4552,16 +6879,110 @@ impl Drop for RepairStage {
 }
 
 fn copy_repair_stage(source: &Path, destination: &Path) -> Result<()> {
-    fn visit(
-        source_root: &Path,
-        source: &Path,
+    copy_repair_stage_with_directory_opened(source, destination, None)
+}
+
+fn copy_repair_stage_with_directory_opened(
+    source: &Path,
+    destination: &Path,
+    directory_opened: Option<&dyn Fn(&Path)>,
+) -> Result<()> {
+    #[cfg(unix)]
+    fn visit_unix(
+        source: &fs::File,
+        relative_dir: &Path,
         destination: &Path,
         file_count: &mut usize,
         byte_count: &mut u64,
+        directory_opened: Option<&dyn Fn(&Path)>,
         depth: usize,
     ) -> Result<()> {
         if depth > 20 {
             bail!("Repair staging tree exceeds its depth limit");
+        }
+        if let Some(hook) = directory_opened {
+            hook(relative_dir);
+        }
+        for entry in unix_recovery_entries(source)? {
+            let name = entry.name.to_string_lossy().into_owned();
+            if [
+                ".git",
+                ".venv",
+                "venv",
+                "target",
+                "node_modules",
+                "__pycache__",
+                "dist",
+            ]
+            .contains(&name.as_str())
+            {
+                continue;
+            }
+            let relative = relative_dir.join(&entry.name);
+            match unix_recovery_entry_kind(&entry) {
+                libc::S_IFLNK => continue,
+                libc::S_IFDIR => {
+                    let target = destination.join(&relative);
+                    fs::create_dir(&target)?;
+                    let (child, _) = open_unix_recovery_entry(source, &entry, true)?;
+                    visit_unix(
+                        &child,
+                        &relative,
+                        destination,
+                        file_count,
+                        byte_count,
+                        directory_opened,
+                        depth + 1,
+                    )?;
+                }
+                libc::S_IFREG => {
+                    *file_count = file_count
+                        .checked_add(1)
+                        .context("Repair staging count overflow")?;
+                    let (mut input, metadata) = open_unix_recovery_entry(source, &entry, false)?;
+                    *byte_count = byte_count
+                        .checked_add(metadata.len())
+                        .context("Repair staging size overflow")?;
+                    if *file_count > 10_000 || *byte_count > 256 * 1024 * 1024 {
+                        bail!("Repair staging project exceeds its bounded copy limit");
+                    }
+                    let target = destination.join(&relative);
+                    let mut output = fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(target)?;
+                    let copied = std::io::copy(&mut input, &mut output)?;
+                    let final_metadata = input.metadata()?;
+                    if copied != metadata.len()
+                        || final_metadata.len() != metadata.len()
+                        || !final_metadata.is_file()
+                    {
+                        bail!("Repair staging source changed while copying");
+                    }
+                    output.sync_all()?;
+                }
+                _ => continue,
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn visit(
+        source: &Path,
+        relative_dir: &Path,
+        destination: &Path,
+        file_count: &mut usize,
+        byte_count: &mut u64,
+        directory_opened: Option<&dyn Fn(&Path)>,
+        depth: usize,
+    ) -> Result<()> {
+        if depth > 20 {
+            bail!("Repair staging tree exceeds its depth limit");
+        }
+        let _directory_guard = hold_windows_recovery_directory(source)?;
+        if let Some(hook) = directory_opened {
+            hook(relative_dir);
         }
         let mut entries = fs::read_dir(source)?.collect::<std::io::Result<Vec<_>>>()?;
         entries.sort_by_key(|entry| entry.file_name());
@@ -4580,28 +7001,29 @@ fn copy_repair_stage(source: &Path, destination: &Path) -> Result<()> {
             {
                 continue;
             }
-            let file_type = entry.file_type()?;
-            if file_type.is_symlink() {
-                continue;
-            }
             let direct_metadata = fs::symlink_metadata(entry.path())?;
             if planning_metadata_is_reparse(&direct_metadata) {
                 bail!("Repair staging refuses a Windows reparse point");
             }
-            let metadata = entry.metadata()?;
-            let relative = entry.path().strip_prefix(source_root)?.to_path_buf();
+            let file_type = direct_metadata.file_type();
+            if file_type.is_symlink() {
+                continue;
+            }
+            let relative = relative_dir.join(entry.file_name());
             let target = destination.join(relative);
             if file_type.is_dir() {
-                fs::create_dir_all(&target)?;
+                fs::create_dir(&target)?;
                 visit(
-                    source_root,
                     &entry.path(),
+                    &relative_dir.join(entry.file_name()),
                     destination,
                     file_count,
                     byte_count,
+                    directory_opened,
                     depth + 1,
                 )?;
             } else if file_type.is_file() {
+                let (mut input, metadata) = open_windows_recovery_file(&entry.path())?;
                 *file_count = file_count
                     .checked_add(1)
                     .context("Repair staging count overflow")?;
@@ -4611,18 +7033,55 @@ fn copy_repair_stage(source: &Path, destination: &Path) -> Result<()> {
                 if *file_count > 10_000 || *byte_count > 256 * 1024 * 1024 {
                     bail!("Repair staging project exceeds its bounded copy limit");
                 }
-                fs::create_dir_all(
-                    target
-                        .parent()
-                        .context("Repair staging file has no parent")?,
-                )?;
-                fs::copy(entry.path(), target)?;
+                let mut output = fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(target)?;
+                let copied = std::io::copy(&mut input, &mut output)?;
+                let final_metadata = input.metadata()?;
+                if copied != metadata.len()
+                    || final_metadata.len() != metadata.len()
+                    || !final_metadata.is_file()
+                    || planning_metadata_is_reparse(&final_metadata)
+                {
+                    bail!("Repair staging source changed while copying");
+                }
+                output.sync_all()?;
             }
         }
         Ok(())
     }
 
-    visit(source, source, destination, &mut 0, &mut 0, 0)
+    #[cfg(unix)]
+    {
+        let source = hold_unix_recovery_root(source)?;
+        visit_unix(
+            &source,
+            Path::new(""),
+            destination,
+            &mut 0,
+            &mut 0,
+            directory_opened,
+            0,
+        )
+    }
+    #[cfg(windows)]
+    {
+        visit(
+            source,
+            Path::new(""),
+            destination,
+            &mut 0,
+            &mut 0,
+            directory_opened,
+            0,
+        )
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (source, destination, directory_opened);
+        bail!("Repair staging is unsupported on this host")
+    }
 }
 
 fn reserve_repair_attempt(feature: &mut Feature) -> Result<()> {
@@ -4654,6 +7113,7 @@ fn reserve_repair_attempt(feature: &mut Feature) -> Result<()> {
     feature.repair_history.push(evidence);
     feature.repair_attempts = attempt;
     feature.repair_pending = true;
+    feature.last_failure_kind.clear();
     feature.review_status = "pending".into();
     feature.review_summary = "Required ChatGPT Codex review has not started".into();
     feature.review_pending = None;
@@ -4662,6 +7122,32 @@ fn reserve_repair_attempt(feature: &mut Feature) -> Result<()> {
     feature.message =
         format!("Repair attempt {attempt} of {REPAIR_LIMIT} reserved by owner control");
     feature.edits = None;
+    if feature.auto_repair_lifecycle == "running" {
+        start_auto_repair_step(feature)?;
+    }
+    Ok(())
+}
+
+fn begin_automatic_ordinary_repair_application(
+    feature: &mut Feature,
+    policy_enabled: bool,
+    observed_epoch: u64,
+    observed_attempt: u32,
+) -> Result<()> {
+    if !policy_enabled
+        || feature.auto_repair_lifecycle != "running"
+        || feature.auto_repair_epoch != observed_epoch
+        || !feature.repair_pending
+        || feature.repair_attempts != observed_attempt
+    {
+        bail!("Automatic ordinary-repair application was cancelled by a newer policy epoch");
+    }
+    feature.checkpoint = format!("repair_{}_applying", feature.repair_attempts);
+    feature.message = format!(
+        "Automatic repair {} application started at policy epoch {}; interruption now requires quarantine",
+        feature.repair_attempts, feature.auto_repair_epoch
+    );
+    start_auto_repair_step(feature)?;
     Ok(())
 }
 
@@ -4732,6 +7218,114 @@ fn is_dependency_manifest(path: &str) -> bool {
         || name == "cargo.toml"
         || name == "cargo.lock"
         || name.starts_with("requirements") && name.ends_with(".txt")
+}
+
+fn is_project_configuration_path(path: &str) -> bool {
+    let normalized = path.replace('\\', "/").to_ascii_lowercase();
+    let name = normalized.rsplit('/').next().unwrap_or_default();
+    is_dependency_manifest(&normalized)
+        || matches!(
+            name,
+            "build.rs"
+                | "setup.py"
+                | "makefile"
+                | "cmakelists.txt"
+                | "meson.build"
+                | "build.gradle"
+                | "build.gradle.kts"
+                | "settings.gradle"
+                | "settings.gradle.kts"
+                | "gradle.properties"
+                | "tsconfig.json"
+                | "pytest.ini"
+                | "setup.cfg"
+                | "tox.ini"
+                | "vite.config.js"
+                | "vite.config.ts"
+        )
+        || name.starts_with("jest.config.")
+        || name.starts_with("webpack.config.")
+        || name.ends_with(".config.js")
+        || name.ends_with(".config.ts")
+        || name.ends_with(".config.mjs")
+        || name.ends_with(".config.cjs")
+        || matches!(
+            Path::new(name).extension().and_then(|value| value.to_str()),
+            Some("sh" | "bash" | "zsh" | "fish" | "ps1" | "bat" | "cmd")
+        )
+}
+
+fn is_known_ordinary_source_path(path: &str) -> bool {
+    let normalized = path.replace('\\', "/").to_ascii_lowercase();
+    let name = normalized.rsplit('/').next().unwrap_or_default();
+    matches!(
+        Path::new(name).extension().and_then(|value| value.to_str()),
+        Some(
+            "rs" | "swift"
+                | "py"
+                | "pyi"
+                | "js"
+                | "jsx"
+                | "mjs"
+                | "cjs"
+                | "ts"
+                | "tsx"
+                | "java"
+                | "kt"
+                | "kts"
+                | "go"
+                | "c"
+                | "h"
+                | "cc"
+                | "cpp"
+                | "cxx"
+                | "hh"
+                | "hpp"
+                | "cs"
+                | "rb"
+                | "php"
+                | "scala"
+                | "vue"
+                | "svelte"
+                | "html"
+                | "css"
+                | "scss"
+                | "sql"
+        )
+    )
+}
+
+fn trusted_review_file_classification(path: &str, validation_paths: &[String]) -> String {
+    let classification = if is_protected_repair_input(path, validation_paths) {
+        "test_or_validation_input"
+    } else if is_project_configuration_path(path) || !is_known_ordinary_source_path(path) {
+        "project_configuration"
+    } else {
+        "ordinary_source"
+    };
+    classification.into()
+}
+
+fn migrate_legacy_publication_classifications(
+    feature: &mut Feature,
+    project: &Path,
+    loaded_queue_version: u8,
+) -> Result<()> {
+    if loaded_queue_version >= 11
+        || !feature
+            .publication_candidate
+            .iter()
+            .any(|file| file.classification == "unclassified_legacy")
+    {
+        return Ok(());
+    }
+    let validation_paths = validation_path_references(project, &feature.validation)?;
+    for file in &mut feature.publication_candidate {
+        if file.classification == "unclassified_legacy" {
+            file.classification = trusted_review_file_classification(&file.path, &validation_paths);
+        }
+    }
+    Ok(())
 }
 
 fn interrupt_pending_review(feature: &mut Feature, summary: &str) -> Result<()> {
@@ -4901,7 +7495,14 @@ fn change_feature_reviewer(
             diagnosis_sha256: proposal.diagnosis_sha256.clone(),
             outcome: "cancelled".into(),
             proposal_sha256: None,
+            candidate_sha256: None,
             summary: proposal.summary.clone(),
+            source: proposal.source.clone(),
+            automatic_epoch: proposal.automatic_epoch,
+            policy_revision: proposal.policy_revision,
+            limit_snapshot: proposal.limit_snapshot,
+            project_state_sha256: proposal.project_state_sha256.clone(),
+            authorization_revision: None,
         });
     }
     feature
@@ -4925,7 +7526,9 @@ fn change_feature_reviewer(
 }
 
 fn review_checkpoint_requires_revalidation(checkpoint: &str) -> bool {
-    checkpoint.starts_with("review_") || checkpoint == "review_binding_changed"
+    checkpoint.starts_with("review_")
+        || checkpoint == "review_binding_changed"
+        || checkpoint == "auto_repair_limit_revalidating"
 }
 
 fn checkpoint_has_applied_edits(checkpoint: &str) -> bool {
@@ -4934,6 +7537,11 @@ fn checkpoint_has_applied_edits(checkpoint: &str) -> bool {
         || checkpoint.ends_with("_applied")
         || checkpoint.ends_with("_validated")
         || review_checkpoint_requires_revalidation(checkpoint)
+}
+
+fn checkpoint_reuses_retained_edits(checkpoint: &str) -> bool {
+    checkpoint_has_applied_edits(checkpoint)
+        || checkpoint.ends_with("_cancelled_before_authorization")
 }
 
 fn escalation_apply_is_quarantined(feature: &Feature) -> bool {
@@ -4993,6 +7601,88 @@ fn merge_review_edits(current: &[Edit], applied: &[Edit]) -> Result<Vec<Edit>> {
         bail!("Review requires 1 to 40 cumulative locally generated files");
     }
     Ok(merged)
+}
+
+fn reconcile_limit_recovery_edits(
+    feature: &Feature,
+    current: &AdmittedProjectSnapshot,
+) -> Result<Vec<Edit>> {
+    let expected_unadmitted = feature
+        .auto_repair_limit_unadmitted_sha256
+        .as_deref()
+        .context("Automatic repair limit has no unadmitted-data binding")?;
+    if expected_unadmitted != current.unadmitted_sha256 {
+        bail!("Sensitive or unadmitted project data changed after the AI repair limit was reached");
+    }
+    let expected_volatile = feature
+        .auto_repair_limit_volatile_sha256
+        .as_deref()
+        .context("Automatic repair limit has no volatile-data binding")?;
+    if expected_volatile != current.volatile_sha256 {
+        bail!("Build, cache, or dependency output changed after the AI repair limit was reached");
+    }
+    for path in feature.auto_repair_limit_project_baseline.keys() {
+        if !current.files.contains_key(path) {
+            bail!("An admitted project file was deleted after the AI repair limit was reached");
+        }
+    }
+    let owner_edits = current
+        .files
+        .iter()
+        .filter_map(|(path, (digest, content))| {
+            let before = feature.auto_repair_limit_project_baseline.get(path);
+            (before != Some(digest)).then(|| Edit {
+                path: path.clone(),
+                content: content.clone(),
+                before: before.cloned(),
+            })
+        })
+        .collect::<Vec<_>>();
+    let prior = feature.edits.as_deref().unwrap_or_default();
+    if owner_edits.is_empty() {
+        if prior.is_empty() {
+            bail!("Limit recovery has no generated or owner-corrected files to review");
+        }
+        return Ok(prior.to_vec());
+    }
+    merge_review_edits(prior, &owner_edits)
+}
+
+fn prepare_limit_recovery_edits(
+    feature: &mut Feature,
+    current: &AdmittedProjectSnapshot,
+) -> Result<Vec<Edit>> {
+    let missing_baseline = feature.auto_repair_limit_project_baseline.is_empty()
+        && feature.auto_repair_limit_unadmitted_sha256.is_none()
+        && feature.auto_repair_limit_volatile_sha256.is_none();
+    if !missing_baseline {
+        return reconcile_limit_recovery_edits(feature, current);
+    }
+    if current.files.is_empty() {
+        bail!("Limit recovery has no bounded current project files to review");
+    }
+    if current.files.len() > 40 {
+        bail!("Limit recovery cannot review more than 40 current project files");
+    }
+    feature.auto_repair_limit_project_baseline = current
+        .files
+        .iter()
+        .map(|(path, (digest, _))| (path.clone(), digest.clone()))
+        .collect();
+    feature.auto_repair_limit_unadmitted_sha256 = Some(current.unadmitted_sha256.clone());
+    feature.auto_repair_limit_volatile_sha256 = Some(current.volatile_sha256.clone());
+    Ok(current
+        .files
+        .iter()
+        .map(|(path, (digest, content))| Edit {
+            path: path.clone(),
+            content: content.clone(),
+            // The post-limit current bytes are the newly established recovery
+            // baseline. Recording their exact digest avoids claiming they are
+            // new while still forcing every admitted byte through Codex review.
+            before: Some(digest.clone()),
+        })
+        .collect())
 }
 
 fn tool_review_and_application_edits(
@@ -5214,6 +7904,7 @@ fn developer_review_packet(
     current_edits: &[Edit],
     validation_evidence_sha256: &str,
 ) -> Result<DeveloperReviewPacket> {
+    let validation_paths = validation_path_references(project, &feature.validation)?;
     let mut generated = std::collections::BTreeMap::<String, (Option<String>, String)>::new();
     for attempt in &feature.repair_history {
         for edit in &attempt.prior_edits {
@@ -5245,6 +7936,7 @@ fn developer_review_packet(
             bail!("Generated file {path} changed after the local model prepared it");
         }
         files.push(DeveloperReviewFile {
+            classification: trusted_review_file_classification(&path, &validation_paths),
             path,
             before_sha256,
             content_sha256,
@@ -5292,7 +7984,9 @@ fn verify_approved_review_binding(feature: &Feature, project: &Path) -> Result<(
     let current_sha256 = rebound.sha256()?;
     let legacy_match = feature.review_binding_version == 0
         && rebound.legacy_sha256_without_reasoning()? == approved.packet_sha256;
-    if current_sha256 != approved.packet_sha256 && !legacy_match {
+    let prior_classification_match = feature.review_binding_version == 1
+        && rebound.legacy_sha256_without_classification()? == approved.packet_sha256;
+    if current_sha256 != approved.packet_sha256 && !legacy_match && !prior_classification_match {
         bail!("Generated files changed after ChatGPT Codex approval; validation and review must run again");
     }
     Ok(())
@@ -5327,6 +8021,7 @@ fn publication_input(feature: &Feature) -> Result<PublicationInput> {
                 bail!("Frozen publication candidate content changed");
             }
             Ok(DeveloperReviewFile {
+                classification: file.classification.clone(),
                 path: file.path.clone(),
                 before_sha256: file.before_sha256.clone(),
                 content_sha256: file.content_sha256.clone(),
@@ -5354,7 +8049,9 @@ fn publication_input(feature: &Feature) -> Result<PublicationInput> {
     let exact = packet.sha256()? == approved.packet_sha256;
     let legacy = feature.review_binding_version == 0
         && packet.legacy_sha256_without_reasoning()? == approved.packet_sha256;
-    if !exact && !legacy {
+    let prior_classification = feature.review_binding_version == 1
+        && packet.legacy_sha256_without_classification()? == approved.packet_sha256;
+    if !exact && !legacy && !prior_classification {
         bail!("Frozen publication candidate does not match the exact approved review packet");
     }
     Ok(PublicationInput {
@@ -5436,12 +8133,308 @@ fn remove_feature(state: &mut Snapshot, id: &str) -> Result<bool> {
         _ => bail!("Feature has an invalid status and cannot be removed"),
     }
 }
+fn terminate_escalation_review_not_run(feature: &mut Feature, summary: &str) -> Result<()> {
+    let proposal = feature
+        .escalation_proposal
+        .as_ref()
+        .context("Reserved repair proposal evidence is missing")?;
+    if proposal.review_slot_terminal {
+        return Ok(());
+    }
+    if feature.review_history.len() >= REVIEW_HISTORY_LIMIT {
+        bail!("Reserved independent-review evidence slot is unavailable");
+    }
+    let attempt = proposal.attempt;
+    let packet_sha256 = repair_escalation_candidate_sha256(proposal)?;
+    let validation_evidence_sha256 = proposal.diagnosis_sha256.clone();
+    feature.review_history.push(ReviewAttemptEvidence {
+        attempt,
+        packet_sha256,
+        validation_evidence_sha256,
+        outcome: "not_run".into(),
+        decision_sha256: None,
+        blocking_findings: Vec::new(),
+        summary: summary.chars().take(1000).collect(),
+    });
+    feature
+        .escalation_proposal
+        .as_mut()
+        .context("Reserved repair proposal evidence is missing")?
+        .review_slot_terminal = true;
+    Ok(())
+}
+
+fn escalation_evidence_stage(outcome: &str) -> Option<&'static str> {
+    if matches!(
+        outcome,
+        "ready" | "no_op" | "duplicate" | "unavailable" | "cancelled" | "proposal_interrupted"
+    ) {
+        Some("proposal")
+    } else if matches!(
+        outcome,
+        "approved_to_apply"
+            | "policy_authorized"
+            | "authorization_not_run"
+            | "authorization_rejected"
+    ) {
+        Some("authorization")
+    } else if matches!(
+        outcome,
+        "succeeded" | "failed" | "interrupted" | "application_not_run"
+    ) {
+        Some("application")
+    } else {
+        None
+    }
+}
+
+fn terminalize_unapplied_escalation(
+    feature: &mut Feature,
+    proposal_outcome_if_missing: &str,
+    authorization_outcome: &str,
+    terminal_status: &str,
+    summary: &str,
+) -> Result<()> {
+    if escalation_evidence_stage(proposal_outcome_if_missing) != Some("proposal")
+        || !matches!(
+            authorization_outcome,
+            "authorization_not_run" | "authorization_rejected"
+        )
+    {
+        bail!("Invalid unapplied escalation terminal evidence classification");
+    }
+    let proposal = feature
+        .escalation_proposal
+        .as_ref()
+        .context("Reserved repair proposal evidence is missing")?
+        .clone();
+    let proposal_id = proposal.proposal_id.as_str();
+    let stages = ["proposal", "authorization", "application"];
+    let stage_counts = stages.map(|stage| {
+        feature
+            .escalation_history
+            .iter()
+            .filter(|evidence| {
+                evidence.proposal_id == proposal_id
+                    && escalation_evidence_stage(&evidence.outcome) == Some(stage)
+            })
+            .count()
+    });
+    for (stage, count) in stages.iter().zip(stage_counts) {
+        if count > 1 {
+            bail!("Repair escalation contains duplicate {stage} evidence");
+        }
+    }
+    let ready_sha256 = feature
+        .escalation_history
+        .iter()
+        .find(|evidence| evidence.proposal_id == proposal_id && evidence.outcome == "ready")
+        .and_then(|evidence| evidence.proposal_sha256.clone());
+    let candidate_sha256 = if proposal_outcome_if_missing == "proposal_interrupted" {
+        None
+    } else {
+        Some(repair_escalation_candidate_sha256(&proposal)?)
+    };
+    for (index, (_stage, outcome, proposal_sha256)) in [
+        ("proposal", proposal_outcome_if_missing, None),
+        ("authorization", authorization_outcome, ready_sha256.clone()),
+        ("application", "application_not_run", ready_sha256),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if stage_counts[index] != 0 {
+            continue;
+        }
+        feature.escalation_history.push(RepairEscalationEvidence {
+            proposal_id: proposal.proposal_id.clone(),
+            attempt: proposal.attempt,
+            model_target: proposal.model_target.clone(),
+            model: proposal.model.clone(),
+            chat_id: proposal.chat_id.clone(),
+            chat_request_id: proposal.chat_request_id.clone(),
+            diagnosis_sha256: proposal.diagnosis_sha256.clone(),
+            outcome: outcome.into(),
+            proposal_sha256,
+            candidate_sha256: candidate_sha256.clone(),
+            summary: summary.chars().take(1000).collect(),
+            source: proposal.source.clone(),
+            automatic_epoch: proposal.automatic_epoch,
+            policy_revision: proposal.policy_revision,
+            limit_snapshot: proposal.limit_snapshot,
+            project_state_sha256: proposal.project_state_sha256.clone(),
+            authorization_revision: None,
+        });
+    }
+    terminate_escalation_review_not_run(feature, summary)?;
+    let current = feature
+        .escalation_proposal
+        .as_mut()
+        .context("Reserved repair proposal evidence is missing")?;
+    current.status = terminal_status.into();
+    current.error = (authorization_outcome == "authorization_rejected")
+        .then(|| summary.chars().take(1000).collect());
+    feature.escalation_pending = false;
+    Ok(())
+}
+
+fn recover_interrupted_escalation_preparation(
+    feature: &mut Feature,
+    recovery_revision: u64,
+) -> Result<bool> {
+    let Some(proposal) = feature
+        .escalation_proposal
+        .as_mut()
+        .filter(|proposal| proposal.status == "preparing")
+    else {
+        return Ok(false);
+    };
+    let automatic = proposal.source == "automatic_failure";
+    proposal.summary =
+        "Runner restarted before the selected local AI finished the repair proposal; prepare a new proposal"
+            .into();
+    proposal.error = None;
+    proposal.binding_revision = recovery_revision;
+    let summary = "Independent review was not run because proposal generation was interrupted by runner restart; authorization and application were also not run";
+    terminalize_unapplied_escalation(
+        feature,
+        "proposal_interrupted",
+        "authorization_not_run",
+        "interrupted",
+        summary,
+    )?;
+    if automatic {
+        set_auto_repair_lifecycle(
+            feature,
+            "running",
+            "The interrupted proposal generation was recorded; the next attempt may be reserved from the same feature budget",
+        )?;
+    }
+    Ok(true)
+}
+
+fn retire_ready_automatic_proposal_for_cancellation(
+    feature: &mut Feature,
+    summary: &str,
+) -> Result<bool> {
+    let Some(attempt) = feature.escalation_proposal.as_ref().and_then(|proposal| {
+        (proposal.source == "automatic_failure" && proposal.status == "ready")
+            .then_some(proposal.attempt)
+    }) else {
+        return Ok(false);
+    };
+    terminalize_unapplied_escalation(
+        feature,
+        "ready",
+        "authorization_not_run",
+        "cancelled",
+        summary,
+    )?;
+    feature.status = "failed".into();
+    feature.checkpoint = format!("escalation_{attempt}_cancelled_before_authorization");
+    feature.message = summary.chars().take(4000).collect();
+    Ok(true)
+}
+
+fn pause_preapply_automatic_proposal_for_disable(
+    feature: &mut Feature,
+    summary: &str,
+) -> Result<bool> {
+    let Some((attempt, proposal_outcome)) =
+        feature.escalation_proposal.as_ref().and_then(|proposal| {
+            (proposal.source == "automatic_failure"
+                && matches!(proposal.status.as_str(), "preparing" | "ready"))
+            .then(|| {
+                (
+                    proposal.attempt,
+                    if proposal.status == "ready" {
+                        "ready"
+                    } else {
+                        "cancelled"
+                    },
+                )
+            })
+        })
+    else {
+        return Ok(false);
+    };
+    terminalize_unapplied_escalation(
+        feature,
+        proposal_outcome,
+        "authorization_not_run",
+        "cancelled",
+        summary,
+    )?;
+    feature.status = "paused".into();
+    feature.checkpoint = format!("escalation_{attempt}_cancelled_before_authorization");
+    feature.message = summary.chars().take(4000).collect();
+    Ok(true)
+}
+
+fn automatic_escalation_is_running(feature: &Feature) -> bool {
+    feature.auto_repair_lifecycle == "running"
+        && feature
+            .escalation_proposal
+            .as_ref()
+            .is_some_and(|proposal| proposal.source == "automatic_failure")
+}
+
+fn record_escalation_file_application(
+    feature: &mut Feature,
+    edit: &Edit,
+    binding_revision: u64,
+) -> Result<()> {
+    feature.edits = Some(merge_review_edits(
+        feature.edits.as_deref().unwrap_or_default(),
+        std::slice::from_ref(edit),
+    )?);
+    let automatic_application = automatic_escalation_is_running(feature);
+    let proposal = feature
+        .escalation_proposal
+        .as_mut()
+        .filter(|proposal| proposal.status == "approved" || proposal.status == "applying")
+        .context("Approved repair proposal evidence is missing")?;
+    let application_started = proposal.status == "approved";
+    if !proposal.files.iter().any(|file| file.path == edit.path) {
+        bail!("Applied file is outside the approved repair proposal");
+    }
+    if !proposal.applied_paths.iter().any(|path| path == &edit.path) {
+        proposal.applied_paths.push(edit.path.clone());
+    }
+    proposal.status = "applying".into();
+    proposal.binding_revision = binding_revision;
+    feature.checkpoint = format!("escalation_{}_applying", proposal.attempt);
+    feature.message = format!(
+        "Applied {} of {} explicitly approved repair files",
+        proposal.applied_paths.len(),
+        proposal.files.len()
+    );
+    if application_started && automatic_application {
+        start_auto_repair_step(feature)?;
+    }
+    Ok(())
+}
+
 fn finish_escalation_application(
     feature: &mut Feature,
     binding_revision: u64,
     outcome: &str,
     summary: &str,
 ) -> Result<()> {
+    if matches!(outcome, "failed" | "interrupted") {
+        if feature.checkpoint.starts_with("review_") {
+            feature
+                .escalation_proposal
+                .as_mut()
+                .context("Applied repair proposal evidence is missing")?
+                .review_slot_terminal = true;
+        } else {
+            terminate_escalation_review_not_run(
+                feature,
+                "Independent review was not run because proposal application or validation did not complete",
+            )?;
+        }
+    }
     let current_proposal_id = feature
         .escalation_proposal
         .as_ref()
@@ -5454,7 +8447,10 @@ fn finish_escalation_application(
         .rev()
         .find(|evidence| {
             evidence.proposal_id == current_proposal_id
-                && evidence.outcome == "approved_to_apply"
+                && matches!(
+                    evidence.outcome.as_str(),
+                    "approved_to_apply" | "policy_authorized"
+                )
                 && evidence.proposal_sha256.is_some()
         })
         .and_then(|evidence| evidence.proposal_sha256.clone())
@@ -5480,7 +8476,14 @@ fn finish_escalation_application(
         diagnosis_sha256: proposal.diagnosis_sha256.clone(),
         outcome: outcome.into(),
         proposal_sha256: Some(approved_proposal_sha256),
+        candidate_sha256: Some(repair_escalation_candidate_sha256(proposal)?),
         summary: summary.chars().take(1000).collect(),
+        source: proposal.source.clone(),
+        automatic_epoch: proposal.automatic_epoch,
+        policy_revision: proposal.policy_revision,
+        limit_snapshot: proposal.limit_snapshot,
+        project_state_sha256: proposal.project_state_sha256.clone(),
+        authorization_revision: None,
     };
     feature.escalation_pending = false;
     feature.escalation_history.push(evidence);
@@ -5506,7 +8509,94 @@ fn quarantine_escalation_application(
     feature.review_pending = None;
     feature.review_status = "pending".into();
     feature.review_summary = "Required ChatGPT Codex review has not started".into();
+    if feature.auto_repair_lifecycle == "running" {
+        set_auto_repair_lifecycle(
+            feature,
+            "quarantined",
+            "Automatic repair was interrupted across an uncertain application boundary. Inspect the workspace; automatic replay is blocked.",
+        )?;
+    }
     Ok(())
+}
+
+fn automatic_post_apply_is_ambiguous(feature: &Feature) -> bool {
+    let ordinary_application_started = feature
+        .checkpoint
+        .strip_prefix("repair_")
+        .and_then(|value| value.split_once('_'))
+        .is_some_and(|(attempt, stage)| {
+            !attempt.is_empty()
+                && attempt.bytes().all(|byte| byte.is_ascii_digit())
+                && stage == "applying"
+        });
+    (checkpoint_has_applied_edits(&feature.checkpoint) || ordinary_application_started)
+        && !matches!(feature.status.as_str(), "succeeded" | "removed")
+}
+
+fn automatic_ordinary_pre_effect_checkpoint(feature: &Feature) -> bool {
+    feature.repair_pending
+        && feature
+            .checkpoint
+            .strip_prefix("repair_")
+            .and_then(|value| value.split_once('_'))
+            .is_some_and(|(attempt, stage)| {
+                attempt.parse::<u32>().ok() == Some(feature.repair_attempts)
+                    && matches!(stage, "reserved" | "prepared")
+            })
+}
+
+fn persist_automatic_cancellation_intent(
+    feature: &mut Feature,
+    work_active: bool,
+    inactive_reason: &str,
+    quarantine_reason: &str,
+) -> Result<()> {
+    feature.auto_repair_epoch = feature
+        .auto_repair_epoch
+        .checked_add(1)
+        .context("Automatic repair epoch overflow")?;
+    if work_active && automatic_ordinary_pre_effect_checkpoint(feature) {
+        feature.status = "paused".into();
+        set_auto_repair_lifecycle(
+            feature,
+            "held",
+            "Automatic repair stopped before its ordinary repair effect boundary. Resume or re-enable may continue the exact reserved or prepared attempt under a fresh policy epoch.",
+        )
+    } else if work_active && automatic_post_apply_is_ambiguous(feature) {
+        set_auto_repair_lifecycle(feature, "quarantined", quarantine_reason)
+    } else {
+        set_auto_repair_lifecycle(feature, "inactive", inactive_reason)
+    }
+}
+
+fn quarantine_automatic_post_apply(
+    feature: &mut Feature,
+    binding_revision: u64,
+    summary: &str,
+) -> Result<()> {
+    if let Some(pending) = feature.review_pending.as_ref() {
+        let pending_attempt = pending.attempt;
+        interrupt_pending_review(feature, summary)?;
+        if feature.checkpoint != format!("review_{pending_attempt}_interrupted") {
+            bail!("Interrupted review evidence was not durably terminalized");
+        }
+    }
+    if feature.escalation_pending {
+        finish_escalation_application(feature, binding_revision, "interrupted", summary)?;
+    }
+    feature.status = "failed".into();
+    feature.checkpoint = "auto_repair_effects_quarantined".into();
+    feature.message = summary.chars().take(4000).collect();
+    feature.review_pending = None;
+    if feature.review_status == "pending" || feature.review_status == "reviewing" {
+        feature.review_status = "interrupted".into();
+        feature.review_summary = "Automatic repair stopped after files were applied; ordinary Resume is blocked because validation or review completion is ambiguous".into();
+    }
+    set_auto_repair_lifecycle(
+        feature,
+        "quarantined",
+        "Automatic repair stopped after project files were applied. Inspect the retained workspace and evidence; ordinary Resume cannot replay this ambiguous boundary.",
+    )
 }
 
 fn reconcile_interrupted_escalation_edits(feature: &mut Feature, project: &Path) -> Result<()> {
@@ -5725,6 +8815,24 @@ fn recover_v7_cumulative_evidence(
 fn hash(data: &[u8]) -> String {
     format!("{:x}", Sha256::digest(data))
 }
+
+fn automatic_failure_prompt_json(
+    proposal: &RepairEscalationProposal,
+    failure_summary: &str,
+) -> Result<String> {
+    if proposal.source != "automatic_failure" {
+        bail!("Only automatic repair proposals may bind automatic failure evidence");
+    }
+    let failure_summary = bounded_code_failure_summary(failure_summary)?;
+    if hash(failure_summary.as_bytes()) != proposal.diagnosis_sha256 {
+        bail!("Automatic repair failure evidence digest changed before inference");
+    }
+    Ok(serde_json::to_string(&json!({
+        "sha256": proposal.diagnosis_sha256,
+        "text": failure_summary,
+    }))?)
+}
+
 fn validate_sha256(value: &str, label: &str) -> Result<()> {
     if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         bail!("Invalid {label}");
@@ -5749,13 +8857,67 @@ fn validate_repair_handoff(
     Ok(())
 }
 fn repair_escalation_proposal_sha256(proposal: &RepairEscalationProposal) -> Result<String> {
+    if proposal.source == "manual_chat" {
+        #[derive(Serialize)]
+        struct LegacyManualProposalDigest<'a> {
+            proposal_id: &'a str,
+            attempt: u32,
+            feature_id: &'a str,
+            feature_checkpoint: &'a str,
+            binding_revision: u64,
+            model_target: &'a str,
+            model: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            chat_id: &'a Option<String>,
+            chat_request_id: &'a str,
+            chat_model_target: &'a str,
+            chat_model: &'a str,
+            diagnosis: &'a str,
+            diagnosis_sha256: &'a str,
+            status: &'a str,
+            summary: &'a str,
+            error: Option<&'a str>,
+            files: &'a [RepairEscalationFile],
+            protected_inputs: &'a std::collections::BTreeMap<String, String>,
+            applied_paths: &'a [String],
+            apply_request_id: Option<&'a str>,
+        }
+        return Ok(hash(&serde_json::to_vec(&LegacyManualProposalDigest {
+            proposal_id: &proposal.proposal_id,
+            attempt: proposal.attempt,
+            feature_id: &proposal.feature_id,
+            feature_checkpoint: &proposal.feature_checkpoint,
+            binding_revision: 0,
+            model_target: &proposal.model_target,
+            model: &proposal.model,
+            chat_id: &proposal.chat_id,
+            chat_request_id: &proposal.chat_request_id,
+            chat_model_target: &proposal.chat_model_target,
+            chat_model: &proposal.chat_model,
+            diagnosis: &proposal.diagnosis,
+            diagnosis_sha256: &proposal.diagnosis_sha256,
+            status: "",
+            summary: &proposal.summary,
+            error: None,
+            files: &proposal.files,
+            protected_inputs: &proposal.protected_inputs,
+            applied_paths: &[],
+            apply_request_id: None,
+        })?));
+    }
     let mut canonical = proposal.clone();
     canonical.binding_revision = 0;
     canonical.status.clear();
     canonical.error = None;
     canonical.applied_paths.clear();
     canonical.apply_request_id = None;
+    canonical.review_slot_terminal = false;
     Ok(hash(&serde_json::to_vec(&canonical)?))
+}
+fn repair_escalation_candidate_sha256(proposal: &RepairEscalationProposal) -> Result<String> {
+    Ok(hash(&serde_json::to_vec(&json!({
+        "files": proposal.files,
+    }))?))
 }
 fn model_target_name(id: &str) -> &str {
     match id {
@@ -5824,6 +8986,32 @@ fn configured_model_targets(args: &Args) -> Result<Vec<ModelTarget>> {
 fn same_loopback_listener(left: &reqwest::Url, right: &reqwest::Url) -> bool {
     left.port_or_known_default() == right.port_or_known_default()
 }
+fn repair_sensitive_path(path: &str) -> bool {
+    path.replace('\\', "/").split('/').any(|component| {
+        let lower = component.to_ascii_lowercase();
+        matches!(
+            lower.as_str(),
+            ".env"
+                | "credentials"
+                | "credentials.toml"
+                | ".git-credentials"
+                | ".netrc"
+                | "id_rsa"
+                | "id_ed25519"
+        ) || lower.contains("credential")
+            || lower.contains("secret")
+            || lower.contains("password")
+            || lower.ends_with(".pem")
+            || lower.ends_with(".key")
+            || lower.ends_with(".p12")
+    })
+}
+fn validate_repair_file_admission(path: &str, content: &str) -> Result<()> {
+    if repair_sensitive_path(path) {
+        bail!("Repair file targets a credential-like or sensitive path");
+    }
+    validate_cloud_text(content).context("Repair file contains secret-shaped text")
+}
 fn checked_path(root: &Path, relative: &str) -> Result<PathBuf> {
     if relative.is_empty()
         || relative.contains('\\')
@@ -5859,25 +9047,261 @@ fn checked_path(root: &Path, relative: &str) -> Result<PathBuf> {
     Ok(full)
 }
 fn apply_edit(root: &Path, edit: &Edit) -> Result<()> {
-    let path = checked_path(root, &edit.path)?;
-    let current = if path.exists() {
-        Some(hash(&fs::read(&path)?))
-    } else {
-        None
-    };
-    if current == Some(hash(edit.content.as_bytes())) {
+    apply_edit_with_parent_opened(root, edit, None)
+}
+
+fn apply_edit_with_parent_opened(
+    root: &Path,
+    edit: &Edit,
+    parent_opened: Option<&dyn Fn(&Path)>,
+) -> Result<()> {
+    validate_repair_file_admission(&edit.path, &edit.content)?;
+    if edit.path.is_empty()
+        || edit.path.contains('\\')
+        || edit.path.contains(':')
+        || edit.path.len() > 240
+    {
+        bail!("Invalid relative path");
+    }
+    let relative = Path::new(&edit.path);
+    let mut components = Vec::new();
+    for component in relative.components() {
+        let Component::Normal(name) = component else {
+            bail!("File path escapes project");
+        };
+        let display = name.to_string_lossy();
+        if display.starts_with('.') || ["node_modules", "target"].contains(&display.as_ref()) {
+            bail!("Generated file targets reserved directory");
+        }
+        components.push(name.to_os_string());
+    }
+    let (leaf, parents) = components
+        .split_last()
+        .context("Repair path has no file leaf")?;
+
+    #[cfg(unix)]
+    {
+        use std::ffi::CString;
+        use std::io::{Seek as _, Write as _};
+        use std::os::fd::{AsRawFd as _, FromRawFd as _};
+        use std::os::unix::ffi::OsStrExt as _;
+        use std::os::unix::fs::MetadataExt as _;
+
+        fn open_directory_at(
+            parent: &fs::File,
+            name: &std::ffi::OsStr,
+            create: bool,
+        ) -> Result<fs::File> {
+            use std::ffi::CString;
+            use std::os::fd::{AsRawFd as _, FromRawFd as _};
+            use std::os::unix::ffi::OsStrExt as _;
+
+            let name = CString::new(name.as_bytes()).context("Repair path contains NUL")?;
+            let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+            let mut descriptor = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags) };
+            if descriptor < 0
+                && create
+                && std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOENT)
+            {
+                if unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o777) } != 0 {
+                    return Err(std::io::Error::last_os_error().into());
+                }
+                descriptor = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags) };
+            }
+            if descriptor < 0 {
+                return Err(std::io::Error::last_os_error().into());
+            }
+            let directory = unsafe { fs::File::from_raw_fd(descriptor) };
+            if !directory.metadata()?.is_dir() {
+                bail!("Repair path component is not a direct directory");
+            }
+            Ok(directory)
+        }
+
+        fn reopen_parent(root: &fs::File, parents: &[std::ffi::OsString]) -> Result<fs::File> {
+            let mut directory = root.try_clone()?;
+            for component in parents {
+                directory = open_directory_at(&directory, component, false)?;
+            }
+            Ok(directory)
+        }
+
+        fn same_unix_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+            left.dev() == right.dev() && left.ino() == right.ino()
+        }
+
+        let root_handle = hold_unix_recovery_root(root)?;
+        let mut parent = root_handle.try_clone()?;
+        for component in parents {
+            parent = open_directory_at(&parent, component, true)?;
+        }
+        if let Some(hook) = parent_opened {
+            hook(relative.parent().unwrap_or_else(|| Path::new("")));
+        }
+        let rebound_parent = reopen_parent(&root_handle, parents)?;
+        if !same_unix_identity(&parent.metadata()?, &rebound_parent.metadata()?) {
+            bail!("Repair parent changed before file application");
+        }
+
+        let leaf_c = CString::new(leaf.as_bytes()).context("Repair path contains NUL")?;
+        let flags = libc::O_RDWR | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK;
+        let mut descriptor = unsafe { libc::openat(parent.as_raw_fd(), leaf_c.as_ptr(), flags) };
+        let mut created = false;
+        if descriptor < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOENT) {
+            if edit.before.is_some() {
+                bail!(
+                    "{} changed after planning; preserve it and reconcile manually",
+                    edit.path
+                );
+            }
+            descriptor = unsafe {
+                libc::openat(
+                    parent.as_raw_fd(),
+                    leaf_c.as_ptr(),
+                    flags | libc::O_CREAT | libc::O_EXCL,
+                    0o666,
+                )
+            };
+            created = true;
+        }
+        if descriptor < 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        let mut file = unsafe { fs::File::from_raw_fd(descriptor) };
+        let metadata = file.metadata()?;
+        if !metadata.is_file() || metadata.nlink() != 1 {
+            bail!("Repair target is not a direct single-link file");
+        }
+        let mut current_bytes = Vec::new();
+        file.read_to_end(&mut current_bytes)?;
+        let current = if created {
+            None
+        } else {
+            Some(hash(&current_bytes))
+        };
+        if current == Some(hash(edit.content.as_bytes())) {
+            return Ok(());
+        }
+        if current != edit.before {
+            bail!(
+                "{} changed after planning; preserve it and reconcile manually",
+                edit.path
+            );
+        }
+        let rebound_parent = reopen_parent(&root_handle, parents)?;
+        if !same_unix_identity(&parent.metadata()?, &rebound_parent.metadata()?) {
+            bail!("Repair parent changed before file write");
+        }
+        let mut leaf_stat = std::mem::MaybeUninit::<libc::stat>::zeroed();
+        if unsafe {
+            libc::fstatat(
+                parent.as_raw_fd(),
+                leaf_c.as_ptr(),
+                leaf_stat.as_mut_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        } != 0
+        {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        let leaf_stat = unsafe { leaf_stat.assume_init() };
+        if metadata.dev() != leaf_stat.st_dev as u64 || metadata.ino() != leaf_stat.st_ino {
+            bail!("Repair target changed before file write");
+        }
+        file.seek(std::io::SeekFrom::Start(0))?;
+        file.set_len(0)?;
+        file.write_all(edit.content.as_bytes())?;
+        file.sync_all()?;
+        let rebound_parent = reopen_parent(&root_handle, parents)?;
+        if !same_unix_identity(&parent.metadata()?, &rebound_parent.metadata()?) {
+            bail!("Repair parent changed during file write");
+        }
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    {
+        use std::io::{Seek as _, Write as _};
+        use std::os::windows::fs::OpenOptionsExt as _;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE,
+        };
+
+        let mut guards = vec![hold_windows_recovery_directory(root)?];
+        let mut parent_path = root.to_path_buf();
+        for component in parents {
+            parent_path.push(component);
+            match fs::symlink_metadata(&parent_path) {
+                Ok(metadata) => {
+                    if planning_metadata_is_reparse(&metadata) || !metadata.is_dir() {
+                        bail!("Repair path component is not a direct directory");
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    fs::create_dir(&parent_path)?;
+                }
+                Err(error) => return Err(error.into()),
+            }
+            guards.push(hold_windows_recovery_directory(&parent_path)?);
+        }
+        if let Some(hook) = parent_opened {
+            hook(relative.parent().unwrap_or_else(|| Path::new("")));
+        }
+        let path = parent_path.join(leaf);
+        let mut options = fs::OpenOptions::new();
+        options
+            .read(true)
+            .write(true)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
+        let (mut file, created) = match options.open(&path) {
+            Ok(file) => (file, false),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if edit.before.is_some() {
+                    bail!(
+                        "{} changed after planning; preserve it and reconcile manually",
+                        edit.path
+                    );
+                }
+                options.create_new(true);
+                (options.open(&path)?, true)
+            }
+            Err(error) => return Err(error.into()),
+        };
+        let metadata = file.metadata()?;
+        if !metadata.is_file() || planning_metadata_is_reparse(&metadata) {
+            bail!("Repair target is not a direct file");
+        }
+        ensure_windows_recovery_file_single_link(&file)?;
+        let mut current_bytes = Vec::new();
+        file.read_to_end(&mut current_bytes)?;
+        let current = if created {
+            None
+        } else {
+            Some(hash(&current_bytes))
+        };
+        if current == Some(hash(edit.content.as_bytes())) {
+            return Ok(());
+        }
+        if current != edit.before {
+            bail!(
+                "{} changed after planning; preserve it and reconcile manually",
+                edit.path
+            );
+        }
+        file.seek(std::io::SeekFrom::Start(0))?;
+        file.set_len(0)?;
+        file.write_all(edit.content.as_bytes())?;
+        file.sync_all()?;
+        let _ = guards;
         return Ok(());
     }
-    if current != edit.before {
-        bail!(
-            "{} changed after planning; preserve it and reconcile manually",
-            edit.path
-        );
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (root, parent_opened, leaf, parents);
+        bail!("Repair file application is unsupported on this host")
     }
-    fs::create_dir_all(path.parent().context("No parent directory")?)?;
-    fs::write(&path, edit.content.as_bytes())?;
-    fs::OpenOptions::new().write(true).open(&path)?.sync_all()?;
-    Ok(())
 }
 fn validation_path_references(root: &Path, validation: &str) -> Result<Vec<String>> {
     let mut tokens = Vec::new();
@@ -5986,6 +9410,9 @@ fn is_protected_repair_input(relative: &str, validation_paths: &[String]) -> boo
         return true;
     }
     let filename = parts.last().copied().unwrap_or_default();
+    if filename == "conftest.py" || filename.starts_with("test_helpers.") {
+        return true;
+    }
     let stem = filename.rsplit_once('.').map_or(filename, |(stem, _)| stem);
     if matches!(stem, "test" | "tests" | "spec" | "specs")
         || stem.starts_with("test_")
@@ -6031,6 +9458,40 @@ fn repair_protected_inputs(
     root: &Path,
     validation_paths: &[String],
 ) -> Result<std::collections::HashMap<String, String>> {
+    repair_protected_inputs_with_directory_opened(root, validation_paths, None)
+}
+
+const PROTECTED_REPAIR_INPUT_BYTE_LIMIT: usize = 64 * 1024 * 1024;
+
+fn reserve_protected_input_bytes(bytes_seen: &mut usize, file_length: u64) -> Result<usize> {
+    let length = usize::try_from(file_length)
+        .context("Protected repair input is too large for this host")?;
+    if length > PROTECTED_REPAIR_INPUT_BYTE_LIMIT {
+        bail!("Protected repair input exceeds 64 MiB");
+    }
+    let next = bytes_seen
+        .checked_add(length)
+        .context("Protected repair input size overflow")?;
+    if next > PROTECTED_REPAIR_INPUT_BYTE_LIMIT {
+        bail!("Protected repair inputs exceed 64 MiB");
+    }
+    *bytes_seen = next;
+    Ok(length)
+}
+
+fn repair_protected_inputs_with_directory_opened(
+    root: &Path,
+    validation_paths: &[String],
+    directory_opened: Option<&dyn Fn(&Path)>,
+) -> Result<std::collections::HashMap<String, String>> {
+    // Shared bounded scan state: aggregate byte/file caps plus the admitted
+    // protected-input digests.
+    struct ProtectedInputScan {
+        out: std::collections::HashMap<String, String>,
+        bytes_seen: usize,
+        files_seen: usize,
+    }
+
     fn intersects_validation_path(relative: &str, validation_paths: &[String]) -> bool {
         let normalized = relative.replace('\\', "/").to_lowercase();
         validation_paths.iter().any(|protected| {
@@ -6039,31 +9500,105 @@ fn repair_protected_inputs(
                 || protected.starts_with(&format!("{normalized}/"))
         })
     }
-    fn visit(
-        root: &Path,
-        dir: &Path,
+
+    #[cfg(unix)]
+    fn visit_unix(
+        directory: &fs::File,
+        relative_dir: &Path,
         validation_paths: &[String],
-        out: &mut std::collections::HashMap<String, String>,
-        bytes_seen: &mut usize,
-        files_seen: &mut usize,
+        scan: &mut ProtectedInputScan,
+        directory_opened: Option<&dyn Fn(&Path)>,
         depth: usize,
     ) -> Result<()> {
         if depth > 12 {
             bail!("Protected repair input tree exceeds depth limit");
         }
+        if let Some(hook) = directory_opened {
+            hook(relative_dir);
+        }
+        for entry in unix_recovery_entries(directory)? {
+            let name = entry.name.to_string_lossy().into_owned();
+            let relative_path = relative_dir.join(&entry.name);
+            let relative = relative_path.to_string_lossy().replace('\\', "/");
+            match unix_recovery_entry_kind(&entry) {
+                libc::S_IFLNK => continue,
+                libc::S_IFDIR => {
+                    let normally_skipped = name.starts_with('.')
+                        || ["target", "node_modules", "__pycache__", "venv", "dist"]
+                            .contains(&name.as_str());
+                    if normally_skipped && !intersects_validation_path(&relative, validation_paths)
+                    {
+                        continue;
+                    }
+                    let (child, _) = open_unix_recovery_entry(directory, &entry, true)?;
+                    visit_unix(
+                        &child,
+                        &relative_path,
+                        validation_paths,
+                        scan,
+                        directory_opened,
+                        depth + 1,
+                    )?;
+                }
+                libc::S_IFREG => {
+                    if !is_protected_repair_input(&relative, validation_paths) {
+                        continue;
+                    }
+                    scan.files_seen += 1;
+                    if scan.files_seen > 2000 {
+                        bail!("Protected repair input count exceeds 2000 files");
+                    }
+                    let (mut file, held_metadata) =
+                        open_unix_recovery_entry(directory, &entry, false)?;
+                    let length =
+                        reserve_protected_input_bytes(&mut scan.bytes_seen, held_metadata.len())?;
+                    let mut content = Vec::with_capacity(length);
+                    file.read_to_end(&mut content)?;
+                    let final_metadata = file.metadata()?;
+                    if content.len() != length
+                        || final_metadata.len() != held_metadata.len()
+                        || !final_metadata.is_file()
+                    {
+                        bail!("Protected repair input changed while reading");
+                    }
+                    scan.out.insert(relative.to_lowercase(), hash(&content));
+                }
+                _ => continue,
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn visit(
+        dir: &Path,
+        relative_dir: &Path,
+        validation_paths: &[String],
+        scan: &mut ProtectedInputScan,
+        directory_opened: Option<&dyn Fn(&Path)>,
+        depth: usize,
+    ) -> Result<()> {
+        if depth > 12 {
+            bail!("Protected repair input tree exceeds depth limit");
+        }
+        let _directory_guard = hold_windows_recovery_directory(dir)?;
+        if let Some(hook) = directory_opened {
+            hook(relative_dir);
+        }
         let mut entries: Vec<_> = fs::read_dir(dir)?.collect::<std::io::Result<_>>()?;
         entries.sort_by_key(|entry| entry.file_name());
         for entry in entries {
             let name = entry.file_name().to_string_lossy().into_owned();
-            let kind = entry.file_type()?;
+            let direct_metadata = fs::symlink_metadata(entry.path())?;
+            if planning_metadata_is_reparse(&direct_metadata) {
+                bail!("Protected repair input refuses a Windows reparse point");
+            }
+            let kind = direct_metadata.file_type();
             if kind.is_symlink() {
                 continue;
             }
-            let relative = entry
-                .path()
-                .strip_prefix(root)?
-                .to_string_lossy()
-                .replace('\\', "/");
+            let relative_path = relative_dir.join(entry.file_name());
+            let relative = relative_path.to_string_lossy().replace('\\', "/");
             if kind.is_dir() {
                 let normally_skipped = name.starts_with('.')
                     || ["target", "node_modules", "__pycache__", "venv", "dist"]
@@ -6072,12 +9607,11 @@ fn repair_protected_inputs(
                     continue;
                 }
                 visit(
-                    root,
                     &entry.path(),
+                    &relative_path,
                     validation_paths,
-                    out,
-                    bytes_seen,
-                    files_seen,
+                    scan,
+                    directory_opened,
                     depth + 1,
                 )?;
                 continue;
@@ -6088,67 +9622,1130 @@ fn repair_protected_inputs(
             if !is_protected_repair_input(&relative, validation_paths) {
                 continue;
             }
-            *files_seen += 1;
-            if *files_seen > 2000 {
+            scan.files_seen += 1;
+            if scan.files_seen > 2000 {
                 bail!("Protected repair input count exceeds 2000 files");
             }
-            let content = fs::read(entry.path())?;
-            *bytes_seen = bytes_seen
-                .checked_add(content.len())
-                .context("Protected repair input size overflow")?;
-            if *bytes_seen > 64 * 1024 * 1024 {
-                bail!("Protected repair inputs exceed 64 MiB");
+            let (mut file, held_metadata) = open_windows_recovery_file(&entry.path())?;
+            let length = reserve_protected_input_bytes(&mut scan.bytes_seen, held_metadata.len())?;
+            let mut content = Vec::with_capacity(length);
+            file.read_to_end(&mut content)?;
+            let final_metadata = file.metadata()?;
+            if content.len() != length
+                || final_metadata.len() != held_metadata.len()
+                || !final_metadata.is_file()
+                || planning_metadata_is_reparse(&final_metadata)
+            {
+                bail!("Protected repair input changed while reading");
             }
-            out.insert(relative.to_lowercase(), hash(&content));
+            scan.out.insert(relative.to_lowercase(), hash(&content));
         }
         Ok(())
     }
-    let mut out = std::collections::HashMap::new();
-    visit(root, root, validation_paths, &mut out, &mut 0, &mut 0, 0)?;
-    Ok(out)
+    let mut scan = ProtectedInputScan {
+        out: std::collections::HashMap::new(),
+        bytes_seen: 0,
+        files_seen: 0,
+    };
+    #[cfg(unix)]
+    {
+        let root = hold_unix_recovery_root(root)?;
+        visit_unix(
+            &root,
+            Path::new(""),
+            validation_paths,
+            &mut scan,
+            directory_opened,
+            0,
+        )?;
+    }
+    #[cfg(windows)]
+    visit(
+        root,
+        Path::new(""),
+        validation_paths,
+        &mut scan,
+        directory_opened,
+        0,
+    )?;
+    #[cfg(not(any(unix, windows)))]
+    bail!("Protected repair input scanning is unsupported on this host");
+    Ok(scan.out)
 }
 fn project_context(root: &Path) -> Result<Vec<Value>> {
+    project_context_with_directory_opened(root, None)
+}
+
+fn project_context_with_directory_opened(
+    root: &Path,
+    directory_opened: Option<&dyn Fn(&Path)>,
+) -> Result<Vec<Value>> {
+    #[cfg(unix)]
+    {
+        project_context_unix(root, directory_opened)
+    }
+
+    #[cfg(windows)]
+    {
+        fn visit(
+            dir: &Path,
+            relative_dir: &Path,
+            out: &mut Vec<Value>,
+            budget: &mut usize,
+            directory_opened: Option<&dyn Fn(&Path)>,
+            depth: usize,
+        ) -> Result<()> {
+            if depth > 6 {
+                return Ok(());
+            }
+            let _directory_guard = hold_windows_recovery_directory(dir)?;
+            if let Some(hook) = directory_opened {
+                hook(relative_dir);
+            }
+            let mut entries: Vec<_> = fs::read_dir(dir)?.collect::<std::io::Result<_>>()?;
+            entries.sort_by_key(|e| e.file_name());
+            for entry in entries {
+                if *budget >= 64000 || out.len() >= 80 {
+                    break;
+                }
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name.starts_with('.')
+                    || ["target", "node_modules", "__pycache__", "venv", "dist"]
+                        .contains(&name.as_str())
+                    || repair_sensitive_path(&name)
+                {
+                    continue;
+                }
+                let metadata = fs::symlink_metadata(entry.path())?;
+                if planning_metadata_is_reparse(&metadata) {
+                    bail!("Automatic repair project context refuses a Windows reparse point");
+                }
+                let kind = metadata.file_type();
+                if kind.is_symlink() {
+                    continue;
+                }
+                let relative = relative_dir.join(entry.file_name());
+                if kind.is_dir() {
+                    visit(
+                        &entry.path(),
+                        &relative,
+                        out,
+                        budget,
+                        directory_opened,
+                        depth + 1,
+                    )?;
+                } else if kind.is_file() {
+                    let (mut file, held_metadata) = open_windows_recovery_file(&entry.path())?;
+                    if held_metadata.len() > 16_000 {
+                        continue;
+                    }
+                    let mut bytes = Vec::with_capacity(held_metadata.len() as usize);
+                    file.by_ref().take(16_001).read_to_end(&mut bytes)?;
+                    let final_metadata = file.metadata()?;
+                    if bytes.len() as u64 != held_metadata.len()
+                        || final_metadata.len() != held_metadata.len()
+                        || !final_metadata.is_file()
+                        || planning_metadata_is_reparse(&final_metadata)
+                    {
+                        bail!("Automatic repair project context file changed while reading");
+                    }
+                    let Ok(content) = String::from_utf8(bytes) else {
+                        continue;
+                    };
+                    let relative = relative.to_string_lossy().replace('\\', "/");
+                    if repair_sensitive_path(&relative) || validate_cloud_text(&content).is_err() {
+                        continue;
+                    }
+                    *budget += content.len();
+                    out.push(json!({"path":relative,"content":content}));
+                }
+            }
+            Ok(())
+        }
+        let mut out = Vec::new();
+        visit(root, Path::new(""), &mut out, &mut 0, directory_opened, 0)?;
+        Ok(out)
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (root, directory_opened);
+        bail!("Automatic repair project context is unsupported on this host")
+    }
+}
+
+struct AdmittedProjectSnapshot {
+    files: std::collections::BTreeMap<String, (String, String)>,
+    unadmitted_sha256: String,
+    volatile_sha256: String,
+}
+
+// Redacted diagnostics: admitted content and excluded paths never enter Debug
+// output, so a failed expect_err panic can only name counts and digests.
+impl std::fmt::Debug for AdmittedProjectSnapshot {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AdmittedProjectSnapshot")
+            .field("admitted_file_count", &self.files.len())
+            .field("unadmitted_sha256", &self.unadmitted_sha256)
+            .field("volatile_sha256", &self.volatile_sha256)
+            .finish()
+    }
+}
+
+#[cfg(unix)]
+struct UnixRecoveryEntry {
+    name: std::ffi::OsString,
+    name_c: std::ffi::CString,
+    mode: libc::mode_t,
+}
+
+#[cfg(unix)]
+fn unix_recovery_errno() -> *mut libc::c_int {
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+    unsafe {
+        libc::__error()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "freebsd")))]
+    unsafe {
+        libc::__errno_location()
+    }
+}
+
+#[cfg(unix)]
+fn hold_unix_recovery_root(path: &Path) -> Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    let mut options = fs::OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let directory = options.open(path)?;
+    if !directory.metadata()?.is_dir() {
+        bail!("Automatic repair recovery refuses a non-direct directory");
+    }
+    Ok(directory)
+}
+
+#[cfg(unix)]
+fn unix_recovery_entries(directory: &fs::File) -> Result<Vec<UnixRecoveryEntry>> {
+    use std::ffi::{CStr, CString, OsString};
+    use std::os::fd::AsRawFd as _;
+    use std::os::unix::ffi::OsStringExt as _;
+
+    struct DirectoryStream(*mut libc::DIR);
+    impl Drop for DirectoryStream {
+        fn drop(&mut self) {
+            unsafe {
+                libc::closedir(self.0);
+            }
+        }
+    }
+
+    let duplicated = unsafe { libc::dup(directory.as_raw_fd()) };
+    if duplicated < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    let stream = unsafe { libc::fdopendir(duplicated) };
+    if stream.is_null() {
+        let error = std::io::Error::last_os_error();
+        unsafe {
+            libc::close(duplicated);
+        }
+        return Err(error.into());
+    }
+    let stream = DirectoryStream(stream);
+    let mut entries = Vec::new();
+    loop {
+        unsafe {
+            *unix_recovery_errno() = 0;
+        }
+        let raw = unsafe { libc::readdir(stream.0) };
+        if raw.is_null() {
+            let errno = unsafe { *unix_recovery_errno() };
+            if errno != 0 {
+                return Err(std::io::Error::from_raw_os_error(errno).into());
+            }
+            break;
+        }
+        let bytes = unsafe { CStr::from_ptr((*raw).d_name.as_ptr()) }.to_bytes();
+        if bytes == b"." || bytes == b".." {
+            continue;
+        }
+        let name_c = CString::new(bytes).context("Project entry name contains NUL")?;
+        let mut stat = std::mem::MaybeUninit::<libc::stat>::zeroed();
+        if unsafe {
+            libc::fstatat(
+                directory.as_raw_fd(),
+                name_c.as_ptr(),
+                stat.as_mut_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        } != 0
+        {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        entries.push(UnixRecoveryEntry {
+            name: OsString::from_vec(bytes.to_vec()),
+            name_c,
+            mode: unsafe { stat.assume_init() }.st_mode,
+        });
+    }
+    entries.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(entries)
+}
+
+#[cfg(unix)]
+fn unix_recovery_entry_kind(entry: &UnixRecoveryEntry) -> libc::mode_t {
+    entry.mode & libc::S_IFMT
+}
+
+#[cfg(unix)]
+fn open_unix_recovery_entry(
+    directory: &fs::File,
+    entry: &UnixRecoveryEntry,
+    directory_required: bool,
+) -> Result<(fs::File, fs::Metadata)> {
+    use std::os::fd::{AsRawFd as _, FromRawFd as _};
+
+    let mut flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK;
+    if directory_required {
+        flags |= libc::O_DIRECTORY;
+    }
+    let descriptor = unsafe { libc::openat(directory.as_raw_fd(), entry.name_c.as_ptr(), flags) };
+    if descriptor < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    let file = unsafe { fs::File::from_raw_fd(descriptor) };
+    let metadata = file.metadata()?;
+    if (directory_required && !metadata.is_dir()) || (!directory_required && !metadata.is_file()) {
+        bail!("Automatic repair recovery entry changed type before it was opened");
+    }
+    if !directory_required {
+        use std::os::unix::fs::MetadataExt as _;
+        if metadata.nlink() != 1 {
+            bail!("Automatic repair recovery refuses a file with multiple hard links");
+        }
+    }
+    Ok((file, metadata))
+}
+
+#[cfg(windows)]
+fn ensure_windows_recovery_file_single_link(file: &fs::File) -> Result<()> {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+
+    let mut information = BY_HANDLE_FILE_INFORMATION::default();
+    if unsafe {
+        GetFileInformationByHandle(
+            file.as_raw_handle() as windows_sys::Win32::Foundation::HANDLE,
+            &mut information,
+        )
+    } == 0
+    {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    if information.nNumberOfLinks != 1 {
+        bail!("Automatic repair recovery refuses a file with multiple hard links");
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn open_windows_recovery_file(path: &Path) -> Result<(fs::File, fs::Metadata)> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+
+    let mut options = fs::OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
+    let file = options.open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || planning_metadata_is_reparse(&metadata) {
+        bail!("Automatic repair recovery refuses a non-direct file");
+    }
+    ensure_windows_recovery_file_single_link(&file)?;
+    Ok((file, metadata))
+}
+
+#[cfg(windows)]
+fn hold_windows_recovery_directory(path: &Path) -> Result<fs::File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+
+    let mut options = fs::OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
+    let directory = options.open(path)?;
+    let metadata = directory.metadata()?;
+    if !metadata.is_dir() || planning_metadata_is_reparse(&metadata) {
+        bail!("Automatic repair recovery refuses a non-direct directory");
+    }
+    Ok(directory)
+}
+
+#[cfg(unix)]
+fn read_unix_recovery_link(
+    directory: &fs::File,
+    entry: &UnixRecoveryEntry,
+) -> Result<std::ffi::OsString> {
+    use std::os::fd::AsRawFd as _;
+    use std::os::unix::ffi::OsStringExt as _;
+
+    let mut bytes = vec![0_u8; 64 * 1024];
+    let length = unsafe {
+        libc::readlinkat(
+            directory.as_raw_fd(),
+            entry.name_c.as_ptr(),
+            bytes.as_mut_ptr().cast(),
+            bytes.len(),
+        )
+    };
+    if length < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    let length = usize::try_from(length).context("Project symlink length is invalid")?;
+    if length == bytes.len() {
+        bail!("Project symlink target exceeds the recovery bound");
+    }
+    bytes.truncate(length);
+    Ok(std::ffi::OsString::from_vec(bytes))
+}
+
+#[cfg(unix)]
+fn project_context_unix(
+    root: &Path,
+    directory_opened: Option<&dyn Fn(&Path)>,
+) -> Result<Vec<Value>> {
     fn visit(
-        root: &Path,
-        dir: &Path,
+        directory: &fs::File,
+        relative_dir: &Path,
         out: &mut Vec<Value>,
         budget: &mut usize,
+        directory_opened: Option<&dyn Fn(&Path)>,
         depth: usize,
     ) -> Result<()> {
         if depth > 6 {
             return Ok(());
         }
-        let mut entries: Vec<_> = fs::read_dir(dir)?.collect::<std::io::Result<_>>()?;
-        entries.sort_by_key(|e| e.file_name());
-        for entry in entries {
-            if *budget >= 64000 || out.len() >= 80 {
+        if let Some(hook) = directory_opened {
+            hook(relative_dir);
+        }
+        for entry in unix_recovery_entries(directory)? {
+            if *budget >= 64_000 || out.len() >= 80 {
                 break;
             }
-            let name = entry.file_name().to_string_lossy().into_owned();
+            let name = entry.name.to_string_lossy().into_owned();
             if name.starts_with('.')
                 || ["target", "node_modules", "__pycache__", "venv", "dist"]
                     .contains(&name.as_str())
+                || repair_sensitive_path(&name)
             {
                 continue;
             }
-            let kind = entry.file_type()?;
-            if kind.is_symlink() {
-                continue;
-            }
-            if kind.is_dir() {
-                visit(root, &entry.path(), out, budget, depth + 1)?;
-            } else if kind.is_file() && entry.metadata()?.len() <= 16000 {
-                if let Ok(content) = fs::read_to_string(entry.path()) {
-                    *budget += content.len();
-                    out.push(json!({"path":entry.path().strip_prefix(root)?.to_string_lossy().replace('\\',"/"),"content":content}));
+            let relative = relative_dir.join(&entry.name);
+            match unix_recovery_entry_kind(&entry) {
+                libc::S_IFLNK => continue,
+                libc::S_IFDIR => {
+                    let (child, _) = open_unix_recovery_entry(directory, &entry, true)?;
+                    visit(&child, &relative, out, budget, directory_opened, depth + 1)?;
                 }
+                libc::S_IFREG => {
+                    let (mut file, held_metadata) =
+                        open_unix_recovery_entry(directory, &entry, false)?;
+                    if held_metadata.len() > 16_000 {
+                        continue;
+                    }
+                    let mut bytes = Vec::with_capacity(held_metadata.len() as usize);
+                    file.by_ref().take(16_001).read_to_end(&mut bytes)?;
+                    let final_metadata = file.metadata()?;
+                    if bytes.len() as u64 != held_metadata.len()
+                        || final_metadata.len() != held_metadata.len()
+                        || !final_metadata.is_file()
+                    {
+                        bail!("Automatic repair project context file changed while reading");
+                    }
+                    let Ok(content) = String::from_utf8(bytes) else {
+                        continue;
+                    };
+                    let relative = relative.to_string_lossy().replace('\\', "/");
+                    if repair_sensitive_path(&relative) || validate_cloud_text(&content).is_err() {
+                        continue;
+                    }
+                    *budget += content.len();
+                    out.push(json!({"path":relative,"content":content}));
+                }
+                _ => continue,
             }
         }
         Ok(())
     }
+
+    let root = hold_unix_recovery_root(root)?;
     let mut out = Vec::new();
-    visit(root, root, &mut out, &mut 0, 0)?;
+    visit(&root, Path::new(""), &mut out, &mut 0, directory_opened, 0)?;
     Ok(out)
+}
+
+#[cfg(unix)]
+fn admitted_project_snapshot_unix(
+    root: &Path,
+    cancellation: Option<&AtomicU8>,
+    directory_opened: Option<&dyn Fn(&Path)>,
+) -> Result<AdmittedProjectSnapshot> {
+    // Complete bounded ledger for one recovery traversal. Admitted files
+    // accumulate under the exact file/byte caps while every excluded or
+    // unreviewable entry contributes only to the stable or volatile unadmitted
+    // digest and the bounded count/byte totals, never to retained content.
+    struct AdmittedSnapshotLedger<'a> {
+        files: std::collections::BTreeMap<String, (String, String)>,
+        admitted_bytes: usize,
+        stable_unadmitted: Sha256,
+        volatile_unadmitted: Sha256,
+        unadmitted_count: usize,
+        unadmitted_bytes: usize,
+        cancellation: Option<&'a AtomicU8>,
+        directory_opened: Option<&'a dyn Fn(&Path)>,
+    }
+
+    impl AdmittedSnapshotLedger<'_> {
+        fn unadmitted(&mut self, stream: UnadmittedStream) -> &mut Sha256 {
+            match stream {
+                UnadmittedStream::Stable => &mut self.stable_unadmitted,
+                UnadmittedStream::Volatile => &mut self.volatile_unadmitted,
+            }
+        }
+    }
+
+    // Selects which unadmitted digest absorbs an excluded entry: durable
+    // project data binds the stable digest while caches and transient
+    // directories bind the volatile digest.
+    #[derive(Clone, Copy)]
+    enum UnadmittedStream {
+        Stable,
+        Volatile,
+    }
+
+    fn bind_unadmitted(
+        directory: &fs::File,
+        entry: &UnixRecoveryEntry,
+        relative: &Path,
+        stream: UnadmittedStream,
+        ledger: &mut AdmittedSnapshotLedger<'_>,
+        depth: usize,
+    ) -> Result<()> {
+        if ledger
+            .cancellation
+            .is_some_and(|value| value.load(Ordering::SeqCst) != 0)
+        {
+            bail!("Automatic repair project inspection was cancelled");
+        }
+        if depth > 8 {
+            bail!("Unadmitted project data exceeds the bounded recovery depth");
+        }
+        ledger.unadmitted_count = ledger
+            .unadmitted_count
+            .checked_add(1)
+            .context("Unadmitted project file count overflow")?;
+        if ledger.unadmitted_count > 100_000 {
+            bail!("Project has too much unadmitted data for bounded recovery");
+        }
+        let relative_text = relative.to_string_lossy().replace('\\', "/");
+        ledger
+            .unadmitted(stream)
+            .update(hash(relative_text.as_bytes()).as_bytes());
+        match unix_recovery_entry_kind(entry) {
+            libc::S_IFLNK => {
+                let target = read_unix_recovery_link(directory, entry)?;
+                ledger.unadmitted(stream).update(b"\0symlink\0");
+                ledger
+                    .unadmitted(stream)
+                    .update(hash(target.to_string_lossy().as_bytes()).as_bytes());
+            }
+            libc::S_IFDIR => {
+                ledger.unadmitted(stream).update(b"\0directory\0");
+                let (child, _) = open_unix_recovery_entry(directory, entry, true)?;
+                if let Some(hook) = ledger.directory_opened {
+                    hook(relative);
+                }
+                for child_entry in unix_recovery_entries(&child)? {
+                    bind_unadmitted(
+                        &child,
+                        &child_entry,
+                        &relative.join(&child_entry.name),
+                        stream,
+                        ledger,
+                        depth + 1,
+                    )?;
+                }
+            }
+            libc::S_IFREG => {
+                let (mut file, held_metadata) = open_unix_recovery_entry(directory, entry, false)?;
+                let byte_len = usize::try_from(held_metadata.len())
+                    .context("Unadmitted project file is too large for this host")?;
+                ledger.unadmitted_bytes = ledger
+                    .unadmitted_bytes
+                    .checked_add(byte_len)
+                    .context("Unadmitted project byte count overflow")?;
+                if ledger.unadmitted_bytes > 4 * 1024 * 1024 * 1024usize {
+                    bail!("Project has too much unadmitted data for bounded recovery");
+                }
+                let mut file_digest = Sha256::new();
+                let mut buffer = [0_u8; 64 * 1024];
+                let mut bytes_read = 0_u64;
+                loop {
+                    if ledger
+                        .cancellation
+                        .is_some_and(|value| value.load(Ordering::SeqCst) != 0)
+                    {
+                        bail!("Automatic repair project inspection was cancelled");
+                    }
+                    let read = file.read(&mut buffer)?;
+                    if read == 0 {
+                        break;
+                    }
+                    bytes_read = bytes_read
+                        .checked_add(read as u64)
+                        .context("Unadmitted project byte count overflow")?;
+                    file_digest.update(&buffer[..read]);
+                }
+                let final_metadata = file.metadata()?;
+                if bytes_read != held_metadata.len()
+                    || final_metadata.len() != held_metadata.len()
+                    || !final_metadata.is_file()
+                {
+                    bail!("Automatic repair recovery file changed while reading");
+                }
+                ledger.unadmitted(stream).update(b"\0file\0");
+                ledger
+                    .unadmitted(stream)
+                    .update(format!("{:x}", file_digest.finalize()).as_bytes());
+            }
+            _ => bail!("Automatic repair recovery refuses a special project entry"),
+        }
+        Ok(())
+    }
+
+    fn visit(
+        directory: &fs::File,
+        relative_dir: &Path,
+        ledger: &mut AdmittedSnapshotLedger<'_>,
+        depth: usize,
+    ) -> Result<()> {
+        if ledger
+            .cancellation
+            .is_some_and(|value| value.load(Ordering::SeqCst) != 0)
+        {
+            bail!("Automatic repair project inspection was cancelled");
+        }
+        if depth > 6 {
+            bail!("Project exceeds the bounded Auto AI repair recovery depth");
+        }
+        for entry in unix_recovery_entries(directory)? {
+            if ledger
+                .cancellation
+                .is_some_and(|value| value.load(Ordering::SeqCst) != 0)
+            {
+                bail!("Automatic repair project inspection was cancelled");
+            }
+            let relative = relative_dir.join(&entry.name);
+            let name = entry.name.to_string_lossy().into_owned();
+            let sensitive_name = repair_sensitive_path(&name);
+            let kind = unix_recovery_entry_kind(&entry);
+            if ["target", "node_modules", "__pycache__", "venv", "dist"].contains(&name.as_str()) {
+                bind_unadmitted(
+                    directory,
+                    &entry,
+                    &relative,
+                    UnadmittedStream::Volatile,
+                    ledger,
+                    depth,
+                )?;
+                continue;
+            }
+            if name == ".git" {
+                bind_unadmitted(
+                    directory,
+                    &entry,
+                    &relative,
+                    UnadmittedStream::Stable,
+                    ledger,
+                    depth,
+                )?;
+                continue;
+            }
+            if name.starts_with('.') || sensitive_name || kind == libc::S_IFLNK {
+                bind_unadmitted(
+                    directory,
+                    &entry,
+                    &relative,
+                    UnadmittedStream::Stable,
+                    ledger,
+                    depth,
+                )?;
+                continue;
+            }
+            if kind == libc::S_IFDIR {
+                let (child, _) = open_unix_recovery_entry(directory, &entry, true)?;
+                if let Some(hook) = ledger.directory_opened {
+                    hook(&relative);
+                }
+                visit(&child, &relative, ledger, depth + 1)?;
+                continue;
+            }
+            if kind != libc::S_IFREG {
+                bind_unadmitted(
+                    directory,
+                    &entry,
+                    &relative,
+                    UnadmittedStream::Stable,
+                    ledger,
+                    depth,
+                )?;
+                continue;
+            }
+            let relative_text = relative.to_string_lossy().replace('\\', "/");
+            let (mut file, held_metadata) = open_unix_recovery_entry(directory, &entry, false)?;
+            let mut bytes = Vec::with_capacity(
+                usize::try_from(held_metadata.len().min(16_001))
+                    .context("Project recovery file is too large for this host")?,
+            );
+            file.by_ref().take(16_001).read_to_end(&mut bytes)?;
+            let final_metadata = file.metadata()?;
+            if final_metadata.len() != held_metadata.len() || !final_metadata.is_file() {
+                bail!("Automatic repair recovery file changed while reading");
+            }
+            let content = String::from_utf8(bytes.clone()).ok();
+            let admitted = !repair_sensitive_path(&relative_text)
+                && held_metadata.len() <= 16_000
+                && bytes.len() as u64 == held_metadata.len()
+                && content
+                    .as_deref()
+                    .is_some_and(|content| validate_cloud_text(content).is_ok());
+            if admitted {
+                if ledger.files.len() >= 80 {
+                    bail!("Project exceeds the bounded Auto AI repair recovery file count");
+                }
+                ledger.admitted_bytes = ledger
+                    .admitted_bytes
+                    .checked_add(bytes.len())
+                    .context("Project recovery byte count overflow")?;
+                if ledger.admitted_bytes > 64_000 {
+                    bail!("Project exceeds the bounded Auto AI repair recovery byte count");
+                }
+                let content = content.unwrap();
+                ledger
+                    .files
+                    .insert(relative_text, (hash(content.as_bytes()), content));
+            } else {
+                bind_unadmitted(
+                    directory,
+                    &entry,
+                    &relative,
+                    UnadmittedStream::Stable,
+                    ledger,
+                    depth,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    let root = hold_unix_recovery_root(root)?;
+    let mut ledger = AdmittedSnapshotLedger {
+        files: std::collections::BTreeMap::new(),
+        admitted_bytes: 0,
+        stable_unadmitted: Sha256::new(),
+        volatile_unadmitted: Sha256::new(),
+        unadmitted_count: 0,
+        unadmitted_bytes: 0,
+        cancellation,
+        directory_opened,
+    };
+    ledger
+        .stable_unadmitted
+        .update(b"assemblywright.auto-repair-stable-unadmitted.v2\0");
+    ledger
+        .volatile_unadmitted
+        .update(b"assemblywright.auto-repair-volatile-unadmitted.v2\0");
+    visit(&root, Path::new(""), &mut ledger, 0)?;
+    Ok(AdmittedProjectSnapshot {
+        files: ledger.files,
+        unadmitted_sha256: format!("{:x}", ledger.stable_unadmitted.finalize()),
+        volatile_sha256: format!("{:x}", ledger.volatile_unadmitted.finalize()),
+    })
+}
+
+/// Captures the complete bounded set that can enter limit-recovery review.
+/// Content excluded because it is sensitive, binary, oversized, or otherwise
+/// unreviewable contributes only to a local digest, so restricted bytes and
+/// paths never become durable state or cloud input.
+#[cfg(test)]
+fn admitted_project_snapshot(root: &Path) -> Result<AdmittedProjectSnapshot> {
+    admitted_project_snapshot_with_cancellation(root, None)
+}
+
+fn admitted_project_snapshot_with_cancellation(
+    root: &Path,
+    cancellation: Option<&AtomicU8>,
+) -> Result<AdmittedProjectSnapshot> {
+    #[cfg(unix)]
+    {
+        admitted_project_snapshot_unix(root, cancellation, None)
+    }
+
+    #[cfg(not(unix))]
+    {
+        fn open_direct_recovery_file(path: &Path) -> Result<(fs::File, fs::Metadata)> {
+            let mut options = fs::OpenOptions::new();
+            options.read(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt as _;
+                // O_NONBLOCK prevents a regular-file-to-FIFO substitution from
+                // hanging recovery before the held-handle metadata check rejects it.
+                options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+            }
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt as _;
+                use windows_sys::Win32::Storage::FileSystem::{
+                    FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE,
+                };
+                options
+                    .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+                    .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
+            }
+            let file = options.open(path)?;
+            let metadata = file.metadata()?;
+            if !metadata.is_file() || planning_metadata_is_reparse(&metadata) {
+                bail!("Automatic repair recovery refuses a non-direct file");
+            }
+            #[cfg(windows)]
+            ensure_windows_recovery_file_single_link(&file)?;
+            Ok((file, metadata))
+        }
+
+        #[cfg(windows)]
+        fn hold_direct_recovery_directory(path: &Path) -> Result<fs::File> {
+            use std::os::windows::fs::OpenOptionsExt as _;
+            use windows_sys::Win32::Storage::FileSystem::{
+                FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ,
+                FILE_SHARE_WRITE,
+            };
+
+            let mut options = fs::OpenOptions::new();
+            options
+                .read(true)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+                // Excluding delete sharing keeps the checked directory from being
+                // renamed or replaced while read_dir resolves the same path.
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
+            let directory = options.open(path)?;
+            let metadata = directory.metadata()?;
+            if !metadata.is_dir() || planning_metadata_is_reparse(&metadata) {
+                bail!("Automatic repair recovery refuses a non-direct directory");
+            }
+            Ok(directory)
+        }
+
+        fn validate_direct_recovery_directory(path: &Path) -> Result<()> {
+            let metadata = fs::symlink_metadata(path)?;
+            if metadata.file_type().is_symlink()
+                || planning_metadata_is_reparse(&metadata)
+                || !metadata.is_dir()
+            {
+                bail!("Automatic repair recovery refuses a non-direct directory");
+            }
+            Ok(())
+        }
+
+        fn bind_unadmitted_entry(
+            root: &Path,
+            path: &Path,
+            unadmitted: &mut Sha256,
+            unadmitted_count: &mut usize,
+            unadmitted_bytes: &mut usize,
+            cancellation: Option<&AtomicU8>,
+            depth: usize,
+        ) -> Result<()> {
+            if cancellation.is_some_and(|value| value.load(Ordering::SeqCst) != 0) {
+                bail!("Automatic repair project inspection was cancelled");
+            }
+            if depth > 8 {
+                bail!("Unadmitted project data exceeds the bounded recovery depth");
+            }
+            *unadmitted_count = unadmitted_count
+                .checked_add(1)
+                .context("Unadmitted project file count overflow")?;
+            if *unadmitted_count > 100_000 {
+                bail!("Project has too much unadmitted data for bounded recovery");
+            }
+            let relative = path
+                .strip_prefix(root)?
+                .to_string_lossy()
+                .replace('\\', "/");
+            let metadata = fs::symlink_metadata(path)?;
+            unadmitted.update(hash(relative.as_bytes()).as_bytes());
+            if planning_metadata_is_reparse(&metadata) {
+                bail!("Automatic repair recovery refuses a Windows reparse point");
+            }
+            if metadata.file_type().is_symlink() {
+                let target = fs::read_link(path)?;
+                unadmitted.update(b"\0symlink\0");
+                unadmitted.update(hash(target.to_string_lossy().as_bytes()).as_bytes());
+                return Ok(());
+            }
+            if metadata.is_dir() {
+                unadmitted.update(b"\0directory\0");
+                #[cfg(windows)]
+                let _directory_guard = hold_direct_recovery_directory(path)?;
+                #[cfg(not(windows))]
+                validate_direct_recovery_directory(path)?;
+                let mut entries: Vec<_> = fs::read_dir(path)?.collect::<std::io::Result<_>>()?;
+                entries.sort_by_key(|entry| entry.file_name());
+                for entry in entries {
+                    bind_unadmitted_entry(
+                        root,
+                        &entry.path(),
+                        unadmitted,
+                        unadmitted_count,
+                        unadmitted_bytes,
+                        cancellation,
+                        depth + 1,
+                    )?;
+                }
+                return Ok(());
+            }
+            if metadata.is_file() {
+                let (mut file, held_metadata) = open_direct_recovery_file(path)?;
+                let byte_len = usize::try_from(held_metadata.len())
+                    .context("Unadmitted project file is too large for this host")?;
+                *unadmitted_bytes = unadmitted_bytes
+                    .checked_add(byte_len)
+                    .context("Unadmitted project byte count overflow")?;
+                if *unadmitted_bytes > 4 * 1024 * 1024 * 1024usize {
+                    bail!("Project has too much unadmitted data for bounded recovery");
+                }
+                let mut file_digest = Sha256::new();
+                let mut buffer = [0_u8; 64 * 1024];
+                let mut bytes_read = 0_u64;
+                loop {
+                    if cancellation.is_some_and(|value| value.load(Ordering::SeqCst) != 0) {
+                        bail!("Automatic repair project inspection was cancelled");
+                    }
+                    let read = file.read(&mut buffer)?;
+                    if read == 0 {
+                        break;
+                    }
+                    bytes_read = bytes_read
+                        .checked_add(read as u64)
+                        .context("Unadmitted project byte count overflow")?;
+                    file_digest.update(&buffer[..read]);
+                }
+                let final_metadata = file.metadata()?;
+                if bytes_read != held_metadata.len()
+                    || final_metadata.len() != held_metadata.len()
+                    || !final_metadata.is_file()
+                    || planning_metadata_is_reparse(&final_metadata)
+                {
+                    bail!("Automatic repair recovery file changed while reading");
+                }
+                unadmitted.update(b"\0file\0");
+                unadmitted.update(format!("{:x}", file_digest.finalize()).as_bytes());
+                return Ok(());
+            }
+            bail!("Automatic repair recovery refuses a special project entry")
+        }
+
+        fn visit(
+            root: &Path,
+            dir: &Path,
+            files: &mut std::collections::BTreeMap<String, (String, String)>,
+            admitted_bytes: &mut usize,
+            stable_unadmitted: &mut Sha256,
+            volatile_unadmitted: &mut Sha256,
+            unadmitted_count: &mut usize,
+            unadmitted_bytes: &mut usize,
+            cancellation: Option<&AtomicU8>,
+            depth: usize,
+        ) -> Result<()> {
+            if cancellation.is_some_and(|value| value.load(Ordering::SeqCst) != 0) {
+                bail!("Automatic repair project inspection was cancelled");
+            }
+            if depth > 6 {
+                bail!("Project exceeds the bounded Auto AI repair recovery depth");
+            }
+            #[cfg(windows)]
+            let _directory_guard = hold_direct_recovery_directory(dir)?;
+            #[cfg(not(windows))]
+            validate_direct_recovery_directory(dir)?;
+            let mut entries: Vec<_> = fs::read_dir(dir)?.collect::<std::io::Result<_>>()?;
+            entries.sort_by_key(|entry| entry.file_name());
+            for entry in entries {
+                if cancellation.is_some_and(|value| value.load(Ordering::SeqCst) != 0) {
+                    bail!("Automatic repair project inspection was cancelled");
+                }
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let sensitive_name = repair_sensitive_path(&name);
+                let direct_metadata = fs::symlink_metadata(entry.path())?;
+                if planning_metadata_is_reparse(&direct_metadata) {
+                    bail!("Automatic repair recovery refuses a Windows reparse point");
+                }
+                let kind = direct_metadata.file_type();
+                if ["target", "node_modules", "__pycache__", "venv", "dist"]
+                    .contains(&name.as_str())
+                {
+                    bind_unadmitted_entry(
+                        root,
+                        &entry.path(),
+                        volatile_unadmitted,
+                        unadmitted_count,
+                        unadmitted_bytes,
+                        cancellation,
+                        depth,
+                    )?;
+                    continue;
+                }
+                if name == ".git" {
+                    bind_unadmitted_entry(
+                        root,
+                        &entry.path(),
+                        stable_unadmitted,
+                        unadmitted_count,
+                        unadmitted_bytes,
+                        cancellation,
+                        depth,
+                    )?;
+                    continue;
+                }
+                if name.starts_with('.') || sensitive_name || kind.is_symlink() {
+                    bind_unadmitted_entry(
+                        root,
+                        &entry.path(),
+                        stable_unadmitted,
+                        unadmitted_count,
+                        unadmitted_bytes,
+                        cancellation,
+                        depth,
+                    )?;
+                    continue;
+                }
+                if kind.is_dir() {
+                    visit(
+                        root,
+                        &entry.path(),
+                        files,
+                        admitted_bytes,
+                        stable_unadmitted,
+                        volatile_unadmitted,
+                        unadmitted_count,
+                        unadmitted_bytes,
+                        cancellation,
+                        depth + 1,
+                    )?;
+                    continue;
+                }
+                if !kind.is_file() {
+                    bind_unadmitted_entry(
+                        root,
+                        &entry.path(),
+                        stable_unadmitted,
+                        unadmitted_count,
+                        unadmitted_bytes,
+                        cancellation,
+                        depth,
+                    )?;
+                    continue;
+                }
+                let relative = entry
+                    .path()
+                    .strip_prefix(root)?
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let (mut file, held_metadata) = open_direct_recovery_file(&entry.path())?;
+                let mut bytes = Vec::with_capacity(
+                    usize::try_from(held_metadata.len().min(16_001))
+                        .context("Project recovery file is too large for this host")?,
+                );
+                file.by_ref().take(16_001).read_to_end(&mut bytes)?;
+                let final_metadata = file.metadata()?;
+                if final_metadata.len() != held_metadata.len()
+                    || !final_metadata.is_file()
+                    || planning_metadata_is_reparse(&final_metadata)
+                {
+                    bail!("Automatic repair recovery file changed while reading");
+                }
+                let content = String::from_utf8(bytes.clone()).ok();
+                let admitted = !repair_sensitive_path(&relative)
+                    && held_metadata.len() <= 16_000
+                    && bytes.len() as u64 == held_metadata.len()
+                    && content
+                        .as_deref()
+                        .is_some_and(|content| validate_cloud_text(content).is_ok());
+                if admitted {
+                    if files.len() >= 80 {
+                        bail!("Project exceeds the bounded Auto AI repair recovery file count");
+                    }
+                    *admitted_bytes = admitted_bytes
+                        .checked_add(bytes.len())
+                        .context("Project recovery byte count overflow")?;
+                    if *admitted_bytes > 64_000 {
+                        bail!("Project exceeds the bounded Auto AI repair recovery byte count");
+                    }
+                    let content = content.unwrap();
+                    files.insert(relative, (hash(content.as_bytes()), content));
+                } else {
+                    bind_unadmitted_entry(
+                        root,
+                        &entry.path(),
+                        stable_unadmitted,
+                        unadmitted_count,
+                        unadmitted_bytes,
+                        cancellation,
+                        depth,
+                    )?;
+                }
+            }
+            Ok(())
+        }
+
+        let mut files = std::collections::BTreeMap::new();
+        let mut stable_unadmitted = Sha256::new();
+        let mut volatile_unadmitted = Sha256::new();
+        let mut admitted_bytes = 0;
+        let mut unadmitted_count = 0;
+        let mut unadmitted_bytes = 0;
+        stable_unadmitted.update(b"assemblywright.auto-repair-stable-unadmitted.v2\0");
+        volatile_unadmitted.update(b"assemblywright.auto-repair-volatile-unadmitted.v2\0");
+        visit(
+            root,
+            root,
+            &mut files,
+            &mut admitted_bytes,
+            &mut stable_unadmitted,
+            &mut volatile_unadmitted,
+            &mut unadmitted_count,
+            &mut unadmitted_bytes,
+            cancellation,
+            0,
+        )?;
+        Ok(AdmittedProjectSnapshot {
+            files,
+            unadmitted_sha256: format!("{:x}", stable_unadmitted.finalize()),
+            volatile_sha256: format!("{:x}", volatile_unadmitted.finalize()),
+        })
+    }
 }
 async fn terminate_tree(pid: u32, child: &mut tokio::process::Child) -> Result<()> {
     #[cfg(windows)]
@@ -6557,6 +11154,14 @@ struct SettingsMutation {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct AutoAiRepairMutation {
+    enabled: bool,
+    max_escalations: u32,
+    expected_revision: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct FeatureReviewerMutation {
     id: String,
     expected_revision: u64,
@@ -6585,6 +11190,24 @@ async fn settings_control(
         request.expected_revision,
         request.orchestrator,
         request.reviewer,
+    ))
+}
+
+async fn auto_ai_repair_control(
+    State(engine): State<Arc<Engine>>,
+    headers: HeaderMap,
+    Json(request): Json<AutoAiRepairMutation>,
+) -> Api {
+    if authorize(&engine, &headers).is_err() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error":"Unauthorized"})),
+        );
+    }
+    api(engine.update_auto_ai_repair(
+        request.expected_revision,
+        request.enabled,
+        request.max_escalations,
     ))
 }
 
@@ -7346,6 +11969,19 @@ impl Engine {
                             escalation_pending: false,
                             escalation_proposal: None,
                             escalation_history: Vec::new(),
+                            auto_ai_repair_limit: None,
+                            auto_repair_lifecycle: default_auto_repair_lifecycle(),
+                            auto_repair_reason: String::new(),
+                            auto_repair_epoch: 0,
+                            auto_repair_step_started_at_ms: None,
+                            auto_repair_policy_revision: None,
+                            escalation_evidence_reserved: 0,
+                            review_evidence_reserved: 0,
+                            last_failure_kind: String::new(),
+                            last_code_failure_summary: String::new(),
+                            auto_repair_limit_project_baseline: Default::default(),
+                            auto_repair_limit_unadmitted_sha256: None,
+                            auto_repair_limit_volatile_sha256: None,
                             model_target: session.model_target.clone(),
                             review_status: "pending".into(),
                             review_model: selected_reviewer.model,
@@ -7612,6 +12248,84 @@ async fn control(
             }
             "stop" | "emergency" => {
                 let emergency = request["action"] == "emergency";
+                let cancellation_effect_guard = {
+                    let guard = engine
+                        .effect_gate
+                        .lock()
+                        .map_err(|_| anyhow!("effect gate failed"))?;
+                    // Linearize Stop and Emergency Pause against every project-file
+                    // effect before attempting durable persistence. A failed write
+                    // intentionally leaves the process-local latch fail closed.
+                    engine.repair_loop_authorized.store(false, Ordering::SeqCst);
+                    engine
+                        .cancellation
+                        .fetch_max(if emergency { 2 } else { 1 }, Ordering::SeqCst);
+                    engine
+                        .publication_cancellation
+                        .fetch_max(if emergency { 2 } else { 1 }, Ordering::SeqCst);
+                    engine.tool_cancellation.store(true, Ordering::SeqCst);
+                    guard
+                };
+                let persisted = engine.change(|s| {
+                    if emergency {
+                        s.emergency_paused = true;
+                    }
+                    for feature in &mut s.queue {
+                        if feature.auto_repair_lifecycle == "running" {
+                            if emergency {
+                                retire_ready_automatic_proposal_for_cancellation(
+                                    feature,
+                                    "Emergency Pause arrived after proposal generation and before authorization. The unapplied automatic proposal was retired without review."
+                                )?;
+                            } else {
+                                pause_preapply_automatic_proposal_for_disable(
+                                    feature,
+                                    "Stop cancelled automatic proposal work before authorization. The unapplied proposal was retired without review; Resume or re-enable may start fresh work without replaying proposal bytes.",
+                                )?;
+                            }
+                            persist_automatic_cancellation_intent(
+                                feature,
+                                engine.running.load(Ordering::SeqCst),
+                                if emergency {
+                                    "Emergency Pause cancellation intent was persisted before active automatic repair was signalled"
+                                } else {
+                                    "Stop cancellation intent was persisted before active automatic repair was signalled"
+                                },
+                                if emergency {
+                                    "Emergency Pause was recorded after automatic repair application began. The uncertain write boundary is quarantined before process termination."
+                                } else {
+                                    "Stop was recorded after automatic repair application began. The uncertain write boundary is quarantined before process termination."
+                                },
+                            )?;
+                        }
+                    }
+                    for session in &mut s.planning_sessions {
+                        invalidate_pending(session, if emergency {
+                            "Emergency Pause interrupted the planning request; retry after clearing the pause."
+                        } else {
+                            "Stop interrupted the planning request; retry when ready."
+                        })?;
+                    }
+                    Ok(())
+                });
+                if let Err(error) = persisted {
+                    if emergency {
+                        // A failed durable Emergency Pause write still latches the
+                        // process-local stop signal so no further work can start.
+                        // Automatic repair remains ineligible until the owner
+                        // durably clears the fail-closed latch.
+                        engine.cancellation.fetch_max(2, Ordering::SeqCst);
+                        engine
+                            .publication_cancellation
+                            .fetch_max(2, Ordering::SeqCst);
+                        engine.tool_cancellation.store(true, Ordering::SeqCst);
+                        engine.cancel_planning_call(true);
+                        engine.cancel_escalation_call(true);
+                        engine.chat.cancel_for_emergency();
+                        engine.tools.cancel_for_emergency();
+                    }
+                    return Err(error);
+                }
                 engine.repair_loop_authorized.store(false, Ordering::SeqCst);
                 engine
                     .cancellation
@@ -7628,24 +12342,12 @@ async fn control(
                     engine.chat.cancel_for_emergency();
                     engine.tools.cancel_for_emergency();
                 }
-                engine.change(|s| {
-                    if emergency {
-                        s.emergency_paused = true;
-                    }
-                    for session in &mut s.planning_sessions {
-                        invalidate_pending(session, if emergency {
-                            "Emergency Pause interrupted the planning request; retry after clearing the pause."
-                        } else {
-                            "Stop interrupted the planning request; retry when ready."
-                        })?;
-                    }
-                    Ok(())
-                })?;
                 if emergency {
                     if let Ok(mut recovery) = engine.planning_completion_recovery.lock() {
                         *recovery = None;
                     }
                 }
+                drop(cancellation_effect_guard);
             }
             "shutdown" => {
                 engine.begin_shutdown()?;
@@ -7717,7 +12419,7 @@ async fn main() -> Result<()> {
     }
     let token = fs::read_to_string(&token_path)?;
     let connection = Connection::open(args.data_dir.join("developer.sqlite3"))?;
-    connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS developer_state(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v1_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v2_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v3_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v4_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v5_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v6_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v7_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v8_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v9_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL);")?;
+    connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS developer_state(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v1_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v2_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v3_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v4_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v5_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v6_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v7_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v8_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v9_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v10_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL);")?;
     let github_setup = GithubSetupState::initialize_and_load(&connection)?;
     let (mut state, loaded_queue_version): (Snapshot, u8) =
         match connection.query_row("SELECT state FROM developer_state WHERE id=1", [], |r| {
@@ -7725,7 +12427,9 @@ async fn main() -> Result<()> {
         }) {
             Ok(data) => {
                 let value: Value = serde_json::from_str(&data)?;
-                let loaded_queue_version = if value.get("queue_v10").is_some() {
+                let loaded_queue_version = if value.get("queue_v11").is_some() {
+                    11
+                } else if value.get("queue_v10").is_some() {
                     10
                 } else if value.get("queue_v9").is_some() {
                     9
@@ -7790,6 +12494,12 @@ async fn main() -> Result<()> {
                         [&data],
                     )?;
                 }
+                if value.get("queue_v10").is_some() && value.get("queue_v11").is_none() {
+                    connection.execute(
+                        "INSERT OR IGNORE INTO developer_state_v10_backup(id,state) VALUES(1,?1)",
+                        [&data],
+                    )?;
+                }
                 (serde_json::from_value(value)?, loaded_queue_version)
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => (
@@ -7797,11 +12507,13 @@ async fn main() -> Result<()> {
                     auto_run: true,
                     ..Default::default()
                 },
-                10,
+                11,
             ),
             Err(e) => return Err(e.into()),
         };
     let root = fs::canonicalize(&args.workspace_root)?;
+    validate_auto_repair_max(state.auto_ai_repair_max_escalations)
+        .context("Persisted Auto AI repair maximum is invalid")?;
     validate_ai_model_id(&state.ai_settings.orchestrator.model)
         .context("Persisted orchestrator model setting is invalid")?;
     validate_reasoning_effort(&state.ai_settings.orchestrator.reasoning_effort)
@@ -7849,6 +12561,7 @@ async fn main() -> Result<()> {
         bail!("Persisted cumulative review evidence has an unsupported version");
     }
     let recovery_revision = state.revision.checked_add(1).context("Revision overflow")?;
+    let recovery_now_ms = current_time_ms().context("System clock is invalid")?;
     let mut connected_projects = std::collections::BTreeSet::new();
     for binding in &state.github_connections {
         validate_publication_binding(binding).context("Persisted GitHub connection is invalid")?;
@@ -7856,7 +12569,22 @@ async fn main() -> Result<()> {
             bail!("Persisted GitHub connections contain a duplicate project");
         }
     }
+    let persisted_revision = state.revision;
     for feature in &mut state.queue {
+        if loaded_queue_version < 11 {
+            feature.escalation_evidence_reserved = feature
+                .escalation_count
+                .saturating_mul(3)
+                .max(feature.escalation_history.len() as u32);
+            feature.review_evidence_reserved = feature.escalation_count;
+        }
+        migrate_and_validate_auto_repair_step_timestamp(feature, recovery_now_ms)
+            .context("Persisted automatic repair step timestamp is invalid")?;
+        validate_auto_repair_feature(feature)
+            .context("Persisted automatic repair feature state is invalid")?;
+        for evidence in &feature.escalation_history {
+            validate_authorization_revision(evidence, loaded_queue_version, persisted_revision)?;
+        }
         validate_ai_model_id(&feature.review_model)
             .context("Persisted feature reviewer model binding is invalid")?;
         validate_reasoning_effort(&feature.review_reasoning_effort)
@@ -7873,6 +12601,14 @@ async fn main() -> Result<()> {
             if !feature.publication_selection_frozen || binding.project != feature.project {
                 bail!("Persisted feature GitHub connection is not frozen to its project");
             }
+        }
+        if loaded_queue_version < 11 && !feature.publication_candidate.is_empty() {
+            let project = fs::canonicalize(root.join(&feature.project))?;
+            if !project.starts_with(&root) {
+                bail!("Project escapes the workspace root");
+            }
+            migrate_legacy_publication_classifications(feature, &project, loaded_queue_version)
+                .context("Legacy frozen publication classification migration failed")?;
         }
         if let Some(publication) = feature.publication.as_ref() {
             publication
@@ -7895,29 +12631,7 @@ async fn main() -> Result<()> {
                 feature.checkpoint = "publication_merged".into();
             }
         }
-        if feature
-            .escalation_proposal
-            .as_ref()
-            .is_some_and(|proposal| proposal.status == "preparing")
-        {
-            let proposal = feature.escalation_proposal.as_mut().unwrap();
-            proposal.status = "interrupted".into();
-            proposal.summary = "Runner restarted before the selected local AI finished the repair proposal; prepare a new proposal".into();
-            proposal.error = None;
-            proposal.binding_revision = recovery_revision;
-            feature.escalation_history.push(RepairEscalationEvidence {
-                proposal_id: proposal.proposal_id.clone(),
-                attempt: proposal.attempt,
-                model_target: proposal.model_target.clone(),
-                model: proposal.model.clone(),
-                chat_id: proposal.chat_id.clone(),
-                chat_request_id: proposal.chat_request_id.clone(),
-                diagnosis_sha256: proposal.diagnosis_sha256.clone(),
-                outcome: "interrupted".into(),
-                proposal_sha256: None,
-                summary: proposal.summary.clone(),
-            });
-        }
+        recover_interrupted_escalation_preparation(feature, recovery_revision)?;
         if feature.escalation_pending
             && (feature.checkpoint.ends_with("_approved")
                 || feature.checkpoint.ends_with("_applying"))
@@ -7932,8 +12646,30 @@ async fn main() -> Result<()> {
                 recovery_revision,
                 "Runner restarted during repair proposal application. Inspect the workspace and prepare a new proposal; Resume will not replay unrecorded or partially applied edits.",
             )?;
+            set_auto_repair_lifecycle(
+                feature,
+                "quarantined",
+                "Runner restart interrupted an automatic repair effect boundary. Inspect the workspace; automatic replay is blocked.",
+            )?;
+        } else if feature.status == "running"
+            && feature.auto_repair_lifecycle == "running"
+            && automatic_ordinary_pre_effect_checkpoint(feature)
+        {
+            feature.status = "failed".into();
+            feature.message = if feature.checkpoint.ends_with("_reserved") {
+                "Runner restarted before the reserved ordinary repair made any change. The same reserved attempt may continue without consuming another attempt."
+            } else {
+                "Runner restarted after an ordinary repair was prepared but before its effect boundary. The exact saved candidate may continue once without re-running inference."
+            }
+            .into();
+            start_auto_repair_step(feature)?;
         } else if feature.status == "running" {
-            feature.status = "paused".into();
+            feature.status = if feature.auto_repair_lifecycle == "running" {
+                "failed"
+            } else {
+                "paused"
+            }
+            .into();
             if feature.review_pending.is_some() {
                 interrupt_pending_review(
                     feature,
@@ -7943,6 +12679,13 @@ async fn main() -> Result<()> {
             feature.message =
                 "Runner restarted. Review the workspace, then Resume from the saved checkpoint."
                     .into();
+            if feature.auto_repair_lifecycle == "running" {
+                set_auto_repair_lifecycle(
+                    feature,
+                    "quarantined",
+                    "Runner restart interrupted validation or independent review. Automatic replay is blocked until the owner inspects the workspace.",
+                )?;
+            }
         }
         if feature.review_status == "legacy_unreviewed"
             && !matches!(feature.status.as_str(), "succeeded" | "removed")
@@ -8013,6 +12756,7 @@ async fn main() -> Result<()> {
             state,
             github_setup,
         }),
+        effect_gate: Mutex::new(()),
         running: AtomicBool::new(false),
         cancellation: AtomicU8::new(0),
         tool_cancellation: Arc::new(AtomicBool::new(false)),
@@ -8039,6 +12783,9 @@ async fn main() -> Result<()> {
         publication_unavailable_reason,
     });
     engine.change(|_| Ok(()))?;
+    if let Err(error) = engine.resume_automatic_after_restart() {
+        eprintln!("developer automatic repair restart recovery: {error:#}");
+    }
     let app = Router::new()
         .route("/status", get(status))
         .route(
@@ -8047,6 +12794,7 @@ async fn main() -> Result<()> {
         )
         .route("/github", get(github_status).post(github_control))
         .route("/settings", get(settings_status).post(settings_control))
+        .route("/auto-ai-repair", post(auto_ai_repair_control))
         .route("/feature-reviewer", post(feature_reviewer_control))
         .route("/control", post(control))
         .route(
@@ -8144,6 +12892,7 @@ mod tests {
                 },
                 github_setup,
             }),
+            effect_gate: Mutex::new(()),
             running: AtomicBool::new(false),
             cancellation: AtomicU8::new(0),
             tool_cancellation: Arc::new(AtomicBool::new(false)),
@@ -8357,6 +13106,19 @@ mod tests {
             escalation_pending: false,
             escalation_proposal: None,
             escalation_history: Vec::new(),
+            auto_ai_repair_limit: None,
+            auto_repair_lifecycle: default_auto_repair_lifecycle(),
+            auto_repair_reason: String::new(),
+            auto_repair_epoch: 0,
+            auto_repair_step_started_at_ms: None,
+            auto_repair_policy_revision: None,
+            escalation_evidence_reserved: 0,
+            review_evidence_reserved: 0,
+            last_failure_kind: String::new(),
+            last_code_failure_summary: String::new(),
+            auto_repair_limit_project_baseline: Default::default(),
+            auto_repair_limit_unadmitted_sha256: None,
+            auto_repair_limit_volatile_sha256: None,
             model_target: "mac".into(),
             review_status: "pending".into(),
             review_model: REVIEW_MODEL_ID.into(),
@@ -8412,6 +13174,12 @@ mod tests {
             )]),
             applied_paths: vec!["tests/test_gui.py".into()],
             apply_request_id: Some("b35972e8-b6a8-4cb9-96fa-cc7a68d2e8b2".into()),
+            source: manual_escalation_source(),
+            automatic_epoch: None,
+            policy_revision: None,
+            limit_snapshot: Some(ESCALATION_LIMIT),
+            project_state_sha256: None,
+            review_slot_terminal: false,
         });
         let proposal = feature.escalation_proposal.as_ref().unwrap();
         feature.escalation_history.push(RepairEscalationEvidence {
@@ -8424,7 +13192,14 @@ mod tests {
             diagnosis_sha256: "0".repeat(64),
             outcome: "approved_to_apply".into(),
             proposal_sha256: Some("0".repeat(64)),
+            candidate_sha256: None,
             summary: "older approval".into(),
+            source: manual_escalation_source(),
+            automatic_epoch: None,
+            policy_revision: None,
+            limit_snapshot: Some(ESCALATION_LIMIT),
+            project_state_sha256: None,
+            authorization_revision: None,
         });
         feature.escalation_history.push(RepairEscalationEvidence {
             proposal_id: proposal.proposal_id.clone(),
@@ -8436,7 +13211,14 @@ mod tests {
             diagnosis_sha256: proposal.diagnosis_sha256.clone(),
             outcome: "approved_to_apply".into(),
             proposal_sha256: Some(repair_escalation_proposal_sha256(proposal).unwrap()),
+            candidate_sha256: Some(repair_escalation_candidate_sha256(proposal).unwrap()),
             summary: "approved".into(),
+            source: proposal.source.clone(),
+            automatic_epoch: proposal.automatic_epoch,
+            policy_revision: proposal.policy_revision,
+            limit_snapshot: proposal.limit_snapshot,
+            project_state_sha256: proposal.project_state_sha256.clone(),
+            authorization_revision: None,
         });
         feature
     }
@@ -8462,6 +13244,7 @@ mod tests {
             before_sha256: None,
             content_sha256: hash(b"saved"),
             content: "saved".into(),
+            classification: "ordinary_source".into(),
         }];
         let validation_evidence_sha256 = "1".repeat(64);
         let packet = DeveloperReviewPacket {
@@ -8477,6 +13260,7 @@ mod tests {
             model_id: feature.review_model.clone(),
             reasoning_effort: feature.review_reasoning_effort.clone(),
             files: vec![DeveloperReviewFile {
+                classification: "ordinary_source".into(),
                 path: "result.txt".into(),
                 before_sha256: None,
                 content_sha256: hash(b"saved"),
@@ -9593,7 +14377,105 @@ mod tests {
     }
 
     #[test]
-    fn queue_v10_reads_legacy_state_defaults_and_fails_closed_for_old_parsers() {
+    fn auto_repair_step_timestamp_migrates_running_legacy_state_and_rejects_future_state() {
+        let mut legacy = feature_with_status("failed");
+        legacy.auto_repair_lifecycle = "running".into();
+        legacy.auto_repair_step_started_at_ms = None;
+        migrate_and_validate_auto_repair_step_timestamp(&mut legacy, 42_000).unwrap();
+        assert_eq!(legacy.auto_repair_step_started_at_ms, Some(42_000));
+        assert_eq!(
+            projected_auto_repair_step_elapsed_ms(&legacy, 42_000),
+            Some(0)
+        );
+
+        legacy.auto_repair_step_started_at_ms = Some(42_001);
+        assert!(
+            migrate_and_validate_auto_repair_step_timestamp(&mut legacy, 42_000)
+                .unwrap_err()
+                .to_string()
+                .contains("future")
+        );
+
+        legacy.auto_repair_step_started_at_ms = Some(0);
+        assert!(migrate_and_validate_auto_repair_step_timestamp(&mut legacy, 42_000).is_err());
+
+        legacy.auto_repair_lifecycle = "held".into();
+        legacy.auto_repair_step_started_at_ms = Some(41_999);
+        assert!(migrate_and_validate_auto_repair_step_timestamp(&mut legacy, 42_000).is_err());
+
+        let mut malformed = serde_json::to_value(feature_with_status("failed")).unwrap();
+        malformed["auto_repair_step_started_at_ms"] = json!("yesterday");
+        assert!(serde_json::from_value::<Feature>(malformed).is_err());
+    }
+
+    #[test]
+    fn auto_repair_step_timestamp_tracks_phase_start_and_clears_for_every_nonrunning_state() {
+        let mut feature = feature_with_status("failed");
+        feature.auto_repair_lifecycle = "running".into();
+        start_auto_repair_step_at(&mut feature, 101).unwrap();
+        assert_eq!(feature.auto_repair_step_started_at_ms, Some(101));
+        start_auto_repair_step_at(&mut feature, 202).unwrap();
+        assert_eq!(feature.auto_repair_step_started_at_ms, Some(202));
+        assert_eq!(
+            projected_auto_repair_step_elapsed_ms(&feature, 303),
+            Some(101)
+        );
+        feature.auto_repair_step_started_at_ms = Some(1);
+        reserve_repair_attempt(&mut feature).unwrap();
+        assert!(feature.auto_repair_step_started_at_ms.unwrap() > 1);
+
+        for lifecycle in ["inactive", "held", "limit_reached", "quarantined"] {
+            feature.auto_repair_lifecycle = "running".into();
+            feature.auto_repair_step_started_at_ms = Some(202);
+            set_auto_repair_lifecycle(&mut feature, lifecycle, "test transition").unwrap();
+            assert_eq!(feature.auto_repair_step_started_at_ms, None, "{lifecycle}");
+            assert_eq!(
+                projected_auto_repair_step_elapsed_ms(&feature, 303),
+                None,
+                "{lifecycle}"
+            );
+        }
+    }
+
+    #[test]
+    fn auto_repair_step_timestamp_projection_is_reconnect_stable() {
+        let (_dir, engine) = control_test_engine();
+        engine
+            .change(|state| {
+                let feature = &mut state.queue[0];
+                feature.auto_repair_lifecycle = "running".into();
+                start_auto_repair_step_at(feature, 303)?;
+                Ok(())
+            })
+            .unwrap();
+        let first = engine.snapshot().unwrap();
+        let second = engine.snapshot().unwrap();
+        assert_eq!(first["queue"][0]["auto_repair_step_started_at_ms"], 303);
+        assert_eq!(
+            first["queue"][0]["auto_repair_step_elapsed_ms"],
+            AUTO_REPAIR_STEP_ELAPSED_LIMIT_MS
+        );
+        assert_eq!(
+            second["queue"][0]["auto_repair_step_started_at_ms"],
+            first["queue"][0]["auto_repair_step_started_at_ms"]
+        );
+
+        let mut future = feature_with_status("failed");
+        future.auto_repair_lifecycle = "running".into();
+        future.auto_repair_step_started_at_ms = Some(u64::MAX);
+        assert_eq!(projected_auto_repair_step_elapsed_ms(&future, 1), Some(0));
+
+        engine
+            .change(|state| set_auto_repair_lifecycle(&mut state.queue[0], "held", "fixture hold"))
+            .unwrap();
+        let held = engine.snapshot().unwrap();
+        assert!(held["queue"][0]
+            .get("auto_repair_step_elapsed_ms")
+            .is_none());
+    }
+
+    #[test]
+    fn queue_v11_reads_legacy_state_defaults_and_fails_closed_for_old_parsers() {
         let legacy_v1 = r#"{"revision":7,"auto_run":true,"emergency_paused":false,"queue":[]}"#;
         let legacy_v2 = r#"{"revision":8,"auto_run":true,"emergency_paused":false,"queue_v2":[]}"#;
         let legacy_v3 = format!(
@@ -9606,6 +14488,11 @@ mod tests {
         assert_eq!(decoded.revision, 7);
         assert!(decoded.queue.is_empty());
         assert_eq!(decoded.ai_settings, DeveloperAiSettings::default());
+        assert!(!decoded.auto_ai_repair_enabled);
+        assert_eq!(
+            decoded.auto_ai_repair_max_escalations,
+            DEFAULT_AUTO_AI_REPAIR_MAX_ESCALATIONS
+        );
         let mut legacy_feature = serde_json::to_value(feature_with_status("queued")).unwrap();
         let legacy_feature = legacy_feature.as_object_mut().unwrap();
         legacy_feature.remove("review_model");
@@ -9616,6 +14503,15 @@ mod tests {
         legacy_feature.remove("publication_binding");
         legacy_feature.remove("publication_candidate");
         legacy_feature.remove("publication");
+        legacy_feature.remove("auto_ai_repair_limit");
+        legacy_feature.remove("auto_repair_lifecycle");
+        legacy_feature.remove("auto_repair_reason");
+        legacy_feature.remove("auto_repair_epoch");
+        legacy_feature.remove("auto_repair_step_started_at_ms");
+        legacy_feature.remove("auto_repair_policy_revision");
+        legacy_feature.remove("escalation_evidence_reserved");
+        legacy_feature.remove("review_evidence_reserved");
+        legacy_feature.remove("last_failure_kind");
         let legacy_feature: Feature =
             serde_json::from_value(Value::Object(legacy_feature.clone())).unwrap();
         assert_eq!(legacy_feature.review_model, REVIEW_MODEL_ID);
@@ -9629,6 +14525,8 @@ mod tests {
         assert!(legacy_feature.publication_binding.is_none());
         assert!(legacy_feature.publication_candidate.is_empty());
         assert!(legacy_feature.publication.is_none());
+        assert!(legacy_feature.last_failure_kind.is_empty());
+        assert!(legacy_feature.auto_repair_step_started_at_ms.is_none());
         assert!(serde_json::from_str::<Snapshot>(r#"{"revision":1,"auto_run":true,"emergency_paused":false,"queue_v8":[],"ai_settings":{"revision":1,"orchestrator":{"model":"gpt-5.6-sol"}}}"#).is_err());
         assert_eq!(
             serde_json::from_str::<Snapshot>(legacy_v2)
@@ -9662,7 +14560,8 @@ mod tests {
 
         let current = serde_json::to_string(&decoded).unwrap();
         let current_value: Value = serde_json::from_str(&current).unwrap();
-        assert!(current_value.get("queue_v10").is_some());
+        assert!(current_value.get("queue_v11").is_some());
+        assert!(current_value.get("queue_v10").is_none());
         assert!(current_value.get("queue_v9").is_none());
         assert!(current_value.get("queue_v8").is_none());
         assert!(current_value.get("queue_v7").is_none());
@@ -10138,6 +15037,10 @@ mod tests {
             .escalation_proposal
             .unwrap();
         let digest = repair_escalation_proposal_sha256(&proposal).unwrap();
+        assert_eq!(
+            digest, "ebb43dca80d6a12faf8bb784bf18da5f2ad8c8e380acb0e87cd173ea75e61618",
+            "schema-v10 manual approval receipts must remain byte-verifiable"
+        );
 
         let mut lifecycle_only = proposal.clone();
         lifecycle_only.status = "approved".into();
@@ -10188,6 +15091,48 @@ mod tests {
             feature.escalation_history.last().unwrap().proposal_sha256,
             approved_hash
         );
+    }
+
+    #[test]
+    fn owner_approved_manual_escalation_applies_without_entering_automatic_timing() {
+        let project = tempfile::tempdir().unwrap();
+        fs::create_dir(project.path().join("tests")).unwrap();
+        fs::write(
+            project.path().join("tests/test_gui.py"),
+            "assert widget == 'old'\n",
+        )
+        .unwrap();
+        let project_root = fs::canonicalize(project.path()).unwrap();
+        let mut feature = feature_with_escalation("running");
+        feature.checkpoint = "escalation_1_approved".into();
+        feature.auto_repair_lifecycle = "inactive".into();
+        feature.auto_repair_step_started_at_ms = None;
+        let proposal = feature.escalation_proposal.as_mut().unwrap();
+        proposal.status = "approved".into();
+        proposal.applied_paths.clear();
+        assert_eq!(proposal.source, manual_escalation_source());
+        let edit = Edit {
+            path: proposal.files[0].path.clone(),
+            content: proposal.files[0].after.clone(),
+            before: proposal.files[0]
+                .before
+                .as_ref()
+                .map(|before| hash(before.as_bytes())),
+        };
+
+        apply_edit(&project_root, &edit).unwrap();
+        record_escalation_file_application(&mut feature, &edit, 12).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(project.path().join("tests/test_gui.py")).unwrap(),
+            "assert widget == 'new'\n"
+        );
+        assert_eq!(feature.checkpoint, "escalation_1_applying");
+        assert_eq!(feature.auto_repair_lifecycle, "inactive");
+        assert_eq!(feature.auto_repair_step_started_at_ms, None);
+        let proposal = feature.escalation_proposal.as_ref().unwrap();
+        assert_eq!(proposal.status, "applying");
+        assert_eq!(proposal.applied_paths, ["tests/test_gui.py"]);
     }
 
     #[test]
@@ -10332,6 +15277,90 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("recorded applied bytes changed"));
+    }
+
+    #[test]
+    fn escalation_write_receipt_commits_before_a_stop_can_cross_the_effect_gate() {
+        let (_directory, engine) = control_test_engine();
+        let project = fs::canonicalize(engine.root.join("example")).unwrap();
+        fs::write(project.join("result.txt"), "saved").unwrap();
+        let edit = Edit {
+            path: "result.txt".into(),
+            content: "repaired".into(),
+            before: Some(hash(b"saved")),
+        };
+        engine
+            .change(|state| {
+                let mut feature = feature_with_escalation("running");
+                feature.checkpoint = "escalation_1_approved".into();
+                let proposal = feature.escalation_proposal.as_mut().unwrap();
+                proposal.status = "approved".into();
+                proposal.applied_paths.clear();
+                proposal.files = vec![RepairEscalationFile {
+                    path: edit.path.clone(),
+                    before: Some("saved".into()),
+                    after: edit.content.clone(),
+                    protected: false,
+                }];
+                state.queue[0] = feature;
+                Ok(())
+            })
+            .unwrap();
+
+        let (write_done_tx, write_done_rx) = std::sync::mpsc::channel();
+        let (record_tx, record_rx) = std::sync::mpsc::channel();
+        let worker_engine = engine.clone();
+        let worker_project = project.clone();
+        let worker_edit = edit.clone();
+        let worker = std::thread::spawn(move || {
+            let effect_guard = worker_engine.effect_gate.lock().unwrap();
+            apply_edit(&worker_project, &worker_edit).unwrap();
+            write_done_tx.send(()).unwrap();
+            record_rx.recv().unwrap();
+            worker_engine
+                .change(|state| {
+                    let revision = state.revision + 1;
+                    record_escalation_file_application(&mut state.queue[0], &worker_edit, revision)
+                })
+                .unwrap();
+            drop(effect_guard);
+        });
+        write_done_rx.recv().unwrap();
+
+        let (stop_started_tx, stop_started_rx) = std::sync::mpsc::channel();
+        let (stop_done_tx, stop_done_rx) = std::sync::mpsc::channel();
+        let stop_engine = engine.clone();
+        let stop = std::thread::spawn(move || {
+            stop_started_tx.send(()).unwrap();
+            let _effect_guard = stop_engine.effect_gate.lock().unwrap();
+            stop_engine
+                .change(|state| {
+                    state.queue[0].status = "paused".into();
+                    Ok(())
+                })
+                .unwrap();
+            stop_done_tx.send(()).unwrap();
+        });
+        stop_started_rx.recv().unwrap();
+        assert!(stop_done_rx
+            .recv_timeout(Duration::from_millis(25))
+            .is_err());
+        record_tx.send(()).unwrap();
+        worker.join().unwrap();
+        stop_done_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        stop.join().unwrap();
+
+        let database = engine.database.lock().unwrap();
+        let feature = &database.state.queue[0];
+        assert_eq!(feature.status, "paused");
+        assert_eq!(
+            feature.escalation_proposal.as_ref().unwrap().applied_paths,
+            ["result.txt"]
+        );
+        assert_eq!(
+            fs::read_to_string(project.join("result.txt")).unwrap(),
+            "repaired"
+        );
     }
 
     #[test]
@@ -10566,6 +15595,65 @@ mod tests {
     }
 
     #[test]
+    fn protected_input_byte_reservation_fails_before_mutating_the_read_budget() {
+        let mut bytes_seen = PROTECTED_REPAIR_INPUT_BYTE_LIMIT - 1;
+        assert_eq!(
+            reserve_protected_input_bytes(&mut bytes_seen, 1).unwrap(),
+            1
+        );
+        assert_eq!(bytes_seen, PROTECTED_REPAIR_INPUT_BYTE_LIMIT);
+
+        let error = reserve_protected_input_bytes(&mut bytes_seen, 1).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Protected repair inputs exceed 64 MiB"));
+        assert_eq!(bytes_seen, PROTECTED_REPAIR_INPUT_BYTE_LIMIT);
+
+        let mut per_file = 0;
+        let error = reserve_protected_input_bytes(
+            &mut per_file,
+            u64::try_from(PROTECTED_REPAIR_INPUT_BYTE_LIMIT).unwrap() + 1,
+        )
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Protected repair input exceeds 64 MiB"));
+        assert_eq!(per_file, 0);
+
+        let mut overflow = usize::MAX;
+        let error = reserve_protected_input_bytes(&mut overflow, 1).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Protected repair input size overflow"));
+        assert_eq!(overflow, usize::MAX);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_oversized_protected_input_is_rejected_from_metadata_before_content_admission() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir(directory.path().join("tests")).unwrap();
+        let path = directory.path().join("tests/oversized.bin");
+        let file = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        // Establish only the oversized logical length. The scanner must reject
+        // the held metadata before allocating a content buffer or reading it.
+        file.set_len(u64::try_from(PROTECTED_REPAIR_INPUT_BYTE_LIMIT).unwrap() + 1)
+            .unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let root = fs::canonicalize(directory.path()).unwrap();
+        let error = repair_protected_inputs(&root, &[]).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Protected repair input exceeds 64 MiB"));
+    }
+
+    #[test]
     fn prepared_edits_resume_once_and_preserve_owner_changes() {
         let dir = tempfile::tempdir().unwrap();
         let root = fs::canonicalize(dir.path()).unwrap();
@@ -10583,6 +15671,2451 @@ mod tests {
             "owner edit"
         );
     }
+
+    #[test]
+    fn auto_ai_repair_request_is_strict_and_bounds_the_shared_cap() {
+        let request: AutoAiRepairMutation = serde_json::from_value(json!({
+            "enabled":true,
+            "max_escalations":100,
+            "expected_revision":7
+        }))
+        .unwrap();
+        assert!(request.enabled);
+        assert_eq!(request.max_escalations, 100);
+        assert_eq!(request.expected_revision, 7);
+        assert!(serde_json::from_value::<AutoAiRepairMutation>(json!({
+            "enabled":true,
+            "max_escalations":100,
+            "expected_revision":7,
+            "approve":true
+        }))
+        .is_err());
+        for invalid in [0, 101, u32::MAX] {
+            assert!(validate_auto_repair_max(invalid).is_err(), "{invalid}");
+        }
+        for valid in [1, 100] {
+            validate_auto_repair_max(valid).unwrap();
+        }
+    }
+
+    #[test]
+    fn disabled_maximum_edit_does_not_cancel_an_ordinary_running_feature() {
+        let (_directory, engine) = control_test_engine();
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = false;
+                state.queue[0].status = "running".into();
+                state.queue[0].checkpoint = "prepared".into();
+                state.queue[0].auto_repair_lifecycle = "inactive".into();
+                Ok(())
+            })
+            .unwrap();
+        engine.running.store(true, Ordering::SeqCst);
+        let revision = engine.database.lock().unwrap().state.revision;
+        let result = engine.update_auto_ai_repair(revision, false, 12).unwrap();
+        assert_eq!(result["auto_ai_repair_max_escalations"], 12);
+        assert_eq!(engine.cancellation.load(Ordering::SeqCst), 0);
+        assert!(!engine.tool_cancellation.load(Ordering::SeqCst));
+        assert_eq!(result["queue"][0]["status"], "running");
+        assert_eq!(result["queue"][0]["auto_repair_lifecycle"], "inactive");
+        engine.running.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn enabled_policy_arms_fresh_execution_before_three_ordinary_repairs() {
+        let mut feature = feature_with_status("queued");
+        feature.checkpoint = "not_started".into();
+        feature.edits = None;
+        assert!(arm_auto_repair_at_execution_start(&mut feature, true, 7, 41).unwrap());
+        assert_eq!(feature.auto_ai_repair_limit, Some(7));
+        assert_eq!(feature.auto_repair_policy_revision, Some(41));
+        assert_eq!(feature.auto_repair_lifecycle, "running");
+        assert_eq!(feature.auto_repair_epoch, 1);
+
+        for expected_attempt in 1..=REPAIR_LIMIT {
+            feature.status = "failed".into();
+            feature.checkpoint = format!("repair_{}_validation_failed", expected_attempt - 1);
+            feature.repair_pending = false;
+            reserve_repair_attempt(&mut feature).unwrap();
+            assert_eq!(feature.repair_attempts, expected_attempt);
+            assert_eq!(feature.escalation_count, 0);
+        }
+        feature.status = "failed".into();
+        feature.repair_pending = false;
+        reserve_escalation_evidence(&mut feature).unwrap();
+        assert_eq!(feature.escalation_count, 1);
+        assert_eq!(feature.escalation_evidence_reserved, 3);
+        assert_eq!(feature.review_evidence_reserved, 1);
+    }
+
+    #[test]
+    fn enable_time_repair_requires_exact_code_failure_classification() {
+        for kind in ["validation_failure", "review_rejection"] {
+            let mut feature = feature_with_status("failed");
+            feature.last_failure_kind = kind.into();
+            assert!(automatic_code_failure_is_eligible(&feature), "{kind}");
+        }
+        for (kind, checkpoint) in [
+            ("operational", "review_1_unavailable"),
+            ("", "review_1_unavailable"),
+            ("", "applied"),
+        ] {
+            let mut feature = feature_with_status("failed");
+            feature.last_failure_kind = kind.into();
+            feature.checkpoint = checkpoint.into();
+            assert!(
+                !automatic_code_failure_is_eligible(&feature),
+                "{kind} {checkpoint}"
+            );
+        }
+
+        let (_directory, engine) = control_test_engine();
+        engine
+            .change(|state| {
+                let feature = &mut state.queue[0];
+                feature.status = "failed".into();
+                feature.checkpoint = "review_1_unavailable".into();
+                feature.last_failure_kind = "operational".into();
+                Ok(())
+            })
+            .unwrap();
+        let revision = engine.snapshot().unwrap()["revision"].as_u64().unwrap();
+        let snapshot = engine.update_auto_ai_repair(revision, true, 8).unwrap();
+        assert_eq!(snapshot["queue"][0]["repair_attempts"], 0);
+        assert_eq!(snapshot["queue"][0]["auto_repair_lifecycle"], "held");
+        assert!(!engine.running.load(Ordering::SeqCst));
+        assert_eq!(engine.cancellation.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn ordinary_auto_repair_persists_applying_epoch_before_any_write_and_quarantines() {
+        let mut feature = feature_with_status("running");
+        feature.repair_attempts = 2;
+        feature.repair_pending = true;
+        feature.auto_repair_epoch = 11;
+        set_auto_repair_lifecycle(&mut feature, "running", "automatic ordinary repair").unwrap();
+
+        begin_automatic_ordinary_repair_application(&mut feature, true, 11, 2).unwrap();
+        assert_eq!(feature.checkpoint, "repair_2_applying");
+        assert!(feature.message.contains("policy epoch 11"));
+        assert!(automatic_post_apply_is_ambiguous(&feature));
+        assert!(begin_automatic_ordinary_repair_application(&mut feature, true, 12, 2).is_err());
+
+        persist_automatic_cancellation_intent(
+            &mut feature,
+            true,
+            "Stop cancellation intent",
+            "Stop quarantined an uncertain ordinary-repair write boundary",
+        )
+        .unwrap();
+        assert_eq!(feature.auto_repair_epoch, 12);
+        assert_eq!(feature.auto_repair_lifecycle, "quarantined");
+
+        quarantine_automatic_post_apply(
+            &mut feature,
+            24,
+            "Stop arrived after an ordinary repair write may have occurred",
+        )
+        .unwrap();
+        assert_eq!(feature.status, "failed");
+        assert_eq!(feature.auto_repair_lifecycle, "quarantined");
+        assert_eq!(feature.checkpoint, "auto_repair_effects_quarantined");
+        assert!(feature.edits.is_some());
+    }
+
+    #[test]
+    fn repair_admission_excludes_secrets_and_rejects_credential_like_outputs() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(directory.path()).unwrap();
+        fs::write(root.join("main.rs"), "fn main() {}\n").unwrap();
+        fs::write(root.join("credentials.json"), "{}\n").unwrap();
+        fs::write(root.join("leaked.txt"), "api_key = supersecretvalue123\n").unwrap();
+
+        let context = project_context(&root).unwrap();
+        assert_eq!(context.len(), 1);
+        assert_eq!(context[0]["path"], "main.rs");
+
+        for edit in [
+            Edit {
+                path: "new-credentials.json".into(),
+                content: "{}\n".into(),
+                before: None,
+            },
+            Edit {
+                path: "src/config.rs".into(),
+                content: "api_key = supersecretvalue123\n".into(),
+                before: None,
+            },
+        ] {
+            assert!(validate_repair_file_admission(&edit.path, &edit.content).is_err());
+            assert!(apply_edit(&root, &edit).is_err());
+            assert!(!root.join(&edit.path).exists());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn project_context_holds_unix_ancestor_during_concurrent_symlink_replacement() {
+        use std::os::unix::fs::symlink;
+        use std::sync::mpsc;
+
+        let project_directory = tempfile::tempdir().unwrap();
+        let outside_directory = tempfile::tempdir().unwrap();
+        let project = fs::canonicalize(project_directory.path()).unwrap();
+        let outside = fs::canonicalize(outside_directory.path()).unwrap();
+        fs::create_dir(project.join("nested")).unwrap();
+        fs::write(project.join("nested/safe.rs"), "fn safe() {}\n").unwrap();
+        let secret = "out-of-project-sensitive-prompt-content";
+        fs::write(outside.join("exposed.rs"), secret).unwrap();
+
+        let (opened_tx, opened_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let scan_root = project.clone();
+        let scan = std::thread::spawn(move || {
+            let directory_opened = |relative: &Path| {
+                if relative == Path::new("nested") {
+                    opened_tx.send(()).unwrap();
+                    release_rx
+                        .recv_timeout(Duration::from_secs(5))
+                        .expect("project-context replacement barrier was not released");
+                }
+            };
+            project_context_with_directory_opened(&scan_root, Some(&directory_opened))
+        });
+
+        opened_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("project context did not hold the nested directory");
+        fs::rename(project.join("nested"), project.join("held-nested")).unwrap();
+        symlink(&outside, project.join("nested")).unwrap();
+        release_tx.send(()).unwrap();
+        let context = scan.join().unwrap().unwrap();
+
+        fs::remove_file(project.join("nested")).unwrap();
+        fs::rename(project.join("held-nested"), project.join("nested")).unwrap();
+        assert_eq!(context.len(), 1);
+        assert_eq!(context[0]["path"], "nested/safe.rs");
+        assert_eq!(context[0]["content"], "fn safe() {}\n");
+        assert!(context
+            .iter()
+            .all(|file| !file["content"].as_str().unwrap().contains(secret)));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn project_context_refuses_windows_junction_before_alias_traversal() {
+        let project_directory = tempfile::tempdir().unwrap();
+        let outside_directory = tempfile::tempdir().unwrap();
+        let project = fs::canonicalize(project_directory.path()).unwrap();
+        fs::write(project.join("main.rs"), "fn main() {}\n").unwrap();
+        fs::write(
+            outside_directory.path().join("exposed.rs"),
+            "out-of-project-sensitive-prompt-content",
+        )
+        .unwrap();
+        let junction = project_directory.path().join("aliased-directory");
+        let creation = std::process::Command::new("cmd.exe")
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&junction)
+            .arg(outside_directory.path())
+            .output()
+            .unwrap();
+        assert!(creation.status.success());
+
+        let result = project_context(&project);
+        let cleanup = std::process::Command::new("cmd.exe")
+            .args(["/D", "/C", "rmdir"])
+            .arg(&junction)
+            .output()
+            .unwrap();
+        assert!(cleanup.status.success());
+        let error = result.err().expect("junction must fail closed");
+        assert!(error
+            .to_string()
+            .contains("refuses a Windows reparse point"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn project_context_windows_directory_handle_blocks_ancestor_replacement() {
+        use std::sync::mpsc;
+
+        let project_directory = tempfile::tempdir().unwrap();
+        let project = fs::canonicalize(project_directory.path()).unwrap();
+        fs::create_dir(project.join("nested")).unwrap();
+        fs::write(project.join("nested/safe.rs"), "fn safe() {}\n").unwrap();
+        let (opened_tx, opened_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let scan_root = project.clone();
+        let scan = std::thread::spawn(move || {
+            let directory_opened = |relative: &Path| {
+                if relative == Path::new("nested") {
+                    opened_tx.send(()).unwrap();
+                    release_rx
+                        .recv_timeout(Duration::from_secs(5))
+                        .expect("Windows project-context barrier was not released");
+                }
+            };
+            project_context_with_directory_opened(&scan_root, Some(&directory_opened))
+        });
+
+        opened_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("project context did not hold the nested directory");
+        let replacement = fs::rename(project.join("nested"), project.join("held-nested"));
+        release_tx.send(()).unwrap();
+        let context = scan.join().unwrap().unwrap();
+
+        assert!(replacement.is_err());
+        assert_eq!(context.len(), 1);
+        assert_eq!(context[0]["path"], "nested/safe.rs");
+    }
+
+    #[test]
+    fn post_apply_automatic_cancellation_quarantines_and_terminalizes_review_slot() {
+        let mut feature = feature_with_escalation("running");
+        feature.auto_ai_repair_limit = Some(4);
+        feature.auto_repair_epoch = 3;
+        feature.review_evidence_reserved = 1;
+        set_auto_repair_lifecycle(&mut feature, "running", "automatic attempt").unwrap();
+        quarantine_automatic_post_apply(
+            &mut feature,
+            19,
+            "Cancellation arrived during immutable validation",
+        )
+        .unwrap();
+
+        assert_eq!(feature.status, "failed");
+        assert_eq!(feature.auto_repair_lifecycle, "quarantined");
+        assert_eq!(feature.checkpoint, "auto_repair_effects_quarantined");
+        assert!(!feature.escalation_pending);
+        assert_eq!(feature.review_history.last().unwrap().outcome, "not_run");
+        assert!(
+            feature
+                .escalation_proposal
+                .as_ref()
+                .unwrap()
+                .review_slot_terminal
+        );
+    }
+
+    #[test]
+    fn disabling_during_applied_validation_records_epoch_and_quarantine_atomically() {
+        let (_directory, engine) = control_test_engine();
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = true;
+                state.auto_ai_repair_max_escalations = 9;
+                state.auto_ai_repair_policy_revision = state.revision + 1;
+                let feature = &mut state.queue[0];
+                feature.status = "running".into();
+                feature.checkpoint = "repair_3_applied".into();
+                feature.auto_ai_repair_limit = Some(9);
+                feature.auto_repair_epoch = 6;
+                set_auto_repair_lifecycle(feature, "running", "validating automatic repair")
+            })
+            .unwrap();
+        engine.running.store(true, Ordering::SeqCst);
+        let revision = engine.snapshot().unwrap()["revision"].as_u64().unwrap();
+        let snapshot = engine.update_auto_ai_repair(revision, false, 9).unwrap();
+        engine.running.store(false, Ordering::SeqCst);
+
+        assert_eq!(snapshot["queue"][0]["auto_repair_epoch"], 7);
+        assert_eq!(snapshot["queue"][0]["auto_repair_lifecycle"], "quarantined");
+        assert_eq!(engine.cancellation.load(Ordering::SeqCst), 1);
+        let queued = &snapshot["queue"][0];
+        let resume = engine.start(
+            queued["id"].as_str(),
+            queued["model_target"].as_str(),
+            queued["status"].as_str(),
+            queued["checkpoint"].as_str(),
+        );
+        assert!(resume
+            .unwrap_err()
+            .to_string()
+            .contains("cannot Resume from a quarantine state"));
+    }
+
+    #[test]
+    fn feature_limit_snapshot_is_immutable_and_manual_counts_reduce_automatic_budget() {
+        let mut feature = feature_with_status("failed");
+        feature.escalation_count = 3;
+        assert!(snapshot_feature_auto_repair_limit(&mut feature, 4, 8).unwrap());
+        assert_eq!(feature.auto_ai_repair_limit, Some(4));
+        assert_eq!(feature.auto_repair_policy_revision, Some(8));
+        assert!(!snapshot_feature_auto_repair_limit(&mut feature, 100, 9).unwrap());
+        assert_eq!(feature.auto_ai_repair_limit, Some(4));
+
+        reserve_escalation_evidence(&mut feature).unwrap();
+        assert_eq!(feature.escalation_count, 4);
+        assert_eq!(feature.escalation_evidence_reserved, 3);
+        assert_eq!(feature.review_evidence_reserved, 1);
+        assert!(reserve_escalation_evidence(&mut feature).is_err());
+        assert_eq!(feature.auto_repair_lifecycle, "limit_reached");
+        assert!(feature.auto_repair_reason.contains("4 of 4"));
+    }
+
+    #[test]
+    fn escalation_admission_reserves_exact_300_and_104_evidence_capacity() {
+        let mut feature = feature_with_status("failed");
+        feature.auto_ai_repair_limit = Some(100);
+        feature.escalation_count = 99;
+        feature.escalation_evidence_reserved = 297;
+        feature.review_evidence_reserved = 99;
+        reserve_escalation_evidence(&mut feature).unwrap();
+        assert_eq!(feature.escalation_count, 100);
+        assert_eq!(feature.escalation_evidence_reserved, 300);
+        assert_eq!(feature.review_evidence_reserved, 100);
+        assert!(reserve_escalation_evidence(&mut feature).is_err());
+        assert_eq!(feature.escalation_count, 100, "no 101st model attempt");
+        assert_eq!(feature.auto_repair_lifecycle, "limit_reached");
+
+        let mut no_escalation_capacity = feature_with_status("failed");
+        no_escalation_capacity.auto_ai_repair_limit = Some(100);
+        no_escalation_capacity.escalation_evidence_reserved = 298;
+        assert!(reserve_escalation_evidence(&mut no_escalation_capacity).is_err());
+        assert_eq!(no_escalation_capacity.auto_repair_lifecycle, "held");
+
+        let mut no_review_capacity = feature_with_status("failed");
+        no_review_capacity.auto_ai_repair_limit = Some(100);
+        no_review_capacity.review_evidence_reserved = 104;
+        assert!(reserve_escalation_evidence(&mut no_review_capacity).is_err());
+        assert_eq!(no_review_capacity.auto_repair_lifecycle, "held");
+    }
+
+    #[test]
+    fn revision_bound_auto_repair_control_replays_exactly_and_cancels_epoch_first() {
+        let (_dir, engine) = control_test_engine();
+        let initial_revision = engine.snapshot().unwrap()["revision"].as_u64().unwrap();
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = true;
+                state.auto_ai_repair_max_escalations = 12;
+                state.auto_ai_repair_policy_revision = state.revision + 1;
+                let feature = &mut state.queue[0];
+                feature.status = "paused".into();
+                feature.auto_ai_repair_limit = Some(12);
+                feature.auto_repair_epoch = 9;
+                set_auto_repair_lifecycle(feature, "running", "active automatic repair")
+            })
+            .unwrap();
+        let revision = engine.snapshot().unwrap()["revision"].as_u64().unwrap();
+        assert!(engine.update_auto_ai_repair(revision, true, 13).is_err());
+        assert_eq!(
+            engine.snapshot().unwrap()["revision"].as_u64(),
+            Some(revision)
+        );
+        let accepted = engine.update_auto_ai_repair(revision, false, 12).unwrap();
+        assert_eq!(accepted["revision"].as_u64(), Some(revision + 1));
+        assert_eq!(accepted["auto_ai_repair_enabled"], false);
+        assert_eq!(accepted["queue"][0]["auto_repair_epoch"], 10);
+        assert_eq!(accepted["queue"][0]["auto_repair_lifecycle"], "inactive");
+        assert_eq!(engine.cancellation.load(Ordering::SeqCst), 1);
+
+        let replay = engine.update_auto_ai_repair(revision, false, 12).unwrap();
+        assert_eq!(replay["revision"], accepted["revision"]);
+        assert!(engine.update_auto_ai_repair(revision, false, 13).is_err());
+        assert!(engine.update_auto_ai_repair(revision + 1, true, 0).is_err());
+        assert_eq!(
+            engine.snapshot().unwrap()["revision"].as_u64(),
+            Some(initial_revision + 2)
+        );
+    }
+
+    #[test]
+    fn automatic_reservation_uses_failure_evidence_without_chat_diagnosis() {
+        let (_dir, engine) = control_test_engine();
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = true;
+                state.auto_ai_repair_max_escalations = 7;
+                state.auto_ai_repair_policy_revision = state.revision + 1;
+                let feature = &mut state.queue[0];
+                feature.repair_attempts = REPAIR_LIMIT;
+                feature.auto_ai_repair_limit = Some(7);
+                feature.auto_repair_policy_revision = Some(state.revision + 1);
+                feature.auto_repair_epoch = 3;
+                set_auto_repair_lifecycle(feature, "running", "fixture")
+            })
+            .unwrap();
+        let feature_id = engine.database.lock().unwrap().state.queue[0].id.clone();
+        let (_, _, epoch, _) = engine
+            .reserve_automatic_escalation(&feature_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(epoch, 3);
+        let database = engine.database.lock().unwrap();
+        let feature = &database.state.queue[0];
+        let proposal = feature.escalation_proposal.as_ref().unwrap();
+        assert_eq!(proposal.source, "automatic_failure");
+        assert!(proposal.chat_id.is_none());
+        assert!(proposal.chat_request_id.is_empty());
+        assert!(proposal.diagnosis.is_empty());
+        assert_eq!(proposal.diagnosis_sha256.len(), 64);
+        assert_eq!(proposal.limit_snapshot, Some(7));
+        assert_eq!(proposal.automatic_epoch, Some(3));
+        assert_eq!(feature.escalation_count, 1);
+        assert_eq!(feature.escalation_evidence_reserved, 3);
+        assert_eq!(feature.review_evidence_reserved, 1);
+    }
+
+    #[tokio::test]
+    async fn automatic_reservation_builds_from_active_checkpoint_and_retains_failure_binding() {
+        let (_dir, engine) = control_test_engine();
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = true;
+                state.auto_ai_repair_max_escalations = 7;
+                state.auto_ai_repair_policy_revision = state.revision + 1;
+                let feature = &mut state.queue[0];
+                feature.repair_attempts = REPAIR_LIMIT;
+                feature.checkpoint = "repair_3_validation_failed".into();
+                feature.message = "exact retained validation failure".into();
+                feature.last_failure_kind = "validation_failure".into();
+                feature.auto_ai_repair_limit = Some(7);
+                feature.auto_repair_policy_revision = Some(state.revision + 1);
+                feature.auto_repair_epoch = 3;
+                set_auto_repair_lifecycle(feature, "running", "fixture")
+            })
+            .unwrap();
+        let feature_id = engine.database.lock().unwrap().state.queue[0].id.clone();
+        let (proposal_id, target, _, failure_summary) = engine
+            .reserve_automatic_escalation(&feature_id)
+            .unwrap()
+            .unwrap();
+        {
+            let database = engine.database.lock().unwrap();
+            let feature = &database.state.queue[0];
+            let proposal = feature.escalation_proposal.as_ref().unwrap();
+            assert_eq!(proposal.feature_checkpoint, "repair_3_validation_failed");
+            assert_eq!(feature.checkpoint, "escalation_1_preparing");
+            validate_escalation_build_binding(feature, proposal).unwrap();
+        }
+
+        let error = match engine
+            .build_escalation_proposal(EscalationProposalInput {
+                feature_id: &feature_id,
+                proposal_id: &proposal_id,
+                target: &target,
+                handoff: None,
+                automatic_failure_summary: Some(&failure_summary),
+                cancellation: &AtomicU8::new(1),
+                inference_lease: None,
+            })
+            .await
+        {
+            Err(error) => error,
+            Ok(_) => panic!("cancelled fixture unexpectedly completed proposal inference"),
+        };
+        assert!(!error.to_string().contains("checkpoint changed"));
+        assert!(!error.to_string().contains("feature binding changed"));
+
+        engine
+            .change(|state| {
+                state.queue[0].checkpoint = "repair_3_validation_failed".into();
+                Ok(())
+            })
+            .unwrap();
+        let error = match engine
+            .build_escalation_proposal(EscalationProposalInput {
+                feature_id: &feature_id,
+                proposal_id: &proposal_id,
+                target: &target,
+                handoff: None,
+                automatic_failure_summary: Some(&failure_summary),
+                cancellation: &AtomicU8::new(1),
+                inference_lease: None,
+            })
+            .await
+        {
+            Err(error) => error,
+            Ok(_) => panic!("drifted checkpoint unexpectedly passed build admission"),
+        };
+        assert!(error.to_string().contains("active checkpoint changed"));
+    }
+
+    #[test]
+    fn automatic_no_op_consumes_attempt_and_records_all_unused_terminal_slots() {
+        let (_dir, engine) = control_test_engine();
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = true;
+                state.auto_ai_repair_max_escalations = 2;
+                state.auto_ai_repair_policy_revision = state.revision + 1;
+                let feature = &mut state.queue[0];
+                feature.repair_attempts = REPAIR_LIMIT;
+                feature.auto_ai_repair_limit = Some(2);
+                feature.auto_repair_policy_revision = Some(state.revision + 1);
+                feature.auto_repair_epoch = 1;
+                set_auto_repair_lifecycle(feature, "running", "fixture")
+            })
+            .unwrap();
+        let feature_id = engine.database.lock().unwrap().state.queue[0].id.clone();
+        let (proposal_id, _, epoch, _) = engine
+            .reserve_automatic_escalation(&feature_id)
+            .unwrap()
+            .unwrap();
+        engine
+            .finish_escalation_proposal(
+                &feature_id,
+                &proposal_id,
+                Ok((
+                    "No changes were needed".into(),
+                    Vec::new(),
+                    Default::default(),
+                )),
+                &AtomicU8::new(0),
+            )
+            .unwrap();
+        assert!(engine
+            .finish_automatic_without_application(&feature_id, &proposal_id, epoch)
+            .unwrap());
+        let database = engine.database.lock().unwrap();
+        let feature = &database.state.queue[0];
+        assert_eq!(feature.escalation_count, 1);
+        assert_eq!(
+            feature
+                .escalation_history
+                .iter()
+                .filter(|evidence| evidence.proposal_id == proposal_id)
+                .map(|evidence| evidence.outcome.as_str())
+                .collect::<Vec<_>>(),
+            ["no_op", "authorization_not_run", "application_not_run"]
+        );
+        assert_eq!(feature.review_history.last().unwrap().outcome, "not_run");
+        assert_eq!(feature.auto_repair_lifecycle, "running");
+    }
+
+    #[tokio::test]
+    async fn automatic_unavailable_completion_is_durably_held_across_reload_until_resume() {
+        let (_directory, engine) = control_test_engine();
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = true;
+                state.auto_ai_repair_max_escalations = 3;
+                state.auto_ai_repair_policy_revision = state.revision + 1;
+                let feature = &mut state.queue[0];
+                feature.repair_attempts = REPAIR_LIMIT;
+                feature.last_failure_kind = "validation_failure".into();
+                feature.last_code_failure_summary = "fixture validation failed".into();
+                feature.auto_ai_repair_limit = Some(3);
+                feature.auto_repair_policy_revision = Some(state.revision + 1);
+                feature.auto_repair_epoch = 4;
+                set_auto_repair_lifecycle(feature, "running", "fixture")
+            })
+            .unwrap();
+        let feature_id = engine.database.lock().unwrap().state.queue[0].id.clone();
+        let (proposal_id, _, _, _) = engine
+            .reserve_automatic_escalation(&feature_id)
+            .unwrap()
+            .unwrap();
+        engine
+            .finish_escalation_proposal(
+                &feature_id,
+                &proposal_id,
+                Err(anyhow!("fixture provider unavailable")),
+                &AtomicU8::new(0),
+            )
+            .unwrap();
+
+        let persisted = {
+            let database = engine.database.lock().unwrap();
+            let encoded: String = database
+                .connection
+                .query_row("SELECT state FROM developer_state WHERE id=1", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            serde_json::from_str::<Snapshot>(&encoded).unwrap()
+        };
+        let held = &persisted.queue[0];
+        assert_eq!(held.status, "failed");
+        assert_eq!(held.auto_repair_lifecycle, "held");
+        assert_eq!(held.checkpoint, "escalation_1_unavailable");
+        assert!(held.auto_repair_reason.contains("explicitly Resume"));
+        assert_eq!(
+            held.escalation_history
+                .iter()
+                .filter(|evidence| evidence.proposal_id == proposal_id)
+                .map(|evidence| evidence.outcome.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "unavailable",
+                "authorization_not_run",
+                "application_not_run"
+            ]
+        );
+        assert_eq!(
+            held.review_history
+                .iter()
+                .filter(|evidence| evidence.outcome == "not_run")
+                .count(),
+            1
+        );
+
+        let (_reload_directory, reloaded) = control_test_engine();
+        reloaded
+            .change(|state| {
+                *state = persisted.clone();
+                Ok(())
+            })
+            .unwrap();
+        reloaded.resume_automatic_after_restart().unwrap();
+        let after_restart = reloaded.snapshot().unwrap();
+        assert!(!after_restart["running"].as_bool().unwrap());
+        assert_eq!(after_restart["queue"][0]["auto_repair_lifecycle"], "held");
+        assert_eq!(after_restart["queue"][0]["escalation_count"], 1);
+        assert_eq!(
+            reloaded.database.lock().unwrap().state.queue[0]
+                .escalation_proposal
+                .as_ref()
+                .unwrap()
+                .proposal_id,
+            proposal_id,
+        );
+
+        reloaded
+            .start(
+                Some(after_restart["queue"][0]["id"].as_str().unwrap()),
+                Some(after_restart["queue"][0]["model_target"].as_str().unwrap()),
+                Some(after_restart["queue"][0]["status"].as_str().unwrap()),
+                Some(after_restart["queue"][0]["checkpoint"].as_str().unwrap()),
+            )
+            .unwrap();
+        reloaded.cancellation.store(1, Ordering::SeqCst);
+        assert!(
+            reloaded.snapshot().unwrap()["queue"][0]["auto_repair_epoch"]
+                .as_u64()
+                .unwrap()
+                > held.auto_repair_epoch
+        );
+    }
+
+    #[test]
+    fn interrupted_preparation_fills_each_reserved_stage_for_manual_and_automatic_attempts() {
+        for automatic in [false, true] {
+            let mut feature = feature_with_status("failed");
+            feature.repair_attempts = REPAIR_LIMIT;
+            feature.escalation_count = 1;
+            feature.escalation_evidence_reserved = 3;
+            feature.review_evidence_reserved = 1;
+            feature.auto_ai_repair_limit = Some(3);
+            feature.auto_repair_epoch = 7;
+            feature.auto_repair_policy_revision = Some(11);
+            if automatic {
+                set_auto_repair_lifecycle(&mut feature, "running", "fixture").unwrap();
+            }
+            let proposal_id = if automatic {
+                "79ce2a2e-4bb8-469e-8dc1-b6d7cf57098f"
+            } else {
+                "3680c592-7d0b-4662-95a8-1ec303d08219"
+            };
+            feature.escalation_proposal = Some(RepairEscalationProposal {
+                proposal_id: proposal_id.into(),
+                attempt: 1,
+                feature_id: feature.id.clone(),
+                feature_checkpoint: "repair_3_validation_failed".into(),
+                binding_revision: 8,
+                model_target: "mac".into(),
+                model: "fixture".into(),
+                chat_id: (!automatic).then(|| "5fcc2572-e2c7-436c-8bd9-3ed7c380e7f3".into()),
+                chat_request_id: if automatic {
+                    String::new()
+                } else {
+                    "b35972e8-b6a8-4cb9-96fa-cc7a68d2e8b2".into()
+                },
+                chat_model_target: if automatic {
+                    String::new()
+                } else {
+                    "windows".into()
+                },
+                chat_model: if automatic {
+                    String::new()
+                } else {
+                    "fixture-chat".into()
+                },
+                diagnosis: String::new(),
+                diagnosis_sha256: "1".repeat(64),
+                status: "preparing".into(),
+                summary: "preparing".into(),
+                error: None,
+                files: Vec::new(),
+                protected_inputs: Default::default(),
+                applied_paths: Vec::new(),
+                apply_request_id: None,
+                source: if automatic {
+                    "automatic_failure".into()
+                } else {
+                    manual_escalation_source()
+                },
+                automatic_epoch: automatic.then_some(7),
+                policy_revision: automatic.then_some(11),
+                limit_snapshot: Some(3),
+                project_state_sha256: automatic.then(|| "2".repeat(64)),
+                review_slot_terminal: false,
+            });
+
+            assert!(recover_interrupted_escalation_preparation(&mut feature, 19).unwrap());
+            assert!(!recover_interrupted_escalation_preparation(&mut feature, 20).unwrap());
+            assert_eq!(
+                feature
+                    .escalation_history
+                    .iter()
+                    .filter(|evidence| evidence.proposal_id == proposal_id)
+                    .map(|evidence| evidence.outcome.as_str())
+                    .collect::<Vec<_>>(),
+                [
+                    "proposal_interrupted",
+                    "authorization_not_run",
+                    "application_not_run"
+                ]
+            );
+            assert!(feature
+                .escalation_history
+                .iter()
+                .filter(|evidence| evidence.proposal_id == proposal_id)
+                .all(|evidence| evidence.candidate_sha256.is_none()));
+            assert_eq!(feature.review_history.len(), 1);
+            assert_eq!(feature.review_history[0].outcome, "not_run");
+            assert!(feature.review_history[0]
+                .summary
+                .contains("proposal generation was interrupted"));
+            assert!(
+                feature
+                    .escalation_proposal
+                    .as_ref()
+                    .unwrap()
+                    .review_slot_terminal
+            );
+            assert_eq!(
+                feature.auto_repair_lifecycle,
+                if automatic { "running" } else { "inactive" }
+            );
+        }
+    }
+
+    #[test]
+    fn ready_to_authorize_cancel_terminalizes_once_and_reenable_reserves_fresh_work() {
+        let (_directory, engine) = control_test_engine();
+        fs::write(engine.root.join("example/result.txt"), "saved").unwrap();
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = true;
+                state.auto_ai_repair_max_escalations = 3;
+                state.auto_ai_repair_policy_revision = state.revision + 1;
+                let feature = &mut state.queue[0];
+                feature.repair_attempts = REPAIR_LIMIT;
+                feature.last_failure_kind = "validation_failure".into();
+                feature.auto_ai_repair_limit = Some(3);
+                feature.auto_repair_policy_revision = Some(state.revision + 1);
+                feature.auto_repair_epoch = 5;
+                set_auto_repair_lifecycle(feature, "running", "fixture")
+            })
+            .unwrap();
+        let feature_id = engine.database.lock().unwrap().state.queue[0].id.clone();
+        let (proposal_id, _, _, _) = engine
+            .reserve_automatic_escalation(&feature_id)
+            .unwrap()
+            .unwrap();
+        engine
+            .finish_escalation_proposal(
+                &feature_id,
+                &proposal_id,
+                Ok((
+                    "repair source".into(),
+                    vec![RepairEscalationFile {
+                        path: "result.txt".into(),
+                        before: Some("saved".into()),
+                        after: "repaired".into(),
+                        protected: false,
+                    }],
+                    Default::default(),
+                )),
+                &AtomicU8::new(0),
+            )
+            .unwrap();
+        let revision = engine.snapshot().unwrap()["revision"].as_u64().unwrap();
+        let cancelled = engine.update_auto_ai_repair(revision, false, 3).unwrap();
+        assert_eq!(cancelled["queue"][0]["auto_repair_epoch"], 6);
+        assert_eq!(cancelled["queue"][0]["auto_repair_lifecycle"], "inactive");
+        let replay = engine.update_auto_ai_repair(revision, false, 3).unwrap();
+        assert_eq!(replay["revision"], cancelled["revision"]);
+
+        {
+            let database = engine.database.lock().unwrap();
+            let feature = &database.state.queue[0];
+            assert_eq!(
+                feature
+                    .escalation_history
+                    .iter()
+                    .filter(|evidence| evidence.proposal_id == proposal_id)
+                    .map(|evidence| evidence.outcome.as_str())
+                    .collect::<Vec<_>>(),
+                ["ready", "authorization_not_run", "application_not_run"]
+            );
+            assert_eq!(feature.review_history.len(), 1);
+            assert_eq!(feature.review_history[0].outcome, "not_run");
+            assert_eq!(
+                feature.escalation_proposal.as_ref().unwrap().status,
+                "cancelled"
+            );
+        }
+
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = true;
+                state.auto_ai_repair_policy_revision = state.revision + 1;
+                let max = state.auto_ai_repair_max_escalations;
+                enable_auto_repair_for_failed_feature(
+                    &mut state.queue[0],
+                    true,
+                    max,
+                    state.revision + 1,
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        engine.cancellation.store(0, Ordering::SeqCst);
+        let (fresh_proposal_id, _, _, _) = engine
+            .reserve_automatic_escalation(&feature_id)
+            .unwrap()
+            .unwrap();
+        assert_ne!(fresh_proposal_id, proposal_id);
+        assert_eq!(
+            engine.database.lock().unwrap().state.queue[0].escalation_count,
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn disabling_during_preparing_pauses_and_late_completion_cannot_restore_work() {
+        let (_directory, engine) = control_test_engine();
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = true;
+                state.auto_ai_repair_max_escalations = 3;
+                state.auto_ai_repair_policy_revision = state.revision + 1;
+                let feature = &mut state.queue[0];
+                feature.repair_attempts = REPAIR_LIMIT;
+                feature.checkpoint = "repair_3_validation_failed".into();
+                feature.last_failure_kind = "validation_failure".into();
+                feature.auto_ai_repair_limit = Some(3);
+                feature.auto_repair_policy_revision = Some(state.revision + 1);
+                feature.auto_repair_epoch = 5;
+                set_auto_repair_lifecycle(feature, "running", "fixture")
+            })
+            .unwrap();
+        let feature_id = engine.database.lock().unwrap().state.queue[0].id.clone();
+        let (proposal_id, _, _, _) = engine
+            .reserve_automatic_escalation(&feature_id)
+            .unwrap()
+            .unwrap();
+        engine.running.store(true, Ordering::SeqCst);
+        let revision = engine.snapshot().unwrap()["revision"].as_u64().unwrap();
+        let disabled = engine.update_auto_ai_repair(revision, false, 3).unwrap();
+        engine.running.store(false, Ordering::SeqCst);
+
+        let feature = &disabled["queue"][0];
+        assert_eq!(feature["status"], "paused");
+        assert_eq!(feature["auto_repair_lifecycle"], "inactive");
+        assert_eq!(
+            feature["checkpoint"],
+            "escalation_1_cancelled_before_authorization"
+        );
+        assert!(feature["message"]
+            .as_str()
+            .unwrap()
+            .contains("Resume revalidates"));
+
+        engine
+            .finish_escalation_proposal(
+                &feature_id,
+                &proposal_id,
+                Ok((
+                    "late untrusted proposal".into(),
+                    vec![RepairEscalationFile {
+                        path: "late.txt".into(),
+                        before: None,
+                        after: "must not survive cancellation".into(),
+                        protected: false,
+                    }],
+                    Default::default(),
+                )),
+                &AtomicU8::new(0),
+            )
+            .unwrap();
+        let snapshot = engine.snapshot().unwrap();
+        let feature = &snapshot["queue"][0];
+        assert_eq!(feature["status"], "paused");
+        assert_eq!(
+            feature["checkpoint"],
+            "escalation_1_cancelled_before_authorization"
+        );
+        assert_eq!(feature["escalation_count"], 1);
+        {
+            let database = engine.database.lock().unwrap();
+            let feature = &database.state.queue[0];
+            assert_eq!(
+                feature
+                    .escalation_history
+                    .iter()
+                    .filter(|evidence| evidence.proposal_id == proposal_id)
+                    .map(|evidence| evidence.outcome.as_str())
+                    .collect::<Vec<_>>(),
+                ["cancelled", "authorization_not_run", "application_not_run"]
+            );
+            assert_eq!(feature.review_history.last().unwrap().outcome, "not_run");
+            assert!(checkpoint_reuses_retained_edits(&feature.checkpoint));
+            assert!(!automatic_post_apply_is_ambiguous(feature));
+        }
+
+        assert!(engine
+            .start(
+                feature["id"].as_str(),
+                feature["model_target"].as_str(),
+                feature["status"].as_str(),
+                feature["checkpoint"].as_str(),
+            )
+            .is_ok());
+        engine.cancellation.store(1, Ordering::SeqCst);
+    }
+
+    #[tokio::test]
+    async fn public_stop_pauses_preparing_once_and_reenable_reserves_fresh_work() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (_directory, mut engine) = control_test_engine();
+        fs::write(engine.root.join("example/result.txt"), "saved").unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        Arc::get_mut(&mut engine).unwrap().model_targets[0].url =
+            format!("http://{}", listener.local_addr().unwrap());
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = true;
+                state.auto_ai_repair_max_escalations = 3;
+                state.auto_ai_repair_policy_revision = state.revision + 1;
+                let feature = &mut state.queue[0];
+                feature.repair_attempts = REPAIR_LIMIT;
+                feature.checkpoint = "repair_3_validation_failed".into();
+                feature.last_failure_kind = "validation_failure".into();
+                feature.auto_ai_repair_limit = Some(3);
+                feature.auto_repair_policy_revision = Some(state.revision + 1);
+                feature.auto_repair_epoch = 5;
+                set_auto_repair_lifecycle(feature, "running", "fixture")
+            })
+            .unwrap();
+        let feature_id = engine.database.lock().unwrap().state.queue[0].id.clone();
+        let (proposal_id, _, _, _) = engine
+            .reserve_automatic_escalation(&feature_id)
+            .unwrap()
+            .unwrap();
+        engine.running.store(true, Ordering::SeqCst);
+        let stopped = control(
+            State(engine.clone()),
+            authorized_headers(),
+            Json(json!({"action":"stop"})),
+        )
+        .await;
+        engine.running.store(false, Ordering::SeqCst);
+        assert_eq!(stopped.0, StatusCode::OK);
+        assert_eq!(stopped.1["queue"][0]["status"], "paused");
+        assert_eq!(
+            stopped.1["queue"][0]["checkpoint"],
+            "escalation_1_cancelled_before_authorization"
+        );
+
+        engine
+            .finish_escalation_proposal(
+                &feature_id,
+                &proposal_id,
+                Ok((
+                    "late proposal".into(),
+                    vec![RepairEscalationFile {
+                        path: "late.txt".into(),
+                        before: None,
+                        after: "late".into(),
+                        protected: false,
+                    }],
+                    Default::default(),
+                )),
+                &AtomicU8::new(0),
+            )
+            .unwrap();
+        let stopped_again = control(
+            State(engine.clone()),
+            authorized_headers(),
+            Json(json!({"action":"stop"})),
+        )
+        .await;
+        assert_eq!(stopped_again.0, StatusCode::OK);
+        {
+            let database = engine.database.lock().unwrap();
+            let feature = &database.state.queue[0];
+            assert!(paused_preauthorization_cancellation_is_resumable(feature));
+            assert_eq!(
+                feature
+                    .escalation_history
+                    .iter()
+                    .filter(|evidence| evidence.proposal_id == proposal_id)
+                    .map(|evidence| evidence.outcome.as_str())
+                    .collect::<Vec<_>>(),
+                ["cancelled", "authorization_not_run", "application_not_run"]
+            );
+            assert_eq!(feature.review_history.len(), 1);
+
+            let assert_invalid = |inexact: Feature| {
+                assert!(!paused_preauthorization_cancellation_is_resumable(&inexact));
+                assert!(validate_auto_repair_feature(&inexact).is_err());
+            };
+            let mut inexact = feature.clone();
+            inexact.checkpoint = "escalation_2_cancelled_before_authorization".into();
+            assert_invalid(inexact);
+            inexact = feature.clone();
+            inexact
+                .escalation_proposal
+                .as_mut()
+                .unwrap()
+                .applied_paths
+                .push("result.txt".into());
+            assert_invalid(inexact);
+
+            let mut stale_epoch = feature.clone();
+            stale_epoch.auto_repair_epoch += 1;
+            assert_invalid(stale_epoch);
+
+            let mut stale_policy = feature.clone();
+            stale_policy.auto_repair_policy_revision = Some(
+                stale_policy
+                    .auto_repair_policy_revision
+                    .unwrap()
+                    .checked_add(1)
+                    .unwrap(),
+            );
+            assert_invalid(stale_policy);
+
+            let mut requested_application = feature.clone();
+            requested_application
+                .escalation_proposal
+                .as_mut()
+                .unwrap()
+                .apply_request_id = Some(Uuid::new_v4().to_string());
+            assert_invalid(requested_application);
+
+            let mut missing_stage = feature.clone();
+            missing_stage
+                .escalation_history
+                .retain(|evidence| evidence.outcome != "authorization_not_run");
+            assert_invalid(missing_stage);
+
+            let mut duplicate_stage = feature.clone();
+            duplicate_stage
+                .escalation_history
+                .push(duplicate_stage.escalation_history[0].clone());
+            assert_invalid(duplicate_stage);
+
+            let mut unterminated_review = feature.clone();
+            unterminated_review
+                .escalation_proposal
+                .as_mut()
+                .unwrap()
+                .review_slot_terminal = false;
+            assert_invalid(unterminated_review);
+
+            let mut duplicate_review = feature.clone();
+            duplicate_review
+                .review_history
+                .push(duplicate_review.review_history[0].clone());
+            assert_invalid(duplicate_review);
+        }
+
+        let revision = stopped_again.1["revision"].as_u64().unwrap();
+        let disabled = engine.update_auto_ai_repair(revision, false, 3).unwrap();
+        let response_content = json!({
+            "summary": "repair the retained implementation",
+            "files": [{"path": "result.txt", "content": "repaired"}]
+        })
+        .to_string();
+        let response_body = json!({
+            "choices": [{
+                "message": {"content": response_content},
+                "finish_reason": "stop"
+            }]
+        })
+        .to_string();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = vec![0_u8; 65_536];
+            let _ = socket.read(&mut request).await.unwrap();
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        response_body.len(),
+                        response_body
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+        });
+        let reenabling = engine
+            .update_auto_ai_repair(disabled["revision"].as_u64().unwrap(), true, 3)
+            .unwrap();
+        assert_eq!(reenabling["auto_ai_repair_enabled"], true);
+        let new_policy_revision = reenabling["auto_ai_repair_policy_revision"]
+            .as_u64()
+            .unwrap();
+        for _ in 0..200 {
+            let authorized = engine.database.lock().unwrap().state.queue[0]
+                .escalation_history
+                .iter()
+                .any(|evidence| evidence.outcome == "policy_authorized");
+            if authorized
+                && fs::read_to_string(engine.root.join("example/result.txt")).unwrap() == "repaired"
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        server.await.unwrap();
+        let database = engine.database.lock().unwrap();
+        let feature = &database.state.queue[0];
+        assert_eq!(feature.escalation_count, 2);
+        assert_eq!(feature.auto_ai_repair_limit, Some(3));
+        assert_eq!(
+            feature.auto_repair_policy_revision,
+            Some(new_policy_revision)
+        );
+        assert_ne!(
+            feature.escalation_proposal.as_ref().unwrap().proposal_id,
+            proposal_id
+        );
+        assert_eq!(
+            feature
+                .escalation_proposal
+                .as_ref()
+                .unwrap()
+                .policy_revision,
+            Some(new_policy_revision)
+        );
+        assert!(feature
+            .escalation_history
+            .iter()
+            .any(|evidence| evidence.outcome == "policy_authorized"
+                && evidence.policy_revision == Some(new_policy_revision)));
+        assert_eq!(
+            fs::read_to_string(engine.root.join("example/result.txt")).unwrap(),
+            "repaired"
+        );
+    }
+
+    #[test]
+    fn automatic_policy_authorization_accepts_tests_but_rejects_stale_epoch() {
+        let (_dir, engine) = control_test_engine();
+        fs::write(engine.root.join("example/result.txt"), "saved").unwrap();
+        fs::create_dir_all(engine.root.join("example/tests")).unwrap();
+        fs::write(
+            engine.root.join("example/tests/test_app.py"),
+            "assert False\n",
+        )
+        .unwrap();
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = true;
+                state.auto_ai_repair_max_escalations = 2;
+                state.auto_ai_repair_policy_revision = state.revision + 1;
+                let feature = &mut state.queue[0];
+                feature.repair_attempts = REPAIR_LIMIT;
+                feature.auto_ai_repair_limit = Some(2);
+                feature.auto_repair_policy_revision = Some(state.revision + 1);
+                feature.auto_repair_epoch = 4;
+                set_auto_repair_lifecycle(feature, "running", "fixture")
+            })
+            .unwrap();
+        let feature_id = engine.database.lock().unwrap().state.queue[0].id.clone();
+        let (proposal_id, _, epoch, _) = engine
+            .reserve_automatic_escalation(&feature_id)
+            .unwrap()
+            .unwrap();
+        engine
+            .finish_escalation_proposal(
+                &feature_id,
+                &proposal_id,
+                Ok((
+                    "repair source and test".into(),
+                    vec![RepairEscalationFile {
+                        path: "tests/test_app.py".into(),
+                        before: Some("assert False\n".into()),
+                        after: "assert True\n".into(),
+                        protected: true,
+                    }],
+                    std::collections::BTreeMap::new(),
+                )),
+                &AtomicU8::new(0),
+            )
+            .unwrap();
+        assert!(engine
+            .authorize_automatic_proposal(&feature_id, &proposal_id, epoch + 1)
+            .is_err());
+        engine
+            .authorize_automatic_proposal(&feature_id, &proposal_id, epoch)
+            .unwrap();
+        let database = engine.database.lock().unwrap();
+        let feature = &database.state.queue[0];
+        assert!(feature.escalation_pending);
+        assert_eq!(
+            feature.escalation_history.last().unwrap().outcome,
+            "policy_authorized"
+        );
+        assert_eq!(
+            feature.escalation_history.last().unwrap().source,
+            "automatic_failure"
+        );
+    }
+
+    #[test]
+    fn automatic_authorization_drift_terminalizes_once_and_recovery_reserves_fresh_attempt() {
+        let (_directory, engine) = control_test_engine();
+        fs::write(engine.root.join("example/result.txt"), "saved").unwrap();
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = true;
+                state.auto_ai_repair_max_escalations = 3;
+                state.auto_ai_repair_policy_revision = state.revision + 1;
+                let feature = &mut state.queue[0];
+                feature.repair_attempts = REPAIR_LIMIT;
+                feature.auto_ai_repair_limit = Some(3);
+                feature.auto_repair_policy_revision = Some(state.revision + 1);
+                feature.auto_repair_epoch = 7;
+                set_auto_repair_lifecycle(feature, "running", "fixture")
+            })
+            .unwrap();
+        let feature_id = engine.database.lock().unwrap().state.queue[0].id.clone();
+        let (proposal_id, _, epoch, _) = engine
+            .reserve_automatic_escalation(&feature_id)
+            .unwrap()
+            .unwrap();
+        engine
+            .finish_escalation_proposal(
+                &feature_id,
+                &proposal_id,
+                Ok((
+                    "repair source".into(),
+                    vec![RepairEscalationFile {
+                        path: "result.txt".into(),
+                        before: Some("saved".into()),
+                        after: "repaired".into(),
+                        protected: false,
+                    }],
+                    Default::default(),
+                )),
+                &AtomicU8::new(0),
+            )
+            .unwrap();
+        fs::write(engine.root.join("example/result.txt"), "owner drift").unwrap();
+        assert!(engine
+            .authorize_automatic_proposal(&feature_id, &proposal_id, epoch)
+            .is_err());
+
+        let assert_terminal = || {
+            let database = engine.database.lock().unwrap();
+            let feature = &database.state.queue[0];
+            assert_eq!(feature.auto_repair_lifecycle, "held");
+            assert_eq!(
+                feature.escalation_proposal.as_ref().unwrap().status,
+                "authorization_rejected"
+            );
+            assert_eq!(
+                feature
+                    .escalation_history
+                    .iter()
+                    .filter(|evidence| evidence.proposal_id == proposal_id)
+                    .map(|evidence| evidence.outcome.as_str())
+                    .collect::<Vec<_>>(),
+                ["ready", "authorization_rejected", "application_not_run"]
+            );
+            assert_eq!(
+                feature
+                    .review_history
+                    .iter()
+                    .filter(|evidence| evidence.outcome == "not_run")
+                    .count(),
+                1
+            );
+        };
+        assert_terminal();
+        assert!(engine
+            .authorize_automatic_proposal(&feature_id, &proposal_id, epoch)
+            .is_err());
+        assert_terminal();
+
+        engine
+            .change(|state| {
+                set_auto_repair_lifecycle(
+                    &mut state.queue[0],
+                    "running",
+                    "Owner explicitly resumed after correcting authorization drift",
+                )
+            })
+            .unwrap();
+        let (next_proposal_id, _, _, _) = engine
+            .reserve_automatic_escalation(&feature_id)
+            .unwrap()
+            .unwrap();
+        assert_ne!(next_proposal_id, proposal_id);
+        assert_eq!(
+            engine.database.lock().unwrap().state.queue[0].escalation_count,
+            2
+        );
+    }
+
+    #[test]
+    fn manual_cancel_fills_each_reserved_escalation_slot_exactly_once() {
+        let (_directory, engine) = control_test_engine();
+        let mut feature = feature_with_escalation("failed");
+        feature.escalation_pending = false;
+        feature.checkpoint = "failed_validation".into();
+        feature.escalation_evidence_reserved = 3;
+        feature.review_evidence_reserved = 1;
+        let proposal_id = feature
+            .escalation_proposal
+            .as_ref()
+            .unwrap()
+            .proposal_id
+            .clone();
+        feature
+            .escalation_history
+            .retain(|evidence| evidence.proposal_id != proposal_id);
+        let proposal = feature.escalation_proposal.as_mut().unwrap();
+        proposal.status = "ready".into();
+        proposal.applied_paths.clear();
+        proposal.apply_request_id = None;
+        feature.escalation_history.push(RepairEscalationEvidence {
+            proposal_id: proposal.proposal_id.clone(),
+            attempt: proposal.attempt,
+            model_target: proposal.model_target.clone(),
+            model: proposal.model.clone(),
+            chat_id: proposal.chat_id.clone(),
+            chat_request_id: proposal.chat_request_id.clone(),
+            diagnosis_sha256: proposal.diagnosis_sha256.clone(),
+            outcome: "ready".into(),
+            proposal_sha256: Some(repair_escalation_proposal_sha256(proposal).unwrap()),
+            candidate_sha256: Some(repair_escalation_candidate_sha256(proposal).unwrap()),
+            summary: proposal.summary.clone(),
+            source: proposal.source.clone(),
+            automatic_epoch: proposal.automatic_epoch,
+            policy_revision: proposal.policy_revision,
+            limit_snapshot: proposal.limit_snapshot,
+            project_state_sha256: proposal.project_state_sha256.clone(),
+            authorization_revision: None,
+        });
+        engine
+            .change(|state| {
+                state.queue[0] = feature.clone();
+                Ok(())
+            })
+            .unwrap();
+        let revision = engine.snapshot().unwrap()["revision"].as_u64().unwrap();
+        let request = RepairEscalationMutation {
+            action: "cancel".into(),
+            feature_id: feature.id.clone(),
+            expected_revision: revision,
+            expected_checkpoint: Some(feature.checkpoint.clone()),
+            model_target: None,
+            chat_id: None,
+            chat_request_id: None,
+            diagnosis_sha256: None,
+            proposal_id: Some(proposal_id.clone()),
+        };
+        engine.cancel_escalation(request).unwrap();
+        let database = engine.database.lock().unwrap();
+        let current = &database.state.queue[0];
+        assert_eq!(
+            current
+                .escalation_history
+                .iter()
+                .filter(|evidence| evidence.proposal_id == proposal_id)
+                .map(|evidence| evidence.outcome.as_str())
+                .collect::<Vec<_>>(),
+            ["ready", "authorization_not_run", "application_not_run"]
+        );
+        assert_eq!(current.review_history.len(), 1);
+        assert_eq!(current.review_history[0].outcome, "not_run");
+        assert_eq!(
+            current.escalation_proposal.as_ref().unwrap().status,
+            "cancelled"
+        );
+    }
+
+    #[test]
+    fn trusted_review_classification_is_conservative_and_validation_first() {
+        let validation = vec!["scripts/custom-build.sh".to_owned()];
+        for path in [
+            "tests/widget.rs",
+            "conftest.py",
+            "test_helpers.py",
+            "scripts/custom-build.sh",
+        ] {
+            assert_eq!(
+                trusted_review_file_classification(path, &validation),
+                "test_or_validation_input",
+                "{path}"
+            );
+        }
+        for path in [
+            "pytest.ini",
+            "setup.cfg",
+            "tox.ini",
+            "setup.py",
+            "next.config.js",
+            "webpack.config.ts",
+            "scripts/build.sh",
+            "unknown.custom",
+        ] {
+            assert_eq!(
+                trusted_review_file_classification(path, &[]),
+                "project_configuration",
+                "{path}"
+            );
+        }
+        for path in ["src/main.rs", "Sources/App.swift", "lib/widget.tsx"] {
+            assert_eq!(
+                trusted_review_file_classification(path, &[]),
+                "ordinary_source",
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn cumulative_review_packet_classifies_earlier_test_and_configuration_inputs() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = fs::canonicalize(directory.path()).unwrap();
+        fs::write(project.join("main.rs"), "fn main() {}\n").unwrap();
+        fs::write(project.join("conftest.py"), "VALUE = 1\n").unwrap();
+        fs::write(project.join("setup.py"), "from setuptools import setup\n").unwrap();
+        let mut feature = feature_with_status("running");
+        feature.validation = "python conftest.py".into();
+        feature.repair_history.push(RepairAttemptEvidence {
+            attempt: 1,
+            prior_checkpoint: "validation_failed".into(),
+            prior_message: "failed".into(),
+            prior_edits: vec![
+                RepairEditEvidence {
+                    path: "conftest.py".into(),
+                    before: None,
+                    content_hash: hash(b"VALUE = 1\n"),
+                },
+                RepairEditEvidence {
+                    path: "setup.py".into(),
+                    before: None,
+                    content_hash: hash(b"from setuptools import setup\n"),
+                },
+            ],
+        });
+        let packet = developer_review_packet(
+            &feature,
+            &project,
+            &[Edit {
+                path: "main.rs".into(),
+                content: "fn main() {}\n".into(),
+                before: None,
+            }],
+            &"1".repeat(64),
+        )
+        .unwrap();
+        let classes = packet
+            .files
+            .iter()
+            .map(|file| (file.path.as_str(), file.classification.as_str()))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(classes["conftest.py"], "test_or_validation_input");
+        assert_eq!(classes["setup.py"], "project_configuration");
+        assert_eq!(classes["main.rs"], "ordinary_source");
+        let digest = packet.sha256().unwrap();
+        let mut changed = packet;
+        changed.files[0].classification = "ordinary_source".into();
+        assert_ne!(changed.sha256().unwrap(), digest);
+    }
+
+    #[test]
+    fn queue_v10_frozen_candidate_migrates_trusted_classification_with_legacy_digest() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = fs::canonicalize(directory.path()).unwrap();
+        fs::write(project.join("result.txt"), "saved").unwrap();
+        let mut feature = feature_with_publication("failed");
+        feature.publication_candidate[0].classification = "unclassified_legacy".into();
+        let approved = feature.review_history.last_mut().unwrap();
+        let packet = DeveloperReviewPacket {
+            schema_version: 1,
+            feature_id: feature.id.clone(),
+            project: feature.project.clone(),
+            instruction: feature.instruction.clone(),
+            approved_plan_sha256: None,
+            approved_plan: None,
+            validation_command: feature.validation.clone(),
+            validation_evidence_sha256: approved.validation_evidence_sha256.clone(),
+            provider_id: REVIEW_PROVIDER_ID.into(),
+            model_id: feature.review_model.clone(),
+            reasoning_effort: feature.review_reasoning_effort.clone(),
+            files: vec![DeveloperReviewFile {
+                classification: "project_configuration".into(),
+                path: "result.txt".into(),
+                before_sha256: None,
+                content_sha256: hash(b"saved"),
+                content: "saved".into(),
+            }],
+        };
+        approved.packet_sha256 = packet.legacy_sha256_without_classification().unwrap();
+        migrate_legacy_publication_classifications(&mut feature, &project, 10).unwrap();
+        assert_eq!(
+            feature.publication_candidate[0].classification,
+            "project_configuration"
+        );
+        for status in ["pending", "attention", "succeeded"] {
+            feature.publication.as_mut().unwrap().status = status.into();
+            publication_input(&feature).unwrap();
+        }
+    }
+
+    #[test]
+    fn authorization_revision_is_exact_for_v11_automatic_policy_evidence_only() {
+        let mut evidence = feature_with_escalation("failed").escalation_history[0].clone();
+        evidence.source = "automatic_failure".into();
+        evidence.outcome = "policy_authorized".into();
+        evidence.authorization_revision = Some(7);
+        validate_authorization_revision(&evidence, 11, 7).unwrap();
+        assert!(validate_authorization_revision(&evidence, 11, 6).is_err());
+        evidence.authorization_revision = None;
+        assert!(validate_authorization_revision(&evidence, 11, 7).is_err());
+        validate_authorization_revision(&evidence, 10, 7).unwrap();
+        evidence.authorization_revision = Some(7);
+        evidence.source = "manual_chat".into();
+        assert!(validate_authorization_revision(&evidence, 11, 7).is_err());
+        evidence.source = "automatic_failure".into();
+        evidence.outcome = "ready".into();
+        assert!(validate_authorization_revision(&evidence, 11, 7).is_err());
+    }
+
+    #[test]
+    fn durable_validation_failure_summary_redacts_secret_bearing_output() {
+        let secret = "Bearer eyJhbGciOiJIUzI1NiJ9.test.signature123";
+        let raw = format!("validation failed while printing {secret}");
+        let durable = durable_failure_summary(&raw, "Validation failed", 4000);
+        assert!(!durable.contains(secret));
+        assert!(!serde_json::to_string(&json!({"message": durable}))
+            .unwrap()
+            .contains(secret));
+        let automatic = bounded_code_failure_summary(&raw).unwrap();
+        assert!(!automatic.contains(secret));
+    }
+
+    #[test]
+    fn no_op_escalation_preserves_digest_bound_failure_for_the_next_attempt() {
+        let (_directory, engine) = control_test_engine();
+        let failure = "validation failed: expected 2, received 3";
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = true;
+                state.auto_ai_repair_max_escalations = 3;
+                state.auto_ai_repair_policy_revision = state.revision + 1;
+                let feature = &mut state.queue[0];
+                feature.repair_attempts = REPAIR_LIMIT;
+                feature.last_failure_kind = "validation_failure".into();
+                feature.last_code_failure_summary = bounded_code_failure_summary(failure)?;
+                feature.auto_ai_repair_limit = Some(3);
+                feature.auto_repair_policy_revision = Some(state.revision + 1);
+                feature.auto_repair_epoch = 4;
+                set_auto_repair_lifecycle(feature, "running", "fixture")
+            })
+            .unwrap();
+        let feature_id = engine.database.lock().unwrap().state.queue[0].id.clone();
+        let (first_id, _, epoch, first_failure) = engine
+            .reserve_automatic_escalation(&feature_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(first_failure, failure);
+        engine
+            .finish_escalation_proposal(
+                &feature_id,
+                &first_id,
+                Ok(("no change".into(), Vec::new(), Default::default())),
+                &AtomicU8::new(0),
+            )
+            .unwrap();
+        assert!(engine
+            .finish_automatic_without_application(&feature_id, &first_id, epoch)
+            .unwrap());
+        let (_second_id, _, _, second_failure) = engine
+            .reserve_automatic_escalation(&feature_id)
+            .unwrap()
+            .unwrap();
+        let feature = &engine.database.lock().unwrap().state.queue[0];
+        let second = feature.escalation_proposal.as_ref().unwrap();
+        assert_eq!(second_failure, failure);
+        assert_eq!(second.diagnosis_sha256, hash(failure.as_bytes()));
+        assert!(automatic_failure_prompt_json(second, &second_failure)
+            .unwrap()
+            .contains(failure));
+    }
+
+    #[test]
+    fn below_limit_reservation_skips_recovery_scan_but_cap_failure_terminalizes() {
+        let (_directory, engine) = control_test_engine();
+        let project = engine.root.join("example");
+        for index in 0..90 {
+            fs::write(project.join(format!("bounded-{index:03}.txt")), "x").unwrap();
+        }
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = true;
+                state.auto_ai_repair_max_escalations = 1;
+                state.auto_ai_repair_policy_revision = state.revision + 1;
+                let feature = &mut state.queue[0];
+                feature.status = "failed".into();
+                feature.checkpoint = "failed_validation".into();
+                feature.repair_attempts = REPAIR_LIMIT;
+                feature.last_failure_kind = "validation_failure".into();
+                feature.last_code_failure_summary = "compile failed".into();
+                feature.auto_ai_repair_limit = Some(1);
+                feature.auto_repair_policy_revision = Some(state.revision + 1);
+                set_auto_repair_lifecycle(feature, "running", "fixture")
+            })
+            .unwrap();
+        let feature_id = engine.database.lock().unwrap().state.queue[0].id.clone();
+        assert!(engine
+            .reserve_automatic_escalation(&feature_id)
+            .unwrap()
+            .is_some());
+
+        engine
+            .change(|state| {
+                let feature = &mut state.queue[0];
+                feature.escalation_pending = false;
+                feature.escalation_proposal = None;
+                feature.escalation_count = 1;
+                feature.escalation_evidence_reserved = 0;
+                feature.review_evidence_reserved = 0;
+                feature.auto_repair_step_started_at_ms = None;
+                feature.checkpoint = "failed_validation".into();
+                set_auto_repair_lifecycle(feature, "running", "fixture")
+            })
+            .unwrap();
+        assert!(engine.reserve_automatic_escalation(&feature_id).is_err());
+        let database = engine.database.lock().unwrap();
+        let feature = &database.state.queue[0];
+        assert_eq!(feature.auto_repair_lifecycle, "limit_reached");
+        assert_eq!(feature.escalation_count, 1);
+        assert_eq!(feature.auto_repair_step_started_at_ms, None);
+        assert!(!engine.running.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn cap_transition_does_not_wait_for_the_shared_inference_gate() {
+        let (_directory, engine) = control_test_engine();
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = true;
+                state.auto_ai_repair_max_escalations = 1;
+                state.auto_ai_repair_policy_revision = state.revision + 1;
+                let feature = &mut state.queue[0];
+                feature.status = "failed".into();
+                feature.checkpoint = "failed_validation".into();
+                feature.repair_attempts = REPAIR_LIMIT;
+                feature.escalation_count = 1;
+                feature.last_failure_kind = "validation_failure".into();
+                feature.last_code_failure_summary = "compile failed".into();
+                feature.auto_ai_repair_limit = Some(1);
+                feature.auto_repair_policy_revision = Some(state.revision + 1);
+                set_auto_repair_lifecycle(feature, "running", "fixture")
+            })
+            .unwrap();
+        let feature_id = engine.database.lock().unwrap().state.queue[0].id.clone();
+        let _occupied = engine.inference_gate.try_acquire().unwrap();
+        assert!(!engine
+            .prepare_next_automatic_escalation(&feature_id)
+            .await
+            .unwrap());
+        assert_eq!(
+            engine.database.lock().unwrap().state.queue[0].auto_repair_lifecycle,
+            "limit_reached"
+        );
+    }
+
+    #[test]
+    fn revalidation_after_limit_is_offered_only_for_exhausted_failed_or_paused_features() {
+        for (lifecycle, status, expected) in [
+            ("limit_reached", "failed", true),
+            ("limit_reached", "paused", true),
+            ("limit_reached", "running", false),
+            ("held", "failed", false),
+            ("quarantined", "paused", false),
+            ("inactive", "failed", false),
+            ("running", "failed", false),
+        ] {
+            let (_directory, engine) = control_test_engine();
+            engine
+                .change(|state| {
+                    state.queue[0].status = status.into();
+                    state.queue[0].auto_ai_repair_limit = Some(3);
+                    state.queue[0].escalation_count = 3;
+                    set_auto_repair_lifecycle(
+                        &mut state.queue[0],
+                        lifecycle,
+                        "fixture recovery boundary",
+                    )
+                })
+                .unwrap();
+            let projected = engine.snapshot().unwrap();
+            assert_eq!(
+                projected["queue"][0]["can_revalidate_after_auto_repair_limit"],
+                json!(expected),
+                "{lifecycle}/{status}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn stopped_limit_recovery_is_rejected_before_project_inspection() {
+        let (_directory, engine) = control_test_engine();
+        let project = fs::canonicalize(engine.root.join("example")).unwrap();
+        fs::write(project.join("main.rs"), "fn value() -> i32 { 1 }\n").unwrap();
+        let baseline = admitted_project_snapshot(&project).unwrap();
+        let mut feature = engine.database.lock().unwrap().state.queue[0].clone();
+        feature.status = "failed".into();
+        feature.checkpoint = "escalation_1_failed".into();
+        feature.auto_ai_repair_limit = Some(1);
+        feature.escalation_count = 1;
+        feature.auto_repair_limit_project_baseline = baseline
+            .files
+            .iter()
+            .map(|(path, (digest, _))| (path.clone(), digest.clone()))
+            .collect();
+        feature.auto_repair_limit_unadmitted_sha256 = Some(baseline.unadmitted_sha256);
+        feature.auto_repair_limit_volatile_sha256 = Some(baseline.volatile_sha256);
+        set_auto_repair_lifecycle(
+            &mut feature,
+            "limit_reached",
+            "1 of 1 AI escalations used. Automatic repair stopped. Correct the project without AI and revalidate, change the reviewer when applicable, or remove the feature.",
+        )
+        .unwrap();
+        engine
+            .change(|state| {
+                state.queue[0] = feature.clone();
+                Ok(())
+            })
+            .unwrap();
+        let revision = engine.snapshot().unwrap()["revision"].as_u64().unwrap();
+        let feature_id = feature.id.clone();
+        engine.cancellation.store(1, Ordering::SeqCst);
+
+        let error = engine
+            .start(
+                Some(&feature_id),
+                Some("mac"),
+                Some("failed"),
+                Some("escalation_1_failed"),
+            )
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("cancelled before project inspection"),
+            "unexpected recovery error: {error:#}"
+        );
+        assert_eq!(
+            engine.snapshot().unwrap()["revision"].as_u64().unwrap(),
+            revision
+        );
+        assert_eq!(
+            engine.database.lock().unwrap().state.queue[0].checkpoint,
+            "escalation_1_failed"
+        );
+    }
+
+    #[tokio::test]
+    async fn limit_recovery_resume_revalidates_owner_bytes_without_inference_or_new_escalation() {
+        let (_directory, engine) = control_test_engine();
+        let project = fs::canonicalize(engine.root.join("example")).unwrap();
+        fs::write(project.join("main.rs"), "fn value() -> i32 { 1 }\n").unwrap();
+        let baseline = admitted_project_snapshot(&project).unwrap();
+        let baseline_digest = baseline.files.get("main.rs").unwrap().0.clone();
+        let mut feature = engine.database.lock().unwrap().state.queue[0].clone();
+        feature.status = "failed".into();
+        feature.checkpoint = "escalation_1_failed".into();
+        feature.repair_attempts = REPAIR_LIMIT;
+        feature.escalation_count = 1;
+        feature.auto_ai_repair_limit = Some(1);
+        feature.auto_repair_policy_revision = Some(7);
+        feature.edits = Some(vec![Edit {
+            path: "main.rs".into(),
+            content: "fn value() -> i32 { 4 }\n".into(),
+            before: Some(baseline_digest.clone()),
+        }]);
+        feature.auto_repair_limit_project_baseline = baseline
+            .files
+            .iter()
+            .map(|(path, (digest, _))| (path.clone(), digest.clone()))
+            .collect();
+        feature.auto_repair_limit_unadmitted_sha256 = Some(baseline.unadmitted_sha256);
+        feature.auto_repair_limit_volatile_sha256 = Some(baseline.volatile_sha256);
+        set_auto_repair_lifecycle(
+            &mut feature,
+            "limit_reached",
+            "1 of 1 AI escalations used. Automatic repair stopped. Correct the project without AI and revalidate, change the reviewer when applicable, or remove the feature.",
+        )
+        .unwrap();
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = true;
+                state.auto_ai_repair_max_escalations = 1;
+                state.auto_ai_repair_policy_revision = 7;
+                state.queue[0] = feature.clone();
+                Ok(())
+            })
+            .unwrap();
+        let revision = engine.snapshot().unwrap()["revision"].as_u64().unwrap();
+        let feature_id = feature.id.clone();
+
+        // The owner corrects project bytes without AI before resuming.
+        fs::write(project.join("main.rs"), "fn value() -> i32 { 2 }\n").unwrap();
+
+        // Validation-only limit recovery is a durable pre-spawn transition: the
+        // exhausted escalation budget stays exhausted, no model call is
+        // authorized, and no new escalation evidence is reserved. Assertions
+        // stop at the admitted durable checkpoint; spawned validation-process
+        // completion is covered by native E2E suites.
+        engine
+            .start(
+                Some(&feature_id),
+                Some("mac"),
+                Some("failed"),
+                Some("escalation_1_failed"),
+            )
+            .unwrap();
+        // The recovery run owns the single start slot without any escalation
+        // call or automatic repair authorization.
+        assert!(engine.running.load(Ordering::SeqCst));
+        assert!(!engine.escalation_running.load(Ordering::SeqCst));
+        assert!(engine.escalation_cancellation.lock().unwrap().is_none());
+        assert!(!engine.repair_loop_authorized.load(Ordering::SeqCst));
+        assert!(!engine.chat.is_running());
+        assert!(!engine.tools.is_running());
+
+        // The exact resume cost is two revisions: one durable publication-selection
+        // freeze and one durable validation-only recovery checkpoint.
+        let recovered = engine.snapshot().unwrap();
+        assert_eq!(recovered["revision"].as_u64().unwrap(), revision + 2);
+        let projected = &recovered["queue"][0];
+        assert_eq!(projected["status"], "paused");
+        assert_eq!(projected["checkpoint"], "auto_repair_limit_revalidating");
+        assert_eq!(projected["auto_repair_lifecycle"], "limit_reached");
+        assert_eq!(
+            projected["auto_repair_reason"],
+            "1 of 1 AI escalations used. Automatic repair stopped. Correct the project without AI and revalidate, change the reviewer when applicable, or remove the feature."
+        );
+        assert_eq!(projected["auto_ai_repair_limit"], 1);
+        assert_eq!(projected["escalation_count"], 1);
+        assert_eq!(projected["review_status"], "pending");
+        assert_eq!(projected["can_revalidate_after_auto_repair_limit"], true);
+        assert!(projected["changed_files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|path| path == "main.rs"));
+        assert!(projected["message"]
+            .as_str()
+            .unwrap()
+            .contains("no repair model attempt is authorized"));
+        {
+            let database = engine.database.lock().unwrap();
+            let durable = &database.state.queue[0];
+            // Owner-corrected bytes are admitted for validation-only review.
+            let edits = durable.edits.as_deref().unwrap();
+            assert_eq!(edits.len(), 1);
+            assert_eq!(edits[0].path, "main.rs");
+            assert_eq!(edits[0].content, "fn value() -> i32 { 2 }\n");
+            assert_eq!(edits[0].before.as_deref(), Some(baseline_digest.as_str()));
+            // The exhausted cap, counter, and policy binding are immutable.
+            assert_eq!(durable.auto_ai_repair_limit, Some(1));
+            assert_eq!(durable.escalation_count, 1);
+            assert_eq!(durable.auto_repair_policy_revision, Some(7));
+            assert_eq!(durable.auto_repair_lifecycle, "limit_reached");
+            assert!(!durable.escalation_pending);
+            assert!(!durable.repair_pending);
+            assert_eq!(durable.escalation_evidence_reserved, 0);
+            assert_eq!(durable.review_evidence_reserved, 0);
+            assert!(durable.escalation_proposal.is_none());
+            assert!(durable.escalation_history.is_empty());
+            // Review state is reset to a fresh validation-only pre-review binding.
+            assert!(durable.review_pending.is_none());
+            assert_eq!(durable.review_status, "pending");
+            assert_eq!(durable.review_attempts, 0);
+            assert!(durable.review_history.is_empty());
+            assert!(durable
+                .review_summary
+                .contains("Validation-only limit recovery"));
+        }
+
+        // Neither the resume route nor the recovery transition reserved the
+        // shared inference slot: validation-only limit recovery never infers.
+        assert!(engine.inference_gate.try_acquire().is_ok());
+        {
+            let database = engine.database.lock().unwrap();
+            assert_eq!(database.state.auto_ai_repair_max_escalations, 1);
+            assert_eq!(database.state.auto_ai_repair_policy_revision, 7);
+        }
+
+        // A stale resume that observed pre-recovery state is rejected without
+        // mutating anything.
+        let stale = engine
+            .start(
+                Some(&feature_id),
+                Some("mac"),
+                Some("failed"),
+                Some("escalation_1_failed"),
+            )
+            .unwrap_err();
+        assert!(
+            stale.to_string().contains("state changed"),
+            "unexpected stale-resume error: {stale:#}"
+        );
+
+        // A parallel resume that observed the recovered state cannot re-enter
+        // while the recovery run holds the start flag, and mutates nothing.
+        engine
+            .start(
+                Some(&feature_id),
+                Some("mac"),
+                Some("paused"),
+                Some("auto_repair_limit_revalidating"),
+            )
+            .unwrap();
+        let after_parallel = engine.snapshot().unwrap();
+        assert_eq!(after_parallel["revision"].as_u64().unwrap(), revision + 2);
+        assert_eq!(after_parallel["queue"][0]["status"], "paused");
+        assert_eq!(
+            after_parallel["queue"][0]["checkpoint"],
+            "auto_repair_limit_revalidating"
+        );
+        assert_eq!(after_parallel["queue"][0]["escalation_count"], 1);
+        assert!(engine.inference_gate.try_acquire().is_ok());
+    }
+
+    #[test]
+    fn missing_limit_baseline_recovers_only_by_reviewing_all_current_admitted_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = fs::canonicalize(directory.path()).unwrap();
+        for index in 0..81 {
+            fs::write(
+                project.join(format!("source-{index:03}.rs")),
+                "fn value() {}\n",
+            )
+            .unwrap();
+        }
+        assert!(admitted_project_snapshot(&project).is_err());
+        for index in 30..81 {
+            fs::remove_file(project.join(format!("source-{index:03}.rs"))).unwrap();
+        }
+        let reduced = admitted_project_snapshot(&project).unwrap();
+        let mut feature = feature_with_status("failed");
+        feature.auto_repair_lifecycle = "limit_reached".into();
+        feature.auto_ai_repair_limit = Some(1);
+        feature.escalation_count = 1;
+        let edits = prepare_limit_recovery_edits(&mut feature, &reduced).unwrap();
+        assert_eq!(edits.len(), reduced.files.len());
+        assert!(edits.iter().all(|edit| edit.before.is_some()));
+        feature.edits = Some(edits.clone());
+        let packet = developer_review_packet(&feature, &project, &edits, &"9".repeat(64)).unwrap();
+        assert_eq!(packet.files.len(), reduced.files.len());
+        assert!(packet.files.iter().all(|file| {
+            file.before_sha256.as_deref() == Some(file.content_sha256.as_str())
+                && !file.content.is_empty()
+        }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn limit_recovery_refuses_unix_special_entries_without_reading_them() {
+        use std::os::unix::net::UnixListener;
+
+        let directory = tempfile::tempdir().unwrap();
+        let project = fs::canonicalize(directory.path()).unwrap();
+        fs::write(project.join("main.rs"), "fn main() {}\n").unwrap();
+        let socket_path = project.join("untrusted.sock");
+        let _listener = UnixListener::bind(&socket_path).unwrap();
+
+        let error = admitted_project_snapshot(&project)
+            .expect_err("special project entry must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("refuses a special project entry"),
+            "unexpected recovery error: {error:#}"
+        );
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn limit_recovery_refuses_native_hard_link_before_content_admission() {
+        let container = tempfile::tempdir().unwrap();
+        let project = container.path().join("project");
+        let outside = container.path().join("outside");
+        fs::create_dir(&project).unwrap();
+        fs::create_dir(&outside).unwrap();
+        fs::write(project.join("main.rs"), "fn main() {}\n").unwrap();
+        let sensitive = outside.join("sensitive.rs");
+        fs::write(
+            &sensitive,
+            "const OUT_OF_PROJECT_CREDENTIAL: &str = \"must-not-enter-review\";\n",
+        )
+        .unwrap();
+        fs::hard_link(&sensitive, project.join("aliased.rs")).unwrap();
+        let project = fs::canonicalize(project).unwrap();
+
+        let context_error = project_context(&project)
+            .expect_err("multi-link project file must not enter an automatic prompt");
+        assert!(
+            context_error.to_string().contains("multiple hard links"),
+            "unexpected project-context error: {context_error:#}"
+        );
+        let error = admitted_project_snapshot(&project)
+            .expect_err("multi-link project file must fail closed");
+        assert!(
+            error.to_string().contains("multiple hard links"),
+            "unexpected recovery error: {error:#}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn limit_recovery_holds_unix_ancestor_during_concurrent_symlink_replacement() {
+        use std::os::unix::fs::symlink;
+        use std::sync::mpsc;
+
+        let project_directory = tempfile::tempdir().unwrap();
+        let outside_directory = tempfile::tempdir().unwrap();
+        let project = fs::canonicalize(project_directory.path()).unwrap();
+        let outside = fs::canonicalize(outside_directory.path()).unwrap();
+        fs::create_dir(project.join("nested")).unwrap();
+        fs::write(
+            project.join("nested/safe.rs"),
+            "fn held_directory_content() {}\n",
+        )
+        .unwrap();
+        let aliased_secret = "outside-sensitive-content-must-not-be-read";
+        fs::write(outside.join("secret.rs"), aliased_secret).unwrap();
+
+        let (opened_tx, opened_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let scan_root = project.clone();
+        let scan = std::thread::spawn(move || {
+            let directory_opened = |relative: &Path| {
+                if relative == Path::new("nested") {
+                    opened_tx.send(()).unwrap();
+                    release_rx
+                        .recv_timeout(Duration::from_secs(5))
+                        .expect("ancestor replacement barrier was not released");
+                }
+            };
+            admitted_project_snapshot_unix(&scan_root, None, Some(&directory_opened))
+        });
+
+        opened_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("scanner did not hold the nested directory before traversal");
+        fs::rename(project.join("nested"), project.join("held-nested")).unwrap();
+        symlink(&outside, project.join("nested")).unwrap();
+        release_tx.send(()).unwrap();
+        let snapshot = scan.join().unwrap().unwrap();
+
+        fs::remove_file(project.join("nested")).unwrap();
+        fs::rename(project.join("held-nested"), project.join("nested")).unwrap();
+        assert_eq!(
+            snapshot
+                .files
+                .get("nested/safe.rs")
+                .map(|(_, content)| content.as_str()),
+            Some("fn held_directory_content() {}\n")
+        );
+        assert!(!snapshot.files.contains_key("nested/secret.rs"));
+        assert!(snapshot
+            .files
+            .values()
+            .all(|(_, content)| !content.contains(aliased_secret)));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn limit_recovery_refuses_directory_junction_before_alias_traversal() {
+        let project_directory = tempfile::tempdir().unwrap();
+        let outside_directory = tempfile::tempdir().unwrap();
+        let project = fs::canonicalize(project_directory.path()).unwrap();
+        let outside = fs::canonicalize(outside_directory.path()).unwrap();
+        fs::write(project.join("main.rs"), "fn main() {}\n").unwrap();
+        fs::write(
+            outside.join("must-not-enter-recovery.txt"),
+            "aliased content must never be read or persisted\n",
+        )
+        .unwrap();
+        // cmd.exe's mklink parser is not reliable with Rust's extended-length
+        // canonical path spelling, so use the equivalent ordinary temp paths
+        // only for this disposable native junction ceremony.
+        let junction = project_directory.path().join("aliased-directory");
+        let creation = std::process::Command::new("cmd.exe")
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&junction)
+            .arg(outside_directory.path())
+            .output()
+            .unwrap();
+        assert!(
+            creation.status.success(),
+            "failed to create disposable test junction: {}",
+            String::from_utf8_lossy(&creation.stderr)
+        );
+        assert!(planning_metadata_is_reparse(
+            &fs::symlink_metadata(&junction).unwrap()
+        ));
+
+        let result = admitted_project_snapshot(&project);
+        let cleanup = std::process::Command::new("cmd.exe")
+            .args(["/D", "/C", "rmdir"])
+            .arg(&junction)
+            .output()
+            .unwrap();
+        assert!(
+            cleanup.status.success(),
+            "failed to remove disposable test junction: {}",
+            String::from_utf8_lossy(&cleanup.stderr)
+        );
+        let error = result.err().expect("directory junction must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("refuses a Windows reparse point"),
+            "unexpected recovery error: {error:#}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn failed_limit_validation_refreshes_only_runner_mutated_volatile_evidence() {
+        let (_directory, engine) = control_test_engine();
+        let project = fs::canonicalize(engine.root.join("example")).unwrap();
+        fs::write(project.join("main.rs"), "fn value() -> i32 { 1 }\n").unwrap();
+        let baseline = admitted_project_snapshot(&project).unwrap();
+        fs::write(project.join("main.rs"), "fn value() -> i32 { 2 }\n").unwrap();
+        let current = admitted_project_snapshot(&project).unwrap();
+        let mut feature = engine.database.lock().unwrap().state.queue[0].clone();
+        feature.status = "paused".into();
+        feature.checkpoint = "auto_repair_limit_revalidating".into();
+        feature.auto_repair_lifecycle = "limit_reached".into();
+        feature.auto_ai_repair_limit = Some(1);
+        feature.escalation_count = 1;
+        feature.auto_repair_limit_project_baseline = baseline
+            .files
+            .iter()
+            .map(|(path, (digest, _))| (path.clone(), digest.clone()))
+            .collect();
+        feature.auto_repair_limit_unadmitted_sha256 = Some(baseline.unadmitted_sha256);
+        feature.auto_repair_limit_volatile_sha256 = Some(baseline.volatile_sha256.clone());
+        feature.edits = Some(reconcile_limit_recovery_edits(&feature, &current).unwrap());
+        feature.validation = "mkdir -p target && printf runner > target/output && exit 1".into();
+        engine
+            .change(|state| {
+                state.queue[0] = feature.clone();
+                Ok(())
+            })
+            .unwrap();
+        assert!(engine.validate_command(&feature, &project).await.is_err());
+        let refreshed = engine.database.lock().unwrap().state.queue[0].clone();
+        assert_ne!(
+            refreshed.auto_repair_limit_volatile_sha256.as_deref(),
+            Some(baseline.volatile_sha256.as_str())
+        );
+
+        fs::write(project.join("main.rs"), "fn value() -> i32 { 3 }\n").unwrap();
+        let corrected = admitted_project_snapshot(&project).unwrap();
+        assert!(reconcile_limit_recovery_edits(&refreshed, &corrected).is_ok());
+        fs::write(project.join("target/output"), "owner drift").unwrap();
+        let tampered = admitted_project_snapshot(&project).unwrap();
+        assert!(reconcile_limit_recovery_edits(&refreshed, &tampered).is_err());
+    }
+
+    #[test]
+    fn limit_recovery_admits_bounded_owner_changes_and_rejects_deletion_or_hidden_drift() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = fs::canonicalize(directory.path()).unwrap();
+        fs::create_dir_all(project.join("tests")).unwrap();
+        fs::create_dir_all(project.join(".github")).unwrap();
+        fs::write(project.join("main.rs"), "fn value() -> i32 { 1 }\n").unwrap();
+        fs::write(project.join("setup.py"), "from setuptools import setup\n").unwrap();
+        fs::write(project.join(".github/workflow.yml"), "name: check\n").unwrap();
+        let baseline = admitted_project_snapshot(&project).unwrap();
+        let mut feature = feature_with_status("failed");
+        feature.auto_ai_repair_limit = Some(2);
+        feature.escalation_count = 2;
+        feature.auto_repair_lifecycle = "limit_reached".into();
+        feature.auto_repair_limit_project_baseline = baseline
+            .files
+            .iter()
+            .map(|(path, (digest, _))| (path.clone(), digest.clone()))
+            .collect();
+        feature.auto_repair_limit_unadmitted_sha256 = Some(baseline.unadmitted_sha256.clone());
+        feature.auto_repair_limit_volatile_sha256 = Some(baseline.volatile_sha256.clone());
+        feature.edits = Some(vec![Edit {
+            path: "main.rs".into(),
+            content: "fn value() -> i32 { 1 }\n".into(),
+            before: None,
+        }]);
+
+        fs::write(project.join("main.rs"), "fn value() -> i32 { 2 }\n").unwrap();
+        fs::write(project.join("next.config.js"), "export default {}\n").unwrap();
+        fs::write(project.join("tests/new_test.py"), "assert True\n").unwrap();
+        let current = admitted_project_snapshot(&project).unwrap();
+        let edits = reconcile_limit_recovery_edits(&feature, &current).unwrap();
+        assert_eq!(edits.len(), 3);
+        feature.edits = Some(edits.clone());
+        feature.validation = "python tests/new_test.py".into();
+        let packet = developer_review_packet(&feature, &project, &edits, &"2".repeat(64)).unwrap();
+        let classes = packet
+            .files
+            .iter()
+            .map(|file| (file.path.as_str(), file.classification.as_str()))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(classes["next.config.js"], "project_configuration");
+        assert_eq!(classes["tests/new_test.py"], "test_or_validation_input");
+
+        fs::remove_file(project.join("setup.py")).unwrap();
+        let deleted = admitted_project_snapshot(&project).unwrap();
+        assert!(reconcile_limit_recovery_edits(&feature, &deleted).is_err());
+        fs::write(project.join("setup.py"), "from setuptools import setup\n").unwrap();
+        fs::write(project.join(".github/workflow.yml"), "name: changed\n").unwrap();
+        let hidden_drift = admitted_project_snapshot(&project).unwrap();
+        assert!(reconcile_limit_recovery_edits(&feature, &hidden_drift).is_err());
+        fs::write(project.join(".github/workflow.yml"), "name: check\n").unwrap();
+        fs::create_dir_all(project.join("target/debug")).unwrap();
+        fs::write(project.join("target/debug/build-output"), "changed\n").unwrap();
+        let target_drift = admitted_project_snapshot(&project).unwrap();
+        assert!(reconcile_limit_recovery_edits(&feature, &target_drift).is_err());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            symlink("main.rs", project.join("link-to-source")).unwrap();
+            let with_link = admitted_project_snapshot(&project).unwrap();
+            feature.auto_repair_limit_unadmitted_sha256 = Some(with_link.unadmitted_sha256.clone());
+            feature.auto_repair_limit_volatile_sha256 = Some(with_link.volatile_sha256.clone());
+            fs::remove_file(project.join("link-to-source")).unwrap();
+            symlink("setup.py", project.join("link-to-source")).unwrap();
+            let changed_link = admitted_project_snapshot(&project).unwrap();
+            assert!(reconcile_limit_recovery_edits(&feature, &changed_link).is_err());
+        }
+    }
+
+    #[test]
+    fn safe_pre_effect_cancellation_rearms_once_but_quarantine_and_limit_never_do() {
+        let mut feature = feature_with_status("running");
+        feature.repair_attempts = 1;
+        feature.repair_pending = true;
+        feature.checkpoint = "repair_1_prepared".into();
+        feature.auto_ai_repair_limit = Some(5);
+        feature.auto_repair_policy_revision = Some(4);
+        feature.auto_repair_epoch = 7;
+        set_auto_repair_lifecycle(&mut feature, "running", "fixture").unwrap();
+        persist_automatic_cancellation_intent(&mut feature, true, "inactive", "quarantined")
+            .unwrap();
+        assert_eq!(feature.auto_repair_lifecycle, "held");
+        assert_eq!(feature.status, "paused");
+        let old_epoch = feature.auto_repair_epoch;
+        assert!(enable_auto_repair_for_failed_feature(&mut feature, false, 100, 9).unwrap());
+        assert_eq!(feature.auto_ai_repair_limit, Some(5));
+        assert_eq!(feature.repair_attempts, 1);
+        assert_eq!(feature.auto_repair_epoch, old_epoch + 1);
+        assert_eq!(feature.auto_repair_policy_revision, Some(9));
+
+        for lifecycle in ["quarantined", "limit_reached"] {
+            let mut blocked = feature_with_status("failed");
+            blocked.auto_repair_lifecycle = lifecycle.into();
+            blocked.auto_ai_repair_limit = Some(3);
+            blocked.escalation_count = 2;
+            let epoch = blocked.auto_repair_epoch;
+            assert!(enable_auto_repair_for_failed_feature(&mut blocked, true, 99, 10).is_err());
+            assert_eq!(blocked.auto_repair_lifecycle, lifecycle);
+            assert_eq!(blocked.auto_ai_repair_limit, Some(3));
+            assert_eq!(blocked.escalation_count, 2);
+            assert_eq!(blocked.auto_repair_epoch, epoch);
+        }
+    }
+
+    #[test]
+    fn auto_run_arms_the_next_selected_feature_with_its_own_immutable_budget() {
+        let mut first = feature_with_status("succeeded");
+        first.auto_ai_repair_limit = Some(2);
+        first.escalation_count = 1;
+        let mut second = feature_with_status("queued");
+        second.id = Uuid::new_v4().to_string();
+        second.checkpoint = "not_started".into();
+        let second_id = second.id.clone();
+        let mut state = Snapshot {
+            auto_run: true,
+            auto_ai_repair_enabled: true,
+            auto_ai_repair_max_escalations: 9,
+            auto_ai_repair_policy_revision: 41,
+            queue: vec![first, second],
+            ..Default::default()
+        };
+        assert!(arm_selected_queued_feature(&mut state, &second_id).unwrap());
+        let second = &state.queue[1];
+        assert_eq!(second.auto_ai_repair_limit, Some(9));
+        assert_eq!(second.auto_repair_policy_revision, Some(41));
+        assert_eq!(second.auto_repair_lifecycle, "running");
+        assert_eq!(second.auto_repair_epoch, 1);
+        assert_eq!(state.queue[0].auto_ai_repair_limit, Some(2));
+        assert_eq!(state.queue[0].escalation_count, 1);
+
+        let mut third = feature_with_status("queued");
+        third.id = Uuid::new_v4().to_string();
+        third.checkpoint = "not_started".into();
+        let third_id = third.id.clone();
+        let mut disabled = Snapshot {
+            auto_run: true,
+            auto_ai_repair_enabled: false,
+            auto_ai_repair_max_escalations: 6,
+            auto_ai_repair_policy_revision: 50,
+            queue: vec![third],
+            ..Default::default()
+        };
+        assert!(arm_selected_queued_feature(&mut disabled, &third_id).unwrap());
+        assert_eq!(disabled.queue[0].auto_ai_repair_limit, Some(6));
+        assert_eq!(disabled.queue[0].auto_repair_lifecycle, "inactive");
+        disabled.auto_ai_repair_max_escalations = 99;
+        disabled.auto_ai_repair_enabled = true;
+        disabled.auto_ai_repair_policy_revision = 51;
+        assert!(arm_selected_queued_feature(&mut disabled, &third_id).unwrap());
+        assert_eq!(disabled.queue[0].auto_ai_repair_limit, Some(6));
+        assert_eq!(disabled.queue[0].auto_repair_lifecycle, "running");
+        assert_eq!(disabled.queue[0].auto_repair_policy_revision, Some(51));
+    }
+
+    #[tokio::test]
+    async fn emergency_pause_prevents_validation_process_creation() {
+        let (_directory, engine) = control_test_engine();
+        let marker = engine.root.join("example/emergency-marker");
+        let mut feature = engine.database.lock().unwrap().state.queue[0].clone();
+        feature.validation = format!("touch {}", marker.display());
+        let response = control(
+            State(engine.clone()),
+            authorized_headers(),
+            Json(json!({"action":"emergency"})),
+        )
+        .await;
+        assert_eq!(response.0, StatusCode::OK);
+        let project = fs::canonicalize(engine.root.join("example")).unwrap();
+        assert!(engine.validate_command(&feature, &project).await.is_err());
+        assert!(!marker.exists());
+    }
+
     #[test]
     fn generated_paths_remain_in_selected_project() {
         let dir = tempfile::tempdir().unwrap();
@@ -10598,5 +18131,331 @@ mod tests {
             assert!(checked_path(&root, path).is_err(), "{path}");
         }
         assert!(checked_path(&root, "src/main.py").is_ok());
+    }
+
+    // Digest conventions must match developer_chat.rs request_payload_sha256.
+    fn chat_request_payload_sha256(
+        project: &str,
+        chat_id: &str,
+        message: &str,
+        model_target: &str,
+    ) -> String {
+        hash(
+            &serde_json::to_vec(&json!({
+                "project":project,
+                "chat_id":chat_id,
+                "message":message,
+                "model_target":model_target,
+                "attachments":Vec::<ChatAttachment>::new(),
+            }))
+            .unwrap(),
+        )
+    }
+
+    // Digest conventions must match developer_chat.rs chat_response_provenance_sha256.
+    fn chat_reply_provenance_sha256(
+        project: &str,
+        chat_id: &str,
+        request_id: &str,
+        model_target: &str,
+        model: &str,
+        content: &str,
+    ) -> String {
+        hash(
+            &serde_json::to_vec(&json!({
+                "project":project,
+                "chat_id":chat_id,
+                "request_id":request_id,
+                "model_target":model_target,
+                "model":model,
+                "content":content,
+            }))
+            .unwrap(),
+        )
+    }
+
+    // The DeveloperChat database field is private, so the completed repair handoff is
+    // installed through a separate connection to developer.sqlite3 using the exact
+    // request payload, content, and provenance bindings repair_handoff re-verifies.
+    fn install_completed_chat_repair_handoff(engine: &Engine) -> (String, String, String) {
+        let chat_id = Uuid::new_v4().to_string();
+        let request_id = Uuid::new_v4().to_string();
+        let project = "example";
+        let model_target = "mac";
+        let model = "fixture";
+        let question = "Diagnose the failed validation";
+        let diagnosis =
+            "The fixture validation failed because the saved artifact is stale; regenerate it and revalidate.";
+        let diagnosis_sha256 = hash(diagnosis.as_bytes());
+        let provenance_sha256 = chat_reply_provenance_sha256(
+            project,
+            &chat_id,
+            &request_id,
+            model_target,
+            model,
+            diagnosis,
+        );
+        engine
+            .chat
+            .create_conversation(&chat_id, project, None)
+            .unwrap();
+        let user_message = json!({
+            "sequence":1,
+            "role":"user",
+            "content":question,
+            "attachments":[],
+            "request_id":request_id,
+            "model_target":model_target,
+        });
+        let assistant_message = json!({
+            "sequence":2,
+            "role":"assistant",
+            "content":diagnosis,
+            "attachments":[],
+            "request_id":request_id,
+            "model_target":model_target,
+            "model":model,
+            "content_sha256":diagnosis_sha256,
+            "provenance_sha256":provenance_sha256,
+        });
+        let connection = Connection::open(engine.data.join("developer.sqlite3")).unwrap();
+        let transaction = connection.unchecked_transaction().unwrap();
+        transaction
+            .execute(
+                "INSERT INTO developer_chat_request(
+                   id,project,chat_id,message,model_target,pending,payload_sha256,reserved_bytes,pre_history_compat)
+                 VALUES(?1,?2,?3,?4,?5,0,?6,0,0)",
+                rusqlite::params![
+                    request_id,
+                    project,
+                    chat_id,
+                    question,
+                    model_target,
+                    chat_request_payload_sha256(project, &chat_id, question, model_target),
+                ],
+            )
+            .unwrap();
+        for (sequence, message) in [
+            (1u64, user_message.to_string()),
+            (2u64, assistant_message.to_string()),
+        ] {
+            transaction
+                .execute(
+                    "INSERT INTO developer_chat_message(chat_id,sequence,message,byte_count)
+                     VALUES(?1,?2,?3,?4)",
+                    rusqlite::params![chat_id, sequence, message, message.len() as u64],
+                )
+                .unwrap();
+        }
+        transaction.commit().unwrap();
+        (chat_id, request_id, diagnosis_sha256)
+    }
+
+    fn persisted_developer_state(engine: &Engine) -> Value {
+        let connection = Connection::open(engine.data.join("developer.sqlite3")).unwrap();
+        let encoded: String = connection
+            .query_row("SELECT state FROM developer_state WHERE id=1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        serde_json::from_str(&encoded).unwrap()
+    }
+
+    // Proves the rejection is durably committed exactly once before the route answers
+    // with its error, and that no model request can start from the rejected state.
+    async fn assert_manual_escalation_preflight_rejection_is_durable(
+        engine: &Arc<Engine>,
+        mut request: RepairEscalationMutation,
+        expected_error: &str,
+        expected_lifecycle: &str,
+        expected_reason: &str,
+        expected_limit: u32,
+        before: (u64, u32, u32, u32),
+    ) {
+        let (revision_before, count_before, escalation_reserved_before, review_reserved_before) =
+            before;
+        // RepairEscalationMutation is not Clone; rebuild the identical binding from
+        // cloned fields so the original stays available for the refreshed retry.
+        let first_request = RepairEscalationMutation {
+            action: request.action.clone(),
+            feature_id: request.feature_id.clone(),
+            expected_revision: request.expected_revision,
+            expected_checkpoint: request.expected_checkpoint.clone(),
+            model_target: request.model_target.clone(),
+            chat_id: request.chat_id.clone(),
+            chat_request_id: request.chat_request_id.clone(),
+            diagnosis_sha256: request.diagnosis_sha256.clone(),
+            proposal_id: request.proposal_id.clone(),
+        };
+        let response = repair_escalation_control(
+            State(engine.clone()),
+            authorized_headers(),
+            Json(first_request),
+        )
+        .await;
+        assert_eq!(response.0, StatusCode::CONFLICT);
+        assert_eq!(response.1["error"], expected_error);
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        assert!(!engine.escalation_running.load(Ordering::SeqCst));
+        assert!(engine.escalation_cancellation.lock().unwrap().is_none());
+        assert!(!engine.repair_loop_authorized.load(Ordering::SeqCst));
+        drop(engine.inference_gate.try_acquire().unwrap());
+        let persisted = persisted_developer_state(engine);
+        assert_eq!(persisted["revision"].as_u64().unwrap(), revision_before + 1);
+        let feature = &persisted["queue_v11"][0];
+        assert_eq!(feature["auto_repair_lifecycle"], expected_lifecycle);
+        assert_eq!(feature["auto_repair_reason"], expected_reason);
+        assert_eq!(feature["auto_ai_repair_limit"], expected_limit);
+        assert!(feature["auto_repair_step_started_at_ms"].is_null());
+        assert_eq!(feature["escalation_count"], count_before);
+        assert_eq!(
+            feature["escalation_evidence_reserved"],
+            escalation_reserved_before
+        );
+        assert_eq!(feature["review_evidence_reserved"], review_reserved_before);
+        assert!(feature["escalation_proposal"].is_null());
+        assert_eq!(feature["escalation_pending"], false);
+        {
+            let database = engine.database.lock().unwrap();
+            let feature = &database.state.queue[0];
+            assert_eq!(database.state.revision, revision_before + 1);
+            assert_eq!(feature.auto_repair_lifecycle, expected_lifecycle);
+            assert_eq!(feature.auto_repair_reason, expected_reason);
+            assert_eq!(feature.auto_ai_repair_limit, Some(expected_limit));
+            assert_eq!(feature.escalation_count, count_before);
+            assert_eq!(
+                feature.escalation_evidence_reserved,
+                escalation_reserved_before
+            );
+            assert_eq!(feature.review_evidence_reserved, review_reserved_before);
+            assert!(feature.escalation_proposal.is_none());
+        }
+        assert_eq!(
+            engine.snapshot().unwrap()["queue"][0]["escalation_status"],
+            "idle"
+        );
+        // Even with a fully refreshed binding the preflight must reject again without
+        // ever starting a model request, and commit exactly one more revision.
+        request.expected_revision = engine.snapshot().unwrap()["revision"].as_u64().unwrap();
+        let response =
+            repair_escalation_control(State(engine.clone()), authorized_headers(), Json(request))
+                .await;
+        assert_eq!(response.0, StatusCode::CONFLICT);
+        assert_eq!(response.1["error"], expected_error);
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        assert!(!engine.escalation_running.load(Ordering::SeqCst));
+        assert!(engine.escalation_cancellation.lock().unwrap().is_none());
+        drop(engine.inference_gate.try_acquire().unwrap());
+        let persisted = persisted_developer_state(engine);
+        assert_eq!(persisted["revision"].as_u64().unwrap(), revision_before + 2);
+        assert_eq!(persisted["queue_v11"][0]["escalation_count"], count_before);
+        assert!(persisted["queue_v11"][0]["escalation_proposal"].is_null());
+    }
+
+    fn prepare_escalation_request(
+        revision: u64,
+        chat_id: &str,
+        request_id: &str,
+        diagnosis_sha256: &str,
+    ) -> RepairEscalationMutation {
+        RepairEscalationMutation {
+            action: "prepare".into(),
+            feature_id: "a8e78ac7-c9a9-47f0-92dc-b35777880967".into(),
+            expected_revision: revision,
+            expected_checkpoint: Some("applied".into()),
+            model_target: Some("mac".into()),
+            chat_id: Some(chat_id.into()),
+            chat_request_id: Some(request_id.into()),
+            diagnosis_sha256: Some(diagnosis_sha256.into()),
+            proposal_id: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn prepare_escalation_route_durably_rejects_when_escalation_count_reaches_snapshot_cap() {
+        let (_directory, engine) = control_test_engine();
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = true;
+                state.auto_ai_repair_max_escalations = 3;
+                state.queue[0].escalation_count = 3;
+                Ok(())
+            })
+            .unwrap();
+        let (chat_id, request_id, diagnosis_sha256) =
+            install_completed_chat_repair_handoff(&engine);
+        let revision_before = engine.snapshot().unwrap()["revision"].as_u64().unwrap();
+        assert_manual_escalation_preflight_rejection_is_durable(
+            &engine,
+            prepare_escalation_request(revision_before, &chat_id, &request_id, &diagnosis_sha256),
+            "Repair escalation limit reached",
+            "limit_reached",
+            "3 of 3 AI escalations used. Automatic repair stopped. Correct the project without AI and revalidate, change the reviewer when applicable, or remove the feature.",
+            3,
+            (revision_before, 3, 0, 0),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn prepare_escalation_route_durably_rejects_when_escalation_evidence_capacity_is_exhausted(
+    ) {
+        let (_directory, engine) = control_test_engine();
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = true;
+                state.auto_ai_repair_max_escalations = 5;
+                let feature = &mut state.queue[0];
+                feature.escalation_count = 1;
+                // Three more reserved entries would exceed the bounded 300-entry capacity.
+                feature.escalation_evidence_reserved = (ESCALATION_HISTORY_LIMIT as u32) - 2;
+                Ok(())
+            })
+            .unwrap();
+        let (chat_id, request_id, diagnosis_sha256) =
+            install_completed_chat_repair_handoff(&engine);
+        let revision_before = engine.snapshot().unwrap()["revision"].as_u64().unwrap();
+        assert_manual_escalation_preflight_rejection_is_durable(
+            &engine,
+            prepare_escalation_request(revision_before, &chat_id, &request_id, &diagnosis_sha256),
+            "Repair escalation evidence capacity reached",
+            "held",
+            "Automatic repair stopped because its bounded escalation evidence capacity is unavailable. Inspect the feature evidence before resuming.",
+            5,
+            (revision_before, 1, (ESCALATION_HISTORY_LIMIT as u32) - 2, 0),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn prepare_escalation_route_durably_rejects_when_review_evidence_capacity_is_exhausted() {
+        let (_directory, engine) = control_test_engine();
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = true;
+                state.auto_ai_repair_max_escalations = 5;
+                let feature = &mut state.queue[0];
+                // One more reserved entry would exceed the bounded 104-entry capacity.
+                feature.review_evidence_reserved = REVIEW_HISTORY_LIMIT as u32;
+                Ok(())
+            })
+            .unwrap();
+        let (chat_id, request_id, diagnosis_sha256) =
+            install_completed_chat_repair_handoff(&engine);
+        let revision_before = engine.snapshot().unwrap()["revision"].as_u64().unwrap();
+        assert_manual_escalation_preflight_rejection_is_durable(
+            &engine,
+            prepare_escalation_request(revision_before, &chat_id, &request_id, &diagnosis_sha256),
+            "Independent review evidence capacity reached",
+            "held",
+            "Automatic repair stopped because its bounded independent-review evidence capacity is unavailable. Inspect the feature evidence before resuming.",
+            5,
+            (revision_before, 0, 0, REVIEW_HISTORY_LIMIT as u32),
+        )
+        .await;
     }
 }

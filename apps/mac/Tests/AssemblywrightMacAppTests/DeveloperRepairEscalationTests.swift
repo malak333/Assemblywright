@@ -4,6 +4,21 @@ import Testing
 
 @Suite("Developer repair escalation")
 struct DeveloperRepairEscalationTests {
+  private func automaticFeature(lifecycle: String, checkpoint: String,
+    reason: String = "", escalationCount: Int = 7, limit: Int = 100,
+    repairAttempts: Int = 3) -> DeveloperRunnerFeature {
+    var feature = DeveloperRunnerFeature(id: "feature", project: "example",
+      instruction: "Modernize GUI", validation: "tests", status: "failed",
+      checkpoint: checkpoint, message: reason, changedFiles: [], repairAttempts: repairAttempts,
+      modelTarget: "mac")
+    feature.escalationCount = escalationCount
+    feature.autoAiRepairLimit = limit
+    feature.autoRepairLifecycle = lifecycle
+    feature.autoRepairReason = reason
+    feature.autoRepairEpoch = 4
+    return feature
+  }
+
   private func runner(_ changes: [String: Any] = [:]) throws -> DeveloperRunnerSnapshot {
     var value: [String: Any] = ["mode": "supervised_developer", "host": "fixture",
       "workspace_root": "C:/fixture", "revision": 12, "auto_run": false,
@@ -125,6 +140,102 @@ struct DeveloperRepairEscalationTests {
     #expect(message.contains("approved changes were applied"))
     #expect(message.contains("validation or independent OpenAI/Codex review failed"))
     #expect(message.contains("prepare a fresh repair proposal"))
+  }
+
+  @Test
+  func automaticRepairPhasesUsePlainBudgetLanguage() {
+    let ordinary = automaticFeature(lifecycle: "running", checkpoint: "repair_2_reserved",
+      repairAttempts: 2)
+    #expect(ordinary.automaticRepairStatus == "Ordinary repair 2 of 3 — preparing repair")
+
+    #expect(automaticFeature(lifecycle: "running", checkpoint: "escalation_7_preparing")
+      .automaticRepairStatus == "AI escalation 7 of 100 — preparing repair")
+    #expect(automaticFeature(lifecycle: "running", checkpoint: "escalation_7_applying")
+      .automaticRepairStatus == "AI escalation 7 of 100 — applying changes")
+    #expect(automaticFeature(lifecycle: "running", checkpoint: "escalation_7_applied")
+      .automaticRepairStatus == "AI escalation 7 of 100 — validating")
+
+    var reviewing = automaticFeature(lifecycle: "running", checkpoint: "review_8_pending")
+    reviewing.reviewStatus = "reviewing"
+    reviewing.escalationStatus = "applied"
+    #expect(reviewing.automaticRepairStatus == "AI escalation 7 of 100 — awaiting Codex review")
+
+    var ordinaryReview = automaticFeature(lifecycle: "running", checkpoint: "review_3_pending",
+      repairAttempts: 2)
+    ordinaryReview.reviewStatus = "reviewing"
+    #expect(ordinaryReview.automaticRepairStatus == "Ordinary repair 2 of 3 — awaiting Codex review")
+  }
+
+  @Test
+  func automaticRepairStopsNameReasonAndAdmissibleNextAction() {
+    let held = automaticFeature(lifecycle: "held", checkpoint: "escalation_7_unavailable",
+      reason: "The selected model is unavailable.")
+    #expect(held.automaticRepairStatus?.contains("selected model is unavailable") == true)
+    #expect(held.automaticRepairNextAction?.contains("explicitly Resume") == true)
+
+    let quarantined = automaticFeature(lifecycle: "quarantined",
+      checkpoint: "auto_repair_effects_quarantined",
+      reason: "Validation completion is ambiguous.")
+    #expect(quarantined.automaticRepairStatus?.contains("uncertain effect") == true)
+    #expect(quarantined.automaticRepairNextAction?.contains("ordinary Resume are blocked") == true)
+    #expect(quarantined.automaticRepairNextAction?.contains("Ask AI to repair") == true)
+    #expect(quarantined.blocksOrdinaryResume)
+    #expect(quarantined.permitsManualEscalation)
+    #expect(!quarantined.canRepair)
+
+    let exactLimitReason = "100 of 100 AI escalations used. Automatic repair stopped."
+    let exhausted = automaticFeature(lifecycle: "limit_reached",
+      checkpoint: "escalation_100_duplicate", reason: exactLimitReason,
+      escalationCount: 100, limit: 100)
+    #expect(exhausted.automaticRepairStatus == exactLimitReason)
+    #expect(exhausted.automaticRepairNextAction?.contains("Revalidate without AI") == true)
+    #expect(!exhausted.blocksOrdinaryResume)
+    #expect(!exhausted.permitsManualEscalation)
+    #expect(!exhausted.automaticRepairIsActive)
+    #expect(!exhausted.canRepair)
+
+    let cancelled = automaticFeature(lifecycle: "inactive", checkpoint: "review_8_interrupted",
+      reason: "Auto AI repair was disabled; cancellation was recorded.")
+    #expect(cancelled.automaticRepairStatus?.contains("cancellation was recorded") == true)
+    #expect(cancelled.automaticRepairNextAction == nil)
+  }
+
+  @Test
+  func quarantineAllowsOnlyBoundedManualProposalAndLimitAllowsOnlyRevalidation() throws {
+    func state(lifecycle: String, count: Int, limit: Int) throws -> DeveloperRunnerSnapshot {
+      try runner(["queue": [["id": "feature", "project": "example",
+        "instruction": "Modernize GUI", "validation": "python tests.py", "status": "failed",
+        "checkpoint": lifecycle == "quarantined" ? "auto_repair_effects_quarantined"
+          : "escalation_100_duplicate",
+        "message": "Stopped", "changed_files": [], "repair_attempts": 0,
+        "model_target": "mac", "escalation_count": count, "auto_ai_repair_limit": limit,
+        "auto_repair_lifecycle": lifecycle]]])
+    }
+
+    let quarantined = try state(lifecycle: "quarantined", count: 7, limit: 100)
+    let quarantineFeature = try #require(quarantined.nextFeature)
+    #expect(quarantined.canEscalate(quarantineFeature))
+    #expect(!quarantined.canRepair(quarantineFeature))
+    #expect(quarantineFeature.blocksOrdinaryResume)
+
+    let cappedQuarantine = try state(lifecycle: "quarantined", count: 100, limit: 100)
+    #expect(!cappedQuarantine.canEscalate(try #require(cappedQuarantine.nextFeature)))
+
+    let exhausted = try state(lifecycle: "limit_reached", count: 100, limit: 100)
+    let exhaustedFeature = try #require(exhausted.nextFeature)
+    #expect(!exhaustedFeature.blocksOrdinaryResume)
+    #expect(!exhausted.canEscalate(exhaustedFeature))
+    #expect(!exhausted.canRepair(exhaustedFeature))
+  }
+
+  @Test
+  func elapsedTimeUsesOnlyAuthoritativeWindowsDuration() {
+    var feature = automaticFeature(lifecycle: "running", checkpoint: "escalation_7_preparing")
+    #expect(feature.automaticRepairElapsed == nil)
+    feature.autoRepairStepElapsedMs = 69_000
+    #expect(feature.automaticRepairElapsed == "Elapsed: 1m 9s")
+    feature.autoRepairLifecycle = "held"
+    #expect(feature.automaticRepairElapsed == nil)
   }
 
   @Test

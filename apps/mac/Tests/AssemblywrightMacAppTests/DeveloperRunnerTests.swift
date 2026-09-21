@@ -121,6 +121,148 @@ struct DeveloperRunnerTests {
     #expect(feature("legacy", status: "queued").modelComputer == "Mac")
   }
 
+  @Test
+  func autoAIRepairProjectionDecodesWithoutInventingLegacyAuthority() throws {
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    let legacy = try decoder.decode(DeveloperRunnerSnapshot.self, from: Data("""
+      {"mode":"supervised_developer","host":"fixture","workspace_root":"/fixture",\
+      "revision":1,"auto_run":true,"emergency_paused":false,"running":false,"queue":[],\
+      "review_required":true,"review_provider":"openai.codex","review_model":"gpt-5.6-sol",\
+      "planning_required":true,"planning_provider":"openai.codex","planning_model":"gpt-5.6-sol",\
+      "planning_running":false,"planning_sessions":[]}
+      """.utf8))
+    #expect(!legacy.supportsAutoAIRepair)
+    #expect(legacy.autoAiRepairEnabled == nil)
+
+    let current = try decoder.decode(DeveloperRunnerSnapshot.self, from: Data("""
+      {"mode":"supervised_developer","host":"fixture","workspace_root":"/fixture",\
+      "revision":42,"auto_run":false,"auto_ai_repair_enabled":true,\
+      "auto_ai_repair_max_escalations":100,"auto_ai_repair_policy_revision":42,\
+      "emergency_paused":false,"running":true,"queue":[{\
+      "id":"feature","project":"example","instruction":"Fix it","validation":"tests",\
+      "status":"failed","checkpoint":"escalation_7_preparing","message":"Preparing",\
+      "changed_files":[],"repair_attempts":3,"escalation_count":7,\
+      "auto_ai_repair_limit":100,"auto_repair_lifecycle":"running",\
+      "auto_repair_reason":"Automatic repair is running","auto_repair_epoch":3,\
+      "auto_repair_step_elapsed_ms":1000,"last_failure_kind":"validation"}],\
+      "review_required":true,"review_provider":"openai.codex","review_model":"gpt-5.6-sol",\
+      "planning_required":true,"planning_provider":"openai.codex","planning_model":"gpt-5.6-sol",\
+      "planning_running":false,"planning_sessions":[]}
+      """.utf8))
+    let active = try #require(current.queue.first)
+    #expect(current.supportsAutoAIRepair)
+    #expect(current.autoAiRepairMaxEscalations == 100)
+    #expect(current.automaticRepairActive)
+    #expect(active.autoAiRepairLimit == 100)
+    #expect(active.autoRepairEpoch == 3)
+    #expect(active.autoRepairStepElapsedMs == 1_000)
+    #expect(active.lastFailureKind == "validation")
+    #expect(active.automaticRepairStatus == "AI escalation 7 of 100 — preparing repair")
+  }
+
+  @Test(arguments: ["1", " 7 ", "100"])
+  func autoAIRepairMaximumAcceptsOnlyBoundedWholeNumbers(value: String) {
+    #expect(DeveloperAutoAIRepairPresentation.normalizedMaximum(value) != nil)
+  }
+
+  @Test(arguments: ["", "0", "101", "-1", "1.5", "ten", "1 0"])
+  func autoAIRepairMaximumRejectsMalformedOrOutOfRangeInput(value: String) {
+    #expect(DeveloperAutoAIRepairPresentation.normalizedMaximum(value) == nil)
+  }
+
+  @Test
+  func automaticRepairLocksManualMutationsButPreservesStop() {
+    var active = feature("active", status: "failed", attempts: 3)
+    active.autoAiRepairLimit = 9
+    active.autoRepairLifecycle = "running"
+    active.escalationCount = 2
+    let state = snapshot([active])
+    #expect(state.automaticRepairActive)
+    #expect(state.canStop)
+    #expect(!state.canRepair(active))
+    #expect(!state.canEscalate(active))
+    #expect(!state.canRemove(active))
+    #expect(!state.canChangeChatAccess)
+    #expect(state.assemblyLineActivity == .automaticRepair)
+
+    let concurrentlyRunning = snapshot([active], running: true)
+    #expect(concurrentlyRunning.assemblyLineActivity == .automaticRepair)
+
+    active.autoRepairLifecycle = "limit_reached"
+    let exhausted = snapshot([active])
+    #expect(!active.blocksOrdinaryResume)
+    #expect(!exhausted.canRepair(active))
+    #expect(!exhausted.canEscalate(active))
+  }
+
+  @Test
+  func limitRevalidationConfirmationDoesNotPromiseAnotherRepair() {
+    var exhausted = feature("limit", status: "failed", attempts: 3)
+    exhausted.autoRepairLifecycle = "limit_reached"
+    exhausted.escalationCount = 100
+    exhausted.autoAiRepairLimit = 100
+
+    #expect(exhausted.resumeActionLabel == "Revalidate without AI")
+    let message = DeveloperGitHubPresentation.startConfirmation(
+      feature: exhausted, connection: nil)
+    #expect(message.contains("will not call a repair model"))
+    #expect(message.contains("current admitted owner corrections"))
+    #expect(message.contains("frozen validation command"))
+    #expect(message.contains("required OpenAI/Codex review"))
+    #expect(message.contains("escalation cap and used counter are preserved"))
+    #expect(!message.contains("up to three local repairs"))
+
+    exhausted.autoRepairLifecycle = "held"
+    #expect(exhausted.resumeActionLabel == "Resume")
+    #expect(DeveloperGitHubPresentation.startConfirmation(
+      feature: exhausted, connection: nil).contains("up to three local repairs"))
+  }
+
+  @Test
+  func autoAIRepairDraftUsesAuthoritativeMaximumOnlyForDisable() {
+    #expect(DeveloperAutoAIRepairPresentation.mutationMaximum(
+      draft: "", authoritative: 100, disabling: true) == 100)
+    #expect(DeveloperAutoAIRepairPresentation.mutationMaximum(
+      draft: "101", authoritative: 37, disabling: true) == 37)
+    #expect(DeveloperAutoAIRepairPresentation.mutationMaximum(
+      draft: "9", authoritative: 37, disabling: false) == 9)
+    #expect(DeveloperAutoAIRepairPresentation.mutationMaximum(
+      draft: "", authoritative: 37, disabling: false) == nil)
+  }
+
+  @Test
+  func autoAIRepairMaximumIsEditableOnlyWhileAuthoritativelyOff() {
+    #expect(DeveloperAutoAIRepairPresentation.maximumIsEditable(
+      supportsAutoAIRepair: true, authoritativeEnabled: false, mutationPending: false,
+      pendingEnabled: nil, sending: false))
+    #expect(!DeveloperAutoAIRepairPresentation.maximumIsEditable(
+      supportsAutoAIRepair: true, authoritativeEnabled: true, mutationPending: false,
+      pendingEnabled: nil, sending: false))
+    #expect(!DeveloperAutoAIRepairPresentation.maximumIsEditable(
+      supportsAutoAIRepair: true, authoritativeEnabled: false, mutationPending: true,
+      pendingEnabled: true, sending: false))
+    #expect(!DeveloperAutoAIRepairPresentation.maximumIsEditable(
+      supportsAutoAIRepair: true, authoritativeEnabled: false, mutationPending: true,
+      pendingEnabled: false, sending: false))
+    #expect(!DeveloperAutoAIRepairPresentation.maximumIsEditable(
+      supportsAutoAIRepair: false, authoritativeEnabled: false, mutationPending: false,
+      pendingEnabled: nil, sending: false))
+    #expect(!DeveloperAutoAIRepairPresentation.maximumIsEditable(
+      supportsAutoAIRepair: true, authoritativeEnabled: false, mutationPending: false,
+      pendingEnabled: nil, sending: true))
+  }
+
+  @Test
+  func authoritativeDraftResetSuppressesOnlyTheConflictBlur() {
+    #expect(!DeveloperAutoAIRepairPresentation.submitsMaximumOnBlur(
+      wasFocused: true, isFocused: false, draft: "9", authoritative: 9, suppress: false))
+    #expect(!DeveloperAutoAIRepairPresentation.submitsMaximumOnBlur(
+      wasFocused: true, isFocused: false, draft: "9", authoritative: 9, suppress: true))
+    #expect(DeveloperAutoAIRepairPresentation.submitsMaximumOnBlur(
+      wasFocused: true, isFocused: false, draft: "8", authoritative: 9, suppress: false))
+  }
+
   @Test(arguments: [-1, 0, 1, 2, 3, 4])
   func repairRequiresRemainingAttemptsAndIdleFirstFailure(attempts: Int) {
     let failed = feature("failed", status: "failed", attempts: attempts)

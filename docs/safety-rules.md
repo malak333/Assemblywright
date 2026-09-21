@@ -40,11 +40,15 @@ continue to govern claims about the protected production runtime.
 
 Project chat remains outside execution authority even when the owner selects a
 different local model or supplies attachments. A saved diagnosis may prepare a
-frozen repair proposal, but only explicit approval of its exact displayed bytes may
-apply it. Changed bytes, stale state, cancellation, or ambiguous recovery invalidate
-that approval. A one-attempt escalation does not reset ordinary repair history or
-relax validation and independent-review gates. See
-[`developer-chat-repair-design.md`](developer-chat-repair-design.md).
+manual frozen repair proposal, but only explicit approval of its exact displayed
+bytes may apply it. The implemented
+[`Developer Auto AI Repair`](developer-auto-ai-repair-design.md) extension defines
+the only exception: a separate persistent owner policy may authorize serial automatic
+repairs for the first failed feature within its snapshotted cumulative limit.
+Automatic repair keeps the validation command immutable, requires fresh independent
+Codex review, rejects prohibited paths and secret-bearing material, and quarantines
+ambiguous effects. Changed bytes or stale state invalidate either authorization.
+See also [`developer-chat-repair-design.md`](developer-chat-repair-design.md).
 
 ## Policy Defaults
 

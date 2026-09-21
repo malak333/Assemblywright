@@ -174,6 +174,34 @@ fresh independent Codex review. A failed test or rejected/unavailable review sto
 the feature and auto-run. The repair sheet keeps Close and available actions pinned
 while long content scrolls.
 
+## Automatic AI repair
+
+The Assembly Line header places **Auto AI repair** beside **Auto-run next feature**.
+Its **Max escalations** value accepts `1...100`, defaults to `100`, and remains
+editable while automatic repair is off. Windows persists both settings. A feature
+snapshots the current maximum when it starts (or when automation is first enabled
+for an eligible legacy failure), so later setting changes do not replenish or alter
+that feature's budget. Auto AI repair is independent of Auto-run: one repairs the
+current failed feature, while the other controls advancement to the next feature.
+
+Enabling the toggle on an eligible validation failure or Codex rejection may start
+immediately. The existing three ordinary attempts run first. Windows then reserves
+serial AI escalations against the same cumulative counter used by manual repair,
+uses the feature's saved model without fallback, applies exact admitted bytes, runs
+the unchanged validation-command string, and requests fresh independent Codex
+review. Automatic escalation may edit admitted source, test, and configuration
+files, but not `.git`, credentials, secret-bearing material, runner state,
+out-of-root paths, or the validation-command string. A no-op or duplicate candidate
+consumes one attempt; operational failures hold, uncertain effects quarantine, and
+the hard feature limit stops all later AI escalation while retaining non-AI
+correction, reviewer change when applicable, removal, Stop, and Emergency Pause.
+
+This is a Developer owner-account boundary. A changed build or test configuration
+can change what the frozen command does when Windows executes it. The toggle does
+not provide hostile-process or workspace-only effect containment. Disabling it
+records cancellation before signalling active work; applied bytes and evidence are
+preserved, and ambiguous application, validation, or review is not replayed.
+
 ## Controls and checkpoints
 
 - **Stop** cancels model waiting or terminates the active validation process tree.
@@ -193,6 +221,10 @@ while long content scrolls.
   succeeds and independent Codex review approves the exact candidate. New features added during execution wait
   for another explicit Start.
   **Auto-run off** leaves the next feature queued for **Start next feature**.
+- **Auto AI repair on** authorizes the bounded repair loop for the current eligible
+  failed feature even when Auto-run is off. **Auto AI repair off** cancels active
+  automatic work and prevents another automatic attempt; it never resets the
+  feature's snapshotted cumulative limit.
 - A failed model response or validation stops advancement. A retry with no prepared
   change set asks the model again. A retry after application reruns validation; fix
   failing code in the project before resuming if needed.
@@ -260,6 +292,7 @@ python3 scripts/developer-runner-chat-e2e.py --binary target/debug/assemblywrigh
 python3 scripts/developer-runner-review-e2e.py --binary target/debug/assemblywright-developer
 python3 scripts/developer-runner-planning-e2e.py --binary target/debug/assemblywright-developer
 python3 scripts/developer-runner-escalation-e2e.py --binary target/debug/assemblywright-developer
+python3 -B scripts/developer-runner-auto-repair-e2e.py --binary target/debug/assemblywright-developer
 swift build --disable-sandbox --package-path apps/mac --product AssemblywrightMacApp
 ```
 
@@ -268,6 +301,19 @@ separate temporary runner and a labeled fixture model, then exercises authentica
 HTTP, real file writes, real command execution, cancellation, checkpoint reuse,
 auto-run, and restart. It does not contact the owner's live queue or local model.
 Live-model evidence is recorded separately below.
+
+The Auto AI repair harness additionally proves its revision-bound policy,
+queue-v11 migration, 21 disposable automatic-repair scenarios, actual 100-call cap,
+late-result cancellation, and restart quarantine on macOS. Its shared-limit
+scenario escalates manually through the public chat and repair routes, and that
+manual escalation consumes the same per-feature cap, so a later automatic
+opportunity stops at `limit_reached` with every further repair-model call
+blocked. After the owner corrects the project bytes directly, the validation-only
+Resume runs the unchanged validation command again with no repair-model call and
+still requires one fresh independent review before the feature succeeds. Run the
+same command with `python` and the `.exe` path for native Windows evidence. That
+Windows run, installed-app interaction, and native visual layout have not yet been
+performed for this slice.
 
 ## Real local-model evidence
 

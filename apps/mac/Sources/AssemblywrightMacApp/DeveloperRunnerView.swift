@@ -40,6 +40,12 @@ struct DeveloperRunnerFeature: Decodable, Identifiable {
   var publicationPrUrl: String? = nil
   var publicationMergedSha: String? = nil
   var canReconcilePublication: Bool? = nil
+  var autoAiRepairLimit: Int? = nil
+  var autoRepairLifecycle: String? = nil
+  var autoRepairReason: String? = nil
+  var autoRepairEpoch: UInt64? = nil
+  var autoRepairStepElapsedMs: UInt64? = nil
+  var lastFailureKind: String? = nil
 
   var hasApprovedReview: Bool { reviewStatus == "approved" }
   var resultLabel: String {
@@ -90,10 +96,83 @@ struct DeveloperRunnerFeature: Decodable, Identifiable {
       "tool_workspace_changed_requires_proposal"].contains(checkpoint)
   }
 
+  var blocksOrdinaryResume: Bool {
+    requiresEscalationRecovery || autoRepairLifecycle == "quarantined"
+  }
+
+  var resumeActionLabel: String {
+    autoRepairLifecycle == "limit_reached" ? "Revalidate without AI" : "Resume"
+  }
+
+  var permitsManualEscalation: Bool {
+    guard autoRepairLifecycle != "limit_reached" else { return false }
+    if autoRepairLifecycle == "quarantined" {
+      guard let escalationCount, let autoAiRepairLimit else { return false }
+      return escalationCount < autoAiRepairLimit
+    }
+    return true
+  }
+
   var canRemove: Bool { ["queued", "paused", "failed"].contains(status) }
   var isFinished: Bool { ["succeeded", "removed"].contains(status) }
+  var automaticRepairIsActive: Bool { autoRepairLifecycle == "running" }
+
+  var automaticRepairStatus: String? {
+    guard let lifecycle = autoRepairLifecycle, lifecycle != "inactive" || !autoRepairReason.isNilOrEmpty
+    else { return nil }
+    switch lifecycle {
+    case "running":
+      let phase = automaticRepairPhase
+      let reviewingOrdinaryRepair = checkpoint.hasPrefix("review_") && escalationStatus != "applied"
+      if checkpoint.hasPrefix("repair_") || reviewingOrdinaryRepair, let attempts = repairAttempts {
+        return "Ordinary repair \(attempts) of 3 — \(phase)"
+      }
+      if let count = escalationCount, let limit = autoAiRepairLimit {
+        return "AI escalation \(count) of \(limit) — \(phase)"
+      }
+      return "Auto AI repair — \(phase)"
+    case "limit_reached":
+      return autoRepairReason.isNilOrEmpty
+        ? "Auto AI repair stopped because the feature escalation limit was reached."
+        : autoRepairReason
+    case "held":
+      return "Auto AI repair stopped. \(autoRepairReason ?? "Correct the operational problem before resuming.")"
+    case "quarantined":
+      return "Auto AI repair is blocked after an uncertain effect. \(autoRepairReason ?? "Inspect the retained workspace and evidence.")"
+    default:
+      return autoRepairReason
+    }
+  }
+
+  var automaticRepairNextAction: String? {
+    switch autoRepairLifecycle {
+    case "held":
+      return "Next action: correct the reported condition, then explicitly Resume."
+    case "quarantined":
+      return "Next action: inspect the workspace and retained evidence, then use Ask AI to repair to prepare a fresh owner-reviewed proposal. Automatic replay and ordinary Resume are blocked."
+    case "limit_reached":
+      return "Next action: correct the project without AI, then choose Revalidate without AI to run validation and Codex review; or remove the feature."
+    default:
+      return nil
+    }
+  }
+
+  var automaticRepairElapsed: String? {
+    guard automaticRepairIsActive, let elapsed = autoRepairStepElapsedMs else { return nil }
+    return DeveloperAutoAIRepairPresentation.elapsed(milliseconds: elapsed)
+  }
+
+  private var automaticRepairPhase: String {
+    if checkpoint.hasSuffix("_preparing") || checkpoint.hasSuffix("_reserved") { return "preparing repair" }
+    if checkpoint.hasSuffix("_applying") || checkpoint.hasSuffix("_prepared") { return "applying changes" }
+    if checkpoint.hasSuffix("_applied") || checkpoint.contains("validation") { return "validating" }
+    if checkpoint.hasPrefix("review_") || reviewStatus == "reviewing" { return "awaiting Codex review" }
+    return "working"
+  }
   var canRepair: Bool {
-    guard status == "failed", !requiresEscalationRecovery, !["unavailable", "interrupted"].contains(reviewStatus ?? ""), let attempts = repairAttempts
+    guard status == "failed", !requiresEscalationRecovery,
+      !["limit_reached", "quarantined"].contains(autoRepairLifecycle ?? ""),
+      !["unavailable", "interrupted"].contains(reviewStatus ?? ""), let attempts = repairAttempts
     else { return false }
     return attempts >= 0 && attempts < 3
   }
@@ -135,16 +214,36 @@ struct DeveloperRunnerSnapshot: Decodable {
   var githubConnections: [DeveloperGitHubConnection]? = nil
   var githubSetupBusy: Bool? = nil
   var githubSetupUnresolved: Bool? = nil
+  var autoAiRepairEnabled: Bool? = nil
+  var autoAiRepairMaxEscalations: Int? = nil
+  var autoAiRepairPolicyRevision: UInt64? = nil
+
+  var supportsAutoAIRepair: Bool {
+    autoAiRepairEnabled != nil && (1...100).contains(autoAiRepairMaxEscalations ?? 0)
+      && autoAiRepairPolicyRevision != nil
+  }
+
+  var automaticRepairActive: Bool { queue.contains(where: \.automaticRepairIsActive) }
+
+  var assemblyLineActivity: DeveloperAssemblyLineActivity {
+    if automaticRepairActive { return .automaticRepair }
+    if running { return .running }
+    if escalationRunning == true { return .preparingRepair }
+    if planningRunning { return .brainstorming }
+    if emergencyPaused { return .emergencyPaused }
+    return nextFeature == nil ? .ready : .waiting
+  }
 
   var canSaveAISettings: Bool {
     aiSettings != nil && aiModels?.isEmpty == false && !running && !planningRunning
+      && !automaticRepairActive
       && escalationRunning != true && chatRunning != true
       && githubPublicationRunning != true && githubPublicationUnresolved != true
       && githubSetupBusy != true && githubSetupUnresolved != true
   }
 
   func canChangeReviewer(_ feature: DeveloperRunnerFeature) -> Bool {
-    featureReviewerSelection == true && canSaveAISettings && !emergencyPaused
+    featureReviewerSelection == true && canSaveAISettings && !emergencyPaused && !automaticRepairActive
       && feature.reviewerSelection != nil && feature.canRemove && !feature.requiresReviewerRecovery
       && queue.contains { current in
         current.id == feature.id && current.canChangeReviewer == true
@@ -195,7 +294,8 @@ struct DeveloperRunnerSnapshot: Decodable {
   }
 
   var canChangeChatAccess: Bool {
-    !running && !planningRunning && chatRunning != true && escalationRunning != true
+    !running && !planningRunning && !automaticRepairActive
+      && chatRunning != true && escalationRunning != true
       && githubPublicationRunning != true && githubPublicationUnresolved != true
       && githubSetupBusy != true && githubSetupUnresolved != true && !emergencyPaused
   }
@@ -204,21 +304,22 @@ struct DeveloperRunnerSnapshot: Decodable {
   var nextFeature: DeveloperRunnerFeature? { queue.first { !$0.isFinished } }
 
   func canRemove(_ feature: DeveloperRunnerFeature) -> Bool {
-    !running && escalationRunning != true && githubPublicationUnresolved != true
+    !running && escalationRunning != true && !automaticRepairActive && githubPublicationUnresolved != true
       && githubSetupBusy != true && githubSetupUnresolved != true
       && queue.contains { $0.id == feature.id && $0.canRemove }
   }
 
   func canEscalate(_ feature: DeveloperRunnerFeature) -> Bool {
-    !running && !planningRunning && !emergencyPaused && chatRunning != true && escalationRunning == false
+    !running && !planningRunning && !emergencyPaused && !automaticRepairActive
+      && chatRunning != true && escalationRunning == false
       && githubPublicationUnresolved != true
       && githubSetupBusy != true && githubSetupUnresolved != true
       && nextFeature?.id == feature.id && nextFeature?.status == "failed"
-      && nextFeature?.checkpoint == feature.checkpoint
+      && nextFeature?.checkpoint == feature.checkpoint && nextFeature?.permitsManualEscalation == true
   }
 
   func canRepair(_ feature: DeveloperRunnerFeature) -> Bool {
-    !running && escalationRunning != true && !planningRunning && !emergencyPaused
+    !running && escalationRunning != true && !planningRunning && !emergencyPaused && !automaticRepairActive
       && githubPublicationUnresolved != true && githubSetupBusy != true && githubSetupUnresolved != true
       && repairLimit == 3 && repairActive == false
       && nextFeature?.id == feature.id
@@ -233,7 +334,7 @@ struct DeveloperRunnerSnapshot: Decodable {
 
   var canStop: Bool {
     running || planningRunning || escalationRunning == true || githubPublicationRunning == true
-      || githubSetupBusy == true
+      || githubSetupBusy == true || automaticRepairActive
   }
 
   func githubConnection(for project: String) -> DeveloperGitHubConnection? {
@@ -241,11 +342,66 @@ struct DeveloperRunnerSnapshot: Decodable {
   }
 }
 
+enum DeveloperAutoAIRepairPresentation {
+  static func normalizedMaximum(_ text: String) -> Int? {
+    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty, trimmed.allSatisfy(\.isNumber), let value = Int(trimmed),
+      (1...100).contains(value) else { return nil }
+    return value
+  }
+
+  static func elapsed(milliseconds: UInt64) -> String {
+    let seconds = milliseconds / 1_000
+    if seconds < 60 { return "Elapsed: \(seconds)s" }
+    return "Elapsed: \(seconds / 60)m \(seconds % 60)s"
+  }
+
+  static func pendingMutation(enabled: Bool, automaticRepairActive: Bool) -> String {
+    if enabled { return "Enabling Auto AI repair…" }
+    return automaticRepairActive ? "Cancelling active Auto AI repair…" : "Disabling Auto AI repair…"
+  }
+
+  static func mutationMaximum(draft: String, authoritative: Int?, disabling: Bool) -> Int? {
+    if disabling { return authoritative }
+    return normalizedMaximum(draft)
+  }
+
+  static func maximumIsEditable(supportsAutoAIRepair: Bool, authoritativeEnabled: Bool,
+    mutationPending: Bool, pendingEnabled: Bool?, sending: Bool) -> Bool {
+    supportsAutoAIRepair && !authoritativeEnabled && !mutationPending
+      && pendingEnabled != true && !sending
+  }
+
+  static func submitsMaximumOnBlur(wasFocused: Bool, isFocused: Bool, draft: String,
+    authoritative: Int?, suppress: Bool) -> Bool {
+    guard wasFocused, !isFocused, !suppress else { return false }
+    return draft.trimmingCharacters(in: .whitespacesAndNewlines) != authoritative.map(String.init)
+  }
+}
+
+enum DeveloperAssemblyLineActivity: Equatable {
+  case automaticRepair
+  case running
+  case preparingRepair
+  case brainstorming
+  case emergencyPaused
+  case ready
+  case waiting
+}
+
+private extension Optional where Wrapped == String {
+  var isNilOrEmpty: Bool { self?.isEmpty != false }
+}
+
 @MainActor
 final class DeveloperRunnerModel: ObservableObject {
   @Published var snapshot: DeveloperRunnerSnapshot?
   @Published var error: String?
   @Published var sending = false
+  @Published var autoAIRepairMutationPending = false
+  @Published var autoAIRepairPendingEnabled: Bool?
+  @Published var autoAIRepairMutationMessage: String?
+  @Published var autoAIRepairDraftResetToken: UInt64 = 0
   private let configurationPath: String
   private var configuration: DeveloperRunnerConfiguration? {
     try? JSONDecoder().decode(DeveloperRunnerConfiguration.self,
@@ -338,6 +494,72 @@ final class DeveloperRunnerModel: ObservableObject {
   func refreshAISettings() async throws {
     let updated = try await request(path: "settings")
     if updated.revision >= (snapshot?.revision ?? 0) { snapshot = updated }
+  }
+
+  func updateAutoAIRepair(enabled: Bool, maxEscalations: Int) async {
+    guard !sending, !autoAIRepairMutationPending, let current = snapshot, current.supportsAutoAIRepair,
+      (1...100).contains(maxEscalations) else {
+      let message = "Reload the current Windows Auto AI repair settings and enter a maximum from 1 through 100."
+      autoAIRepairMutationMessage = message
+      error = message
+      return
+    }
+    autoAIRepairMutationPending = true
+    autoAIRepairPendingEnabled = enabled
+    autoAIRepairMutationMessage = DeveloperAutoAIRepairPresentation.pendingMutation(
+      enabled: enabled, automaticRepairActive: current.automaticRepairActive)
+    defer {
+      autoAIRepairMutationPending = false
+      autoAIRepairPendingEnabled = nil
+    }
+    do {
+      let updated = try await request(path: "auto-ai-repair", body: [
+        "enabled": enabled,
+        "max_escalations": maxEscalations,
+        "expected_revision": current.revision,
+      ])
+      let (expectedRevision, overflow) = current.revision.addingReportingOverflow(1)
+      guard !overflow, updated.revision == expectedRevision,
+        updated.autoAiRepairEnabled == enabled,
+        updated.autoAiRepairMaxEscalations == maxEscalations,
+        updated.autoAiRepairPolicyRevision == expectedRevision else {
+        throw NSError(domain: "Developer Auto AI repair", code: 2,
+          userInfo: [NSLocalizedDescriptionKey:
+            "Windows did not confirm the exact Auto AI repair setting change."])
+      }
+      if let observed = snapshot, observed.revision > updated.revision {
+        guard observed.autoAiRepairEnabled == enabled,
+          observed.autoAiRepairMaxEscalations == maxEscalations,
+          let observedPolicyRevision = observed.autoAiRepairPolicyRevision,
+          observedPolicyRevision >= expectedRevision else {
+          throw NSError(domain: "Developer Auto AI repair", code: 3,
+            userInfo: [NSLocalizedDescriptionKey:
+              "Newer Windows state no longer confirms the requested Auto AI repair setting."])
+        }
+      } else {
+        snapshot = updated
+      }
+      autoAIRepairMutationMessage = nil
+      actionError = nil
+      error = nil
+    } catch {
+      let conflict = error.localizedDescription
+      var refreshed = false
+      let minimumRefreshRevision = snapshot?.revision ?? current.revision
+      if let observed = try? await request(path: "status"),
+        observed.revision >= minimumRefreshRevision {
+        snapshot = observed
+        refreshed = true
+        autoAIRepairDraftResetToken &+= 1
+      }
+      let recovery = refreshed
+        ? "Authoritative settings were refreshed; review them before trying again."
+        : "Authoritative settings could not be refreshed; reconnect before trying again."
+      let message = "\(conflict) \(recovery)"
+      autoAIRepairMutationMessage = message
+      actionError = message
+      self.error = message
+    }
   }
 
   func changeReviewer(_ feature: DeveloperRunnerFeature, revision: UInt64,
@@ -472,6 +694,9 @@ struct DeveloperRunnerView: View {
   @State private var showingSettings = false
   @State private var showingGitHub = false
   @State private var reviewerFeature: DeveloperRunnerFeature?
+  @State private var autoRepairMaximumText = "100"
+  @State private var suppressAutoRepairMaximumBlurSubmission = false
+  @FocusState private var autoRepairMaximumFocused: Bool
   @AppStorage("developerChatProject") private var chatProject = ""
   @AppStorage("developerChatRepairFeature") private var chatRepairFeature = ""
 
@@ -484,9 +709,222 @@ struct DeveloperRunnerView: View {
     model.snapshot?.nextFeature
   }
   private var startLabel: String {
-    if let next, ["paused", "failed"].contains(next.status) { return "Resume" }
+    if let next, ["paused", "failed"].contains(next.status) { return next.resumeActionLabel }
     return (model.snapshot?.queue.contains { $0.status == "succeeded" } ?? false)
       ? "Start next feature" : "Start"
+  }
+  private func submitAutoAIRepair(enabled: Bool, disabling: Bool = false) {
+    let maximum = DeveloperAutoAIRepairPresentation.mutationMaximum(
+      draft: autoRepairMaximumText, authoritative: model.snapshot?.autoAiRepairMaxEscalations,
+      disabling: disabling) ?? 0
+    Task { await model.updateAutoAIRepair(enabled: enabled, maxEscalations: maximum) }
+  }
+  private func submitAutoAIRepairMaximum() {
+    submitAutoAIRepair(enabled: model.snapshot?.autoAiRepairEnabled ?? false)
+  }
+  private var autoAIRepairControls: some View {
+    HStack(spacing: 18) {
+      Toggle("Auto AI repair", isOn: Binding(
+        get: { model.snapshot?.autoAiRepairEnabled ?? false },
+        set: { enabled in
+          suppressAutoRepairMaximumBlurSubmission = autoRepairMaximumFocused
+          if autoRepairMaximumFocused { autoRepairMaximumFocused = false }
+          submitAutoAIRepair(enabled: enabled, disabling: !enabled)
+        }))
+        .toggleStyle(.checkbox)
+        .disabled(model.snapshot?.supportsAutoAIRepair != true
+          || model.autoAIRepairMutationPending || model.sending)
+        .help("Enabling Auto AI repair may immediately change files in the failed project.")
+        .accessibilityLabel("Auto AI repair")
+        .accessibilityValue(model.snapshot?.autoAiRepairEnabled == true ? "Enabled" : "Disabled")
+        .accessibilityHint("May immediately repair the current failed feature using its saved model computer.")
+        .accessibilityIdentifier("developer-auto-ai-repair")
+      HStack(spacing: 6) {
+        Text("Max escalations")
+        TextField("100", text: $autoRepairMaximumText)
+          .textFieldStyle(.roundedBorder)
+          .multilineTextAlignment(.trailing)
+          .frame(width: 58)
+          .focused($autoRepairMaximumFocused)
+          .onSubmit { submitAutoAIRepairMaximum() }
+          .disabled(!DeveloperAutoAIRepairPresentation.maximumIsEditable(
+            supportsAutoAIRepair: model.snapshot?.supportsAutoAIRepair == true,
+            authoritativeEnabled: model.snapshot?.autoAiRepairEnabled == true,
+            mutationPending: model.autoAIRepairMutationPending,
+            pendingEnabled: model.autoAIRepairPendingEnabled, sending: model.sending))
+          .accessibilityLabel("Maximum Auto AI repair escalations per feature")
+          .accessibilityValue(autoRepairMaximumText)
+          .accessibilityHint("Enter a whole number from 1 through 100. This remains editable while Auto AI repair is off.")
+          .accessibilityIdentifier("developer-auto-ai-repair-maximum")
+      }
+    }
+  }
+  @ViewBuilder private var assemblyLineActivity: some View {
+    switch model.snapshot?.assemblyLineActivity {
+    case .automaticRepair:
+      ProgressView().controlSize(.small)
+      Text("Auto AI repair")
+    case .running:
+      ProgressView().controlSize(.small)
+      Text("Running")
+    case .preparingRepair:
+      ProgressView().controlSize(.small)
+      Text("Preparing repair")
+    case .brainstorming:
+      ProgressView().controlSize(.small)
+      Text("Brainstorming")
+    case .emergencyPaused:
+      Text("Emergency paused").foregroundStyle(.orange)
+    case .ready:
+      Text("Ready").foregroundStyle(.secondary)
+    case .waiting, nil:
+      Text("Waiting for you").foregroundStyle(.secondary)
+    }
+  }
+  @ViewBuilder private var autoAIRepairNotice: some View {
+    if model.snapshot?.supportsAutoAIRepair == true {
+      Text("Enabling Auto AI repair may immediately change files in the failed project. Validation runs under your Windows account, so changed build or test configuration can change its effects.")
+        .font(.caption).foregroundStyle(.secondary)
+    } else {
+      Text("Update the Windows developer runner to configure Auto AI repair.")
+        .font(.caption).foregroundStyle(.orange)
+    }
+    if let mutation = model.autoAIRepairMutationMessage {
+      HStack(spacing: 6) {
+        if model.autoAIRepairMutationPending { ProgressView().controlSize(.small) }
+        Text(mutation)
+      }
+      .font(.caption)
+      .foregroundStyle(model.autoAIRepairMutationPending ? Color.secondary : Color.orange)
+      .accessibilityIdentifier("developer-auto-ai-repair-mutation-status")
+    }
+  }
+  private var assemblyLineButtons: some View {
+    HStack {
+      Button(startLabel) {
+        startFeature = next
+        confirmingStart = true
+      }
+      .buttonStyle(.borderedProminent)
+      .help(next?.autoRepairLifecycle == "limit_reached"
+        ? "Run the saved validation and Codex review without calling a repair model or resetting the escalation limit."
+        : "Start or resume the next feature.")
+      .disabled(next == nil || next?.blocksOrdinaryResume == true
+        || model.snapshot?.running == true || model.snapshot?.escalationRunning == true
+        || model.snapshot?.planningRunning == true || model.snapshot?.automaticRepairActive == true
+        || model.snapshot?.emergencyPaused == true || model.snapshot?.canStartFeature != true
+        || model.sending)
+      Button("Stop") { Task { await model.send("stop") } }
+        .disabled(model.snapshot?.canStop != true)
+      Button("Emergency Pause", role: .destructive) {
+        Task { await model.send("emergency") }
+      }.disabled(model.snapshot == nil)
+      if model.snapshot?.emergencyPaused == true {
+        Button("Clear Emergency Pause") { Task { await model.send("clear_emergency") } }
+          .disabled(model.snapshot?.running == true || model.snapshot?.planningRunning == true
+            || model.snapshot?.escalationRunning == true)
+      }
+    }
+  }
+  private func featureCard(_ feature: DeveloperRunnerFeature) -> some View {
+    VStack(alignment: .leading, spacing: 6) {
+      HStack {
+        Text(feature.project).font(.headline)
+        Spacer()
+        Text(feature.resultLabel).foregroundStyle(
+          feature.status == "succeeded" && feature.hasApprovedReview
+            ? Color.green : feature.status == "failed" ? Color.red : Color.primary)
+        if feature.status == "failed" {
+          Button("Repair and retry") {
+            repairFeature = feature
+            confirmingRepair = true
+          }
+          .disabled(model.sending || model.snapshot?.canRepair(feature) != true)
+          .help("Ask the local model to fix this failure and rerun validation, up to three repair attempts per feature.")
+          .accessibilityIdentifier("developer-repair-\(feature.id)")
+          Button(feature.escalationStatus == "ready" ? "Review repair…" : "Ask AI to repair…") {
+            if feature.escalationStatus == "ready" {
+              escalationFeatureId = feature.id
+              showingEscalation = true
+            } else {
+              chatProject = feature.project
+              chatRepairFeature = feature.id + ":" + UUID().uuidString
+            }
+          }
+          .disabled(model.sending || model.snapshot?.canEscalate(feature) != true)
+          .accessibilityIdentifier("developer-escalate-\(feature.id)")
+        }
+        if feature.canRemove {
+          Button("Remove", role: .destructive) {
+            Task { await model.send("remove", values: ["id": feature.id]) }
+          }
+          .disabled(model.sending || model.snapshot?.canRemove(feature) != true)
+          .help("Remove from the queue. Saved project files are kept. Stop the runner first if it is running.")
+          .accessibilityLabel("Remove feature from \(feature.project)")
+          .accessibilityIdentifier("developer-remove-\(feature.id)")
+        }
+      }
+      Text(feature.instruction)
+      Text("Model computer: \(feature.modelComputer)").font(.caption).foregroundStyle(.secondary)
+      if let attempts = feature.repairAttempts, attempts > 0 {
+        Text("Repair attempts: \(attempts) of 3").font(.caption).foregroundStyle(.secondary)
+      }
+      if let count = feature.escalationCount, count > 0 {
+        Text("Repair escalations: \(count) · \(feature.escalationStatus ?? "recorded")")
+          .font(.caption).foregroundStyle(.secondary)
+      }
+      if let limit = feature.autoAiRepairLimit {
+        Text("Auto AI repair limit snapshot: \(limit) escalations")
+          .font(.caption).foregroundStyle(.secondary)
+      }
+      if let status = feature.automaticRepairStatus {
+        Text(status).font(.callout)
+          .foregroundStyle(feature.autoRepairLifecycle == "running" ? Color.primary : Color.orange)
+          .accessibilityIdentifier("developer-auto-ai-repair-status-\(feature.id)")
+        if let elapsed = feature.automaticRepairElapsed {
+          Text(elapsed).font(.caption).foregroundStyle(.secondary)
+            .accessibilityLabel("Auto AI repair step \(elapsed.lowercased())")
+        }
+      }
+      if let nextAction = feature.automaticRepairNextAction {
+        Text(nextAction).font(.caption).foregroundStyle(.orange)
+          .accessibilityIdentifier("developer-auto-ai-repair-next-action-\(feature.id)")
+      }
+      Text("Checkpoint: \(feature.checkpoint.replacingOccurrences(of: "_", with: " "))")
+        .font(.caption).foregroundStyle(.secondary)
+      if feature.planningStatus == "legacy_unplanned" {
+        Text("Brainstorming: not recorded for this earlier feature")
+          .font(.caption).foregroundStyle(.secondary)
+      }
+      Text(feature.reviewLabel).font(.caption)
+        .foregroundStyle(feature.hasApprovedReview ? Color.green : Color.secondary)
+      DeveloperGitHubFeatureStatus(feature: feature, runner: model)
+      if let reviewModel = feature.reviewModel {
+        HStack {
+          Text("Reviewer: \(reviewModel) · \(DeveloperAISelection.effortLabel(feature.reviewReasoningEffort ?? "high")) reasoning")
+            .font(.caption).foregroundStyle(.secondary)
+          if feature.canRemove {
+            Button("Change reviewer…") { reviewerFeature = feature }
+              .disabled(model.sending || model.snapshot?.canChangeReviewer(feature) != true)
+              .help("Choose the reviewer for this feature's next review. Stop active work first.")
+              .accessibilityIdentifier("developer-change-reviewer-\(feature.id)")
+          }
+        }
+      }
+      if let summary = feature.reviewSummary, !summary.isEmpty {
+        Text(summary).font(.caption).textSelection(.enabled)
+      }
+      if feature.requiresEscalationRecovery {
+        Text("Repair application was interrupted. Ask AI to inspect the current files and prepare a fresh proposal.")
+          .font(.callout).foregroundStyle(.orange)
+      }
+      Text(feature.message).font(.caption).textSelection(.enabled)
+      if !feature.changedFiles.isEmpty {
+        Text(feature.changedFiles.joined(separator: " · ")).font(.caption.monospaced())
+          .foregroundStyle(.secondary)
+      }
+    }.padding(10).frame(maxWidth: .infinity, alignment: .leading).background(
+      .quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
   }
   var body: some View {
     HSplitView {
@@ -537,7 +975,7 @@ struct DeveloperRunnerView: View {
         DeveloperPlanningView(configurationPath: configurationPath, runner: model.snapshot)
         GroupBox("Assembly line") {
           VStack(alignment: .leading, spacing: 14) {
-            HStack {
+            HStack(spacing: 18) {
               Toggle(
                 "Auto-run next feature",
                 isOn: Binding(
@@ -546,43 +984,14 @@ struct DeveloperRunnerView: View {
                     Task { await model.send("auto_run", values: ["enabled": enabled]) }
                   })
               )
+              .toggleStyle(.checkbox)
               .disabled(model.snapshot == nil)
+              autoAIRepairControls
               Spacer()
-              if model.snapshot?.running == true {
-                ProgressView().controlSize(.small)
-                Text("Running")
-              } else if model.snapshot?.escalationRunning == true {
-                ProgressView().controlSize(.small)
-                Text("Preparing repair")
-              } else if model.snapshot?.planningRunning == true {
-                ProgressView().controlSize(.small)
-                Text("Brainstorming")
-              } else if model.snapshot?.emergencyPaused == true {
-                Text("Emergency paused").foregroundStyle(.orange)
-              } else {
-                Text(next == nil ? "Ready" : "Waiting for you").foregroundStyle(.secondary)
-              }
+              assemblyLineActivity
             }
-            HStack {
-              Button(startLabel) {
-                startFeature = next
-                confirmingStart = true
-              }
-                .buttonStyle(.borderedProminent)
-                .disabled(
-                  next == nil || next?.requiresEscalationRecovery == true || model.snapshot?.running == true || model.snapshot?.escalationRunning == true || model.snapshot?.planningRunning == true
-                    || model.snapshot?.emergencyPaused == true || model.snapshot?.canStartFeature != true
-                    || model.sending)
-              Button("Stop") { Task { await model.send("stop") } }.disabled(
-                model.snapshot?.canStop != true)
-              Button("Emergency Pause", role: .destructive) {
-                Task { await model.send("emergency") }
-              }.disabled(model.snapshot == nil)
-              if model.snapshot?.emergencyPaused == true {
-                Button("Clear Emergency Pause") { Task { await model.send("clear_emergency") } }
-                  .disabled(model.snapshot?.running == true || model.snapshot?.planningRunning == true || model.snapshot?.escalationRunning == true)
-              }
-            }
+            autoAIRepairNotice
+            assemblyLineButtons
             Text(
               "Runs under your Windows account. Review the project and validation command before starting. OpenAI/Codex reviews generated code before success. Connected projects publish through a feature branch and merge after required GitHub checks pass."
             )
@@ -592,90 +1001,7 @@ struct DeveloperRunnerView: View {
               Text("Add your first feature to begin.").foregroundStyle(.secondary)
             }
             ForEach(model.snapshot?.visibleQueue ?? []) { feature in
-              VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                  Text(feature.project).font(.headline)
-                  Spacer()
-                  Text(feature.resultLabel)
-                    .foregroundStyle(
-                      feature.status == "succeeded" && feature.hasApprovedReview
-                        ? .green : feature.status == "failed" ? .red : .primary)
-                  if feature.status == "failed" {
-                    Button("Repair and retry") {
-                      repairFeature = feature
-                      confirmingRepair = true
-                    }
-                    .disabled(model.sending || model.snapshot?.canRepair(feature) != true)
-                    .help("Ask the local model to fix this failure and rerun validation, up to three repair attempts per feature.")
-                    .accessibilityIdentifier("developer-repair-\(feature.id)")
-                  }
-                  if feature.status == "failed" {
-                    Button(feature.escalationStatus == "ready" ? "Review repair…" : "Ask AI to repair…") {
-                      if feature.escalationStatus == "ready" {
-                        escalationFeatureId = feature.id
-                        showingEscalation = true
-                      } else {
-                        chatProject = feature.project
-                        chatRepairFeature = feature.id + ":" + UUID().uuidString
-                      }
-                    }.disabled(model.sending || model.snapshot?.nextFeature?.id != feature.id)
-                      .accessibilityIdentifier("developer-escalate-\(feature.id)")
-                  }
-                  if feature.canRemove {
-                    Button("Remove", role: .destructive) {
-                      Task { await model.send("remove", values: ["id": feature.id]) }
-                    }
-                    .disabled(model.sending || model.snapshot?.canRemove(feature) != true)
-                    .help("Remove from the queue. Saved project files are kept. Stop the runner first if it is running.")
-                    .accessibilityLabel("Remove feature from \(feature.project)")
-                    .accessibilityIdentifier("developer-remove-\(feature.id)")
-                  }
-                }
-                Text(feature.instruction)
-                Text("Model computer: \(feature.modelComputer)")
-                  .font(.caption).foregroundStyle(.secondary)
-                if let attempts = feature.repairAttempts, attempts > 0 {
-                  Text("Repair attempts: \(attempts) of 3")
-                    .font(.caption).foregroundStyle(.secondary)
-                }
-                if let count = feature.escalationCount, count > 0 {
-                  Text("Repair escalations: \(count) · \(feature.escalationStatus ?? "recorded")")
-                    .font(.caption).foregroundStyle(.secondary)
-                }
-                Text("Checkpoint: \(feature.checkpoint.replacingOccurrences(of: "_", with: " "))")
-                  .font(.caption).foregroundStyle(.secondary)
-                if feature.planningStatus == "legacy_unplanned" {
-                  Text("Brainstorming: not recorded for this earlier feature").font(.caption).foregroundStyle(.secondary)
-                }
-                Text(feature.reviewLabel).font(.caption)
-                  .foregroundStyle(feature.hasApprovedReview ? .green : .secondary)
-                DeveloperGitHubFeatureStatus(feature: feature, runner: model)
-                if let reviewModel = feature.reviewModel {
-                  HStack {
-                    Text("Reviewer: \(reviewModel) · \(DeveloperAISelection.effortLabel(feature.reviewReasoningEffort ?? "high")) reasoning")
-                      .font(.caption).foregroundStyle(.secondary)
-                    if feature.canRemove {
-                      Button("Change reviewer…") { reviewerFeature = feature }
-                        .disabled(model.sending || model.snapshot?.canChangeReviewer(feature) != true)
-                        .help("Choose the reviewer for this feature's next review. Stop active work first.")
-                        .accessibilityIdentifier("developer-change-reviewer-\(feature.id)")
-                    }
-                  }
-                }
-                if let summary = feature.reviewSummary, !summary.isEmpty {
-                  Text(summary).font(.caption).textSelection(.enabled)
-                }
-                if feature.requiresEscalationRecovery {
-                  Text("Repair application was interrupted. Ask AI to inspect the current files and prepare a fresh proposal.")
-                    .font(.callout).foregroundStyle(.orange)
-                }
-                Text(feature.message).font(.caption).textSelection(.enabled)
-                if !feature.changedFiles.isEmpty {
-                  Text(feature.changedFiles.joined(separator: " · ")).font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                }
-              }.padding(10).frame(maxWidth: .infinity, alignment: .leading).background(
-                .quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 8))
+              featureCard(feature)
             }
           }.padding(10)
         }
@@ -688,6 +1014,24 @@ struct DeveloperRunnerView: View {
     }.frame(minWidth: 1000, minHeight: 680)
       .task { await model.observe() }
     .task { await connection.observe() }
+      .onChange(of: model.snapshot?.autoAiRepairMaxEscalations, initial: true) { _, maximum in
+        if !autoRepairMaximumFocused, let maximum { autoRepairMaximumText = String(maximum) }
+      }
+      .onChange(of: model.autoAIRepairDraftResetToken) { _, _ in
+        guard let maximum = model.snapshot?.autoAiRepairMaxEscalations else { return }
+        autoRepairMaximumText = String(maximum)
+        suppressAutoRepairMaximumBlurSubmission = autoRepairMaximumFocused
+        if autoRepairMaximumFocused { autoRepairMaximumFocused = false }
+      }
+      .onChange(of: autoRepairMaximumFocused) { wasFocused, isFocused in
+        let suppress = suppressAutoRepairMaximumBlurSubmission
+        suppressAutoRepairMaximumBlurSubmission = false
+        guard DeveloperAutoAIRepairPresentation.submitsMaximumOnBlur(
+          wasFocused: wasFocused, isFocused: isFocused, draft: autoRepairMaximumText,
+          authoritative: model.snapshot?.autoAiRepairMaxEscalations, suppress: suppress)
+        else { return }
+        submitAutoAIRepairMaximum()
+      }
       .sheet(item: $reviewerFeature) { feature in
         DeveloperFeatureReviewerView(runner: model, feature: feature)
       }
@@ -727,10 +1071,13 @@ struct DeveloperRunnerView: View {
         )
       }
       .confirmationDialog(
-        "Run the queued work on Windows?", isPresented: $confirmingStart,
+        startFeature?.autoRepairLifecycle == "limit_reached"
+          ? "Revalidate the current owner corrections without AI?"
+          : "Run the queued work on Windows?", isPresented: $confirmingStart,
         titleVisibility: .visible, presenting: startFeature
       ) { feature in
-        Button(["paused", "failed"].contains(feature.status) ? "Resume" : "Start next feature") {
+        Button(["paused", "failed"].contains(feature.status)
+          ? feature.resumeActionLabel : "Start next feature") {
           Task {
             await model.send(["paused", "failed"].contains(feature.status) ? "resume" : "start",
               values: feature.startBinding)

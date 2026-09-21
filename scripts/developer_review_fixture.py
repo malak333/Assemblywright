@@ -50,7 +50,7 @@ if "[fixture:wait]" in instruction:time.sleep(20)
 digest="0"*64 if "[fixture:stale]" in instruction else hashlib.sha256(raw.encode()).hexdigest()
 bad=next((f for f in p["files"] if "VALUE = 0" in f["content"]),None) if "[fixture:reject-zero]" in instruction else None
 findings=[{"finding_id":"wrong-value","path":bad["path"],"message":"Implementation must set VALUE to 1 while preserving every other generated file."}] if bad else []
-print(json.dumps({"schema_version":1,"review_packet_sha256":digest,"provider_id":"openai.codex","model_id":p["model_id"],"reasoning_effort":p["reasoning_effort"],"decision":"rejected" if findings else "approved","blocking_findings":findings,"non_blocking_findings":[],"validation_evidence_sha256":p["validation_evidence_sha256"],"reviewed_files":[{"path":f["path"],"content_sha256":f["content_sha256"]} for f in p["files"]]}))
+print(json.dumps({"schema_version":1,"review_packet_sha256":digest,"provider_id":"openai.codex","model_id":p["model_id"],"reasoning_effort":p["reasoning_effort"],"decision":"rejected" if findings else "approved","blocking_findings":findings,"non_blocking_findings":[],"validation_evidence_sha256":p["validation_evidence_sha256"],"reviewed_files":[{"path":f["path"],"content_sha256":f["content_sha256"],"classification":f["classification"]} for f in p["files"]]}))
 ''')
             executable.chmod(0o700)
     return ['--review-codex-executable', str(executable), '--review-codex-home', str(home)]

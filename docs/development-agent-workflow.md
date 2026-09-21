@@ -20,6 +20,21 @@ caps open agent threads at four and nesting at one level. A parent should do kno
 directly, use read-heavy parallelism when it reduces context or elapsed time,
 and serialize overlapping writes.
 
+## GLM-5.3-Flash Implementation Delegation
+
+The owner's current decision is that new implementation work is delegated to
+GLM-5.3-Flash, the single bounded low- and normal-risk implementation lane; the
+local Qwen/local-AI worker lane is retired and must not be used. GLM-5.3-Flash
+performs bounded low- and normal-risk implementation in an isolated worktree and
+returns a proposal only. The frontier parent retains planning, independent
+complete-diff review, integration, and every commit, push, merge, publication
+action, and final evidence judgment. Architecture, authentication, permissions,
+model routing, migrations, plugin containment, concurrency, publication,
+security, and release-evidence semantics stay with the parent and the Sol High
+high-risk roles; they are never routed to GLM-5.3-Flash. Treat its output as an
+untrusted proposal: inspect the worktree status and complete diff, run validation
+independently, and obtain frontier review before integrating any accepted bytes.
+
 ## Operating Rules
 
 - Assign an explicit objective and owned paths to every write agent.
