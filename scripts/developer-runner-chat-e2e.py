@@ -256,6 +256,41 @@ def main():
         def complete(project='alpha'):
             return wait('chat?project=' + project, lambda value: not value['running'])
 
+        def generation_started(stage, timeout=15):
+            """Deterministically wait for the fixture model server to observe the
+            expected generation request before serialization probes run.
+
+            The runner admits work synchronously but issues the generation
+            request from another thread across a process boundary, so no fixed
+            sleep can prove arrival; the fixture event is the real handshake.
+            The bound matches the harness's other bounded waits, early-exits if
+            the runner process is gone, and on expiry reports thread state,
+            captured fixture requests, the runner snapshot, and the runner log.
+            """
+            deadline = time.monotonic() + timeout
+            sampled, status, exit_code = 0., None, None
+            while True:
+                if entered.wait(.05):
+                    return True
+                if exit_code is not None or deadline - time.monotonic() <= 0:
+                    break
+                if time.monotonic() >= sampled:
+                    sampled = time.monotonic() + .25
+                    exit_code = None if process is None else process.poll()
+                    try:
+                        status = api()
+                    except (OSError, urllib.error.URLError) as error:
+                        status = type(error).__name__ + ': ' + str(error)
+            windows = [path for path, _ in fixture['calls']]
+            mac = [path for path, _ in fixture['mac_chat_calls']]
+            raise AssertionError(
+                f'No generation request reached the fixture model server within {timeout}s: {stage}; '
+                + f'mode={fixture["mode"]!r} release={release.is_set()} runner_exit={exit_code} '
+                + f'runner_status={status} windows_requests={len(windows)} windows_tail={windows[-6:]} '
+                + f'mac_requests={len(mac)} mac_tail={mac[-6:]} '
+                + f'threads={[(thread.name, thread.is_alive()) for thread in threading.enumerate()]}\n'
+                + (root / 'runner.log').read_text(errors='replace'))
+
         def files():
             return {str(path.relative_to(projects)): hashlib.sha256(path.read_bytes()).hexdigest()
                 for directory in ('alpha', 'beta') for path in (projects / directory).rglob('*') if path.is_file()}
@@ -430,7 +465,7 @@ def main():
             fixture['mode'] = 'block'
             entered.clear(); release.clear()
             request, _ = ask('Wait for cancellation')
-            assert entered.wait(5)
+            assert generation_started('chat generation before cancel and start serialization probes')
             assert api()['chat_running']
             rejected('chat/cancel', {'id': str(uuid.uuid4())})
             rejected('control', {'action': 'shutdown'})
@@ -445,7 +480,7 @@ def main():
 
             fixture['mode'] = 'block'; entered.clear(); release.clear()
             ask('Emergency cancellation')
-            assert entered.wait(5)
+            assert generation_started('chat generation before Emergency Pause cancellation')
             control('emergency')
             assert complete()['error']
             assert api()['emergency_paused']
@@ -459,7 +494,7 @@ def main():
             entered.clear(); release.clear()
             control('start', expected_feature_id=feature_id, expected_model_target='windows',
                 expected_status='queued', expected_checkpoint='not_started')
-            assert entered.wait(5)
+            assert generation_started('Windows feature generation before busy-chat rejection')
             rejected('chat', {'id': str(uuid.uuid4()), 'project': 'alpha', 'message': 'busy feature'})
             control('stop'); release.set()
             wait('status', lambda value: not value['running'])
@@ -472,7 +507,7 @@ def main():
             fixture['mode'] = 'block'; entered.clear(); release.clear()
             mac_chat_request, _ = ask('Mac chat blocks Mac generation', project='beta',
                 model_target='mac')
-            assert entered.wait(5)
+            assert generation_started('Mac chat generation before start rejection')
             rejected('control', dict(action='start', expected_feature_id=mac_id, expected_model_target='mac',
                 expected_status='queued', expected_checkpoint='not_started'))
             api('chat/cancel', {'id': mac_chat_request['id']})
@@ -491,7 +526,7 @@ def main():
             entered.clear(); release.clear()
             control('start', expected_feature_id=blocking_mac_id, expected_model_target='mac',
                 expected_status='queued', expected_checkpoint='not_started')
-            assert entered.wait(5)
+            assert generation_started('Mac feature generation before Mac chat rejection')
             rejected('chat', {'id': str(uuid.uuid4()), 'project': 'beta',
                 'message': 'busy Mac feature', 'attachments': [], 'model_target': 'mac'})
             control('stop'); release.set()
@@ -500,7 +535,7 @@ def main():
 
             fixture['mode'] = 'block'; entered.clear(); release.clear()
             ask('Restart during answer')
-            assert entered.wait(5)
+            assert generation_started('chat generation before restart termination')
             terminate(); release.set(); fixture['mode'] = 'normal'
             launch()
             recovered = complete()
