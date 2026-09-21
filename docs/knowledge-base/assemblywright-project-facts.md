@@ -2539,6 +2539,11 @@ Full-machine target phase: planning/creation containment has bounded native Wind
   validation parent and descendant exist, then verify checkpointed restart.
   Windows `cmd.exe` also needs canonical local `\\?\C:\` working directories
   normalized to drive paths; this developer launcher does not use UNC workspaces.
+- Windows `cmd.exe` can inject reserved hidden pseudo-environment entries such as
+  `=ExitCode` and `=ExitCodeAscii`. An owned child-environment snapshot must omit
+  those unusable pseudo entries while preserving valid per-drive current-directory
+  entries such as `=C:`. Explicit caller-supplied environment names remain strict
+  and must not use the reserved `=...` namespace.
 - Unit coverage and native E2E coverage serve different boundaries. Use Rust
   state/file tests, deterministic Swift URLSession tests, and disposable native
   HTTP/process tests on both Mac and Windows. The fixture-model tests do not

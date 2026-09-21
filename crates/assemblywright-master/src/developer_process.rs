@@ -38,10 +38,18 @@ pub struct ValidationEnvironment {
 
 impl ValidationEnvironment {
     pub fn capture() -> Result<Self> {
+        Self::capture_entries(std::env::vars_os())
+    }
+
+    fn capture_entries(entries: impl IntoIterator<Item = (OsString, OsString)>) -> Result<Self> {
         let mut environment = Self {
             entries: Vec::new(),
         };
-        for (name, value) in std::env::vars_os() {
+        for (name, value) in entries {
+            #[cfg(windows)]
+            if windows_reserved_environment_entry(&name) {
+                continue;
+            }
             environment.set(name, value)?;
         }
         Ok(environment)
@@ -85,14 +93,25 @@ fn windows_environment_name_key(name: &OsStr) -> Result<String> {
     let name = name
         .to_str()
         .context("Windows environment variable name is not Unicode")?;
-    let hidden_drive = name.len() == 3
-        && name.as_bytes()[0] == b'='
-        && name.as_bytes()[1].is_ascii_alphabetic()
-        && name.as_bytes()[2] == b':';
+    let hidden_drive = windows_hidden_drive_environment_entry(name);
     if name.is_empty() || name.contains('\0') || name.contains('=') && !hidden_drive {
         bail!("Windows environment variable name is invalid");
     }
     Ok(name.to_uppercase())
+}
+
+#[cfg(windows)]
+fn windows_reserved_environment_entry(name: &OsStr) -> bool {
+    name.to_str()
+        .is_some_and(|name| name.starts_with('=') && !windows_hidden_drive_environment_entry(name))
+}
+
+#[cfg(windows)]
+fn windows_hidden_drive_environment_entry(name: &str) -> bool {
+    name.len() == 3
+        && name.as_bytes()[0] == b'='
+        && name.as_bytes()[1].is_ascii_alphabetic()
+        && name.as_bytes()[2] == b':'
 }
 
 #[cfg(windows)]
@@ -701,6 +720,29 @@ mod platform {
                 environment.get(OsStr::new("=D:")),
                 Some(OsStr::new(r"D:\workspace"))
             );
+        }
+
+        #[test]
+        fn environment_capture_omits_reserved_pseudo_entries() {
+            let mut environment = ValidationEnvironment::capture_entries([
+                (OsString::from("PATH"), OsString::from(r"C:\Windows")),
+                (OsString::from("=C:"), OsString::from(r"C:\workspace")),
+                (OsString::from("=ExitCode"), OsString::from("00000000")),
+                (OsString::from("=ExitCodeAscii"), OsString::from("00000000")),
+            ])
+            .unwrap();
+
+            assert_eq!(
+                environment.get(OsStr::new("PATH")),
+                Some(OsStr::new(r"C:\Windows"))
+            );
+            assert_eq!(
+                environment.get(OsStr::new("=C:")),
+                Some(OsStr::new(r"C:\workspace"))
+            );
+            assert_eq!(environment.get(OsStr::new("=ExitCode")), None);
+            assert_eq!(environment.get(OsStr::new("=ExitCodeAscii")), None);
+            assert!(environment.set("=ExitCode", "00000000").is_err());
         }
     }
 }
