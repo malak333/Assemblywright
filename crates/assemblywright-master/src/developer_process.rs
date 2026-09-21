@@ -566,6 +566,10 @@ mod platform {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use windows_sys::Win32::{
+            Foundation::{CompareObjectHandles, ERROR_INVALID_HANDLE},
+            Storage::FileSystem::FILE_SHARE_DELETE,
+        };
 
         fn open_unrelated_inheritable_file(path: &Path) -> Result<OwnedHandle> {
             let attributes = SECURITY_ATTRIBUTES {
@@ -579,7 +583,7 @@ mod platform {
                     CreateFileW(
                         path.as_ptr(),
                         GENERIC_READ | windows_sys::Win32::Foundation::GENERIC_WRITE,
-                        FILE_SHARE_READ | FILE_SHARE_WRITE,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                         &attributes,
                         windows_sys::Win32::Storage::FileSystem::CREATE_ALWAYS,
                         FILE_ATTRIBUTE_NORMAL,
@@ -619,12 +623,39 @@ mod platform {
             let mut child =
                 spawn("ping -n 30 127.0.0.1 >NUL", root.path(), log, &environment).unwrap();
 
+            let mut duplicated = null_mut();
+            let duplicate_result = unsafe {
+                DuplicateHandle(
+                    child.process.raw(),
+                    unrelated.raw(),
+                    GetCurrentProcess(),
+                    &mut duplicated,
+                    0,
+                    0,
+                    DUPLICATE_SAME_ACCESS,
+                )
+            };
+            let inherited_same_object = if duplicate_result == 0 {
+                let code = unsafe { windows_sys::Win32::Foundation::GetLastError() };
+                assert_eq!(
+                    code, ERROR_INVALID_HANDLE,
+                    "querying the validation child's unrelated handle slot failed unexpectedly"
+                );
+                false
+            } else {
+                let duplicated = OwnedHandle::new(duplicated, "own child handle probe").unwrap();
+                unsafe { CompareObjectHandles(duplicated.raw(), unrelated.raw()) != 0 }
+            };
+
             drop(unrelated);
-            let removal = std::fs::remove_file(&unrelated_path);
             let termination = child.terminate().await;
 
-            removal.expect("unrelated inheritable handle leaked into validation process");
+            assert!(
+                !inherited_same_object,
+                "validation child inherited the unrelated file object"
+            );
             termination.expect("validation process tree did not terminate cleanly");
+            std::fs::remove_file(&unrelated_path).unwrap();
         }
 
         #[test]
