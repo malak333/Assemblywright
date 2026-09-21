@@ -15923,6 +15923,8 @@ mod tests {
             .output()
             .unwrap();
         assert!(creation.status.success());
+        let junction_metadata = fs::symlink_metadata(&junction).unwrap();
+        assert!(planning_metadata_is_reparse(&junction_metadata));
 
         let result = project_context(&project);
         let cleanup = std::process::Command::new("cmd.exe")
