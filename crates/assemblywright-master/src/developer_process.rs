@@ -7,7 +7,12 @@
 //! process containment or production execution evidence.
 
 use anyhow::{Context, Result};
-use std::{fs::File, path::Path, process::ExitStatus};
+use std::{
+    ffi::{OsStr, OsString},
+    fs::File,
+    path::Path,
+    process::ExitStatus,
+};
 
 #[cfg(windows)]
 use anyhow::bail;
@@ -22,12 +27,81 @@ const TERMINATED_EXIT_CODE: u32 = 1;
 #[error("validation spawn cleanup could not be confirmed: {0}")]
 pub struct CleanupUnconfirmed(pub String);
 
+/// An owned, closed snapshot of the validation child's environment.
+///
+/// Capturing before spawn prevents a concurrent ambient environment mutation
+/// from changing the child between policy validation and process creation.
+#[derive(Debug, Clone)]
+pub struct ValidationEnvironment {
+    entries: Vec<(OsString, OsString)>,
+}
+
+impl ValidationEnvironment {
+    pub fn capture() -> Result<Self> {
+        let mut environment = Self {
+            entries: Vec::new(),
+        };
+        for (name, value) in std::env::vars_os() {
+            environment.set(name, value)?;
+        }
+        Ok(environment)
+    }
+
+    pub fn set(&mut self, name: impl Into<OsString>, value: impl Into<OsString>) -> Result<()> {
+        let name = name.into();
+        let value = value.into();
+        #[cfg(windows)]
+        let name_key = windows_environment_name_key(&name)?;
+        self.entries.retain(|(candidate, _)| {
+            #[cfg(windows)]
+            {
+                windows_environment_name_key(candidate)
+                    .map(|candidate| candidate != name_key)
+                    .unwrap_or(false)
+            }
+            #[cfg(not(windows))]
+            {
+                candidate != &name
+            }
+        });
+        self.entries.push((name, value));
+        Ok(())
+    }
+
+    pub fn get(&self, name: &OsStr) -> Option<&OsStr> {
+        self.entries.iter().find_map(|(candidate, value)| {
+            #[cfg(windows)]
+            let matches = windows_environment_name_key(candidate).ok()
+                == windows_environment_name_key(name).ok();
+            #[cfg(not(windows))]
+            let matches = candidate == name;
+            matches.then_some(value.as_os_str())
+        })
+    }
+}
+
+#[cfg(windows)]
+fn windows_environment_name_key(name: &OsStr) -> Result<String> {
+    let name = name
+        .to_str()
+        .context("Windows environment variable name is not Unicode")?;
+    let hidden_drive = name.len() == 3
+        && name.as_bytes()[0] == b'='
+        && name.as_bytes()[1].is_ascii_alphabetic()
+        && name.as_bytes()[2] == b':';
+    if name.is_empty() || name.contains('\0') || name.contains('=') && !hidden_drive {
+        bail!("Windows environment variable name is invalid");
+    }
+    Ok(name.to_uppercase())
+}
+
 #[cfg(windows)]
 mod platform {
     use super::*;
     use std::{
+        ffi::c_void,
         ffi::OsString,
-        mem::{size_of, zeroed},
+        mem::{size_of, size_of_val, zeroed},
         os::windows::{
             ffi::{OsStrExt, OsStringExt},
             io::AsRawHandle,
@@ -37,8 +111,8 @@ mod platform {
     };
     use windows_sys::Win32::{
         Foundation::{
-            CloseHandle, DuplicateHandle, DUPLICATE_SAME_ACCESS, GENERIC_READ, HANDLE,
-            INVALID_HANDLE_VALUE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
+            CloseHandle, DuplicateHandle, DUPLICATE_SAME_ACCESS, ERROR_INSUFFICIENT_BUFFER,
+            GENERIC_READ, HANDLE, INVALID_HANDLE_VALUE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
         },
         Security::SECURITY_ATTRIBUTES,
         Storage::FileSystem::{
@@ -54,9 +128,11 @@ mod platform {
             },
             SystemInformation::GetSystemDirectoryW,
             Threading::{
-                CreateProcessW, GetCurrentProcess, GetExitCodeProcess, ResumeThread,
-                TerminateProcess, WaitForSingleObject, CREATE_SUSPENDED, PROCESS_INFORMATION,
-                STARTF_USESTDHANDLES, STARTUPINFOW,
+                CreateProcessW, DeleteProcThreadAttributeList, GetCurrentProcess,
+                GetExitCodeProcess, InitializeProcThreadAttributeList, ResumeThread,
+                TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject, CREATE_SUSPENDED,
+                CREATE_UNICODE_ENVIRONMENT, EXTENDED_STARTUPINFO_PRESENT, PROCESS_INFORMATION,
+                PROC_THREAD_ATTRIBUTE_HANDLE_LIST, STARTF_USESTDHANDLES, STARTUPINFOEXW,
             },
         },
     };
@@ -89,6 +165,50 @@ mod platform {
                     CloseHandle(self.0);
                 }
             }
+        }
+    }
+
+    struct AttributeList {
+        storage: Vec<usize>,
+        ptr: windows_sys::Win32::System::Threading::LPPROC_THREAD_ATTRIBUTE_LIST,
+    }
+
+    impl AttributeList {
+        fn new(count: u32) -> Result<Self> {
+            let mut bytes = 0usize;
+            unsafe { InitializeProcThreadAttributeList(null_mut(), count, 0, &mut bytes) };
+            if bytes == 0
+                || unsafe { windows_sys::Win32::Foundation::GetLastError() }
+                    != ERROR_INSUFFICIENT_BUFFER
+            {
+                return Err(std::io::Error::last_os_error())
+                    .context("measure validation process attribute list");
+            }
+            let mut storage = vec![0usize; bytes.div_ceil(size_of::<usize>())];
+            let ptr = storage.as_mut_ptr().cast();
+            if unsafe { InitializeProcThreadAttributeList(ptr, count, 0, &mut bytes) } == 0 {
+                return Err(std::io::Error::last_os_error())
+                    .context("initialize validation process attribute list");
+            }
+            Ok(Self { storage, ptr })
+        }
+
+        fn update(&mut self, attribute: usize, value: *const c_void, bytes: usize) -> Result<()> {
+            if unsafe {
+                UpdateProcThreadAttribute(self.ptr, 0, attribute, value, bytes, null_mut(), null())
+            } == 0
+            {
+                return Err(std::io::Error::last_os_error())
+                    .context("set validation inherited handle allowlist");
+            }
+            Ok(())
+        }
+    }
+
+    impl Drop for AttributeList {
+        fn drop(&mut self) {
+            unsafe { DeleteProcThreadAttributeList(self.ptr) };
+            let _ = self.storage.len();
         }
     }
 
@@ -156,7 +276,12 @@ mod platform {
         }
     }
 
-    pub fn spawn(validation: &str, project: &Path, log: File) -> Result<ValidationChild> {
+    pub fn spawn(
+        validation: &str,
+        project: &Path,
+        log: File,
+        environment: &ValidationEnvironment,
+    ) -> Result<ValidationChild> {
         if validation.contains('\0') {
             bail!("validation command contains a NUL character");
         }
@@ -167,18 +292,27 @@ mod platform {
         let inherited_stdin = open_inheritable_null()?;
         let application = system_cmd_path()?;
         let current_directory = command_working_directory(project)?;
+        let environment = environment_block(environment)?;
+        let mut inherited = [inherited_stdin.raw(), inherited_log.raw()];
+        let mut attributes = AttributeList::new(1)?;
+        attributes.update(
+            PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
+            inherited.as_mut_ptr().cast(),
+            size_of_val(&inherited),
+        )?;
         let mut command_line: Vec<u16> =
             OsString::from(format!("\"cmd.exe\" /d /s /c \"{validation}\""))
                 .encode_wide()
                 .chain(std::iter::once(0))
                 .collect();
 
-        let mut startup: STARTUPINFOW = unsafe { zeroed() };
-        startup.cb = size_of::<STARTUPINFOW>() as u32;
-        startup.dwFlags = STARTF_USESTDHANDLES;
-        startup.hStdInput = inherited_stdin.raw();
-        startup.hStdOutput = inherited_log.raw();
-        startup.hStdError = inherited_log.raw();
+        let mut startup: STARTUPINFOEXW = unsafe { zeroed() };
+        startup.StartupInfo.cb = size_of::<STARTUPINFOEXW>() as u32;
+        startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+        startup.StartupInfo.hStdInput = inherited_stdin.raw();
+        startup.StartupInfo.hStdOutput = inherited_log.raw();
+        startup.StartupInfo.hStdError = inherited_log.raw();
+        startup.lpAttributeList = attributes.ptr;
         let mut information: PROCESS_INFORMATION = unsafe { zeroed() };
 
         if unsafe {
@@ -188,10 +322,10 @@ mod platform {
                 null(),
                 null(),
                 1,
-                CREATE_SUSPENDED,
-                null(),
+                CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
+                environment.as_ptr().cast(),
                 current_directory.as_ptr(),
-                &startup,
+                &startup.StartupInfo,
                 &mut information,
             )
         } == 0
@@ -229,6 +363,38 @@ mod platform {
 
         drop(thread);
         Ok(ValidationChild { job, process })
+    }
+
+    fn environment_block(environment: &ValidationEnvironment) -> Result<Vec<u16>> {
+        let mut entries = environment
+            .entries
+            .iter()
+            .map(|(name, value)| {
+                let key = windows_environment_name_key(name)?;
+                let mut encoded: Vec<u16> = name.encode_wide().collect();
+                if encoded.contains(&0) {
+                    bail!("Windows environment variable name contains a NUL character");
+                }
+                encoded.push(b'=' as u16);
+                let value: Vec<u16> = value.encode_wide().collect();
+                if value.contains(&0) {
+                    bail!("Windows environment variable value contains a NUL character");
+                }
+                encoded.extend(value);
+                Ok((key, encoded))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        entries.sort_by(|left, right| left.0.cmp(&right.0).then(left.1.cmp(&right.1)));
+        let mut block = Vec::new();
+        for (_, entry) in entries {
+            block.extend(entry);
+            block.push(0);
+        }
+        if block.is_empty() {
+            block.push(0);
+        }
+        block.push(0);
+        Ok(block)
     }
 
     fn create_kill_on_close_job() -> Result<OwnedHandle> {
@@ -401,11 +567,36 @@ mod platform {
     mod tests {
         use super::*;
 
+        fn open_unrelated_inheritable_file(path: &Path) -> Result<OwnedHandle> {
+            let attributes = SECURITY_ATTRIBUTES {
+                nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+                lpSecurityDescriptor: null_mut(),
+                bInheritHandle: 1,
+            };
+            let path = wide_nul(path.as_os_str())?;
+            OwnedHandle::new(
+                unsafe {
+                    CreateFileW(
+                        path.as_ptr(),
+                        GENERIC_READ | windows_sys::Win32::Foundation::GENERIC_WRITE,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE,
+                        &attributes,
+                        windows_sys::Win32::Storage::FileSystem::CREATE_ALWAYS,
+                        FILE_ATTRIBUTE_NORMAL,
+                        null_mut(),
+                    )
+                },
+                "open unrelated inheritable file",
+            )
+        }
+
         #[tokio::test]
         async fn invalid_process_query_cannot_report_confirmed_termination() {
             let root = tempfile::tempdir().unwrap();
             let log = File::create(root.path().join("validation.log")).unwrap();
-            let mut child = spawn("ping -n 30 127.0.0.1 >NUL", root.path(), log).unwrap();
+            let environment = ValidationEnvironment::capture().unwrap();
+            let mut child =
+                spawn("ping -n 30 127.0.0.1 >NUL", root.path(), log, &environment).unwrap();
             // Force a real kernel query failure without altering the owned Job.
             let process = std::mem::replace(&mut child.process, OwnedHandle(null_mut()));
             assert!(child.try_wait().is_err());
@@ -415,6 +606,69 @@ mod platform {
             assert_eq!(
                 unsafe { WaitForSingleObject(process.raw(), 5000) },
                 WAIT_OBJECT_0
+            );
+        }
+
+        #[tokio::test]
+        async fn spawn_excludes_unrelated_inheritable_handles() {
+            let root = tempfile::tempdir().unwrap();
+            let log = File::create(root.path().join("validation.log")).unwrap();
+            let unrelated_path = root.path().join("unrelated-inheritable-handle.txt");
+            let unrelated = open_unrelated_inheritable_file(&unrelated_path).unwrap();
+            let environment = ValidationEnvironment::capture().unwrap();
+            let mut child =
+                spawn("ping -n 30 127.0.0.1 >NUL", root.path(), log, &environment).unwrap();
+
+            drop(unrelated);
+            let removal = std::fs::remove_file(&unrelated_path);
+            let termination = child.terminate().await;
+
+            removal.expect("unrelated inheritable handle leaked into validation process");
+            termination.expect("validation process tree did not terminate cleanly");
+        }
+
+        #[test]
+        fn environment_block_is_casefolded_sorted_utf16_and_double_nul_terminated() {
+            let mut environment = ValidationEnvironment {
+                entries: Vec::new(),
+            };
+            environment.set("z_value", "last").unwrap();
+            environment.set("Path", "old").unwrap();
+            environment.set("alpha", "first").unwrap();
+            environment.set("=c:", r"C:\old").unwrap();
+            environment.set("PATH", "new-\u{2603}").unwrap();
+            environment.set("=C:", r"C:\current").unwrap();
+            let block = environment_block(&environment).unwrap();
+            assert!(block.ends_with(&[0, 0]));
+            let decoded = block[..block.len() - 1]
+                .split(|value| *value == 0)
+                .filter(|entry| !entry.is_empty())
+                .map(String::from_utf16)
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap();
+            assert_eq!(
+                decoded,
+                [
+                    r"=C:=C:\current",
+                    "alpha=first",
+                    "PATH=new-\u{2603}",
+                    "z_value=last"
+                ]
+            );
+        }
+
+        #[test]
+        fn environment_rejects_ambiguous_names_but_preserves_hidden_drive_entries() {
+            let mut environment = ValidationEnvironment {
+                entries: Vec::new(),
+            };
+            assert!(environment.set("", "value").is_err());
+            assert!(environment.set("NAME=ALIAS", "value").is_err());
+            assert!(environment.set("=CC:", r"C:\ambiguous").is_err());
+            environment.set("=d:", r"D:\workspace").unwrap();
+            assert_eq!(
+                environment.get(OsStr::new("=D:")),
+                Some(OsStr::new(r"D:\workspace"))
             );
         }
     }
@@ -452,10 +706,22 @@ mod platform {
         }
     }
 
-    pub fn spawn(validation: &str, project: &Path, log: File) -> Result<ValidationChild> {
+    pub fn spawn(
+        validation: &str,
+        project: &Path,
+        log: File,
+        environment: &ValidationEnvironment,
+    ) -> Result<ValidationChild> {
         let mut command = tokio::process::Command::new("/bin/sh");
         command.args(["-c", validation]);
         command.as_std_mut().process_group(0);
+        command.env_clear();
+        command.envs(
+            environment
+                .entries
+                .iter()
+                .map(|(name, value)| (name, value)),
+        );
         let child = command
             .current_dir(project)
             .stdin(Stdio::null())

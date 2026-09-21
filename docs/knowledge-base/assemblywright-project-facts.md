@@ -62,6 +62,32 @@ reproduced zero admitted files with the raw alias and passed all 44 developer te
 after canonicalizing the fixture root. Preserve the containment comparison rather
 than relaxing it to accommodate a test-only path mismatch.
 
+## Developer Validation Containment
+
+- Developer validation runs in an owned, closed environment: the runner captures an
+  explicit environment snapshot before spawn, so a concurrent ambient environment
+  change cannot alter the child between policy validation and process creation.
+- On Windows the validation child is created with `STARTUPINFOEX` plus a
+  `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, so only duplicated stdin and log handles are
+  inheritable instead of every inheritable handle under plain `STARTF_USESTDHANDLES`.
+  The process is created suspended, assigned to a kill-on-close Job Object, and only
+  then resumed.
+- Any cleanup whose completion cannot be confirmed first latches the volatile global
+  emergency gates, then atomically persists Emergency Pause/quarantine while
+  terminalizing pending evidence and retaining the exact tool-workspace revision and
+  live edits for owner recovery. A persistence failure keeps the volatile latch; the
+  feature is quarantined at checkpoint `validation_cleanup_unconfirmed` and never
+  replays automatically.
+- The native Auto AI repair harness exercises the project-rename cleanup probe
+  cross-platform. Actual native Windows execution is required to establish
+  Windows directory-handle release and the Windows-only delayed-descendant
+  kill-on-close Job proof reported as `windows_validation_job_reaps_descendants`.
+  Both Windows proofs stay pending until that native Windows run completes;
+  Mac fixture success and
+  non-Windows/generic hosted checks are not substitutes, and an actual
+  Windows-hosted native run may establish hosted Windows evidence but never
+  live Windows deployment proof.
+
 These notes capture durable facts for future agents working on this repository.
 
 ## Developer GitHub Publication

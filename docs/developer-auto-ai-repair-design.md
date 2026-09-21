@@ -172,7 +172,12 @@ project. This Developer runner has no hostile-process or external-effect contain
 for that process. The Auto AI repair control is therefore an explicit acceptance of
 the same owner-account execution risk as existing Developer validation, amplified
 by unattended configuration edits. The UI and documentation must state this; no
-production-sandbox or workspace-only effect claim is permitted.
+production-sandbox or workspace-only effect claim is permitted. Within that
+boundary validation still runs in an owned, closed environment: the runner captures
+an explicit environment snapshot before spawn, and on Windows creates the child
+with `STARTUPINFOEX` so only duplicated stdin and log handles are inheritable,
+starting it suspended, assigning the kill-on-close Job Object, and only then
+resuming it.
 
 The three ordinary repairs deliberately retain their current narrower tool and
 protected-test restrictions. The owner-approved broader any-project-file authority
@@ -201,6 +206,11 @@ secret-bearing project material is never admitted to the repair packet.
   first persist intent and advance the feature's automatic-repair epoch, then signal
   active work. Completion from the prior epoch is rejected. Applied bytes and
   evidence remain preserved; unconfirmed termination enters quarantine.
+- Validation cleanup whose completion cannot be confirmed first latches the
+  volatile global emergency gates and atomically persists Emergency
+  Pause/quarantine while terminalizing pending evidence and retaining the exact
+  tool-workspace revision and live edits for owner recovery. A persistence failure
+  keeps the volatile latch, and the quarantine never replays automatically.
 - A durably ready and unapplied proposal may continue only when its digest and
   every bound byte still match.
 - A proposal-generation call interrupted before any write is recorded as
@@ -283,7 +293,10 @@ an unchanged validation-command string, review-rejection continuation, configure
 and absolute caps including exactly 100 automatic calls with no 101st call,
 app-independent polling, operational hold, disable/Stop late-result rejection,
 clean pre-effect restart, and validation/review restart quarantine without replay.
-Its shared-limit scenario drives the public authenticated routes the Mac app uses:
+It also exercises the project-rename cleanup probe cross-platform. Actual native
+Windows execution is required to establish Windows directory-handle release and
+the Windows-only delayed-descendant sentinel that the kill-on-close Job
+must reap. Its shared-limit scenario drives the public authenticated routes the Mac app uses:
 project chat plus an owner-approved manual escalation consumes the one shared
 per-feature cap; a later automatic opportunity stops at `limit_reached` at that
 cap without any repair-model or reviewer call; the owner corrects the project
@@ -293,7 +306,9 @@ prove live model quality, account entitlement, Windows-native or installed-app
 behavior, rendered visual placement, Windows Job behavior, signing or notarization,
 hosted checks, live-device QA, or production readiness. Native Windows and visual
 macOS validation have not yet been run for this implementation and remain separate
-evidence layers.
+evidence layers. Windows proof of the handle-release and delayed-descendant
+coverage stays pending until that native Windows run completes; live or hosted
+Windows success is not claimed by Mac fixture evidence.
 
 ## Risks acknowledged
 

@@ -26,7 +26,7 @@ cross-browser matrices, and browser visual baselines are not applicable.
 | Developer GitHub publication | Candidate/base/tree binding; URL/base/policy rejection; required-check app and head identity; cancellation; ambiguous-effect reconciliation; exact merged-base verification; historical local-only state | Rust Developer binary tests plus `scripts/developer-runner-publication-e2e.py` on Mac and Windows |
 | Developer GitHub setup | Invalid/expired/masked authentication; stale/busy actions; device challenge and cancellation; pagination; empty-repository branch truth; collision; ambiguous creation and restart; immutable repository ID; strict Swift acknowledgements | Rust Developer binary tests, `scripts/developer-runner-github-setup-e2e.py`, and `DeveloperGitHubSetupTests` |
 | Developer Auto AI repair state/UI | Default-off migration; atomic revision-bound settings; `1...100` limit; per-feature snapshot; shared manual/automatic count; evidence capacity; lifecycle/epoch cancellation; strict Swift acknowledgement, conflict refresh, input, accessibility, progress and recovery presentation | Rust Developer binary tests plus `DeveloperRunnerTests`, `DeveloperRunnerClientTests`, and `DeveloperRepairEscalationTests` |
-| Developer Auto AI repair process | Three ordinary repairs before automatic escalation; source/test/configuration writes; immutable validation-command string; review rejection; configured and absolute caps; app-independent polling; operational hold; disable/Stop late results; pre-effect restart; validation/review quarantine; project chat plus manual escalation on the shared per-feature cap; automatic stop at the shared cap without repair-model or reviewer calls; owner-corrected bytes with validation-only Resume, fresh validation, and one independent review | `python3 -B scripts/developer-runner-auto-repair-e2e.py --binary target/debug/assemblywright-developer` |
+| Developer Auto AI repair process | Three ordinary repairs before automatic escalation; source/test/configuration writes; immutable validation-command string; review rejection; configured and absolute caps; app-independent polling; operational hold; disable/Stop late results; pre-effect restart; validation/review quarantine; project chat plus manual escalation on the shared per-feature cap; automatic stop at the shared cap without repair-model or reviewer calls; owner-corrected bytes with validation-only Resume, fresh validation, and one independent review; validation handle release before cleanup; Windows-only delayed-descendant reap sentinel | `python3 -B scripts/developer-runner-auto-repair-e2e.py --binary target/debug/assemblywright-developer` |
 
 The Swift transport fixture substitutes only HTTP delivery; it exercises the real
 client model, decoding, state handling, and error reporting. The native E2E fixture
@@ -206,7 +206,11 @@ Swift/Rust/process surface.
 The disposable Mac process harness reports 21 proof keys using real authenticated
 HTTP, SQLite, filesystem changes, and validation subprocesses with deterministic
 model and reviewer fixtures. It exercises exactly 100 automatic model calls at the
-absolute cap and observes no 101st call. Its shared-limit scenario uses the public
+absolute cap and observes no 101st call. It also exercises the project-rename
+cleanup probe cross-platform. Actual native Windows execution is required to
+establish Windows directory-handle release and the Windows-only
+delayed-descendant sentinel that the kill-on-close Job must reap. Its
+shared-limit scenario uses the public
 authenticated routes the Mac app uses: project chat plus an owner-approved manual
 escalation consumes the one shared per-feature cap, a later automatic opportunity
 stops at `limit_reached` at that cap without any repair-model or reviewer call,
@@ -222,4 +226,8 @@ Native Windows execution of this harness, installed Developer app behavior,
 rendered layout and keyboard navigation, the final full local gate, exact-commit
 hosted checks, publication, signing, notarization, live-device QA, and production
 readiness are not claimed by this repository evidence and remain separately
-reportable proof layers.
+reportable proof layers. The handle-release and delayed-descendant Windows proof
+stays pending until the native Windows run of this harness completes. Mac
+fixture success and non-Windows/generic hosted checks are not substitutes; an
+actual Windows-hosted native run may establish hosted Windows evidence, but it
+is not live Windows deployment proof.
