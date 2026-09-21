@@ -17,6 +17,7 @@ root = Path.cwd()
 config_path = root / ".codex" / "config.toml"
 agents_dir = root / ".codex" / "agents"
 instructions_path = root / "AGENTS.md"
+workflow_doc_path = root / "docs" / "development-agent-workflow.md"
 
 expected = {
     "assemblywright-explorer": ("gpt-5.6-terra", "medium", "read-only"),
@@ -83,6 +84,50 @@ for name in expected:
         raise SystemExit(f"error: AGENTS.md does not route {name}")
 if len(instructions.splitlines()) > 100:
     raise SystemExit("error: AGENTS.md exceeds the 100-line instruction limit")
+
+def normalized(text: str) -> str:
+    return " ".join(text.split())
+
+required_instructions = (
+    "new implementation work is delegated to GLM-5.3-Flash, the single bounded low/normal-risk implementation lane",
+    "the local Qwen/local-AI worker lane is retired and must not be used",
+    "The frontier parent retains planning, independent complete-diff review, integration, and every commit, push, merge, publication action, and final evidence judgment",
+    "Treat GLM-5.3-Flash output as an untrusted proposal",
+)
+norm_instructions = normalized(instructions)
+for required in required_instructions:
+    if required not in norm_instructions:
+        raise SystemExit(f"error: AGENTS.md is missing delegation policy text: {required}")
+for forbidden in (
+    "local Qwen proposal worker",
+    "local_codex_worker.py",
+    "local-worker",
+):
+    if forbidden in norm_instructions:
+        raise SystemExit(f"error: AGENTS.md must not keep the retired local Qwen/local-AI lane text: {forbidden}")
+
+if not workflow_doc_path.is_file():
+    raise SystemExit("error: missing docs/development-agent-workflow.md")
+workflow_doc = normalized(workflow_doc_path.read_text(encoding="utf-8"))
+for required in (
+    "## GLM-5.3-Flash Implementation Delegation",
+    "new implementation work is delegated to GLM-5.3-Flash, the single bounded low- and normal-risk implementation lane",
+    "the local Qwen/local-AI worker lane is retired and must not be used",
+    "The frontier parent retains planning, independent complete-diff review, integration, and every commit, push, merge, publication action, and final evidence judgment",
+    "they are never routed to GLM-5.3-Flash",
+):
+    if required not in workflow_doc:
+        raise SystemExit(f"error: docs/development-agent-workflow.md is missing delegation policy text: {required}")
+for forbidden in (
+    "## Local Qwen Proposal Worker",
+    "local Qwen proposal worker",
+    "local_codex_worker.py",
+    "qwen36-local",
+    "local_qwen",
+    "proposal or cross-check",
+):
+    if forbidden in workflow_doc:
+        raise SystemExit(f"error: docs/development-agent-workflow.md must not keep the retired local Qwen/local-AI lane text: {forbidden}")
 
 print(f"Assemblywright Codex workflow validation: ok ({len(expected)} agents, max_threads={max_threads})")
 PY

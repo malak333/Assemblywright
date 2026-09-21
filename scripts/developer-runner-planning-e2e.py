@@ -148,13 +148,35 @@ def main():
             outside = root / "outside-context"
             outside.mkdir()
             (outside / "private.txt").write_text("token = abcdefgh\n")
+            if sys.platform == "win32":
+                junction_feature_id = str(uuid.uuid4())
+                junction_project = projects / "junction"
+                junction_project.mkdir()
+                junction = junction_project / "outside-junction"
+                subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J",
+                    str(junction), str(outside)], check=True,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                junction_feature = {"id":junction_feature_id, "project":"junction",
+                    "instruction":"Reject the unsafe project alias", "validation":validation,
+                    "model_target":"mac"}
+                enqueue_with_plan(f"http://127.0.0.1:{port}", token, junction_feature)
+                api("control", {"action":"start", "expected_feature_id":junction_feature_id,
+                    "expected_model_target":"mac", "expected_status":"queued",
+                    "expected_checkpoint":"not_started"})
+                junction_failed = wait(lambda value: not value["running"] and next(
+                    item for item in value["queue"] if item["id"] == junction_feature_id)["status"] == "failed")
+                junction_state = next(item for item in junction_failed["queue"]
+                    if item["id"] == junction_feature_id)
+                assert junction_state["message"] == "Automatic repair project context refuses a Windows reparse point"
+                assert not model_prompts, "Windows junction must fail before model disclosure"
+                api("control", {"action":"remove", "id":junction_feature_id})
+                wait(lambda value: all(item["id"] != junction_feature_id for item in value["queue"]))
+                cleanup = subprocess.run(["cmd.exe", "/d", "/c", "rmdir", str(junction)],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                assert cleanup.returncode == 0, cleanup.stderr.decode(errors="replace")
             planned_project = projects / "planned"
             planned_project.mkdir()
-            if sys.platform == "win32":
-                subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J",
-                    str(planned_project / "outside-junction"), str(outside)], check=True,
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            else:
+            if sys.platform != "win32":
                 (planned_project / "outside-junction").symlink_to(outside, target_is_directory=True)
             feature = {"id":feature_id, "project":"planned", "instruction":"Implement the planned fixture",
                        "validation":validation, "model_target":"mac"}
@@ -180,6 +202,7 @@ def main():
             completed = wait(lambda value: not value["running"] and next(
                 item for item in value["queue"] if item["id"] == feature_id)["status"] == "succeeded")
             assert len(model_prompts) == 2
+            assert all("abcdef" not in prompt for prompt in model_prompts)
 
             combined = ("# Understanding\n" + documents["understanding"] + "\n\n# Assumptions\n" +
                 documents["assumptions"] + "\n\n# Decision Log\n" + documents["decision_log"] +
@@ -198,12 +221,12 @@ def main():
             with closing(__import__("sqlite3").connect(data / "developer.sqlite3")) as database:
                 durable = json.loads(database.execute(
                     "SELECT state FROM developer_state WHERE id=1").fetchone()[0])
-            assert "queue_v10" in durable and "queue_v5" not in durable
+            assert "queue_v11" in durable and "queue_v5" not in durable
             print(json.dumps({"raw_enqueue_rejected":True, "exact_replay_safe":True,
                 "emergency_invalidated_planning":True, "durable_skill_and_provider_evidence":True,
                 "restart_invalidated_and_retry_cancelled":True,
                 "reparse_context_not_disclosed":True,
-                "approved_plan_reached_initial_repair_and_review":True, "durable_queue_schema":"queue_v10"}))
+                "approved_plan_reached_initial_repair_and_review":True, "durable_queue_schema":"queue_v11"}))
         finally:
             try: api("control", {"action":"emergency"})
             except Exception: pass

@@ -321,7 +321,7 @@ def main():
                 def durable_feature():
                     with closing(sqlite3.connect(data / 'developer.sqlite3')) as db:
                         durable = json.loads(db.execute('SELECT state FROM developer_state WHERE id=1').fetchone()[0])
-                    return next(f for f in durable['queue_v10'] if f['id'] == exhausted_id)
+                    return next(f for f in durable['queue_v11'] if f['id'] == exhausted_id)
 
                 prior_evidence = durable_feature()
                 project_bytes = (projects / 'exhausted-reviewer/app.py').read_bytes()

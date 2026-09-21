@@ -2666,3 +2666,92 @@ consistency.
   busy rejection, and existing-feature reviewer changes. The real runner boundary
   is `scripts/developer-runner-settings-e2e.py`; its fixture calls do not establish
   account entitlement or production provider availability.
+
+## Developer Auto AI Repair implementation
+
+- The implementation adds a persistent Windows-owned **Auto AI repair** policy beside
+  Auto-run and a per-feature escalation maximum from 1 through 100, defaulting to
+  100. The authenticated `/auto-ai-repair` mutation carries both settings and the
+  expected runner revision; the Swift client requires exact returned values and a
+  one-revision acknowledgement.
+- Each feature snapshots its maximum. Manual and automatic escalations share the
+  existing cumulative counter, and enable/disable cycles do not replenish it. The
+  existing three ordinary repairs run before automatic escalation. The snapshot is
+  also the absolute lifetime AI-escalation cap; once reached, recovery is non-AI.
+- Automatic repair is independent of queue Auto-run, uses the feature's saved model
+  without fallback, runs serially, and may change any admitted project file including
+  tests and configuration. The validation command, prohibited paths, credentials,
+  secret-bearing material, Git internals, and out-of-root paths remain immutable or
+  unavailable.
+- Validation failures, Codex rejections, no-op proposals, and duplicate candidates
+  may continue the loop. Operational failures stop; uncertain application,
+  validation, review, persistence, or publication effects quarantine and never
+  replay automatically.
+- Fresh independent Codex review examines the cumulative feature diff from the
+  earliest baseline and remains mandatory before success, publication, or Auto-run
+  advancement. Reaching the limit preserves manual recovery and never removes or
+  advances the feature.
+- The Developer validation command is immutable as a string, but automatically
+  changed build or test configuration can alter what that command does under the
+  Windows owner account. Auto AI repair does not establish hostile-process or
+  workspace-only effect containment; the UI states that execution boundary.
+- Queue-v11 backup-first migration defaults existing installations to off with a
+  maximum of 100. The automatic lifecycle (`inactive`, `running`, `held`,
+  `limit_reached`, or `quarantined`) and epoch keep late work from restoring
+  eligibility after disable, Stop, or ambiguous restart. Escalation and review
+  evidence capacities are 300 and 104 respectively.
+- `scripts/developer-runner-auto-repair-e2e.py` is the disposable native runner,
+  HTTP, SQLite, filesystem, validation-process, and fixture-model/reviewer proof. A
+  Mac run reports 21 proof keys, including the real 100-call boundary, restart
+  quarantine, and the shared-limit closeout. It is registered as the twelfth script
+  in the cross-host `developer_workflow_e2e` wrapper reached by the Cargo workspace
+  gate. Native Windows, installed-app, visual UI, live-model, hosted, signing,
+  notarization, live-device, publication, and production evidence remain unproven
+  until separately run.
+- A manual escalation admission rejection is durable before it is visible. When the
+  prepare preflight finds the shared cap exhausted, or escalation or review
+  evidence capacity unavailable, it commits the resulting `limit_reached` or
+  `held` lifecycle and plain reason in the same state mutation before the error is
+  returned, and it makes no model call. A rejected prepare therefore never leaves
+  ambiguous or unrecorded admission state behind.
+- Manual and automatic escalation share one per-feature cap: the feature's
+  snapshotted maximum. A manual chat escalation increments the same cumulative
+  counter an automatic attempt must honor, so an earlier manual escalation reduces
+  the automatic budget and can stop it entirely.
+- Once the shared cap is reached, limit recovery uses owner-corrected project bytes
+  and no repair-model inference: the validation-only Resume runs the immutable
+  validation command, then fresh validation evidence and one fresh independent
+  review may approve and complete the feature. No 101st AI escalation exists on
+  that path.
+- Windows-native, installed/visual, signing/notarization, hosted, live-device, and
+  production proof remain separate evidence layers. A passing local or native
+  repository harness never substitutes for any of them.
+- An automatic provider-unavailable completion must persist its terminal evidence
+  and lifecycle atomically: the `unavailable`, `authorization_not_run`, and
+  `application_not_run` escalation records plus the `not_run` review record commit
+  in the same state mutation as the `held` lifecycle and its plain reason. A
+  restart therefore cannot reserve again, replay, or silently relaunch before the
+  owner's explicit Resume; it leaves the shared escalation counter and retained
+  proposal binding exactly as persisted, and only Resume advances the epoch.
+- Restart while an escalation proposal is still preparing fills exactly the three
+  reserved stages as `proposal_interrupted`, `authorization_not_run`, and
+  `application_not_run`, plus a `not_run` review record, identically for manual
+  and automatic reservations. No candidate digest is fabricated for an
+  interrupted proposal, a second recovery of the same proposal is a no-op, and
+  the consumed escalation stays consumed when a fresh attempt is reserved.
+- Protected-input admission reserves bytes with checked per-file and aggregate
+  arithmetic before any allocation or read: held metadata above the 64 MiB
+  per-file bound, a running total above the 64 MiB aggregate, or a size overflow
+  fails before the content buffer is allocated or read, on both the Unix and
+  Windows visitors. The Windows-gated fixture is designed and source-covered
+  to prove this pre-read rejection against a sparse file whose oversized
+  length is metadata only; that claim remains pending native Windows
+  execution. A failed escalation- or
+  review-evidence reservation mutates only the lifecycle and plain reason;
+  `escalation_count`, `escalation_evidence_reserved`, and
+  `review_evidence_reserved` change only after every admission check passes.
+- Proof boundary for this closeout review: the portable Rust unit coverage and
+  the macOS native `developer-runner-auto-repair-e2e.py` run are green. The
+  `#[cfg(windows)]` sparse-file scanner fixture and any native Windows execution
+  of this Auto AI repair boundary remain separate evidence layers, unproven
+  until they are actually run.

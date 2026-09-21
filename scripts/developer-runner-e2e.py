@@ -95,7 +95,9 @@ def main():
             while not (data / 'developer-token').exists() and time.monotonic() < deadline:
                 time.sleep(.05)
             token = (data / 'developer-token').read_text().strip()
-            wait(lambda s: not s['running'])
+            initial = wait(lambda s: not s['running'])
+            assert initial['auto_ai_repair_enabled'] is False
+            assert initial['auto_ai_repair_max_escalations'] == 100
             try:
                 urllib.request.urlopen(f'http://127.0.0.1:{port}/status', timeout=3)
                 raise AssertionError('Unauthenticated status accepted')
@@ -212,8 +214,12 @@ def main():
             assert 'queue' not in durable
             assert 'queue_v2' not in durable
             assert 'queue_v3' not in durable
-            tombstone = next(feature for feature in durable['queue_v10'] if feature['id'] == failed_id)
-            assert all(feature['model_target'] == 'mac' for feature in durable['queue_v10'])
+            assert durable['auto_ai_repair_enabled'] is False
+            assert durable['auto_ai_repair_max_escalations'] == 100
+            tombstone = next(feature for feature in durable['queue_v11'] if feature['id'] == failed_id)
+            assert all(feature['model_target'] == 'mac' for feature in durable['queue_v11'])
+            assert tombstone['auto_ai_repair_limit'] == 100
+            assert tombstone['auto_repair_lifecycle'] == 'inactive'
             assert tombstone['status'] == 'removed'
             assert tombstone['checkpoint'] == 'applied'
             assert tombstone['edits'][0]['path'] == 'result.txt'

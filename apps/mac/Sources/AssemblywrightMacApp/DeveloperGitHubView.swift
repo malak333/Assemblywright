@@ -173,6 +173,16 @@ enum DeveloperGitHubPresentation {
 
   static func startConfirmation(feature: DeveloperRunnerFeature,
     connection: DeveloperGitHubConnection?) -> String {
+    if feature.autoRepairLifecycle == "limit_reached" {
+      let revalidation = "Windows will not call a repair model. It validates the current admitted owner corrections with the frozen validation command, then sends the unchanged feature request and bounded project code for required OpenAI/Codex review. The Auto AI repair escalation cap and used counter are preserved."
+      guard let connection else {
+        return revalidation + " This project is not connected to GitHub, so an approved result stays local and is labeled unpublished."
+      }
+      guard connection.isUsable else {
+        return revalidation + " The saved GitHub destination is invalid; update the connection before revalidating."
+      }
+      return revalidation + " After approval, Windows publishes the exact reviewed commit to \(connection.repositoryUrl) on its own feature branch, opens a pull request into \(connection.baseBranch), and merges only after required GitHub checks pass."
+    }
     let work = "The model on \(feature.modelComputer) prepares \(feature.project). Windows applies changes, runs validation, and sends the feature request and bounded project code to OpenAI/Codex for review."
     guard let connection else {
       return work + " Codex findings can trigger up to three local repairs. This project is not connected to GitHub, so a successful result stays local and is labeled unpublished. Auto-run continues only after validation and reviewer approval."

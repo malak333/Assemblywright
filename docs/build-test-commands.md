@@ -64,6 +64,35 @@ The installed read-only check uses `ASSEMBLYWRIGHT_DEVELOPER_LIVE_CONFIG` and
 `--filter installedWindowsHistoryReopensExactConversationsWithoutSending`.
 It requires saved history and verifies selection without sending messages.
 
+## Developer Auto AI repair
+
+Auto AI repair has focused Rust state-machine coverage, native Swift control and
+projection coverage, and a disposable runner/HTTP/SQLite/filesystem/process E2E:
+
+```sh
+cargo test -p assemblywright-master --bin assemblywright-developer
+cargo build -p assemblywright-master --bin assemblywright-developer
+swift test --disable-sandbox --package-path apps/mac --filter 'DeveloperRunnerTests|DeveloperRunnerClientTests|DeveloperRepairEscalationTests'
+python3 -B scripts/developer-runner-auto-repair-e2e.py --binary target/debug/assemblywright-developer
+```
+
+On Windows use `python` and the native `.exe` path. The fixture harness receipt
+now carries 21 proof keys, including migration/defaults, atomic policy mutation,
+three ordinary repairs before escalation, source/test/configuration application
+with an unchanged validation-command string, review rejection, configured and
+absolute caps, app-independent polling, operational hold, late-result rejection,
+restart quarantine, and the shared-limit closeout. That closeout drives the public
+authenticated routes the Mac app uses: project chat plus an owner-approved manual
+escalation consumes the one shared per-feature escalation cap, a later automatic
+opportunity stops at `limit_reached` at that shared cap without any repair-model
+or reviewer call, the owner then corrects the project bytes directly, and the
+validation-only Resume proceeds without AI through fresh validation and one fresh
+independent review that succeed. It makes exactly 100 automatic model calls at the
+hard cap and asserts there is no 101st. These local/native checks do not prove
+Windows-native or installed-app behavior, rendered visual placement, signing or
+notarization, hosted checks, live-device QA, or production readiness; each
+remains separately recorded evidence.
+
 ## Local Model Selection Focused Validation
 
 ```bash
@@ -1527,6 +1556,7 @@ python3 scripts/developer-runner-planning-e2e.py --binary target/debug/assemblyw
 python3 scripts/developer-runner-model-target-e2e.py --binary target/debug/assemblywright-developer
 python3 scripts/developer-runner-chat-e2e.py --binary target/debug/assemblywright-developer
 python3 scripts/developer-runner-escalation-e2e.py --binary target/debug/assemblywright-developer
+python3 -B scripts/developer-runner-auto-repair-e2e.py --binary target/debug/assemblywright-developer
 python3 scripts/developer-build-tests.py
 python3 scripts/developer-connection-tests.py
 python3 scripts/developer-connection-e2e.py
@@ -1534,10 +1564,10 @@ swift test --disable-sandbox --package-path apps/mac --filter DeveloperRunnerCli
 ./scripts/developer-build.py --build
 ```
 
-The master package integration test `developer_workflow_e2e` invokes all eleven
+The master package integration test `developer_workflow_e2e` invokes all twelve
 native fixture-model HTTP/process scripts: base runner, ordinary repair, independent
-review, planning, model targets, chat, chat history, escalation, settings, GitHub setup,
-and publication. Both the canonical local
+review, planning, model targets, chat, chat history, escalation, settings, Auto AI
+repair, GitHub setup, and publication. Both the canonical local
 release gate and the required Windows distributed gate run that wrapper through
 their existing Cargo workspace tests, using `python3` on Mac and `python` on
 Windows. Swift client tests run with the full Swift package. Use

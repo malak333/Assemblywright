@@ -65,7 +65,13 @@ fn main() {
         .as_array()
         .unwrap()
         .iter()
-        .map(|f| json!({"path":f["path"],"content_sha256":f["content_sha256"]}))
+        .map(|f| {
+            json!({
+                "path": f["path"],
+                "content_sha256": f["content_sha256"],
+                "classification": f["classification"]
+            })
+        })
         .collect();
     std::fs::write(
         std::env::current_exe()

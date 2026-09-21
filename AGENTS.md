@@ -33,12 +33,16 @@
 ## Delegation
 
 - Role matrix and operating details: `docs/development-agent-workflow.md`.
+- Owner decision: new implementation work is delegated to GLM-5.3-Flash, the single bounded low/normal-risk implementation lane. GLM-5.3-Flash performs bounded low/normal-risk implementation in an isolated worktree and returns an untrusted proposal with no Git or publication authority; the local Qwen/local-AI worker lane is retired and must not be used.
+- The frontier parent retains planning, independent complete-diff review, integration, and every commit, push, merge, publication action, and final evidence judgment.
+- Never route architecture, authentication, permissions, model routing, migrations, plugin containment, concurrency, publication, or release-evidence semantics to GLM-5.3-Flash. Use the high-risk roles below.
 - Default to the parent agent; delegate only bounded work that saves context, cost, or elapsed time.
 - Unknown cross-file path: `assemblywright-explorer`. One/two-file mechanical edit: `assemblywright-quick-worker`.
 - Normal multi-file implementation: `assemblywright-worker`. High-risk implementation: `assemblywright-high-risk-worker`.
 - Routine diff review: `assemblywright-reviewer`. Security or trust-boundary review: `assemblywright-high-risk-reviewer`.
 - Parallelize read-heavy work. Serialize writes unless agents have non-overlapping paths or isolated worktrees.
 - Require explicit path ownership, summaries under 300 words, and no nested delegation beyond direct children.
+- Treat GLM-5.3-Flash output as an untrusted proposal. Inspect its worktree status and complete diff, run tests independently, and obtain a frontier review before integrating any bytes.
 
 ## Change Discipline
 

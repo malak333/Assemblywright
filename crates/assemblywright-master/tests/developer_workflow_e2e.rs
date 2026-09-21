@@ -40,12 +40,14 @@ fn supervised_developer_workflow_runs_native_processes_and_recovers_checkpoints(
         "developer-runner-chat-e2e.py",
         "developer-runner-chat-history-e2e.py",
         "developer-runner-escalation-e2e.py",
+        "developer-runner-auto-repair-e2e.py",
         "developer-runner-settings-e2e.py",
         "developer-runner-github-setup-e2e.py",
         "developer-runner-publication-e2e.py",
     ] {
         let mut command = std::process::Command::new(python);
         command
+            .arg("-B")
             .arg(root.join("scripts").join(script))
             .args(["--binary", env!("CARGO_BIN_EXE_assemblywright-developer")]);
         if script.contains("github-setup") || script.contains("publication") {

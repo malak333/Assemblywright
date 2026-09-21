@@ -19,6 +19,11 @@ DISTRIBUTED_DESIGN="docs/distributed-developer-mode-design.md"
 FEATURE_CONVEYOR_DESIGN="docs/feature-conveyor-design.md"
 FULL_MACHINE_ASSEMBLY_LINE_DESIGN="docs/full-machine-assembly-line-design.md"
 AGENT_WORKFLOW="docs/development-agent-workflow.md"
+DEVELOPER_BUILD_DOC="docs/developer-build.md"
+DEVELOPER_BUILD_TESTING_DOC="docs/developer-build-testing.md"
+DEVELOPER_AUTO_REPAIR_DESIGN="docs/developer-auto-ai-repair-design.md"
+DEVELOPER_AUTO_REPAIR_E2E="scripts/developer-runner-auto-repair-e2e.py"
+DEVELOPER_WORKFLOW_E2E="crates/assemblywright-master/tests/developer_workflow_e2e.rs"
 
 IPC_TRANSPORT="crates/assemblywright-core/src/ipc_transport.rs"
 MACOS_CODE_IDENTITY="crates/assemblywright-core/src/macos_code_identity.rs"
@@ -1253,6 +1258,23 @@ require_text "agent workflow explicit closeout verdicts" "$AGENT_WORKFLOW" \
   "state explicit verdicts for documentation and safety"
 
 require_text "build docs local gate" "$BUILD_DOCS" "./scripts/release-local.sh"
+require_file "$DEVELOPER_AUTO_REPAIR_E2E"
+require_text "Developer workflow wrapper runs Auto AI repair E2E" \
+  "$DEVELOPER_WORKFLOW_E2E" '"developer-runner-auto-repair-e2e.py"'
+require_text "local gate reaches Developer workflow wrapper through workspace tests" \
+  "$LOCAL_GATE" "cargo test --workspace"
+require_text "build docs list Developer Auto AI repair E2E" "$BUILD_DOCS" \
+  "python3 -B scripts/developer-runner-auto-repair-e2e.py --binary target/debug/assemblywright-developer"
+require_text "Developer build docs list Auto AI repair E2E" "$DEVELOPER_BUILD_DOC" \
+  "python3 -B scripts/developer-runner-auto-repair-e2e.py --binary target/debug/assemblywright-developer"
+require_text "Developer build testing records Auto AI repair E2E" \
+  "$DEVELOPER_BUILD_TESTING_DOC" "scripts/developer-runner-auto-repair-e2e.py"
+require_text "Auto AI repair design records implemented status" \
+  "$DEVELOPER_AUTO_REPAIR_DESIGN" "Status: implemented in the repository working tree"
+require_text "knowledge base records Auto AI repair implementation" "$KB" \
+  "## Developer Auto AI Repair implementation"
+forbid_text "Auto AI repair design stale implementation status" \
+  "$DEVELOPER_AUTO_REPAIR_DESIGN" "implementation has not started"
 require_text "build docs repository-gate proof controller" "$BUILD_DOCS" \
   "./scripts/repository-gate-proof-controller.sh --run"
 require_text "design repository-gate controller boundary" "$DESIGN" \

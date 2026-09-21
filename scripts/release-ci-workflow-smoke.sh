@@ -35,6 +35,7 @@ for script in developer-runner-e2e.py developer-runner-repair-e2e.py \
   developer-runner-review-e2e.py developer-runner-planning-e2e.py \
   developer-runner-model-target-e2e.py developer-runner-chat-e2e.py \
   developer-runner-chat-history-e2e.py developer-runner-escalation-e2e.py \
+  developer-runner-auto-repair-e2e.py \
   developer-runner-settings-e2e.py developer-runner-github-setup-e2e.py \
   developer-runner-publication-e2e.py; do
   require_file "scripts/$script"
