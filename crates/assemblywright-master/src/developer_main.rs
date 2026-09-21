@@ -9294,7 +9294,7 @@ fn apply_edit_with_parent_opened(
         file.write_all(edit.content.as_bytes())?;
         file.sync_all()?;
         let _ = guards;
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(any(unix, windows)))]
@@ -10459,6 +10459,7 @@ fn admitted_project_snapshot_with_cancellation(
             Ok(directory)
         }
 
+        #[cfg(not(windows))]
         fn validate_direct_recovery_directory(path: &Path) -> Result<()> {
             let metadata = fs::symlink_metadata(path)?;
             if metadata.file_type().is_symlink()
@@ -10568,6 +10569,7 @@ fn admitted_project_snapshot_with_cancellation(
             bail!("Automatic repair recovery refuses a special project entry")
         }
 
+        #[allow(clippy::too_many_arguments)]
         fn visit(
             root: &Path,
             dir: &Path,
@@ -15929,7 +15931,7 @@ mod tests {
             .output()
             .unwrap();
         assert!(cleanup.status.success());
-        let error = result.err().expect("junction must fail closed");
+        let error = result.expect_err("junction must fail closed");
         assert!(error
             .to_string()
             .contains("refuses a Windows reparse point"));
@@ -17888,7 +17890,7 @@ mod tests {
             "failed to remove disposable test junction: {}",
             String::from_utf8_lossy(&cleanup.stderr)
         );
-        let error = result.err().expect("directory junction must fail closed");
+        let error = result.expect_err("directory junction must fail closed");
         assert!(
             error
                 .to_string()
