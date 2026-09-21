@@ -50,6 +50,19 @@ Codex review, rejects prohibited paths and secret-bearing material, and quaranti
 ambiguous effects. Changed bytes or stale state invalidate either authorization.
 See also [`developer-chat-repair-design.md`](developer-chat-repair-design.md).
 
+Developer validation runs in an owned, closed environment: the runner snapshots an
+explicit environment before spawn instead of inheriting ambient state at process
+creation. On Windows the validation child is created with `STARTUPINFOEX` and a
+handle allowlist so only duplicated stdin and log handles are inheritable; it is
+created suspended, assigned to a kill-on-close Job Object, and only then resumed.
+Any cleanup whose completion cannot be confirmed first latches the volatile global
+emergency gates and atomically persists Emergency Pause/quarantine, terminalizes
+pending evidence, and retains the exact tool-workspace revision and live edits for
+owner recovery; a failed persistence keeps the volatile latch. These developer
+checks bound inherited state and descendant lifetime under the owner account. They
+are not production hostile-process containment and stay separate from live-device,
+release, and Windows-hosted proof.
+
 ## Policy Defaults
 
 - One authenticated owner holds all authority. Models and workers may propose,

@@ -5,12 +5,14 @@ from developer_planning_fixture import enqueue_with_plan
 from developer_review_fixture import reviewer_arguments
 
 import argparse
+import base64
 from contextlib import closing
 import hashlib
 import http.server
 import json
 from pathlib import Path
 import re
+import shutil
 import socket
 import sqlite3
 import subprocess
@@ -529,20 +531,46 @@ def main():
                 "proposal generation was interrupted" in item["summary"]]
             assert len(interrupted_reviews) == 1
 
+            descendant_program = (
+                "import time; from pathlib import Path; time.sleep(8); "
+                "Path('validation-descendant-survived').write_text('survived')"
+            )
+            descendant_payload = base64.b64encode(
+                descendant_program.encode("utf-8")).decode("ascii")
+            descendant_launch = (
+                "(subprocess.Popen([sys.executable,'-B','-c',"
+                f"__import__('base64').b64decode('{descendant_payload}').decode('utf-8')]),"
+                "Path('validation-descendant-started').write_text('started'))"
+                if sys.platform == "win32" else "None"
+            )
             sleep_validation = (
-                f'"{sys.executable}" -B -c "from pathlib import Path; import app,time; '
+                f'"{sys.executable}" -B -c "from pathlib import Path; '
+                "import app,subprocess,sys,time; "
+                f"{descendant_launch} if app.VALUE == 1 else None; "
                 "Path('validation-count').open('a').write('x'); "
                 'time.sleep(20) if app.VALUE == 1 else None; assert app.VALUE == 1"'
             )
             validation_id = start_feature("validation-quarantine", sleep_validation)
             validation_counter = projects / "validation-quarantine/validation-count"
+            validation_descendant_started = (
+                projects / "validation-quarantine/validation-descendant-started")
+            validation_descendant_survived = (
+                projects / "validation-quarantine/validation-descendant-survived")
             wait(lambda state: state["running"] and
                 feature(state, validation_id)["checkpoint"] == "escalation_1_applied" and
-                validation_counter.exists() and len(validation_counter.read_text()) >= 5, 50)
+                validation_counter.exists() and len(validation_counter.read_text()) >= 5 and
+                (sys.platform != "win32" or validation_descendant_started.exists()), 50)
             validation_count_before = validation_counter.read_text()
             validation_restarted = restart()
+            validation_project = projects / "validation-quarantine"
+            validation_handle_probe = projects / "validation-quarantine-handle-probe"
+            validation_project.rename(validation_handle_probe)
+            validation_handle_probe.rename(validation_project)
             validation_stopped = wait(lambda state:
                 feature(state, validation_id)["auto_repair_lifecycle"] == "quarantined", 30)
+            if sys.platform == "win32":
+                time.sleep(9)
+                assert not validation_descendant_survived.exists()
             assert feature(validation_restarted, validation_id)["status"] == "failed"
             assert feature(validation_stopped, validation_id)["status"] == "failed"
             assert feature(validation_stopped, validation_id)[
@@ -564,6 +592,8 @@ def main():
                 if call["marker"] == "validation-quarantine"]) == quarantine_calls
             policy(False, 3)
             remove(validation_id)
+            shutil.rmtree(validation_project)
+            assert not validation_project.exists()
 
             policy(True, 3)
             reviewer_calls_baseline = reviewer_call_count()
@@ -807,7 +837,7 @@ def main():
                     "SELECT state FROM developer_state_v2_backup WHERE id=1").fetchone()[0]
             assert backup == legacy
             assert "queue_v11" in durable and "queue_v2" not in durable
-            print(json.dumps({
+            proof = {
                 "native_platform": sys.platform,
                 "migration_defaults_and_atomic_control": True,
                 "enable_after_existing_failure_starts_authorized_repair": True,
@@ -822,6 +852,7 @@ def main():
                 "emergency_rejects_late_proposal_without_replay": True,
                 "clean_pre_effect_restart_continues_with_next_attempt": True,
                 "restart_quarantines_applied_validation_without_replay": True,
+                "validation_project_handles_released_before_cleanup": True,
                 "restart_quarantines_pending_review_without_replay": True,
                 "quarantine_and_limit_reenable_do_not_restart": True,
                 "manual_chat_escalation_consumes_the_shared_feature_counter": True,
@@ -829,7 +860,10 @@ def main():
                 "limit_recovery_revalidates_owner_bytes_without_repair_model": True,
                 "limit_recovery_produces_fresh_validation_and_independent_review": True,
                 "auto_run_arms_and_repairs_each_feature_independently": True,
-            }, sort_keys=True))
+            }
+            if sys.platform == "win32":
+                proof["windows_validation_job_reaps_descendants"] = True
+            print(json.dumps(proof, sort_keys=True))
         finally:
             for event in released.values():
                 event.set()

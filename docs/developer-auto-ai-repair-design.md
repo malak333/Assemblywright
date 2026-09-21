@@ -1,8 +1,9 @@
 # Developer Auto AI Repair
 
-Status: implemented in the repository working tree; focused Mac fixture evidence
-exists, while native Windows, installed-app, visual UI, full-gate, hosted, signing,
-notarization, live-device, and production evidence remain separate.
+Status: implemented in the repository working tree; focused Mac and native
+Windows process evidence exists, while installed-app, visual UI, full-gate,
+hosted, signing, notarization, live-device, and production evidence remain
+separate.
 
 ## Understanding summary
 
@@ -172,7 +173,12 @@ project. This Developer runner has no hostile-process or external-effect contain
 for that process. The Auto AI repair control is therefore an explicit acceptance of
 the same owner-account execution risk as existing Developer validation, amplified
 by unattended configuration edits. The UI and documentation must state this; no
-production-sandbox or workspace-only effect claim is permitted.
+production-sandbox or workspace-only effect claim is permitted. Within that
+boundary validation still runs in an owned, closed environment: the runner captures
+an explicit environment snapshot before spawn, and on Windows creates the child
+with `STARTUPINFOEX` so only duplicated stdin and log handles are inheritable,
+starting it suspended, assigning the kill-on-close Job Object, and only then
+resuming it.
 
 The three ordinary repairs deliberately retain their current narrower tool and
 protected-test restrictions. The owner-approved broader any-project-file authority
@@ -201,6 +207,11 @@ secret-bearing project material is never admitted to the repair packet.
   first persist intent and advance the feature's automatic-repair epoch, then signal
   active work. Completion from the prior epoch is rejected. Applied bytes and
   evidence remain preserved; unconfirmed termination enters quarantine.
+- Validation cleanup whose completion cannot be confirmed first latches the
+  volatile global emergency gates and atomically persists Emergency
+  Pause/quarantine while terminalizing pending evidence and retaining the exact
+  tool-workspace revision and live edits for owner recovery. A persistence failure
+  keeps the volatile latch, and the quarantine never replays automatically.
 - A durably ready and unapplied proposal may continue only when its digest and
   every bound byte still match.
 - A proposal-generation call interrupted before any write is recorded as
@@ -283,17 +294,33 @@ an unchanged validation-command string, review-rejection continuation, configure
 and absolute caps including exactly 100 automatic calls with no 101st call,
 app-independent polling, operational hold, disable/Stop late-result rejection,
 clean pre-effect restart, and validation/review restart quarantine without replay.
-Its shared-limit scenario drives the public authenticated routes the Mac app uses:
+It also exercises the project-rename cleanup probe cross-platform. Native
+Windows execution has now completed in the isolated MIKE-PC worktree
+`C:\Users\mike\Codex\Assemblywright-auto-ai-proof-2` at exact commit
+`04a9ddd7f0f99e7fb7f0cd83cb9602360a9e2743`: the native Windows Developer binary
+suite passed 192 tests with 0 failures and 1 intentionally ignored, the focused
+Windows handle-exclusion test passed, the native Windows Auto AI repair E2E
+exited 0 with every printed proof flag true including
+`validation_project_handles_released_before_cleanup` and
+`windows_validation_job_reaps_descendants`, and the native Windows chat E2E
+exited 0 including isolated reparse-point fail-closed cleanup. That run
+establishes the previously pending Windows directory-handle release and
+delayed-descendant kill-on-close Job proof, plus the native Windows chat reparse
+cleanup run, for that exact commit and worktree. Its shared-limit scenario
+drives the public authenticated routes the Mac app uses:
 project chat plus an owner-approved manual escalation consumes the one shared
 per-feature cap; a later automatic opportunity stops at `limit_reached` at that
 cap without any repair-model or reviewer call; the owner corrects the project
 bytes directly; and the validation-only Resume proceeds without AI through fresh
-validation and one fresh independent review that succeed. Fixture results do not
-prove live model quality, account entitlement, Windows-native or installed-app
-behavior, rendered visual placement, Windows Job behavior, signing or notarization,
-hosted checks, live-device QA, or production readiness. Native Windows and visual
-macOS validation have not yet been run for this implementation and remain separate
-evidence layers.
+validation and one fresh independent review that succeed. Fixture and
+deterministic-fixture results do not prove live model quality, account
+entitlement, installed-app behavior, rendered visual placement, signing or
+notarization, hosted checks, live-device QA, or production readiness; visual
+macOS validation also remains a separate evidence layer. Hosted exact-commit
+checks, installed-app UI, visual UI, signing, notarization, live-device
+behavior, deployment, and production readiness remain separately reportable and
+unproven. Running on the owner's MIKE-PC machine is not live Windows deployment
+proof, and hosted Windows success is not claimed by this repository evidence.
 
 ## Risks acknowledged
 

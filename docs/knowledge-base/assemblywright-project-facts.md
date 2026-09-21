@@ -62,6 +62,41 @@ reproduced zero admitted files with the raw alias and passed all 44 developer te
 after canonicalizing the fixture root. Preserve the containment comparison rather
 than relaxing it to accommodate a test-only path mismatch.
 
+## Developer Validation Containment
+
+- Developer validation runs in an owned, closed environment: the runner captures an
+  explicit environment snapshot before spawn, so a concurrent ambient environment
+  change cannot alter the child between policy validation and process creation.
+- On Windows the validation child is created with `STARTUPINFOEX` plus a
+  `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, so only duplicated stdin and log handles are
+  inheritable instead of every inheritable handle under plain `STARTF_USESTDHANDLES`.
+  The process is created suspended, assigned to a kill-on-close Job Object, and only
+  then resumed.
+- Any cleanup whose completion cannot be confirmed first latches the volatile global
+  emergency gates, then atomically persists Emergency Pause/quarantine while
+  terminalizing pending evidence and retaining the exact tool-workspace revision and
+  live edits for owner recovery. A persistence failure keeps the volatile latch; the
+  feature is quarantined at checkpoint `validation_cleanup_unconfirmed` and never
+  replays automatically.
+- The native Auto AI repair harness exercises the project-rename cleanup probe
+  cross-platform. Native Windows execution completed in the isolated MIKE-PC
+  worktree `C:\Users\mike\Codex\Assemblywright-auto-ai-proof-2` at exact commit
+  `04a9ddd7f0f99e7fb7f0cd83cb9602360a9e2743`: the native Windows Developer
+  binary suite passed 192 tests with 0 failures and 1 intentionally ignored, the
+  focused Windows handle-exclusion test passed, the native Windows Auto AI
+  repair E2E exited 0 with every printed proof flag true including
+  `validation_project_handles_released_before_cleanup` and
+  `windows_validation_job_reaps_descendants`, and the native Windows chat E2E
+  exited 0 including isolated reparse-point fail-closed cleanup. That run
+  establishes the previously pending Windows directory-handle release and
+  delayed-descendant kill-on-close Job proof plus the native Windows chat
+  reparse cleanup run for that exact commit and worktree. It establishes neither
+  hosted PR checks nor installed-app, visual, signing, notarization,
+  live-device, deployment, or production proof; Mac fixture success and
+  non-Windows/generic hosted checks are not substitutes, running on MIKE-PC is
+  never live Windows deployment proof, and hosted Windows evidence remains
+  pending.
+
 These notes capture durable facts for future agents working on this repository.
 
 ## Developer GitHub Publication
@@ -2504,6 +2539,11 @@ Full-machine target phase: planning/creation containment has bounded native Wind
   validation parent and descendant exist, then verify checkpointed restart.
   Windows `cmd.exe` also needs canonical local `\\?\C:\` working directories
   normalized to drive paths; this developer launcher does not use UNC workspaces.
+- Windows `cmd.exe` can inject reserved hidden pseudo-environment entries such as
+  `=ExitCode` and `=ExitCodeAscii`. An owned child-environment snapshot must omit
+  those unusable pseudo entries while preserving valid per-drive current-directory
+  entries such as `=C:`. Explicit caller-supplied environment names remain strict
+  and must not use the reserved `=...` namespace.
 - Unit coverage and native E2E coverage serve different boundaries. Use Rust
   state/file tests, deterministic Swift URLSession tests, and disposable native
   HTTP/process tests on both Mac and Windows. The fixture-model tests do not
@@ -2705,9 +2745,10 @@ consistency.
   Mac run reports 21 proof keys, including the real 100-call boundary, restart
   quarantine, and the shared-limit closeout. It is registered as the twelfth script
   in the cross-host `developer_workflow_e2e` wrapper reached by the Cargo workspace
-  gate. Native Windows, installed-app, visual UI, live-model, hosted, signing,
-  notarization, live-device, publication, and production evidence remain unproven
-  until separately run.
+  gate. Installed-app and visual UI, live-model quality and account
+  entitlement, hosted exact-commit/PR checks, signing and notarization,
+  live-device, publication and deployment, and production readiness remain
+  unproven until separately run.
 - A manual escalation admission rejection is durable before it is visible. When the
   prepare preflight finds the shared cap exhausted, or escalation or review
   evidence capacity unavailable, it commits the resulting `limit_reached` or

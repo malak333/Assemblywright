@@ -11,6 +11,7 @@ import http.server
 import json
 from pathlib import Path
 import socket
+import stat
 import struct
 import subprocess
 import sys
@@ -47,6 +48,60 @@ def png(width, height, fill=b'\x7f', compression=6):
 def attachment(name, media_type, content):
     return {'name': name, 'media_type': media_type,
         'data_base64': base64.b64encode(content).decode()}
+
+
+def is_reparse_entry(path):
+    """True when a directory entry itself is a symlink or Windows reparse point."""
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return False
+    if sys.platform == 'win32':
+        return bool(info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+    return stat.S_ISLNK(info.st_mode)
+
+
+def assert_ordinary_tree(root, stage):
+    """Fail loudly unless every entry under `root` is ordinary, never a link."""
+    assert root.is_dir() and not is_reparse_entry(root), (stage, str(root))
+    for path in sorted(root.rglob('*')):
+        assert not is_reparse_entry(path), (stage, 'unexpected reparse entry', str(path))
+
+
+def cmd_windows_builtin(argv, check=False):
+    """Run one cmd.exe builtin with Python-owned quoting, never /c re-parsing.
+
+    The command is built from an argv-like list with subprocess.list2cmdline,
+    so every TEMP or project path is quoted exactly once by Python's Windows
+    quoting facility instead of ad-hoc string handling of uncontrolled path
+    text. The quoted command is passed as one single command string after
+    `cmd.exe /d /s /c` with shell=False: /d skips AutoRun, /s strips exactly
+    the fixed outer quote pair, and /c preserves the mklink /J and rmdir
+    junction semantics, so paths containing spaces stay single Windows
+    arguments. check=True fails loudly with the captured stderr.
+    """
+    assert sys.platform == 'win32', 'cmd.exe builtin requires Windows: ' + repr(argv)
+    command = subprocess.list2cmdline([str(part) for part in argv])
+    completed = subprocess.run('cmd.exe /d /s /c "' + command + '"',
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if check:
+        assert completed.returncode == 0, (command, completed.returncode,
+            completed.stdout.decode(errors='replace'), completed.stderr.decode(errors='replace'))
+    return completed
+
+
+def remove_reparse_entry(path):
+    """Exactly remove one symlink or Windows junction itself, never its target."""
+    if sys.platform == 'win32':
+        assert is_reparse_entry(path), 'expected a Windows reparse point: ' + str(path)
+        cleanup = cmd_windows_builtin(['rmdir', path])
+        assert cleanup.returncode == 0, ('rmdir', str(path), cleanup.returncode,
+            cleanup.stderr.decode(errors='replace'))
+    else:
+        assert is_reparse_entry(path), 'expected a symlink: ' + str(path)
+        path.unlink()
+    assert not is_reparse_entry(path) and not path.exists(), \
+        'reparse fixture survived removal: ' + str(path)
 
 
 def main():
@@ -174,21 +229,22 @@ def main():
         (outside / 'secret.txt').write_text('OUTSIDE_PRIVATE_SENTINEL')
         link_created = False
         nested_link_created = False
+        reparse_project = reparse_link = None
         try:
             (projects / 'escape').symlink_to(outside, target_is_directory=True)
             link_created = True
         except OSError:
             if sys.platform == 'win32':
-                link_created = subprocess.run(['cmd', '/c', 'mklink', '/J', str(projects / 'escape'), str(outside)],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+                cmd_windows_builtin(['mklink', '/J', projects / 'escape', outside], check=True)
+                link_created = True
         try:
             (projects / 'alpha' / 'escape').symlink_to(outside, target_is_directory=True)
             nested_link_created = True
         except OSError:
             if sys.platform == 'win32':
-                nested_link_created = subprocess.run(['cmd', '/c', 'mklink', '/J',
-                    str(projects / 'alpha' / 'escape'), str(outside)],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+                cmd_windows_builtin(['mklink', '/J', projects / 'alpha' / 'escape', outside],
+                    check=True)
+                nested_link_created = True
         if sys.platform == 'win32':
             assert link_created and nested_link_created, 'Windows junction coverage requires both escape fixtures'
         state = root / 'state'
@@ -308,6 +364,60 @@ def main():
             assert api('chat/projects')['projects'] == ['alpha', 'beta']
             for invalid in ('../outside', 'missing') + (('escape',) if link_created else ()):
                 rejected('chat?project=' + urllib.parse.quote(invalid, safe=''))
+
+            # The Windows reparse-point case stays a real fail-closed product
+            # proof, isolated exactly like the planning E2E: it runs in a
+            # dedicated throwaway project, must fail before any model call, and
+            # its reparse fixture is removed exactly before positive generation.
+            if sys.platform == 'win32':
+                reparse_id = str(uuid.uuid4())
+                reparse_project = projects / 'reparse-negative'
+                reparse_project.mkdir()
+                reparse_link = reparse_project / 'escape'
+                cmd_windows_builtin(['mklink', '/J', reparse_link, outside], check=True)
+                assert is_reparse_entry(reparse_link), reparse_link
+                prior_auto_run = api()['auto_run']
+                control('auto_run', enabled=False)
+                control('enqueue', id=reparse_id, project='reparse-negative',
+                    instruction='Reject the unsafe project alias', model_target='windows',
+                    validation='"' + sys.executable + '" -B -c "raise SystemExit(0)"')
+                control('start', expected_feature_id=reparse_id, expected_model_target='windows',
+                    expected_status='queued', expected_checkpoint='not_started')
+                reparse_failed = wait('status', lambda value: not value['running'] and any(
+                    item['id'] == reparse_id and item['status'] == 'failed'
+                    for item in value['queue']))
+                reparse_state = next(item for item in reparse_failed['queue']
+                    if item['id'] == reparse_id)
+                assert reparse_state['message'] == \
+                    'Automatic repair project context refuses a Windows reparse point', reparse_state
+                endpoint_counts = {'windows': len(fixture['calls']),
+                    'mac_feature': len(fixture['mac_calls']),
+                    'mac_chat': len(fixture['mac_chat_calls'])}
+                assert not any(endpoint_counts.values()), \
+                    ('Windows reparse project must fail closed before any model call',
+                    endpoint_counts)
+                control('remove', id=reparse_id)
+                wait('status', lambda value: all(
+                    item['id'] != reparse_id for item in value['queue']))
+                control('auto_run', enabled=prior_auto_run)
+                assert api()['auto_run'] == prior_auto_run
+                remove_reparse_entry(reparse_link)
+                reparse_project.rmdir()
+                assert not reparse_project.exists()
+                assert (outside / 'secret.txt').read_text() == 'OUTSIDE_PRIVATE_SENTINEL'
+
+            # Every reparse fixture is now gone from positive surfaces: remove
+            # the remaining negative links exactly, then prove the shared alpha
+            # project and the whole workspace hold only ordinary entries before
+            # any later positive chat or feature generation begins.
+            if link_created:
+                remove_reparse_entry(projects / 'escape')
+            if nested_link_created:
+                remove_reparse_entry(projects / 'alpha' / 'escape')
+            assert_ordinary_tree(projects / 'alpha',
+                'positive alpha project before later generation')
+            assert_ordinary_tree(projects, 'positive generation workspace isolation')
+
             before_files, before_queue = files(), api()['queue']
             request, admitted = ask()
             assert admitted['running'] and admitted['request_id'] == request['id']
@@ -550,23 +660,23 @@ def main():
             ask('offline Windows')
             assert complete()['error'] and len(fixture['mac_calls']) == prior_mac_calls
             assert files() == before_files
-            print('PASS: authenticated project chat, explicit Mac/Windows selection, grounding, read-only files/queue, context admission, history, serialization, cancellation, emergency, and restart')
+            print('PASS: authenticated project chat, explicit Mac/Windows selection, grounding, read-only files/queue, context admission, history, serialization, cancellation, emergency, restart, and isolated reparse-point fail-closed cleanup')
         finally:
             release.set()
             terminate()
             output.close()
             for server in (windows, mac):
                 server.shutdown(); server.server_close()
-            if link_created and (projects / 'escape').exists():
-                if (projects / 'escape').is_symlink():
-                    (projects / 'escape').unlink()
-                else:
-                    (projects / 'escape').rmdir()
-            if nested_link_created and (projects / 'alpha' / 'escape').exists():
-                if (projects / 'alpha' / 'escape').is_symlink():
-                    (projects / 'alpha' / 'escape').unlink()
-                else:
-                    (projects / 'alpha' / 'escape').rmdir()
+            for created, path in ((link_created, projects / 'escape'),
+                    (nested_link_created, projects / 'alpha' / 'escape')):
+                if created and is_reparse_entry(path):
+                    remove_reparse_entry(path)
+            if reparse_link is not None and is_reparse_entry(reparse_link):
+                remove_reparse_entry(reparse_link)
+            if reparse_project is not None and reparse_project.is_dir():
+                if not any(reparse_project.iterdir()):
+                    reparse_project.rmdir()
+                    assert not reparse_project.exists()
 
 
 if __name__ == '__main__':

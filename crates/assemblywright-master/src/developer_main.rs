@@ -2,6 +2,7 @@
 mod developer_chat;
 mod developer_github_setup;
 mod developer_planning;
+mod developer_process;
 mod developer_publication;
 mod developer_review;
 mod developer_settings;
@@ -23,14 +24,12 @@ use std::{
     fs,
     io::Read as _,
     path::{Component, Path, PathBuf},
-    process::Stdio,
     sync::{
         atomic::{AtomicBool, AtomicU8, Ordering},
         Arc, Mutex,
     },
     time::Duration,
 };
-use tokio::process::Command;
 use uuid::Uuid;
 
 use assemblywright_master::current_time_ms;
@@ -85,6 +84,10 @@ struct RepairableValidationFailure(String);
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 struct RepairableReviewRejection(String);
+
+#[derive(Debug, thiserror::Error)]
+#[error("Could not confirm validation termination; review processes before clearing Emergency Pause: {0}")]
+struct UnconfirmedTermination(String);
 
 struct ToolFeatureOutcome {
     edits: Vec<Edit>,
@@ -1961,6 +1964,85 @@ impl Engine {
     }
     fn cancelled(&self) -> bool {
         self.cancellation.load(Ordering::SeqCst) != 0
+    }
+
+    fn quarantine_unconfirmed_validation_cleanup(
+        &self,
+        feature_id: &str,
+        candidate_evidence: Option<(u64, &[Edit])>,
+    ) -> Result<()> {
+        let _effect_guard = self
+            .effect_gate
+            .lock()
+            .map_err(|_| anyhow!("effect gate failed"))?;
+        // Cleanup ambiguity is itself an emergency boundary. Latch every
+        // process-local admission gate before persistence so a failed database
+        // write cannot reopen the runner while a validation process may live.
+        self.repair_loop_authorized.store(false, Ordering::SeqCst);
+        self.cancellation.fetch_max(2, Ordering::SeqCst);
+        self.publication_cancellation.fetch_max(2, Ordering::SeqCst);
+        self.tool_cancellation.store(true, Ordering::SeqCst);
+
+        let summary = "Validation process-tree cleanup could not be confirmed. Emergency Pause is active; inspect and terminate any remaining validation processes before clearing it. The feature is quarantined and will not replay automatically.";
+        let persisted = self.change(|state| {
+            state.emergency_paused = true;
+            let binding_revision = state.revision + 1;
+            let current = state
+                .queue
+                .iter_mut()
+                .find(|candidate| candidate.id == feature_id)
+                .context("feature missing")?;
+            if current.escalation_pending {
+                finish_escalation_application(
+                    current,
+                    binding_revision,
+                    "interrupted",
+                    summary,
+                )?;
+            }
+            if let Some(pending) = current.review_pending.as_ref() {
+                let attempt = pending.attempt;
+                interrupt_pending_review(current, summary)?;
+                if current.checkpoint != format!("review_{attempt}_interrupted") {
+                    bail!("Interrupted validation review evidence was not durably terminalized");
+                }
+            }
+            if let Some((workspace_revision, live_edits)) = candidate_evidence {
+                current.tool_workspace_revision = workspace_revision;
+                if !live_edits.is_empty() {
+                    current.edits = Some(merge_review_edits(
+                        current.edits.as_deref().unwrap_or_default(),
+                        live_edits,
+                    )?);
+                }
+            }
+            current.status = "failed".into();
+            current.checkpoint = "validation_cleanup_unconfirmed".into();
+            current.message = summary.into();
+            current.repair_pending = false;
+            current.last_failure_kind = "operational".into();
+            set_auto_repair_lifecycle(
+                current,
+                "quarantined",
+                "Validation cleanup is unconfirmed. Emergency Pause blocks all work; inspect remaining processes before clearing it.",
+            )?;
+            for session in &mut state.planning_sessions {
+                invalidate_pending(
+                    session,
+                    "Emergency Pause followed unconfirmed validation cleanup; retry only after process inspection and clearing the pause.",
+                )?;
+            }
+            Ok(())
+        });
+
+        self.cancel_planning_call(true);
+        self.cancel_escalation_call(true);
+        self.chat.cancel_for_emergency();
+        self.tools.cancel_for_emergency();
+        if let Ok(mut recovery) = self.planning_completion_recovery.lock() {
+            *recovery = None;
+        }
+        persisted
     }
 
     fn emergency_paused(&self, state: &Snapshot) -> bool {
@@ -5071,6 +5153,15 @@ impl Engine {
             };
             let result = self.run_feature(&feature).await;
             drop(active_inference_lease);
+            if result
+                .as_ref()
+                .is_err_and(|error| error.downcast_ref::<UnconfirmedTermination>().is_some())
+            {
+                // validate_command already performed the fail-closed emergency
+                // transition. Preserve its cleanup ambiguity without allowing a
+                // later cancellation/evidence write to replace it.
+                return result;
+            }
             if self.cancelled() {
                 self.change(|state| {
                     let current = state
@@ -5078,7 +5169,10 @@ impl Engine {
                         .iter_mut()
                         .find(|candidate| candidate.id == feature.id)
                         .context("feature missing")?;
-                    if automatic_post_apply_is_ambiguous(current)
+                    if current.checkpoint == "validation_cleanup_unconfirmed" {
+                        // validate_command already durably engaged Emergency Pause
+                        // and quarantined this exact cleanup ambiguity.
+                    } else if automatic_post_apply_is_ambiguous(current)
                         && (feature.auto_repair_lifecycle == "running"
                             || current.auto_repair_lifecycle == "quarantined")
                     {
@@ -5387,7 +5481,15 @@ impl Engine {
                 )?;
                 return Err(error);
             }
-            match self.validate_command(feature, project).await {
+            match self
+                .validate_command_with_candidate_evidence(
+                    feature,
+                    project,
+                    workspace_revision,
+                    &edits,
+                )
+                .await
+            {
                 Ok(_) => {
                     return Ok(ToolFeatureOutcome {
                         edits,
@@ -5402,14 +5504,12 @@ impl Engine {
                         .downcast_ref::<RepairableValidationFailure>()
                         .is_some() => {}
                 Err(error) => {
-                    self.record_tool_candidate_failure(
+                    return self.finish_environment_preparation_validation_error(
                         &feature.id,
                         workspace_revision,
                         &edits,
-                        false,
-                        &error.to_string(),
-                    )?;
-                    return Err(error);
+                        error,
+                    );
                 }
             }
         }
@@ -5555,6 +5655,29 @@ impl Engine {
             )
         })
         .map(|_| ())
+    }
+
+    fn finish_environment_preparation_validation_error(
+        &self,
+        feature_id: &str,
+        workspace_revision: u64,
+        live_edits: &[Edit],
+        error: anyhow::Error,
+    ) -> Result<ToolFeatureOutcome> {
+        if error.downcast_ref::<UnconfirmedTermination>().is_some() {
+            // validate_command has already latched and attempted to persist the
+            // global Emergency Pause. Do not let a secondary candidate-evidence
+            // write replace the cleanup ambiguity or its owner action.
+            return Err(error);
+        }
+        self.record_tool_candidate_failure(
+            feature_id,
+            workspace_revision,
+            live_edits,
+            false,
+            &error.to_string(),
+        )?;
+        Err(error)
     }
 
     async fn complete_reviewed_feature(&self, feature_id: &str) -> Result<()> {
@@ -6595,28 +6718,49 @@ impl Engine {
     }
 
     async fn validate_command(&self, feature: &Feature, project: &Path) -> Result<String> {
+        let result = self.validate_command_inner(feature, project).await;
+        self.fail_closed_validation_result(&feature.id, None, result)
+    }
+
+    async fn validate_command_with_candidate_evidence(
+        &self,
+        feature: &Feature,
+        project: &Path,
+        workspace_revision: u64,
+        live_edits: &[Edit],
+    ) -> Result<String> {
+        let result = self.validate_command_inner(feature, project).await;
+        self.fail_closed_validation_result(
+            &feature.id,
+            Some((workspace_revision, live_edits)),
+            result,
+        )
+    }
+
+    fn fail_closed_validation_result<T>(
+        &self,
+        feature_id: &str,
+        candidate_evidence: Option<(u64, &[Edit])>,
+        result: Result<T>,
+    ) -> Result<T> {
+        match result {
+            Err(error) if error.downcast_ref::<UnconfirmedTermination>().is_some() => {
+                if let Err(persistence_error) =
+                    self.quarantine_unconfirmed_validation_cleanup(feature_id, candidate_evidence)
+                {
+                    return Err(error.context(format!(
+                        "Emergency Pause persistence also failed: {persistence_error:#}"
+                    )));
+                }
+                Err(error)
+            }
+            result => result,
+        }
+    }
+
+    async fn validate_command_inner(&self, feature: &Feature, project: &Path) -> Result<String> {
         let log_path = self.data.join(format!("{}.log", feature.id));
         let log = fs::File::create(&log_path)?;
-        #[cfg(windows)]
-        let mut command = {
-            use std::os::windows::process::CommandExt;
-            let mut c = Command::new("cmd.exe");
-            c.args(["/d", "/s", "/c"]);
-            c.as_std_mut()
-                .raw_arg(format!("\"{}\"", feature.validation));
-            c
-        };
-        #[cfg(not(windows))]
-        let mut command = {
-            let mut c = Command::new("/bin/sh");
-            c.args(["-c", &feature.validation]);
-            c
-        };
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            command.as_std_mut().process_group(0);
-        }
         let limit_unadmitted_binding = if feature.checkpoint == "auto_repair_limit_revalidating" {
             let current =
                 admitted_project_snapshot_with_cancellation(project, Some(&self.cancellation))?;
@@ -6640,7 +6784,8 @@ impl Engine {
         } else {
             None
         };
-        configure_project_environment(&mut command, project)?;
+        let mut environment = developer_process::ValidationEnvironment::capture()?;
+        configure_project_environment(&mut environment, project)?;
         let spawn_guard = self
             .effect_gate
             .lock()
@@ -6691,25 +6836,52 @@ impl Engine {
                 }
             }
         }
-        let mut child = command
-            .current_dir(project)
-            .stdin(Stdio::null())
-            .stdout(log.try_clone()?)
-            .stderr(log)
-            .kill_on_drop(true)
-            .spawn()?;
+        let mut child = developer_process::spawn(&feature.validation, project, log, &environment)
+            .map_err(|error| {
+            if error.is::<developer_process::CleanupUnconfirmed>() {
+                anyhow!(UnconfirmedTermination(format!("{error:#}")))
+            } else {
+                error
+            }
+        })?;
         drop(spawn_guard);
-        let pid = child.id().context("Validation process has no ID")?;
         let started = std::time::Instant::now();
         loop {
+            let log_size = match fs::metadata(&log_path) {
+                Ok(metadata) => metadata.len(),
+                Err(error) => {
+                    child
+                        .terminate()
+                        .await
+                        .map_err(|cleanup| UnconfirmedTermination(format!("{cleanup:#}")))?;
+                    return Err(error).context("read validation log size after confirmed cleanup");
+                }
+            };
             if self.cancelled()
                 || started.elapsed() > Duration::from_secs(900)
-                || fs::metadata(&log_path)?.len() > 2 * 1024 * 1024
+                || log_size > 2 * 1024 * 1024
             {
-                terminate_tree(pid, &mut child).await?;
+                child
+                    .terminate()
+                    .await
+                    .map_err(|error| UnconfirmedTermination(format!("{error:#}")))?;
                 bail!("Validation stopped or exceeded its time/output limit");
             }
-            if let Some(status) = child.try_wait()? {
+            let observed = match child.try_wait() {
+                Ok(status) => status,
+                Err(error) => {
+                    child
+                        .terminate()
+                        .await
+                        .map_err(|cleanup| UnconfirmedTermination(format!("{cleanup:#}")))?;
+                    return Err(error).context("poll validation process after confirmed cleanup");
+                }
+            };
+            if let Some(status) = observed {
+                child
+                    .terminate()
+                    .await
+                    .map_err(|error| UnconfirmedTermination(format!("{error:#}")))?;
                 let terminal_limit_binding = if limit_unadmitted_binding.is_some() {
                     Some(self.refresh_limit_recovery_volatile_binding(feature, project)?)
                 } else {
@@ -6792,31 +6964,34 @@ impl Engine {
     }
 }
 
-fn configure_project_environment(command: &mut Command, project: &Path) -> Result<()> {
-    let environment = project.join(".venv");
-    if !environment.exists() {
+fn configure_project_environment(
+    process_environment: &mut developer_process::ValidationEnvironment,
+    project: &Path,
+) -> Result<()> {
+    let virtual_environment = project.join(".venv");
+    if !virtual_environment.exists() {
         return Ok(());
     }
-    let environment_metadata = fs::symlink_metadata(&environment)?;
+    let environment_metadata = fs::symlink_metadata(&virtual_environment)?;
     if environment_metadata.file_type().is_symlink() || !environment_metadata.is_dir() {
         bail!("Project .venv must be an ordinary directory");
     }
-    let environment = fs::canonicalize(environment)?;
+    let virtual_environment = fs::canonicalize(virtual_environment)?;
     let expected_environment = project.join(".venv");
-    if environment != expected_environment || !environment.starts_with(project) {
+    if virtual_environment != expected_environment || !virtual_environment.starts_with(project) {
         bail!("Project .venv leaves or redirects within the project");
     }
     #[cfg(windows)]
-    let bin = environment.join("Scripts");
+    let bin = virtual_environment.join("Scripts");
     #[cfg(not(windows))]
-    let bin = environment.join("bin");
+    let bin = virtual_environment.join("bin");
     let bin_metadata =
         fs::symlink_metadata(&bin).context("Project .venv has no interpreter bin")?;
     if bin_metadata.file_type().is_symlink() || !bin_metadata.is_dir() {
         bail!("Project .venv interpreter bin must be an ordinary directory");
     }
     let bin = fs::canonicalize(bin)?;
-    if !bin.starts_with(&environment) {
+    if !bin.starts_with(&virtual_environment) {
         bail!("Project .venv interpreter bin leaves the environment");
     }
     #[cfg(windows)]
@@ -6829,11 +7004,11 @@ fn configure_project_environment(command: &mut Command, project: &Path) -> Resul
         bail!("Project .venv Python interpreter must resolve to a file");
     }
     let mut paths = vec![bin];
-    if let Some(existing) = std::env::var_os("PATH") {
+    if let Some(existing) = process_environment.get(std::ffi::OsStr::new("PATH")) {
         paths.extend(std::env::split_paths(&existing));
     }
-    command.env("PATH", std::env::join_paths(paths)?);
-    command.env("VIRTUAL_ENV", environment);
+    process_environment.set("PATH", std::env::join_paths(paths)?)?;
+    process_environment.set("VIRTUAL_ENV", virtual_environment)?;
     Ok(())
 }
 
@@ -6841,7 +7016,10 @@ fn require_project_virtual_environment(project: &Path) -> Result<()> {
     if !project.join(".venv").exists() {
         bail!("Dependency preparation did not create the required project-local .venv");
     }
-    configure_project_environment(&mut Command::new("venv-structure-check"), project)
+    configure_project_environment(
+        &mut developer_process::ValidationEnvironment::capture()?,
+        project,
+    )
 }
 
 struct RepairStage {
@@ -10749,22 +10927,6 @@ fn admitted_project_snapshot_with_cancellation(
         })
     }
 }
-async fn terminate_tree(pid: u32, child: &mut tokio::process::Child) -> Result<()> {
-    #[cfg(windows)]
-    {
-        let _ = Command::new("taskkill.exe")
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .output()
-            .await?;
-    }
-    #[cfg(unix)]
-    unsafe {
-        libc::kill(-(pid as i32), libc::SIGKILL);
-    }
-    let _ = child.kill().await;
-    let _ = child.wait().await;
-    Ok(())
-}
 fn authorize(engine: &Engine, headers: &HeaderMap) -> Result<()> {
     if headers.get("authorization").and_then(|h| h.to_str().ok())
         != Some(format!("Bearer {}", engine.token).as_str())
@@ -13619,6 +13781,161 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn unconfirmed_validation_cleanup_durably_pauses_and_quarantines_all_work() {
+        let (_dir, engine) = control_test_engine();
+        let feature_id = engine.database.lock().unwrap().state.queue[0].id.clone();
+        engine
+            .change(|state| {
+                let feature = &mut state.queue[0];
+                feature.status = "running".into();
+                feature.checkpoint = "repair_1_applied".into();
+                feature.repair_attempts = 1;
+                feature.repair_pending = true;
+                set_auto_repair_lifecycle(feature, "running", "fixture repair is running")?;
+                Ok(())
+            })
+            .unwrap();
+        engine.repair_loop_authorized.store(true, Ordering::SeqCst);
+
+        engine
+            .quarantine_unconfirmed_validation_cleanup(&feature_id, None)
+            .unwrap();
+
+        {
+            let database = engine.database.lock().unwrap();
+            assert!(database.state.emergency_paused);
+            let feature = &database.state.queue[0];
+            assert_eq!(feature.status, "failed");
+            assert_eq!(feature.checkpoint, "validation_cleanup_unconfirmed");
+            assert_eq!(feature.last_failure_kind, "operational");
+            assert_eq!(feature.auto_repair_lifecycle, "quarantined");
+            assert!(!feature.repair_pending);
+            assert!(feature.message.contains("Emergency Pause is active"));
+            assert!(feature.message.contains("will not replay automatically"));
+        }
+        assert_eq!(engine.cancellation.load(Ordering::SeqCst), 2);
+        assert_eq!(engine.publication_cancellation.load(Ordering::SeqCst), 2);
+        assert!(engine.tool_cancellation.load(Ordering::SeqCst));
+        assert!(!engine.repair_loop_authorized.load(Ordering::SeqCst));
+        assert!(engine.start(None, None, None, None).is_err());
+        assert!(engine.repair(&feature_id, 1).is_err());
+        assert!(engine
+            .planning_mutate(json!({
+                "action":"start",
+                "feature_id":"123faf2a-6a8e-411b-af3e-267d9ea49747",
+                "request_id":"b35972e8-b6a8-4cb9-96fa-cc7a68d2e8b2",
+                "expected_revision":0,
+                "project":"example",
+                "instruction":"Plan the repair",
+                "validation":"true",
+                "model_target":"mac",
+            }))
+            .is_err());
+        assert_eq!(
+            chat_start(
+                State(engine.clone()),
+                authorized_headers(),
+                Json(json!({
+                    "project":"example",
+                    "message":"diagnose the failure",
+                    "id":"418ab506-8295-4b4c-90c7-30f8dd7dcedd",
+                    "model_target":"mac",
+                })),
+            )
+            .await
+            .0,
+            StatusCode::CONFLICT
+        );
+    }
+
+    #[test]
+    fn unconfirmed_validation_cleanup_persistence_failure_keeps_volatile_emergency_latch() {
+        let (_dir, engine) = control_test_engine();
+        let feature_id = engine.database.lock().unwrap().state.queue[0].id.clone();
+        engine
+            .database
+            .lock()
+            .unwrap()
+            .connection
+            .execute_batch(
+                "CREATE TRIGGER reject_cleanup_pause BEFORE UPDATE ON developer_state BEGIN SELECT RAISE(ABORT,'fixture write failure'); END;",
+            )
+            .unwrap();
+
+        assert!(engine
+            .quarantine_unconfirmed_validation_cleanup(&feature_id, None)
+            .is_err());
+        assert_eq!(engine.cancellation.load(Ordering::SeqCst), 2);
+        assert_eq!(engine.publication_cancellation.load(Ordering::SeqCst), 2);
+        assert!(engine.tool_cancellation.load(Ordering::SeqCst));
+        assert_eq!(engine.snapshot().unwrap()["emergency_paused"], true);
+        assert!(engine.start(None, None, None, None).is_err());
+    }
+
+    #[test]
+    fn cleanup_ambiguity_survives_candidate_evidence_persistence_failure() {
+        let (_dir, engine) = control_test_engine();
+        let feature_id = engine.database.lock().unwrap().state.queue[0].id.clone();
+        let live_edits = vec![Edit {
+            path: "requirements.txt".into(),
+            content: "pytest==9.0.0\n".into(),
+            before: None,
+        }];
+        let cleanup_error = engine
+            .fail_closed_validation_result::<()>(
+                &feature_id,
+                Some((17, &live_edits)),
+                Err(anyhow!(UnconfirmedTermination(
+                    "fixture cleanup query failed".into()
+                ))),
+            )
+            .unwrap_err();
+        assert!(cleanup_error
+            .downcast_ref::<UnconfirmedTermination>()
+            .is_some());
+        engine
+            .database
+            .lock()
+            .unwrap()
+            .connection
+            .execute_batch(
+                "CREATE TRIGGER reject_candidate_evidence BEFORE UPDATE ON developer_state BEGIN SELECT RAISE(ABORT,'fixture candidate evidence write failure'); END;",
+            )
+            .unwrap();
+        assert!(engine
+            .record_tool_candidate_failure(
+                &feature_id,
+                1,
+                &[],
+                false,
+                "fixture ordinary candidate failure",
+            )
+            .is_err());
+
+        let returned = engine
+            .finish_environment_preparation_validation_error(&feature_id, 1, &[], cleanup_error)
+            .err()
+            .unwrap();
+        assert!(returned.downcast_ref::<UnconfirmedTermination>().is_some());
+        let database = engine.database.lock().unwrap();
+        assert!(database.state.emergency_paused);
+        assert_eq!(
+            database.state.queue[0].checkpoint,
+            "validation_cleanup_unconfirmed"
+        );
+        assert_eq!(database.state.queue[0].auto_repair_lifecycle, "quarantined");
+        assert_eq!(database.state.queue[0].tool_workspace_revision, 17);
+        let retained = database.state.queue[0].edits.as_deref().unwrap();
+        let retained_live_edit = retained
+            .iter()
+            .filter(|edit| edit.path == live_edits[0].path)
+            .collect::<Vec<_>>();
+        assert_eq!(retained_live_edit.len(), 1);
+        assert_eq!(retained_live_edit[0].content, live_edits[0].content);
+        assert_eq!(retained_live_edit[0].before, live_edits[0].before);
+    }
+
+    #[tokio::test]
     async fn failed_planning_completion_persistence_recovers_on_status_poll_without_provider_reexecution(
     ) {
         let (_dir, engine) = control_test_engine();
@@ -14848,21 +15165,13 @@ mod tests {
         fs::write(bin.join("python.exe"), b"fixture").unwrap();
         #[cfg(not(windows))]
         fs::write(bin.join("python"), b"fixture").unwrap();
-        let mut command = Command::new("fixture");
-        configure_project_environment(&mut command, &project).unwrap();
-        let environment = command
-            .as_std()
-            .get_envs()
-            .find(|(name, _)| *name == "VIRTUAL_ENV")
-            .and_then(|(_, value)| value)
+        let mut environment = developer_process::ValidationEnvironment::capture().unwrap();
+        configure_project_environment(&mut environment, &project).unwrap();
+        let virtual_environment = environment
+            .get(std::ffi::OsStr::new("VIRTUAL_ENV"))
             .unwrap();
-        assert_eq!(environment, project.join(".venv"));
-        let configured_path = command
-            .as_std()
-            .get_envs()
-            .find(|(name, _)| *name == "PATH")
-            .and_then(|(_, value)| value)
-            .unwrap();
+        assert_eq!(virtual_environment, project.join(".venv"));
+        let configured_path = environment.get(std::ffi::OsStr::new("PATH")).unwrap();
         assert_eq!(std::env::split_paths(configured_path).next(), Some(bin));
 
         #[cfg(unix)]
@@ -14872,12 +15181,13 @@ mod tests {
             std::os::unix::fs::symlink(escaped.path(), linked_project.path().join(".venv"))
                 .unwrap();
             let linked_project = fs::canonicalize(linked_project.path()).unwrap();
-            assert!(
-                configure_project_environment(&mut Command::new("fixture"), &linked_project)
-                    .unwrap_err()
-                    .to_string()
-                    .contains("ordinary directory")
-            );
+            assert!(configure_project_environment(
+                &mut developer_process::ValidationEnvironment::capture().unwrap(),
+                &linked_project,
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("ordinary directory"));
         }
     }
 
