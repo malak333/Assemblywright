@@ -79,14 +79,23 @@ than relaxing it to accommodate a test-only path mismatch.
   feature is quarantined at checkpoint `validation_cleanup_unconfirmed` and never
   replays automatically.
 - The native Auto AI repair harness exercises the project-rename cleanup probe
-  cross-platform. Actual native Windows execution is required to establish
-  Windows directory-handle release and the Windows-only delayed-descendant
-  kill-on-close Job proof reported as `windows_validation_job_reaps_descendants`.
-  Both Windows proofs stay pending until that native Windows run completes;
-  Mac fixture success and
-  non-Windows/generic hosted checks are not substitutes, and an actual
-  Windows-hosted native run may establish hosted Windows evidence but never
-  live Windows deployment proof.
+  cross-platform. Native Windows execution completed in the isolated MIKE-PC
+  worktree `C:\Users\mike\Codex\Assemblywright-auto-ai-proof-2` at exact commit
+  `04a9ddd7f0f99e7fb7f0cd83cb9602360a9e2743`: the native Windows Developer
+  binary suite passed 192 tests with 0 failures and 1 intentionally ignored, the
+  focused Windows handle-exclusion test passed, the native Windows Auto AI
+  repair E2E exited 0 with every printed proof flag true including
+  `validation_project_handles_released_before_cleanup` and
+  `windows_validation_job_reaps_descendants`, and the native Windows chat E2E
+  exited 0 including isolated reparse-point fail-closed cleanup. That run
+  establishes the previously pending Windows directory-handle release and
+  delayed-descendant kill-on-close Job proof plus the native Windows chat
+  reparse cleanup run for that exact commit and worktree. It establishes neither
+  hosted PR checks nor installed-app, visual, signing, notarization,
+  live-device, deployment, or production proof; Mac fixture success and
+  non-Windows/generic hosted checks are not substitutes, running on MIKE-PC is
+  never live Windows deployment proof, and hosted Windows evidence remains
+  pending.
 
 These notes capture durable facts for future agents working on this repository.
 
@@ -2731,9 +2740,10 @@ consistency.
   Mac run reports 21 proof keys, including the real 100-call boundary, restart
   quarantine, and the shared-limit closeout. It is registered as the twelfth script
   in the cross-host `developer_workflow_e2e` wrapper reached by the Cargo workspace
-  gate. Native Windows, installed-app, visual UI, live-model, hosted, signing,
-  notarization, live-device, publication, and production evidence remain unproven
-  until separately run.
+  gate. Installed-app and visual UI, live-model quality and account
+  entitlement, hosted exact-commit/PR checks, signing and notarization,
+  live-device, publication and deployment, and production readiness remain
+  unproven until separately run.
 - A manual escalation admission rejection is durable before it is visible. When the
   prepare preflight finds the shared cap exhausted, or escalation or review
   evidence capacity unavailable, it commits the resulting `limit_reached` or

@@ -207,27 +207,35 @@ The disposable Mac process harness reports 21 proof keys using real authenticate
 HTTP, SQLite, filesystem changes, and validation subprocesses with deterministic
 model and reviewer fixtures. It exercises exactly 100 automatic model calls at the
 absolute cap and observes no 101st call. It also exercises the project-rename
-cleanup probe cross-platform. Actual native Windows execution is required to
-establish Windows directory-handle release and the Windows-only
-delayed-descendant sentinel that the kill-on-close Job must reap. Its
+cleanup probe cross-platform. Native Windows execution has now completed in the
+isolated MIKE-PC worktree `C:\Users\mike\Codex\Assemblywright-auto-ai-proof-2`
+at exact commit `04a9ddd7f0f99e7fb7f0cd83cb9602360a9e2743`: the native Windows
+Developer binary suite passed 192 tests with 0 failures and 1 intentionally
+ignored, the focused Windows handle-exclusion test passed, and the native
+Windows Auto AI repair E2E exited 0 with every printed proof flag true including
+`validation_project_handles_released_before_cleanup` and
+`windows_validation_job_reaps_descendants`. Its
 shared-limit scenario uses the public
 authenticated routes the Mac app uses: project chat plus an owner-approved manual
 escalation consumes the one shared per-feature cap, a later automatic opportunity
 stops at `limit_reached` at that cap without any repair-model or reviewer call,
 the owner corrects the project bytes directly, and the validation-only Resume
 proceeds without AI through fresh validation and one fresh independent review that
-succeed. The harness does not establish live model quality, account entitlement,
-Windows-native or installed-app behavior, rendered visual placement, hosted
-checks, live-device QA, or production readiness. It is registered as the twelfth
+succeed. The harness does not establish live-model quality and account
+entitlement, installed Developer app/UI behavior, rendered visual and keyboard
+behavior, hosted exact-commit/PR checks, signing and notarization, live-device
+behavior, publication and deployment, or production readiness.
+It is registered as the twelfth
 script in `developer_workflow_e2e`, which runs through Cargo workspace testing on
 both required hosts.
 
-Native Windows execution of this harness, installed Developer app behavior,
-rendered layout and keyboard navigation, the final full local gate, exact-commit
-hosted checks, publication, signing, notarization, live-device QA, and production
-readiness are not claimed by this repository evidence and remain separately
-reportable proof layers. The handle-release and delayed-descendant Windows proof
-stays pending until the native Windows run of this harness completes. Mac
-fixture success and non-Windows/generic hosted checks are not substitutes; an
-actual Windows-hosted native run may establish hosted Windows evidence, but it
-is not live Windows deployment proof.
+Native Windows execution of this harness for the exact commit and worktree above
+established the previously pending Windows directory-handle release and
+delayed-descendant kill-on-close Job proof, plus the native Windows chat E2E
+exit 0 with isolated reparse-point fail-closed cleanup. Installed Developer app
+behavior, rendered layout and keyboard navigation, the final full local gate,
+exact-commit hosted checks, publication, signing, notarization, live-device QA,
+and production readiness are not claimed by this repository evidence and remain
+separately reportable proof layers. Mac fixture success and non-Windows/generic
+hosted checks are not substitutes; running on MIKE-PC is not live Windows
+deployment proof, and hosted Windows evidence remains pending.
