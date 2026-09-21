@@ -13801,17 +13801,18 @@ mod tests {
             .quarantine_unconfirmed_validation_cleanup(&feature_id, None)
             .unwrap();
 
-        let database = engine.database.lock().unwrap();
-        assert!(database.state.emergency_paused);
-        let feature = &database.state.queue[0];
-        assert_eq!(feature.status, "failed");
-        assert_eq!(feature.checkpoint, "validation_cleanup_unconfirmed");
-        assert_eq!(feature.last_failure_kind, "operational");
-        assert_eq!(feature.auto_repair_lifecycle, "quarantined");
-        assert!(!feature.repair_pending);
-        assert!(feature.message.contains("Emergency Pause is active"));
-        assert!(feature.message.contains("will not replay automatically"));
-        drop(database);
+        {
+            let database = engine.database.lock().unwrap();
+            assert!(database.state.emergency_paused);
+            let feature = &database.state.queue[0];
+            assert_eq!(feature.status, "failed");
+            assert_eq!(feature.checkpoint, "validation_cleanup_unconfirmed");
+            assert_eq!(feature.last_failure_kind, "operational");
+            assert_eq!(feature.auto_repair_lifecycle, "quarantined");
+            assert!(!feature.repair_pending);
+            assert!(feature.message.contains("Emergency Pause is active"));
+            assert!(feature.message.contains("will not replay automatically"));
+        }
         assert_eq!(engine.cancellation.load(Ordering::SeqCst), 2);
         assert_eq!(engine.publication_cancellation.load(Ordering::SeqCst), 2);
         assert!(engine.tool_cancellation.load(Ordering::SeqCst));
