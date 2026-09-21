@@ -8,8 +8,8 @@ The Developer binary tests exercise this surface; master library tests alone do 
 cargo test -p assemblywright-master --bin assemblywright-developer
 cargo build -p assemblywright-master --bin assemblywright-developer --example developer_review_fixture
 env ASSEMBLYWRIGHT_DEVELOPER_REVIEW_FIXTURE=target/debug/examples/developer_review_fixture python3 scripts/developer-runner-chat-history-e2e.py --binary target/debug/assemblywright-developer
-swift test --disable-sandbox --package-path apps/mac --filter 'shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions'
-swift test --disable-sandbox --package-path apps/mac --filter 'DeveloperChatHistory|DeveloperProjectChat|DeveloperChatAttachment|DeveloperRepairEscalation' --skip 'shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions'
+swift test --disable-sandbox --package-path apps/mac --filter '^AssemblywrightMacAppTests\.DeveloperProjectChatTests/(shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions)\(\)(/.*)?$'
+swift test --disable-sandbox --package-path apps/mac --filter 'DeveloperChatHistory|DeveloperProjectChat|DeveloperChatAttachment|DeveloperRepairEscalation' --skip '^AssemblywrightMacAppTests\.DeveloperProjectChatTests/(shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions)\(\)(/.*)?$'
 ./scripts/developer-build.py --build
 ```
 
@@ -166,8 +166,9 @@ cargo test -p assemblywright-protocol --test full_machine_assembly_line_contract
 cargo test -p assemblywright-master --lib planning_effects::tests -- --nocapture
 cargo test -p assemblywright-master --test brainstorming_provider_adapter_e2e -- --nocapture
 cargo test -p assemblywright-master --test assembly_line_planning_http -- --nocapture
-swift test --disable-sandbox --package-path apps/mac --filter 'shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions'
-swift test --disable-sandbox --package-path apps/mac --skip 'shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions'
+swift test --disable-sandbox --package-path apps/mac --filter '^AssemblywrightMacAppTests\.DeveloperProjectChatTests/(shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions)\(\)(/.*)?$'
+swift test --disable-sandbox --package-path apps/mac --filter '^AssemblywrightMacCoreTests\.DeveloperBridgeTests/'
+swift test --disable-sandbox --package-path apps/mac --skip '^AssemblywrightMacCoreTests\.DeveloperBridgeTests/|^AssemblywrightMacAppTests\.DeveloperProjectChatTests/(shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions)\(\)(/.*)?$'
 ```
 
 These planning tests bind the sandbox split to the source contract: brainstorming is
@@ -496,10 +497,28 @@ cargo run -p assemblywright-cli -- release live-device-runbook
 ./scripts/release-evidence-doctor.sh --self-test
 ./scripts/release-external-handoff.sh --check
 ./scripts/release-external-handoff.sh --self-test
-swift test --disable-sandbox --package-path apps/mac --filter 'shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions'
-swift test --disable-sandbox --package-path apps/mac --skip 'shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions'
+./scripts/swift-test-partition-smoke.sh --self-test
+./scripts/swift-test-partition-smoke.sh
+swift test --disable-sandbox --package-path apps/mac --filter '^AssemblywrightMacAppTests\.DeveloperProjectChatTests/(shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions)\(\)(/.*)?$'
+swift test --disable-sandbox --package-path apps/mac --filter '^AssemblywrightMacCoreTests\.DeveloperBridgeTests/'
+swift test --disable-sandbox --package-path apps/mac --skip '^AssemblywrightMacCoreTests\.DeveloperBridgeTests/|^AssemblywrightMacAppTests\.DeveloperProjectChatTests/(shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions)\(\)(/.*)?$'
 swift build --disable-sandbox --package-path apps/mac
 ```
+
+The Swift gate uses three processes deliberately. AppKit window tests run alone;
+the serialized `DeveloperBridgeTests` lifecycle suite also runs alone so its actor,
+subprocess, cancellation, and teardown checks cannot compete with unrelated suites
+on a constrained hosted runner; the final command excludes both groups and runs the
+remaining suites. A test is not omitted: the CI workflow smoke binds this exact
+three-command partition to `release-local.sh`, and
+`scripts/swift-test-partition-smoke.sh` proves that the three disjoint groups
+cover every currently discovered test specifier exactly once by evaluating the
+same UI and DeveloperBridge regular expressions used by the release commands.
+Its self-test rejects missing exact UI tests, duplicate discovery, empty bridge
+or remaining partitions, and synthetic overlapping filter predicates.
+SwiftPM appends source metadata after a Swift Testing identifier during filter
+matching even though `swift test list` displays the identifier ending in `()`;
+the anchored optional `/.*` suffix accounts for only that runtime representation.
 
 When the owner is running the distribution app, run packaging validation against a
 separate output directory. The guard protects the exact app and bundled-core paths;
