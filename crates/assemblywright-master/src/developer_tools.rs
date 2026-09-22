@@ -47,6 +47,8 @@ const MAX_MUTATION_FILES: usize = 1_000;
 const MAX_MUTATION_FILE_BYTES: u64 = 256 * 1024;
 const MAX_GENERATED_DIRECTORY_ENTRIES: usize = 20_000;
 const MAX_GENERATED_DIRECTORY_DEPTH: usize = 40;
+const OPENCODE_MODEL_CONTEXT_TOKENS: u64 = 262_144;
+const OPENCODE_MODEL_OUTPUT_TOKENS: u64 = 32_768;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -908,6 +910,9 @@ impl DeveloperTools {
         let temporary = isolated.join("tmp");
         fs::create_dir_all(&isolated)?;
         fs::create_dir_all(&temporary)?;
+        let project_tool_path = tool_path(project_path)?;
+        let encoded_config = serde_json::to_string(&config)?;
+        let python_cache = tool_python_bytecode_cache(&isolated, project_path)?;
         let password = Uuid::new_v4().simple().to_string();
         let mut command = Command::new(&runtime.executable);
         command
@@ -921,14 +926,15 @@ impl DeveloperTools {
             ])
             .current_dir(project_path)
             .env_clear()
-            .env("PATH", tool_path(project_path)?)
+            .env("PATH", project_tool_path)
             .env("HOME", &isolated)
             .env("USERPROFILE", &isolated)
             .env("APPDATA", &isolated)
             .env("LOCALAPPDATA", &isolated)
             .env("TEMP", &temporary)
             .env("TMP", &temporary)
-            .env("OPENCODE_CONFIG_CONTENT", serde_json::to_string(&config)?)
+            .env("PYTHONPYCACHEPREFIX", python_cache.path())
+            .env("OPENCODE_CONFIG_CONTENT", encoded_config)
             .env("OPENCODE_CONFIG_DIR", &isolated)
             .env("XDG_CONFIG_HOME", &isolated)
             .env("XDG_DATA_HOME", &isolated)
@@ -944,14 +950,26 @@ impl DeveloperTools {
             .kill_on_drop(true);
         copy_required_os_environment(&mut command);
         prepare_process_tree(&mut command);
-        let mut child = command
-            .spawn()
-            .context("Could not start the configured OpenCode runtime")?;
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                let cleanup = python_cache
+                    .close()
+                    .context("clean unused OpenCode Python bytecode cache");
+                return match cleanup {
+                    Ok(()) => Err(error).context("Could not start the configured OpenCode runtime"),
+                    Err(cleanup) => {
+                        Err(cleanup.context(format!("OpenCode spawn also failed: {error}")))
+                    }
+                };
+            }
+        };
         let mut process_tree = match attach_process_tree(&child) {
             Ok(process_tree) => process_tree,
             Err(error) => {
                 let _ = child.kill().await;
                 let _ = child.wait().await;
+                python_cache.retain_for_ambiguity();
                 self.latch_attention("OpenCode process-tree attachment could not be confirmed.");
                 return Err(error.context("Could not attach the OpenCode process tree"));
             }
@@ -962,12 +980,20 @@ impl DeveloperTools {
                 let cleanup = process_tree
                     .terminate_and_wait(&mut child, Duration::from_secs(5))
                     .await;
-                if cleanup.is_err() {
+                if let Err(error) = cleanup {
                     self.latch_attention(
                         "OpenCode process-tree termination could not be confirmed.",
                     );
+                    python_cache.retain_for_ambiguity();
+                    return Err(error);
                 }
-                cleanup?;
+                let cache_cleanup = python_cache
+                    .close()
+                    .context("clean OpenCode Python bytecode cache after stderr failure");
+                if cache_cleanup.is_err() {
+                    self.latch_attention("OpenCode Python bytecode cache cleanup failed.");
+                }
+                cache_cleanup?;
                 bail!("OpenCode stderr pipe was unavailable");
             }
         };
@@ -1132,14 +1158,26 @@ impl DeveloperTools {
             .terminate_and_wait(&mut child, Duration::from_secs(5))
             .await;
         stderr_drain.abort();
-        match (execution, cleanup) {
-            (_, Err(error)) => {
+        let cache_cleanup = if cleanup.is_err() {
+            python_cache.retain_for_ambiguity();
+            Ok(())
+        } else {
+            python_cache
+                .close()
+                .context("clean OpenCode Python bytecode cache")
+        };
+        match (execution, cleanup, cache_cleanup) {
+            (_, Err(error), _) => {
                 self.latch_attention("OpenCode process-tree termination could not be confirmed.");
                 Err(error.context(
                     "OpenCode process-tree termination could not be confirmed; execution needs attention",
                 ))
             }
-            (result, Ok(())) => result,
+            (_, Ok(()), Err(error)) => {
+                self.latch_attention("OpenCode Python bytecode cache cleanup failed.");
+                Err(error)
+            }
+            (result, Ok(()), Ok(())) => result,
         }
     }
 
@@ -1199,6 +1237,56 @@ impl DeveloperTools {
             )?;
         Ok(())
     }
+}
+
+struct ToolPythonBytecodeCache {
+    path: PathBuf,
+}
+
+impl ToolPythonBytecodeCache {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn close(mut self) -> Result<()> {
+        fs::remove_dir_all(&self.path)?;
+        self.path.clear();
+        Ok(())
+    }
+
+    fn retain_for_ambiguity(mut self) {
+        self.path.clear();
+    }
+}
+
+impl Drop for ToolPythonBytecodeCache {
+    fn drop(&mut self) {
+        if !self.path.as_os_str().is_empty() {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
+fn tool_python_bytecode_cache(
+    owner_root: &Path,
+    project: &Path,
+) -> Result<ToolPythonBytecodeCache> {
+    let owner_root = fs::canonicalize(owner_root)?;
+    let project = fs::canonicalize(project)?;
+    if owner_root.starts_with(&project) {
+        bail!("OpenCode Python bytecode cache root must stay outside the project");
+    }
+    let cache_path = owner_root.join(format!("python-pycache-{}", Uuid::new_v4().simple()));
+    fs::create_dir(&cache_path)?;
+    let mut cache = ToolPythonBytecodeCache { path: cache_path };
+    cache.path = fs::canonicalize(&cache.path)?;
+    if cache.path.starts_with(&project) {
+        cache
+            .close()
+            .context("clean rejected OpenCode Python bytecode cache")?;
+        bail!("OpenCode Python bytecode cache must stay outside the project");
+    }
+    Ok(cache)
 }
 
 fn validate_runtime_config(runtime: &OpenCodeRuntimeConfig) -> Result<()> {
@@ -1514,10 +1602,23 @@ fn opencode_config(
             provider:{
                 "npm":"@ai-sdk/openai-compatible",
                 "options":{"baseURL":model.url,"timeout":900000},
-                "models":{model.model.clone():{"limit":{"context":262144,"output":4096}}}
+                "models":{model.model.clone():{"limit":{
+                    "context":OPENCODE_MODEL_CONTEXT_TOKENS,
+                    "output":OPENCODE_MODEL_OUTPUT_TOKENS
+                }}}
             }
         }
     }))
+}
+
+fn resolved_model_limits_match(
+    resolved: &Value,
+    expected: &Value,
+    model: &ToolModelConfig,
+) -> bool {
+    let provider = provider_id(&model.target);
+    resolved["provider"][provider.as_str()]["models"][model.model.as_str()]["limit"]
+        == expected["provider"][provider.as_str()]["models"][model.model.as_str()]["limit"]
 }
 
 fn permission_config(
@@ -1727,6 +1828,9 @@ async fn verify_resolved_config(
     }
     if resolved["enabled_providers"] != expected["enabled_providers"] {
         mismatches.push("enabled_providers");
+    }
+    if !resolved_model_limits_match(&resolved, &expected, model) {
+        mismatches.push("provider.model.limit");
     }
     if resolved["tools"] != expected["tools"] {
         mismatches.push("tools");
@@ -2238,6 +2342,32 @@ fn redact_value(value: &mut Value, secrets: &[String]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::AsyncWriteExt as _;
+
+    async fn resolved_config_server(body: Value) -> (Url, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let encoded = serde_json::to_vec(&body).unwrap();
+        let task = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                let count = stream.read(&mut buffer).await.unwrap();
+                assert_ne!(count, 0, "HTTP request ended before its headers");
+                request.extend_from_slice(&buffer[..count]);
+            }
+            assert!(request.starts_with(b"GET /config?directory="));
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                encoded.len()
+            );
+            stream.write_all(header.as_bytes()).await.unwrap();
+            stream.write_all(&encoded).await.unwrap();
+            stream.shutdown().await.unwrap();
+        });
+        (Url::parse(&format!("http://{address}/")).unwrap(), task)
+    }
 
     fn service(runtime: Option<OpenCodeRuntimeConfig>) -> (tempfile::TempDir, Arc<DeveloperTools>) {
         let directory = tempfile::tempdir().unwrap();
@@ -2331,6 +2461,10 @@ mod tests {
         assert_eq!(config["tools"]["task"], false);
         assert_eq!(config["tools"]["skill"], false);
         assert_eq!(config["tools"]["lsp"], false);
+        let limits =
+            &config["provider"]["assemblywright-windows"]["models"]["windows-coder"]["limit"];
+        assert_eq!(limits["context"], json!(262_144));
+        assert_eq!(limits["output"], json!(32_768));
         assert!(config["mcp"].as_object().unwrap().is_empty());
         assert!(config["plugin"].as_array().unwrap().is_empty());
         assert!(opencode_config(
@@ -2346,6 +2480,69 @@ mod tests {
     }
 
     #[test]
+    fn resolved_config_rejects_selected_model_limit_drift() {
+        let model = ToolModelConfig {
+            target: "windows".into(),
+            url: "http://127.0.0.1:18081/v1".into(),
+            model: "windows-coder".into(),
+        };
+        let expected = opencode_config(
+            &model,
+            ToolAccessMode::Auto,
+            Path::new("C:/projects/project"),
+            &[],
+        )
+        .unwrap();
+        let mut resolved = expected.clone();
+        assert!(resolved_model_limits_match(&resolved, &expected, &model));
+
+        resolved["provider"]["assemblywright-windows"]["models"]["windows-coder"]["limit"]
+            ["output"] = json!(4_096);
+        assert!(!resolved_model_limits_match(&resolved, &expected, &model));
+
+        resolved["provider"]["assemblywright-windows"]["models"]["windows-coder"]["limit"] =
+            json!({"context":131_072,"output":32_768});
+        assert!(!resolved_model_limits_match(&resolved, &expected, &model));
+    }
+
+    #[tokio::test]
+    async fn resolved_config_http_boundary_accepts_exact_limits_and_rejects_drift() {
+        let model = ToolModelConfig {
+            target: "windows".into(),
+            url: "http://127.0.0.1:18081/v1".into(),
+            model: "windows-coder".into(),
+        };
+        let project = Path::new("C:/projects/project");
+        let expected = opencode_config(&model, ToolAccessMode::Auto, project, &[]).unwrap();
+        let mut resolved = expected.clone();
+        resolved["agent"]["build"]["permission"] = json!({
+            "task":"deny",
+            "skill":"deny",
+            "lsp":"deny",
+            "question":"deny",
+            "todowrite":"deny"
+        });
+        let client = Client::builder().no_proxy().build().unwrap();
+
+        let (base, served) = resolved_config_server(resolved.clone()).await;
+        verify_resolved_config(&client, &base, project, &model, ToolAccessMode::Auto, &[])
+            .await
+            .unwrap();
+        served.await.unwrap();
+
+        let mut drifted = resolved;
+        drifted["provider"]["assemblywright-windows"]["models"]["windows-coder"]["limit"]
+            ["output"] = json!(4_096);
+        let (base, served) = resolved_config_server(drifted).await;
+        let error =
+            verify_resolved_config(&client, &base, project, &model, ToolAccessMode::Auto, &[])
+                .await
+                .unwrap_err();
+        assert!(error.to_string().contains("provider.model.limit"));
+        served.await.unwrap();
+    }
+
+    #[test]
     fn ambient_project_or_ancestor_opencode_extensions_fail_before_launch() {
         let directory = tempfile::tempdir().unwrap();
         let workspace = directory.path().join("workspace");
@@ -2357,6 +2554,37 @@ mod tests {
         fs::remove_file(workspace.join("opencode.json")).unwrap();
         fs::create_dir(project.join(".opencode")).unwrap();
         assert!(reject_ambient_opencode_inputs(&project).is_err());
+    }
+
+    #[test]
+    fn opencode_python_cache_is_unique_outside_project_and_removed() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("projects/project");
+        let isolated = directory.path().join("state/opencode-runtime");
+        fs::create_dir_all(&project).unwrap();
+        fs::create_dir_all(&isolated).unwrap();
+        let project = fs::canonicalize(project).unwrap();
+        let first = tool_python_bytecode_cache(&isolated, &project).unwrap();
+        let second = tool_python_bytecode_cache(&isolated, &project).unwrap();
+        let first_path = first.path().to_owned();
+        let second_path = second.path().to_owned();
+        assert_ne!(first_path, second_path);
+        assert!(!first_path.starts_with(&project));
+        assert!(!second_path.starts_with(&project));
+        first.close().unwrap();
+        second.close().unwrap();
+        assert!(!first_path.exists());
+        assert!(!second_path.exists());
+
+        let retained = tool_python_bytecode_cache(&isolated, &project).unwrap();
+        let retained_path = retained.path().to_owned();
+        retained.retain_for_ambiguity();
+        assert!(retained_path.is_dir());
+        fs::remove_dir(&retained_path).unwrap();
+
+        let inside = project.join("runner-state");
+        fs::create_dir(&inside).unwrap();
+        assert!(tool_python_bytecode_cache(&inside, &project).is_err());
     }
 
     #[test]

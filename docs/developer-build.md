@@ -159,6 +159,19 @@ supervised Developer workflow, not activation of the protected production runtim
 Image and bounded text attachments are untrusted references. Unsupported vision,
 unavailable models, and context limits fail explicitly without fallback.
 
+For an approved feature, selecting a local model assigns that model the
+implementation phase: it may inspect and edit the selected project and run tools
+under the chosen access mode, and Windows independently runs the feature's exact
+immutable validation command. Codex continues to produce the plan and independently
+reviews the exact cumulative candidate after validation. The local model cannot
+approve its own work, change the queue or validation command, accept review
+evidence, or perform GitHub publication. For a connected Developer project, Windows
+owns the frozen candidate, derived feature branch, required-check verification,
+normal merge, and remote-base reconciliation. Stop, Emergency Pause, restart
+recovery, and ambiguous effects retain the existing fail-closed behavior. This
+product-runtime assignment is distinct from the GLM repository-agent policy used
+to develop Assemblywright itself.
+
 ## Repair a failed feature from chat
 
 The accepted contract is [Developer chat repair escalation](developer-chat-repair-design.md).
@@ -267,6 +280,23 @@ its script and is no longer offered. Explicit use returns setup guidance; saved
 legacy script paths are accepted for compatibility and removed on settings rewrite.
 An unavailable selected model fails without automatic fallback.
 
+The pinned OpenCode 1.18.23 configuration advertises the selected model with an
+exact 262,144-token context limit and 32,768-token output limit. The runner reads
+OpenCode's resolved configuration over its authenticated loopback server before
+creating a session and rejects any selected-model limit drift. The output limit is
+capacity, not permission to accept unbounded changes: file, byte, action, event,
+timeout, validation, review, and evidence limits still apply. Every OpenCode tool
+session and immutable validation child receives a unique runner-owned
+`PYTHONPYCACHEPREFIX` outside the project for that process tree's complete lifetime.
+Confirmed termination removes the prefix. If attachment or process-tree termination
+is unconfirmed, the runner retains the prefix for inspection and recovery, emits no
+path in diagnostics, and uses the existing owner-attention, Emergency, and
+quarantine semantics to block or pause further work. This prevents Python from
+consuming or writing project `__pycache__` during those processes. Any tool-created,
+changed, binary, linked,
+or spoofed project cache remains unreviewable and stops the feature; cache-prefix
+creation or confirmed-termination cleanup failure also fails closed.
+
 The reviewer executable is hash-bound for each runner lifetime, runs from a separate
 working directory with a cleared environment, and uses strict configuration to
 turn off the supported tool, memory, plugin, browser, and automation features.
@@ -342,6 +372,24 @@ accessibility state, so this does not claim visual UI automation.
 The working developer phase is published separately from unfinished production
 integration drafts. Signed production installation and hostile containment remain
 separate work.
+
+### Windows Qwen/OpenCode acceptance evidence (2026-09-22)
+
+An isolated Windows runner used OpenCode 1.18.23 with the owner-selected
+Qwen3.6 35B-A3B Q4 service, whose live runtime reported a 262,144-token context.
+The earlier 4,096-token OpenCode output cap truncated implementation responses;
+32,768 completed the bounded implementation while exact resolved-config checking
+kept drift fail closed. A Metal Gear Solid PlayStation demo reached Windows
+validation with 60 Python tests and 29 JavaScript controller checks passing, then
+received independent Codex approval of the exact changed files. Real Chromium
+testing caught a `DOMTokenList.has` assumption that fixture doubles had missed;
+the local model corrected the production path to prefer the native `contains`
+method and retain a bounded compatibility fallback.
+
+This live run establishes one supervised local-model coding/validation/review
+path. It does not establish sustained full-context performance, general model
+quality, installed-app or live-device proof, cross-browser coverage, hosted checks,
+publication, signing, notarization, deployment, or protected-production readiness.
 
 ## Chat repair closeout evidence (2026-09-07)
 

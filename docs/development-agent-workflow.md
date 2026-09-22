@@ -22,9 +22,14 @@ and serialize overlapping writes.
 
 ## GLM-5.3-Flash Implementation Delegation
 
-The owner's current decision is that new implementation work is delegated to
-GLM-5.3-Flash, the single bounded low- and normal-risk implementation lane; the
-local Qwen/local-AI worker lane is retired and must not be used. GLM-5.3-Flash
+This section governs Codex repository-agent work, not the Assemblywright
+Developer product runtime.
+
+The owner's current decision for Codex agents developing this repository is that
+new implementation work is delegated to GLM-5.3-Flash, the single bounded low-
+and normal-risk implementation lane; the
+local Qwen/local-AI worker lane is retired and must not be used for Codex
+repository-agent work. GLM-5.3-Flash
 performs bounded low- and normal-risk implementation in an isolated worktree and
 returns a proposal only. The frontier parent retains planning, independent
 complete-diff review, integration, and every commit, push, merge, publication
@@ -34,6 +39,17 @@ security, and release-evidence semantics stay with the parent and the Sol High
 high-risk roles; they are never routed to GLM-5.3-Flash. Treat its output as an
 untrusted proposal: inspect the worktree status and complete diff, run validation
 independently, and obtain frontier review before integrating any accepted bytes.
+
+This is not the model-routing contract inside the Assemblywright Developer
+product. In that supervised runtime, an owner-selected local LLM performs the
+approved feature's coding and tool execution, Windows runs the immutable
+validation command, and Codex remains the planner and independent exact-diff
+reviewer. Windows retains queue, cancellation, checkpoint, policy, and audit
+authority. Neither product-runtime model selection nor a passing validation
+grants the model Git or publication authority. Inside Developer, Windows owns the
+frozen candidate, feature branch, required checks, merge, and remote-base
+reconciliation. The frontier parent retains commit, push, merge, publication, and
+final evidence judgment only for development of the Assemblywright repository.
 
 ## Operating Rules
 
