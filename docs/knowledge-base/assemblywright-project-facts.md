@@ -2562,6 +2562,45 @@ Full-machine target phase: planning/creation containment has bounded native Wind
 - A local-model developer mode must validate `--model-url` as loopback before
   collecting project context. Accepting an arbitrary URL contradicts that mode even
   if the control server itself is loopback-only.
+- Do not conflate the Codex repository-agent policy with the Developer product
+  runtime. GLM-5.3-Flash is the bounded proposal worker for low/normal-risk work on
+  the Assemblywright repository, while an owner-selected local LLM inside Developer
+  performs approved project implementation/tool execution. In the product path,
+  Windows retains queue, cancellation, immutable validation, evidence and checkpoint
+  authority; Codex retains planning and independent exact-diff review. Windows also
+  owns the frozen candidate, feature branch, required checks, merge, and remote-base
+  reconciliation for connected Developer projects. The frontier parent retains Git,
+  publication, and final evidence judgment only for development of Assemblywright.
+- The September 22 Windows acceptance used OpenCode 1.18.23 and Qwen3.6 35B-A3B Q4.
+  The live server reported a 262,144-token context. OpenCode's former 4,096-token
+  output limit caused truncated implementation responses; the bounded configuration
+  now uses 32,768 and rejects drift in the resolved selected-model limit before a
+  session is created. This does not prove sustained full-context operation.
+- Never admit project `__pycache__` mutations as validation-environment noise. Binary
+  or linked cache content can be hostile, and timestamp bytecode can remain valid
+  after a same-size source change with restored mtime. Give every OpenCode tool
+  session and immutable validation process a unique runner-owned
+  `PYTHONPYCACHEPREFIX` outside the project and retain it for the complete child
+  lifetime. Confirmed termination removes the prefix. Unconfirmed attachment or
+  process-tree termination disarms cleanup and retains it under runner-owned state
+  for inspection/recovery; path-free diagnostics plus the existing owner-attention,
+  Emergency, and quarantine semantics block or pause work. Creation or confirmed-
+  termination cleanup failure rejects. All
+  project cache mutations and near matches remain unreviewable.
+- The same acceptance created a Metal Gear Solid PlayStation demo through the local
+  model and passed 60 Python tests plus 29 JavaScript controller checks before exact
+  Codex approval. Real Chromium then found that the test double exposed
+  `classList.has` while native `DOMTokenList` exposes `contains`; use real-browser
+  checks for browser code because fixture parity is not browser proof.
+- Proof limits for that run: it establishes one supervised Windows local-model
+  implementation, immutable validation and independent-review path. It is not
+  installed-app, live-device, cross-browser, hosted-check, publication, signing,
+  notarization, deployment, sustained-context, general model-quality, or protected-
+  production evidence. Repository regressions use a real loopback HTTP boundary for
+  resolved configuration, hostile cache-mutation units, and a committed native
+  runner/process E2E that rejects stale project bytecode with a fresh external
+  validation prefix. The pinned-OpenCode/live-model tool-session chain remains a
+  separate native Windows boundary.
 
 ## Developer project chat and reviewed repair escalation
 

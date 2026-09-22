@@ -7,7 +7,9 @@ import argparse
 from contextlib import closing
 import http.server
 import json
+import os
 from pathlib import Path
+import py_compile
 import socket
 import sqlite3
 import subprocess
@@ -229,7 +231,47 @@ def main():
             assert failed_id not in [feature['id'] for feature in advanced['queue']]
             assert failed_file.read_text() == 'real file from fixture model\n'
             assert len(calls) == 7
-            print(json.dumps({'native_platform': sys.platform, 'stop_seconds': round(stop_seconds, 3), 'checkpoint_resume_no_rewrite_or_replanning': True, 'emergency_during_validation': True, 'auto_run_off_waits': True, 'auto_run_on_advances': True, 'restart_preserves_results': True, 'malformed_output_blocks_advancement': True, 'remove_failed_advances_queue': True, 'remove_preserves_files_and_evidence': True, 'remove_persists_across_restart': True, 'remove_rejected_while_running': True, 'model_calls': len(calls)}))
+
+            # A timestamp-based .pyc with the same source size and restored mtime
+            # is intentionally valid to ordinary Python. Immutable validation must
+            # ignore that project cache by receiving a fresh runner-owned
+            # PYTHONPYCACHEPREFIX outside the project for this one child lifetime.
+            stale_project = projects / 'stale-pyc'
+            stale_project.mkdir()
+            stale_source = stale_project / 'stale.py'
+            stale_source.write_text('VALUE = 1\n')
+            original = stale_source.stat()
+            py_compile.compile(str(stale_source), doraise=True,
+                invalidation_mode=py_compile.PycInvalidationMode.TIMESTAMP)
+            stale_cache = {str(path.relative_to(stale_project)): path.read_bytes()
+                for path in (stale_project / '__pycache__').iterdir() if path.is_file()}
+            assert stale_cache
+            stale_source.write_text('VALUE = 0\n')
+            os.utime(stale_source, ns=(original.st_atime_ns, original.st_mtime_ns))
+            assert stale_source.stat().st_size == original.st_size
+            ambient_environment = os.environ.copy()
+            ambient_environment.pop('PYTHONPYCACHEPREFIX', None)
+            stale_control = subprocess.run([sys.executable, '-c',
+                'import stale; assert stale.VALUE == 1'], cwd=stale_project,
+                env=ambient_environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            assert stale_control.returncode == 0, stale_control.stderr.decode(errors='replace')
+
+            stale_id = str(uuid.uuid4())
+            call('enqueue', id=stale_id, project='stale-pyc',
+                instruction='Create a fixture result file while validation checks current source',
+                validation=python + ' -c "import stale; assert stale.VALUE == 1"')
+            call('start')
+            stale_failed = wait(lambda s: not s['running'] and s['queue'][-1]['id'] == stale_id
+                and s['queue'][-1]['status'] == 'failed')
+            assert 'Validation failed' in stale_failed['queue'][-1]['message']
+            assert stale_source.read_text() == 'VALUE = 0\n'
+            assert stale_cache == {str(path.relative_to(stale_project)): path.read_bytes()
+                for path in (stale_project / '__pycache__').iterdir() if path.is_file()}
+            assert not list(data.glob('validation-pycache-*'))
+            assert len(calls) == 8
+            call('remove', id=stale_id)
+
+            print(json.dumps({'native_platform': sys.platform, 'stop_seconds': round(stop_seconds, 3), 'checkpoint_resume_no_rewrite_or_replanning': True, 'emergency_during_validation': True, 'auto_run_off_waits': True, 'auto_run_on_advances': True, 'restart_preserves_results': True, 'malformed_output_blocks_advancement': True, 'remove_failed_advances_queue': True, 'remove_preserves_files_and_evidence': True, 'remove_persists_across_restart': True, 'remove_rejected_while_running': True, 'stale_project_pyc_rejected_by_fresh_validation_prefix': True, 'validation_prefix_cleaned': True, 'model_calls': len(calls)}))
         finally:
             try:
                 call('emergency')

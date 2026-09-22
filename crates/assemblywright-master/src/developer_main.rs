@@ -6786,131 +6786,162 @@ impl Engine {
         };
         let mut environment = developer_process::ValidationEnvironment::capture()?;
         configure_project_environment(&mut environment, project)?;
-        let spawn_guard = self
-            .effect_gate
-            .lock()
-            .map_err(|_| anyhow!("effect gate failed"))?;
-        if self.cancelled() {
-            bail!("Validation was cancelled before process creation");
-        }
-        {
-            let database = self
-                .database
+        let python_cache =
+            runner_python_bytecode_cache(&self.data, project, "validation-pycache-")?;
+        environment.set("PYTHONPYCACHEPREFIX", python_cache.path())?;
+        let validation = async {
+            let spawn_guard = self
+                .effect_gate
                 .lock()
-                .map_err(|_| anyhow!("state lock failed"))?;
-            if database.state.emergency_paused {
-                bail!("Emergency Pause blocks validation process creation");
+                .map_err(|_| anyhow!("effect gate failed"))?;
+            if self.cancelled() {
+                bail!("Validation was cancelled before process creation");
             }
-            if feature.auto_repair_lifecycle == "running" {
-                let current = database
-                    .state
-                    .queue
-                    .iter()
-                    .find(|candidate| candidate.id == feature.id)
-                    .context("feature missing")?;
-                if !database.state.auto_ai_repair_enabled
-                    || current.auto_repair_lifecycle != "running"
-                    || current.auto_repair_epoch != feature.auto_repair_epoch
-                    || current.auto_repair_policy_revision
-                        != Some(database.state.auto_ai_repair_policy_revision)
-                {
-                    bail!("Automatic repair validation binding changed before process creation");
+            {
+                let database = self
+                    .database
+                    .lock()
+                    .map_err(|_| anyhow!("state lock failed"))?;
+                if database.state.emergency_paused {
+                    bail!("Emergency Pause blocks validation process creation");
                 }
-            } else if limit_unadmitted_binding.is_some() {
-                let current = database
-                    .state
-                    .queue
-                    .iter()
-                    .find(|candidate| candidate.id == feature.id)
-                    .context("feature missing")?;
-                if current.auto_repair_lifecycle != "limit_reached"
-                    || current.checkpoint != "auto_repair_limit_revalidating"
-                    || current.auto_repair_limit_project_baseline
-                        != feature.auto_repair_limit_project_baseline
-                    || current.auto_repair_limit_unadmitted_sha256
-                        != feature.auto_repair_limit_unadmitted_sha256
-                    || current.auto_repair_limit_volatile_sha256
-                        != feature.auto_repair_limit_volatile_sha256
-                {
-                    bail!("Limit-recovery snapshot binding changed before process creation");
+                if feature.auto_repair_lifecycle == "running" {
+                    let current = database
+                        .state
+                        .queue
+                        .iter()
+                        .find(|candidate| candidate.id == feature.id)
+                        .context("feature missing")?;
+                    if !database.state.auto_ai_repair_enabled
+                        || current.auto_repair_lifecycle != "running"
+                        || current.auto_repair_epoch != feature.auto_repair_epoch
+                        || current.auto_repair_policy_revision
+                            != Some(database.state.auto_ai_repair_policy_revision)
+                    {
+                        bail!(
+                            "Automatic repair validation binding changed before process creation"
+                        );
+                    }
+                } else if limit_unadmitted_binding.is_some() {
+                    let current = database
+                        .state
+                        .queue
+                        .iter()
+                        .find(|candidate| candidate.id == feature.id)
+                        .context("feature missing")?;
+                    if current.auto_repair_lifecycle != "limit_reached"
+                        || current.checkpoint != "auto_repair_limit_revalidating"
+                        || current.auto_repair_limit_project_baseline
+                            != feature.auto_repair_limit_project_baseline
+                        || current.auto_repair_limit_unadmitted_sha256
+                            != feature.auto_repair_limit_unadmitted_sha256
+                        || current.auto_repair_limit_volatile_sha256
+                            != feature.auto_repair_limit_volatile_sha256
+                    {
+                        bail!("Limit-recovery snapshot binding changed before process creation");
+                    }
                 }
+            }
+            let mut child =
+                developer_process::spawn(&feature.validation, project, log, &environment).map_err(
+                    |error| {
+                        if error.is::<developer_process::CleanupUnconfirmed>() {
+                            anyhow!(UnconfirmedTermination(format!("{error:#}")))
+                        } else {
+                            error
+                        }
+                    },
+                )?;
+            drop(spawn_guard);
+            let started = std::time::Instant::now();
+            loop {
+                let log_size = match fs::metadata(&log_path) {
+                    Ok(metadata) => metadata.len(),
+                    Err(error) => {
+                        child
+                            .terminate()
+                            .await
+                            .map_err(|cleanup| UnconfirmedTermination(format!("{cleanup:#}")))?;
+                        return Err(error)
+                            .context("read validation log size after confirmed cleanup");
+                    }
+                };
+                if self.cancelled()
+                    || started.elapsed() > Duration::from_secs(900)
+                    || log_size > 2 * 1024 * 1024
+                {
+                    child
+                        .terminate()
+                        .await
+                        .map_err(|error| UnconfirmedTermination(format!("{error:#}")))?;
+                    bail!("Validation stopped or exceeded its time/output limit");
+                }
+                let observed = match child.try_wait() {
+                    Ok(status) => status,
+                    Err(error) => {
+                        child
+                            .terminate()
+                            .await
+                            .map_err(|cleanup| UnconfirmedTermination(format!("{cleanup:#}")))?;
+                        return Err(error)
+                            .context("poll validation process after confirmed cleanup");
+                    }
+                };
+                if let Some(status) = observed {
+                    child
+                        .terminate()
+                        .await
+                        .map_err(|error| UnconfirmedTermination(format!("{error:#}")))?;
+                    let terminal_limit_binding = if limit_unadmitted_binding.is_some() {
+                        Some(self.refresh_limit_recovery_volatile_binding(feature, project)?)
+                    } else {
+                        None
+                    };
+                    if status.success() {
+                        let mut evidence = Sha256::new();
+                        evidence.update(b"assemblywright.developer-validation.v1\0");
+                        evidence.update(feature.id.as_bytes());
+                        evidence.update(feature.validation.as_bytes());
+                        if let Some((unadmitted_sha256, _)) = &limit_unadmitted_binding {
+                            evidence.update(b"\0limit_unadmitted_sha256=");
+                            evidence.update(unadmitted_sha256.as_bytes());
+                        }
+                        if let Some(volatile_sha256) = &terminal_limit_binding {
+                            evidence.update(b"\0limit_volatile_sha256=");
+                            evidence.update(volatile_sha256.as_bytes());
+                        }
+                        evidence.update(b"exit_status=0");
+                        return Ok(format!("{:x}", evidence.finalize()));
+                    }
+                    let bytes = fs::read(&log_path)?;
+                    let tail = String::from_utf8_lossy(&bytes[bytes.len().saturating_sub(3500)..]);
+                    return Err(RepairableValidationFailure(format!(
+                        "Validation failed ({status}):\n{tail}"
+                    ))
+                    .into());
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
             }
         }
-        let mut child = developer_process::spawn(&feature.validation, project, log, &environment)
-            .map_err(|error| {
-            if error.is::<developer_process::CleanupUnconfirmed>() {
-                anyhow!(UnconfirmedTermination(format!("{error:#}")))
-            } else {
-                error
+        .await;
+        let validation_cleanup_ambiguous = validation
+            .as_ref()
+            .err()
+            .is_some_and(|error| error.downcast_ref::<UnconfirmedTermination>().is_some());
+        let cache_cleanup = if validation_cleanup_ambiguous {
+            python_cache.retain_for_ambiguity();
+            Ok(())
+        } else {
+            python_cache
+                .close()
+                .context("clean validation Python bytecode cache")
+        };
+        match (validation, cache_cleanup) {
+            (Err(error), _) if error.downcast_ref::<UnconfirmedTermination>().is_some() => {
+                Err(error)
             }
-        })?;
-        drop(spawn_guard);
-        let started = std::time::Instant::now();
-        loop {
-            let log_size = match fs::metadata(&log_path) {
-                Ok(metadata) => metadata.len(),
-                Err(error) => {
-                    child
-                        .terminate()
-                        .await
-                        .map_err(|cleanup| UnconfirmedTermination(format!("{cleanup:#}")))?;
-                    return Err(error).context("read validation log size after confirmed cleanup");
-                }
-            };
-            if self.cancelled()
-                || started.elapsed() > Duration::from_secs(900)
-                || log_size > 2 * 1024 * 1024
-            {
-                child
-                    .terminate()
-                    .await
-                    .map_err(|error| UnconfirmedTermination(format!("{error:#}")))?;
-                bail!("Validation stopped or exceeded its time/output limit");
-            }
-            let observed = match child.try_wait() {
-                Ok(status) => status,
-                Err(error) => {
-                    child
-                        .terminate()
-                        .await
-                        .map_err(|cleanup| UnconfirmedTermination(format!("{cleanup:#}")))?;
-                    return Err(error).context("poll validation process after confirmed cleanup");
-                }
-            };
-            if let Some(status) = observed {
-                child
-                    .terminate()
-                    .await
-                    .map_err(|error| UnconfirmedTermination(format!("{error:#}")))?;
-                let terminal_limit_binding = if limit_unadmitted_binding.is_some() {
-                    Some(self.refresh_limit_recovery_volatile_binding(feature, project)?)
-                } else {
-                    None
-                };
-                if status.success() {
-                    let mut evidence = Sha256::new();
-                    evidence.update(b"assemblywright.developer-validation.v1\0");
-                    evidence.update(feature.id.as_bytes());
-                    evidence.update(feature.validation.as_bytes());
-                    if let Some((unadmitted_sha256, _)) = &limit_unadmitted_binding {
-                        evidence.update(b"\0limit_unadmitted_sha256=");
-                        evidence.update(unadmitted_sha256.as_bytes());
-                    }
-                    if let Some(volatile_sha256) = &terminal_limit_binding {
-                        evidence.update(b"\0limit_volatile_sha256=");
-                        evidence.update(volatile_sha256.as_bytes());
-                    }
-                    evidence.update(b"exit_status=0");
-                    return Ok(format!("{:x}", evidence.finalize()));
-                }
-                let bytes = fs::read(&log_path)?;
-                let tail = String::from_utf8_lossy(&bytes[bytes.len().saturating_sub(3500)..]);
-                return Err(RepairableValidationFailure(format!(
-                    "Validation failed ({status}):\n{tail}"
-                ))
-                .into());
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            (_, Err(error)) => Err(error),
+            (result, Ok(())) => result,
         }
     }
 
@@ -7010,6 +7041,58 @@ fn configure_project_environment(
     process_environment.set("PATH", std::env::join_paths(paths)?)?;
     process_environment.set("VIRTUAL_ENV", virtual_environment)?;
     Ok(())
+}
+
+fn runner_python_bytecode_cache(
+    owner_root: &Path,
+    project: &Path,
+    prefix: &str,
+) -> Result<RunnerPythonBytecodeCache> {
+    fs::create_dir_all(owner_root)?;
+    let owner_root = fs::canonicalize(owner_root)?;
+    let project = fs::canonicalize(project)?;
+    if owner_root.starts_with(&project) {
+        bail!("Runner Python bytecode cache root must stay outside the project");
+    }
+    let cache_path = owner_root.join(format!("{prefix}{}", Uuid::new_v4().simple()));
+    fs::create_dir(&cache_path)?;
+    let mut cache = RunnerPythonBytecodeCache { path: cache_path };
+    cache.path = fs::canonicalize(&cache.path)?;
+    if cache.path.starts_with(&project) {
+        cache
+            .close()
+            .context("clean rejected validation Python bytecode cache")?;
+        bail!("Runner Python bytecode cache must stay outside the project");
+    }
+    Ok(cache)
+}
+
+struct RunnerPythonBytecodeCache {
+    path: PathBuf,
+}
+
+impl RunnerPythonBytecodeCache {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    fn close(mut self) -> Result<()> {
+        fs::remove_dir_all(&self.path)?;
+        self.path.clear();
+        Ok(())
+    }
+
+    fn retain_for_ambiguity(mut self) {
+        self.path.clear();
+    }
+}
+
+impl Drop for RunnerPythonBytecodeCache {
+    fn drop(&mut self) {
+        if !self.path.as_os_str().is_empty() {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
 }
 
 fn require_project_virtual_environment(project: &Path) -> Result<()> {
@@ -15102,6 +15185,63 @@ mod tests {
         assert!(protected.contains(&"tests/**".into()));
         assert!(protected.contains(&"qa/acceptance.py".into()));
         assert!(protected.contains(&"qa/acceptance.py/**".into()));
+    }
+
+    #[test]
+    fn python_cache_and_near_matches_remain_unreviewable_project_mutations() {
+        for path in [
+            "__pycache__",
+            "tests/__pycache__",
+            "tests/__pycache__/test_site.cpython-312.pyc",
+            "src\\package\\__PYCACHE__\\module.cpython-312.pyc",
+            "not__pycache__",
+            "tests/not__pycache__/test_site.cpython-312.pyc",
+            "tests/__pycache___/test_site.cpython-312.pyc",
+            "tests/test_site.py",
+            "src/package/module.py",
+        ] {
+            assert!(!is_validation_environment_artifact(path), "{path}");
+            let mutation = vec![ToolProjectMutation {
+                revision: 3,
+                request_id: "8d919ad1-449f-4089-a6ef-2c6ea4806f1e".into(),
+                feature_id: Some("feature-1".into()),
+                edits: Vec::new(),
+                unreviewable_paths: vec![path.into()],
+            }];
+            assert!(tool_mutation_edits(&mutation, Some("feature-1")).is_err());
+        }
+    }
+
+    #[test]
+    fn validation_python_cache_is_unique_outside_project_and_removed() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("workspace/project");
+        let data = directory.path().join("state");
+        fs::create_dir_all(&project).unwrap();
+        fs::create_dir(&data).unwrap();
+        let project = fs::canonicalize(project).unwrap();
+        let first = runner_python_bytecode_cache(&data, &project, "validation-pycache-").unwrap();
+        let second = runner_python_bytecode_cache(&data, &project, "validation-pycache-").unwrap();
+        let first_path = first.path().to_owned();
+        let second_path = second.path().to_owned();
+        assert_ne!(first_path, second_path);
+        assert!(!first_path.starts_with(&project));
+        assert!(!second_path.starts_with(&project));
+        first.close().unwrap();
+        second.close().unwrap();
+        assert!(!first_path.exists());
+        assert!(!second_path.exists());
+
+        let retained =
+            runner_python_bytecode_cache(&data, &project, "validation-pycache-").unwrap();
+        let retained_path = retained.path().to_owned();
+        retained.retain_for_ambiguity();
+        assert!(retained_path.is_dir());
+        fs::remove_dir(&retained_path).unwrap();
+
+        let inside = project.join("runner-state");
+        fs::create_dir(&inside).unwrap();
+        assert!(runner_python_bytecode_cache(&inside, &project, "validation-pycache-").is_err());
     }
 
     #[test]

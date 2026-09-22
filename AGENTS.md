@@ -33,7 +33,8 @@
 ## Delegation
 
 - Role matrix and operating details: `docs/development-agent-workflow.md`.
-- Owner decision: new implementation work is delegated to GLM-5.3-Flash, the single bounded low/normal-risk implementation lane. GLM-5.3-Flash performs bounded low/normal-risk implementation in an isolated worktree and returns an untrusted proposal with no Git or publication authority; the local Qwen/local-AI worker lane is retired and must not be used.
+- Owner decision for Codex repository-agent work: new implementation work is delegated to GLM-5.3-Flash, the single bounded low/normal-risk implementation lane. GLM-5.3-Flash performs bounded low/normal-risk implementation in an isolated worktree and returns an untrusted proposal with no Git or publication authority; the local Qwen/local-AI worker lane is retired and must not be used for Codex repository-agent work.
+- That repository-agent policy is separate from the Assemblywright Developer product runtime. When the owner selects a local LLM in Developer, Windows may route the approved feature's implementation/tool execution to that selected local model and then run the immutable validation command. Codex still owns planning and independent exact-diff review. Inside Developer, Windows owns the frozen candidate, feature branch, required checks, merge, and remote-base reconciliation; the frontier parent retains Git/publication authority only for development of the Assemblywright repository itself.
 - The frontier parent retains planning, independent complete-diff review, integration, and every commit, push, merge, publication action, and final evidence judgment.
 - Never route architecture, authentication, permissions, model routing, migrations, plugin containment, concurrency, publication, or release-evidence semantics to GLM-5.3-Flash. Use the high-risk roles below.
 - Default to the parent agent; delegate only bounded work that saves context, cost, or elapsed time.

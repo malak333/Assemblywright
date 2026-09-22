@@ -1567,6 +1567,9 @@ coverage. It does not activate the protected production dispatcher.
 
 ```sh
 cargo test -p assemblywright-master --bin assemblywright-developer
+cargo test -p assemblywright-master --bin assemblywright-developer opencode_config_disables_ambient_capability_surfaces -- --nocapture
+cargo test -p assemblywright-master --bin assemblywright-developer resolved_config -- --nocapture
+cargo test -p assemblywright-master --bin assemblywright-developer python_cache -- --nocapture
 cargo build -p assemblywright-master --bin assemblywright-developer
 python3 scripts/developer-runner-e2e.py --binary target/debug/assemblywright-developer
 python3 scripts/developer-runner-repair-e2e.py --binary target/debug/assemblywright-developer
@@ -1593,3 +1596,18 @@ Windows. Swift client tests run with the full Swift package. Use
 `docs/developer-build-testing.md` for the scenario matrix, limitations, and
 closeout evidence; `docs/developer-build.md` describes owner use and the separate
 live local-model demonstration.
+
+The focused resolved-config command includes a real loopback HTTP response and
+proves exact 262,144/32,768 selected-model limits plus drift rejection. The
+Python-cache command proves exact case-insensitive `__pycache__` paths and near
+matches remain blocked from review admission. The native runner E2E
+precompiles valid timestamp bytecode, changes same-size source while restoring its
+mtime, proves ordinary Python consumes the stale project cache, then proves the
+immutable validation child executes current failing source through a fresh external
+prefix and cleans that prefix after confirmed process termination. Focused cache
+unit coverage also proves the ambiguity path disarms cleanup and retains the prefix
+under runner-owned state while existing attention/Emergency/quarantine semantics
+block or pause work, without exposing its path in diagnostics. This committed
+runner/process proof does not replace
+a native Windows run with pinned OpenCode 1.18.23, the live model, and independent
+reviewer.
