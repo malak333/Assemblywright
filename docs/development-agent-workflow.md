@@ -108,8 +108,13 @@ Every feature or phase closes as one auditable slice. Before publication:
    finding. Security, authentication, routing, persistence, concurrency, and
    publication changes require the high-risk reviewer.
 7. When the owner requested publication, commit without bypassing hooks, push
-   to `main`, verify local `HEAD` equals `origin/main`, and wait for every
-   required hosted gate. A local pass or successful push alone is not closeout.
+   a feature branch, and wait for every required hosted gate on that exact
+   candidate before requesting a merge. Do not rely on automatic merge to wait:
+   if branch protection does not require those checks, GitHub can merge while
+   they are still running. Merge through the normal pull request path only
+   after the checks pass, then verify the reviewed commit is contained in
+   `origin/main` and local `HEAD` equals the published main SHA. A local pass,
+   successful push, or merge while checks are pending is not closeout.
    If deployment or live proof happens after the implementation commit, record
    that evidence in a docs-only closeout commit, run the required hosted gates
    for that exact final SHA, and restore authoritative-host source parity. Do

@@ -161,14 +161,18 @@ struct DeveloperToolApprovalView: View {
   let disabled: Bool
   let decide: (String) -> Void
 
+  var projectText: String { "Project: \(project)" }
+  var executionText: String { "Execution computer: Windows" }
+  var detailText: String { approval.detailText }
+
   var body: some View {
     VStack(alignment: .leading, spacing: 7) {
       Label("Approval required", systemImage: "hand.raised.fill").font(.headline)
       Text(approval.summary).font(.body)
-      Text("Project: \(project)").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-      Text("Execution computer: Windows").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+      Text(projectText).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+      Text(executionText).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
       Text(approval.tool).font(.caption.bold()).foregroundStyle(.secondary)
-      Text(approval.detailText)
+      Text(detailText)
         .font(.system(.caption, design: .monospaced))
         .textSelection(.enabled)
         .padding(8)
