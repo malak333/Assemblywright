@@ -86,6 +86,10 @@ struct RepairableValidationFailure(String);
 struct RepairableReviewRejection(String);
 
 #[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+struct RepairableStagedCandidateRejection(String);
+
+#[derive(Debug, thiserror::Error)]
 #[error("Could not confirm validation termination; review processes before clearing Emergency Pause: {0}")]
 struct UnconfirmedTermination(String);
 
@@ -736,7 +740,7 @@ fn validate_auto_repair_feature(feature: &Feature) -> Result<()> {
     }
     if !matches!(
         feature.last_failure_kind.as_str(),
-        "" | "validation_failure" | "review_rejection" | "operational"
+        "" | "validation_failure" | "review_rejection" | "candidate_rejection" | "operational"
     ) {
         bail!("Persisted automatic repair failure classification is unsupported");
     }
@@ -873,12 +877,32 @@ fn validate_escalation_build_binding(
 fn automatic_code_failure_is_eligible(feature: &Feature) -> bool {
     matches!(
         feature.last_failure_kind.as_str(),
-        "validation_failure" | "review_rejection"
+        "validation_failure" | "review_rejection" | "candidate_rejection"
     ) || (feature.last_failure_kind.is_empty()
         && (feature.checkpoint == "validation_failed"
             || feature.checkpoint.ends_with("_validation_failed")
             || feature.checkpoint.starts_with("review_")
                 && feature.checkpoint.ends_with("_rejected")))
+}
+
+fn clean_staged_tool_hold_recoverable(feature: &Feature) -> bool {
+    feature.status == "failed"
+        && feature.auto_repair_lifecycle == "held"
+        && feature.checkpoint == "staged_tool_candidate_quarantined"
+        && feature.last_failure_kind == "operational"
+        && feature.repair_attempts <= REPAIR_LIMIT
+        && feature.repair_history.len() == feature.repair_attempts as usize
+        && !feature.repair_pending
+        && feature.edits.is_none()
+        && (feature.message.starts_with(
+            "A protected test or validation input changed during staged tool-assisted repair; no candidate files were applied",
+        ) || feature.message.starts_with(
+            "OpenCode event stream failed: error decoding response body: request or response body error: operation timed out",
+        ) || feature.message.starts_with(
+            "OpenCode project tool session timed out",
+        ) || feature.message.starts_with(
+            "OpenCode tool action count exceeded its reserved limit",
+        ))
 }
 
 fn paused_preauthorization_cancellation_is_resumable(feature: &Feature) -> bool {
@@ -2445,6 +2469,7 @@ impl Engine {
                         policy_revision,
                     )?
                 } else if current.auto_repair_lifecycle == "held" && policy_enabled {
+                    let resume_rejected_stage = clean_staged_tool_hold_recoverable(current);
                     snapshot_feature_auto_repair_limit(current, max_escalations, policy_revision)?;
                     current.auto_repair_epoch = current
                         .auto_repair_epoch
@@ -2455,6 +2480,13 @@ impl Engine {
                         "running",
                         "The owner explicitly resumed Auto AI repair after an operational hold",
                     )?;
+                    if resume_rejected_stage {
+                        if current.repair_attempts < REPAIR_LIMIT {
+                            reserve_repair_attempt(current)?;
+                        } else {
+                            current.last_failure_kind = "candidate_rejection".into();
+                        }
+                    }
                     true
                 } else {
                     arm_auto_repair_at_execution_start(
@@ -2978,12 +3010,13 @@ impl Engine {
             )
         };
         let system_prompt = if proposal.source == "automatic_failure" {
-            "Prepare one bounded automatic repair proposal for a failed feature. Do not execute commands or claim that files were changed. Preserve the original requirements and immutable validation command. You may modify any admitted source, test, build, or project configuration file when necessary, but must not weaken, delete, or skip coverage, modify .git, access secrets, or name paths outside the project. Return ONLY JSON with summary and files. Each file has path and complete UTF-8 content. No markdown fences."
+            "Prepare one bounded automatic repair proposal for a failed feature. Do not execute commands or claim that files were changed. Preserve the original requirements and immutable validation command. You may modify any admitted source, test, build, or project configuration file when necessary, but must not weaken, delete, or skip coverage, modify .git, access secrets, or name paths outside the project. Focus on the smallest coherent correction, preferably four or fewer changed files; later attempts can address remaining findings. Return ONLY JSON with summary and files. Each file has path and complete UTF-8 content. No markdown fences."
         } else {
             "Prepare one reviewable repair proposal for a failed feature. Do not execute commands or claim that files were changed. Preserve the original requested behavior and immutable validation command. You may propose an existing test or validation-input change only when the test contradicts the original feature or approved plan; keep that change minimal and include it for explicit owner review. Do not weaken, delete, skip, or broadly rewrite tests. Return ONLY JSON with summary and files. Each file has path and complete UTF-8 content. Include only changed files, do not delete files, modify .git, dependencies, or secrets. No markdown fences."
         };
+        let automatic = proposal.source == "automatic_failure";
         let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(900))
+            .timeout(Duration::from_secs(if automatic { 1_800 } else { 900 }))
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
             .build()?;
@@ -2993,7 +3026,8 @@ impl Engine {
                 target.url.trim_end_matches('/')
             ))
             .json(&json!({
-                "model":target.model,"temperature":0.1,"max_tokens":8192,
+                "model":target.model,"temperature":0.1,
+                "max_tokens":if automatic { 32_768 } else { 8_192 },
                 "response_format":{"type":"json_object"},
                 "chat_template_kwargs":{"enable_thinking":false},
                 "messages":[{"role":"system","content":system_prompt},
@@ -5216,6 +5250,9 @@ impl Engine {
                     .downcast_ref::<RepairableValidationFailure>()
                     .is_some();
                 let review_rejection = error.downcast_ref::<RepairableReviewRejection>().is_some();
+                let candidate_rejection = error
+                    .downcast_ref::<RepairableStagedCandidateRejection>()
+                    .is_some();
                 let reserved_next = self.change(|s| {
                     let next_revision = s.revision + 1;
                     let current = s
@@ -5225,7 +5262,8 @@ impl Engine {
                         .context("feature missing")?;
                     current.status = "failed".into();
                     let latest_error = format!("{error:#}");
-                    let code_failure = repairable_validation || review_rejection;
+                    let code_failure =
+                        repairable_validation || review_rejection || candidate_rejection;
                     let durable_error = if code_failure {
                         let bounded_error = latest_error
                             .chars()
@@ -5265,6 +5303,8 @@ impl Engine {
                         "validation_failure"
                     } else if review_rejection {
                         "review_rejection"
+                    } else if candidate_rejection {
+                        "candidate_rejection"
                     } else {
                         "operational"
                     }
@@ -5299,7 +5339,7 @@ impl Engine {
                             .store(!escalation_attempt, Ordering::SeqCst);
                     }
                     if !escalation_attempt
-                        && (repairable_validation || review_rejection)
+                        && code_failure
                         && !self.cancelled()
                         && self.repair_loop_authorized.load(Ordering::SeqCst)
                         && current.repair_attempts < REPAIR_LIMIT
@@ -5326,7 +5366,7 @@ impl Engine {
                         .lock()
                         .map_err(|_| anyhow!("state lock failed"))?;
                     database.state.auto_ai_repair_enabled
-                        && (repairable_validation || review_rejection)
+                        && (repairable_validation || review_rejection || candidate_rejection)
                         && database
                             .state
                             .queue
@@ -5593,17 +5633,28 @@ impl Engine {
             return Err(error);
         }
         if let Some(stage) = &repair_stage {
-            let protected_unchanged = (|| -> Result<bool> {
-                Ok(
-                    repair_protected_inputs(stage.project_path(), validation_paths)?
-                        == *protected_repair_inputs
-                        && repair_protected_inputs(project, validation_paths)?
-                            == *protected_repair_inputs,
-                )
-            })();
-            if !matches!(protected_unchanged, Ok(true)) {
-                let detail = protected_unchanged
+            let live_protected = repair_protected_inputs(project, validation_paths);
+            let staged_protected = repair_protected_inputs(stage.project_path(), validation_paths);
+            if staged_protected_candidate_only(
+                &live_protected,
+                &staged_protected,
+                protected_repair_inputs,
+            ) {
+                let reason = "The staged tool candidate changed a protected test or validation input; no candidate files were applied";
+                self.record_rejected_staged_tool_candidate(
+                    &feature.id,
+                    workspace_revision,
+                    &live_environment_edits,
+                    reason,
+                )?;
+                return Err(RepairableStagedCandidateRejection(reason.into()).into());
+            }
+            if !matches!(live_protected.as_ref(), Ok(inputs) if inputs == protected_repair_inputs)
+                || !matches!(staged_protected.as_ref(), Ok(inputs) if inputs == protected_repair_inputs)
+            {
+                let detail = live_protected
                     .err()
+                    .or_else(|| staged_protected.err())
                     .map(|error| format!(" ({error})"))
                     .unwrap_or_default();
                 let error = anyhow!(
@@ -5655,6 +5706,23 @@ impl Engine {
             )
         })
         .map(|_| ())
+    }
+
+    fn record_rejected_staged_tool_candidate(
+        &self,
+        feature_id: &str,
+        workspace_revision: u64,
+        live_edits: &[Edit],
+        reason: &str,
+    ) -> Result<()> {
+        self.change(|state| {
+            let feature = state
+                .queue
+                .iter_mut()
+                .find(|feature| feature.id == feature_id)
+                .context("feature missing")?;
+            reject_staged_tool_candidate(feature, workspace_revision, live_edits, reason)
+        })
     }
 
     fn finish_environment_preparation_validation_error(
@@ -8101,6 +8169,37 @@ fn quarantine_tool_candidate(
     Ok(())
 }
 
+fn staged_protected_candidate_only(
+    live: &Result<std::collections::HashMap<String, String>>,
+    staged: &Result<std::collections::HashMap<String, String>>,
+    baseline: &std::collections::HashMap<String, String>,
+) -> bool {
+    matches!(live, Ok(inputs) if inputs == baseline)
+        && matches!(staged, Ok(inputs) if inputs != baseline)
+}
+
+fn reject_staged_tool_candidate(
+    feature: &mut Feature,
+    workspace_revision: u64,
+    live_edits: &[Edit],
+    reason: &str,
+) -> Result<()> {
+    feature.tool_workspace_revision = workspace_revision;
+    if !live_edits.is_empty() {
+        feature.edits = Some(merge_review_edits(
+            feature.edits.as_deref().unwrap_or_default(),
+            live_edits,
+        )?);
+    }
+    feature.status = "failed".into();
+    feature.review_status = "interrupted".into();
+    feature.review_pending = None;
+    feature.review_summary = reason.chars().take(1000).collect();
+    feature.checkpoint = "staged_tool_candidate_rejected".into();
+    feature.message = reason.chars().take(4000).collect();
+    Ok(())
+}
+
 fn never_started_project_has_no_tool_ledger(feature: &Feature) -> bool {
     feature.tool_workspace_revision == 0 && feature.edits.is_none() && feature.review_attempts == 0
 }
@@ -8533,8 +8632,9 @@ fn terminalize_unapplied_escalation(
         .as_mut()
         .context("Reserved repair proposal evidence is missing")?;
     current.status = terminal_status.into();
-    current.error = (authorization_outcome == "authorization_rejected")
-        .then(|| summary.chars().take(1000).collect());
+    if authorization_outcome == "authorization_rejected" {
+        current.error = Some(summary.chars().take(1000).collect());
+    }
     feature.escalation_pending = false;
     Ok(())
 }
@@ -9762,6 +9862,16 @@ fn repair_protected_inputs_with_directory_opened(
         })
     }
 
+    fn incidental_python_cache(relative: &str, name: &str, validation_paths: &[String]) -> bool {
+        if !name.eq_ignore_ascii_case("__pycache__") {
+            return false;
+        }
+        let normalized = relative.replace('\\', "/").to_lowercase();
+        !validation_paths
+            .iter()
+            .any(|path| path == &normalized || path.starts_with(&format!("{normalized}/")))
+    }
+
     #[cfg(unix)]
     fn visit_unix(
         directory: &fs::File,
@@ -9784,6 +9894,9 @@ fn repair_protected_inputs_with_directory_opened(
             match unix_recovery_entry_kind(&entry) {
                 libc::S_IFLNK => continue,
                 libc::S_IFDIR => {
+                    if incidental_python_cache(&relative, &name, validation_paths) {
+                        continue;
+                    }
                     let normally_skipped = name.starts_with('.')
                         || ["target", "node_modules", "__pycache__", "venv", "dist"]
                             .contains(&name.as_str());
@@ -9861,6 +9974,9 @@ fn repair_protected_inputs_with_directory_opened(
             let relative_path = relative_dir.join(entry.file_name());
             let relative = relative_path.to_string_lossy().replace('\\', "/");
             if kind.is_dir() {
+                if incidental_python_cache(&relative, &name, validation_paths) {
+                    continue;
+                }
                 let normally_skipped = name.starts_with('.')
                     || ["target", "node_modules", "__pycache__", "venv", "dist"]
                         .contains(&name.as_str());
@@ -9933,6 +10049,9 @@ fn repair_protected_inputs_with_directory_opened(
     bail!("Protected repair input scanning is unsupported on this host");
     Ok(scan.out)
 }
+const REPAIR_CONTEXT_FILE_BYTE_LIMIT: u64 = 32_000;
+const REPAIR_CONTEXT_TOTAL_BYTE_LIMIT: usize = 128_000;
+
 fn project_context(root: &Path) -> Result<Vec<Value>> {
     project_context_with_directory_opened(root, None)
 }
@@ -9966,7 +10085,7 @@ fn project_context_with_directory_opened(
             let mut entries: Vec<_> = fs::read_dir(dir)?.collect::<std::io::Result<_>>()?;
             entries.sort_by_key(|e| e.file_name());
             for entry in entries {
-                if *budget >= 64000 || out.len() >= 80 {
+                if out.len() >= 80 {
                     break;
                 }
                 let name = entry.file_name().to_string_lossy().into_owned();
@@ -9997,11 +10116,13 @@ fn project_context_with_directory_opened(
                     )?;
                 } else if kind.is_file() {
                     let (mut file, held_metadata) = open_windows_recovery_file(&entry.path())?;
-                    if held_metadata.len() > 16_000 {
+                    if held_metadata.len() > REPAIR_CONTEXT_FILE_BYTE_LIMIT {
                         continue;
                     }
                     let mut bytes = Vec::with_capacity(held_metadata.len() as usize);
-                    file.by_ref().take(16_001).read_to_end(&mut bytes)?;
+                    file.by_ref()
+                        .take(REPAIR_CONTEXT_FILE_BYTE_LIMIT + 1)
+                        .read_to_end(&mut bytes)?;
                     let final_metadata = file.metadata()?;
                     if bytes.len() as u64 != held_metadata.len()
                         || final_metadata.len() != held_metadata.len()
@@ -10017,7 +10138,12 @@ fn project_context_with_directory_opened(
                     if repair_sensitive_path(&relative) || validate_cloud_text(&content).is_err() {
                         continue;
                     }
-                    *budget += content.len();
+                    *budget = budget
+                        .checked_add(content.len())
+                        .context("Project repair context byte count overflow")?;
+                    if *budget > REPAIR_CONTEXT_TOTAL_BYTE_LIMIT {
+                        bail!("Project exceeds the bounded repair context byte count");
+                    }
                     out.push(json!({"path":relative,"content":content}));
                 }
             }
@@ -10303,7 +10429,7 @@ fn project_context_unix(
             hook(relative_dir);
         }
         for entry in unix_recovery_entries(directory)? {
-            if *budget >= 64_000 || out.len() >= 80 {
+            if out.len() >= 80 {
                 break;
             }
             let name = entry.name.to_string_lossy().into_owned();
@@ -10324,11 +10450,13 @@ fn project_context_unix(
                 libc::S_IFREG => {
                     let (mut file, held_metadata) =
                         open_unix_recovery_entry(directory, &entry, false)?;
-                    if held_metadata.len() > 16_000 {
+                    if held_metadata.len() > REPAIR_CONTEXT_FILE_BYTE_LIMIT {
                         continue;
                     }
                     let mut bytes = Vec::with_capacity(held_metadata.len() as usize);
-                    file.by_ref().take(16_001).read_to_end(&mut bytes)?;
+                    file.by_ref()
+                        .take(REPAIR_CONTEXT_FILE_BYTE_LIMIT + 1)
+                        .read_to_end(&mut bytes)?;
                     let final_metadata = file.metadata()?;
                     if bytes.len() as u64 != held_metadata.len()
                         || final_metadata.len() != held_metadata.len()
@@ -10343,7 +10471,12 @@ fn project_context_unix(
                     if repair_sensitive_path(&relative) || validate_cloud_text(&content).is_err() {
                         continue;
                     }
-                    *budget += content.len();
+                    *budget = budget
+                        .checked_add(content.len())
+                        .context("Project repair context byte count overflow")?;
+                    if *budget > REPAIR_CONTEXT_TOTAL_BYTE_LIMIT {
+                        bail!("Project exceeds the bounded repair context byte count");
+                    }
                     out.push(json!({"path":relative,"content":content}));
                 }
                 _ => continue,
@@ -10578,17 +10711,19 @@ fn admitted_project_snapshot_unix(
             let relative_text = relative.to_string_lossy().replace('\\', "/");
             let (mut file, held_metadata) = open_unix_recovery_entry(directory, &entry, false)?;
             let mut bytes = Vec::with_capacity(
-                usize::try_from(held_metadata.len().min(16_001))
+                usize::try_from(held_metadata.len().min(REPAIR_CONTEXT_FILE_BYTE_LIMIT + 1))
                     .context("Project recovery file is too large for this host")?,
             );
-            file.by_ref().take(16_001).read_to_end(&mut bytes)?;
+            file.by_ref()
+                .take(REPAIR_CONTEXT_FILE_BYTE_LIMIT + 1)
+                .read_to_end(&mut bytes)?;
             let final_metadata = file.metadata()?;
             if final_metadata.len() != held_metadata.len() || !final_metadata.is_file() {
                 bail!("Automatic repair recovery file changed while reading");
             }
             let content = String::from_utf8(bytes.clone()).ok();
             let admitted = !repair_sensitive_path(&relative_text)
-                && held_metadata.len() <= 16_000
+                && held_metadata.len() <= REPAIR_CONTEXT_FILE_BYTE_LIMIT
                 && bytes.len() as u64 == held_metadata.len()
                 && content
                     .as_deref()
@@ -10601,7 +10736,7 @@ fn admitted_project_snapshot_unix(
                     .admitted_bytes
                     .checked_add(bytes.len())
                     .context("Project recovery byte count overflow")?;
-                if ledger.admitted_bytes > 64_000 {
+                if ledger.admitted_bytes > REPAIR_CONTEXT_TOTAL_BYTE_LIMIT {
                     bail!("Project exceeds the bounded Auto AI repair recovery byte count");
                 }
                 let content = content.unwrap();
@@ -10938,10 +11073,12 @@ fn admitted_project_snapshot_with_cancellation(
                     .replace('\\', "/");
                 let (mut file, held_metadata) = open_direct_recovery_file(&entry.path())?;
                 let mut bytes = Vec::with_capacity(
-                    usize::try_from(held_metadata.len().min(16_001))
+                    usize::try_from(held_metadata.len().min(REPAIR_CONTEXT_FILE_BYTE_LIMIT + 1))
                         .context("Project recovery file is too large for this host")?,
                 );
-                file.by_ref().take(16_001).read_to_end(&mut bytes)?;
+                file.by_ref()
+                    .take(REPAIR_CONTEXT_FILE_BYTE_LIMIT + 1)
+                    .read_to_end(&mut bytes)?;
                 let final_metadata = file.metadata()?;
                 if final_metadata.len() != held_metadata.len()
                     || !final_metadata.is_file()
@@ -10951,7 +11088,7 @@ fn admitted_project_snapshot_with_cancellation(
                 }
                 let content = String::from_utf8(bytes.clone()).ok();
                 let admitted = !repair_sensitive_path(&relative)
-                    && held_metadata.len() <= 16_000
+                    && held_metadata.len() <= REPAIR_CONTEXT_FILE_BYTE_LIMIT
                     && bytes.len() as u64 == held_metadata.len()
                     && content
                         .as_deref()
@@ -10963,7 +11100,7 @@ fn admitted_project_snapshot_with_cancellation(
                     *admitted_bytes = admitted_bytes
                         .checked_add(bytes.len())
                         .context("Project recovery byte count overflow")?;
-                    if *admitted_bytes > 64_000 {
+                    if *admitted_bytes > REPAIR_CONTEXT_TOTAL_BYTE_LIMIT {
                         bail!("Project exceeds the bounded Auto AI repair recovery byte count");
                     }
                     let content = content.unwrap();
@@ -15395,6 +15532,94 @@ mod tests {
     }
 
     #[test]
+    fn rejected_staged_test_edit_can_continue_auto_repair_only_with_unchanged_live_inputs() {
+        let baseline =
+            std::collections::HashMap::from([("tests/test_site.py".into(), "old".into())]);
+        let changed =
+            std::collections::HashMap::from([("tests/test_site.py".into(), "new".into())]);
+        assert!(staged_protected_candidate_only(
+            &Ok(baseline.clone()),
+            &Ok(changed.clone()),
+            &baseline,
+        ));
+        assert!(!staged_protected_candidate_only(
+            &Ok(changed.clone()),
+            &Ok(changed),
+            &baseline,
+        ));
+        assert!(!staged_protected_candidate_only(
+            &Ok(baseline.clone()),
+            &Err(anyhow!("scan failed")),
+            &baseline,
+        ));
+
+        let mut feature = feature_with_status("running");
+        feature.edits = None;
+        reject_staged_tool_candidate(&mut feature, 3, &[], "Protected candidate rejected").unwrap();
+        assert_eq!(feature.checkpoint, "staged_tool_candidate_rejected");
+        assert_eq!(feature.tool_workspace_revision, 3);
+        assert!(feature.edits.is_none());
+        feature.last_failure_kind = "candidate_rejection".into();
+        assert!(automatic_code_failure_is_eligible(&feature));
+    }
+
+    #[test]
+    fn explicit_resume_of_legacy_protected_stage_hold_reserves_the_next_ordinary_attempt() {
+        let mut feature = feature_with_status("failed");
+        feature.auto_repair_lifecycle = "held".into();
+        feature.checkpoint = "staged_tool_candidate_quarantined".into();
+        feature.last_failure_kind = "operational".into();
+        feature.repair_attempts = 1;
+        feature.repair_history = vec![RepairAttemptEvidence {
+            attempt: 1,
+            prior_checkpoint: "validation_failed".into(),
+            prior_message: "Validation failed".into(),
+            prior_edits: Vec::new(),
+        }];
+        feature.edits = None;
+        feature.repair_pending = false;
+        feature.message = "A protected test or validation input changed during staged tool-assisted repair; no candidate files were applied".into();
+        assert!(clean_staged_tool_hold_recoverable(&feature));
+        let mut other_error = feature.clone();
+        other_error.message = "Tool effects are uncertain".into();
+        assert!(!clean_staged_tool_hold_recoverable(&other_error));
+        let mut timed_out_stage = feature.clone();
+        timed_out_stage.message = "OpenCode event stream failed: error decoding response body: request or response body error: operation timed out".into();
+        assert!(clean_staged_tool_hold_recoverable(&timed_out_stage));
+        timed_out_stage.message = "OpenCode project tool session timed out".into();
+        assert!(clean_staged_tool_hold_recoverable(&timed_out_stage));
+        let mut with_live_edits = feature.clone();
+        with_live_edits.edits = Some(Vec::new());
+        assert!(!clean_staged_tool_hold_recoverable(&with_live_edits));
+
+        set_auto_repair_lifecycle(&mut feature, "running", "explicit Resume").unwrap();
+        reserve_repair_attempt(&mut feature).unwrap();
+        assert_eq!(feature.status, "queued");
+        assert_eq!(feature.checkpoint, "repair_2_reserved");
+        assert_eq!(feature.repair_attempts, 2);
+        assert_eq!(feature.auto_repair_lifecycle, "running");
+
+        let mut exhausted_stage = feature.clone();
+        exhausted_stage.status = "failed".into();
+        exhausted_stage.auto_repair_lifecycle = "held".into();
+        exhausted_stage.checkpoint = "staged_tool_candidate_quarantined".into();
+        exhausted_stage.message = "OpenCode tool action count exceeded its reserved limit".into();
+        exhausted_stage.last_failure_kind = "operational".into();
+        exhausted_stage.repair_pending = false;
+        exhausted_stage.repair_attempts = REPAIR_LIMIT;
+        exhausted_stage.repair_history.push(RepairAttemptEvidence {
+            attempt: REPAIR_LIMIT,
+            prior_checkpoint: "staged_tool_candidate_quarantined".into(),
+            prior_message: "Earlier attempt failed".into(),
+            prior_edits: Vec::new(),
+        });
+        assert!(clean_staged_tool_hold_recoverable(&exhausted_stage));
+        set_auto_repair_lifecycle(&mut exhausted_stage, "running", "explicit Resume").unwrap();
+        exhausted_stage.last_failure_kind = "candidate_rejection".into();
+        assert!(automatic_code_failure_is_eligible(&exhausted_stage));
+    }
+
+    #[test]
     fn staged_repair_applies_only_candidate_bytes_but_reviews_environment_too() {
         let environment = Edit {
             path: "requirements.txt".into(),
@@ -16047,6 +16272,34 @@ mod tests {
     }
 
     #[test]
+    fn protected_test_scan_ignores_incidental_python_bytecode_but_detects_source_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        let tests = dir.path().join("tests");
+        fs::create_dir_all(&tests).unwrap();
+        fs::write(tests.join("test_site.py"), "assert True\n").unwrap();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        let validation_paths = vec!["tests".into()];
+        let baseline = repair_protected_inputs(&root, &validation_paths).unwrap();
+
+        fs::create_dir_all(tests.join("__pycache__")).unwrap();
+        fs::write(
+            tests.join("__pycache__/test_site.cpython-312.pyc"),
+            b"generated bytecode",
+        )
+        .unwrap();
+        assert_eq!(
+            repair_protected_inputs(&root, &validation_paths).unwrap(),
+            baseline
+        );
+
+        fs::write(tests.join("test_site.py"), "assert False\n").unwrap();
+        assert_ne!(
+            repair_protected_inputs(&root, &validation_paths).unwrap(),
+            baseline
+        );
+    }
+
+    #[test]
     fn protected_input_byte_reservation_fails_before_mutating_the_read_budget() {
         let mut bytes_seen = PROTECTED_REPAIR_INPUT_BYTE_LIMIT - 1;
         assert_eq!(
@@ -16303,6 +16556,40 @@ mod tests {
             assert!(apply_edit(&root, &edit).is_err());
             assert!(!root.join(&edit.path).exists());
         }
+    }
+
+    #[test]
+    fn repair_context_and_recovery_admit_large_source_within_bounded_file_limit() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(directory.path()).unwrap();
+        let source = format!("# generated source\n{}\n", "x".repeat(22_000));
+        fs::write(root.join("site_generator.py"), &source).unwrap();
+        let context = project_context(&root).unwrap();
+        assert_eq!(context.len(), 1);
+        assert_eq!(context[0]["path"], "site_generator.py");
+        assert_eq!(context[0]["content"], source);
+        let recovery = admitted_project_snapshot(&root).unwrap();
+        assert_eq!(recovery.files["site_generator.py"].1, source);
+
+        fs::write(root.join("oversized.py"), "x".repeat(32_001)).unwrap();
+        assert_eq!(project_context(&root).unwrap().len(), 1);
+        assert!(!admitted_project_snapshot(&root)
+            .unwrap()
+            .files
+            .contains_key("oversized.py"));
+    }
+
+    #[test]
+    fn repair_context_rejects_aggregate_overshoot_consistently_with_recovery() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(directory.path()).unwrap();
+        for index in 0..5 {
+            fs::write(root.join(format!("source_{index}.py")), "x".repeat(31_000)).unwrap();
+        }
+        let context_error = project_context(&root).unwrap_err();
+        assert!(context_error.to_string().contains("byte count"));
+        let recovery_error = admitted_project_snapshot(&root).unwrap_err();
+        assert!(recovery_error.to_string().contains("byte count"));
     }
 
     #[cfg(unix)]
@@ -16787,6 +17074,10 @@ mod tests {
         assert_eq!(held.auto_repair_lifecycle, "held");
         assert_eq!(held.checkpoint, "escalation_1_unavailable");
         assert!(held.auto_repair_reason.contains("explicitly Resume"));
+        assert_eq!(
+            held.escalation_proposal.as_ref().unwrap().error.as_deref(),
+            Some("fixture provider unavailable")
+        );
         assert_eq!(
             held.escalation_history
                 .iter()

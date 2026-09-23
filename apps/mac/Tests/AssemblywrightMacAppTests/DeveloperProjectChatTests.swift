@@ -106,9 +106,12 @@ struct DeveloperProjectChatTests {
     RunLoop.main.run(until: Date().addingTimeInterval(0.1))
 
     func descendants<T: NSView>(_ type: T.Type, in view: NSView) -> [T] {
-      (view as? T).map { [$0] } ?? view.subviews.flatMap { descendants(type, in: $0) }
+      ((view as? T).map { [$0] } ?? []) + view.subviews.flatMap { descendants(type, in: $0) }
     }
-    let labels = descendants(NSTextField.self, in: host).map(\.stringValue).joined(separator: "\n")
+    // SwiftUI text can be hosted in AppKitTextInteractionView rather than NSTextField.
+    let labels = descendants(NSView.self, in: host)
+      .compactMap { $0.accessibilityValue() as? String }
+      .joined(separator: "\n")
     #expect(labels.contains("Project: demo"))
     #expect(labels.contains("Execution computer: Windows"))
     #expect(labels.contains("python -m pip install PySide6"))

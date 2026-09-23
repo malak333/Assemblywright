@@ -2766,6 +2766,24 @@ consistency.
   may continue the loop. Operational failures stop; uncertain application,
   validation, review, persistence, or publication effects quarantine and never
   replay automatically.
+- A protected test edit made only in a disposable ordinary-repair stage is a
+  rejected candidate if both protected-input scans succeed and live inputs still
+  match the captured baseline. Its staged bytes are never applied; the ordinary
+  attempt is consumed, and enabled Auto AI repair can continue to the remaining
+  attempts and escalation. Live drift or incomplete evidence still holds.
+- Tool-assisted feature sessions now have a 30-minute finite event-stream and
+  runner deadline; project chat remains at 15 minutes. A timed-out disposable
+  stage with no live edits stays held, but exact explicit Resume can reserve the
+  next ordinary attempt after confirmed cleanup. It is not an automatic replay.
+  Verify the selected provider's resolved OpenCode timeout and model limits at
+  the loopback config boundary, since a silently shortened provider timeout
+  can defeat the longer runner deadline.
+- Feature tool sessions admit at most 128 bounded actions; project chat retains
+  its 48-action cap. An exact clean staged action-cap hold after ordinary attempt
+  three can enter the existing Auto AI escalation path on explicit Resume.
+- Unavailable automatic escalation must retain the bounded sanitized proposal
+  error after filling its unused authorization/application evidence slots;
+  clearing it obscures the provider failure and prevents precise recovery.
 - Fresh independent Codex review examines the cumulative feature diff from the
   earliest baseline and remains mandatory before success, publication, or Auto-run
   advancement. Reaching the limit preserves manual recovery and never removes or
@@ -2850,3 +2868,21 @@ consistency.
   metadata after Swift Testing identifiers even though discovery displays an
   identifier ending in `()`; the exact UI selector therefore permits one
   anchored optional `/.*` suffix after the literal method parentheses.
+- The September 2026 `aw-fft-demo` Auto AI repair exposed a context ceiling:
+  an existing 21,788-byte `site_generator.py` was excluded by the 16,000-byte
+  per-file project context and recovery scans, so a valid automatic proposal
+  naming it was rejected as outside the bounded context. Both scans now admit
+  files through 32,000 bytes with a 128,000-byte project total,
+  80-file ceiling, path and secret screening, before-byte checks, validation,
+  and independent review. Source coverage includes a 22,000-byte file and an
+  excluded 32,001-byte file; live recovery remains separate evidence.
+- In live `aw-fft-demo` recovery, escalation 5 produced a candidate that passed
+  the unchanged validation command but independent Codex review rejected it
+  with 12 blocking findings. The enabled runner advanced to escalation 6 and
+  then 7 without owner input. This proves automatic continuation through
+  review rejection, not feature completion or publication.
+- In native SwiftUI approval-view tests, rendered `Text` may appear as
+  `AppKitTextInteractionView` with an accessibility value, not an `NSTextField`
+  subview. Traverse all hosted `NSView` descendants and assert their text
+  accessibility values; keep the actual AppKit approval buttons and callbacks
+  under test. A recursive helper must continue below a matching `NSView`.
