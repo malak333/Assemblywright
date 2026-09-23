@@ -2883,6 +2883,20 @@ consistency.
   review rejection, not feature completion or publication.
 - In native SwiftUI approval-view tests, rendered `Text` may appear as
   `AppKitTextInteractionView` with an accessibility value, not an `NSTextField`
-  subview. Traverse all hosted `NSView` descendants and assert their text
-  accessibility values; keep the actual AppKit approval buttons and callbacks
-  under test. A recursive helper must continue below a matching `NSView`.
+  subview. A recursive `NSView` helper must continue below a matching view;
+  stopping at the first match hides its descendants.
+- On the hosted macOS runner, SwiftUI's hosted text accessibility values were
+  absent even though the same approval view exposed them locally; only the
+  AppKit button titles appeared. The stable test boundary checks the exact
+  presentation strings supplied to `Text` and exercises the real hosted
+  Approve/Deny buttons and callbacks. Do not infer visual or accessibility
+  rendering parity from this test alone.
+- The live `aw-fft-demo` automatic loop later held at escalation 7 of 100 when
+  the selected local model returned 63,745 bytes that failed repair-proposal
+  JSON parsing despite `finish_reason` being `stop`. The runner applied no
+  candidate for that escalation. A normal finish marker is not proof of a
+  parseable proposal, and this remains a distinct model-output recovery issue.
+- GitHub accepted `gh pr merge --auto --merge` for repair PR #417 while its
+  hosted checks were pending because the branch did not require them for merge.
+  For future phases, observe passing required checks on the exact candidate
+  before requesting merge; verify the resulting main SHA afterward.

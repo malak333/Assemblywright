@@ -94,8 +94,9 @@ struct DeveloperProjectChatTests {
       """.utf8))
     let approval = try #require(snapshot.pendingApproval)
     var decisions: [String] = []
-    let host = NSHostingView(rootView: DeveloperToolApprovalView(
-      approval: approval, project: "demo", disabled: false, decide: { decisions.append($0) }))
+    let view = DeveloperToolApprovalView(
+      approval: approval, project: "demo", disabled: false, decide: { decisions.append($0) })
+    let host = NSHostingView(rootView: view)
     let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 240),
       styleMask: [.titled], backing: .buffered, defer: false)
     window.isReleasedWhenClosed = false
@@ -108,14 +109,10 @@ struct DeveloperProjectChatTests {
     func descendants<T: NSView>(_ type: T.Type, in view: NSView) -> [T] {
       ((view as? T).map { [$0] } ?? []) + view.subviews.flatMap { descendants(type, in: $0) }
     }
-    // SwiftUI text can be hosted in AppKitTextInteractionView rather than NSTextField.
-    let labels = descendants(NSView.self, in: host)
-      .compactMap { $0.accessibilityValue() as? String }
-      .joined(separator: "\n")
-    #expect(labels.contains("Project: demo"))
-    #expect(labels.contains("Execution computer: Windows"))
-    #expect(labels.contains("python -m pip install PySide6"))
-    #expect(labels.contains("C:/demo"))
+    #expect(view.projectText == "Project: demo")
+    #expect(view.executionText == "Execution computer: Windows")
+    #expect(view.detailText.contains("python -m pip install PySide6"))
+    #expect(view.detailText.contains("C:/demo"))
     let buttons = descendants(NSButton.self, in: host)
     let approve = try #require(buttons.first { $0.title == "Approve once" })
     let deny = try #require(buttons.first { $0.title == "Deny" })
