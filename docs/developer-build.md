@@ -208,6 +208,10 @@ out-of-root paths, or the validation-command string. A no-op or duplicate candid
 consumes one attempt; operational failures hold, uncertain effects quarantine, and
 the hard feature limit stops all later AI escalation while retaining non-AI
 correction, reviewer change when applicable, removal, Stop, and Emergency Pause.
+Automatic proposals have a 32,768-token output budget and 30-minute model deadline;
+the prompt requests a small coherent correction so later attempts can address
+remaining findings. A truncated response retains the provider error and holds for
+explicit Resume.
 
 This is a Developer owner-account boundary. A changed build or test configuration
 can change what the frozen command does when Windows executes it. The toggle does

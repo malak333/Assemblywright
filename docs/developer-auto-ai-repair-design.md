@@ -56,6 +56,12 @@ runs under the Windows owner account and is not hostile-process containment.
 - The independent Codex reviewer and its saved feature binding remain unchanged.
 - Existing installations migrate to Auto AI repair off and maximum `100`.
 - Each model, validation, and review step retains its existing finite deadline.
+  Tool-assisted feature sessions have a 30-minute deadline; project chat keeps
+  its 15-minute deadline. Confirmed timeout cleanup is still an operational hold.
+  OpenCode's resolved selected-provider timeout and model limits must match the
+  pinned request configuration before a session starts; drift stops the session.
+  Feature tool sessions may record up to 128 bounded actions; project chat keeps
+  its 48-action cap. Exhausting either cap stops that session.
   Quota or entitlement failure is operational and enters `held`; it is never retried
   as a code failure.
 
@@ -156,6 +162,12 @@ limit was exhausted.
 
 Automatic proposals may change source, tests, and project configuration. They may
 not change the immutable validation command or any excluded path or material.
+They may
+request up to 32,768 output tokens and have a 30-minute model deadline; manual
+proposals retain the 8,192-token, 15-minute limits. The automatic prompt asks for
+the smallest coherent correction, preferably four or fewer files, so later
+attempts can address remaining review findings. A truncated or unavailable
+response still holds for explicit Resume with its provider error retained.
 Every changed test or validation-related file is explicitly marked in the Codex
 review packet. Review compares the cumulative candidate with each file's earliest
 feature baseline and must reject weakened or deleted coverage, hidden skips,
@@ -164,6 +176,9 @@ validation bypasses, or departures from the approved requirements.
 Project context and proposal admission stay bounded. A truncated context is not a
 complete mutation manifest. Only exact admitted paths with verified before bytes
 may be included in the frozen proposal.
+The per-file context and recovery limit is 32,000 bytes, with a 128,000-byte
+project total and 80-file limit. Context admission rejects an aggregate byte
+overrun before a proposal; recovery rejects projects exceeding either limit.
 
 Freezing the validation command freezes its exact command string, not the behavior
 of files that command loads. Automatically changing `package.json`, build scripts,
@@ -196,9 +211,26 @@ secret-bearing project material is never admitted to the repair packet.
 ## Failure, cancellation, and recovery
 
 - No-op and previously attempted candidates consume an escalation and continue.
+- An ordinary tool-assisted repair that changes a protected test or validation
+  input only in its disposable stage is a rejected candidate when the live
+  protected inputs still match the pre-attempt baseline and both scans succeed.
+  No staged bytes are applied. The rejection consumes that ordinary attempt and
+  Auto AI repair may continue through the remaining ordinary attempts and then
+  the existing escalation limit. Live-input drift, incomplete mutation evidence,
+  or a failed scan remains an operational hold requiring inspection.
+  The protected-input comparison excludes incidental Python `__pycache__`
+  unless the validation command names it; the separate tool mutation ledger
+  still rejects unreviewable in-project cache changes.
+  A previously held feature with the exact staged-protected-input rejection or
+  OpenCode stream or session timeout or action-count exhaustion, no applied candidate
+  edits, and intact ordinary-attempt history may use explicit Resume to reserve
+  the next ordinary attempt or enter automatic escalation after attempt three.
+  Other operational holds retain their existing recovery rules.
 - Malformed provider output, provider unavailability, persistence failure,
   workspace drift, an invalid path, publication failure, or other operational
   failure consumes any already-reserved attempt but stops for manual recovery.
+  The unavailable proposal retains its bounded sanitized provider error for
+  diagnosis through the explicit recovery step.
 - Limit exhaustion keeps owner-directed non-AI correction/revalidation,
   reviewer-change, and removal recovery available; it never permits another AI
   escalation, removes, advances, or automatically re-enters the feature. All

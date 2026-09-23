@@ -39,16 +39,37 @@ const EXPECTED_OPENCODE_SHA256: &str =
 const EXPECTED_OPENCODE_SHA256: &str =
     "f7c45939a895e5a9febf141ab16307418bc41da31879aa0b2e65223190ca1c1a";
 const MAX_ACTIONS_PER_PROJECT: usize = 50;
-const MAX_ACTIONS_PER_REQUEST: u64 = 48;
+const MAX_CHAT_ACTIONS_PER_REQUEST: u64 = 48;
+const MAX_FEATURE_ACTIONS_PER_REQUEST: u64 = 128;
 const MAX_ACTION_OUTPUT_BYTES: usize = 32 * 1024;
 const MAX_ACTION_DETAILS_BYTES: usize = 1024 * 1024;
 pub(crate) const CHAT_ACTION_EVIDENCE_RESERVE_BYTES: u64 = 64 * 1024 * 1024;
+#[cfg(test)]
+const FEATURE_ACTION_EVIDENCE_BOUND_BYTES: u64 = 192 * 1024 * 1024;
+
+fn action_limit(request: &ToolChatRequest) -> u64 {
+    if request.feature_id.is_some() {
+        MAX_FEATURE_ACTIONS_PER_REQUEST
+    } else {
+        MAX_CHAT_ACTIONS_PER_REQUEST
+    }
+}
 const MAX_MUTATION_FILES: usize = 1_000;
 const MAX_MUTATION_FILE_BYTES: u64 = 256 * 1024;
 const MAX_GENERATED_DIRECTORY_ENTRIES: usize = 20_000;
 const MAX_GENERATED_DIRECTORY_DEPTH: usize = 40;
 const OPENCODE_MODEL_CONTEXT_TOKENS: u64 = 262_144;
 const OPENCODE_MODEL_OUTPUT_TOKENS: u64 = 32_768;
+const OPENCODE_FEATURE_TIMEOUT_SECS: u64 = 1_800;
+const OPENCODE_CHAT_TIMEOUT_SECS: u64 = 900;
+
+fn opencode_session_timeout(feature_id: Option<&str>) -> Duration {
+    Duration::from_secs(if feature_id.is_some() {
+        OPENCODE_FEATURE_TIMEOUT_SECS
+    } else {
+        OPENCODE_CHAT_TIMEOUT_SECS
+    })
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -897,6 +918,7 @@ impl DeveloperTools {
         cancel_rx: &mut mpsc::UnboundedReceiver<()>,
         approval_rx: &mut mpsc::UnboundedReceiver<ApprovalReply>,
     ) -> Result<ToolChatResult> {
+        let session_timeout = opencode_session_timeout(request.feature_id.as_deref());
         reject_ambient_opencode_inputs(project_path)?;
         verify_runtime_executable(&runtime.executable)?;
         let port = reserve_loopback_port().await?;
@@ -1057,7 +1079,7 @@ impl DeveloperTools {
                 .to_owned();
             let mut event_response = client
                 .get(project_url(&base, "event", project_path)?)
-                .timeout(Duration::from_secs(900))
+                .timeout(session_timeout)
                 .send()
                 .await?
                 .error_for_status()?;
@@ -1091,7 +1113,7 @@ impl DeveloperTools {
                 session_id: &session_id,
                 redactions: &redactions,
             };
-            let deadline = tokio::time::sleep(Duration::from_secs(900));
+            let deadline = tokio::time::sleep(session_timeout);
             tokio::pin!(deadline);
             'events: loop {
                 tokio::select! {
@@ -1601,7 +1623,7 @@ fn opencode_config(
         "provider":{
             provider:{
                 "npm":"@ai-sdk/openai-compatible",
-                "options":{"baseURL":model.url,"timeout":900000},
+                "options":{"baseURL":model.url,"timeout":1_800_000},
                 "models":{model.model.clone():{"limit":{
                     "context":OPENCODE_MODEL_CONTEXT_TOKENS,
                     "output":OPENCODE_MODEL_OUTPUT_TOKENS
@@ -1619,6 +1641,16 @@ fn resolved_model_limits_match(
     let provider = provider_id(&model.target);
     resolved["provider"][provider.as_str()]["models"][model.model.as_str()]["limit"]
         == expected["provider"][provider.as_str()]["models"][model.model.as_str()]["limit"]
+}
+
+fn resolved_provider_timeout_matches(
+    resolved: &Value,
+    expected: &Value,
+    model: &ToolModelConfig,
+) -> bool {
+    let provider = provider_id(&model.target);
+    resolved["provider"][provider.as_str()]["options"]["timeout"]
+        == expected["provider"][provider.as_str()]["options"]["timeout"]
 }
 
 fn permission_config(
@@ -1831,6 +1863,9 @@ async fn verify_resolved_config(
     }
     if !resolved_model_limits_match(&resolved, &expected, model) {
         mismatches.push("provider.model.limit");
+    }
+    if !resolved_provider_timeout_matches(&resolved, &expected, model) {
+        mismatches.push("provider.options.timeout");
     }
     if resolved["tools"] != expected["tools"] {
         mismatches.push("tools");
@@ -2217,7 +2252,7 @@ fn require_action_evidence_capacity(
             params![request.project, request.request_id, request.chat_id],
             |row| row.get(0),
         )?;
-        if count >= MAX_ACTIONS_PER_REQUEST {
+        if count >= action_limit(request) {
             bail!("OpenCode tool action count exceeded its reserved limit");
         }
     }
@@ -2465,6 +2500,15 @@ mod tests {
             &config["provider"]["assemblywright-windows"]["models"]["windows-coder"]["limit"];
         assert_eq!(limits["context"], json!(262_144));
         assert_eq!(limits["output"], json!(32_768));
+        assert_eq!(
+            config["provider"]["assemblywright-windows"]["options"]["timeout"],
+            json!(1_800_000)
+        );
+        assert_eq!(
+            opencode_session_timeout(Some("feature-id")),
+            Duration::from_secs(1_800)
+        );
+        assert_eq!(opencode_session_timeout(None), Duration::from_secs(900));
         assert!(config["mcp"].as_object().unwrap().is_empty());
         assert!(config["plugin"].as_array().unwrap().is_empty());
         assert!(opencode_config(
@@ -2530,7 +2574,7 @@ mod tests {
             .unwrap();
         served.await.unwrap();
 
-        let mut drifted = resolved;
+        let mut drifted = resolved.clone();
         drifted["provider"]["assemblywright-windows"]["models"]["windows-coder"]["limit"]
             ["output"] = json!(4_096);
         let (base, served) = resolved_config_server(drifted).await;
@@ -2539,6 +2583,17 @@ mod tests {
                 .await
                 .unwrap_err();
         assert!(error.to_string().contains("provider.model.limit"));
+        served.await.unwrap();
+
+        let mut timeout_drifted = resolved;
+        timeout_drifted["provider"]["assemblywright-windows"]["options"]["timeout"] =
+            json!(900_000);
+        let (base, served) = resolved_config_server(timeout_drifted).await;
+        let error =
+            verify_resolved_config(&client, &base, project, &model, ToolAccessMode::Auto, &[])
+                .await
+                .unwrap_err();
+        assert!(error.to_string().contains("provider.options.timeout"));
         served.await.unwrap();
     }
 
@@ -3053,16 +3108,21 @@ mod tests {
         let (_directory, tools) = service(None);
         let request = test_request();
         assert!(
-            MAX_ACTIONS_PER_REQUEST
+            MAX_CHAT_ACTIONS_PER_REQUEST
                 * (MAX_ACTION_DETAILS_BYTES as u64 + MAX_ACTION_OUTPUT_BYTES as u64 + 1_000)
                 < CHAT_ACTION_EVIDENCE_RESERVE_BYTES
+        );
+        assert!(
+            MAX_FEATURE_ACTIONS_PER_REQUEST
+                * (MAX_ACTION_DETAILS_BYTES as u64 + MAX_ACTION_OUTPUT_BYTES as u64 + 1_000)
+                < FEATURE_ACTION_EVIDENCE_BOUND_BYTES
         );
         let unicode_summary = bounded(&"😀".repeat(1_000), 1_000);
         assert_eq!(unicode_summary.len(), 1_000);
         assert!(unicode_summary.is_char_boundary(unicode_summary.len()));
         let mut database = tools.database.lock().unwrap();
         let transaction = database.transaction().unwrap();
-        for index in 0..MAX_ACTIONS_PER_REQUEST {
+        for index in 0..MAX_CHAT_ACTIONS_PER_REQUEST {
             transaction.execute(
                 "INSERT INTO developer_tool_action(
                    id,request_id,project,chat_id,access_revision,tool,summary,details,status,output,updated_unix)
@@ -3086,5 +3146,36 @@ mod tests {
         .unwrap_err()
         .to_string()
         .contains("size"));
+    }
+
+    #[test]
+    fn feature_action_budget_allows_complex_staged_work_but_still_has_a_hard_cap() {
+        let (_directory, tools) = service(None);
+        let mut request = test_request();
+        request.feature_id = Some("feature-1".into());
+        assert_eq!(action_limit(&request), 128);
+        let mut database = tools.database.lock().unwrap();
+        let transaction = database.transaction().unwrap();
+        for index in 0..MAX_FEATURE_ACTIONS_PER_REQUEST - 1 {
+            transaction.execute(
+                "INSERT INTO developer_tool_action(
+                   id,request_id,project,chat_id,access_revision,tool,summary,details,status,output,updated_unix,feature_id)
+                 VALUES(?1,?2,?3,NULL,1,'bash','bounded','{}','completed',NULL,1,?4)",
+                params![format!("feature-action-{index}"), request.request_id, request.project, request.feature_id],
+            ).unwrap();
+        }
+        require_action_evidence_capacity(&transaction, &request, "last-admitted", 2, 0).unwrap();
+        transaction.execute(
+            "INSERT INTO developer_tool_action(
+               id,request_id,project,chat_id,access_revision,tool,summary,details,status,output,updated_unix,feature_id)
+             VALUES('last-admitted',?1,?2,NULL,1,'bash','bounded','{}','completed',NULL,1,?3)",
+            params![request.request_id, request.project, request.feature_id],
+        ).unwrap();
+        assert!(
+            require_action_evidence_capacity(&transaction, &request, "over-cap", 2, 0)
+                .unwrap_err()
+                .to_string()
+                .contains("count")
+        );
     }
 }
