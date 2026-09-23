@@ -2908,3 +2908,18 @@ consistency.
   hosted checks were pending because the branch did not require them for merge.
   For future phases, observe passing required checks on the exact candidate
   before requesting merge; verify the resulting main SHA afterward.
+- PR #419 merged the bounded malformed-JSON retry as main commit
+  `91ba190e6b01d9a0b64849d555ef5ece20c59b89` only after its exact-head
+  Mac release and Windows distributed gates passed. The Developer build from
+  that commit was installed into the existing Mac app and Windows runner;
+  the installed Mac bundle passed strict code-signature verification, and
+  the native Windows Developer runner suite passed 209 tests with one ignored.
+  Local `developer_main.rs` matched the Windows source SHA-256
+  `bc4107b3aa61235c7f1f0451c3702523c7c9ca47e2fc99cc01e2511f4f7f50e0`;
+  the built and installed Windows executable both matched SHA-256
+  `af43c073de1118363f75fe69368a39e3752536d6a8c9212771688a95a655a6f0`.
+  The Mac app relaunched and reconnected to MIKE-PC. On September 23 its
+  authenticated runner state retained `aw-fft-demo` at held escalation 7;
+  a bound Resume advanced automatically to escalation 8 preparing with
+  Auto AI repair running and Emergency Pause clear. This verifies installed
+  recovery entry, not proposal validity, feature completion, or publication.
