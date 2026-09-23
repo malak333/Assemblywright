@@ -2881,6 +2881,14 @@ consistency.
   with 12 blocking findings. The enabled runner advanced to escalation 6 and
   then 7 without owner input. This proves automatic continuation through
   review rejection, not feature completion or publication.
+- A local model can return syntactically invalid repair JSON while reporting
+  `finish_reason: stop`. For an automatic escalation, permit one corrective
+  model request inside the same reserved attempt, with the frozen prompt,
+  cancellation token, inference lease, and 30-minute overall deadline. Parse
+  before admitting any candidate bytes; a second malformed response holds and
+  consumes only that reserved escalation. The runner tests use a real loopback
+  HTTP provider, and native process E2E still verifies operational holds; live
+  recovery of `aw-fft-demo` requires separate Windows evidence.
 - In native SwiftUI approval-view tests, rendered `Text` may appear as
   `AppKitTextInteractionView` with an accessibility value, not an `NSTextField`
   subview. A recursive `NSView` helper must continue below a matching view;

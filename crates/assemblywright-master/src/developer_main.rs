@@ -75,6 +75,7 @@ const REVIEW_HISTORY_LIMIT: usize = 104;
 const REVIEWER_SELECTION_HISTORY_LIMIT: usize = 80;
 const AUTO_REPAIR_REASON_LIMIT: usize = 1000;
 const CODE_FAILURE_SUMMARY_LIMIT: usize = 4000;
+const REPAIR_PROPOSAL_SUMMARY_LIMIT: usize = 4000;
 const AUTO_REPAIR_STEP_ELAPSED_LIMIT_MS: u64 = 24 * 60 * 60 * 1_000;
 
 #[derive(Debug, thiserror::Error)]
@@ -555,6 +556,89 @@ fn durable_failure_summary(value: &str, category: &str, limit: usize) -> String 
             hash(value.as_bytes())
         )
     })
+}
+
+#[derive(Debug)]
+struct CompletedMalformedRepairProposal {
+    content_bytes: usize,
+}
+
+impl std::fmt::Display for CompletedMalformedRepairProposal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "Model did not return valid repair proposal JSON ({} bytes; finish reason stop)",
+            self.content_bytes
+        )
+    }
+}
+
+impl std::error::Error for CompletedMalformedRepairProposal {}
+
+fn bounded_model_finish_reason(value: &Value) -> &'static str {
+    match value.as_str() {
+        Some("stop") => "stop",
+        Some("length") => "length",
+        Some("content_filter") => "content_filter",
+        Some("tool_calls") => "tool_calls",
+        _ => "unknown",
+    }
+}
+
+fn parse_repair_proposal_json(content: &str, finish_reason: &Value) -> Result<Value> {
+    let normalized = content
+        .trim()
+        .strip_prefix("```json")
+        .or_else(|| content.trim().strip_prefix("```"))
+        .and_then(|value| value.trim().strip_suffix("```"))
+        .unwrap_or(content)
+        .trim();
+    match serde_json::from_str(normalized) {
+        Ok(generated) => Ok(generated),
+        Err(_) if finish_reason.as_str() == Some("stop") => {
+            Err(anyhow::Error::new(CompletedMalformedRepairProposal {
+                content_bytes: content.len(),
+            }))
+        }
+        Err(_) => bail!(
+            "Model did not return valid repair proposal JSON ({} bytes; finish reason {})",
+            content.len(),
+            bounded_model_finish_reason(finish_reason)
+        ),
+    }
+}
+
+fn repair_proposal_request_preflight(
+    cancellation: &AtomicU8,
+    deadline: tokio::time::Instant,
+) -> Result<()> {
+    if cancellation.load(Ordering::SeqCst) != 0 {
+        bail!("Repair proposal was cancelled");
+    }
+    if tokio::time::Instant::now() >= deadline {
+        bail!("Repair proposal generation timed out");
+    }
+    Ok(())
+}
+
+fn corrected_repair_proposal_summary(
+    model_summary: &str,
+    malformed_response_bytes: usize,
+) -> Result<String> {
+    let prefix = format!(
+        "Recovered after one bounded JSON correction retry following a {malformed_response_bytes}-byte malformed completed response. "
+    );
+    let available = REPAIR_PROPOSAL_SUMMARY_LIMIT
+        .checked_sub(prefix.len())
+        .context("JSON correction evidence exceeds the repair proposal summary limit")?;
+    let mut bounded_model_summary = String::with_capacity(available.min(model_summary.len()));
+    for character in model_summary.chars() {
+        if bounded_model_summary.len() + character.len_utf8() > available {
+            break;
+        }
+        bounded_model_summary.push(character);
+    }
+    Ok(format!("{prefix}{bounded_model_summary}"))
 }
 
 fn set_auto_repair_lifecycle(feature: &mut Feature, lifecycle: &str, reason: &str) -> Result<()> {
@@ -3015,72 +3099,101 @@ impl Engine {
             "Prepare one reviewable repair proposal for a failed feature. Do not execute commands or claim that files were changed. Preserve the original requested behavior and immutable validation command. You may propose an existing test or validation-input change only when the test contradicts the original feature or approved plan; keep that change minimal and include it for explicit owner review. Do not weaken, delete, skip, or broadly rewrite tests. Return ONLY JSON with summary and files. Each file has path and complete UTF-8 content. Include only changed files, do not delete files, modify .git, dependencies, or secrets. No markdown fences."
         };
         let automatic = proposal.source == "automatic_failure";
+        let proposal_deadline =
+            tokio::time::Instant::now() + Duration::from_secs(if automatic { 1_800 } else { 900 });
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(if automatic { 1_800 } else { 900 }))
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
             .build()?;
-        let request = client
-            .post(format!(
-                "{}/chat/completions",
-                target.url.trim_end_matches('/')
-            ))
-            .json(&json!({
-                "model":target.model,"temperature":0.1,
-                "max_tokens":if automatic { 32_768 } else { 8_192 },
-                "response_format":{"type":"json_object"},
-                "chat_template_kwargs":{"enable_thinking":false},
-                "messages":[{"role":"system","content":system_prompt},
-                    {"role":"user","content":prompt}]
-            }))
-            .send();
-        tokio::pin!(request);
-        let response = loop {
-            tokio::select! {
-                result = &mut request => break result.with_context(|| format!("{} model target request failed", target.name))?,
-                _ = tokio::time::sleep(Duration::from_millis(100)) => if cancellation.load(Ordering::SeqCst) != 0 { bail!("Repair proposal was cancelled"); }
+        let mut used_json_correction_retry = false;
+        let mut malformed_retry_bytes = None;
+        let generated = loop {
+            repair_proposal_request_preflight(cancellation, proposal_deadline)?;
+            let request_prompt = if used_json_correction_retry {
+                format!(
+                    "{prompt}\n\nThe previous response completed but was not valid JSON. Correct only the response encoding. Return exactly one JSON object with summary and files, with every file containing its complete UTF-8 content. Do not add prose or markdown fences."
+                )
+            } else {
+                prompt.clone()
+            };
+            let request = client
+                .post(format!(
+                    "{}/chat/completions",
+                    target.url.trim_end_matches('/')
+                ))
+                .json(&json!({
+                    "model":target.model,"temperature":0.1,
+                    "max_tokens":if automatic { 32_768 } else { 8_192 },
+                    "response_format":{"type":"json_object"},
+                    "chat_template_kwargs":{"enable_thinking":false},
+                    "messages":[{"role":"system","content":system_prompt},
+                        {"role":"user","content":request_prompt}]
+                }))
+                .send();
+            tokio::pin!(request);
+            let response = loop {
+                tokio::select! {
+                    result = &mut request => break result.with_context(|| format!("{} model target request failed", target.name))?,
+                    _ = tokio::time::sleep(Duration::from_millis(100)) => if cancellation.load(Ordering::SeqCst) != 0 { bail!("Repair proposal was cancelled"); },
+                    _ = tokio::time::sleep_until(proposal_deadline) => bail!("Repair proposal generation timed out"),
+                }
+            };
+            let status = response.status();
+            if !status.is_success() {
+                bail!("{} model target returned HTTP {status}", target.name);
+            }
+            let body = response.json::<Value>();
+            tokio::pin!(body);
+            let payload = loop {
+                tokio::select! {
+                    result = &mut body => break result?,
+                    _ = tokio::time::sleep(Duration::from_millis(100)) => if cancellation.load(Ordering::SeqCst) != 0 { bail!("Repair proposal was cancelled"); },
+                    _ = tokio::time::sleep_until(proposal_deadline) => bail!("Repair proposal generation timed out"),
+                }
+            };
+            let content = payload["choices"][0]["message"]["content"]
+                .as_str()
+                .context("Model returned no repair proposal")?;
+            if content.len() > 1024 * 1024 {
+                bail!("Model repair proposal exceeds 1 MiB");
+            }
+            match parse_repair_proposal_json(content, &payload["choices"][0]["finish_reason"]) {
+                Ok(generated) => break generated,
+                Err(error)
+                    if automatic
+                        && !used_json_correction_retry
+                        && error
+                            .downcast_ref::<CompletedMalformedRepairProposal>()
+                            .is_some() =>
+                {
+                    used_json_correction_retry = true;
+                    malformed_retry_bytes = error
+                        .downcast_ref::<CompletedMalformedRepairProposal>()
+                        .map(|failure| failure.content_bytes);
+                }
+                Err(error) => return Err(error),
             }
         };
-        let status = response.status();
-        if !status.is_success() {
-            bail!("{} model target returned HTTP {status}", target.name);
-        }
-        let body = response.json::<Value>();
-        tokio::pin!(body);
-        let payload = loop {
-            tokio::select! {
-                result = &mut body => break result?,
-                _ = tokio::time::sleep(Duration::from_millis(100)) => if cancellation.load(Ordering::SeqCst) != 0 { bail!("Repair proposal was cancelled"); }
-            }
-        };
-        let content = payload["choices"][0]["message"]["content"]
-            .as_str()
-            .context("Model returned no repair proposal")?;
-        if content.len() > 1024 * 1024 {
-            bail!("Model repair proposal exceeds 1 MiB");
-        }
-        let normalized = content
-            .trim()
-            .strip_prefix("```json")
-            .or_else(|| content.trim().strip_prefix("```"))
-            .and_then(|value| value.trim().strip_suffix("```"))
-            .unwrap_or(content)
-            .trim();
-        let generated: Value = serde_json::from_str(normalized).with_context(|| {
-            format!(
-                "Model did not return valid repair proposal JSON ({} bytes; finish reason {})",
-                content.len(),
-                payload["choices"][0]["finish_reason"]
-            )
-        })?;
-        let summary = generated["summary"]
+        let model_summary = generated["summary"]
             .as_str()
             .context("Repair proposal has no summary")?;
-        if summary.trim().is_empty() || summary.len() > 4000 {
+        if model_summary.trim().is_empty() || model_summary.len() > REPAIR_PROPOSAL_SUMMARY_LIMIT {
             bail!("Repair proposal summary must be 1 to 4000 characters");
         }
-        validate_cloud_text(summary)
+        validate_cloud_text(model_summary)
             .context("Repair proposal summary contains secret-shaped text")?;
+        let summary = if used_json_correction_retry {
+            corrected_repair_proposal_summary(
+                model_summary,
+                malformed_retry_bytes.context("Malformed retry byte count is missing")?,
+            )?
+        } else {
+            model_summary.into()
+        };
+        if summary.len() > REPAIR_PROPOSAL_SUMMARY_LIMIT {
+            bail!("Repair proposal summary must be 1 to 4000 characters");
+        }
         let entries = generated["files"]
             .as_array()
             .context("Repair proposal has no files array")?;
@@ -3135,7 +3248,7 @@ impl Engine {
         if cancellation.load(Ordering::SeqCst) != 0 {
             bail!("Repair proposal was cancelled");
         }
-        Ok((summary.into(), proposed, protected_inputs))
+        Ok((summary, proposed, protected_inputs))
     }
 
     fn finish_escalation_proposal(
@@ -3208,13 +3321,14 @@ impl Engine {
                     }
                     Err(error) => {
                         proposal.status = "unavailable".into();
-                        proposal.summary =
-                            "The selected local AI could not prepare a repair proposal".into();
-                        proposal.error = Some(durable_failure_summary(
+                        let durable_error = durable_failure_summary(
                             &error.to_string(),
                             "Repair proposal generation failed",
                             1000,
-                        ));
+                        );
+                        proposal.summary =
+                            "The selected local AI could not prepare a repair proposal".into();
+                        proposal.error = Some(durable_error);
                         "unavailable"
                     }
                 }
@@ -17018,13 +17132,339 @@ mod tests {
             feature
                 .escalation_history
                 .iter()
-                .filter(|evidence| evidence.proposal_id == proposal_id)
+                .filter(|evidence| evidence.proposal_id == proposal_id.as_str())
                 .map(|evidence| evidence.outcome.as_str())
                 .collect::<Vec<_>>(),
             ["no_op", "authorization_not_run", "application_not_run"]
         );
         assert_eq!(feature.review_history.last().unwrap().outcome, "not_run");
         assert_eq!(feature.auto_repair_lifecycle, "running");
+    }
+
+    #[test]
+    fn repair_proposal_request_preflight_blocks_cancelled_or_expired_retry() {
+        let cancellation = AtomicU8::new(0);
+        repair_proposal_request_preflight(
+            &cancellation,
+            tokio::time::Instant::now() + Duration::from_secs(60),
+        )
+        .unwrap();
+
+        cancellation.store(1, Ordering::SeqCst);
+        let cancelled =
+            repair_proposal_request_preflight(&cancellation, tokio::time::Instant::now())
+                .unwrap_err();
+        assert_eq!(cancelled.to_string(), "Repair proposal was cancelled");
+
+        cancellation.store(0, Ordering::SeqCst);
+        let timed_out =
+            repair_proposal_request_preflight(&cancellation, tokio::time::Instant::now())
+                .unwrap_err();
+        assert_eq!(
+            timed_out.to_string(),
+            "Repair proposal generation timed out"
+        );
+    }
+
+    #[test]
+    fn json_correction_evidence_reserves_summary_space_at_utf8_boundary() {
+        let ascii_model_summary = "x".repeat(REPAIR_PROPOSAL_SUMMARY_LIMIT);
+        let ascii = corrected_repair_proposal_summary(&ascii_model_summary, 63_745).unwrap();
+        assert_eq!(ascii.len(), REPAIR_PROPOSAL_SUMMARY_LIMIT);
+        assert!(ascii.starts_with(
+            "Recovered after one bounded JSON correction retry following a 63745-byte malformed completed response. "
+        ));
+        assert!(ascii.ends_with('x'));
+
+        let multibyte_model_summary = "🙂".repeat(REPAIR_PROPOSAL_SUMMARY_LIMIT / 4);
+        let multibyte =
+            corrected_repair_proposal_summary(&multibyte_model_summary, 63_745).unwrap();
+        assert!(multibyte.len() <= REPAIR_PROPOSAL_SUMMARY_LIMIT);
+        assert!(multibyte.ends_with('🙂'));
+        assert!(!multibyte.contains('\u{fffd}'));
+
+        let short = corrected_repair_proposal_summary("short summary", 14).unwrap();
+        assert!(short.ends_with("short summary"));
+    }
+
+    #[tokio::test]
+    async fn completed_malformed_automatic_proposal_gets_one_bounded_corrective_request() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        async fn read_request(socket: &mut tokio::net::TcpStream) -> String {
+            let mut request = Vec::new();
+            loop {
+                let mut chunk = [0_u8; 8192];
+                let read = socket.read(&mut chunk).await.unwrap();
+                assert!(read > 0);
+                request.extend_from_slice(&chunk[..read]);
+                assert!(request.len() <= 1024 * 1024);
+                let Some(header_end) = request
+                    .windows(4)
+                    .position(|window| window == b"\r\n\r\n")
+                    .map(|position| position + 4)
+                else {
+                    continue;
+                };
+                let headers = String::from_utf8_lossy(&request[..header_end]);
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        line.to_ascii_lowercase()
+                            .strip_prefix("content-length:")
+                            .map(|value| value.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap();
+                if request.len() >= header_end + content_length {
+                    return String::from_utf8(request).unwrap();
+                }
+            }
+        }
+
+        let (_directory, mut engine) = control_test_engine();
+        fs::write(engine.root.join("example/result.txt"), "saved").unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        Arc::get_mut(&mut engine).unwrap().model_targets[0].url =
+            format!("http://{}", listener.local_addr().unwrap());
+        let malformed = "x".repeat(63_745);
+        let malformed_body = json!({
+            "choices": [{
+                "message": {"content": malformed},
+                "finish_reason": "stop"
+            }]
+        })
+        .to_string();
+        let corrected_content = json!({
+            "summary": "repair the retained implementation",
+            "files": [{"path": "result.txt", "content": "repaired"}]
+        })
+        .to_string();
+        let corrected_body = json!({
+            "choices": [{
+                "message": {"content": corrected_content},
+                "finish_reason": "stop"
+            }]
+        })
+        .to_string();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let recorded_requests = requests.clone();
+        let server = tokio::spawn(async move {
+            for response_body in [malformed_body, corrected_body] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let request = read_request(&mut socket).await;
+                recorded_requests.lock().unwrap().push(request);
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            response_body.len(),
+                            response_body
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = true;
+                state.auto_ai_repair_max_escalations = 3;
+                state.auto_ai_repair_policy_revision = state.revision + 1;
+                let feature = &mut state.queue[0];
+                feature.repair_attempts = REPAIR_LIMIT;
+                feature.last_failure_kind = "validation_failure".into();
+                feature.last_code_failure_summary = "fixture validation failed".into();
+                feature.auto_ai_repair_limit = Some(3);
+                feature.auto_repair_policy_revision = Some(state.revision + 1);
+                feature.auto_repair_epoch = 4;
+                set_auto_repair_lifecycle(feature, "running", "fixture")
+            })
+            .unwrap();
+        let feature_id = engine.database.lock().unwrap().state.queue[0].id.clone();
+        assert!(engine
+            .prepare_next_automatic_escalation(&feature_id)
+            .await
+            .unwrap());
+        server.await.unwrap();
+
+        let database = engine.database.lock().unwrap();
+        let feature = &database.state.queue[0];
+        let proposal = feature.escalation_proposal.as_ref().unwrap();
+        let proposal_id = &proposal.proposal_id;
+        assert_eq!(feature.escalation_count, 1);
+        assert_eq!(proposal.status, "approved");
+        assert_eq!(feature.auto_repair_lifecycle, "running");
+        assert_eq!(proposal.files.len(), 1);
+        assert_eq!(proposal.applied_paths, Vec::<String>::new());
+        assert!(proposal.error.is_none());
+        assert!(proposal
+            .summary
+            .starts_with("Recovered after one bounded JSON correction retry following a 63745-byte malformed completed response."));
+        assert_eq!(
+            feature
+                .escalation_history
+                .iter()
+                .filter(|evidence| evidence.proposal_id == proposal_id.as_str())
+                .map(|evidence| evidence.outcome.as_str())
+                .collect::<Vec<_>>(),
+            ["ready", "policy_authorized"]
+        );
+        assert_eq!(
+            fs::read_to_string(engine.root.join("example/result.txt")).unwrap(),
+            "saved"
+        );
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(!requests[0].contains("previous response completed but was not valid JSON"));
+        assert!(requests[1].contains("previous response completed but was not valid JSON"));
+    }
+
+    #[tokio::test]
+    async fn second_completed_malformed_proposal_holds_same_reserved_attempt() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (_directory, mut engine) = control_test_engine();
+        fs::write(engine.root.join("example/result.txt"), "saved").unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        Arc::get_mut(&mut engine).unwrap().model_targets[0].url =
+            format!("http://{}", listener.local_addr().unwrap());
+        let response_bodies = ["x".repeat(63_745), "still-not-json".into()].map(|content| {
+            json!({
+                "choices": [{
+                    "message": {"content": content},
+                    "finish_reason": "stop"
+                }]
+            })
+            .to_string()
+        });
+        let server = tokio::spawn(async move {
+            for response_body in response_bodies {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 65_536];
+                assert!(socket.read(&mut request).await.unwrap() > 0);
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            response_body.len(),
+                            response_body
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = true;
+                state.auto_ai_repair_max_escalations = 3;
+                state.auto_ai_repair_policy_revision = state.revision + 1;
+                let feature = &mut state.queue[0];
+                feature.repair_attempts = REPAIR_LIMIT;
+                feature.last_failure_kind = "validation_failure".into();
+                feature.last_code_failure_summary = "fixture validation failed".into();
+                feature.auto_ai_repair_limit = Some(3);
+                feature.auto_repair_policy_revision = Some(state.revision + 1);
+                feature.auto_repair_epoch = 4;
+                set_auto_repair_lifecycle(feature, "running", "fixture")
+            })
+            .unwrap();
+        let feature_id = engine.database.lock().unwrap().state.queue[0].id.clone();
+        assert!(!engine
+            .prepare_next_automatic_escalation(&feature_id)
+            .await
+            .unwrap());
+        server.await.unwrap();
+
+        let database = engine.database.lock().unwrap();
+        let feature = &database.state.queue[0];
+        let proposal = feature.escalation_proposal.as_ref().unwrap();
+        assert_eq!(feature.escalation_count, 1);
+        assert_eq!(feature.auto_repair_lifecycle, "held");
+        assert_eq!(feature.checkpoint, "escalation_1_unavailable");
+        assert_eq!(proposal.status, "unavailable");
+        assert!(proposal.files.is_empty());
+        assert_eq!(proposal.applied_paths, Vec::<String>::new());
+        assert_eq!(
+            proposal.error.as_deref(),
+            Some("Model did not return valid repair proposal JSON (14 bytes; finish reason stop)")
+        );
+        assert_eq!(
+            feature
+                .escalation_history
+                .iter()
+                .filter(|evidence| evidence.proposal_id == proposal.proposal_id)
+                .map(|evidence| evidence.outcome.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "unavailable",
+                "authorization_not_run",
+                "application_not_run"
+            ]
+        );
+        assert_eq!(feature.review_history.last().unwrap().outcome, "not_run");
+        assert_eq!(
+            fs::read_to_string(engine.root.join("example/result.txt")).unwrap(),
+            "saved"
+        );
+    }
+
+    #[test]
+    fn truncated_or_unknown_malformed_proposal_remains_held() {
+        for finish_reason in [json!("length"), json!("provider_extension"), Value::Null] {
+            let (_directory, engine) = control_test_engine();
+            engine
+                .change(|state| {
+                    state.auto_ai_repair_enabled = true;
+                    state.auto_ai_repair_max_escalations = 3;
+                    state.auto_ai_repair_policy_revision = state.revision + 1;
+                    let feature = &mut state.queue[0];
+                    feature.repair_attempts = REPAIR_LIMIT;
+                    feature.last_failure_kind = "validation_failure".into();
+                    feature.last_code_failure_summary = "fixture validation failed".into();
+                    feature.auto_ai_repair_limit = Some(3);
+                    feature.auto_repair_policy_revision = Some(state.revision + 1);
+                    feature.auto_repair_epoch = 4;
+                    set_auto_repair_lifecycle(feature, "running", "fixture")
+                })
+                .unwrap();
+            let feature_id = engine.database.lock().unwrap().state.queue[0].id.clone();
+            let (proposal_id, _, epoch, _) = engine
+                .reserve_automatic_escalation(&feature_id)
+                .unwrap()
+                .unwrap();
+            let error = parse_repair_proposal_json("{", &finish_reason).unwrap_err();
+            assert!(error
+                .downcast_ref::<CompletedMalformedRepairProposal>()
+                .is_none());
+            engine
+                .finish_escalation_proposal(
+                    &feature_id,
+                    &proposal_id,
+                    Err(error),
+                    &AtomicU8::new(0),
+                )
+                .unwrap();
+            assert!(!engine
+                .finish_automatic_without_application(&feature_id, &proposal_id, epoch)
+                .unwrap());
+            let database = engine.database.lock().unwrap();
+            let feature = &database.state.queue[0];
+            assert_eq!(feature.escalation_count, 1);
+            assert_eq!(feature.auto_repair_lifecycle, "held");
+            assert_eq!(feature.checkpoint, "escalation_1_unavailable");
+            assert!(feature.auto_repair_reason.contains("explicitly Resume"));
+            assert!(!feature
+                .escalation_proposal
+                .as_ref()
+                .unwrap()
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("provider_extension"));
+        }
     }
 
     #[tokio::test]

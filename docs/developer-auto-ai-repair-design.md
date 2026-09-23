@@ -166,8 +166,16 @@ They may
 request up to 32,768 output tokens and have a 30-minute model deadline; manual
 proposals retain the 8,192-token, 15-minute limits. The automatic prompt asks for
 the smallest coherent correction, preferably four or fewer files, so later
-attempts can address remaining review findings. A truncated or unavailable
-response still holds for explicit Resume with its provider error retained.
+attempts can address remaining review findings. If an automatic response is
+syntactically invalid JSON and the selected provider explicitly marks it complete
+with exact finish reason `stop`, the runner may make one corrective request within
+the same reserved escalation. The retry uses the same frozen prompt and bindings,
+adds only a fixed JSON-format correction, shares the original cancellation token and
+30-minute overall deadline, and requests at most another 32,768 output tokens.
+Parsing precedes candidate admission and application, so no bytes from the malformed
+response are accepted or written. A second malformed response, truncation, unknown
+or missing finish reason, provider unavailability, or a structurally invalid proposal
+holds for explicit Resume with its bounded provider error retained.
 Every changed test or validation-related file is explicitly marked in the Codex
 review packet. Review compares the cumulative candidate with each file's earliest
 feature baseline and must reject weakened or deleted coverage, hidden skips,
@@ -226,7 +234,19 @@ secret-bearing project material is never admitted to the repair packet.
   edits, and intact ordinary-attempt history may use explicit Resume to reserve
   the next ordinary attempt or enter automatic escalation after attempt three.
   Other operational holds retain their existing recovery rules.
-- Malformed provider output, provider unavailability, persistence failure,
+- The first completed response containing syntactically invalid JSON may trigger one
+  cancellable corrective provider request inside the same reserved escalation. A
+  successful correction records its use in the proposal summary before ordinary
+  admission, authorization, application, validation, and review continue. It does
+  not increment the escalation counter or create candidate authority for the first
+  response. The fixed retry evidence reserves space inside the existing 4,000-byte
+  summary bound; only the already validated model summary is truncated at a UTF-8
+  boundary when necessary.
+- If the corrective response is also malformed, the same reserved escalation records
+  unavailable proposal, unused authorization, unused application, and `not_run`
+  review evidence, then enters `held`. No further automatic provider call occurs.
+- Truncated output, a missing or unknown finish reason, a syntactically valid but
+  structurally invalid proposal, provider unavailability, persistence failure,
   workspace drift, an invalid path, publication failure, or other operational
   failure consumes any already-reserved attempt but stops for manual recovery.
   The unavailable proposal retains its bounded sanitized provider error for
