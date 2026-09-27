@@ -1543,14 +1543,20 @@ impl Engine {
                     object.insert("auto_repair_step_elapsed_ms".into(), json!(elapsed_ms));
                 }
                 object.insert("last_failure_kind".into(), json!(f.last_failure_kind));
+                if f.status == "running" && self.tools.is_running() {
+                    object.insert(
+                        "pending_tool_approval".into(),
+                        self.tools.pending_for_feature(&f.project, &f.id)?,
+                    );
+                }
                 object.insert(
                     "can_revalidate_after_auto_repair_limit".into(),
                     json!(f.auto_repair_lifecycle == "limit_reached"
                         && matches!(f.status.as_str(), "failed" | "paused")),
                 );
-                projected
+                Ok(projected)
             })
-            .collect();
+            .collect::<Result<Vec<Value>>>()?;
         let model_targets: Vec<Value> = self
             .model_targets
             .iter()
@@ -11733,6 +11739,10 @@ async fn chat_approval(
         );
     }
     api((|| -> Result<Value> {
+        let _effect_guard = engine
+            .effect_gate
+            .lock()
+            .map_err(|_| anyhow!("effect gate failed"))?;
         let database = engine
             .database
             .lock()
@@ -11747,6 +11757,7 @@ async fn chat_approval(
         engine.tools.decide(
             &request.project,
             Some(&chat_id),
+            None,
             &request.request_id,
             &request.approval_id,
             request.access_revision,
@@ -11754,6 +11765,77 @@ async fn chat_approval(
         )?;
         drop(database);
         engine.chat.snapshot_chat(&request.project, &chat_id, None)
+    })())
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FeatureToolApprovalMutation {
+    feature_id: String,
+    project: String,
+    expected_checkpoint: String,
+    request_id: String,
+    approval_id: String,
+    access_revision: u64,
+    decision: String,
+}
+
+fn feature_tool_approval_admissible(
+    feature: &Feature,
+    project: &str,
+    expected_checkpoint: &str,
+) -> Result<()> {
+    if feature.project != project
+        || feature.status != "running"
+        || feature.checkpoint != expected_checkpoint
+    {
+        bail!("Feature changed; refresh before deciding");
+    }
+    Ok(())
+}
+
+async fn feature_tool_approval(
+    State(engine): State<Arc<Engine>>,
+    headers: HeaderMap,
+    Json(request): Json<FeatureToolApprovalMutation>,
+) -> Api {
+    if authorize(&engine, &headers).is_err() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error":"Unauthorized"})),
+        );
+    }
+    api((|| -> Result<Value> {
+        Uuid::parse_str(&request.feature_id).context("Invalid feature ID")?;
+        let _effect_guard = engine
+            .effect_gate
+            .lock()
+            .map_err(|_| anyhow!("effect gate failed"))?;
+        let database = engine
+            .database
+            .lock()
+            .map_err(|_| anyhow!("state lock failed"))?;
+        engine.ensure_publication_barrier_clear(&database.state, &database.github_setup)?;
+        if engine.emergency_paused(&database.state) {
+            bail!("Clear Emergency Pause before deciding a tool action");
+        }
+        let feature = database
+            .state
+            .queue
+            .iter()
+            .find(|feature| feature.id == request.feature_id)
+            .context("Feature not found")?;
+        feature_tool_approval_admissible(feature, &request.project, &request.expected_checkpoint)?;
+        engine.tools.decide(
+            &request.project,
+            None,
+            Some(&request.feature_id),
+            &request.request_id,
+            &request.approval_id,
+            request.access_revision,
+            &request.decision,
+        )?;
+        engine.snapshot_locked(&database)
     })())
 }
 
@@ -12976,6 +13058,7 @@ async fn main() -> Result<()> {
         .route("/chat/cancel", post(chat_cancel))
         .route("/chat/access", post(chat_access))
         .route("/chat/approval", post(chat_approval))
+        .route("/feature/tool-approval", post(feature_tool_approval))
         .route(
             "/repair/escalation",
             get(repair_escalation_status).post(repair_escalation_control),
@@ -13301,6 +13384,74 @@ mod tests {
             publication_candidate: Vec::new(),
             publication: None,
         }
+    }
+
+    #[test]
+    fn feature_tool_approval_requires_running_exact_project_and_checkpoint() {
+        let feature = feature_with_status("running");
+        assert!(feature_tool_approval_admissible(&feature, "example", "applied").is_ok());
+        assert!(feature_tool_approval_admissible(&feature, "other", "applied").is_err());
+        assert!(feature_tool_approval_admissible(&feature, "example", "stale").is_err());
+        assert!(feature_tool_approval_admissible(
+            &feature_with_status("paused"),
+            "example",
+            "applied"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn feature_tool_approval_waits_for_stop_gate_and_rechecks_feature() {
+        let (_directory, engine) = control_test_engine();
+        engine
+            .change(|state| {
+                state.queue[0].status = "running".into();
+                Ok(())
+            })
+            .unwrap();
+        let feature = {
+            let database = engine.database.lock().unwrap();
+            database.state.queue[0].clone()
+        };
+        let effect_guard = engine.effect_gate.lock().unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        let worker_engine = engine.clone();
+        let worker = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            started_tx.send(()).unwrap();
+            let result = runtime.block_on(feature_tool_approval(
+                State(worker_engine),
+                authorized_headers(),
+                Json(FeatureToolApprovalMutation {
+                    feature_id: feature.id,
+                    project: feature.project,
+                    expected_checkpoint: feature.checkpoint,
+                    request_id: Uuid::new_v4().to_string(),
+                    approval_id: Uuid::new_v4().to_string(),
+                    access_revision: 1,
+                    decision: "approve".into(),
+                }),
+            ));
+            result_tx.send(result.0).unwrap();
+        });
+        started_rx.recv().unwrap();
+        assert!(result_rx.recv_timeout(Duration::from_millis(25)).is_err());
+        engine
+            .change(|state| {
+                state.queue[0].status = "paused".into();
+                Ok(())
+            })
+            .unwrap();
+        drop(effect_guard);
+        assert_eq!(
+            result_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            StatusCode::CONFLICT
+        );
+        worker.join().unwrap();
     }
 
     fn feature_with_escalation(status: &str) -> Feature {

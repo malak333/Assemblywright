@@ -122,6 +122,25 @@ struct DeveloperRunnerTests {
   }
 
   @Test
+  func featureApprovalProjectionShowsTheExactPendingAction() throws {
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    let feature = try decoder.decode(DeveloperRunnerFeature.self, from: Data("""
+      {"id":"feature-1","project":"example","instruction":"Build it","validation":"tests",\
+      "status":"running","checkpoint":"tool_work","message":"","changed_files":[],\
+      "pending_tool_approval":{"id":"approval-1","request_id":"request-1",\
+      "summary":"Check Python","tool":"bash","details":{"command":"python --version"},\
+      "access_revision":4}}
+      """.utf8))
+    let approval = try #require(feature.pendingToolApproval)
+    #expect(approval.id == "approval-1")
+    #expect(approval.requestId == "request-1")
+    #expect(approval.accessRevision == 4)
+    #expect(approval.detailText.contains("python --version"))
+    #expect(self.feature("legacy", status: "running").pendingToolApproval == nil)
+  }
+
+  @Test
   func autoAIRepairProjectionDecodesWithoutInventingLegacyAuthority() throws {
     let decoder = JSONDecoder()
     decoder.keyDecodingStrategy = .convertFromSnakeCase

@@ -156,6 +156,12 @@ and request, and chat cannot enqueue or reorder features. Project edits invalida
 older validation and review evidence before feature work resumes. Without
 the tool runtime, chat uses the local model without tool execution. This is the
 supervised Developer workflow, not activation of the protected production runtime.
+When an implementation feature requests a command under Ask or Approve for me,
+its pending action appears on that feature's Assembly Line card. Approve once or
+Deny applies only to the displayed feature, checkpoint, request, action, and access revision;
+project chat approvals cannot decide a feature action. A stopped tool session
+requires inspection and explicit Resume, since completed or uncertain effects are
+never replayed automatically.
 Image and bounded text attachments are untrusted references. Unsupported vision,
 unavailable models, and context limits fail explicitly without fallback.
 

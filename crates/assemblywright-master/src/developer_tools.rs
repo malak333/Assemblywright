@@ -335,6 +335,34 @@ impl DeveloperTools {
         self.snapshot_for_chat(project, None)
     }
 
+    pub(crate) fn pending_for_feature(&self, project: &str, feature_id: &str) -> Result<Value> {
+        self.project_path(project)?;
+        let database = self
+            .database
+            .lock()
+            .map_err(|_| anyhow!("developer tool database lock failed"))?;
+        let pending: Option<(String, String, String, String, String, u64)> = database
+            .query_row(
+                "SELECT id,request_id,summary,tool,details,access_revision
+                 FROM developer_tool_action
+                 WHERE project=?1 AND feature_id=?2 AND chat_id IS NULL AND status='pending_approval'
+                 ORDER BY updated_unix,id LIMIT 1",
+                params![project, feature_id],
+                |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?)),
+            )
+            .optional()?;
+        pending.map_or(
+            Ok(Value::Null),
+            |(id, request_id, summary, tool, details, access_revision)| {
+                let details: Value = serde_json::from_str(&details)?;
+                Ok(
+                    json!({"id":id,"request_id":request_id,"summary":summary,"tool":tool,
+                "details":details,"access_revision":access_revision}),
+                )
+            },
+        )
+    }
+
     pub(crate) fn snapshot_for_chat(&self, project: &str, chat_id: Option<&str>) -> Result<Value> {
         self.project_path(project)?;
         let access = self.access(project)?;
@@ -498,6 +526,7 @@ impl DeveloperTools {
         &self,
         project: &str,
         chat_id: Option<&str>,
+        feature_id: Option<&str>,
         request_id: &str,
         approval_id: &str,
         access_revision: u64,
@@ -533,9 +562,9 @@ impl DeveloperTools {
                 .database
                 .lock()
                 .map_err(|_| anyhow!("developer tool database lock failed"))?;
-            let exact: Option<(String, Option<String>, u64, String, String)> = database
+            let exact: Option<(String, Option<String>, Option<String>, u64, String, String)> = database
                 .query_row(
-                    "SELECT request_id,chat_id,access_revision,status,details FROM developer_tool_action
+                    "SELECT request_id,chat_id,feature_id,access_revision,status,details FROM developer_tool_action
                      WHERE id=?1 AND project=?2",
                     params![approval_id, project],
                     |row| {
@@ -545,14 +574,22 @@ impl DeveloperTools {
                             row.get(2)?,
                             row.get(3)?,
                             row.get(4)?,
+                            row.get(5)?,
                         ))
                     },
                 )
                 .optional()?;
-            let (stored_request, stored_chat_id, stored_revision, status, details) =
-                exact.context("Tool approval was not found")?;
+            let (
+                stored_request,
+                stored_chat_id,
+                stored_feature_id,
+                stored_revision,
+                status,
+                details,
+            ) = exact.context("Tool approval was not found")?;
             if stored_request != request_id
                 || stored_chat_id.as_deref() != chat_id
+                || stored_feature_id.as_deref() != feature_id
                 || stored_revision != access_revision
                 || status != "pending_approval"
             {
@@ -2415,11 +2452,20 @@ mod tests {
             params![approval_id,request_id,json!({"opencode_permission_id":"permission-1"}).to_string()],
         ).unwrap();
         assert!(tools
-            .decide("project", None, &request_id, &approval_id, 2, "approve")
+            .decide(
+                "project",
+                None,
+                None,
+                &request_id,
+                &approval_id,
+                2,
+                "approve"
+            )
             .is_err());
         assert!(tools
             .decide(
                 "project",
+                None,
                 None,
                 &Uuid::new_v4().to_string(),
                 &approval_id,
@@ -2428,14 +2474,30 @@ mod tests {
             )
             .is_err());
         tools
-            .decide("project", None, &request_id, &approval_id, 1, "approve")
+            .decide(
+                "project",
+                None,
+                None,
+                &request_id,
+                &approval_id,
+                1,
+                "approve",
+            )
             .unwrap();
         let reply = approval_rx.try_recv().unwrap();
         assert_eq!(reply.approval_id, approval_id);
         assert_eq!(reply.permission_id, "permission-1");
         assert_eq!(reply.response, "once");
         assert!(tools
-            .decide("project", None, &request_id, &approval_id, 1, "approve")
+            .decide(
+                "project",
+                None,
+                None,
+                &request_id,
+                &approval_id,
+                1,
+                "approve"
+            )
             .is_err());
     }
 
@@ -2462,7 +2524,15 @@ mod tests {
         ).unwrap();
         cancellation.store(true, Ordering::SeqCst);
         assert!(tools
-            .decide("project", None, &request_id, &approval_id, 1, "approve")
+            .decide(
+                "project",
+                None,
+                None,
+                &request_id,
+                &approval_id,
+                1,
+                "approve"
+            )
             .is_err());
         assert!(approval_rx.try_recv().is_err());
         assert_eq!(
@@ -2808,6 +2878,7 @@ mod tests {
             .decide(
                 "project",
                 Some(&chat_b),
+                None,
                 &request_id,
                 &approval_id,
                 1,
@@ -2818,6 +2889,88 @@ mod tests {
             tools.snapshot_for_chat("project", Some(&chat_a)).unwrap()["pending_approval"]["id"],
             approval_id
         );
+    }
+
+    #[test]
+    fn feature_approval_is_visible_only_to_its_feature_and_single_use() {
+        let (_directory, tools) = service(None);
+        let request_id = Uuid::new_v4().to_string();
+        let approval_id = Uuid::new_v4().to_string();
+        let feature_id = Uuid::new_v4().to_string();
+        let other_feature_id = Uuid::new_v4().to_string();
+        let (cancel, _cancel_rx) = mpsc::unbounded_channel();
+        let (approvals, mut approval_rx) = mpsc::unbounded_channel();
+        *tools.active.lock().unwrap() = Some(ActiveRuntime {
+            request_id: request_id.clone(),
+            project: "project".into(),
+            chat_id: None,
+            cancel,
+            approvals,
+            cancellation: Arc::new(AtomicBool::new(false)),
+        });
+        tools.database.lock().unwrap().execute(
+            "INSERT INTO developer_tool_action(
+               id,request_id,project,chat_id,access_revision,tool,summary,details,status,output,updated_unix,feature_id)
+             VALUES(?1,?2,'project',NULL,1,'bash','exact feature',?3,'pending_approval',NULL,1,?4)",
+            params![approval_id,request_id,json!({"opencode_permission_id":"permission-1"}).to_string(),feature_id],
+        ).unwrap();
+        assert_eq!(
+            tools.pending_for_feature("project", &feature_id).unwrap()["id"],
+            approval_id
+        );
+        assert!(tools
+            .pending_for_feature("project", &other_feature_id)
+            .unwrap()
+            .is_null());
+        assert!(tools
+            .decide(
+                "project",
+                None,
+                Some(&other_feature_id),
+                &request_id,
+                &approval_id,
+                1,
+                "approve"
+            )
+            .is_err());
+        assert!(tools
+            .decide(
+                "project",
+                Some(&Uuid::new_v4().to_string()),
+                None,
+                &request_id,
+                &approval_id,
+                1,
+                "approve"
+            )
+            .is_err());
+        tools
+            .decide(
+                "project",
+                None,
+                Some(&feature_id),
+                &request_id,
+                &approval_id,
+                1,
+                "approve",
+            )
+            .unwrap();
+        assert_eq!(approval_rx.try_recv().unwrap().response, "once");
+        assert!(tools
+            .pending_for_feature("project", &feature_id)
+            .unwrap()
+            .is_null());
+        assert!(tools
+            .decide(
+                "project",
+                None,
+                Some(&feature_id),
+                &request_id,
+                &approval_id,
+                1,
+                "approve"
+            )
+            .is_err());
     }
 
     #[test]
