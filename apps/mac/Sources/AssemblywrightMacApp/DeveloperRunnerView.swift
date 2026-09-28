@@ -46,6 +46,8 @@ struct DeveloperRunnerFeature: Decodable, Identifiable {
   var autoRepairEpoch: UInt64? = nil
   var autoRepairStepElapsedMs: UInt64? = nil
   var lastFailureKind: String? = nil
+  var assetRecoverySha256: String? = nil
+  var assetRecoveryUnavailableReason: String? = nil
   var pendingToolApproval: DeveloperToolApproval? = nil
 
   var hasApprovedReview: Bool { reviewStatus == "approved" }
@@ -73,8 +75,32 @@ struct DeveloperRunnerFeature: Decodable, Identifiable {
   }
 
   var startBinding: [String: Any] {
-    ["expected_feature_id": id, "expected_model_target": modelTarget ?? "mac",
+    var binding: [String: Any] = ["expected_feature_id": id, "expected_model_target": modelTarget ?? "mac",
      "expected_status": status, "expected_checkpoint": checkpoint]
+    if let digest = validAssetRecoverySha256 {
+      binding["expected_asset_recovery_sha256"] = digest
+    }
+    return binding
+  }
+
+  var isAssetRecoveryCheckpoint: Bool {
+    ["tool_effects_quarantined", "auto_repair_effects_quarantined"].contains(checkpoint)
+  }
+
+  var validAssetRecoverySha256: String? {
+    guard isAssetRecoveryCheckpoint, status == "failed",
+      let digest = assetRecoverySha256, digest.utf8.count == 64,
+      digest.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else { return nil }
+    return digest
+  }
+
+  func matchesAssetRecoverySnapshot(presentedBy feature: DeveloperRunnerFeature) -> Bool {
+    validAssetRecoverySha256 == feature.validAssetRecoverySha256
+  }
+
+  var assetRecoveryNotice: String? {
+    guard let digest = validAssetRecoverySha256 else { return nil }
+    return "Resume adopts the current files as a new recovery candidate, then runs validation and independent review. Quarantined writes are not replayed. Earlier recovery history and repair counters are retained. If these files change, refresh before resuming. Snapshot: \(digest)"
   }
 
   var reviewerSelection: DeveloperAISelection? {
@@ -98,7 +124,8 @@ struct DeveloperRunnerFeature: Decodable, Identifiable {
   }
 
   var blocksOrdinaryResume: Bool {
-    requiresEscalationRecovery || autoRepairLifecycle == "quarantined"
+    if isAssetRecoveryCheckpoint { return validAssetRecoverySha256 == nil }
+    return requiresEscalationRecovery || autoRepairLifecycle == "quarantined"
   }
 
   var resumeActionLabel: String {
@@ -146,6 +173,13 @@ struct DeveloperRunnerFeature: Decodable, Identifiable {
   }
 
   var automaticRepairNextAction: String? {
+    if let assetRecoveryNotice { return assetRecoveryNotice }
+    if isAssetRecoveryCheckpoint {
+      if let reason = assetRecoveryUnavailableReason, !reason.isEmpty {
+        return "Recovery snapshot unavailable: \(reason) Automatic replay and ordinary Resume are blocked."
+      }
+      return "Current files cannot yet form a verified recovery snapshot. Automatic replay and ordinary Resume are blocked. Inspect the reported files or use Ask AI to repair."
+    }
     switch autoRepairLifecycle {
     case "held":
       return "Next action: correct the reported condition, then explicitly Resume."
@@ -1135,11 +1169,14 @@ struct DeveloperRunnerView: View {
           || model.snapshot?.emergencyPaused == true
           || model.snapshot?.canStartFeature != true
           || next?.id != feature.id || next?.status != feature.status
-          || next?.checkpoint != feature.checkpoint || next?.modelTarget != feature.modelTarget)
+          || next?.checkpoint != feature.checkpoint || next?.modelTarget != feature.modelTarget
+          || next?.matchesAssetRecoverySnapshot(presentedBy: feature) == false
+          || feature.blocksOrdinaryResume)
         Button("Cancel", role: .cancel) {}
       } message: { feature in
-        Text(DeveloperGitHubPresentation.startConfirmation(feature: feature,
-          connection: model.snapshot?.githubConnection(for: feature.project)))
+        Text((feature.assetRecoveryNotice.map { $0 + "\n\n" } ?? "")
+          + DeveloperGitHubPresentation.startConfirmation(feature: feature,
+            connection: model.snapshot?.githubConnection(for: feature.project)))
       }
   }
 }

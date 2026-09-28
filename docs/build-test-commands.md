@@ -74,6 +74,7 @@ cargo test -p assemblywright-master --bin assemblywright-developer
 cargo build -p assemblywright-master --bin assemblywright-developer
 swift test --disable-sandbox --package-path apps/mac --filter 'DeveloperRunnerTests|DeveloperRunnerClientTests|DeveloperRepairEscalationTests'
 python3 -B scripts/developer-runner-auto-repair-e2e.py --binary target/debug/assemblywright-developer
+python3 -B scripts/developer-runner-scalable-repair-e2e.py --binary target/debug/assemblywright-developer
 ```
 
 On Windows use `python` and the native `.exe` path. The fixture harness receipt
@@ -92,6 +93,20 @@ hard cap and asserts there is no 101st. These local/native checks do not prove
 Windows-native or installed-app behavior, rendered visual placement, signing or
 notarization, hosted checks, live-device QA, or production readiness; each
 remains separately recorded evidence.
+
+The separate scalable-repair harness uses a disposable project larger than the
+previous context ceiling, automatic repair across 49 cumulative source files,
+multiple independently bound review batches, aggregate review, and a resumed
+binary asset passed through the reviewer's actual image CLI argument. Its model
+and reviewer are controlled fixtures; actual provider acceptance is a separate
+live recovery check. The staged automatic-repair scenario uses the actual pinned
+OpenCode 1.18.23 executable with a local model fixture. Supply
+`--opencode-executable` or `ASSEMBLYWRIGHT_DEVELOPER_OPENCODE_EXECUTABLE` to reuse
+an installed runtime. Otherwise the fixture provisioner downloads the fixed
+Mac ARM64 or Windows AMD64 release into `target/developer-fixtures`, verifies
+both archive and production executable SHA-256 values, and reuses that verified
+cache. The first uncached run needs network access; an invalid explicit runtime
+fails rather than skipping the boundary.
 
 ## Local Model Selection Focused Validation
 
@@ -1586,10 +1601,10 @@ swift test --disable-sandbox --package-path apps/mac --filter DeveloperRunnerCli
 ./scripts/developer-build.py --build
 ```
 
-The master package integration test `developer_workflow_e2e` invokes all twelve
+The master package integration test `developer_workflow_e2e` invokes all thirteen
 native fixture-model HTTP/process scripts: base runner, ordinary repair, independent
 review, planning, model targets, chat, chat history, escalation, settings, Auto AI
-repair, GitHub setup, and publication. Both the canonical local
+repair, scalable repair, GitHub setup, and publication. Both the canonical local
 release gate and the required Windows distributed gate run that wrapper through
 their existing Cargo workspace tests, using `python3` on Mac and `python` on
 Windows. Swift client tests run with the full Swift package. Use

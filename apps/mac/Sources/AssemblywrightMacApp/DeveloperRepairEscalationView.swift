@@ -15,6 +15,114 @@ struct DeveloperRepairFile: Decodable, Identifiable {
   var id: String { path }
 }
 
+private func validRepairCandidateDigest(_ value: String?) -> Bool {
+  guard let value, value.utf8.count == 64 else { return false }
+  return value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+}
+
+struct DeveloperRepairCandidateEntry: Decodable, Identifiable {
+  let kind: String?
+  let path: String?
+  let beforeSha256: String?
+  let contentSha256: String?
+  let after: String?
+  let mediaType: String?
+  let width: Int?
+  let height: Int?
+  let containsRawBytes: Bool
+  let containsMalformedFields: Bool
+
+  var id: String { "\(kind ?? "unsupported"):\(path ?? "missing")" }
+
+  private enum CodingKeys: String, CodingKey {
+    case kind, path, beforeSha256, contentSha256, after, mediaType, width, height
+    case dataBase64
+  }
+
+  init(from decoder: Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    var malformed = false
+    func decode<T: Decodable>(_ type: T.Type, forKey key: CodingKeys) -> T? {
+      do { return try values.decodeIfPresent(type, forKey: key) }
+      catch { malformed = true; return nil }
+    }
+    kind = decode(String.self, forKey: .kind)
+    path = decode(String.self, forKey: .path)
+    beforeSha256 = decode(String.self, forKey: .beforeSha256)
+    contentSha256 = decode(String.self, forKey: .contentSha256)
+    after = decode(String.self, forKey: .after)
+    mediaType = decode(String.self, forKey: .mediaType)
+    width = decode(Int.self, forKey: .width)
+    height = decode(Int.self, forKey: .height)
+    containsRawBytes = values.contains(.dataBase64)
+    containsMalformedFields = malformed
+  }
+
+  private var validPath: Bool {
+    guard let path, !path.isEmpty, path.utf8.count <= 240, !path.hasPrefix("/"),
+      !path.hasPrefix("\\"), !path.contains("\\"), !path.contains(":"), !path.contains("\0")
+    else { return false }
+    return path.split(separator: "/", omittingEmptySubsequences: false).allSatisfy {
+      !$0.isEmpty && $0 != "." && $0 != ".."
+    }
+  }
+
+  var validationError: String? { validationError(payloadState: "full") }
+
+  func validationError(payloadState: String?) -> String? {
+    guard !containsRawBytes else { return "raw asset bytes were exposed in the approval response" }
+    guard !containsMalformedFields else { return "candidate metadata contains malformed fields" }
+    guard validPath else { return "a candidate path is missing or unsafe" }
+    guard beforeSha256 == nil || validRepairCandidateDigest(beforeSha256),
+      validRepairCandidateDigest(contentSha256) else {
+      return "candidate SHA-256 metadata is invalid"
+    }
+    switch kind {
+    case "text":
+      guard mediaType == nil, width == nil, height == nil else {
+        return "a text candidate has invalid or mixed metadata"
+      }
+      if payloadState == "full" && after == nil {
+        return "a full text candidate is missing its exact contents"
+      }
+      if payloadState == "hash_only" && after != nil {
+        return "a hash-only text candidate unexpectedly contains retained contents"
+      }
+    case "asset":
+      guard after == nil, matchesSupportedAsset else {
+        return "an image candidate has unsupported format or dimensions"
+      }
+    default:
+      return "the candidate contains an unsupported entry kind"
+    }
+    return nil
+  }
+
+  private var matchesSupportedAsset: Bool {
+    guard let mediaType, ["image/png", "image/jpeg"].contains(mediaType),
+      let width, let height, (2...4096).contains(width), (2...4096).contains(height),
+      width * height <= 16_777_216 else { return false }
+    let lowerPath = path?.lowercased() ?? ""
+    return mediaType == "image/png" ? lowerPath.hasSuffix(".png")
+      : lowerPath.hasSuffix(".jpg") || lowerPath.hasSuffix(".jpeg")
+  }
+
+  var displayTitle: String { path ?? "Unavailable candidate path" }
+  var displayKind: String {
+    switch kind {
+    case "text": return "Text file"
+    case "asset": return "Image asset"
+    default: return "Unsupported candidate entry"
+    }
+  }
+  var priorDigestDisplay: String { beforeSha256 ?? "New file" }
+  var currentDigestDisplay: String { contentSha256 ?? "Unavailable" }
+  var assetMetadataDisplay: String? {
+    guard kind == "asset" else { return nil }
+    return "\(mediaType ?? "Unsupported format") · \(width.map(String.init) ?? "?") × \(height.map(String.init) ?? "?") pixels"
+  }
+}
+
 struct DeveloperRepairProposal: Decodable {
   let status: String
   let featureId: String
@@ -25,6 +133,11 @@ struct DeveloperRepairProposal: Decodable {
   let files: [DeveloperRepairFile]?
   let binding: DeveloperRepairBinding?
   let count: Int?
+  let source: String?
+  let candidateSchemaVersion: Int?
+  let candidateSha256: String?
+  let candidatePayloadState: String?
+  let candidateEntries: [DeveloperRepairCandidateEntry]?
   var diagnosis: String? = nil
   var chatRequestId: String? = nil
   var diagnosisSha256: String? = nil
@@ -42,6 +155,51 @@ struct DeveloperRepairProposal: Decodable {
   var prepareActionTitle: String {
     ["cancelled", "unavailable", "failed", "interrupted"].contains(status)
       ? "Prepare fresh repair" : "Prepare repair"
+  }
+
+  private var hasTypedCandidateFields: Bool {
+    candidateSchemaVersion != nil || candidateSha256 != nil || candidatePayloadState != nil
+      || candidateEntries != nil
+  }
+
+  var typedCandidateWarning: String? {
+    guard hasTypedCandidateFields || (source != nil && source != "manual_chat") else { return nil }
+    guard source == "automatic_failure" else {
+      return "Manual approval is unavailable because this repair candidate has an unsupported source."
+    }
+    guard hasTypedCandidateFields else {
+      return "This automatic repair proposal is read-only here. Windows controls its saved policy and lifecycle; it cannot be manually approved."
+    }
+    guard files?.isEmpty != false else {
+      return "Manual approval is unavailable because this proposal mixes legacy text edits with a newer repair candidate format."
+    }
+    guard candidateSchemaVersion == 1 else {
+      return "Manual approval is unavailable because this repair candidate uses an unsupported format."
+    }
+    guard validRepairCandidateDigest(candidateSha256),
+      let entries = candidateEntries, !entries.isEmpty else {
+      return "Manual approval is unavailable because this repair candidate is missing its exact binding or entries."
+    }
+    let fullStatuses: Set<String> = ["ready", "approved", "applying", "applied"]
+    let hashOnlyStatuses: Set<String> = ["no_op", "duplicate", "cancelled", "unavailable",
+      "authorization_rejected", "failed", "interrupted", "succeeded"]
+    guard (candidatePayloadState == "full" && fullStatuses.contains(status))
+      || (candidatePayloadState == "hash_only" && hashOnlyStatuses.contains(status)) else {
+      return "Manual approval is unavailable because this repair candidate payload format does not match its lifecycle status."
+    }
+    guard entries.count <= 320 else {
+      return "Manual approval is unavailable because this repair candidate exceeds 320 reviewable entries."
+    }
+    var paths: Set<String> = []
+    for entry in entries {
+      if let error = entry.validationError(payloadState: candidatePayloadState) {
+        return "Manual approval is unavailable because \(error)."
+      }
+      guard let path = entry.path, paths.insert(path.lowercased()).inserted else {
+        return "Manual approval is unavailable because the repair candidate contains duplicate paths."
+      }
+    }
+    return "This automatic repair candidate is read-only here. Windows retains its exact binding for validation and independent review; it cannot be manually approved."
   }
 
   var statusMessage: String? {
@@ -68,7 +226,8 @@ struct DeveloperRepairProposal: Decodable {
   }
 
   func canApprove(feature: DeveloperRunnerFeature, runner: DeveloperRunnerSnapshot) -> Bool {
-    status == "ready" && proposalId?.isEmpty == false && featureId == feature.id
+    !hasTypedCandidateFields && (source == nil || source == "manual_chat")
+      && status == "ready" && proposalId?.isEmpty == false && featureId == feature.id
       && diagnosis?.isEmpty == false && chatRequestId?.isEmpty == false && diagnosisSha256?.count == 64
       && ["mac", "windows"].contains(chatModelTarget ?? "") && ["mac", "windows"].contains(modelTarget ?? "")
       && binding?.featureId == feature.id && binding?.checkpoint == feature.checkpoint
@@ -288,6 +447,53 @@ struct DeveloperRepairEscalationView: View {
           }
           Text("Approval applies only these changes on Windows, runs the original validation command, and sends the candidate to OpenAI/Codex for independent review. Auto-run can advance only after both gates pass.")
             .font(.caption).foregroundStyle(.secondary)
+        }
+        if let entries = proposal.candidateEntries, !entries.isEmpty {
+          Text("Automatic repair changes")
+            .font(.headline)
+          Text("Candidate SHA-256: \(proposal.candidateSha256 ?? "Unavailable")")
+            .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+          if proposal.candidatePayloadState == "hash_only" {
+            Text("Terminal hash-only evidence. Exact text contents and image bytes are no longer retained in this proposal; their recorded hashes and image metadata remain available.")
+              .font(.caption).foregroundStyle(.secondary)
+          }
+          VStack(alignment: .leading, spacing: 18) {
+            ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
+              VStack(alignment: .leading, spacing: 8) {
+                Text(entry.displayTitle).font(.headline.monospaced())
+                Label(entry.displayKind,
+                  systemImage: entry.kind == "asset" ? "photo" : "doc.plaintext")
+                  .font(.caption.bold())
+                if let metadata = entry.assetMetadataDisplay {
+                  Text(metadata).font(.caption).textSelection(.enabled)
+                }
+                Text("Prior SHA-256: \(entry.priorDigestDisplay)")
+                  .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                Text("Current SHA-256: \(entry.currentDigestDisplay)")
+                  .font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                if entry.kind == "text" {
+                  Divider()
+                  if let after = entry.after {
+                    Text("After").font(.caption.bold())
+                    Text(after).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                  } else if proposal.candidatePayloadState == "hash_only" {
+                    Text("Text contents released after terminal evidence was recorded.")
+                      .font(.caption).foregroundStyle(.secondary)
+                  } else {
+                    Text("Exact text contents are unavailable in this repair response.")
+                      .font(.caption).foregroundStyle(.orange)
+                  }
+                }
+              }
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .padding(12).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
+            }
+          }
+        }
+        if let warning = proposal.typedCandidateWarning {
+          Label(warning, systemImage: "lock.shield")
+            .font(.callout).foregroundStyle(.orange)
+            .fixedSize(horizontal: false, vertical: true)
         }
         if let statusMessage = proposal.statusMessage {
           Text(statusMessage).font(.callout).fixedSize(horizontal: false, vertical: true)

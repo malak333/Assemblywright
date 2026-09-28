@@ -34,6 +34,16 @@ controller. Default connection values reflect the owner's current two-machine se
 5. Review each feature's status, checkpoint, changed files, validation, and review.
    Files remain in the Windows project folder.
 
+Larger repair candidates use bounded context retrieval and complete batched Codex
+review, including supported PNG/JPEG assets through actual image input. An image
+existing on disk or a unit-test pass alone does not establish feature completion.
+See [scalable repair](developer-scalable-repair-design.md) for the evidence contract.
+For older tool-effect holds without retained image bytes, Resume can explicitly
+adopt the displayed current-file snapshot as a fresh recovery candidate. The
+confirmation describes that adoption; changed bytes require a refreshed snapshot,
+and validation plus fresh independent review remain mandatory. Historical tool
+effects are not relabeled as verified or replayed.
+
 ## AI settings
 
 Click the **gear icon** at the top right of the developer build. Choose a **Model**
@@ -343,7 +353,7 @@ auto-run, and restart. It does not contact the owner's live queue or local model
 Live-model evidence is recorded separately below.
 
 The Auto AI repair harness additionally proves its revision-bound policy,
-queue-v11 migration, 21 disposable automatic-repair scenarios, actual 100-call cap,
+queue-v12 migration, 21 disposable automatic-repair scenarios, actual 100-call cap,
 late-result cancellation, and restart quarantine on macOS. Its shared-limit
 scenario escalates manually through the public chat and repair routes, and that
 manual escalation consumes the same per-feature cap, so a later automatic

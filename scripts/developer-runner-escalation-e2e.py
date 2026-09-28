@@ -324,7 +324,7 @@ def main():
             with closing(sqlite3.connect(data / "developer.sqlite3")) as database:
                 state = json.loads(database.execute(
                     "SELECT state FROM developer_state WHERE id=1").fetchone()[0])
-            return next(item for item in state["queue_v11"] if item["id"] == feature_id)
+            return next(item for item in state["queue_v12"] if item["id"] == feature_id)
 
         try:
             launch()
@@ -401,7 +401,7 @@ def main():
             with closing(sqlite3.connect(data / "developer.sqlite3")) as database:
                 durable_ready = json.loads(database.execute(
                     "SELECT state FROM developer_state WHERE id=1").fetchone()[0])
-            ready_feature = next(item for item in durable_ready["queue_v11"]
+            ready_feature = next(item for item in durable_ready["queue_v12"]
                 if item["id"] == primary)
             approved_digest = next(item["proposal_sha256"] for item in
                 reversed(ready_feature["escalation_history"])
@@ -589,9 +589,9 @@ def main():
                     "SELECT state FROM developer_state WHERE id=1").fetchone()[0])
                 v7_backup = json.loads(database.execute(
                     "SELECT state FROM developer_state_v7_backup WHERE id=1").fetchone()[0])
-            assert "queue_v11" in durable and "queue_v7" not in durable
-            assert "queue_v7" in v7_backup and "queue_v11" not in v7_backup
-            durable_primary = next(item for item in durable["queue_v11"]
+            assert "queue_v12" in durable and "queue_v7" not in durable
+            assert "queue_v7" in v7_backup and "queue_v12" not in v7_backup
+            durable_primary = next(item for item in durable["queue_v12"]
                 if item["id"] == primary)
             assert durable_primary["repair_attempts"] == 3
             assert len(durable_primary["repair_history"]) == 3
@@ -627,15 +627,22 @@ def main():
                 for item in expected_packet["files"]] == [
                 ("app.py", "ordinary_source"),
                 ("tests/test_app.py", "test_or_validation_input")]
-            expected_packet_sha = sha256(json.dumps(expected_packet,
+            # Version 2 binds the complete source packet and typed assets before
+            # splitting it into review batches; preserve exact byte equality.
+            expected_binding = {"schema_version": 2, "packet": expected_packet, "assets": []}
+            expected_packet_sha = sha256(json.dumps(expected_binding,
                 separators=(",", ":")).encode())
             assert review["packet_sha256"] == expected_packet_sha
+            assert review["binding_version"] == 2
+            assert len(review["batch_packet_sha256s"]) == 1
+            assert len(review["batch_receipt_sha256s"]) == 1
+            assert durable_primary["review_binding_version"] == 2
             final_evidence = [item for item in durable_primary["escalation_history"]
                 if item["proposal_id"] == second["proposal_id"]]
             assert [item["outcome"] for item in final_evidence] == [
                 "ready", "approved_to_apply", "succeeded"]
             assert all(item["proposal_sha256"] == approved_digest for item in final_evidence)
-            durable_partial = next(item for item in durable["queue_v11"]
+            durable_partial = next(item for item in durable["queue_v12"]
                 if item["id"] == partial_id)
             assert durable_partial["escalation_pending"] is False
             assert durable_partial["edits"] == [{"path": "app.py", "content": "VALUE = 2\n",
@@ -644,19 +651,19 @@ def main():
             assert durable_partial["escalation_proposal"]["status"] == "interrupted"
             assert durable_partial["escalation_proposal"]["applied_paths"] == ["app.py"]
             assert durable_partial["escalation_history"][-1]["outcome"] == "interrupted"
-            durable_validation = next(item for item in durable["queue_v11"]
+            durable_validation = next(item for item in durable["queue_v12"]
                 if item["id"] == validation_id)
             assert durable_validation["status"] == "removed"
             assert durable_validation["review_attempts"] == 0
             assert durable_validation["escalation_history"][-1]["outcome"] == "failed"
-            durable_rejection = next(item for item in durable["queue_v11"]
+            durable_rejection = next(item for item in durable["queue_v12"]
                 if item["id"] == rejection_id)
             assert durable_rejection["status"] == "removed"
             assert durable_rejection["review_status"] == "rejected"
             assert [item["outcome"] for item in durable_rejection["review_history"]] == [
                 "rejected"]
             assert durable_rejection["escalation_history"][-1]["outcome"] == "failed"
-            durable_legacy = next(item for item in durable["queue_v11"]
+            durable_legacy = next(item for item in durable["queue_v12"]
                 if item["id"] == feature_ids["legacy"])
             assert durable_legacy["cumulative_evidence_version"] == 1
             assert durable_legacy["checkpoint"] == "review_binding_changed"

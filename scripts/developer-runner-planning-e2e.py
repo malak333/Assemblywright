@@ -167,8 +167,15 @@ def main():
                     item for item in value["queue"] if item["id"] == junction_feature_id)["status"] == "failed")
                 junction_state = next(item for item in junction_failed["queue"]
                     if item["id"] == junction_feature_id)
-                assert junction_state["message"] == "Automatic repair project context refuses a Windows reparse point"
-                assert not model_prompts, "Windows junction must fail before model disclosure"
+                junction_prompts = list(model_prompts)
+                assert len(junction_prompts) == 1, (
+                    "excluded Windows junction must enter one bounded source-context request")
+                assert '"kind":"excluded_link"' in junction_prompts[0]
+                assert all(value not in prompt for prompt in junction_prompts for value in
+                    ["abcdef", "outside-context", "outside-junction", "private.txt"]), (
+                    "Windows junction target or target content reached the model")
+                assert (outside / "private.txt").read_text() == "token = abcdefgh\n"
+                model_prompts.clear()
                 api("control", {"action":"remove", "id":junction_feature_id})
                 wait(lambda value: all(item["id"] != junction_feature_id for item in value["queue"]))
                 cleanup = subprocess.run(["cmd.exe", "/d", "/c", "rmdir", str(junction)],
@@ -221,12 +228,12 @@ def main():
             with closing(__import__("sqlite3").connect(data / "developer.sqlite3")) as database:
                 durable = json.loads(database.execute(
                     "SELECT state FROM developer_state WHERE id=1").fetchone()[0])
-            assert "queue_v11" in durable and "queue_v5" not in durable
+            assert "queue_v12" in durable and "queue_v5" not in durable
             print(json.dumps({"raw_enqueue_rejected":True, "exact_replay_safe":True,
                 "emergency_invalidated_planning":True, "durable_skill_and_provider_evidence":True,
                 "restart_invalidated_and_retry_cancelled":True,
                 "reparse_context_not_disclosed":True,
-                "approved_plan_reached_initial_repair_and_review":True, "durable_queue_schema":"queue_v11"}))
+                "approved_plan_reached_initial_repair_and_review":True, "durable_queue_schema":"queue_v12"}))
         finally:
             try: api("control", {"action":"emergency"})
             except Exception: pass

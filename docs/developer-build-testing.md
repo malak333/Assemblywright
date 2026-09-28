@@ -222,7 +222,7 @@ layout coverage; the native UI automation pipe was unavailable during observatio
 ## Developer Auto AI repair implementation evidence
 
 The implementation follows the same unit-first and native `e2e-testing` workflows.
-The real Developer binary owns policy persistence, queue-v11 backup-first migration,
+The real Developer binary owns policy persistence, queue-v12 backup-first migration,
 feature limit snapshots, a shared lifetime escalation cap, bounded evidence,
 automatic proposal authorization, file application, validation, independent review,
 cancellation epochs, holds, and quarantine. Swift owns only revision-bound controls

@@ -6,6 +6,59 @@ import Testing
 
 @Suite("Developer runner")
 struct DeveloperRunnerTests {
+  private func recoveryFeature(checkpoint: String, digest: String? = String(repeating: "a", count: 64),
+    status: String = "failed") throws -> DeveloperRunnerFeature
+  {
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    var wire: [String: Any] = ["id": "fixture", "project": "maps", "instruction": "Create a map",
+      "validation": "python tests.py", "status": status, "checkpoint": checkpoint,
+      "message": "Inspect recovered image", "changed_files": ["map.png"]]
+    wire["auto_repair_lifecycle"] = checkpoint == "auto_repair_effects_quarantined"
+      ? "quarantined" : "held"
+    if let digest { wire["asset_recovery_sha256"] = digest }
+    return try decoder.decode(DeveloperRunnerFeature.self,
+      from: JSONSerialization.data(withJSONObject: wire))
+  }
+
+  @Test(arguments: ["tool_effects_quarantined", "auto_repair_effects_quarantined"])
+  func assetRecoveryRequiresExactDisplayedDigestAndExplainsFreshCandidate(checkpoint: String) throws {
+    let value = try recoveryFeature(checkpoint: checkpoint)
+    #expect(value.startBinding["expected_asset_recovery_sha256"] as? String == String(repeating: "a", count: 64))
+    #expect(value.assetRecoveryNotice?.contains("new recovery candidate") == true)
+    #expect(value.assetRecoveryNotice?.contains(value.validAssetRecoverySha256!) == true)
+    #expect(value.assetRecoveryNotice?.contains("Quarantined writes are not replayed") == true)
+    #expect(value.assetRecoveryNotice?.contains("history and repair counters are retained") == true)
+    #expect(!value.blocksOrdinaryResume)
+    #expect(value.automaticRepairNextAction == value.assetRecoveryNotice)
+  }
+
+  @Test(arguments: ["tool_effects_quarantined", "auto_repair_effects_quarantined"])
+  func assetRecoveryRejectsMissingInvalidAndStaleDigests(checkpoint: String) throws {
+    for digest in [nil, String(repeating: "A", count: 64), String(repeating: "a", count: 63)] {
+      var value = try recoveryFeature(checkpoint: checkpoint, digest: digest)
+      #expect(value.validAssetRecoverySha256 == nil)
+      #expect(value.startBinding["expected_asset_recovery_sha256"] == nil)
+      #expect(value.assetRecoveryNotice == nil)
+      #expect(value.blocksOrdinaryResume)
+      #expect(value.automaticRepairNextAction?.contains("ordinary Resume are blocked") == true)
+      value.assetRecoveryUnavailableReason = "A retained file is no longer available."
+      #expect(value.automaticRepairNextAction
+        == "Recovery snapshot unavailable: A retained file is no longer available. Automatic replay and ordinary Resume are blocked.")
+    }
+
+    let presented = try recoveryFeature(checkpoint: checkpoint)
+    let changed = try recoveryFeature(checkpoint: checkpoint, digest: String(repeating: "b", count: 64))
+    #expect(!changed.matchesAssetRecoverySnapshot(presentedBy: presented))
+    let noLongerFailed = try recoveryFeature(checkpoint: checkpoint, status: "paused")
+    #expect(noLongerFailed.validAssetRecoverySha256 == nil)
+    #expect(noLongerFailed.blocksOrdinaryResume)
+
+    let unrelated = try recoveryFeature(checkpoint: "review_1_pending")
+    #expect(unrelated.validAssetRecoverySha256 == nil)
+    #expect(unrelated.startBinding["expected_asset_recovery_sha256"] == nil)
+  }
+
   private func feature(_ id: String, status: String, attempts: Int? = 0) -> DeveloperRunnerFeature {
     DeveloperRunnerFeature(
       id: id, project: "example", instruction: "Add a feature", validation: "python tests.py",
