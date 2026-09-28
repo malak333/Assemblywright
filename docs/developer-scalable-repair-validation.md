@@ -419,6 +419,17 @@ no P0-P3 issues after a sensitive-path audit and PEM-redaction correction.
 Hosted Windows compilation exposed a `ReviewJob` raw handle borrowed across an
 asynchronous sleep, which made the queue future non-`Send`. The bounded job
 termination check now runs synchronously only after an exited reviewer process;
-the exact Windows hosted rerun and full canonical gate remain required before
-publication. Installation verification and live FFT website acceptance remain
-separate open boundaries.
+a Windows-only needless-return lint finding was also corrected without changing
+the bounded read. The final implementation passed strict Windows master Clippy,
+272 Windows Developer tests (one ignored), and both pinned OpenCode 1.18.23
+native E2Es on Windows. The scalable-repair run verified real image transport,
+complete 49-file review, finite retry, exact restart recovery, and one
+post-apply quarantine receipt; the approval run verified one-use binding,
+deny, replay rejection, Stop, and Emergency Pause.
+
+The complete local `./scripts/release-local.sh` gate passed on the final
+implementation source, including the Rust workspace, native Developer workflow,
+Swift tests and build, packaging, and release contracts. Independent review of
+the final Windows correction found no P0-P3 issues. Hosted checks for the
+repair PR are still required before merge. Installation verification and live
+FFT website acceptance remain separate open boundaries.
