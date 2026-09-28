@@ -1,4 +1,6 @@
+import AppKit
 import Foundation
+import SwiftUI
 import Testing
 @testable import AssemblywrightMacApp
 
@@ -138,6 +140,90 @@ struct DeveloperRunnerTests {
     #expect(approval.accessRevision == 4)
     #expect(approval.detailText.contains("python --version"))
     #expect(self.feature("legacy", status: "running").pendingToolApproval == nil)
+  }
+
+  @Test @MainActor
+  func featureApprovalBindsCurrentSnapshotAndSuppressesStaleOrEmergencyActions() throws {
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    let feature = try decoder.decode(DeveloperRunnerFeature.self, from: Data("""
+      {"id":"feature-1","project":"example","instruction":"Build it","validation":"tests",\
+      "status":"running","checkpoint":"tool_work","message":"","changed_files":[],\
+      "pending_tool_approval":{"id":"approval-1","request_id":"request-1",\
+      "summary":"Check Python","tool":"bash","details":{"command":"python --version"},\
+      "access_revision":4}}
+      """.utf8))
+    let approval = try #require(feature.pendingToolApproval)
+    let model = DeveloperRunnerModel(configurationPath: "/missing-fixture")
+    model.snapshot = snapshot([feature])
+    for decision in ["approve", "deny"] {
+      let body = try #require(model.featureToolApprovalBody(
+        decision, feature: feature, approval: approval))
+      #expect(body["feature_id"] as? String == "feature-1")
+      #expect(body["project"] as? String == "example")
+      #expect(body["expected_checkpoint"] as? String == "tool_work")
+      #expect(body["request_id"] as? String == "request-1")
+      #expect(body["approval_id"] as? String == "approval-1")
+      #expect(body["access_revision"] as? UInt64 == 4)
+      #expect(body["decision"] as? String == decision)
+    }
+    #expect(model.featureToolApprovalBody("allow", feature: feature, approval: approval) == nil)
+
+    model.snapshot = snapshot([feature])
+    var stalePresented = feature
+    stalePresented.pendingToolApproval = approval
+    stalePresented = DeveloperRunnerFeature(
+      id: stalePresented.id, project: stalePresented.project,
+      instruction: stalePresented.instruction, validation: stalePresented.validation,
+      status: stalePresented.status, checkpoint: "old_checkpoint", message: stalePresented.message,
+      changedFiles: stalePresented.changedFiles, repairAttempts: stalePresented.repairAttempts,
+      modelTarget: stalePresented.modelTarget, pendingToolApproval: approval)
+    #expect(model.featureToolApprovalBody(
+      "approve", feature: stalePresented, approval: approval) == nil)
+    model.snapshot = snapshot([feature], emergencyPaused: true)
+    #expect(model.featureToolApprovalBody("approve", feature: feature, approval: approval) == nil)
+  }
+
+  @Test @MainActor
+  func featureApprovalViewOffersBothDecisionsAndEmergencyPauseDisablesThem() throws {
+    _ = NSApplication.shared
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    let feature = try decoder.decode(DeveloperRunnerFeature.self, from: Data("""
+      {"id":"feature-1","project":"example","instruction":"Build it","validation":"tests",\
+      "status":"running","checkpoint":"tool_work","message":"","changed_files":[],\
+      "pending_tool_approval":{"id":"approval-1","request_id":"request-1",\
+      "summary":"Check Python","tool":"bash","details":{"command":"python --version"},\
+      "access_revision":4}}
+      """.utf8))
+    let approval = try #require(feature.pendingToolApproval)
+    var decisions: [String] = []
+
+    func buttons(disabled: Bool) throws -> [NSButton] {
+      let view = DeveloperToolApprovalView(approval: approval, project: feature.project,
+        disabled: disabled, decide: { decisions.append($0) })
+      let host = NSHostingView(rootView: view)
+      host.frame = NSRect(x: 0, y: 0, width: 520, height: 240)
+      host.layoutSubtreeIfNeeded()
+      RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+      func descendants(_ node: NSView) -> [NSButton] {
+        ((node as? NSButton).map { [$0] } ?? []) + node.subviews.flatMap(descendants)
+      }
+      return descendants(host)
+    }
+
+    let enabled = try buttons(disabled: false)
+    let approve = try #require(enabled.first { $0.title == "Approve once" })
+    let deny = try #require(enabled.first { $0.title == "Deny" })
+    #expect(approve.isEnabled)
+    #expect(deny.isEnabled)
+    approve.performClick(nil)
+    deny.performClick(nil)
+    #expect(decisions == ["approve", "deny"])
+
+    let paused = try buttons(disabled: true)
+    #expect(paused.first { $0.title == "Approve once" }?.isEnabled == false)
+    #expect(paused.first { $0.title == "Deny" }?.isEnabled == false)
   }
 
   @Test

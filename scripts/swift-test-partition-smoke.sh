@@ -6,9 +6,10 @@ ROOT_DIR="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
 PACKAGE_PATH="$ROOT_DIR/apps/mac"
 UI_TEST_ONE='AssemblywrightMacAppTests.DeveloperProjectChatTests/shiftReturnInsertsNewlineAtCursorAndReplacesSelection()'
 UI_TEST_TWO='AssemblywrightMacAppTests.DeveloperProjectChatTests/approvalViewPresentsExactDetailsAndDecisions()'
+UI_TEST_THREE='AssemblywrightMacAppTests.DeveloperRunnerTests/featureApprovalViewOffersBothDecisionsAndEmergencyPauseDisablesThem()'
 # Exact copies of the release-local expressions. The CI workflow smoke binds
 # these constants to the literal command manifest so either copy drifting fails.
-UI_FILTER_REGEX='^AssemblywrightMacAppTests\.DeveloperProjectChatTests/(shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions)\(\)(/.*)?$'
+UI_FILTER_REGEX='^AssemblywrightMacAppTests\.(DeveloperProjectChatTests/(shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions)|DeveloperRunnerTests/featureApprovalViewOffersBothDecisionsAndEmergencyPauseDisablesThem)\(\)(/.*)?$'
 BRIDGE_FILTER_REGEX='^AssemblywrightMacCoreTests\.DeveloperBridgeTests/'
 
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/assemblywright-swift-partition.XXXXXX")"
@@ -27,6 +28,7 @@ verify_partition() {
   local remaining_count=0
   local ui_one_count=0
   local ui_two_count=0
+  local ui_three_count=0
   local membership_failures=0
   local test_id
 
@@ -44,6 +46,7 @@ verify_partition() {
     [[ "$ui_match" -eq 0 ]] || ui_count=$((ui_count + 1))
     [[ "$test_id" != "$UI_TEST_ONE" ]] || ui_one_count=$((ui_one_count + 1))
     [[ "$test_id" != "$UI_TEST_TWO" ]] || ui_two_count=$((ui_two_count + 1))
+    [[ "$test_id" != "$UI_TEST_THREE" ]] || ui_three_count=$((ui_three_count + 1))
     [[ "$bridge_match" -eq 0 ]] || bridge_count=$((bridge_count + 1))
     [[ "$remaining_match" -eq 0 ]] || remaining_count=$((remaining_count + 1))
     all_count=$((all_count + 1))
@@ -58,8 +61,9 @@ verify_partition() {
     printf 'error: a discovered Swift test matches overlapping release partitions\n' >&2
     return 1
   }
-  [[ "$ui_one_count" -eq 1 && "$ui_two_count" -eq 1 && "$ui_count" -eq 2 ]] || {
-    printf 'error: Swift AppKit partition must contain its two exact tests once each\n' >&2
+  [[ "$ui_one_count" -eq 1 && "$ui_two_count" -eq 1 && "$ui_three_count" -eq 1 \
+      && "$ui_count" -eq 3 ]] || {
+    printf 'error: Swift AppKit partition must contain its three exact tests once each\n' >&2
     return 1
   }
   [[ "$bridge_count" -gt 0 ]] || {
@@ -99,27 +103,27 @@ if [[ "${1-}" == "--self-test" ]]; then
   empty_bridge="$scratch/empty-bridge"
   collision="$scratch/collision"
   empty_remaining="$scratch/empty-remaining"
-  printf '%s\n%s\n%s\n%s\n' \
-    "$UI_TEST_ONE" "$UI_TEST_TWO" \
+  printf '%s\n%s\n%s\n%s\n%s\n' \
+    "$UI_TEST_ONE" "$UI_TEST_TWO" "$UI_TEST_THREE" \
     'AssemblywrightMacCoreTests.DeveloperBridgeTests/sample()' \
     'AssemblywrightMacCoreTests.OtherTests/sample()' >"$valid"
-  printf '%s\n%s\n%s\n' \
-    "$UI_TEST_ONE" \
+  printf '%s\n%s\n%s\n%s\n' \
+    "$UI_TEST_ONE" "$UI_TEST_THREE" \
     'AssemblywrightMacCoreTests.DeveloperBridgeTests/sample()' \
     'AssemblywrightMacCoreTests.OtherTests/sample()' >"$missing_ui"
-  printf '%s\n%s\n%s\n%s\n%s\n' \
-    "$UI_TEST_ONE" "$UI_TEST_TWO" "$UI_TEST_ONE" \
+  printf '%s\n%s\n%s\n%s\n%s\n%s\n' \
+    "$UI_TEST_ONE" "$UI_TEST_TWO" "$UI_TEST_THREE" "$UI_TEST_ONE" \
     'AssemblywrightMacCoreTests.DeveloperBridgeTests/sample()' \
     'AssemblywrightMacCoreTests.OtherTests/sample()' >"$duplicate"
-  printf '%s\n%s\n%s\n' \
-    "$UI_TEST_ONE" "$UI_TEST_TWO" \
-    'AssemblywrightMacCoreTests.OtherTests/sample()' >"$empty_bridge"
   printf '%s\n%s\n%s\n%s\n' \
-    "$UI_TEST_ONE" "$UI_TEST_TWO" \
+    "$UI_TEST_ONE" "$UI_TEST_TWO" "$UI_TEST_THREE" \
+    'AssemblywrightMacCoreTests.OtherTests/sample()' >"$empty_bridge"
+  printf '%s\n%s\n%s\n%s\n%s\n' \
+    "$UI_TEST_ONE" "$UI_TEST_TWO" "$UI_TEST_THREE" \
     'AssemblywrightMacCoreTests.DeveloperBridgeTests/collision()' \
     'AssemblywrightMacCoreTests.OtherTests/sample()' >"$collision"
-  printf '%s\n%s\n%s\n' \
-    "$UI_TEST_ONE" "$UI_TEST_TWO" \
+  printf '%s\n%s\n%s\n%s\n' \
+    "$UI_TEST_ONE" "$UI_TEST_TWO" "$UI_TEST_THREE" \
     'AssemblywrightMacCoreTests.DeveloperBridgeTests/sample()' >"$empty_remaining"
   verify_partition "$valid" >/dev/null
   expect_rejection "$missing_ui" "missing UI test"

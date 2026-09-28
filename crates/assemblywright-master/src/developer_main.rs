@@ -64,7 +64,8 @@ use developer_settings::{
     DEFAULT_MODEL as REVIEW_MODEL_ID, DEFAULT_REASONING_EFFORT,
 };
 use developer_tools::{
-    DeveloperTools, OpenCodeRuntimeConfig, ToolChatRequest, ToolModelConfig, ToolProjectMutation,
+    DeveloperTools, OpenCodeRuntimeConfig, ToolApprovalDecision, ToolChatRequest, ToolModelConfig,
+    ToolProjectMutation,
 };
 
 const REPAIR_LIMIT: u32 = 3;
@@ -12088,15 +12089,15 @@ async fn chat_approval(
         let chat_id = engine
             .chat
             .resolve_chat_id(&request.project, request.chat_id.as_deref())?;
-        engine.tools.decide(
-            &request.project,
-            Some(&chat_id),
-            None,
-            &request.request_id,
-            &request.approval_id,
-            request.access_revision,
-            &request.decision,
-        )?;
+        engine.tools.decide(ToolApprovalDecision {
+            project: &request.project,
+            chat_id: Some(&chat_id),
+            feature_id: None,
+            request_id: &request.request_id,
+            approval_id: &request.approval_id,
+            access_revision: request.access_revision,
+            decision: &request.decision,
+        })?;
         drop(database);
         engine.chat.snapshot_chat(&request.project, &chat_id, None)
     })())
@@ -12160,15 +12161,15 @@ async fn feature_tool_approval(
             .find(|feature| feature.id == request.feature_id)
             .context("Feature not found")?;
         feature_tool_approval_admissible(feature, &request.project, &request.expected_checkpoint)?;
-        engine.tools.decide(
-            &request.project,
-            None,
-            Some(&request.feature_id),
-            &request.request_id,
-            &request.approval_id,
-            request.access_revision,
-            &request.decision,
-        )?;
+        engine.tools.decide(ToolApprovalDecision {
+            project: &request.project,
+            chat_id: None,
+            feature_id: Some(&request.feature_id),
+            request_id: &request.request_id,
+            approval_id: &request.approval_id,
+            access_revision: request.access_revision,
+            decision: &request.decision,
+        })?;
         engine.snapshot_locked(&database)
     })())
 }

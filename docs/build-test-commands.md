@@ -166,9 +166,9 @@ cargo test -p assemblywright-protocol --test full_machine_assembly_line_contract
 cargo test -p assemblywright-master --lib planning_effects::tests -- --nocapture
 cargo test -p assemblywright-master --test brainstorming_provider_adapter_e2e -- --nocapture
 cargo test -p assemblywright-master --test assembly_line_planning_http -- --nocapture
-swift test --disable-sandbox --package-path apps/mac --filter '^AssemblywrightMacAppTests\.DeveloperProjectChatTests/(shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions)\(\)(/.*)?$'
+swift test --disable-sandbox --package-path apps/mac --filter '^AssemblywrightMacAppTests\.(DeveloperProjectChatTests/(shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions)|DeveloperRunnerTests/featureApprovalViewOffersBothDecisionsAndEmergencyPauseDisablesThem)\(\)(/.*)?$'
 swift test --disable-sandbox --package-path apps/mac --filter '^AssemblywrightMacCoreTests\.DeveloperBridgeTests/'
-swift test --disable-sandbox --package-path apps/mac --skip '^AssemblywrightMacCoreTests\.DeveloperBridgeTests/|^AssemblywrightMacAppTests\.DeveloperProjectChatTests/(shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions)\(\)(/.*)?$'
+swift test --disable-sandbox --package-path apps/mac --skip '^AssemblywrightMacCoreTests\.DeveloperBridgeTests/|^AssemblywrightMacAppTests\.(DeveloperProjectChatTests/(shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions)|DeveloperRunnerTests/featureApprovalViewOffersBothDecisionsAndEmergencyPauseDisablesThem)\(\)(/.*)?$'
 ```
 
 These planning tests bind the sandbox split to the source contract: brainstorming is
@@ -499,9 +499,9 @@ cargo run -p assemblywright-cli -- release live-device-runbook
 ./scripts/release-external-handoff.sh --self-test
 ./scripts/swift-test-partition-smoke.sh --self-test
 ./scripts/swift-test-partition-smoke.sh
-swift test --disable-sandbox --package-path apps/mac --filter '^AssemblywrightMacAppTests\.DeveloperProjectChatTests/(shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions)\(\)(/.*)?$'
+swift test --disable-sandbox --package-path apps/mac --filter '^AssemblywrightMacAppTests\.(DeveloperProjectChatTests/(shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions)|DeveloperRunnerTests/featureApprovalViewOffersBothDecisionsAndEmergencyPauseDisablesThem)\(\)(/.*)?$'
 swift test --disable-sandbox --package-path apps/mac --filter '^AssemblywrightMacCoreTests\.DeveloperBridgeTests/'
-swift test --disable-sandbox --package-path apps/mac --skip '^AssemblywrightMacCoreTests\.DeveloperBridgeTests/|^AssemblywrightMacAppTests\.DeveloperProjectChatTests/(shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions)\(\)(/.*)?$'
+swift test --disable-sandbox --package-path apps/mac --skip '^AssemblywrightMacCoreTests\.DeveloperBridgeTests/|^AssemblywrightMacAppTests\.(DeveloperProjectChatTests/(shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions)|DeveloperRunnerTests/featureApprovalViewOffersBothDecisionsAndEmergencyPauseDisablesThem)\(\)(/.*)?$'
 swift build --disable-sandbox --package-path apps/mac
 ```
 

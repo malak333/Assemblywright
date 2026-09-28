@@ -472,18 +472,13 @@ final class DeveloperRunnerModel: ObservableObject {
   func decideFeatureToolApproval(_ decision: String, feature: DeveloperRunnerFeature,
     approval: DeveloperToolApproval) async
   {
-    guard ["approve", "deny"].contains(decision), !decidingFeatureToolApproval,
-      snapshot?.queue.first(where: { $0.id == feature.id })?.pendingToolApproval?.id == approval.id
+    guard !decidingFeatureToolApproval,
+      let body = featureToolApprovalBody(decision, feature: feature, approval: approval)
     else { return }
     decidingFeatureToolApproval = true
     defer { decidingFeatureToolApproval = false }
     do {
-      let updated = try await request(path: "feature/tool-approval", body: [
-        "feature_id": feature.id, "project": feature.project,
-        "expected_checkpoint": feature.checkpoint,
-        "request_id": approval.requestId, "approval_id": approval.id,
-        "access_revision": approval.accessRevision, "decision": decision
-      ])
+      let updated = try await request(path: "feature/tool-approval", body: body)
       if updated.revision >= (snapshot?.revision ?? 0) { snapshot = updated }
       actionError = nil
       error = nil
@@ -492,6 +487,25 @@ final class DeveloperRunnerModel: ObservableObject {
       self.error = actionError
       await refresh()
     }
+  }
+
+  func featureToolApprovalBody(_ decision: String, feature: DeveloperRunnerFeature,
+    approval: DeveloperToolApproval) -> [String: Any]?
+  {
+    guard ["approve", "deny"].contains(decision), let snapshot, !snapshot.emergencyPaused,
+      let current = snapshot.queue.first(where: { $0.id == feature.id }),
+      current.project == feature.project, current.checkpoint == feature.checkpoint,
+      current.status == "running", feature.status == "running",
+      let pending = current.pendingToolApproval,
+      pending.id == approval.id, pending.requestId == approval.requestId,
+      pending.accessRevision == approval.accessRevision
+    else { return nil }
+    return [
+      "feature_id": feature.id, "project": feature.project,
+      "expected_checkpoint": feature.checkpoint,
+      "request_id": approval.requestId, "approval_id": approval.id,
+      "access_revision": approval.accessRevision, "decision": decision
+    ]
   }
 
   func observe() async {

@@ -175,6 +175,18 @@ pub(crate) struct ToolAttachment {
     pub(crate) data_base64: String,
 }
 
+pub(crate) struct ToolApprovalDecision<'a> {
+    pub(crate) project: &'a str,
+    pub(crate) chat_id: Option<&'a str>,
+    pub(crate) feature_id: Option<&'a str>,
+    pub(crate) request_id: &'a str,
+    pub(crate) approval_id: &'a str,
+    pub(crate) access_revision: u64,
+    pub(crate) decision: &'a str,
+}
+
+type StoredToolApproval = (String, Option<String>, Option<String>, u64, String, String);
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ToolChatResult {
     pub(crate) response: String,
@@ -545,16 +557,16 @@ impl DeveloperTools {
         mutations
     }
 
-    pub(crate) fn decide(
-        &self,
-        project: &str,
-        chat_id: Option<&str>,
-        feature_id: Option<&str>,
-        request_id: &str,
-        approval_id: &str,
-        access_revision: u64,
-        decision: &str,
-    ) -> Result<Value> {
+    pub(crate) fn decide(&self, binding: ToolApprovalDecision<'_>) -> Result<Value> {
+        let ToolApprovalDecision {
+            project,
+            chat_id,
+            feature_id,
+            request_id,
+            approval_id,
+            access_revision,
+            decision,
+        } = binding;
         self.project_path(project)?;
         Uuid::parse_str(request_id).context("Invalid tool request ID")?;
         Uuid::parse_str(approval_id).context("Invalid tool approval ID")?;
@@ -585,7 +597,7 @@ impl DeveloperTools {
                 .database
                 .lock()
                 .map_err(|_| anyhow!("developer tool database lock failed"))?;
-            let exact: Option<(String, Option<String>, Option<String>, u64, String, String)> = database
+            let exact: Option<StoredToolApproval> = database
                 .query_row(
                     "SELECT request_id,chat_id,feature_id,access_revision,status,details FROM developer_tool_action
                      WHERE id=?1 AND project=?2",
@@ -2455,6 +2467,26 @@ mod tests {
         (directory, tools)
     }
 
+    fn approval_decision<'a>(
+        project: &'a str,
+        chat_id: Option<&'a str>,
+        feature_id: Option<&'a str>,
+        request_id: &'a str,
+        approval_id: &'a str,
+        access_revision: u64,
+        decision: &'a str,
+    ) -> ToolApprovalDecision<'a> {
+        ToolApprovalDecision {
+            project,
+            chat_id,
+            feature_id,
+            request_id,
+            approval_id,
+            access_revision,
+            decision,
+        }
+    }
+
     #[test]
     fn access_defaults_ask_and_changes_only_at_exact_idle_revision() {
         let (_directory, tools) = service(None);
@@ -2735,7 +2767,7 @@ mod tests {
             params![approval_id,request_id,json!({"opencode_permission_id":"permission-1"}).to_string()],
         ).unwrap();
         assert!(tools
-            .decide(
+            .decide(approval_decision(
                 "project",
                 None,
                 None,
@@ -2743,10 +2775,10 @@ mod tests {
                 &approval_id,
                 2,
                 "approve"
-            )
+            ))
             .is_err());
         assert!(tools
-            .decide(
+            .decide(approval_decision(
                 "project",
                 None,
                 None,
@@ -2754,10 +2786,10 @@ mod tests {
                 &approval_id,
                 1,
                 "approve"
-            )
+            ))
             .is_err());
         tools
-            .decide(
+            .decide(approval_decision(
                 "project",
                 None,
                 None,
@@ -2765,14 +2797,14 @@ mod tests {
                 &approval_id,
                 1,
                 "approve",
-            )
+            ))
             .unwrap();
         let reply = approval_rx.try_recv().unwrap();
         assert_eq!(reply.approval_id, approval_id);
         assert_eq!(reply.permission_id, "permission-1");
         assert_eq!(reply.response, "once");
         assert!(tools
-            .decide(
+            .decide(approval_decision(
                 "project",
                 None,
                 None,
@@ -2780,7 +2812,7 @@ mod tests {
                 &approval_id,
                 1,
                 "approve"
-            )
+            ))
             .is_err());
     }
 
@@ -2807,7 +2839,7 @@ mod tests {
         ).unwrap();
         cancellation.store(true, Ordering::SeqCst);
         assert!(tools
-            .decide(
+            .decide(approval_decision(
                 "project",
                 None,
                 None,
@@ -2815,7 +2847,7 @@ mod tests {
                 &approval_id,
                 1,
                 "approve"
-            )
+            ))
             .is_err());
         assert!(approval_rx.try_recv().is_err());
         assert_eq!(
@@ -3158,7 +3190,7 @@ mod tests {
         assert!(b["tool_actions"].as_array().unwrap().is_empty());
         assert!(b["pending_approval"].is_null());
         assert!(tools
-            .decide(
+            .decide(approval_decision(
                 "project",
                 Some(&chat_b),
                 None,
@@ -3166,7 +3198,7 @@ mod tests {
                 &approval_id,
                 1,
                 "approve",
-            )
+            ))
             .is_err());
         assert_eq!(
             tools.snapshot_for_chat("project", Some(&chat_a)).unwrap()["pending_approval"]["id"],
@@ -3206,7 +3238,7 @@ mod tests {
             .unwrap()
             .is_null());
         assert!(tools
-            .decide(
+            .decide(approval_decision(
                 "project",
                 None,
                 Some(&other_feature_id),
@@ -3214,10 +3246,10 @@ mod tests {
                 &approval_id,
                 1,
                 "approve"
-            )
+            ))
             .is_err());
         assert!(tools
-            .decide(
+            .decide(approval_decision(
                 "project",
                 Some(&Uuid::new_v4().to_string()),
                 None,
@@ -3225,10 +3257,10 @@ mod tests {
                 &approval_id,
                 1,
                 "approve"
-            )
+            ))
             .is_err());
         tools
-            .decide(
+            .decide(approval_decision(
                 "project",
                 None,
                 Some(&feature_id),
@@ -3236,7 +3268,7 @@ mod tests {
                 &approval_id,
                 1,
                 "approve",
-            )
+            ))
             .unwrap();
         assert_eq!(approval_rx.try_recv().unwrap().response, "once");
         assert!(tools
@@ -3244,7 +3276,7 @@ mod tests {
             .unwrap()
             .is_null());
         assert!(tools
-            .decide(
+            .decide(approval_decision(
                 "project",
                 None,
                 Some(&feature_id),
@@ -3252,7 +3284,7 @@ mod tests {
                 &approval_id,
                 1,
                 "approve"
-            )
+            ))
             .is_err());
     }
 

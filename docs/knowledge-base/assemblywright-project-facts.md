@@ -97,6 +97,22 @@ than relaxing it to accommodate a test-only path mismatch.
   never live Windows deployment proof, and hosted Windows evidence remains
   pending.
 
+## Feature tool approval identity
+
+- A tool approval shown on an Assembly Line feature is authority for exactly one
+  pending OpenCode permission. Admission binds the current feature ID, project,
+  running checkpoint, provider request ID, approval ID, and tool-access revision.
+  The approval is consumed once; a project-chat approval, another feature, stale
+  UI snapshot, Stop, or Emergency Pause cannot reuse it. Stop and Emergency Pause
+  serialize through the project effect gate before the binding is rechecked.
+- The native process boundary requires the exact pinned OpenCode runtime. The
+  opt-in `developer-runner-feature-approval-e2e.py` harness checks the projected
+  action through authenticated runner HTTP and proves that Approve sends the
+  one-shot permission which executes the fixture action, while Deny, replay,
+  stale bindings, Stop, and Emergency Pause produce no such effect. A skipped
+  run without `ASSEMBLYWRIGHT_DEVELOPER_OPENCODE_EXECUTABLE` is registration
+  coverage only and is not native OpenCode evidence.
+
 These notes capture durable facts for future agents working on this repository.
 
 ## Developer GitHub Publication

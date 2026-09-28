@@ -29,7 +29,7 @@ require_file "$WORKFLOW"
 require_file "$WINDOWS_PROTOCOL_WORKFLOW"
 require_file "$LOCAL_GATE"
 require_file "$SWIFT_PARTITION_SMOKE"
-require_text "UI_FILTER_REGEX='^AssemblywrightMacAppTests\.DeveloperProjectChatTests/(shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions)\(\)(/.*)?$'" \
+require_text "UI_FILTER_REGEX='^AssemblywrightMacAppTests\.(DeveloperProjectChatTests/(shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions)|DeveloperRunnerTests/featureApprovalViewOffersBothDecisionsAndEmergencyPauseDisablesThem)\(\)(/.*)?$'" \
   "$SWIFT_PARTITION_SMOKE"
 require_text "BRIDGE_FILTER_REGEX='^AssemblywrightMacCoreTests\.DeveloperBridgeTests/'" \
   "$SWIFT_PARTITION_SMOKE"
@@ -44,7 +44,8 @@ require_file "$DEVELOPER_E2E"
 for script in developer-runner-e2e.py developer-runner-repair-e2e.py \
   developer-runner-review-e2e.py developer-runner-planning-e2e.py \
   developer-runner-model-target-e2e.py developer-runner-chat-e2e.py \
-  developer-runner-chat-history-e2e.py developer-runner-escalation-e2e.py \
+  developer-runner-chat-history-e2e.py developer-runner-feature-approval-e2e.py \
+  developer-runner-escalation-e2e.py \
   developer-runner-auto-repair-e2e.py \
   developer-runner-settings-e2e.py developer-runner-github-setup-e2e.py \
   developer-runner-publication-e2e.py; do
@@ -153,9 +154,9 @@ expected_local_gate_commands=(
   "run ./scripts/release-external-handoff.sh --self-test"
   "run ./scripts/swift-test-partition-smoke.sh --self-test"
   "run ./scripts/swift-test-partition-smoke.sh"
-  "run swift test --disable-sandbox --package-path apps/mac --filter '^AssemblywrightMacAppTests\.DeveloperProjectChatTests/(shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions)\(\)(/.*)?$'"
+  "run swift test --disable-sandbox --package-path apps/mac --filter '^AssemblywrightMacAppTests\.(DeveloperProjectChatTests/(shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions)|DeveloperRunnerTests/featureApprovalViewOffersBothDecisionsAndEmergencyPauseDisablesThem)\(\)(/.*)?$'"
   "run swift test --disable-sandbox --package-path apps/mac --filter '^AssemblywrightMacCoreTests\.DeveloperBridgeTests/'"
-  "run swift test --disable-sandbox --package-path apps/mac --skip '^AssemblywrightMacCoreTests\.DeveloperBridgeTests/|^AssemblywrightMacAppTests\.DeveloperProjectChatTests/(shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions)\(\)(/.*)?$'"
+  "run swift test --disable-sandbox --package-path apps/mac --skip '^AssemblywrightMacCoreTests\.DeveloperBridgeTests/|^AssemblywrightMacAppTests\.(DeveloperProjectChatTests/(shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions)|DeveloperRunnerTests/featureApprovalViewOffersBothDecisionsAndEmergencyPauseDisablesThem)\(\)(/.*)?$'"
   "run swift build --disable-sandbox --package-path apps/mac"
 )
 
