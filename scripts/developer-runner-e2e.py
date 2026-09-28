@@ -218,8 +218,8 @@ def main():
             assert 'queue_v3' not in durable
             assert durable['auto_ai_repair_enabled'] is False
             assert durable['auto_ai_repair_max_escalations'] == 100
-            tombstone = next(feature for feature in durable['queue_v11'] if feature['id'] == failed_id)
-            assert all(feature['model_target'] == 'mac' for feature in durable['queue_v11'])
+            tombstone = next(feature for feature in durable['queue_v12'] if feature['id'] == failed_id)
+            assert all(feature['model_target'] == 'mac' for feature in durable['queue_v12'])
             assert tombstone['auto_ai_repair_limit'] == 100
             assert tombstone['auto_repair_lifecycle'] == 'inactive'
             assert tombstone['status'] == 'removed'

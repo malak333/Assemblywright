@@ -2887,11 +2887,13 @@ consistency.
 - The September 2026 `aw-fft-demo` Auto AI repair exposed a context ceiling:
   an existing 21,788-byte `site_generator.py` was excluded by the 16,000-byte
   per-file project context and recovery scans, so a valid automatic proposal
-  naming it was rejected as outside the bounded context. Both scans now admit
-  files through 32,000 bytes with a 128,000-byte project total,
-  80-file ceiling, path and secret screening, before-byte checks, validation,
-  and independent review. Source coverage includes a 22,000-byte file and an
-  excluded 32,001-byte file; live recovery remains separate evidence.
+  naming it was rejected as outside the bounded context. Scalable repair replaces
+  that whole-project prompt representation with a bounded hash inventory and
+  128,000-byte selected or retrieved source portions. Generated output remains
+  accounted for without displacing relevant source. Inventory bounds, proposal
+  admission, exact before-byte checks, validation, and independent review remain
+  separate gates. See `docs/developer-scalable-repair-design.md`; deployed recovery
+  remains separate evidence from source implementation and focused tests.
 - In live `aw-fft-demo` recovery, escalation 5 produced a candidate that passed
   the unchanged validation command but independent Codex review rejected it
   with 12 blocking findings. The enabled runner advanced to escalation 6 and
@@ -2939,3 +2941,140 @@ consistency.
   a bound Resume advanced automatically to escalation 8 preparing with
   Auto AI repair running and Emergency Pause clear. This verifies installed
   recovery entry, not proposal validity, feature completion, or publication.
+- Scalable Developer review freezes the exact cumulative candidate, including
+  retained earlier repair edits. Up to eight packets cover at most 40 entries
+  each; bounded text and verified raster assets share one complete manifest.
+  Every packet needs a bound decision, and the final aggregate decision must
+  preserve all packet blockers and bind the ordered receipts. The final file
+  hashes must still match before completion. File count, unit tests, or a model's
+  prose claim of completion cannot substitute for this evidence.
+- Legacy path-only asset quarantine cannot establish the provenance of current
+  image bytes. Resume may explicitly adopt a newly displayed exact snapshot,
+  bound to the feature, revision, inventory, and merged candidate. Adoption
+  preserves failure history and consumed attempts, then validates and reviews
+  current bytes without replaying the old tool session or calling the repair
+  model merely because all three ordinary attempts were already used.
+- Raster review transports actual verified PNG/JPEG bytes through the reviewer's
+  image input. Format, dimensions, byte and pixel bounds are admission checks;
+  independent visual assessment against the approved requirements remains
+  required. Generated output remains accounted for even when excluded from the
+  initial source context. A meaningful original map and its accessible textual
+  route must be tested in the complete website, not accepted from existence or
+  dimensions alone.
+- Legacy quarantine recovery must distinguish current candidate files from old
+  tool-ledger outputs. An earlier dependency preparation can leave cache entries
+  and obsolete paths in immutable history. Recovery binds the complete current
+  inventory, preserves current cumulative review files strictly, and does not
+  resurrect obsolete ledger-only paths. Dependency artifacts remain accounted
+  for without being treated as editable source or image-review candidates.
+  Unassigned project-chat mutations use the same deterministic project target
+  selection as normal reconciliation; their original attribution remains intact.
+  When admission fails, the Developer UI shows the bounded recovery reason.
+- Provider schema compatibility requires real-provider proof as well as local
+  schema tests. Codex rejected batch file/asset discriminator constants without
+  an explicit `type: "string"`, even though they were valid general JSON Schema.
+  Both batch and aggregate schemas now type their constants, and a recursive
+  regression guards that requirement. A diagnostic structured response proves
+  schema acceptance only; the exact candidate still needs every batch decision
+  and the final aggregate approval.
+- Live FFT review exposed a second repair convergence problem after scalable
+  review was installed: source-only automatic JSON proposals corrected templates
+  and generators but left generated pages stale. Passing unchanged unit tests
+  did not establish a synchronized site build; the reviewer correctly rejected
+  the combined candidate. The accepted extension prepares automatic repairs
+  with the selected Windows tool model in a disposable copy, captures the build
+  outputs with source, and keeps validation and independent review afterward.
+  Its temporary mutation ledger must remain separate from live revisions, and
+  generated paths omitted from the copy still need exact live before hashes.
+  Implementation, cleanup/restart tests, installation, and final site acceptance
+  are separate evidence; see the scalable repair validation document for status.
+- Automatic staged repair now has native Mac/Windows proof for exact partial
+  application after an unexpected process restart. Recovery binds the unique
+  preparation and policy receipts, original request UUID, candidate, attempt,
+  policy, runtime, and current project state; only remaining paths are written.
+  Emergency Pause, uncertain tool processes, and unrelated project drift hold
+  recovery. Existing protected tests stay immutable; explicitly approved new
+  regression tests are permitted and remain subject to exact-byte checks.
+- Runtime pinning must not rehash a large tool executable on every file effect.
+  Verify the complete runtime at invocation, authorization/reconciliation, and
+  the first pending effect in each process; preserve policy and project checks
+  on every effect. A native restart test found this performance issue and proved
+  the correction without weakening runtime identity.
+- Native fixture writers must use explicit bytes when exact candidate hashes
+  are the assertion. Windows `Path.write_text` translates newlines; that can
+  create a fixture mismatch even when application and independent review bind
+  the actual bytes correctly.
+- A disposable project intentionally omits `.venv`; the model must receive the
+  checked prepared interpreter and host-shell instructions or it can waste its
+  bounded session reinstalling already available dependencies into global Python.
+  Read-only dependency use is guidance under the Developer Full-access exception,
+  not containment: virtual environments are omitted from staged copies and
+  editable review entries, while their bytes remain covered by aggregate
+  private effect fingerprints.
+- Stop can race with staged completion and interrupt independent review after
+  all authorized writes and validation have completed. Inspect retained state
+  before claiming that a stop prevented application. Exact post-application
+  owner recovery must preserve the interrupted authorization, verify its private
+  snapshot and compacted candidate receipts, and start fresh validation/review
+  without write replay. A new Stop must dominate even after adoption persists.
+  Current implementation and deployment proof belongs in the scalable repair
+  validation document; matching candidate files alone is insufficient evidence.
+- Immutable validation can still write Python bytecode after the final staged
+  application snapshot. Exact candidate-file matches do not establish equality
+  of the complete private inventory. A restoration must reproduce the retained
+  digest exactly; modification times, guessed cache deletion, and older source
+  backups are insufficient. Prevent incidental validation artifacts and bind
+  pre/post state through review admission. Python's no-bytecode-write variable
+  still permits reads of old timestamp-valid bytecode; a fresh absent cache
+  prefix avoids that ordinary-import trap. These environment settings are not
+  OS containment and can be ignored by an explicitly overriding command.
+- Staged validation must reload the durable feature after application. A stale
+  pre-application feature clone can silently select the legacy validation path
+  even when the applied candidate is complete; native stale-bytecode E2E caught
+  this after focused recovered-candidate tests passed. Missing staged binding
+  evidence is an operational hold, not eligibility for legacy validation.
+- An actual reviewer outage followed by Resume can advance the feature epoch
+  before a later Stop. Exact-candidate recovery must account for bounded retry
+  transitions using retained v2 review packet and ordered-batch digests. A
+  fixed one-epoch allowance rejects legitimate recovery, while an unbounded
+  later-epoch allowance weakens authority. Preserve the same applied candidate,
+  counters, files, and review history; Resume revalidates without implementation
+  inference or write replay. Native tests must exercise the full sequence.
+- For every Developer feature/phase closeout, map meaningful unit tests to
+  actual policy boundaries and use native cross-process E2E for the runner,
+  service, and Swift app. Browser E2E belongs to generated websites and must
+  prove the accepted live build, not only a disposable copy. Record installation,
+  independent review, source parity, and unresolved acceptance separately.
+- A disposable automatic-repair stage is a tool-visible disclosure boundary.
+  Filter sensitive path components such as `.env.*`, `.aws`, and `.ssh` before
+  copying, and inspect bounded text for secret-shaped content. Keep one shared
+  path policy for inventory, candidate admission, and independent review;
+  otherwise a path omitted from context can still enter a Full-access stage or
+  a repaired candidate. Oversized and unsupported binaries remain accounted
+  for by the private inventory, but are omitted from tool-visible staging.
+  Native E2E should inspect stage bytes while the model is paused and verify
+  the live project still retains excluded files.
+- Apply that same sensitive-path classifier to tool action audit records.
+  A `read` of `.ssh/id_ed25519` must suppress both successful and error output;
+  shell output containing a PEM key needs block redaction even when no known
+  secret value or assignment prefix is available. Regression tests should
+  inspect the persisted action snapshot, not only an in-memory formatter.
+  Ask and Auto read patterns must cover the same common sensitive paths;
+  `.env.example` cannot be a special allow exception while the shared
+  classifier treats all `.env.*` components as sensitive.
+- A review provider failure is retryable only when termination of the entire
+  contained reviewer process tree is positively confirmed, the exact candidate
+  and complete private state are unchanged, and the retry is finite. A direct
+  child exit or closed stdout alone does not prove detached descendants are
+  gone. Deterministic schema/binding failures and uncertain process cleanup
+  remain holds; they must not spawn overlapping independent reviewers.
+  Windows Job handles are raw pointers and must not be borrowed across an
+  `await` inside a spawned queue future. A bounded synchronous termination and
+  `ActiveProcesses == 0` check avoids that `Send` failure while retaining the
+  fail-closed retry rule; Windows compilation is a required proof boundary.
+- A post-apply validation guard can durably quarantine an automatic repair
+  inside the validation function. The outer queue loop must recognize that
+  terminal quarantine before applying its stale pre-run escalation state, or
+  it can append a duplicate failed receipt and erase the interrupted outcome.
+  Assert the single terminal receipt through the real runner loop, not only
+  the helper that records quarantine.

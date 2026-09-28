@@ -42,6 +42,13 @@ before success or auto-run advancement. Operational ambiguity stops and quaranti
 rather than replaying effects. See also
 [`docs/developer-chat-repair-design.md`](docs/developer-chat-repair-design.md).
 
+The owner approved [scalable Developer repair](docs/developer-scalable-repair-design.md):
+targeted text retrieval against complete project evidence, complete cumulative
+review in bounded batches with a final aggregate decision, genuine image review,
+and preflight/recovery that avoids replaying uncertain effects. This extends the
+Developer repair contract; Windows authority, immutable validation, independent
+review, and the separate production/publication proof boundaries remain required.
+
 This document is the system-level design. Two documents own the detailed
 accepted designs and take precedence within their scope:
 

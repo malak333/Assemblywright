@@ -47,7 +47,7 @@ pub(super) struct CandidateFile {
     pub path: String,
     pub before_sha256: Option<String>,
     pub content_sha256: String,
-    pub content: String,
+    pub content: Vec<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1049,7 +1049,7 @@ impl Runtime {
                     file.path
                 ),
             }
-            if sha256(file.content.as_bytes()) != file.content_sha256 {
+            if sha256(&file.content) != file.content_sha256 {
                 bail!(
                     "Reviewed candidate bytes for {} changed before publication",
                     file.path
@@ -1063,7 +1063,7 @@ impl Runtime {
                 }
             }
             let target = checked_candidate_path(&checkout, &file.path)?;
-            fs::write(&target, file.content.as_bytes())?;
+            fs::write(&target, &file.content)?;
         }
         let status = self
             .command(
@@ -2600,8 +2600,8 @@ fn validate_new_repository_name(name: &str) -> Result<()> {
 }
 
 fn validate_candidate_files(files: &[CandidateFile]) -> Result<()> {
-    if files.is_empty() || files.len() > 40 {
-        bail!("Publication requires 1 to 40 reviewed files");
+    if files.is_empty() || files.len() > 320 {
+        bail!("Publication requires 1 to 320 reviewed files");
     }
     let mut paths = BTreeSet::new();
     let mut portable_paths = BTreeSet::new();
@@ -2618,13 +2618,13 @@ fn validate_candidate_files(files: &[CandidateFile]) -> Result<()> {
         if let Some(before) = &file.before_sha256 {
             validate_sha256(before)?;
         }
-        if sha256(file.content.as_bytes()) != file.content_sha256 {
+        if sha256(&file.content) != file.content_sha256 {
             bail!("Publication candidate content hash is invalid");
         }
         total_bytes = total_bytes
             .checked_add(file.content.len())
             .context("Publication candidate size overflow")?;
-        if total_bytes > 2 * 1024 * 1024 {
+        if total_bytes > 40 * 1024 * 1024 {
             bail!("Publication candidate exceeds its byte bound");
         }
     }
@@ -3101,11 +3101,11 @@ mod tests {
             path: "src/app.rs".into(),
             before_sha256: None,
             content_sha256: sha256(b"new"),
-            content: "new".into(),
+            content: b"new".to_vec(),
         };
         assert!(validate_candidate_files(std::slice::from_ref(&valid)).is_ok());
         let mut drifted = valid.clone();
-        drifted.content.push('!');
+        drifted.content.push(b'!');
         assert!(validate_candidate_files(&[drifted]).is_err());
         let mut git = valid.clone();
         git.path = ".git/config".into();
@@ -3134,7 +3134,7 @@ mod tests {
                 path: "app.txt".into(),
                 before_sha256: None,
                 content_sha256: sha256(b"ok"),
-                content: "ok".into(),
+                content: b"ok".to_vec(),
             }],
         };
         let mut record = PublicationRecord::pending(&input).unwrap();
@@ -3236,7 +3236,7 @@ mod tests {
                 path: "app.txt".into(),
                 before_sha256: None,
                 content_sha256: sha256(b"ok"),
-                content: "ok".into(),
+                content: b"ok".to_vec(),
             }],
         };
         let mut record = PublicationRecord::pending(&input).unwrap();

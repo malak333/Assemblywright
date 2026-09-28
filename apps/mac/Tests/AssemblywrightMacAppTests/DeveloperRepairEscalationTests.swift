@@ -90,6 +90,139 @@ struct DeveloperRepairEscalationTests {
     #expect(!(try proposal(["feature_id": "other"])).canApprove(feature: feature, runner: state))
     #expect(!(try proposal(["binding": ["feature_id": "feature", "checkpoint": "changed", "revision": 12]]))
       .canApprove(feature: feature, runner: state))
+    #expect((try proposal(["source": "manual_chat"])).canApprove(feature: feature, runner: state))
+  }
+
+  @Test
+  func typedAutomaticCandidateDisplaysTextAndAssetMetadataButCannotBeApproved() throws {
+    let digest = String(repeating: "a", count: 64)
+    let prior = String(repeating: "b", count: 64)
+    let candidate = try proposal([
+      "source": "automatic_failure", "files": [], "candidate_schema_version": 1,
+      "candidate_sha256": String(repeating: "c", count: 64),
+      "candidate_payload_state": "full",
+      "candidate_entries": [
+        ["kind": "text", "path": "src/app.py", "before_sha256": prior,
+          "content_sha256": digest, "after": "print('repaired')"],
+        ["kind": "asset", "path": "content/maps/route.png", "before_sha256": NSNull(),
+          "content_sha256": digest, "media_type": "image/png", "width": 1536, "height": 1024],
+      ],
+    ])
+    let state = try runner()
+    let feature = try #require(state.nextFeature)
+    let entries = try #require(candidate.candidateEntries)
+    #expect(entries.count == 2)
+    #expect(entries[0].displayKind == "Text file")
+    #expect(entries[0].displayTitle == "src/app.py")
+    #expect(entries[0].priorDigestDisplay == prior)
+    #expect(entries[0].currentDigestDisplay == digest)
+    #expect(entries[0].after == "print('repaired')")
+    #expect(entries[1].displayKind == "Image asset")
+    #expect(entries[1].assetMetadataDisplay == "image/png · 1536 × 1024 pixels")
+    #expect(entries[1].priorDigestDisplay == "New file")
+    #expect(entries.allSatisfy { $0.validationError == nil })
+    #expect(candidate.typedCandidateWarning?.contains("read-only") == true)
+    #expect(!candidate.canApprove(feature: feature, runner: state))
+  }
+
+  @Test
+  func terminalHashOnlyCandidateRetainsManifestWithoutPretendingContentsRemain() throws {
+    let digest = String(repeating: "e", count: 64)
+    let entries: [[String: Any]] = [
+      ["kind": "text", "path": "src/app.py", "before_sha256": NSNull(),
+        "content_sha256": digest],
+      ["kind": "asset", "path": "content/maps/route.jpg", "before_sha256": digest,
+        "content_sha256": digest, "media_type": "image/jpeg", "width": 800, "height": 600],
+    ]
+    let terminal = try proposal(["status": "succeeded", "source": "automatic_failure",
+      "files": [], "candidate_schema_version": 1, "candidate_sha256": digest,
+      "candidate_payload_state": "hash_only", "candidate_entries": entries])
+    let decoded = try #require(terminal.candidateEntries)
+    #expect(decoded.count == 2)
+    #expect(decoded[0].after == nil)
+    #expect(decoded[0].validationError(payloadState: terminal.candidatePayloadState) == nil)
+    #expect(decoded[1].assetMetadataDisplay == "image/jpeg · 800 × 600 pixels")
+    #expect(decoded.allSatisfy { !$0.containsRawBytes })
+    #expect(terminal.typedCandidateWarning?.contains("read-only") == true)
+    let state = try runner()
+    #expect(!terminal.canApprove(feature: try #require(state.nextFeature), runner: state))
+
+    let readyWithoutText = try proposal(["source": "automatic_failure", "files": [],
+      "candidate_schema_version": 1, "candidate_sha256": digest,
+      "candidate_payload_state": "full", "candidate_entries": entries])
+    #expect(readyWithoutText.typedCandidateWarning?.contains("missing its exact contents") == true)
+
+    let mismatches: [[String: Any]] = [
+      ["status": "ready", "candidate_payload_state": "hash_only"],
+      ["status": "succeeded", "candidate_payload_state": "full"],
+      ["status": "ready", "candidate_payload_state": "future"],
+    ]
+    for mismatch in mismatches {
+      let candidate = try proposal(["source": "automatic_failure", "files": [],
+        "candidate_schema_version": 1, "candidate_sha256": digest,
+        "candidate_entries": entries].merging(mismatch) { _, new in new })
+      #expect(candidate.typedCandidateWarning?.contains("does not match its lifecycle status") == true)
+      #expect(!candidate.canApprove(feature: try #require(state.nextFeature), runner: state))
+    }
+    let missingMarker = try proposal(["source": "automatic_failure", "files": [],
+      "candidate_schema_version": 1, "candidate_sha256": digest, "candidate_entries": entries])
+    #expect(missingMarker.typedCandidateWarning?.contains("does not match its lifecycle status") == true)
+  }
+
+  @Test
+  func unsupportedTypedCandidatesRemainVisibleAndFailClosed() throws {
+    let digest = String(repeating: "d", count: 64)
+    let state = try runner()
+    let feature = try #require(state.nextFeature)
+    let entry: [String: Any] = ["kind": "asset", "path": "map.png",
+      "before_sha256": NSNull(), "content_sha256": digest,
+      "media_type": "image/png", "width": 32, "height": 32]
+    let base: [String: Any] = ["source": "automatic_failure", "files": [],
+      "candidate_schema_version": 1, "candidate_sha256": digest,
+      "candidate_payload_state": "full",
+      "candidate_entries": [entry]]
+
+    let malformed: [[String: Any]] = [
+      base.merging(["candidate_schema_version": 2]) { _, new in new },
+      base.merging(["candidate_sha256": "ABC"]) { _, new in new },
+      base.merging(["candidate_entries": [["kind": "video", "path": "map.png",
+        "before_sha256": NSNull(), "content_sha256": digest]]]) { _, new in new },
+      base.merging(["candidate_entries": [["kind": "asset", "path": "map.png",
+        "before_sha256": 7, "content_sha256": digest,
+        "media_type": "image/png", "width": 32, "height": 32]]]) { _, new in new },
+      base.merging(["candidate_entries": [entry, entry]]) { _, new in new },
+      base.merging(["files": [["path": "app.py", "before": "old", "after": "new",
+        "protected": false]]]) { _, new in new },
+    ]
+    for value in malformed {
+      let candidate = try proposal(value)
+      #expect(candidate.typedCandidateWarning?.contains("unavailable") == true)
+      #expect(!candidate.canApprove(feature: feature, runner: state))
+    }
+
+    var byteBearingEntry = entry
+    byteBearingEntry["data_base64"] = "raw-bytes-must-not-enter-the-client"
+    let byteBearing = try proposal(base.merging(
+      ["candidate_entries": [byteBearingEntry]]) { _, new in new })
+    let decoded = try #require(byteBearing.candidateEntries?.first)
+    #expect(decoded.containsRawBytes)
+    #expect(decoded.validationError?.contains("raw asset bytes") == true)
+    #expect(byteBearing.typedCandidateWarning?.contains("raw asset bytes") == true)
+    #expect(!byteBearing.canApprove(feature: feature, runner: state))
+
+    for status in ["ready", "preparing", "cancelled"] {
+      let automaticLegacy = try proposal(["source": "automatic_failure", "status": status])
+      #expect(automaticLegacy.typedCandidateWarning?.contains("read-only") == true)
+      #expect(automaticLegacy.typedCandidateWarning?.contains("missing") == false)
+      #expect(!automaticLegacy.canApprove(feature: feature, runner: state))
+    }
+    let oversized = try proposal(base.merging(
+      ["candidate_entries": Array(repeating: entry, count: 321)]) { _, new in new })
+    #expect(oversized.typedCandidateWarning?.contains("exceeds 320") == true)
+    #expect(!oversized.canApprove(feature: feature, runner: state))
+    let unknownSource = try proposal(["source": "future_source"])
+    #expect(unknownSource.typedCandidateWarning?.contains("unsupported source") == true)
+    #expect(!unknownSource.canApprove(feature: feature, runner: state))
   }
 
   @Test

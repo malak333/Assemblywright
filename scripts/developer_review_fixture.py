@@ -9,6 +9,7 @@ def reviewer_arguments(root):
     root = Path(root) / 'review-fixture'
     root.mkdir(exist_ok=True)
     shutil.copy2(Path(__file__).with_name('developer_planning_fixture.py'), root / 'developer_planning_fixture.py')
+    shutil.copy2(Path(__file__).with_name('developer_review_scalable_fixture.py'), root / 'developer_review_scalable_fixture.py')
     home = root / 'auth'
     home.mkdir(exist_ok=True)
     executable = root / ('codex.exe' if os.name == 'nt' else 'codex')
@@ -22,6 +23,7 @@ def reviewer_arguments(root):
             executable.write_text('#!' + sys.executable + '\n' + '''import hashlib,json,sys,time,os
 from pathlib import Path
 from developer_planning_fixture import planning_output
+from developer_review_scalable_fixture import scalable_review
 def evidence(value):
     with Path(__file__).with_name("review-input-evidence.jsonl").open("a") as out:out.write(json.dumps(value)+"\\n")
 model=next((sys.argv[index+1] for index,value in enumerate(sys.argv[:-1]) if value=="--model"),None)
@@ -39,6 +41,8 @@ if "Untrusted canonical planning packet JSON follows:\\n" in input_text:
     if "[planning:skip]" in p["instruction"]:result["response_kind"]="ready"
     if "[planning:stale]" in p["instruction"]:result["planning_packet_sha256"]="0"*64
     print(json.dumps(result));sys.exit(0)
+scalable=scalable_review(input_text,sys.argv,evidence)
+if scalable is not None:print(json.dumps(scalable));sys.exit(0)
 raw=input_text.split("Untrusted canonical review packet JSON follows:\\n",1)[1]
 p=json.loads(raw)
 evidence({"kind":"review","model_id":p.get("model_id"),"reasoning_effort":p.get("reasoning_effort"),"approved_plan_sha256":p.get("approved_plan_sha256"),"approved_plan_text_sha256":hashlib.sha256((p.get("approved_plan") or "").encode()).hexdigest()})

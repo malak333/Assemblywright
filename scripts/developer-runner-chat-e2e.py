@@ -366,16 +366,27 @@ def main():
                 rejected('chat?project=' + urllib.parse.quote(invalid, safe=''))
 
             # The Windows reparse-point case stays a real fail-closed product
-            # proof, isolated exactly like the planning E2E: it runs in a
-            # dedicated throwaway project, must fail before any model call, and
-            # its reparse fixture is removed exactly before positive generation.
+            # proof, isolated exactly like the planning E2E. The link itself is
+            # represented by redacted exclusion metadata in one bounded request;
+            # neither its name, target, nor target content may enter the prompt.
+            # The deliberately malformed model response must leave the feature
+            # held without applying any files or falling back to the Mac model.
             if sys.platform == 'win32':
                 reparse_id = str(uuid.uuid4())
                 reparse_project = projects / 'reparse-negative'
                 reparse_project.mkdir()
-                reparse_link = reparse_project / 'escape'
-                cmd_windows_builtin(['mklink', '/J', reparse_link, outside], check=True)
+                reparse_target = root / 'REPARSE_TARGET_SENTINEL_74c9'
+                reparse_target.mkdir()
+                reparse_target_file = reparse_target / 'REPARSE_SECRET_SENTINEL_74c9.txt'
+                reparse_target_file.write_text('REPARSE_OUTSIDE_SENTINEL_74c9')
+                reparse_link = reparse_project / 'REPARSE_ALIAS_SENTINEL_74c9'
+                cmd_windows_builtin(['mklink', '/J', reparse_link, reparse_target], check=True)
                 assert is_reparse_entry(reparse_link), reparse_link
+                reparse_entries = [path.name for path in reparse_project.iterdir()]
+                assert reparse_entries == [reparse_link.name], reparse_entries
+                call_offsets = {'windows': len(fixture['calls']),
+                    'mac_feature': len(fixture['mac_calls']),
+                    'mac_chat': len(fixture['mac_chat_calls'])}
                 prior_auto_run = api()['auto_run']
                 control('auto_run', enabled=False)
                 control('enqueue', id=reparse_id, project='reparse-negative',
@@ -388,14 +399,32 @@ def main():
                     for item in value['queue']))
                 reparse_state = next(item for item in reparse_failed['queue']
                     if item['id'] == reparse_id)
-                assert reparse_state['message'] == \
-                    'Automatic repair project context refuses a Windows reparse point', reparse_state
-                endpoint_counts = {'windows': len(fixture['calls']),
-                    'mac_feature': len(fixture['mac_calls']),
-                    'mac_chat': len(fixture['mac_chat_calls'])}
-                assert not any(endpoint_counts.values()), \
-                    ('Windows reparse project must fail closed before any model call',
-                    endpoint_counts)
+                assert 'Model did not return valid repair proposal JSON' in \
+                    reparse_state['message'], reparse_state
+                assert reparse_state['changed_files'] == [], reparse_state
+                assert reparse_state['checkpoint'] == 'not_started', reparse_state
+                assert reparse_state['repair_attempts'] == 0, reparse_state
+                windows_calls = fixture['calls'][call_offsets['windows']:]
+                windows_generations = [body for path, body in windows_calls
+                    if path == '/v1/chat/completions']
+                assert len(windows_generations) == 1, (
+                    'excluded Windows junction must enter one bounded source-context request',
+                    [path for path, unused in windows_calls])
+                reparse_prompt = json.dumps(windows_generations[0]['messages'])
+                assert 'excluded_link' in reparse_prompt, reparse_prompt
+                assert all(value not in reparse_prompt for value in [
+                    reparse_link.name, reparse_target.name, reparse_target_file.name,
+                    'REPARSE_OUTSIDE_SENTINEL_74c9']), (
+                    'Windows junction alias, target, or target content reached the model',
+                    reparse_prompt)
+                assert len(fixture['mac_calls']) == call_offsets['mac_feature'], \
+                    'Windows feature unexpectedly fell back to the Mac feature endpoint'
+                assert len(fixture['mac_chat_calls']) == call_offsets['mac_chat'], \
+                    'Windows feature unexpectedly fell back to the Mac chat endpoint'
+                assert is_reparse_entry(reparse_link), reparse_link
+                assert [path.name for path in reparse_project.iterdir()] == \
+                    [reparse_link.name]
+                assert reparse_target_file.read_text() == 'REPARSE_OUTSIDE_SENTINEL_74c9'
                 control('remove', id=reparse_id)
                 wait('status', lambda value: all(
                     item['id'] != reparse_id for item in value['queue']))
@@ -405,6 +434,9 @@ def main():
                 reparse_project.rmdir()
                 assert not reparse_project.exists()
                 assert (outside / 'secret.txt').read_text() == 'OUTSIDE_PRIVATE_SENTINEL'
+                fixture['calls'].clear()
+                fixture['mac_calls'].clear()
+                fixture['mac_chat_calls'].clear()
 
             # Every reparse fixture is now gone from positive surfaces: remove
             # the remaining negative links exactly, then prove the shared alpha
@@ -660,7 +692,7 @@ def main():
             ask('offline Windows')
             assert complete()['error'] and len(fixture['mac_calls']) == prior_mac_calls
             assert files() == before_files
-            print('PASS: authenticated project chat, explicit Mac/Windows selection, grounding, read-only files/queue, context admission, history, serialization, cancellation, emergency, restart, and isolated reparse-point fail-closed cleanup')
+            print('PASS: authenticated project chat, explicit Mac/Windows selection, grounding, read-only files/queue, context admission, history, serialization, cancellation, emergency, restart, and redacted reparse-point exclusion cleanup')
         finally:
             release.set()
             terminate()

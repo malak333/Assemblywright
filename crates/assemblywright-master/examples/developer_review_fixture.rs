@@ -52,6 +52,10 @@ fn main() {
         print!("{}", serde_json::to_string(&output).unwrap());
         return;
     }
+    if let Some(output) = scalable_review(&input, &arguments) {
+        print!("{}", serde_json::to_string(&output).unwrap());
+        return;
+    }
     let packet_bytes = input
         .split_once("Untrusted canonical review packet JSON follows:\n")
         .unwrap()
@@ -154,4 +158,128 @@ fn append_evidence(value: Value) {
         .open(path)
         .unwrap();
     writeln!(output, "{}", serde_json::to_string(&value).unwrap()).unwrap();
+}
+
+fn scalable_review(input: &str, arguments: &[String]) -> Option<Value> {
+    let marker = [
+        "Untrusted canonical review batch JSON follows:\n",
+        "Untrusted aggregate review evidence JSON follows:\n",
+    ]
+    .into_iter()
+    .find(|marker| input.contains(marker))?;
+    let packet: Value = serde_json::from_str(input.split_once(marker)?.1).unwrap();
+    let binding = input
+        .split_once("Trusted host-generated response binding JSON follows:\n")?
+        .1
+        .split_once("\nUntrusted ")?
+        .0;
+    let mut output: Value = serde_json::from_str(binding).unwrap();
+    output
+        .as_object_mut()
+        .unwrap()
+        .remove("ordered_image_attachments");
+    let observed = arguments
+        .windows(2)
+        .filter(|pair| pair[0] == "--image")
+        .map(|pair| format!("{:x}", Sha256::digest(std::fs::read(&pair[1]).unwrap())))
+        .collect::<Vec<_>>();
+    let assets = packet["assets"].as_array().cloned().unwrap_or_default();
+    assert_eq!(
+        observed,
+        assets
+            .iter()
+            .map(|asset| asset["content_sha256"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    );
+    let instruction = packet["instruction"]
+        .as_str()
+        .or_else(|| packet["shared_candidate"]["instruction"].as_str())
+        .unwrap_or("");
+    if packet["batch_index"] == 0 {
+        append_evidence(json!({"kind":"review", "model_id":packet["model_id"],
+            "reasoning_effort":packet["reasoning_effort"], "approved_plan_sha256":packet["approved_plan_sha256"],
+            "approved_plan_text_sha256":format!("{:x}", Sha256::digest(packet["approved_plan"].as_str().unwrap_or("").as_bytes()))}));
+    }
+    std::fs::write(
+        std::env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("started.pid"),
+        std::process::id().to_string(),
+    )
+    .unwrap();
+    if instruction.contains("[fixture:malformed]") {
+        return Some(json!("malformed"));
+    }
+    if instruction.contains("[fixture:wait]") && output.get("review_batch_sha256").is_some() {
+        std::thread::sleep(std::time::Duration::from_secs(20));
+    }
+    let rejected = packet["files"].as_array().and_then(|files| {
+        files.iter().find(|file| {
+            instruction.contains("[fixture:reject-zero]")
+                && file["content"].as_str().unwrap_or("").contains("VALUE = 0")
+        })
+    });
+    output["decision"] = json!(if rejected.is_some() {
+        "rejected"
+    } else {
+        "approved"
+    });
+    output["blocking_findings"] = rejected.map(|file| json!([{
+        "finding_id":"wrong-value", "path":file["path"], "message":"Implementation must set VALUE to 1."
+    }])).unwrap_or_else(|| json!([]));
+    output["non_blocking_findings"] = json!([]);
+    if let Some(receipts) = packet["ordered_batch_receipts"].as_array() {
+        for receipt in receipts {
+            if receipt["decision"] == "rejected" {
+                output["decision"] = json!("rejected");
+                output["blocking_findings"].as_array_mut().unwrap().extend(
+                    receipt["blocking_findings"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .cloned(),
+                );
+            }
+        }
+    }
+    let schema_path = arguments
+        .windows(2)
+        .find(|pair| pair[0] == "--output-schema")
+        .unwrap();
+    let schema: Value = serde_json::from_slice(&std::fs::read(&schema_path[1]).unwrap()).unwrap();
+    if schema["properties"].get("review_summary").is_some() {
+        output["review_summary"] = json!(
+            "Fixture verified exact entries and attachment hashes; no unresolved interfaces."
+        );
+    }
+    if schema["properties"]
+        .get("interfaces_and_dependencies")
+        .is_some()
+    {
+        output["interfaces_and_dependencies"] = json!([]);
+    }
+    if (instruction.contains("[fixture:stale-batch]") || instruction.contains("[fixture:stale]"))
+        && output.get("review_batch_sha256").is_some()
+    {
+        output["review_batch_sha256"] = json!("0".repeat(64));
+    }
+    if instruction.contains("[fixture:omit-batch-entry]")
+        && output.get("review_batch_sha256").is_some()
+    {
+        output["reviewed_entries"].as_array_mut().unwrap().pop();
+    }
+    if instruction.contains("[fixture:stale-aggregate]")
+        && output.get("ordered_batch_receipt_sha256s").is_some()
+    {
+        output["review_packet_sha256"] = json!("0".repeat(64));
+    }
+    append_evidence(json!({
+        "kind": if output.get("review_batch_sha256").is_some() { "review_batch" } else { "review_aggregate" },
+        "candidate_sha256":packet["aggregate_candidate_sha256"],
+        "batch_index":packet["batch_index"],"batch_count":packet["batch_count"],
+        "entries":output["reviewed_entries"],"image_sha256s":observed
+    }));
+    Some(output)
 }

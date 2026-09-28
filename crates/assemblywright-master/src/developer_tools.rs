@@ -15,7 +15,7 @@ use std::{
     path::{Path, PathBuf},
     process::Stdio,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
         Arc, Mutex,
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -56,6 +56,11 @@ fn action_limit(request: &ToolChatRequest) -> u64 {
 }
 const MAX_MUTATION_FILES: usize = 1_000;
 const MAX_MUTATION_FILE_BYTES: u64 = 256 * 1024;
+const MAX_MUTATION_ASSET_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_CAPTURED_MUTATION_ASSET_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_CAPTURED_MUTATION_SCAN_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_MUTATION_ASSET_DIMENSION: u32 = 4_096;
+const MAX_MUTATION_ASSET_PIXELS: u64 = 16_000_000;
 const MAX_GENERATED_DIRECTORY_ENTRIES: usize = 20_000;
 const MAX_GENERATED_DIRECTORY_DEPTH: usize = 40;
 const OPENCODE_MODEL_CONTEXT_TOKENS: u64 = 262_144;
@@ -102,7 +107,9 @@ impl ToolAccessMode {
             "*":"allow",
             "*.env":"ask",
             "*.env.*":"ask",
-            "*.env.example":"allow",
+            "*.aws*":"ask",
+            "*.ssh*":"ask",
+            "*.netrc":"ask",
             "*credential*":"ask",
             "*secret*":"ask",
             "*password*":"ask",
@@ -111,6 +118,7 @@ impl ToolAccessMode {
             "*.key":"ask",
             "*.p12":"ask",
             "*id_rsa*":"ask",
+            "*id_ed25519*":"ask",
             "*keystore*":"ask"
         });
         match self {
@@ -168,6 +176,48 @@ pub(crate) struct ToolChatRequest {
     pub(crate) cancellation: Arc<AtomicBool>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ToolStageBinding {
+    pub(crate) scope_id: String,
+    pub(crate) project: String,
+    pub(crate) stage_project: String,
+    pub(crate) request_id: String,
+    pub(crate) feature_id: String,
+    pub(crate) proposal_id: Option<String>,
+    pub(crate) automatic_epoch: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ToolExecutionBinding {
+    pub(crate) stage: ToolStageBinding,
+    pub(crate) access_mode: ToolAccessMode,
+    pub(crate) access_revision: u64,
+    pub(crate) runtime_sha256: String,
+    pub(crate) tool_catalog_sha256: String,
+    pub(crate) model_target: String,
+    pub(crate) model_url: String,
+    pub(crate) model: String,
+    pub(crate) forbidden_write_paths: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ToolStageMutationSummary {
+    pub(crate) mutation_sha256: String,
+    pub(crate) mutation_count: u64,
+    pub(crate) text_bytes: u64,
+    pub(crate) asset_bytes: u64,
+    pub(crate) serialized_bytes: u64,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ToolEffectSnapshot {
+    pub(crate) sha256: String,
+    pub(crate) entries: BTreeMap<String, String>,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ToolAttachment {
     pub(crate) name: String,
@@ -191,6 +241,7 @@ type StoredToolApproval = (String, Option<String>, Option<String>, u64, String, 
 pub(crate) struct ToolChatResult {
     pub(crate) response: String,
     pub(crate) model: String,
+    pub(crate) execution_binding: Option<ToolExecutionBinding>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -198,6 +249,17 @@ pub(crate) struct ToolMutationEdit {
     pub(crate) path: String,
     pub(crate) before_sha256: Option<String>,
     pub(crate) after: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) asset: Option<ToolMutationAsset>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ToolMutationAsset {
+    pub(crate) media_type: String,
+    pub(crate) data_base64: String,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -213,6 +275,7 @@ pub(crate) struct ToolProjectMutation {
 struct ProjectFileSnapshot {
     sha256: String,
     text: Option<String>,
+    asset: Option<ToolMutationAsset>,
 }
 
 #[derive(Clone, Debug)]
@@ -257,7 +320,7 @@ impl DeveloperTools {
         if let Some(runtime) = &runtime {
             validate_runtime_config(runtime)?;
         }
-        let connection = Connection::open(database_path)?;
+        let mut connection = Connection::open(database_path)?;
         connection.execute_batch(
             "PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
              CREATE TABLE IF NOT EXISTS developer_tool_access(
@@ -289,6 +352,28 @@ impl DeveloperTools {
                feature_id TEXT,
                evidence TEXT NOT NULL,
                PRIMARY KEY(project,revision)
+             );
+             CREATE TABLE IF NOT EXISTS developer_tool_stage(
+               scope_id TEXT PRIMARY KEY,
+               project TEXT NOT NULL,
+               stage_project TEXT NOT NULL UNIQUE,
+               request_id TEXT NOT NULL UNIQUE,
+               binding TEXT NOT NULL,
+               status TEXT NOT NULL CHECK(status IN
+                 ('registered','running','captured','cleanup_pending','cleaned','cleanup_failed','compacted')),
+               mutation_sha256 TEXT,
+               mutation_count INTEGER,
+               text_bytes INTEGER,
+               asset_bytes INTEGER,
+               serialized_bytes INTEGER,
+               updated_unix INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS developer_tool_stage_mutation(
+               scope_id TEXT NOT NULL,
+               revision INTEGER NOT NULL,
+               evidence TEXT NOT NULL,
+               PRIMARY KEY(scope_id,revision),
+               FOREIGN KEY(scope_id) REFERENCES developer_tool_stage(scope_id)
              );
              CREATE TABLE IF NOT EXISTS developer_tool_attention(
                singleton INTEGER PRIMARY KEY CHECK(singleton=1),
@@ -337,12 +422,19 @@ impl DeveloperTools {
             [],
         )?;
         connection.execute("DELETE FROM developer_tool_attention", [])?;
+        let cleanup_attention = recover_orphaned_stages(&mut connection, &root)?;
+        if let Some(reason) = cleanup_attention.as_deref() {
+            connection.execute(
+                "INSERT INTO developer_tool_attention(singleton,reason) VALUES(1,?1)",
+                [reason],
+            )?;
+        }
         Ok(Arc::new(Self {
             database: Mutex::new(connection),
             root,
             runtime,
             active: Mutex::new(None),
-            attention: AtomicBool::new(false),
+            attention: AtomicBool::new(cleanup_attention.is_some()),
         }))
     }
 
@@ -499,7 +591,11 @@ impl DeveloperTools {
         idle: bool,
     ) -> Result<Value> {
         self.project_path(project)?;
-        if !idle || self.blocks_work() {
+        let active = self
+            .active
+            .lock()
+            .map_err(|_| anyhow!("developer tool state lock failed"))?;
+        if !idle || self.attention.load(Ordering::SeqCst) || active.is_some() {
             bail!("Stop project work before changing tool access");
         }
         let mode = ToolAccessMode::parse(mode)?;
@@ -521,6 +617,7 @@ impl DeveloperTools {
         }
         transaction.commit()?;
         drop(database);
+        drop(active);
         self.snapshot(project)
     }
 
@@ -555,6 +652,375 @@ impl DeveloperTools {
             })
             .collect();
         mutations
+    }
+
+    pub(crate) fn register_stage(&self, binding: &ToolStageBinding) -> Result<()> {
+        validate_stage_binding(binding)?;
+        self.project_path(&binding.project)?;
+        let stage_path = self.root.join(&binding.stage_project);
+        if stage_path.try_exists()?
+            || stage_path.file_name().and_then(|name| name.to_str())
+                != Some(binding.stage_project.as_str())
+        {
+            bail!("Invalid repair stage path binding");
+        }
+        let encoded = serde_json::to_string(binding)?;
+        self.database
+            .lock()
+            .map_err(|_| anyhow!("developer tool database lock failed"))?
+            .execute(
+                "INSERT INTO developer_tool_stage(scope_id,project,stage_project,request_id,binding,status,updated_unix)
+                 VALUES(?1,?2,?3,?4,?5,'registered',?6)",
+                params![binding.scope_id, binding.project, binding.stage_project, binding.request_id, encoded, now_unix()?],
+            )?;
+        Ok(())
+    }
+
+    pub(crate) fn stage_mutations(
+        &self,
+        binding: &ToolStageBinding,
+    ) -> Result<Vec<ToolProjectMutation>> {
+        self.require_stage(binding, &["captured", "cleanup_pending", "cleaned"])?;
+        let database = self
+            .database
+            .lock()
+            .map_err(|_| anyhow!("developer tool database lock failed"))?;
+        let mut statement = database.prepare(
+            "SELECT evidence FROM developer_tool_stage_mutation
+             WHERE scope_id=?1 ORDER BY revision",
+        )?;
+        let mutations = statement
+            .query_map([&binding.scope_id], |row| row.get::<_, String>(0))?
+            .map(|encoded| {
+                let encoded = encoded?;
+                serde_json::from_str(&encoded).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        encoded.len(),
+                        rusqlite::types::Type::Text,
+                        Box::new(error),
+                    )
+                    .into()
+                })
+            })
+            .collect();
+        mutations
+    }
+
+    pub(crate) fn mark_stage_cleanup_pending(&self, binding: &ToolStageBinding) -> Result<()> {
+        if let Err(error) =
+            self.transition_stage(binding, &["registered", "captured"], "cleanup_pending")
+        {
+            self.latch_attention(
+                "Repair stage cleanup lifecycle could not be durably reserved; inspect retained stage evidence.",
+            );
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn project_effect_snapshot(
+        &self,
+        project: &str,
+        cancellation: Option<&AtomicU8>,
+    ) -> Result<ToolEffectSnapshot> {
+        let project = self.project_path(project)?;
+        let captured = capture_project_with_limits_and_byte_cancellation(
+            &project,
+            MAX_CAPTURED_MUTATION_ASSET_BYTES,
+            MAX_CAPTURED_MUTATION_SCAN_BYTES,
+            None,
+            cancellation,
+            true,
+        )?;
+        let mut entries = BTreeMap::new();
+        for (path, snapshot) in captured {
+            if matches!(snapshot.sha256.as_str(), "symlink" | "special") {
+                bail!("Live effect binding refuses symbolic links or special files");
+            }
+            entries.insert(path, snapshot.sha256);
+        }
+        let sha256 = format!("{:x}", Sha256::digest(serde_json::to_vec(&entries)?));
+        Ok(ToolEffectSnapshot { sha256, entries })
+    }
+
+    pub(crate) fn latch_stage_cleanup_failure(&self) {
+        self.latch_attention("Unregistered repair stage cleanup could not be confirmed.");
+    }
+
+    pub(crate) fn latch_stage_payload_retention(&self) {
+        self.latch_attention(
+            "Repair stage payload was retained because equivalent candidate evidence was not persisted.",
+        );
+    }
+
+    pub(crate) fn complete_stage_cleanup(
+        &self,
+        binding: &ToolStageBinding,
+        cleanup_confirmed: bool,
+    ) -> Result<()> {
+        if !cleanup_confirmed || self.root.join(&binding.stage_project).try_exists()? {
+            self.latch_attention("Repair stage cleanup could not be confirmed.");
+            self.transition_stage(binding, &["cleanup_pending"], "cleanup_failed")
+                .context("Repair stage cleanup failure evidence could not be persisted")?;
+            bail!("Repair stage cleanup could not be confirmed");
+        }
+        if let Err(error) = self.transition_stage(binding, &["cleanup_pending"], "cleaned") {
+            self.latch_attention("Repair stage cleanup completion could not be persisted.");
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn stage_mutation_summary(
+        &self,
+        binding: &ToolStageBinding,
+    ) -> Result<ToolStageMutationSummary> {
+        self.require_stage(binding, &["cleaned"])?;
+        let database = self
+            .database
+            .lock()
+            .map_err(|_| anyhow!("developer tool database lock failed"))?;
+        let mut statement = database.prepare(
+            "SELECT evidence FROM developer_tool_stage_mutation
+             WHERE scope_id=?1 ORDER BY revision",
+        )?;
+        let encoded = statement
+            .query_map([&binding.scope_id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        summarize_stage_mutations(&encoded)
+    }
+
+    pub(crate) fn compact_stage(
+        &self,
+        binding: &ToolStageBinding,
+        expected: &ToolStageMutationSummary,
+    ) -> Result<()> {
+        const COMPACTION_ATTENTION: &str =
+            "Repair stage payload compaction failed; retained bounded evidence requires attention.";
+        // A transaction may have committed even when the caller observed a transient
+        // SQLite/verification error. The operation is digest-bound and idempotent, so
+        // retry it once before latching the retained-payload hold.
+        let result = self
+            .compact_stage_inner(binding, expected)
+            .or_else(|first| {
+                self.compact_stage_inner(binding, expected)
+                    .map_err(|second| {
+                        second.context(format!("Initial stage compaction failed: {first}"))
+                    })
+            });
+        if result.is_err() {
+            self.latch_attention(COMPACTION_ATTENTION);
+        }
+        result
+    }
+
+    fn compact_stage_inner(
+        &self,
+        binding: &ToolStageBinding,
+        expected: &ToolStageMutationSummary,
+    ) -> Result<()> {
+        validate_stage_binding(binding)?;
+        let mut database = self
+            .database
+            .lock()
+            .map_err(|_| anyhow!("developer tool database lock failed"))?;
+        let transaction = database.transaction()?;
+        let row = transaction
+            .query_row(
+                "SELECT binding,status FROM developer_tool_stage WHERE scope_id=?1",
+                [&binding.scope_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?
+            .context("Repair stage is not registered")?;
+        if serde_json::from_str::<ToolStageBinding>(&row.0)? != *binding {
+            bail!("Repair stage binding changed before compaction");
+        }
+        if row.1 == "compacted" {
+            drop(transaction);
+            drop(database);
+            return self.verify_stage_archive(binding, expected);
+        }
+        if row.1 != "cleaned" {
+            bail!("Repair stage is not cleaned and cannot be compacted");
+        }
+        let encoded = {
+            let mut statement = transaction.prepare(
+                "SELECT evidence FROM developer_tool_stage_mutation
+                 WHERE scope_id=?1 ORDER BY revision",
+            )?;
+            let encoded = statement
+                .query_map([&binding.scope_id], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            encoded
+        };
+        let summary = summarize_stage_mutations(&encoded)?;
+        if &summary != expected {
+            bail!("Repair stage mutation summary changed before compaction");
+        }
+        transaction.execute(
+            "DELETE FROM developer_tool_stage_mutation WHERE scope_id=?1",
+            [&binding.scope_id],
+        )?;
+        let changed = transaction.execute(
+            "UPDATE developer_tool_stage SET status='compacted',mutation_sha256=?2,
+             mutation_count=?3,text_bytes=?4,asset_bytes=?5,serialized_bytes=?6,updated_unix=?7
+             WHERE scope_id=?1 AND status='cleaned'",
+            params![
+                binding.scope_id,
+                summary.mutation_sha256,
+                summary.mutation_count,
+                summary.text_bytes,
+                summary.asset_bytes,
+                summary.serialized_bytes,
+                now_unix()?
+            ],
+        )?;
+        if changed != 1 {
+            bail!("Repair stage compaction was not durable");
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub(crate) fn verify_stage_archive(
+        &self,
+        binding: &ToolStageBinding,
+        expected: &ToolStageMutationSummary,
+    ) -> Result<()> {
+        self.require_stage(binding, &["compacted"])?;
+        let database = self
+            .database
+            .lock()
+            .map_err(|_| anyhow!("developer tool database lock failed"))?;
+        let observed = database.query_row(
+            "SELECT mutation_sha256,mutation_count,text_bytes,asset_bytes,serialized_bytes
+             FROM developer_tool_stage WHERE scope_id=?1",
+            [&binding.scope_id],
+            |row| {
+                Ok(ToolStageMutationSummary {
+                    mutation_sha256: row.get(0)?,
+                    mutation_count: row.get(1)?,
+                    text_bytes: row.get(2)?,
+                    asset_bytes: row.get(3)?,
+                    serialized_bytes: row.get(4)?,
+                })
+            },
+        )?;
+        let payload_count: u64 = database.query_row(
+            "SELECT COUNT(*) FROM developer_tool_stage_mutation WHERE scope_id=?1",
+            [&binding.scope_id],
+            |row| row.get(0),
+        )?;
+        if observed != *expected || payload_count != 0 {
+            bail!("Compacted repair stage evidence does not match the proposal binding");
+        }
+        Ok(())
+    }
+
+    pub(crate) fn verify_execution_binding(&self, binding: &ToolExecutionBinding) -> Result<()> {
+        self.verify_execution_policy_binding(binding)?;
+        let runtime = self
+            .runtime
+            .as_ref()
+            .context("OpenCode tools are not provisioned on this developer runner")?;
+        if verify_runtime_executable(&runtime.executable)? != binding.runtime_sha256 {
+            bail!("Tool runtime changed after staged candidate preparation");
+        }
+        Ok(())
+    }
+
+    pub(crate) fn verify_execution_policy_binding(
+        &self,
+        binding: &ToolExecutionBinding,
+    ) -> Result<()> {
+        self.require_stage(&binding.stage, &["cleaned", "compacted"])?;
+        let access = self.access(&binding.stage.project)?;
+        if access.mode != binding.access_mode || access.revision != binding.access_revision {
+            bail!("Tool access changed after staged candidate preparation");
+        }
+        if binding.access_mode == ToolAccessMode::Ask {
+            bail!("Staged automatic repair requires Auto or Full tool access");
+        }
+        if binding.tool_catalog_sha256
+            != tool_catalog_sha256(
+                &ToolModelConfig {
+                    target: binding.model_target.clone(),
+                    url: binding.model_url.clone(),
+                    model: binding.model.clone(),
+                },
+                binding.access_mode,
+                &binding.forbidden_write_paths,
+            )?
+        {
+            bail!("Tool catalog changed after staged candidate preparation");
+        }
+        Ok(())
+    }
+
+    fn require_stage(&self, binding: &ToolStageBinding, statuses: &[&str]) -> Result<()> {
+        validate_stage_binding(binding)?;
+        let database = self
+            .database
+            .lock()
+            .map_err(|_| anyhow!("developer tool database lock failed"))?;
+        let row = database
+            .query_row(
+                "SELECT binding,status FROM developer_tool_stage WHERE scope_id=?1",
+                [&binding.scope_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?
+            .context("Repair stage is not registered")?;
+        if serde_json::from_str::<ToolStageBinding>(&row.0)? != *binding
+            || !statuses.contains(&row.1.as_str())
+        {
+            bail!("Repair stage binding or lifecycle changed");
+        }
+        Ok(())
+    }
+
+    fn request_stage(&self, request: &ToolChatRequest) -> Result<Option<ToolStageBinding>> {
+        let Some(working_project) = request.working_project.as_deref() else {
+            return Ok(None);
+        };
+        let database = self
+            .database
+            .lock()
+            .map_err(|_| anyhow!("developer tool database lock failed"))?;
+        let encoded = database
+            .query_row(
+                "SELECT binding FROM developer_tool_stage WHERE request_id=?1",
+                [&request.request_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .context("Disposable working project has no registered stage binding")?;
+        let binding: ToolStageBinding = serde_json::from_str(&encoded)?;
+        if binding.project != request.project
+            || binding.stage_project != working_project
+            || request.feature_id.as_deref() != Some(binding.feature_id.as_str())
+        {
+            bail!("Tool request does not match its registered repair stage");
+        }
+        Ok(Some(binding))
+    }
+
+    fn transition_stage(&self, binding: &ToolStageBinding, from: &[&str], to: &str) -> Result<()> {
+        self.require_stage(binding, from)?;
+        let changed = self
+            .database
+            .lock()
+            .map_err(|_| anyhow!("developer tool database lock failed"))?
+            .execute(
+                "UPDATE developer_tool_stage SET status=?2,updated_unix=?3
+                 WHERE scope_id=?1",
+                params![binding.scope_id, to, now_unix()?],
+            )?;
+        if changed != 1 {
+            bail!("Repair stage lifecycle update was not durable");
+        }
+        Ok(())
     }
 
     pub(crate) fn decide(&self, binding: ToolApprovalDecision<'_>) -> Result<Value> {
@@ -745,37 +1211,67 @@ impl DeveloperTools {
                 .unwrap_or(&request.project),
         )?;
         validate_tool_model(&request.model)?;
-        let access = self.access(&request.project)?;
-        // A complete baseline is required before any tool can produce effects.
-        let before = capture_project(&project_path)?;
+        let request_stage = self.request_stage(&request)?;
+        if let Some(stage) = &request_stage {
+            self.require_stage(stage, &["registered"])?;
+            if request.working_project.as_deref() != Some(stage.stage_project.as_str())
+                || request.project != stage.project
+                || request.request_id != stage.request_id
+                || request.feature_id.as_deref() != Some(stage.feature_id.as_str())
+            {
+                bail!("Tool request does not match its registered repair stage");
+            }
+        } else {
+            if request.working_project.is_some() {
+                bail!("A disposable working project requires a registered stage binding");
+            }
+        }
         let (cancel_tx, mut cancel_rx) = mpsc::unbounded_channel();
         let (approval_tx, mut approval_rx) = mpsc::unbounded_channel();
-        {
-            let mut active = self
-                .active
-                .lock()
-                .map_err(|_| anyhow!("developer tool state lock failed"))?;
-            if active.is_some() {
-                bail!("A project tool session is already running");
+        let access =
+            self.reserve_runtime_slot(&request, request_stage.as_ref(), cancel_tx, approval_tx)?;
+        let execution_binding = match (|| -> Result<_> {
+            if let Some(stage) = &request_stage {
+                let runtime_sha256 = verify_runtime_executable(&runtime.executable)?;
+                return Ok(Some(ToolExecutionBinding {
+                    stage: stage.clone(),
+                    access_mode: access.mode,
+                    access_revision: access.revision,
+                    runtime_sha256,
+                    tool_catalog_sha256: tool_catalog_sha256(
+                        &request.model,
+                        access.mode,
+                        &request.forbidden_write_paths,
+                    )?,
+                    model_target: request.model.target.clone(),
+                    model_url: request.model.url.clone(),
+                    model: request.model.model.clone(),
+                    forbidden_write_paths: request.forbidden_write_paths.clone(),
+                }));
             }
-            *active = Some(ActiveRuntime {
-                request_id: request.request_id.clone(),
-                project: request.project.clone(),
-                chat_id: request.chat_id.clone(),
-                cancel: cancel_tx,
-                approvals: approval_tx,
-                cancellation: request.cancellation.clone(),
-            });
-        }
+            Ok(None)
+        })() {
+            Ok(binding) => binding,
+            Err(error) => {
+                self.retire_unspawned(&request, request_stage.as_ref())?;
+                return Err(error);
+            }
+        };
+        // Reserve policy and runtime ownership before the complete baseline so
+        // access cannot change between admission and process launch.
+        let before = match capture_project_with_cancellation(
+            &project_path,
+            Some(request.cancellation.as_ref()),
+            request_stage.is_some(),
+        ) {
+            Ok(before) => before,
+            Err(error) => {
+                self.retire_unspawned(&request, request_stage.as_ref())?;
+                return Err(error);
+            }
+        };
         if request.cancellation.load(Ordering::SeqCst) {
-            if let Ok(mut active) = self.active.lock() {
-                if active
-                    .as_ref()
-                    .is_some_and(|active| active.request_id == request.request_id)
-                {
-                    *active = None;
-                }
-            }
+            self.retire_unspawned(&request, request_stage.as_ref())?;
             bail!("Stopped");
         }
         let result = self
@@ -802,7 +1298,11 @@ impl DeveloperTools {
             self.latch_attention("Tool action completion evidence could not be persisted.");
             reconciliation_error = Some(error);
         }
-        match capture_project(&project_path) {
+        match capture_project_with_cancellation(
+            &project_path,
+            Some(request.cancellation.as_ref()),
+            request_stage.is_some(),
+        ) {
             Ok(after) => {
                 if let Err(error) = self.record_project_mutation(&request, &before, &after) {
                     if self.record_uncertain_mutation(&request).is_err() {
@@ -835,10 +1335,90 @@ impl DeveloperTools {
         } else {
             self.latch_attention("Developer tool active-state cleanup could not be confirmed.");
         }
+        if let Some(stage) = &request_stage {
+            if self.attention.load(Ordering::SeqCst) {
+                return Err(anyhow!(
+                    "Repair stage remains quarantined because tool termination was not confirmed"
+                ));
+            }
+            if let Err(error) = self.transition_stage(stage, &["running"], "captured") {
+                self.latch_attention("Repair stage capture lifecycle could not be persisted.");
+                return Err(error);
+            }
+        }
         if let Some(error) = reconciliation_error {
             return Err(error);
         }
-        result
+        result.map(|mut result| {
+            result.execution_binding = execution_binding;
+            result
+        })
+    }
+
+    fn reserve_runtime_slot(
+        &self,
+        request: &ToolChatRequest,
+        stage: Option<&ToolStageBinding>,
+        cancel: mpsc::UnboundedSender<()>,
+        approvals: mpsc::UnboundedSender<ApprovalReply>,
+    ) -> Result<AccessState> {
+        let mut active = self
+            .active
+            .lock()
+            .map_err(|_| anyhow!("developer tool state lock failed"))?;
+        if active.is_some() {
+            bail!("A project tool session is already running");
+        }
+        let access = self.access(&request.project)?;
+        if stage.is_some() && access.mode == ToolAccessMode::Ask {
+            bail!("Staged automatic repair requires Auto or Full tool access");
+        }
+        // Reserve the sole runtime slot and persist `running` under the same
+        // process-local critical section as the access read. `set_access`
+        // retains this same guard through its database commit, so either the
+        // new policy wins or this exact revision owns the runtime; stale Full
+        // access can never launch after a downgrade to Ask.
+        if let Some(stage) = stage {
+            self.transition_stage(stage, &["registered"], "running")?;
+        }
+        *active = Some(ActiveRuntime {
+            request_id: request.request_id.clone(),
+            project: request.project.clone(),
+            chat_id: request.chat_id.clone(),
+            cancel,
+            approvals,
+            cancellation: request.cancellation.clone(),
+        });
+        Ok(access)
+    }
+
+    fn retire_unspawned(
+        &self,
+        request: &ToolChatRequest,
+        stage: Option<&ToolStageBinding>,
+    ) -> Result<()> {
+        if let Some(stage) = stage {
+            if let Err(error) = self.transition_stage(stage, &["running"], "captured") {
+                self.latch_attention(
+                    "Cancelled pre-spawn repair stage could not be made cleanup-eligible.",
+                );
+                return Err(error);
+            }
+        }
+        let mut active = self
+            .active
+            .lock()
+            .map_err(|_| anyhow!("developer tool state lock failed"))?;
+        if active
+            .as_ref()
+            .is_some_and(|active| active.request_id == request.request_id)
+        {
+            *active = None;
+        } else {
+            self.latch_attention("Cancelled pre-spawn runtime ownership changed unexpectedly.");
+            bail!("Cancelled tool runtime ownership changed");
+        }
+        Ok(())
     }
 
     fn latch_attention(&self, reason: &str) {
@@ -858,16 +1438,7 @@ impl DeveloperTools {
             .lock()
             .map_err(|_| anyhow!("developer tool database lock failed"))?;
         let transaction = database.transaction()?;
-        transaction.execute(
-            "INSERT INTO developer_tool_workspace(project,revision) VALUES(?1,1)
-             ON CONFLICT(project) DO UPDATE SET revision=revision+1",
-            [&request.project],
-        )?;
-        let revision: u64 = transaction.query_row(
-            "SELECT revision FROM developer_tool_workspace WHERE project=?1",
-            [&request.project],
-            |row| row.get(0),
-        )?;
+        let revision = next_mutation_revision(&transaction, request)?;
         let evidence = ToolProjectMutation {
             revision,
             request_id: request.request_id.clone(),
@@ -875,17 +1446,7 @@ impl DeveloperTools {
             edits: Vec::new(),
             unreviewable_paths: vec!["<project-inventory-unavailable>".into()],
         };
-        transaction.execute(
-            "INSERT INTO developer_tool_mutation(project,revision,request_id,feature_id,evidence)
-             VALUES(?1,?2,?3,?4,?5)",
-            params![
-                request.project,
-                revision,
-                request.request_id,
-                request.feature_id,
-                serde_json::to_string(&evidence)?
-            ],
-        )?;
+        insert_mutation_evidence(&transaction, request, revision, &evidence)?;
         transaction.commit()?;
         Ok(())
     }
@@ -913,6 +1474,15 @@ impl DeveloperTools {
                         path,
                         before_sha256: old.map(|file| file.sha256.clone()),
                         after: new.text.clone(),
+                        asset: None,
+                    });
+                }
+                (old, Some(new)) if new.asset.is_some() && !sensitive_path(&path) => {
+                    edits.push(ToolMutationEdit {
+                        path,
+                        before_sha256: old.map(|file| file.sha256.clone()),
+                        after: None,
+                        asset: new.asset.clone(),
                     });
                 }
                 _ => unreviewable_paths.push(path),
@@ -926,16 +1496,7 @@ impl DeveloperTools {
             .lock()
             .map_err(|_| anyhow!("developer tool database lock failed"))?;
         let transaction = database.transaction()?;
-        transaction.execute(
-            "INSERT INTO developer_tool_workspace(project,revision) VALUES(?1,1)
-             ON CONFLICT(project) DO UPDATE SET revision=revision+1",
-            [&request.project],
-        )?;
-        let revision: u64 = transaction.query_row(
-            "SELECT revision FROM developer_tool_workspace WHERE project=?1",
-            [&request.project],
-            |row| row.get(0),
-        )?;
+        let revision = next_mutation_revision(&transaction, request)?;
         let evidence = ToolProjectMutation {
             revision,
             request_id: request.request_id.clone(),
@@ -943,17 +1504,7 @@ impl DeveloperTools {
             edits,
             unreviewable_paths,
         };
-        transaction.execute(
-            "INSERT INTO developer_tool_mutation(project,revision,request_id,feature_id,evidence)
-             VALUES(?1,?2,?3,?4,?5)",
-            params![
-                request.project,
-                revision,
-                request.request_id,
-                request.feature_id,
-                serde_json::to_string(&evidence)?
-            ],
-        )?;
+        insert_mutation_evidence(&transaction, request, revision, &evidence)?;
         transaction.commit()?;
         Ok(())
     }
@@ -1212,7 +1763,11 @@ impl DeveloperTools {
                                     if response.trim().is_empty() || response.len() > 64_000 {
                                         bail!("OpenCode returned invalid response text");
                                     }
-                                    break 'events Ok(ToolChatResult { response, model: request.model.model.clone() });
+                                    break 'events Ok(ToolChatResult {
+                                        response,
+                                        model: request.model.model.clone(),
+                                        execution_binding: None,
+                                    });
                                 }
                             }
                         }
@@ -1397,89 +1952,319 @@ fn reject_ambient_opencode_inputs(project: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn capture_project(root: &Path) -> Result<BTreeMap<String, ProjectFileSnapshot>> {
-    fn visit(
-        root: &Path,
-        directory: &Path,
-        output: &mut BTreeMap<String, ProjectFileSnapshot>,
-        depth: usize,
-    ) -> Result<()> {
-        if depth > 32 {
-            bail!("Project mutation scan exceeded its directory depth limit");
-        }
-        let mut entries = fs::read_dir(directory)?.collect::<std::io::Result<Vec<_>>>()?;
-        entries.sort_by_key(|entry| entry.file_name());
-        for entry in entries {
-            if output.len() >= MAX_MUTATION_FILES {
-                bail!("Project mutation scan exceeded its file-count limit");
-            }
-            let metadata = fs::symlink_metadata(entry.path())?;
-            let relative = entry
-                .path()
-                .strip_prefix(root)?
-                .to_string_lossy()
-                .replace('\\', "/");
-            if metadata.file_type().is_symlink() {
-                output.insert(
-                    relative,
-                    ProjectFileSnapshot {
-                        sha256: "symlink".into(),
-                        text: None,
-                    },
-                );
-                continue;
-            }
-            if metadata.is_dir() {
-                if generated_directory(&entry.file_name().to_string_lossy()) {
-                    output.insert(relative, directory_fingerprint(&entry.path())?);
-                } else {
-                    visit(root, &entry.path(), output, depth + 1)?;
-                }
-                continue;
-            }
-            if !metadata.is_file() {
-                output.insert(
-                    relative,
-                    ProjectFileSnapshot {
-                        sha256: "special".into(),
-                        text: None,
-                    },
-                );
-                continue;
-            }
-            let mut file = fs::File::open(entry.path())?;
-            let mut digest = Sha256::new();
-            let mut bytes = Vec::new();
-            let mut buffer = [0u8; 64 * 1024];
-            loop {
-                let count = file.read(&mut buffer)?;
-                if count == 0 {
-                    break;
-                }
-                digest.update(&buffer[..count]);
-                if metadata.len() <= MAX_MUTATION_FILE_BYTES {
-                    bytes.extend_from_slice(&buffer[..count]);
-                }
-            }
-            let text = if metadata.len() <= MAX_MUTATION_FILE_BYTES {
-                String::from_utf8(bytes).ok()
-            } else {
-                None
-            };
-            output.insert(
-                relative,
-                ProjectFileSnapshot {
-                    sha256: format!("{:x}", digest.finalize()),
-                    text,
-                },
-            );
+    capture_project_with_limits(
+        root,
+        MAX_CAPTURED_MUTATION_ASSET_BYTES,
+        MAX_CAPTURED_MUTATION_SCAN_BYTES,
+        None,
+        false,
+    )
+}
+
+fn capture_project_with_cancellation(
+    root: &Path,
+    cancellation: Option<&AtomicBool>,
+    expand_reviewable_generated: bool,
+) -> Result<BTreeMap<String, ProjectFileSnapshot>> {
+    capture_project_with_limits(
+        root,
+        MAX_CAPTURED_MUTATION_ASSET_BYTES,
+        MAX_CAPTURED_MUTATION_SCAN_BYTES,
+        cancellation,
+        expand_reviewable_generated,
+    )
+}
+
+#[cfg(test)]
+fn capture_project_with_asset_limit(
+    root: &Path,
+    asset_limit: u64,
+) -> Result<BTreeMap<String, ProjectFileSnapshot>> {
+    capture_project_with_limits(
+        root,
+        asset_limit,
+        MAX_CAPTURED_MUTATION_SCAN_BYTES,
+        None,
+        false,
+    )
+}
+
+fn capture_project_with_limits(
+    root: &Path,
+    asset_limit: u64,
+    scan_limit: u64,
+    cancellation: Option<&AtomicBool>,
+    expand_reviewable_generated: bool,
+) -> Result<BTreeMap<String, ProjectFileSnapshot>> {
+    capture_project_with_limits_and_byte_cancellation(
+        root,
+        asset_limit,
+        scan_limit,
+        cancellation,
+        None,
+        expand_reviewable_generated,
+    )
+}
+
+fn capture_project_with_limits_and_byte_cancellation(
+    root: &Path,
+    asset_limit: u64,
+    scan_limit: u64,
+    cancellation: Option<&AtomicBool>,
+    byte_cancellation: Option<&AtomicU8>,
+    expand_reviewable_generated: bool,
+) -> Result<BTreeMap<String, ProjectFileSnapshot>> {
+    if asset_limit > MAX_CAPTURED_MUTATION_ASSET_BYTES {
+        bail!("Captured mutation asset limit exceeds the fixed safety bound");
+    }
+    if scan_limit > MAX_CAPTURED_MUTATION_SCAN_BYTES {
+        bail!("Project mutation scan limit exceeds the fixed safety bound");
+    }
+    let mut output = BTreeMap::new();
+    let mut captured_asset_bytes = 0_u64;
+    let mut capture_budget = MutationCaptureBudget {
+        scanned_bytes: 0,
+        scan_limit,
+        cancellation,
+        byte_cancellation,
+    };
+    capture_walk(
+        root,
+        root,
+        &mut output,
+        0,
+        &mut captured_asset_bytes,
+        asset_limit,
+        &mut capture_budget,
+        expand_reviewable_generated,
+    )?;
+    Ok(output)
+}
+
+struct MutationCaptureBudget<'a> {
+    scanned_bytes: u64,
+    scan_limit: u64,
+    cancellation: Option<&'a AtomicBool>,
+    byte_cancellation: Option<&'a AtomicU8>,
+}
+
+impl MutationCaptureBudget<'_> {
+    fn check_cancelled(&self) -> Result<()> {
+        if self
+            .cancellation
+            .is_some_and(|cancellation| cancellation.load(Ordering::SeqCst))
+            || self
+                .byte_cancellation
+                .is_some_and(|cancellation| cancellation.load(Ordering::SeqCst) != 0)
+        {
+            bail!("Stopped");
         }
         Ok(())
     }
 
-    let mut output = BTreeMap::new();
-    visit(root, root, &mut output, 0)?;
-    Ok(output)
+    fn consume(&mut self, bytes: usize) -> Result<()> {
+        self.check_cancelled()?;
+        self.scanned_bytes = self
+            .scanned_bytes
+            .checked_add(bytes.try_into()?)
+            .context("Project mutation scan byte count overflow")?;
+        if self.scanned_bytes > self.scan_limit {
+            bail!("Project mutation scan exceeded its aggregate byte limit");
+        }
+        Ok(())
+    }
+}
+
+// Each parameter enforces a distinct traversal, capacity, cancellation, or
+// evidence boundary and remains explicit at the recursive call sites.
+#[allow(clippy::too_many_arguments)]
+fn capture_walk(
+    root: &Path,
+    directory: &Path,
+    output: &mut BTreeMap<String, ProjectFileSnapshot>,
+    depth: usize,
+    captured_asset_bytes: &mut u64,
+    asset_limit: u64,
+    capture_budget: &mut MutationCaptureBudget<'_>,
+    expand_reviewable_generated: bool,
+) -> Result<()> {
+    capture_budget.check_cancelled()?;
+    if depth > 32 {
+        bail!("Project mutation scan exceeded its directory depth limit");
+    }
+    #[cfg(windows)]
+    let _directory_guard = hold_windows_capture_directory(directory)?;
+    let mut entries = fs::read_dir(directory)?.collect::<std::io::Result<Vec<_>>>()?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        capture_budget.check_cancelled()?;
+        if output.len() >= MAX_MUTATION_FILES {
+            bail!("Project mutation scan exceeded its file-count limit");
+        }
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)?;
+        let relative = path
+            .strip_prefix(root)?
+            .to_string_lossy()
+            .replace('\\', "/");
+        if is_reparse_point(&metadata) {
+            bail!("Project mutation scan refuses a Windows reparse point");
+        }
+        if metadata.file_type().is_symlink() {
+            output.insert(
+                relative,
+                ProjectFileSnapshot {
+                    sha256: "symlink".into(),
+                    text: None,
+                    asset: None,
+                },
+            );
+            continue;
+        }
+        if metadata.is_dir() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if generated_directory(&name)
+                && !(expand_reviewable_generated && reviewable_generated_directory(&name))
+            {
+                output.insert(relative, directory_fingerprint(&path, capture_budget)?);
+            } else {
+                capture_walk(
+                    root,
+                    &path,
+                    output,
+                    depth + 1,
+                    captured_asset_bytes,
+                    asset_limit,
+                    capture_budget,
+                    expand_reviewable_generated,
+                )?;
+            }
+            continue;
+        }
+        if !metadata.is_file() {
+            output.insert(
+                relative,
+                ProjectFileSnapshot {
+                    sha256: "special".into(),
+                    text: None,
+                    asset: None,
+                },
+            );
+            continue;
+        }
+        let mut file = open_capture_file(&path)?;
+        let opened_metadata = file.metadata()?;
+        if !opened_metadata.is_file()
+            || is_reparse_point(&opened_metadata)
+            || opened_metadata.len() != metadata.len()
+        {
+            bail!("Project mutation scan observed a file changing before capture");
+        }
+        let mut digest = Sha256::new();
+        let mut bytes = Vec::new();
+        let mut capturing_bytes = opened_metadata.len() <= MAX_MUTATION_ASSET_BYTES;
+        let mut observed_bytes = 0_u64;
+        let mut buffer = [0u8; 64 * 1024];
+        loop {
+            let count = file.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            capture_budget.consume(count)?;
+            observed_bytes = observed_bytes
+                .checked_add(count.try_into()?)
+                .context("Project mutation scan byte count overflow")?;
+            digest.update(&buffer[..count]);
+            if capturing_bytes {
+                if bytes
+                    .len()
+                    .checked_add(count)
+                    .is_some_and(|length| length <= MAX_MUTATION_ASSET_BYTES as usize)
+                {
+                    bytes.extend_from_slice(&buffer[..count]);
+                } else {
+                    bytes.clear();
+                    capturing_bytes = false;
+                }
+            }
+        }
+        let final_metadata = file.metadata()?;
+        if !final_metadata.is_file()
+            || is_reparse_point(&final_metadata)
+            || observed_bytes != opened_metadata.len()
+            || final_metadata.len() != opened_metadata.len()
+        {
+            bail!("Project mutation scan observed a file changing during capture");
+        }
+        let (text, asset) = if capturing_bytes && bytes.len() as u64 <= MAX_MUTATION_FILE_BYTES {
+            match String::from_utf8(bytes) {
+                Ok(text) => (Some(text), None),
+                Err(error) => {
+                    let bytes = error.into_bytes();
+                    (
+                        None,
+                        reviewable_image_asset(&bytes, captured_asset_bytes, asset_limit).ok(),
+                    )
+                }
+            }
+        } else if capturing_bytes {
+            (
+                None,
+                reviewable_image_asset(&bytes, captured_asset_bytes, asset_limit).ok(),
+            )
+        } else {
+            (None, None)
+        };
+        output.insert(
+            relative,
+            ProjectFileSnapshot {
+                sha256: format!("{:x}", digest.finalize()),
+                text,
+                asset,
+            },
+        );
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn open_capture_file(path: &Path) -> Result<fs::File> {
+    Ok(fs::File::open(path)?)
+}
+
+#[cfg(windows)]
+fn open_capture_file(path: &Path) -> Result<fs::File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+    let mut options = fs::OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
+    Ok(options.open(path)?)
+}
+
+#[cfg(windows)]
+fn hold_windows_capture_directory(path: &Path) -> Result<fs::File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+    let mut options = fs::OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
+    let directory = options.open(path)?;
+    let metadata = directory.metadata()?;
+    if !metadata.is_dir() || is_reparse_point(&metadata) {
+        bail!("Project mutation scan refuses a non-direct directory");
+    }
+    Ok(directory)
 }
 
 fn generated_directory(name: &str) -> bool {
@@ -1489,13 +2274,80 @@ fn generated_directory(name: &str) -> bool {
     )
 }
 
-fn directory_fingerprint(path: &Path) -> Result<ProjectFileSnapshot> {
-    directory_fingerprint_with_limit(path, MAX_GENERATED_DIRECTORY_ENTRIES)
+fn reviewable_generated_directory(name: &str) -> bool {
+    matches!(name.to_ascii_lowercase().as_str(), "dist" | "build")
 }
 
+fn reviewable_image_asset(
+    bytes: &[u8],
+    captured_asset_bytes: &mut u64,
+    asset_limit: u64,
+) -> Result<ToolMutationAsset> {
+    if bytes.is_empty() || bytes.len() as u64 > MAX_MUTATION_ASSET_BYTES {
+        bail!("Binary mutation image exceeds the bounded byte limit");
+    }
+    let format = image::guess_format(bytes).context("Binary mutation is not a recognized image")?;
+    let media_type = match format {
+        image::ImageFormat::Png => "image/png",
+        image::ImageFormat::Jpeg => "image/jpeg",
+        _ => bail!("Binary mutation uses an unsupported image format"),
+    };
+    let mut reader = image::ImageReader::with_format(std::io::Cursor::new(bytes), format);
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_MUTATION_ASSET_DIMENSION);
+    limits.max_image_height = Some(MAX_MUTATION_ASSET_DIMENSION);
+    limits.max_alloc = Some(MAX_MUTATION_ASSET_PIXELS * 4);
+    reader.limits(limits);
+    let decoded = reader
+        .decode()
+        .context("Binary mutation image could not be decoded")?;
+    let width = decoded.width();
+    let height = decoded.height();
+    if width < 2 || height < 2 || u64::from(width) * u64::from(height) > MAX_MUTATION_ASSET_PIXELS {
+        bail!("Binary mutation image is a placeholder smaller than 2 by 2 pixels");
+    }
+    let next_captured_asset_bytes = captured_asset_bytes
+        .checked_add(bytes.len().try_into()?)
+        .context("Captured mutation asset byte count overflow")?;
+    if next_captured_asset_bytes > asset_limit {
+        bail!("Captured mutation assets exceed the aggregate byte limit");
+    }
+    // Reserve the decoded byte count before allocating the base64 evidence.
+    // Callers retain the file hash with asset=None when the aggregate limit is full.
+    *captured_asset_bytes = next_captured_asset_bytes;
+    Ok(ToolMutationAsset {
+        media_type: media_type.into(),
+        data_base64: BASE64_STANDARD.encode(bytes),
+        width,
+        height,
+    })
+}
+
+fn directory_fingerprint(
+    path: &Path,
+    capture_budget: &mut MutationCaptureBudget<'_>,
+) -> Result<ProjectFileSnapshot> {
+    directory_fingerprint_with_limits(path, MAX_GENERATED_DIRECTORY_ENTRIES, capture_budget)
+}
+
+#[cfg(test)]
 fn directory_fingerprint_with_limit(
     path: &Path,
     maximum_entries: usize,
+) -> Result<ProjectFileSnapshot> {
+    let mut capture_budget = MutationCaptureBudget {
+        scanned_bytes: 0,
+        scan_limit: MAX_CAPTURED_MUTATION_SCAN_BYTES,
+        cancellation: None,
+        byte_cancellation: None,
+    };
+    directory_fingerprint_with_limits(path, maximum_entries, &mut capture_budget)
+}
+
+fn directory_fingerprint_with_limits(
+    path: &Path,
+    maximum_entries: usize,
+    capture_budget: &mut MutationCaptureBudget<'_>,
 ) -> Result<ProjectFileSnapshot> {
     fn visit(
         path: &Path,
@@ -1503,13 +2355,18 @@ fn directory_fingerprint_with_limit(
         count: &mut usize,
         depth: usize,
         maximum_entries: usize,
+        capture_budget: &mut MutationCaptureBudget<'_>,
     ) -> Result<()> {
+        capture_budget.check_cancelled()?;
         if depth > MAX_GENERATED_DIRECTORY_DEPTH {
             bail!("Generated project directory fingerprint exceeded its depth limit");
         }
+        #[cfg(windows)]
+        let _directory_guard = hold_windows_capture_directory(path)?;
         let mut entries = fs::read_dir(path)?.collect::<std::io::Result<Vec<_>>>()?;
         entries.sort_by_key(|entry| entry.file_name());
         for entry in entries {
+            capture_budget.check_cancelled()?;
             if *count >= maximum_entries {
                 bail!(
                     "Generated project directory fingerprint exceeded its {maximum_entries}-entry limit"
@@ -1517,6 +2374,9 @@ fn directory_fingerprint_with_limit(
             }
             *count += 1;
             let metadata = fs::symlink_metadata(entry.path())?;
+            if is_reparse_point(&metadata) {
+                bail!("Generated project directory fingerprint refuses a Windows reparse point");
+            }
             let name = entry.file_name();
             let name = name.to_string_lossy();
             digest.update((name.len() as u64).to_le_bytes());
@@ -1529,17 +2389,44 @@ fn directory_fingerprint_with_limit(
                 digest.update(target.as_bytes());
             } else if metadata.is_dir() {
                 digest.update(b"directory");
-                visit(&entry.path(), digest, count, depth + 1, maximum_entries)?;
+                visit(
+                    &entry.path(),
+                    digest,
+                    count,
+                    depth + 1,
+                    maximum_entries,
+                    capture_budget,
+                )?;
             } else if metadata.is_file() {
                 digest.update(b"file");
-                let mut file = fs::File::open(entry.path())?;
+                let mut file = open_capture_file(&entry.path())?;
+                let opened_metadata = file.metadata()?;
+                if !opened_metadata.is_file()
+                    || is_reparse_point(&opened_metadata)
+                    || opened_metadata.len() != metadata.len()
+                {
+                    bail!("Generated project file changed before fingerprinting");
+                }
                 let mut buffer = [0u8; 64 * 1024];
+                let mut observed = 0_u64;
                 loop {
                     let read = file.read(&mut buffer)?;
                     if read == 0 {
                         break;
                     }
+                    capture_budget.consume(read)?;
+                    observed = observed
+                        .checked_add(read as u64)
+                        .context("Generated project fingerprint byte count overflow")?;
                     digest.update(&buffer[..read]);
+                }
+                let final_metadata = file.metadata()?;
+                if observed != opened_metadata.len()
+                    || final_metadata.len() != opened_metadata.len()
+                    || !final_metadata.is_file()
+                    || is_reparse_point(&final_metadata)
+                {
+                    bail!("Generated project file changed during fingerprinting");
                 }
             } else {
                 digest.update(b"special");
@@ -1549,30 +2436,24 @@ fn directory_fingerprint_with_limit(
     }
     let mut digest = Sha256::new();
     let mut count = 0;
-    visit(path, &mut digest, &mut count, 0, maximum_entries)?;
+    visit(
+        path,
+        &mut digest,
+        &mut count,
+        0,
+        maximum_entries,
+        capture_budget,
+    )?;
     Ok(ProjectFileSnapshot {
         sha256: format!("{:x}", digest.finalize()),
         text: None,
+        asset: None,
     })
 }
 
-fn sensitive_path(path: &str) -> bool {
-    path.split('/').any(|part| {
-        let lower = part.to_ascii_lowercase();
-        lower == ".env"
-            || lower.contains("credential")
-            || lower.contains("secret")
-            || lower.contains("password")
-            || lower.contains("token")
-            || lower == "id_rsa"
-            || lower.contains("keystore")
-            || lower.ends_with(".pem")
-            || lower.ends_with(".key")
-            || lower.ends_with(".p12")
-    })
-}
+use crate::developer_review::sensitive_path;
 
-fn verify_runtime_executable(path: &Path) -> Result<()> {
+fn verify_runtime_executable(path: &Path) -> Result<String> {
     let metadata = fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         bail!("Configured OpenCode executable changed type before launch");
@@ -1589,10 +2470,319 @@ fn verify_runtime_executable(path: &Path) -> Result<()> {
             }
             digest.update(&buffer[..count]);
         }
-        if format!("{:x}", digest.finalize()) != EXPECTED_OPENCODE_SHA256 {
+        let observed = format!("{:x}", digest.finalize());
+        if observed != EXPECTED_OPENCODE_SHA256 {
             bail!("Configured OpenCode executable failed its pinned SHA-256 check");
         }
+        Ok(observed)
     }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        file_sha256(path)
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn file_sha256(path: &Path) -> Result<String> {
+    let mut file = fs::File::open(path)?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+fn tool_catalog_sha256(
+    model: &ToolModelConfig,
+    access_mode: ToolAccessMode,
+    forbidden_write_paths: &[String],
+) -> Result<String> {
+    let value = json!({
+        "schema_version":1,
+        "runtime":"opencode",
+        "runtime_version":EXPECTED_OPENCODE_VERSION,
+        "model_target":model.target,
+        "model_url":model.url,
+        "model":model.model,
+        "access_mode":access_mode,
+        "permission_policy":access_mode.permission_config(),
+        "forbidden_write_paths":forbidden_write_paths,
+        "external_skills":false,
+        "project_config":false,
+    });
+    Ok(format!("{:x}", Sha256::digest(serde_json::to_vec(&value)?)))
+}
+
+#[cfg(test)]
+pub(crate) fn test_tool_catalog_sha256(
+    model: &ToolModelConfig,
+    access_mode: ToolAccessMode,
+    forbidden_write_paths: &[String],
+) -> Result<String> {
+    tool_catalog_sha256(model, access_mode, forbidden_write_paths)
+}
+
+fn validate_stage_binding(binding: &ToolStageBinding) -> Result<()> {
+    Uuid::parse_str(&binding.scope_id).context("Invalid repair stage scope ID")?;
+    Uuid::parse_str(&binding.request_id).context("Invalid repair stage request ID")?;
+    if binding.project.is_empty()
+        || binding.feature_id.is_empty()
+        || !binding.stage_project.starts_with("aw-repair-stage-")
+        || binding.stage_project.len() > 80
+        || !binding
+            .stage_project
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        bail!("Invalid repair stage binding");
+    }
+    if let Some(proposal_id) = &binding.proposal_id {
+        Uuid::parse_str(proposal_id).context("Invalid repair stage proposal ID")?;
+    }
+    Ok(())
+}
+
+fn next_mutation_revision(
+    transaction: &rusqlite::Transaction<'_>,
+    request: &ToolChatRequest,
+) -> Result<u64> {
+    if let Some(scope_id) = stage_scope_id(transaction, request)? {
+        let revision = transaction.query_row(
+            "SELECT COALESCE(MAX(revision),0)+1 FROM developer_tool_stage_mutation
+             WHERE scope_id=?1",
+            [&scope_id],
+            |row| row.get(0),
+        )?;
+        Ok(revision)
+    } else {
+        transaction.execute(
+            "INSERT INTO developer_tool_workspace(project,revision) VALUES(?1,1)
+             ON CONFLICT(project) DO UPDATE SET revision=revision+1",
+            [&request.project],
+        )?;
+        Ok(transaction.query_row(
+            "SELECT revision FROM developer_tool_workspace WHERE project=?1",
+            [&request.project],
+            |row| row.get(0),
+        )?)
+    }
+}
+
+fn insert_mutation_evidence(
+    transaction: &rusqlite::Transaction<'_>,
+    request: &ToolChatRequest,
+    revision: u64,
+    evidence: &ToolProjectMutation,
+) -> Result<()> {
+    let encoded = serde_json::to_string(evidence)?;
+    if let Some(scope_id) = stage_scope_id(transaction, request)? {
+        transaction.execute(
+            "INSERT INTO developer_tool_stage_mutation(scope_id,revision,evidence)
+             VALUES(?1,?2,?3)",
+            params![scope_id, revision, encoded],
+        )?;
+    } else {
+        transaction.execute(
+            "INSERT INTO developer_tool_mutation(project,revision,request_id,feature_id,evidence)
+             VALUES(?1,?2,?3,?4,?5)",
+            params![
+                request.project,
+                revision,
+                request.request_id,
+                request.feature_id,
+                encoded
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+fn stage_scope_id(
+    transaction: &rusqlite::Transaction<'_>,
+    request: &ToolChatRequest,
+) -> Result<Option<String>> {
+    let Some(working_project) = request.working_project.as_deref() else {
+        return Ok(None);
+    };
+    let row = transaction
+        .query_row(
+            "SELECT scope_id,binding FROM developer_tool_stage WHERE request_id=?1",
+            [&request.request_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?
+        .context("Disposable working project has no registered stage mutation scope")?;
+    let binding: ToolStageBinding = serde_json::from_str(&row.1)?;
+    if binding.scope_id != row.0
+        || binding.project != request.project
+        || binding.stage_project != working_project
+        || request.feature_id.as_deref() != Some(binding.feature_id.as_str())
+    {
+        bail!("Staged mutation evidence binding changed");
+    }
+    Ok(Some(row.0))
+}
+
+fn summarize_stage_mutations(encoded: &[String]) -> Result<ToolStageMutationSummary> {
+    let mut text_bytes = 0_u64;
+    let mut asset_bytes = 0_u64;
+    for evidence in encoded {
+        let mutation: ToolProjectMutation = serde_json::from_str(evidence)?;
+        for edit in mutation.edits {
+            if let Some(text) = edit.after {
+                text_bytes = text_bytes
+                    .checked_add(text.len() as u64)
+                    .context("Stage text byte count overflow")?;
+            }
+            if let Some(asset) = edit.asset {
+                asset_bytes = asset_bytes
+                    .checked_add(BASE64_STANDARD.decode(asset.data_base64)?.len() as u64)
+                    .context("Stage asset byte count overflow")?;
+            }
+        }
+    }
+    let serialized_bytes = encoded.iter().try_fold(0_u64, |total, item| {
+        total
+            .checked_add(item.len() as u64)
+            .context("Stage serialized byte count overflow")
+    })?;
+    Ok(ToolStageMutationSummary {
+        mutation_sha256: format!(
+            "{:x}",
+            Sha256::digest(serde_json::to_vec(&json!({
+                "schema_version":1,
+                "mutations":encoded,
+            }))?)
+        ),
+        mutation_count: encoded.len() as u64,
+        text_bytes,
+        asset_bytes,
+        serialized_bytes,
+    })
+}
+
+fn recover_orphaned_stages(connection: &mut Connection, root: &Path) -> Result<Option<String>> {
+    let mut statement = connection.prepare(
+        "SELECT scope_id,stage_project,binding,status FROM developer_tool_stage
+         WHERE status!='compacted' ORDER BY updated_unix,scope_id",
+    )?;
+    let stages = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(statement);
+    let mut failed = false;
+    for (scope_id, stage_project, encoded, status) in stages {
+        let binding: ToolStageBinding = match serde_json::from_str(&encoded) {
+            Ok(binding) => binding,
+            Err(_) => {
+                failed = true;
+                continue;
+            }
+        };
+        if validate_stage_binding(&binding).is_err()
+            || binding.scope_id != scope_id
+            || binding.stage_project != stage_project
+        {
+            failed = true;
+            continue;
+        }
+        // The process-wide developer.lock proves there is no second runner for
+        // this state directory, but a child process can outlive a crashed Unix
+        // parent. Only lifecycle states written after run_opencode confirmed
+        // process-tree termination are safe to clean automatically.
+        if status == "running" {
+            failed = true;
+            continue;
+        }
+        let path = root.join(&stage_project);
+        let cleanup = if status == "cleaned" {
+            if path.try_exists()? {
+                Err(std::io::Error::other(
+                    "cleaned repair stage unexpectedly exists",
+                ))
+            } else {
+                Ok(())
+            }
+        } else if path.try_exists()? {
+            fs::remove_dir_all(&path).and_then(|_| {
+                if path.exists() {
+                    Err(std::io::Error::other("repair stage still exists"))
+                } else {
+                    Ok(())
+                }
+            })
+        } else {
+            Ok(())
+        };
+        if cleanup.is_ok() {
+            connection.execute(
+                "UPDATE developer_tool_stage SET status='cleaned',updated_unix=?2
+                 WHERE scope_id=?1",
+                params![scope_id, now_unix()?],
+            )?;
+            if compact_recovered_stage(connection, &scope_id).is_err() {
+                failed = true;
+            }
+        } else {
+            failed = true;
+            connection.execute(
+                "UPDATE developer_tool_stage SET status='cleanup_failed',updated_unix=?2
+                 WHERE scope_id=?1",
+                params![scope_id, now_unix()?],
+            )?;
+        }
+    }
+    Ok(failed
+        .then(|| "Repair stage cleanup could not be confirmed after runner restart.".to_string()))
+}
+
+fn compact_recovered_stage(connection: &mut Connection, scope_id: &str) -> Result<()> {
+    let transaction = connection.transaction()?;
+    let encoded = {
+        let mut statement = transaction.prepare(
+            "SELECT evidence FROM developer_tool_stage_mutation
+             WHERE scope_id=?1 ORDER BY revision",
+        )?;
+        let encoded = statement
+            .query_map([scope_id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        encoded
+    };
+    let summary = summarize_stage_mutations(&encoded)?;
+    transaction.execute(
+        "DELETE FROM developer_tool_stage_mutation WHERE scope_id=?1",
+        [scope_id],
+    )?;
+    let changed = transaction.execute(
+        "UPDATE developer_tool_stage SET status='compacted',mutation_sha256=?2,
+         mutation_count=?3,text_bytes=?4,asset_bytes=?5,serialized_bytes=?6,updated_unix=?7
+         WHERE scope_id=?1 AND status='cleaned'",
+        params![
+            scope_id,
+            summary.mutation_sha256,
+            summary.mutation_count,
+            summary.text_bytes,
+            summary.asset_bytes,
+            summary.serialized_bytes,
+            now_unix()?
+        ],
+    )?;
+    if changed != 1 {
+        bail!("Recovered repair stage compaction was not durable");
+    }
+    transaction.commit()?;
     Ok(())
 }
 
@@ -1701,7 +2891,6 @@ fn resolved_provider_timeout_matches(
     resolved["provider"][provider.as_str()]["options"]["timeout"]
         == expected["provider"][provider.as_str()]["options"]["timeout"]
 }
-
 fn permission_config(
     mode: ToolAccessMode,
     project: &Path,
@@ -2240,16 +3429,20 @@ fn record_tool_part(
         ),
         "error" => (
             "failed",
-            Some(redact_output(
-                &bounded_optional(state, "error", MAX_ACTION_OUTPUT_BYTES),
-                redactions,
-            )),
+            Some(if suppress_output {
+                "[REDACTED: sensitive file output]".into()
+            } else {
+                redact_output(
+                    &bounded_optional(state, "error", MAX_ACTION_OUTPUT_BYTES),
+                    redactions,
+                )
+            }),
         ),
         _ => bail!("OpenCode emitted an unknown tool status"),
     };
     redact_value(&mut input, redactions);
     let summary = state["title"].as_str().unwrap_or(&tool);
-    let summary = bounded(summary, 1000);
+    let summary = redact_output(&bounded(summary, 1000), redactions);
     let action_id = tool_action_id(request, revision, &call_id);
     let mut database = tools
         .database
@@ -2361,7 +3554,9 @@ fn redact_known(value: &str, secrets: &[String]) -> String {
 }
 
 fn redact_output(value: &str, secrets: &[String]) -> String {
-    redact_secret_assignments(&redact_known(value, secrets))
+    crate::developer_review::redact_pem_blocks(redact_secret_assignments(&redact_known(
+        value, secrets,
+    )))
 }
 
 fn redact_secret_assignments(value: &str) -> String {
@@ -2425,6 +3620,26 @@ fn redact_value(value: &mut Value, secrets: &[String]) {
 
 #[cfg(test)]
 mod tests {
+    fn approval_decision<'a>(
+        project: &'a str,
+        chat_id: Option<&'a str>,
+        feature_id: Option<&'a str>,
+        request_id: &'a str,
+        approval_id: &'a str,
+        access_revision: u64,
+        decision: &'a str,
+    ) -> ToolApprovalDecision<'a> {
+        ToolApprovalDecision {
+            project,
+            chat_id,
+            feature_id,
+            request_id,
+            approval_id,
+            access_revision,
+            decision,
+        }
+    }
+
     use super::*;
     use tokio::io::AsyncWriteExt as _;
 
@@ -2467,26 +3682,6 @@ mod tests {
         (directory, tools)
     }
 
-    fn approval_decision<'a>(
-        project: &'a str,
-        chat_id: Option<&'a str>,
-        feature_id: Option<&'a str>,
-        request_id: &'a str,
-        approval_id: &'a str,
-        access_revision: u64,
-        decision: &'a str,
-    ) -> ToolApprovalDecision<'a> {
-        ToolApprovalDecision {
-            project,
-            chat_id,
-            feature_id,
-            request_id,
-            approval_id,
-            access_revision,
-            decision,
-        }
-    }
-
     #[test]
     fn access_defaults_ask_and_changes_only_at_exact_idle_revision() {
         let (_directory, tools) = service(None);
@@ -2506,7 +3701,11 @@ mod tests {
         let ask = ToolAccessMode::Ask.permission_config();
         assert_eq!(ask["read"]["*"], "allow");
         assert_eq!(ask["read"]["*.env"], "ask");
-        assert_eq!(ask["read"]["*.env.example"], "allow");
+        assert_eq!(ask["read"]["*.env.example"], Value::Null);
+        assert_eq!(ask["read"]["*.aws*"], "ask");
+        assert_eq!(ask["read"]["*.ssh*"], "ask");
+        assert_eq!(ask["read"]["*.netrc"], "ask");
+        assert_eq!(ask["read"]["*id_ed25519*"], "ask");
         assert_eq!(ask["edit"], Value::Null);
         assert_eq!(ask["*"], "ask");
         let automatic = ToolAccessMode::Auto.permission_config();
@@ -2665,7 +3864,6 @@ mod tests {
         assert!(error.to_string().contains("provider.options.timeout"));
         served.await.unwrap();
     }
-
     #[test]
     fn ambient_project_or_ancestor_opencode_extensions_fail_before_launch() {
         let directory = tempfile::tempdir().unwrap();
@@ -3027,6 +4225,25 @@ mod tests {
     }
 
     #[test]
+    fn sensitive_ssh_read_and_pem_command_output_never_enter_action_evidence() {
+        let (_directory, tools) = service(None);
+        let request = test_request();
+        let key = "-----BEGIN OPENSSH PRIVATE KEY-----\nraw-private-key\n-----END OPENSSH PRIVATE KEY-----";
+        let read = json!({"sessionID":"s","callID":"ssh-read","tool":"read","state":{"status":"completed","input":{"filePath":"C:/project/.ssh/id_ed25519"},"title":"read key","output":key}});
+        record_tool_part(&tools, &request, 1, &read, &[]).unwrap();
+        let command = json!({"sessionID":"s","callID":"ssh-command","tool":"bash","state":{"status":"completed","input":{"command":"cat key"},"title":"command","output":key}});
+        record_tool_part(&tools, &request, 1, &command, &[]).unwrap();
+        let aws_error = json!({"sessionID":"s","callID":"aws-read","tool":"read","state":{"status":"error","input":{"filePath":"C:/project/.aws/credentials"},"title":"read credentials","error":key}});
+        record_tool_part(&tools, &request, 1, &aws_error, &[]).unwrap();
+        let netrc = json!({"sessionID":"s","callID":"netrc-read","tool":"read","state":{"status":"completed","input":{"filePath":"C:/project/.netrc"},"title":"read netrc","output":"machine example login user password private-value"}});
+        record_tool_part(&tools, &request, 1, &netrc, &[]).unwrap();
+        let encoded = serde_json::to_string(&tools.snapshot("project").unwrap()).unwrap();
+        assert!(!encoded.contains("raw-private-key"));
+        assert!(!encoded.contains("private-value"));
+        assert!(encoded.contains("REDACTED"));
+    }
+
+    #[test]
     fn protected_paths_are_denied_even_in_full_access() {
         let model = ToolModelConfig {
             target: "windows".into(),
@@ -3091,6 +4308,471 @@ mod tests {
         assert_eq!(mutations[0].unreviewable_paths, vec!["deleted.txt"]);
         assert!(tools.project_mutations("project", 1).unwrap().is_empty());
         assert_eq!(tools.snapshot("project").unwrap()["workspace_revision"], 1);
+    }
+
+    fn stage_fixture(
+        directory: &tempfile::TempDir,
+        tools: &DeveloperTools,
+    ) -> (ToolStageBinding, ToolChatRequest, PathBuf) {
+        let stage_project = format!("aw-repair-stage-{}", Uuid::new_v4().simple());
+        let request_id = Uuid::new_v4().to_string();
+        let binding = ToolStageBinding {
+            scope_id: Uuid::new_v4().to_string(),
+            project: "project".into(),
+            stage_project: stage_project.clone(),
+            request_id: request_id.clone(),
+            feature_id: "feature-1".into(),
+            proposal_id: Some(Uuid::new_v4().to_string()),
+            automatic_epoch: 7,
+        };
+        tools.register_stage(&binding).unwrap();
+        let path = directory.path().join("projects").join(&stage_project);
+        assert!(!path.exists(), "registration must precede stage creation");
+        fs::create_dir(&path).unwrap();
+        let request = ToolChatRequest {
+            request_id,
+            project: "project".into(),
+            chat_id: None,
+            prompt: "stage".into(),
+            model: ToolModelConfig {
+                target: "windows".into(),
+                url: "http://127.0.0.1:18081/v1".into(),
+                model: "windows-coder".into(),
+            },
+            attachments: Vec::new(),
+            feature_id: Some("feature-1".into()),
+            forbidden_write_paths: Vec::new(),
+            working_project: Some(stage_project),
+            cancellation: Arc::new(AtomicBool::new(false)),
+        };
+        (binding, request, path)
+    }
+
+    #[test]
+    fn staged_mutations_never_increment_live_revision_and_compact_exact_payload() {
+        let (directory, tools) = service(None);
+        let (binding, request, stage_path) = stage_fixture(&directory, &tools);
+        fs::write(stage_path.join("page.txt"), "before").unwrap();
+        let before = capture_project(&stage_path).unwrap();
+        fs::write(stage_path.join("page.txt"), "after").unwrap();
+        let after = capture_project(&stage_path).unwrap();
+        tools
+            .transition_stage(&binding, &["registered"], "running")
+            .unwrap();
+        tools
+            .record_project_mutation(&request, &before, &after)
+            .unwrap();
+        tools
+            .transition_stage(&binding, &["running"], "captured")
+            .unwrap();
+        assert!(tools.project_mutations("project", 0).unwrap().is_empty());
+        assert_eq!(tools.snapshot("project").unwrap()["workspace_revision"], 0);
+        assert_eq!(tools.stage_mutations(&binding).unwrap().len(), 1);
+
+        tools.mark_stage_cleanup_pending(&binding).unwrap();
+        fs::remove_dir_all(&stage_path).unwrap();
+        tools.complete_stage_cleanup(&binding, true).unwrap();
+        let summary = tools.stage_mutation_summary(&binding).unwrap();
+        assert_eq!(summary.mutation_count, 1);
+        assert_eq!(summary.text_bytes, 5);
+        let mut mismatched = summary.clone();
+        mismatched.text_bytes += 1;
+        assert!(tools.compact_stage(&binding, &mismatched).is_err());
+        assert!(tools.attention.load(Ordering::SeqCst));
+        assert_eq!(tools.stage_mutations(&binding).unwrap().len(), 1);
+        tools.compact_stage(&binding, &summary).unwrap();
+        // A prior retained-payload hold is global and remains latched until startup
+        // reconciles every scope; another stage's success must not clear it.
+        assert!(tools.attention.load(Ordering::SeqCst));
+        tools.verify_stage_archive(&binding, &summary).unwrap();
+        tools.compact_stage(&binding, &summary).unwrap();
+        assert!(tools.stage_mutations(&binding).is_err());
+    }
+
+    #[test]
+    fn later_staged_effects_recheck_policy_without_reusing_runtime_authority() {
+        let (directory, tools) = service(None);
+        tools.set_access("project", "full", 1, true).unwrap();
+        let (binding, request, stage_path) = stage_fixture(&directory, &tools);
+        tools
+            .transition_stage(&binding, &["registered"], "running")
+            .unwrap();
+        tools
+            .transition_stage(&binding, &["running"], "captured")
+            .unwrap();
+        tools.mark_stage_cleanup_pending(&binding).unwrap();
+        fs::remove_dir_all(stage_path).unwrap();
+        tools.complete_stage_cleanup(&binding, true).unwrap();
+        let summary = tools.stage_mutation_summary(&binding).unwrap();
+        tools.compact_stage(&binding, &summary).unwrap();
+        let execution = ToolExecutionBinding {
+            stage: binding,
+            access_mode: ToolAccessMode::Full,
+            access_revision: 2,
+            runtime_sha256: "0".repeat(64),
+            tool_catalog_sha256: tool_catalog_sha256(
+                &request.model,
+                ToolAccessMode::Full,
+                &request.forbidden_write_paths,
+            )
+            .unwrap(),
+            model_target: request.model.target,
+            model_url: request.model.url,
+            model: request.model.model,
+            forbidden_write_paths: request.forbidden_write_paths,
+        };
+
+        tools.verify_execution_policy_binding(&execution).unwrap();
+        assert!(tools.verify_execution_binding(&execution).is_err());
+        tools.set_access("project", "ask", 2, true).unwrap();
+        assert!(tools.verify_execution_policy_binding(&execution).is_err());
+    }
+
+    #[test]
+    fn staged_capture_expands_dist_text_and_images_but_live_capture_keeps_fingerprint() {
+        let (directory, tools) = service(None);
+        let (binding, request, stage_path) = stage_fixture(&directory, &tools);
+        let before = capture_project_with_cancellation(&stage_path, None, true).unwrap();
+        fs::create_dir(stage_path.join("dist")).unwrap();
+        fs::write(stage_path.join("dist/index.html"), "<main>rebuilt</main>\n").unwrap();
+        let image = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            8,
+            8,
+            image::Rgba([20, 40, 60, 255]),
+        ));
+        let mut png = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        fs::write(stage_path.join("dist/map.png"), png.into_inner()).unwrap();
+
+        let ordinary = capture_project(&stage_path).unwrap();
+        assert!(ordinary.contains_key("dist"));
+        assert!(!ordinary.contains_key("dist/index.html"));
+        let after = capture_project_with_cancellation(&stage_path, None, true).unwrap();
+        assert_eq!(
+            after["dist/index.html"].text.as_deref(),
+            Some("<main>rebuilt</main>\n")
+        );
+        assert!(after["dist/map.png"].asset.is_some());
+
+        tools
+            .transition_stage(&binding, &["registered"], "running")
+            .unwrap();
+        tools
+            .record_project_mutation(&request, &before, &after)
+            .unwrap();
+        tools
+            .transition_stage(&binding, &["running"], "captured")
+            .unwrap();
+        let mutations = tools.stage_mutations(&binding).unwrap();
+        assert_eq!(mutations.len(), 1);
+        assert!(mutations[0]
+            .edits
+            .iter()
+            .any(|edit| edit.path == "dist/index.html" && edit.after.is_some()));
+        assert!(mutations[0]
+            .edits
+            .iter()
+            .any(|edit| edit.path == "dist/map.png" && edit.asset.is_some()));
+        assert!(mutations[0].unreviewable_paths.is_empty());
+        tools.mark_stage_cleanup_pending(&binding).unwrap();
+        fs::remove_dir_all(stage_path).unwrap();
+        tools.complete_stage_cleanup(&binding, true).unwrap();
+    }
+
+    #[test]
+    fn restart_compacts_cleaned_stage_but_quarantines_unknown_running_stage() {
+        let (directory, tools) = service(None);
+        let database_path = directory.path().join("state.sqlite3");
+        let root = fs::canonicalize(directory.path().join("projects")).unwrap();
+        let (cleaned, request, cleaned_path) = stage_fixture(&directory, &tools);
+        let before = capture_project(&cleaned_path).unwrap();
+        fs::write(cleaned_path.join("generated.txt"), "generated").unwrap();
+        let after = capture_project(&cleaned_path).unwrap();
+        tools
+            .transition_stage(&cleaned, &["registered"], "running")
+            .unwrap();
+        tools
+            .record_project_mutation(&request, &before, &after)
+            .unwrap();
+        tools
+            .transition_stage(&cleaned, &["running"], "captured")
+            .unwrap();
+        tools.mark_stage_cleanup_pending(&cleaned).unwrap();
+        fs::remove_dir_all(&cleaned_path).unwrap();
+        tools.complete_stage_cleanup(&cleaned, true).unwrap();
+        let expected = tools.stage_mutation_summary(&cleaned).unwrap();
+        drop(tools);
+
+        let reopened = DeveloperTools::open(&database_path, root.clone(), None).unwrap();
+        reopened.verify_stage_archive(&cleaned, &expected).unwrap();
+        let (running, _, running_path) = stage_fixture(&directory, &reopened);
+        reopened
+            .transition_stage(&running, &["registered"], "running")
+            .unwrap();
+        drop(reopened);
+
+        let held = DeveloperTools::open(&database_path, root, None).unwrap();
+        assert!(held.needs_attention());
+        assert!(running_path.exists());
+        let status: String = held
+            .database
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT status FROM developer_tool_stage WHERE scope_id=?1",
+                [&running.scope_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "running");
+        fs::remove_dir_all(running_path).unwrap();
+    }
+
+    #[test]
+    fn concurrent_runtime_loser_leaves_registered_stage_cleanup_eligible() {
+        let (directory, tools) = service(None);
+        tools.set_access("project", "auto", 1, true).unwrap();
+        let (binding, request, stage_path) = stage_fixture(&directory, &tools);
+        let (existing_cancel, _existing_cancel_rx) = mpsc::unbounded_channel();
+        let (existing_approvals, _existing_approvals_rx) = mpsc::unbounded_channel();
+        *tools.active.lock().unwrap() = Some(ActiveRuntime {
+            request_id: Uuid::new_v4().to_string(),
+            project: "project".into(),
+            chat_id: None,
+            cancel: existing_cancel,
+            approvals: existing_approvals,
+            cancellation: Arc::new(AtomicBool::new(false)),
+        });
+        let (cancel, _cancel_rx) = mpsc::unbounded_channel();
+        let (approvals, _approvals_rx) = mpsc::unbounded_channel();
+        assert!(tools
+            .reserve_runtime_slot(&request, Some(&binding), cancel, approvals)
+            .is_err());
+        let status: String = tools
+            .database
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT status FROM developer_tool_stage WHERE scope_id=?1",
+                [&binding.scope_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "registered");
+        *tools.active.lock().unwrap() = None;
+        tools.mark_stage_cleanup_pending(&binding).unwrap();
+        fs::remove_dir_all(stage_path).unwrap();
+        tools.complete_stage_cleanup(&binding, true).unwrap();
+    }
+
+    #[test]
+    fn cancellation_after_runtime_reservation_makes_unspawned_stage_cleanup_eligible() {
+        let (directory, tools) = service(None);
+        tools.set_access("project", "auto", 1, true).unwrap();
+        let (binding, request, stage_path) = stage_fixture(&directory, &tools);
+        let (cancel, _cancel_rx) = mpsc::unbounded_channel();
+        let (approvals, _approvals_rx) = mpsc::unbounded_channel();
+        tools
+            .reserve_runtime_slot(&request, Some(&binding), cancel, approvals)
+            .unwrap();
+        request.cancellation.store(true, Ordering::SeqCst);
+        tools.retire_unspawned(&request, Some(&binding)).unwrap();
+        assert!(!tools.is_running());
+        tools.stage_mutations(&binding).unwrap();
+        tools.mark_stage_cleanup_pending(&binding).unwrap();
+        fs::remove_dir_all(stage_path).unwrap();
+        tools.complete_stage_cleanup(&binding, true).unwrap();
+    }
+
+    #[test]
+    fn cleanup_transition_failures_latch_attention_before_returning() {
+        let (directory, tools) = service(None);
+        let (binding, _request, stage_path) = stage_fixture(&directory, &tools);
+        fs::remove_dir_all(stage_path).unwrap();
+        assert!(tools.complete_stage_cleanup(&binding, true).is_err());
+        assert!(tools.needs_attention());
+        assert!(tools.blocks_work());
+        let status: String = tools
+            .database
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT status FROM developer_tool_stage WHERE scope_id=?1",
+                [&binding.scope_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            status, "registered",
+            "failed transition retains exact stage"
+        );
+    }
+
+    #[test]
+    fn access_downgrade_linearizes_before_staged_runtime_admission() {
+        let (directory, tools) = service(None);
+        tools.set_access("project", "full", 1, true).unwrap();
+        let (binding, request, stage_path) = stage_fixture(&directory, &tools);
+        let database_guard = tools.database.lock().unwrap();
+
+        let setter_tools = tools.clone();
+        let setter = std::thread::spawn(move || setter_tools.set_access("project", "ask", 2, true));
+        let mut setter_holds_runtime_gate = false;
+        for _ in 0..200 {
+            if tools.active.try_lock().is_err() {
+                setter_holds_runtime_gate = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            setter_holds_runtime_gate,
+            "access setter must retain the runtime gate while committing"
+        );
+
+        let runner_tools = tools.clone();
+        let runner_binding = binding.clone();
+        let runner = std::thread::spawn(move || {
+            let (cancel, _cancel_rx) = mpsc::unbounded_channel();
+            let (approvals, _approvals_rx) = mpsc::unbounded_channel();
+            runner_tools.reserve_runtime_slot(&request, Some(&runner_binding), cancel, approvals)
+        });
+        drop(database_guard);
+
+        let changed = setter.join().unwrap().unwrap();
+        assert_eq!(changed["tool_access"]["mode"], "ask");
+        let error = runner.join().unwrap().unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("requires Auto or Full tool access"));
+        assert!(!tools.is_running());
+        let status: String = tools
+            .database
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT status FROM developer_tool_stage WHERE scope_id=?1",
+                [&binding.scope_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(status, "registered");
+        tools.mark_stage_cleanup_pending(&binding).unwrap();
+        fs::remove_dir_all(stage_path).unwrap();
+        tools.complete_stage_cleanup(&binding, true).unwrap();
+    }
+
+    #[test]
+    fn capture_project_bounds_aggregate_asset_bytes_before_base64_and_keeps_hashes() {
+        fn png(width: u32, height: u32, color: [u8; 4]) -> Vec<u8> {
+            let image = image::RgbaImage::from_pixel(width, height, image::Rgba(color));
+            let mut output = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::ImageRgba8(image)
+                .write_to(&mut output, image::ImageFormat::Png)
+                .unwrap();
+            output.into_inner()
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let first = png(8, 8, [10, 20, 30, 255]);
+        let second = png(8, 8, [40, 50, 60, 255]);
+        fs::write(directory.path().join("a.png"), &first).unwrap();
+        fs::write(directory.path().join("b.png"), &second).unwrap();
+
+        let snapshot =
+            capture_project_with_asset_limit(directory.path(), first.len().try_into().unwrap())
+                .unwrap();
+        assert_eq!(
+            snapshot["a.png"].sha256,
+            format!("{:x}", Sha256::digest(&first))
+        );
+        assert_eq!(
+            snapshot["b.png"].sha256,
+            format!("{:x}", Sha256::digest(&second))
+        );
+        let captured = snapshot["a.png"].asset.as_ref().unwrap();
+        assert_eq!(
+            BASE64_STANDARD.decode(&captured.data_base64).unwrap(),
+            first
+        );
+        assert!(snapshot["b.png"].asset.is_none());
+
+        let oversized_limit = match capture_project_with_asset_limit(
+            directory.path(),
+            MAX_CAPTURED_MUTATION_ASSET_BYTES + 1,
+        ) {
+            Ok(_) => panic!("capture accepted an asset limit above the fixed safety bound"),
+            Err(error) => error,
+        };
+        assert!(oversized_limit.to_string().contains("fixed safety bound"));
+
+        // Each pre/post capture owns an independent bounded budget.
+        let repeated =
+            capture_project_with_asset_limit(directory.path(), first.len().try_into().unwrap())
+                .unwrap();
+        assert!(repeated["a.png"].asset.is_some());
+        assert!(repeated["b.png"].asset.is_none());
+    }
+
+    #[test]
+    fn capture_project_bounds_total_bytes_across_ordinary_and_generated_files() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("a.txt"), b"ordinary").unwrap();
+        fs::create_dir(directory.path().join("dist")).unwrap();
+        fs::write(directory.path().join("dist/generated.bin"), b"generated").unwrap();
+
+        let error = capture_project_with_limits(
+            directory.path(),
+            MAX_CAPTURED_MUTATION_ASSET_BYTES,
+            16,
+            None,
+            false,
+        )
+        .err()
+        .expect("ordinary and generated bytes must share one aggregate scan budget");
+        assert!(error.to_string().contains("aggregate byte limit"));
+    }
+
+    #[test]
+    fn capture_project_honors_tool_session_cancellation_before_scanning() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("large.bin"), vec![7_u8; 128 * 1024]).unwrap();
+        let cancellation = AtomicBool::new(true);
+
+        let error = capture_project_with_limits(
+            directory.path(),
+            MAX_CAPTURED_MUTATION_ASSET_BYTES,
+            MAX_CAPTURED_MUTATION_SCAN_BYTES,
+            Some(&cancellation),
+            false,
+        )
+        .err()
+        .expect("a cancelled tool session must stop mutation capture");
+        assert_eq!(error.to_string(), "Stopped");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn capture_project_rejects_a_windows_junction_escape() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("project");
+        let outside = directory.path().join("outside");
+        fs::create_dir(&project).unwrap();
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("escaped.txt"), "outside").unwrap();
+        let junction = project.join("escape");
+        let status = std::process::Command::new("cmd.exe")
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&junction)
+            .arg(&outside)
+            .status()
+            .unwrap();
+        assert!(status.success(), "Windows junction fixture creation failed");
+        let error = capture_project(&project)
+            .err()
+            .expect("junction must be rejected");
+        assert!(error.to_string().contains("reparse point"));
+        fs::remove_dir(&junction).unwrap();
     }
 
     #[test]

@@ -42,6 +42,7 @@ fn supervised_developer_workflow_runs_native_processes_and_recovers_checkpoints(
         "developer-runner-feature-approval-e2e.py",
         "developer-runner-escalation-e2e.py",
         "developer-runner-auto-repair-e2e.py",
+        "developer-runner-scalable-repair-e2e.py",
         "developer-runner-settings-e2e.py",
         "developer-runner-github-setup-e2e.py",
         "developer-runner-publication-e2e.py",
@@ -69,6 +70,13 @@ fn supervised_developer_workflow_runs_native_processes_and_recovers_checkpoints(
         }
         if cfg!(windows) {
             command.env("ASSEMBLYWRIGHT_DEVELOPER_REVIEW_FIXTURE", &review_fixture);
+        }
+        if script == "developer-runner-scalable-repair-e2e.py" {
+            if let Some(executable) =
+                std::env::var_os("ASSEMBLYWRIGHT_DEVELOPER_OPENCODE_EXECUTABLE")
+            {
+                command.arg("--opencode-executable").arg(executable);
+            }
         }
         let output = command
             .output()

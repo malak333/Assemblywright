@@ -153,10 +153,10 @@ the original attempt, three ordinary repairs, and every lifetime escalation, for
 `1 + 3 + 100 = 104` records. Unused reserved review slots terminate as `not_run`.
 Reservation of all four slots is atomic and precedes inference. Each record has
 fixed field and summary limits; proposal file bytes live only in the current frozen
-proposal and cumulative review manifest, not duplicated history. The existing
-40-file cumulative review ceiling remains an independent workspace bound: reaching
-it enters a visible operational hold rather than pretending the configured attempt
-limit was exhausted.
+proposal and cumulative review manifest, not duplicated history. The
+[scalable repair extension](developer-scalable-repair-design.md) replaces the
+40-file cumulative ceiling with bounded review batches and an aggregate decision.
+Capacity failures remain distinct from exhausting the configured attempt budget.
 
 ## File authority and independent review
 
@@ -184,9 +184,12 @@ validation bypasses, or departures from the approved requirements.
 Project context and proposal admission stay bounded. A truncated context is not a
 complete mutation manifest. Only exact admitted paths with verified before bytes
 may be included in the frozen proposal.
-The per-file context and recovery limit is 32,000 bytes, with a 128,000-byte
-project total and 80-file limit. Context admission rejects an aggregate byte
-overrun before a proposal; recovery rejects projects exceeding either limit.
+The scalable path selects bounded source portions against hash-bound inventory
+evidence and supports additional bounded retrieval. Generated output is accounted
+for without crowding out source. The earlier 32,000-byte per-file, 128,000-byte
+total, and 80-file whole-context representation remains a legacy contract, not a
+claim that selected text represents every project byte. Complete mutation and
+review evidence is required independently of prompt selection.
 
 Freezing the validation command freezes its exact command string, not the behavior
 of files that command loads. Automatically changing `package.json`, build scripts,
@@ -227,8 +230,9 @@ secret-bearing project material is never admitted to the repair packet.
   the existing escalation limit. Live-input drift, incomplete mutation evidence,
   or a failed scan remains an operational hold requiring inspection.
   The protected-input comparison excludes incidental Python `__pycache__`
-  unless the validation command names it; the separate tool mutation ledger
-  still rejects unreviewable in-project cache changes.
+  unless the validation command explicitly names it; explicitly named cache
+  paths remain bound. The separate tool mutation ledger still rejects
+  unreviewable in-project cache changes.
   A previously held feature with the exact staged-protected-input rejection or
   OpenCode stream or session timeout or action-count exhaustion, no applied candidate
   edits, and intact ordinary-attempt history may use explicit Resume to reserve
@@ -418,7 +422,7 @@ proof, and hosted Windows success is not claimed by this repository evidence.
 | A disabled maximum field prevented choosing a lower limit before an enable-and-start mutation. | Accepted. The field remains editable while automation is off, and enablement sends the chosen value atomically. |
 | Limit exhaustion claimed manual recovery without defining an admissible transition. | Accepted and tightened after user-advocate review. The snapshot is the absolute shared escalation cap; recovery after exhaustion is non-AI only. |
 | Operational stops lacked a durable state and late-result ordering. | Accepted. Added lifecycle, monotonic epoch, persisted cancellation intent, explicit Resume recovery from `held`, and quarantine on uncertain termination. |
-| Current limits of 20 escalations, 80 history records, and 40 cumulative files conflict with a configured maximum of 100. | Accepted. Implementation must raise attempt/evidence capacity with pre-reserved bounded terminal evidence; the 40-file bound remains independent and produces a truthful hold. |
+| Current limits of 20 escalations, 80 history records, and 40 cumulative files conflict with a configured maximum of 100. | Accepted. Implementation must raise attempt/evidence capacity with pre-reserved bounded terminal evidence; the original 40-file bound produced a truthful hold. The later scalable repair extension replaces the cumulative bound with complete bounded batches and a final aggregate review. |
 | The design incorrectly implied production-grade redaction and audit for Developer validation logs. | Accepted. Durable state stores bounded sanitized summaries and hashes; existing owner-only unredacted validation logs retain their explicitly weaker boundary. |
 | Existing ordinary repairs cannot change protected tests although escalations may change any admitted project file. | Accepted clarification. Ordinary attempts retain their narrower current restrictions; the broader authority starts only at automatic escalation. |
 | Evidence capacity remained inconsistent with post-limit manual recovery. | Accepted and tightened after user-advocate review. The feature has an absolute shared cap of 100; atomic admission reserves three escalation-ledger records and one review record per attempt, with exact capacities of 300 and 104. |
