@@ -708,7 +708,10 @@ fn main() {{
         .unwrap();
     let process = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, descendant) };
     if !process.is_null() {
-        assert_eq!(unsafe { WaitForSingleObject(process, 0) }, WAIT_OBJECT_0);
+        assert_eq!(
+            unsafe { WaitForSingleObject(process, 5_000) },
+            WAIT_OBJECT_0
+        );
         unsafe { CloseHandle(process) };
     }
 

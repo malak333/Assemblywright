@@ -39,6 +39,7 @@ fn supervised_developer_workflow_runs_native_processes_and_recovers_checkpoints(
         "developer-runner-model-target-e2e.py",
         "developer-runner-chat-e2e.py",
         "developer-runner-chat-history-e2e.py",
+        "developer-runner-feature-approval-e2e.py",
         "developer-runner-escalation-e2e.py",
         "developer-runner-auto-repair-e2e.py",
         "developer-runner-settings-e2e.py",
@@ -50,6 +51,15 @@ fn supervised_developer_workflow_runs_native_processes_and_recovers_checkpoints(
             .arg("-B")
             .arg(root.join("scripts").join(script))
             .args(["--binary", env!("CARGO_BIN_EXE_assemblywright-developer")]);
+        if script.contains("feature-approval") {
+            let Ok(opencode) = std::env::var("ASSEMBLYWRIGHT_DEVELOPER_OPENCODE_EXECUTABLE") else {
+                println!(
+                    "{script}: skipped because the exact pinned OpenCode runtime was not supplied"
+                );
+                continue;
+            };
+            command.arg("--opencode-executable").arg(opencode);
+        }
         if script.contains("github-setup") || script.contains("publication") {
             assert!(
                 github_fixture.is_file(),

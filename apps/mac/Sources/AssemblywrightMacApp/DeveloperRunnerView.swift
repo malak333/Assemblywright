@@ -46,6 +46,7 @@ struct DeveloperRunnerFeature: Decodable, Identifiable {
   var autoRepairEpoch: UInt64? = nil
   var autoRepairStepElapsedMs: UInt64? = nil
   var lastFailureKind: String? = nil
+  var pendingToolApproval: DeveloperToolApproval? = nil
 
   var hasApprovedReview: Bool { reviewStatus == "approved" }
   var resultLabel: String {
@@ -398,6 +399,7 @@ final class DeveloperRunnerModel: ObservableObject {
   @Published var snapshot: DeveloperRunnerSnapshot?
   @Published var error: String?
   @Published var sending = false
+  @Published var decidingFeatureToolApproval = false
   @Published var autoAIRepairMutationPending = false
   @Published var autoAIRepairPendingEnabled: Bool?
   @Published var autoAIRepairMutationMessage: String?
@@ -465,6 +467,45 @@ final class DeveloperRunnerModel: ObservableObject {
       snapshot = nil
       self.error = error.localizedDescription
     }
+  }
+
+  func decideFeatureToolApproval(_ decision: String, feature: DeveloperRunnerFeature,
+    approval: DeveloperToolApproval) async
+  {
+    guard !decidingFeatureToolApproval,
+      let body = featureToolApprovalBody(decision, feature: feature, approval: approval)
+    else { return }
+    decidingFeatureToolApproval = true
+    defer { decidingFeatureToolApproval = false }
+    do {
+      let updated = try await request(path: "feature/tool-approval", body: body)
+      if updated.revision >= (snapshot?.revision ?? 0) { snapshot = updated }
+      actionError = nil
+      error = nil
+    } catch {
+      actionError = error.localizedDescription
+      self.error = actionError
+      await refresh()
+    }
+  }
+
+  func featureToolApprovalBody(_ decision: String, feature: DeveloperRunnerFeature,
+    approval: DeveloperToolApproval) -> [String: Any]?
+  {
+    guard ["approve", "deny"].contains(decision), let snapshot, !snapshot.emergencyPaused,
+      let current = snapshot.queue.first(where: { $0.id == feature.id }),
+      current.project == feature.project, current.checkpoint == feature.checkpoint,
+      current.status == "running", feature.status == "running",
+      let pending = current.pendingToolApproval,
+      pending.id == approval.id, pending.requestId == approval.requestId,
+      pending.accessRevision == approval.accessRevision
+    else { return nil }
+    return [
+      "feature_id": feature.id, "project": feature.project,
+      "expected_checkpoint": feature.checkpoint,
+      "request_id": approval.requestId, "approval_id": approval.id,
+      "access_revision": approval.accessRevision, "decision": decision
+    ]
   }
 
   func observe() async {
@@ -885,6 +926,13 @@ struct DeveloperRunnerView: View {
           Text(elapsed).font(.caption).foregroundStyle(.secondary)
             .accessibilityLabel("Auto AI repair step \(elapsed.lowercased())")
         }
+      }
+      if let approval = feature.pendingToolApproval {
+        DeveloperToolApprovalView(approval: approval, project: feature.project,
+          disabled: model.decidingFeatureToolApproval || model.snapshot?.emergencyPaused == true) { decision in
+          Task { await model.decideFeatureToolApproval(decision, feature: feature, approval: approval) }
+        }
+        .accessibilityIdentifier("developer-feature-tool-approval-\(feature.id)")
       }
       if let nextAction = feature.automaticRepairNextAction {
         Text(nextAction).font(.caption).foregroundStyle(.orange)

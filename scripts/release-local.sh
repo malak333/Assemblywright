@@ -162,12 +162,12 @@ fi
 # Keep AppKit windows separate from subprocess HTTP fixtures.
 run ./scripts/swift-test-partition-smoke.sh --self-test
 run ./scripts/swift-test-partition-smoke.sh
-run swift test --disable-sandbox --package-path apps/mac --filter '^AssemblywrightMacAppTests\.DeveloperProjectChatTests/(shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions)\(\)(/.*)?$'
+run swift test --disable-sandbox --package-path apps/mac --filter '^AssemblywrightMacAppTests\.(DeveloperProjectChatTests/(shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions)|DeveloperRunnerTests/featureApprovalViewOffersBothDecisionsAndEmergencyPauseDisablesThem)\(\)(/.*)?$'
 # Keep the serialized bridge lifecycle suite in its own process. Swift Testing
 # otherwise runs it concurrently with unrelated suites, which can starve its
 # actor/process cleanup on constrained hosted runners.
 run swift test --disable-sandbox --package-path apps/mac --filter '^AssemblywrightMacCoreTests\.DeveloperBridgeTests/'
-run swift test --disable-sandbox --package-path apps/mac --skip '^AssemblywrightMacCoreTests\.DeveloperBridgeTests/|^AssemblywrightMacAppTests\.DeveloperProjectChatTests/(shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions)\(\)(/.*)?$'
+run swift test --disable-sandbox --package-path apps/mac --skip '^AssemblywrightMacCoreTests\.DeveloperBridgeTests/|^AssemblywrightMacAppTests\.(DeveloperProjectChatTests/(shiftReturnInsertsNewlineAtCursorAndReplacesSelection|approvalViewPresentsExactDetailsAndDecisions)|DeveloperRunnerTests/featureApprovalViewOffersBothDecisionsAndEmergencyPauseDisablesThem)\(\)(/.*)?$'
 run swift build --disable-sandbox --package-path apps/mac
 
 printf '\nAssemblywright local release verification: ok\n'
