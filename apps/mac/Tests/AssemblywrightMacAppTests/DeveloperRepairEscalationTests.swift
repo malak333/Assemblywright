@@ -226,6 +226,19 @@ struct DeveloperRepairEscalationTests {
   }
 
   @Test
+  func emptyManualUnavailableCandidateDoesNotClaimUnsupportedSource() throws {
+    let unavailable = try proposal([
+      "status": "unavailable", "source": "manual_chat", "files": [],
+      "candidate_entries": [],
+    ])
+    #expect(unavailable.candidateEntries?.isEmpty == true)
+    #expect(unavailable.typedCandidateWarning == nil)
+    let state = try runner()
+    #expect(!unavailable.canApprove(feature: try #require(state.nextFeature), runner: state))
+    #expect(unavailable.showsPrepareAction)
+  }
+
+  @Test
   func repairActionsFollowProposalLifecycle() throws {
     let ready = try proposal()
     #expect(ready.showsApproveAction)

@@ -84,7 +84,8 @@ struct DeveloperRunnerFeature: Decodable, Identifiable {
   }
 
   var isAssetRecoveryCheckpoint: Bool {
-    ["tool_effects_quarantined", "auto_repair_effects_quarantined"].contains(checkpoint)
+    ["tool_effects_quarantined", "auto_repair_effects_quarantined",
+      "tool_workspace_changed_requires_proposal"].contains(checkpoint)
   }
 
   var validAssetRecoverySha256: String? {

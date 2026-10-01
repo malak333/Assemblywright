@@ -464,6 +464,291 @@ def main():
                          'site/retained-generated.html'):
                 assert (path, hashlib.sha256((project / path).read_bytes()).hexdigest()) in reviewed, path
 
+            # Reproduce the exact live checkpoint left after all three ordinary
+            # repairs and an unavailable manual proposal. Resume may adopt only
+            # a freshly displayed current-snapshot digest; it must not replay an
+            # implementation or erase the retained counters and proposal.
+            stop()
+            checkpoint_validation_gate = root / 'checkpoint-validation-gate'
+            checkpoint_validation_started = root / 'checkpoint-validation-started'
+            checkpoint_validation_gate.write_text('hold exact snapshot validation')
+            checkpoint_validation_code = '; '.join([
+                'from pathlib import Path', 'import signal,sys,time',
+                f"started=Path({str(checkpoint_validation_started)!r})",
+                f"gate=Path({str(checkpoint_validation_gate)!r})",
+                "signal.signal(signal.SIGTERM, lambda *_: sys.exit(130))",
+                "started.write_bytes(b'started')",
+                "deadline=time.monotonic()+30",
+                "exec('while gate.exists() and time.monotonic() < deadline:\\n time.sleep(0.05)')",
+                "assert not gate.exists()",
+                'import app', 'assert app.VALUE == 1',
+            ])
+            checkpoint_validation = (subprocess.list2cmdline(
+                [sys.executable, '-B', '-c', checkpoint_validation_code])
+                if os.name == 'nt' else shlex.join(
+                    [sys.executable, '-B', '-c', checkpoint_validation_code]))
+            with closing(sqlite3.connect(data / 'developer.sqlite3')) as database, database:
+                durable = json.loads(database.execute(
+                    'SELECT state FROM developer_state WHERE id=1').fetchone()[0])
+                feature = next(item for item in durable['queue_v12'] if item['id'] == feature_id)
+                durable['auto_ai_repair_max_escalations'] = 100
+                diagnosis = 'No further correction is needed'
+                diagnosis_sha256 = hashlib.sha256(diagnosis.encode()).hexdigest()
+                proposal_id = str(uuid.uuid4())
+                chat_request_id = str(uuid.uuid4())
+                candidate_sha256 = hashlib.sha256(b'{"files":[]}').hexdigest()
+                feature.update(status='failed',
+                    checkpoint='tool_workspace_changed_requires_proposal',
+                    validation=checkpoint_validation,
+                    repair_pending=False, escalation_count=34, escalation_pending=False,
+                    review_status='unavailable', review_pending=None,
+                    last_failure_kind='operational', auto_ai_repair_limit=100,
+                    auto_repair_lifecycle='quarantined', auto_repair_epoch=19,
+                    auto_repair_step_started_at_ms=None,
+                    auto_repair_reason='Automatic repair stopped after project files were applied')
+                feature['escalation_proposal'] = {
+                    'proposal_id': proposal_id, 'attempt': 34,
+                    'feature_id': feature_id,
+                    'feature_checkpoint': 'tool_workspace_changed_requires_proposal',
+                    'binding_revision': durable['revision'] + 1,
+                    'model_target': feature['model_target'], 'model': 'fixture',
+                    'chat_request_id': chat_request_id, 'chat_model_target': 'windows',
+                    'chat_model': 'fixture', 'diagnosis': diagnosis,
+                    'diagnosis_sha256': diagnosis_sha256,
+                    'status': 'unavailable',
+                    'summary': 'The selected AI did not provide a bounded file proposal',
+                    'error': 'Expected 1 to 40 proposed files', 'files': [],
+                    'source': 'manual_chat', 'limit_snapshot': 100,
+                    'review_slot_terminal': False,
+                }
+                terminal_metadata = {
+                    'proposal_id': proposal_id, 'attempt': 34,
+                    'model_target': feature['model_target'], 'model': 'fixture',
+                    'chat_request_id': chat_request_id,
+                    'diagnosis_sha256': diagnosis_sha256, 'proposal_sha256': None,
+                    'candidate_sha256': candidate_sha256,
+                    'summary': 'Proposal preparation did not produce an authorized application',
+                    'source': 'manual_chat', 'automatic_epoch': None,
+                    'policy_revision': None, 'limit_snapshot': 100,
+                    'project_state_sha256': None,
+                }
+                durable['revision'] += 1
+                database.execute('UPDATE developer_state SET state=? WHERE id=1',
+                    (json.dumps(durable),))
+            launch()
+            incomplete = api()['queue'][0]
+            assert incomplete.get('asset_recovery_sha256') is None, incomplete
+            stop()
+            with closing(sqlite3.connect(data / 'developer.sqlite3')) as database, database:
+                durable = json.loads(database.execute(
+                    'SELECT state FROM developer_state WHERE id=1').fetchone()[0])
+                feature = next(item for item in durable['queue_v12'] if item['id'] == feature_id)
+                feature['escalation_proposal']['review_slot_terminal'] = True
+                feature['escalation_history'].extend([
+                    dict(terminal_metadata, outcome='unavailable'),
+                    dict(terminal_metadata, outcome='authorization_not_run'),
+                    dict(terminal_metadata, outcome='application_not_run'),
+                ])
+                feature['review_history'].append({
+                    'attempt': 34, 'packet_sha256': candidate_sha256,
+                    'validation_evidence_sha256': diagnosis_sha256,
+                    'outcome': 'not_run', 'decision_sha256': None,
+                    'binding_version': 0, 'batch_packet_sha256s': [],
+                    'batch_receipt_sha256s': [], 'blocking_findings': [],
+                    'summary': 'Independent review was not run because proposal preparation failed',
+                })
+                durable['revision'] += 1
+                database.execute('UPDATE developer_state SET state=? WHERE id=1',
+                    (json.dumps(durable),))
+            launch()
+            held = api()['queue'][0]
+            checkpoint_digest = held.get('asset_recovery_sha256')
+            assert checkpoint_digest and len(checkpoint_digest) == 64, held
+            checkpoint_binding = {'action': 'resume', 'expected_feature_id': feature_id,
+                'expected_model_target': held['model_target'], 'expected_status': held['status'],
+                'expected_checkpoint': held['checkpoint']}
+            try:
+                api('control', checkpoint_binding)
+                raise AssertionError('Checkpoint recovery accepted a missing snapshot digest')
+            except urllib.error.HTTPError as error:
+                assert error.code in (400, 409), error.code
+            (project / 'source' / 'new-owner-source.py').write_bytes(
+                b'# Exact checkpoint owner snapshot\n')
+            try:
+                api('control', dict(checkpoint_binding,
+                    expected_asset_recovery_sha256=checkpoint_digest))
+                raise AssertionError('Checkpoint recovery accepted a stale snapshot digest')
+            except urllib.error.HTTPError as error:
+                assert error.code == 409, error.code
+            fresh = api()['queue'][0]
+            fresh_digest = fresh.get('asset_recovery_sha256')
+            assert fresh_digest and fresh_digest != checkpoint_digest, fresh
+            project_files_before_adoption = {str(path.relative_to(project)):
+                hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in project.rglob('*') if path.is_file()}
+            model_calls_before_checkpoint_adoption = (len(calls), len(opencode_calls))
+            api('control', dict(checkpoint_binding,
+                expected_asset_recovery_sha256=fresh_digest))
+            wait(lambda unused: checkpoint_validation_started.exists())
+            api('control', {'action': 'stop'})
+            checkpoint_validation_gate.unlink()
+            stopped_state = wait(lambda s: not s['running'])
+            stopped_checkpoint = stopped_state['queue'][0]
+            assert stopped_checkpoint['checkpoint'] != 'auto_repair_effects_quarantined', \
+                stopped_checkpoint
+            assert stopped_checkpoint['repair_attempts'] == 3
+            assert stopped_checkpoint['escalation_count'] == 34
+            if stopped_checkpoint['status'] == 'paused':
+                assert stopped_checkpoint['auto_repair_lifecycle'] == 'inactive', \
+                    stopped_checkpoint
+                resume(feature_id)
+            else:
+                # A platform can conservatively report unconfirmed process-tree
+                # cleanup. Preserve that stronger safety boundary, then restore
+                # the same terminal fixture to prove the ordinary success path.
+                assert stopped_checkpoint['status'] == 'failed', stopped_checkpoint
+                assert stopped_checkpoint['checkpoint'] == 'validation_cleanup_unconfirmed', \
+                    stopped_checkpoint
+                assert stopped_checkpoint['auto_repair_lifecycle'] == 'quarantined', \
+                    stopped_checkpoint
+                assert stopped_state['emergency_paused'], stopped_state
+                api('control', {'action': 'clear_emergency'})
+                stop()
+                with closing(sqlite3.connect(data / 'developer.sqlite3')) as database, database:
+                    durable = json.loads(database.execute(
+                        'SELECT state FROM developer_state WHERE id=1').fetchone()[0])
+                    feature = next(item for item in durable['queue_v12']
+                        if item['id'] == feature_id)
+                    feature.update(status='failed',
+                        checkpoint='tool_workspace_changed_requires_proposal',
+                        repair_pending=False, escalation_pending=False,
+                        review_status='unavailable', review_pending=None,
+                        last_failure_kind='operational', auto_repair_lifecycle='quarantined',
+                        auto_repair_step_started_at_ms=None,
+                        auto_repair_reason='Automatic repair stopped after project files were applied')
+                    durable['revision'] += 1
+                    database.execute('UPDATE developer_state SET state=? WHERE id=1',
+                        (json.dumps(durable),))
+                launch()
+                restored = api()['queue'][0]
+                restored_digest = restored.get('asset_recovery_sha256')
+                assert restored_digest and len(restored_digest) == 64, restored
+                api('control', dict(checkpoint_binding,
+                    expected_asset_recovery_sha256=restored_digest))
+            state = wait(lambda s: not s['running'] and s['queue'][0]['status'] == 'succeeded')
+            recovered = state['queue'][0]
+            assert recovered['repair_attempts'] == 3
+            assert recovered['escalation_count'] == 34
+            assert model_calls_before_checkpoint_adoption == (len(calls), len(opencode_calls)), \
+                'Exact checkpoint adoption replayed implementation'
+            assert project_files_before_adoption == {str(path.relative_to(project)):
+                hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in project.rglob('*') if path.is_file()}, \
+                'Exact checkpoint adoption replayed file writes'
+            checkpoint_evidence = [json.loads(line) for line in
+                (root / 'review-fixture/review-input-evidence.jsonl').read_text().splitlines()]
+            assert any(item.get('kind') == 'review_batch'
+                and any(entry['path'] == 'source/new-owner-source.py'
+                    and entry['content_sha256'] == hashlib.sha256(
+                        (project / 'source/new-owner-source.py').read_bytes()).hexdigest()
+                    for entry in item['entries'])
+                for item in checkpoint_evidence), 'Current checkpoint snapshot was not reviewed'
+
+            # Emergency Pause at the same validation-only boundary must preserve
+            # resumability and never manufacture staged automatic-write evidence.
+            stop()
+            if checkpoint_validation_started.exists():
+                checkpoint_validation_started.unlink()
+            checkpoint_validation_gate.write_text('hold emergency validation')
+            with closing(sqlite3.connect(data / 'developer.sqlite3')) as database, database:
+                durable = json.loads(database.execute(
+                    'SELECT state FROM developer_state WHERE id=1').fetchone()[0])
+                feature = next(item for item in durable['queue_v12'] if item['id'] == feature_id)
+                feature.update(status='failed',
+                    checkpoint='tool_workspace_changed_requires_proposal',
+                    repair_pending=False, escalation_pending=False,
+                    review_status='unavailable', review_pending=None,
+                    last_failure_kind='operational', auto_repair_lifecycle='quarantined',
+                    auto_repair_step_started_at_ms=None,
+                    auto_repair_reason='Automatic repair stopped after project files were applied')
+                durable['revision'] += 1
+                database.execute('UPDATE developer_state SET state=? WHERE id=1',
+                    (json.dumps(durable),))
+            launch()
+            emergency_held = api()['queue'][0]
+            emergency_digest = emergency_held.get('asset_recovery_sha256')
+            assert emergency_digest and len(emergency_digest) == 64, emergency_held
+            api('control', {'action': 'resume', 'expected_feature_id': feature_id,
+                'expected_model_target': emergency_held['model_target'],
+                'expected_status': emergency_held['status'],
+                'expected_checkpoint': emergency_held['checkpoint'],
+                'expected_asset_recovery_sha256': emergency_digest})
+            wait(lambda unused: checkpoint_validation_started.exists())
+            api('control', {'action': 'emergency'})
+            checkpoint_validation_gate.unlink()
+            emergency_state = wait(lambda s: not s['running'] and s['emergency_paused'])
+            emergency_feature = emergency_state['queue'][0]
+            assert emergency_feature['checkpoint'] != 'auto_repair_effects_quarantined', \
+                emergency_feature
+            if emergency_feature['status'] == 'paused':
+                assert emergency_feature['auto_repair_lifecycle'] == 'inactive', \
+                    emergency_feature
+            else:
+                # Emergency Pause deliberately escalates uncertain process-tree
+                # cleanup. That fail-closed quarantine is valid so long as it
+                # cannot be mistaken for staged automatic file application.
+                assert emergency_feature['status'] == 'failed', emergency_feature
+                assert emergency_feature['checkpoint'] == 'validation_cleanup_unconfirmed', \
+                    emergency_feature
+                assert emergency_feature['auto_repair_lifecycle'] == 'quarantined', \
+                    emergency_feature
+            assert emergency_feature['repair_attempts'] == 3
+            assert emergency_feature['escalation_count'] == 34
+            with closing(sqlite3.connect(data / 'developer.sqlite3')) as database:
+                emergency_durable = json.loads(database.execute(
+                    'SELECT state FROM developer_state WHERE id=1').fetchone()[0])
+            emergency_durable_feature = next(item for item in emergency_durable['queue_v12']
+                if item['id'] == feature_id)
+            emergency_proposal = emergency_durable_feature['escalation_proposal']
+            assert emergency_proposal['source'] == 'manual_chat'
+            assert emergency_proposal['status'] == 'unavailable'
+            assert emergency_proposal.get('automatic_epoch') is None
+            assert emergency_proposal.get('application_state_sha256') is None
+            assert not emergency_proposal.get('staged_candidate')
+            assert not emergency_proposal.get('applied_paths')
+            api('control', {'action': 'clear_emergency'})
+            if emergency_feature['status'] == 'paused':
+                resume(feature_id)
+            else:
+                stop()
+                with closing(sqlite3.connect(data / 'developer.sqlite3')) as database, database:
+                    durable = json.loads(database.execute(
+                        'SELECT state FROM developer_state WHERE id=1').fetchone()[0])
+                    feature = next(item for item in durable['queue_v12']
+                        if item['id'] == feature_id)
+                    feature.update(status='failed',
+                        checkpoint='tool_workspace_changed_requires_proposal',
+                        repair_pending=False, escalation_pending=False,
+                        review_status='unavailable', review_pending=None,
+                        last_failure_kind='operational', auto_repair_lifecycle='quarantined',
+                        auto_repair_step_started_at_ms=None,
+                        auto_repair_reason='Automatic repair stopped after project files were applied')
+                    durable['revision'] += 1
+                    database.execute('UPDATE developer_state SET state=? WHERE id=1',
+                        (json.dumps(durable),))
+                launch()
+                restored = api()['queue'][0]
+                restored_digest = restored.get('asset_recovery_sha256')
+                assert restored_digest and len(restored_digest) == 64, restored
+                api('control', dict(checkpoint_binding,
+                    expected_asset_recovery_sha256=restored_digest))
+            wait(lambda s: not s['running'] and s['queue'][0]['status'] == 'succeeded')
+            assert model_calls_before_checkpoint_adoption == (len(calls), len(opencode_calls))
+            assert project_files_before_adoption == {str(path.relative_to(project)):
+                hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in project.rglob('*') if path.is_file()}
+
+
             # Exercise the approved staged automatic-repair boundary with the
             # real pinned OpenCode process and a deterministic loopback model.
             # The live project must remain byte-for-byte untouched until the

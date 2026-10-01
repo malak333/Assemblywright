@@ -14,14 +14,16 @@ struct DeveloperRunnerTests {
     var wire: [String: Any] = ["id": "fixture", "project": "maps", "instruction": "Create a map",
       "validation": "python tests.py", "status": status, "checkpoint": checkpoint,
       "message": "Inspect recovered image", "changed_files": ["map.png"]]
-    wire["auto_repair_lifecycle"] = checkpoint == "auto_repair_effects_quarantined"
+    wire["auto_repair_lifecycle"] = ["auto_repair_effects_quarantined",
+      "tool_workspace_changed_requires_proposal"].contains(checkpoint)
       ? "quarantined" : "held"
     if let digest { wire["asset_recovery_sha256"] = digest }
     return try decoder.decode(DeveloperRunnerFeature.self,
       from: JSONSerialization.data(withJSONObject: wire))
   }
 
-  @Test(arguments: ["tool_effects_quarantined", "auto_repair_effects_quarantined"])
+  @Test(arguments: ["tool_effects_quarantined", "auto_repair_effects_quarantined",
+    "tool_workspace_changed_requires_proposal"])
   func assetRecoveryRequiresExactDisplayedDigestAndExplainsFreshCandidate(checkpoint: String) throws {
     let value = try recoveryFeature(checkpoint: checkpoint)
     #expect(value.startBinding["expected_asset_recovery_sha256"] as? String == String(repeating: "a", count: 64))
@@ -33,7 +35,8 @@ struct DeveloperRunnerTests {
     #expect(value.automaticRepairNextAction == value.assetRecoveryNotice)
   }
 
-  @Test(arguments: ["tool_effects_quarantined", "auto_repair_effects_quarantined"])
+  @Test(arguments: ["tool_effects_quarantined", "auto_repair_effects_quarantined",
+    "tool_workspace_changed_requires_proposal"])
   func assetRecoveryRejectsMissingInvalidAndStaleDigests(checkpoint: String) throws {
     for digest in [nil, String(repeating: "A", count: 64), String(repeating: "a", count: 63)] {
       var value = try recoveryFeature(checkpoint: checkpoint, digest: digest)

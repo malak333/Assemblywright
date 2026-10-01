@@ -4,17 +4,17 @@ This record separates repository validation, installed Developer behavior, and
 the recovered website. It does not establish production signing, notarization,
 hosted publication, or external release readiness.
 
-Prior standalone-source result: the scalability baseline, staged automatic repair,
-and validation effect guard were implemented and installed. Its full local gate
-and 13 native Windows workflows passed, and its independent source review
-approved that source. The rebased release branch has additional changes and
-needs its own exact-head validation, independent review, and installation evidence.
-The live FFT feature is quarantined because its historical private
-checkpoint cannot be reconstructed from retained evidence. Its selected Windows
-model and repair history remain preserved; the website has not received final
-acceptance. The historical sections below retain intermediate failures and
-superseded counts; the final frozen-source and installation records at the end
-identify the current evidence.
+Prior standalone-source results: the scalability baseline, staged automatic
+repair, validation effect guard, and later exact-current-snapshot recovery were
+implemented and installed. Their full local gates and native Windows workflows
+passed, and independent source reviews approved those exact sources. The live
+FFT feature used digest-bound recovery, passed 32 tests, and reached independent
+review attempt 18; that review rejected the website with 13 substantive findings.
+Its selected Windows model, three repair attempts, 34 escalations, and project
+files remain preserved. The rebased release branch has additional changes and
+needs its own exact-head validation, independent review, and publication
+evidence. The historical sections below retain intermediate failures and
+superseded counts; the final records identify the current live evidence.
 
 For the prior standalone source, the `unit-testing-test-generate` workflow was applied to actual Rust and Swift
 units: exact inventory and context selection, batched review and image
@@ -433,3 +433,52 @@ Swift tests and build, packaging, and release contracts. Independent review of
 the final Windows correction found no P0-P3 issues. Hosted checks for the
 repair PR are still required before merge. Installation verification and live
 FFT website acceptance remain separate open boundaries.
+
+## Exact current-snapshot checkpoint recovery
+
+Independent high-risk review approved the standalone recovery extension with no
+P0-P3 findings. Eligibility requires the exact failed checkpoint, retained
+cumulative edits, terminal effect-free manual proposal receipts, and a matching
+not-run review record. Missing provenance and stale digests remain denied.
+Adoption is validation-only with inactive automatic repair authority; it does
+not replay implementation or uncertain writes. Empty manual candidate arrays no
+longer produce the misleading unsupported-source warning.
+
+The standalone backend source SHA-256 was
+`2813b783fbcd4a4752c361b7c0f2d49f2dac85766d78cf542b440dd2f83d9590`.
+Focused Swift coverage passed 35 tests. Native Windows passed 266 Developer tests
+with one ignored helper separately exercised, and the final scalable workflow
+passed. The matching macOS scalable workflow passed. The full standalone
+`release-local.sh` gate completed with exit 0, including the native Developer
+workflow, Rust workspace, documentation/release contracts, Swift partitions,
+and app build. This rebased source still requires its own exact-head evidence.
+
+Installation used authenticated idle shutdown and retained state/binary backups.
+The installed Windows executable matches native-tested SHA-256
+`7718c5b887c2b86b3d225dbfe33b4aa607d5e4d83e9f850d87788872fbeb106f`.
+The installed Mac executable SHA-256 is
+`e46310464dbdbcdcea131f7c411f95aa096cdd2cf350a2569b702167bc70fc3c`;
+its ad-hoc signature passed strict verification. The installation helper initially
+waited for reconnection while holding maintenance authority; the wait timed out,
+the lock released, and the existing supervisor then reconnected successfully.
+This sequencing error did not change project files or queue recovery evidence.
+
+Authenticated Resume adopted snapshot
+`1e08198743ba8b903e7507ef8a0ada9dd3e577dd3c797bd294741ad46fefc618`.
+The live feature passed the immutable
+`python -m unittest discover -s tests -v` command: 32 tests in 1.993 seconds.
+All 260 pre-recovery manifest files still matched their hashes after validation.
+The feature retained three repairs and 34 escalations, then completed independent
+`gpt-5.6-sol` high-reasoning review attempt 18 over two bound batches.
+
+Review attempt 18 rejected the candidate with 13 blocking findings and left the
+feature idle at `review_18_rejected`, with inactive automatic-repair authority
+and unchanged three-repair/34-escalation history. Findings cover PS1 job-system
+inaccuracies, an incorrect early-story route, stale generated output, a map
+generator that cannot reproduce the retained asset, insufficient corpus
+coverage, placeholder canonical origins, incomplete redirect/navigation/
+walkthrough/formula validation, unstable walkthrough fragments, and missing
+meaningful integration regressions. These are reviewer findings, not a new
+independently researched factual audit. The next phase requires a fresh repair
+proposal followed by validation and independent review. Successful checkpoint
+recovery does not justify bypassing that rejection or publishing the website.

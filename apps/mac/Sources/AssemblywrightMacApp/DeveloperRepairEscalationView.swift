@@ -159,7 +159,7 @@ struct DeveloperRepairProposal: Decodable {
 
   private var hasTypedCandidateFields: Bool {
     candidateSchemaVersion != nil || candidateSha256 != nil || candidatePayloadState != nil
-      || candidateEntries != nil
+      || candidateEntries?.isEmpty == false
   }
 
   var typedCandidateWarning: String? {
