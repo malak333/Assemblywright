@@ -82,16 +82,17 @@ complete Rust workspace, ignored tests, native workflow E2E, packaging/evidence
 checks, partitioned Swift suites, and Swift build. Hosted checks and merge are
 separate publication gates and must pass before merging this candidate.
 
-## Installed proof and limits
+## Initial targeted installation proof and limits
 
-The installed Windows source differs from the working checkout. Installation
-therefore added only the missing response field to the existing Windows source
+During the initial targeted installation, the installed Windows source differed
+from the working checkout. That installation added only the missing response field
+to the existing Windows source
 after verifying its hash and backing up source and executable. The runner rebuilt
 successfully, restarted with its existing configuration, and returned the saved
 nonlegacy conversation ID for the cancelled live proposal. Its feature record was
 unchanged across restart.
 
-The Mac update was built from an isolated archive of the clean installed-source
+The initial Mac update was built from an isolated archive of the clean installed-source
 checkout with only the repair-view and test changes. Release build and focused
 tests passed. The existing app bundle was backed up, its executable replaced, its
 local ad-hoc signature verified, and the app relaunched. This is local installation
