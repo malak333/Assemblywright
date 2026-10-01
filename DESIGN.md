@@ -48,6 +48,16 @@ review in bounded batches with a final aggregate decision, genuine image review,
 and preflight/recovery that avoids replaying uncertain effects. This extends the
 Developer repair contract; Windows authority, immutable validation, independent
 review, and the separate production/publication proof boundaries remain required.
+An exhausted failed feature at `tool_workspace_changed_requires_proposal` may use
+the same explicit exact-current-snapshot adoption only when its latest manual
+proposal is terminal and effect-free, all repair/proposal/review work is idle,
+its proposal/authorization/application and not-run-review receipts are complete,
+and the retained cumulative candidate is nonempty. Windows binds the complete
+current inventory and tool-mutation evidence, rejects a stale digest, preserves
+all counters and history, and enters a durable validation-only state for the
+original validation plus independent review. Stop, Emergency Pause, restart, or
+review retry cannot reauthorize repair-model calls or file writes. The stricter
+partially applied staged-repair reconciliation remains a separate contract.
 
 This document is the system-level design. Two documents own the detailed
 accepted designs and take precedence within their scope:

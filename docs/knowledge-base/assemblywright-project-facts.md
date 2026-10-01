@@ -3078,3 +3078,13 @@ consistency.
   it can append a duplicate failed receipt and erase the interrupted outcome.
   Assert the single terminal receipt through the real runner loop, not only
   the helper that records quarantine.
+- An exhausted `tool_workspace_changed_requires_proposal` feature can expose an
+  exact current-snapshot Resume binding only when its latest manual proposal is
+  terminal and effect-free and every repair, escalation, and review operation is
+  idle. Exact terminal proposal, authorization-not-run, application-not-run, and
+  review-not-run receipts are required. Adoption preserves the three repair
+  attempts, escalation and review histories, and proposal evidence; it merges the
+  complete current reviewable inventory with attributable tool mutations, rejects
+  stale hashes, and enters an automatic-repair-inactive validation-only state.
+  Stop, Emergency Pause, restart, and review retry cannot reauthorize model calls
+  or file writes. This path does not weaken staged-quarantine receipt checks.

@@ -4,17 +4,14 @@ This record separates repository validation, installed Developer behavior, and
 the recovered website. It does not establish production signing, notarization,
 hosted publication, or external release readiness.
 
-Prior standalone-source result: the scalability baseline, staged automatic repair,
-and validation effect guard were implemented and installed. Its full local gate
-and 13 native Windows workflows passed, and its independent source review
-approved that source. The rebased release branch has additional changes and
-needs its own exact-head validation, independent review, and installation evidence.
-The live FFT feature is quarantined because its historical private
-checkpoint cannot be reconstructed from retained evidence. Its selected Windows
-model and repair history remain preserved; the website has not received final
-acceptance. The historical sections below retain intermediate failures and
-superseded counts; the final frozen-source and installation records at the end
-identify the current evidence.
+Current result: exact current-snapshot recovery is implemented, independently
+reviewed, validated, and installed. It recovered the retained FFT snapshot and
+completed fresh review attempt 18, which rejected the website with 13 substantive
+findings. Subsequent manual work reached escalation 35/review attempt 19 and a
+new `tool_effects_quarantined` hold. The published-source Developer update
+preserved that exact live state. Website acceptance and publication remain open.
+The historical sections below retain intermediate failures and superseded
+results; the final records identify current evidence.
 
 For the prior standalone source, the `unit-testing-test-generate` workflow was applied to actual Rust and Swift
 units: exact inventory and context selection, batched review and image
@@ -433,3 +430,121 @@ Swift tests and build, packaging, and release contracts. Independent review of
 the final Windows correction found no P0-P3 issues. Hosted checks for the
 repair PR are still required before merge. Installation verification and live
 FFT website acceptance remain separate open boundaries.
+
+Two supplemental Windows feature-approval runs completed every behavioral
+assertion, then failed during fixture cleanup. An extended-path probe identified
+the retained npm-cache leaf: its normal spelling was 277 characters and reported
+absent, while the exact `\\?\` spelling existed and exposed the 27,509,693-byte
+file. No matching runner or provider process remained. This is retained as
+fixture failure rather than product proof. The fixture now waits for runner
+shutdown and model-server shutdown, then removes only its exact temporary root,
+using the extended-length spelling on Windows. Cleanup retains a short bounded
+retry only for `ENOTEMPTY` or Windows error 145. Other errors fail immediately,
+an exhausted retry raises the final error, and the pass receipt is emitted only
+after exact-root removal succeeds. Its focused contract check covers transient
+success, immediate unexpected-error rejection, and bounded persistent failure.
+A fresh Windows run with the corrected fixture was required before this
+correction could contribute native approval evidence; its result is recorded
+below.
+
+## Exact current-snapshot checkpoint recovery
+
+Independent high-risk review approved the standalone recovery extension with no
+P0-P3 findings. Eligibility requires the exact failed checkpoint, retained
+cumulative edits, terminal effect-free manual proposal receipts, and a matching
+not-run review record. Missing provenance and stale digests remain denied.
+Adoption is validation-only with inactive automatic repair authority; it does
+not replay implementation or uncertain writes. Empty manual candidate arrays no
+longer produce the misleading unsupported-source warning.
+
+The standalone backend source SHA-256 was
+`2813b783fbcd4a4752c361b7c0f2d49f2dac85766d78cf542b440dd2f83d9590`.
+Focused Swift coverage passed 35 tests. Native Windows passed 266 Developer tests
+with one ignored helper separately exercised, and the final scalable workflow
+passed. The matching macOS scalable workflow passed. The full standalone
+`release-local.sh` gate completed with exit 0, including the native Developer
+workflow, Rust workspace, documentation/release contracts, Swift partitions,
+and app build. This rebased source still requires its own exact-head evidence.
+
+Installation used authenticated idle shutdown and retained state/binary backups.
+The installed Windows executable matches native-tested SHA-256
+`7718c5b887c2b86b3d225dbfe33b4aa607d5e4d83e9f850d87788872fbeb106f`.
+The installed Mac executable SHA-256 is
+`e46310464dbdbcdcea131f7c411f95aa096cdd2cf350a2569b702167bc70fc3c`;
+its ad-hoc signature passed strict verification. The installation helper initially
+waited for reconnection while holding maintenance authority; the wait timed out,
+the lock released, and the existing supervisor then reconnected successfully.
+This sequencing error did not change project files or queue recovery evidence.
+
+Authenticated Resume adopted snapshot
+`1e08198743ba8b903e7507ef8a0ada9dd3e577dd3c797bd294741ad46fefc618`.
+The live feature passed the immutable
+`python -m unittest discover -s tests -v` command: 32 tests in 1.993 seconds.
+All 260 pre-recovery manifest files still matched their hashes after validation.
+The feature retained three repairs and 34 escalations, then completed independent
+`gpt-5.6-sol` high-reasoning review attempt 18 over two bound batches.
+
+Review attempt 18 rejected the candidate with 13 blocking findings and left the
+feature idle at `review_18_rejected`, with inactive automatic-repair authority
+and unchanged three-repair/34-escalation history. Findings cover PS1 job-system
+inaccuracies, an incorrect early-story route, stale generated output, a map
+generator that cannot reproduce the retained asset, insufficient corpus
+coverage, placeholder canonical origins, incomplete redirect/navigation/
+walkthrough/formula validation, unstable walkthrough fragments, and missing
+meaningful integration regressions. These are reviewer findings, not a new
+independently researched factual audit. The next phase requires a fresh repair
+proposal followed by validation and independent review. Successful checkpoint
+recovery does not justify bypassing that rejection or publishing the website.
+
+The port onto current main passed six focused Rust cases and 37 focused Swift
+cases. Its authoritative Windows run passed 277 Developer tests (plus the
+separately invoked platform helper) and the complete default native workflow
+wrapper in 351.10 seconds. The default wrapper skips feature-tool approval when
+no pinned runtime is supplied; that boundary was then exercised separately with
+OpenCode 1.18.23. After the fixture cleanup correction, both Windows and macOS
+approval fixtures exited 0 and emitted their pass receipts after cleanup. They
+covered exact projection/binding, one-time approval, denial, replay rejection,
+Stop, and Emergency Pause. Fixture SHA-256:
+`e9729201046da2d76e205c3965827bb6f8b6403b9ba5c852aa7d4686d8e1bdc7`.
+The matching Windows executable SHA-256 is
+`e5fcfab8c532ed7206c13d291c7c68c584c3640b86a919d8f242bd23f002deb3`.
+The earlier failed fixture runs remain failed evidence; their pass assertions do
+not substitute for the corrected runs' successful teardown and exit codes.
+
+
+## Published-source validation and installation closeout
+
+The first isolated local gate used a shared `CARGO_TARGET_DIR` and stopped when
+`mac-local-coding-snapshot-e2e.sh` could not find the worktree-local debug agent.
+It is retained as an invocation/target-layout failure, not a successful gate.
+The full rerun with the standard target layout completed with exit 0 and terminal
+marker `Assemblywright local release verification: ok` at implementation head
+`4cee2187d351af3f4f412ec676240e6c959d3bc5`. It passed 272 macOS Developer
+unit tests, the native Developer workflow in 349.57 seconds, the Mac local-coding
+snapshot boundary, Rust workspace and ignored tests, packaging/unsigned launch,
+305 Swift tests, and the final Swift build. The retained log is
+`target/checkpoint-recovery/published-release-local-default.log`. Hosted gates
+must independently verify the final publication head; a local pass is separate.
+
+The authoritative Windows checkout was advanced to that same implementation
+head with no tracked source modifications. Its explicitly pinned approval fixture
+was rerun from the Git checkout and exited 0. After authenticated idle shutdown,
+the matching native-tested Windows executable was installed with SHA-256
+`e5fcfab8c532ed7206c13d291c7c68c584c3640b86a919d8f242bd23f002deb3`.
+The installed Mac executable SHA-256 is
+`4ac1705dc7ad1af5949755dba868a8f49ea0529825b0b24b1194d48a4d93ca4d`;
+strict ad-hoc signature verification passed, and the existing authenticated
+connection reestablished at revision 671. State and binary backups were retained.
+This updates the supervised Developer runtime, not the production SCM service,
+Developer ID signing, notarization, or external release evidence.
+
+The FFT feature changed during source publication through subsequent manual
+work. Before the runtime update it was idle at `tool_effects_quarantined`, with
+three repairs, 35 escalations, review attempt 19, and a ready manual proposal.
+Its message reports unreviewable tool changes to
+`site/mechanics/job-system/index.html`. The runtime update preserved the entire
+feature JSON hash exactly:
+`75f81b78783d0b7eac74edc99157c85d3720a82490cc43d30f72c86f5fb96061`.
+No Resume, proposal application, checkpoint reset, or website publication was
+performed during this source-publication phase. This later hold is separate
+from the successfully recovered snapshot and review-attempt-18 rejection.

@@ -96,6 +96,23 @@ exact snapshot digest. Swift includes that digest in the existing Resume
 confirmation; Windows recomputes it before adopting the new candidate. This is
 fresh owner-directed recovery evidence, not retroactive tool provenance.
 
+The same digest-bound owner action applies to the narrow exhausted checkpoint
+`tool_workspace_changed_requires_proposal` when the latest manual proposal is
+`cancelled` or `unavailable` and contains no authorized or staged effect. The
+feature must have exactly three retained ordinary repair attempts, a nonempty
+cumulative candidate, and no pending repair, escalation, or review. Proposal
+identity, attempt, checkpoint, model target, and empty effect fields must match
+the feature. The exact terminal proposal, authorization-not-run,
+application-not-run, and independent-review-not-run receipts are mandatory; a
+discarded unavailable proposal retains its original unavailable proposal receipt.
+Windows combines retained edits, attributable tool mutations, and the complete
+current reviewable inventory into the displayed digest. Resume recomputes that
+digest, rejects drift, preserves repair/escalation/review evidence, and enters a
+durable validation-only checkpoint with automatic repair inactive. Stop,
+Emergency Pause, restart, and reviewer retries remain validation/review-only and
+cannot reauthorize a repair model or file write. This does not relax the receipt,
+policy, private-effect, or epoch checks for a partially applied staged proposal.
+
 Legacy tool history can contain dependency-cache files and obsolete outputs.
 Adoption uses the complete current inventory plus retained cumulative review
 files; it does not recreate obsolete ledger-only paths or feed cache binaries to

@@ -1399,6 +1399,120 @@ fn legacy_tool_quarantine_recovery(feature: &Feature) -> bool {
             .contains("cannot enter bounded review")
 }
 
+fn validate_exact_current_snapshot_terminal_provenance(
+    feature: &Feature,
+    proposal: &RepairEscalationProposal,
+) -> Result<()> {
+    if !proposal.review_slot_terminal {
+        bail!("Exact current-snapshot proposal review slot is not terminal");
+    }
+    let candidate_sha256 = repair_escalation_candidate_sha256(proposal)?;
+    let evidence = feature
+        .escalation_history
+        .iter()
+        .filter(|evidence| evidence.proposal_id == proposal.proposal_id)
+        .collect::<Vec<_>>();
+    let exact_metadata = |evidence: &RepairEscalationEvidence| {
+        evidence.attempt == proposal.attempt
+            && evidence.model_target == proposal.model_target
+            && evidence.model == proposal.model
+            && evidence.chat_id == proposal.chat_id
+            && evidence.chat_request_id == proposal.chat_request_id
+            && evidence.diagnosis_sha256 == proposal.diagnosis_sha256
+            && evidence.source == proposal.source
+            && evidence.automatic_epoch == proposal.automatic_epoch
+            && evidence.policy_revision == proposal.policy_revision
+            && evidence.limit_snapshot == proposal.limit_snapshot
+            && evidence.project_state_sha256 == proposal.project_state_sha256
+            && evidence.authorization_revision.is_none()
+            && evidence.apply_request_id.is_none()
+            && evidence.proposal_sha256.is_none()
+    };
+    let proposal_evidence = evidence
+        .iter()
+        .filter(|evidence| escalation_evidence_stage(&evidence.outcome) == Some("proposal"))
+        .collect::<Vec<_>>();
+    let accepted_proposal_outcome = |outcome: &str| {
+        outcome == proposal.status || (proposal.status == "cancelled" && outcome == "unavailable")
+    };
+    if evidence.len() != 3
+        || proposal_evidence.len() != 1
+        || !accepted_proposal_outcome(&proposal_evidence[0].outcome)
+        || evidence
+            .iter()
+            .filter(|evidence| evidence.outcome == "authorization_not_run")
+            .count()
+            != 1
+        || evidence
+            .iter()
+            .filter(|evidence| evidence.outcome == "application_not_run")
+            .count()
+            != 1
+        || evidence.iter().any(|evidence| !exact_metadata(evidence))
+        || evidence.iter().any(|evidence| {
+            if escalation_evidence_stage(&evidence.outcome) == Some("proposal") {
+                evidence
+                    .candidate_sha256
+                    .as_deref()
+                    .is_some_and(|digest| digest != candidate_sha256)
+            } else {
+                evidence.candidate_sha256.as_deref() != Some(candidate_sha256.as_str())
+            }
+        })
+    {
+        bail!("Exact current-snapshot proposal terminal evidence is incomplete or changed");
+    }
+    let matching_review = feature
+        .review_history
+        .iter()
+        .filter(|review| {
+            review.attempt == proposal.attempt
+                && review.outcome == "not_run"
+                && review.packet_sha256 == candidate_sha256
+                && review.validation_evidence_sha256 == proposal.diagnosis_sha256
+        })
+        .count();
+    if matching_review != 1 {
+        bail!("Exact current-snapshot proposal review evidence is missing or duplicated");
+    }
+    Ok(())
+}
+
+fn exact_current_snapshot_checkpoint_recovery(feature: &Feature) -> bool {
+    let Some(proposal) = feature.escalation_proposal.as_ref() else {
+        return false;
+    };
+    feature.status == "failed"
+        && feature.checkpoint == "tool_workspace_changed_requires_proposal"
+        && feature.auto_repair_lifecycle == "quarantined"
+        && feature.repair_attempts == REPAIR_LIMIT
+        && feature.repair_history.len() == feature.repair_attempts as usize
+        && !feature.repair_pending
+        && !feature.escalation_pending
+        && feature.review_pending.is_none()
+        && feature
+            .edits
+            .as_ref()
+            .is_some_and(|edits| !edits.is_empty())
+        && proposal.source == manual_escalation_source()
+        && matches!(proposal.status.as_str(), "cancelled" | "unavailable")
+        && proposal.feature_id == feature.id
+        && proposal.feature_checkpoint == feature.checkpoint
+        && proposal.attempt == feature.escalation_count
+        && proposal.model_target == feature.model_target
+        && proposal.files.is_empty()
+        && proposal.staged_candidate.is_empty()
+        && proposal.staged_binding.is_none()
+        && proposal.staged_candidate_manifest.is_empty()
+        && proposal.protected_inputs.is_empty()
+        && proposal.applied_paths.is_empty()
+        && proposal.apply_request_id.is_none()
+        && proposal.automatic_epoch.is_none()
+        && proposal.project_state_sha256.is_none()
+        && proposal.application_state_sha256.is_none()
+        && validate_exact_current_snapshot_terminal_provenance(feature, proposal).is_ok()
+}
+
 fn automatic_effects_quarantine_recovery(feature: &Feature) -> bool {
     feature.status == "failed"
         && feature.checkpoint == "auto_repair_effects_quarantined"
@@ -2546,6 +2660,7 @@ impl Engine {
                     .filter(|feature| {
                         feature.status == "failed"
                             && (legacy_tool_quarantine_recovery(feature)
+                                || exact_current_snapshot_checkpoint_recovery(feature)
                                 || automatic_effects_quarantine_recovery(feature))
                     })
                     .cloned()
@@ -2657,6 +2772,7 @@ impl Engine {
                 object.insert("last_failure_kind".into(), json!(f.last_failure_kind));
                 if f.status == "failed"
                     && (legacy_tool_quarantine_recovery(f)
+                        || exact_current_snapshot_checkpoint_recovery(f)
                         || automatic_effects_quarantine_recovery(f))
                 {
                     if let Some(projection) = recovery_projections.get(&f.id) {
@@ -3269,8 +3385,9 @@ impl Engine {
         recovery_epoch: u64,
     ) -> Result<(String, Vec<Edit>)> {
         let legacy_tool_quarantine = legacy_tool_quarantine_recovery(feature);
+        let exact_current_snapshot = exact_current_snapshot_checkpoint_recovery(feature);
         let automatic_effects_quarantine = automatic_effects_quarantine_recovery(feature);
-        if !legacy_tool_quarantine && !automatic_effects_quarantine {
+        if !legacy_tool_quarantine && !exact_current_snapshot && !automatic_effects_quarantine {
             bail!("Feature has no supported asset quarantine recovery candidate");
         }
         let project = fs::canonicalize(self.root.join(&feature.project))?;
@@ -3353,15 +3470,27 @@ impl Engine {
                 current_manifest_paths.extend(context.generated_asset_paths.iter().cloned());
                 current_manifest_paths.sort();
                 current_manifest_paths.dedup();
-                let edits = recover_supported_asset_mutations(
-                    &owned,
-                    &feature.id,
-                    &project,
-                    feature.edits.as_deref().unwrap_or_default(),
-                    &current_manifest_paths,
-                    &additional_paths,
-                    side_target.as_deref(),
-                )?;
+                let edits = if exact_current_snapshot {
+                    recover_exact_current_snapshot_mutations(
+                        &owned,
+                        &feature.id,
+                        &project,
+                        feature.edits.as_deref().unwrap_or_default(),
+                        &current_manifest_paths,
+                        &additional_paths,
+                        side_target.as_deref(),
+                    )?
+                } else {
+                    recover_supported_asset_mutations(
+                        &owned,
+                        &feature.id,
+                        &project,
+                        feature.edits.as_deref().unwrap_or_default(),
+                        &current_manifest_paths,
+                        &additional_paths,
+                        side_target.as_deref(),
+                    )?
+                };
                 ("legacy_tool", side_target, None, None, edits)
             };
         let binding = edits
@@ -3378,7 +3507,7 @@ impl Engine {
         Ok((
             hash(&serde_json::to_vec(&json!({
                 "schema_version":4,
-                "kind":kind,
+                "kind":if exact_current_snapshot { "exact_current_snapshot" } else { kind },
                 "feature_id":feature.id,
                 "project":feature.project,
                 "checkpoint":feature.checkpoint,
@@ -3493,6 +3622,7 @@ impl Engine {
                 .context("feature missing")?;
             if current.status != "failed"
                 || (!legacy_tool_quarantine_recovery(current)
+                    && !exact_current_snapshot_checkpoint_recovery(current)
                     && !automatic_effects_quarantine_recovery(current))
                 || current.auto_repair_epoch != feature.auto_repair_epoch
                 || current.tool_workspace_revision != feature.tool_workspace_revision
@@ -3516,7 +3646,11 @@ impl Engine {
             // immutable tool ledger and complete manifest binding.
             current.edits = Some(reconciled);
             current.status = "paused".into();
-            current.checkpoint = "applied".into();
+            current.checkpoint = if exact_current_snapshot_checkpoint_recovery(&feature) {
+                "exact_snapshot_revalidating".into()
+            } else {
+                "applied".into()
+            };
             current.review_pending = None;
             current.review_status = "pending".into();
             current.review_summary = "The owner explicitly adopted the displayed exact current project-file recovery binding as a fresh candidate. Historical quarantine evidence remains retained; immutable validation and independent review, including visual review of images, are required.".into();
@@ -3526,6 +3660,12 @@ impl Engine {
                     current,
                     "held",
                     "The owner explicitly adopted the displayed exact post-application snapshot for fresh immutable validation and independent review",
+                )?;
+            } else if exact_current_snapshot_checkpoint_recovery(&feature) {
+                set_auto_repair_lifecycle(
+                    current,
+                    "inactive",
+                    "The owner adopted the exact current snapshot for validation and independent review only; no repair model or file write is authorized",
                 )?;
             }
             Ok(())
@@ -3647,6 +3787,7 @@ impl Engine {
         }
         if feature.as_ref().is_some_and(|feature| {
             legacy_tool_quarantine_recovery(feature)
+                || exact_current_snapshot_checkpoint_recovery(feature)
                 || automatic_effects_quarantine_recovery(feature)
         }) {
             let recovery_sha256 = expected_asset_recovery_sha256
@@ -3748,9 +3889,16 @@ impl Engine {
         } else {
             None
         };
+        let validation_only_snapshot_recovery = feature
+            .as_ref()
+            .is_some_and(|feature| feature.checkpoint == "exact_snapshot_revalidating");
         let inference_lease = feature
             .as_ref()
-            .filter(|_| !resumes_at_escalation && !revalidates_at_limit)
+            .filter(|_| {
+                !resumes_at_escalation
+                    && !revalidates_at_limit
+                    && !validation_only_snapshot_recovery
+            })
             .map(|_| {
                 self.inference_gate
                     .try_acquire()
@@ -7346,9 +7494,11 @@ impl Engine {
                 })?;
                 break;
             }
-            let validation_only_limit_recovery =
-                feature.checkpoint == "auto_repair_limit_revalidating";
-            let active_inference_lease = if validation_only_limit_recovery {
+            let validation_only_recovery = matches!(
+                feature.checkpoint.as_str(),
+                "auto_repair_limit_revalidating" | "exact_snapshot_revalidating"
+            );
+            let active_inference_lease = if validation_only_recovery {
                 None
             } else {
                 Some(match inference_lease.take() {
@@ -11285,6 +11435,7 @@ fn review_checkpoint_requires_revalidation(checkpoint: &str) -> bool {
     checkpoint.starts_with("review_")
         || checkpoint == "review_binding_changed"
         || checkpoint == "auto_repair_limit_revalidating"
+        || checkpoint == "exact_snapshot_revalidating"
 }
 
 fn checkpoint_has_applied_edits(checkpoint: &str) -> bool {
@@ -11868,6 +12019,29 @@ fn recover_supported_asset_mutations(
     )
 }
 
+fn recover_exact_current_snapshot_mutations(
+    mutations: &[ToolProjectMutation],
+    feature_id: &str,
+    project: &Path,
+    prior_edits: &[Edit],
+    current_manifest_paths: &[String],
+    additional_paths: &[String],
+    unassigned_target: Option<&str>,
+) -> Result<Vec<Edit>> {
+    recover_current_snapshot_mutations_with_limits(
+        mutations,
+        feature_id,
+        project,
+        prior_edits,
+        current_manifest_paths,
+        additional_paths,
+        unassigned_target,
+        MAX_REVIEW_TEXT_TOTAL_BYTES,
+        MAX_REVIEW_ASSET_TOTAL_BYTES,
+        false,
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn recover_supported_asset_mutations_with_limits(
     mutations: &[ToolProjectMutation],
@@ -11879,6 +12053,33 @@ fn recover_supported_asset_mutations_with_limits(
     unassigned_target: Option<&str>,
     text_limit: usize,
     asset_limit: usize,
+) -> Result<Vec<Edit>> {
+    recover_current_snapshot_mutations_with_limits(
+        mutations,
+        feature_id,
+        project,
+        prior_edits,
+        current_manifest_paths,
+        additional_paths,
+        unassigned_target,
+        text_limit,
+        asset_limit,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn recover_current_snapshot_mutations_with_limits(
+    mutations: &[ToolProjectMutation],
+    feature_id: &str,
+    project: &Path,
+    prior_edits: &[Edit],
+    current_manifest_paths: &[String],
+    additional_paths: &[String],
+    unassigned_target: Option<&str>,
+    text_limit: usize,
+    asset_limit: usize,
+    require_supported_asset: bool,
 ) -> Result<Vec<Edit>> {
     if text_limit > MAX_REVIEW_TEXT_TOTAL_BYTES || asset_limit > MAX_REVIEW_ASSET_TOTAL_BYTES {
         bail!("Tool quarantine recovery limits exceed the fixed review bounds");
@@ -12073,7 +12274,7 @@ fn recover_supported_asset_mutations_with_limits(
             }
         }
     }
-    if !recovered.iter().any(|edit| edit.asset.is_some()) {
+    if require_supported_asset && !recovered.iter().any(|edit| edit.asset.is_some()) {
         bail!("Tool quarantine contains no supported image asset to reconcile");
     }
     merge_review_edits(&reviewable_prior, &recovered)
@@ -19192,6 +19393,375 @@ mod tests {
             apply_request_id: proposal.apply_request_id.clone(),
         });
         feature
+    }
+
+    fn exact_current_snapshot_recovery_fixture() -> Feature {
+        let mut feature = feature_with_status("failed");
+        feature.checkpoint = "tool_workspace_changed_requires_proposal".into();
+        feature.repair_attempts = REPAIR_LIMIT;
+        feature.repair_history = (1..=REPAIR_LIMIT)
+            .map(|attempt| RepairAttemptEvidence {
+                attempt,
+                prior_checkpoint: format!("repair_{}_applied", attempt.saturating_sub(1)),
+                prior_message: "retained repair evidence".into(),
+                prior_edits: Vec::new(),
+            })
+            .collect();
+        feature.escalation_count = 34;
+        feature.auto_ai_repair_limit = Some(100);
+        feature.auto_repair_epoch = 19;
+        feature.tool_workspace_revision = 1;
+        feature.last_failure_kind = "operational".into();
+        feature.review_status = "unavailable".into();
+        feature.review_attempts = 17;
+        feature.review_summary =
+            "Project tools changed the workspace; immutable validation and Codex review must run again."
+                .into();
+        set_auto_repair_lifecycle(
+            &mut feature,
+            "quarantined",
+            "Automatic repair stopped after project files were applied",
+        )
+        .unwrap();
+        feature.escalation_proposal = Some(RepairEscalationProposal {
+            proposal_id: Uuid::new_v4().to_string(),
+            attempt: feature.escalation_count,
+            feature_id: feature.id.clone(),
+            feature_checkpoint: feature.checkpoint.clone(),
+            binding_revision: 42,
+            model_target: feature.model_target.clone(),
+            model: "fixture".into(),
+            chat_request_id: Uuid::new_v4().to_string(),
+            chat_model_target: "windows".into(),
+            chat_model: "fixture".into(),
+            diagnosis: "No further correction is needed".into(),
+            diagnosis_sha256: hash(b"No further correction is needed"),
+            status: "preparing".into(),
+            summary: "The selected AI did not provide a bounded file proposal".into(),
+            error: Some("Expected 1 to 40 proposed files".into()),
+            source: manual_escalation_source(),
+            limit_snapshot: feature.auto_ai_repair_limit,
+            ..Default::default()
+        });
+        terminalize_unapplied_escalation(
+            &mut feature,
+            "unavailable",
+            "authorization_not_run",
+            "unavailable",
+            "Proposal preparation did not produce an authorized application; independent review was not run",
+        )
+        .unwrap();
+        feature
+    }
+
+    #[test]
+    fn exact_current_snapshot_checkpoint_requires_terminal_effect_free_manual_proposal() {
+        let feature = exact_current_snapshot_recovery_fixture();
+        assert!(exact_current_snapshot_checkpoint_recovery(&feature));
+
+        let mut pending = feature.clone();
+        pending.escalation_pending = true;
+        assert!(!exact_current_snapshot_checkpoint_recovery(&pending));
+
+        let mut incomplete_history = feature.clone();
+        incomplete_history.repair_history.pop();
+        assert!(!exact_current_snapshot_checkpoint_recovery(
+            &incomplete_history
+        ));
+
+        let mut wrong_source = feature.clone();
+        wrong_source.escalation_proposal.as_mut().unwrap().source = "automatic_failure".into();
+        assert!(!exact_current_snapshot_checkpoint_recovery(&wrong_source));
+
+        let mut effect_possible = feature.clone();
+        effect_possible
+            .escalation_proposal
+            .as_mut()
+            .unwrap()
+            .apply_request_id = Some(Uuid::new_v4().to_string());
+        assert!(!exact_current_snapshot_checkpoint_recovery(
+            &effect_possible
+        ));
+
+        let mut missing_receipt = feature.clone();
+        missing_receipt.escalation_history.pop();
+        assert!(!exact_current_snapshot_checkpoint_recovery(
+            &missing_receipt
+        ));
+
+        let mut duplicate_receipt = feature.clone();
+        duplicate_receipt
+            .escalation_history
+            .push(duplicate_receipt.escalation_history[0].clone());
+        assert!(!exact_current_snapshot_checkpoint_recovery(
+            &duplicate_receipt
+        ));
+
+        let mut unterminated_review = feature.clone();
+        unterminated_review
+            .escalation_proposal
+            .as_mut()
+            .unwrap()
+            .review_slot_terminal = false;
+        assert!(!exact_current_snapshot_checkpoint_recovery(
+            &unterminated_review
+        ));
+
+        let mut ready = feature;
+        ready.escalation_proposal.as_mut().unwrap().status = "ready".into();
+        assert!(!exact_current_snapshot_checkpoint_recovery(&ready));
+    }
+
+    #[test]
+    fn exact_current_snapshot_accepts_discarded_unavailable_manual_proposal_lineage() {
+        let (_directory, engine) = control_test_engine();
+        let feature = exact_current_snapshot_recovery_fixture();
+        let proposal_id = feature
+            .escalation_proposal
+            .as_ref()
+            .unwrap()
+            .proposal_id
+            .clone();
+        engine
+            .change(|state| {
+                state.queue[0] = feature.clone();
+                Ok(())
+            })
+            .unwrap();
+        let revision = engine.snapshot().unwrap()["revision"].as_u64().unwrap();
+        engine
+            .cancel_escalation(RepairEscalationMutation {
+                action: "cancel".into(),
+                feature_id: feature.id.clone(),
+                expected_revision: revision,
+                expected_checkpoint: Some(feature.checkpoint.clone()),
+                model_target: None,
+                chat_id: None,
+                chat_request_id: None,
+                diagnosis_sha256: None,
+                proposal_id: Some(proposal_id),
+            })
+            .unwrap();
+        let database = engine.database.lock().unwrap();
+        let discarded = &database.state.queue[0];
+        assert_eq!(
+            discarded.escalation_proposal.as_ref().unwrap().status,
+            "cancelled"
+        );
+        assert!(discarded
+            .escalation_history
+            .iter()
+            .any(|evidence| { evidence.outcome == "unavailable" }));
+        assert!(exact_current_snapshot_checkpoint_recovery(discarded));
+    }
+
+    #[test]
+    fn exact_current_snapshot_checkpoint_rejects_stale_digest_and_preserves_history() {
+        let (directory, engine) = control_test_engine();
+        let project = engine.root.join("example");
+        fs::write(project.join("result.txt"), b"current result\n").unwrap();
+        let mut feature = exact_current_snapshot_recovery_fixture();
+        feature.edits = Some(vec![Edit {
+            path: "result.txt".into(),
+            content: "current result\n".into(),
+            before: Some(hash(b"original result\n")),
+            asset: None,
+        }]);
+        let proposal_before = serde_json::to_vec(&feature.escalation_proposal).unwrap();
+        let repairs_before = serde_json::to_vec(&feature.repair_history).unwrap();
+        engine
+            .change(|state| {
+                state.queue[0] = feature.clone();
+                Ok(())
+            })
+            .unwrap();
+        let mutation = ToolProjectMutation {
+            revision: 1,
+            request_id: Uuid::new_v4().to_string(),
+            feature_id: Some(feature.id.clone()),
+            edits: vec![developer_tools::ToolMutationEdit {
+                path: "result.txt".into(),
+                before_sha256: Some(hash(b"original result\n")),
+                after: Some("stale ledger bytes\n".into()),
+                asset: None,
+            }],
+            unreviewable_paths: Vec::new(),
+        };
+        let connection =
+            Connection::open(directory.path().join("data").join("developer.sqlite3")).unwrap();
+        connection
+            .execute(
+                "INSERT INTO developer_tool_workspace(project,revision) VALUES('example',1)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO developer_tool_mutation(project,revision,request_id,feature_id,evidence)
+                 VALUES('example',1,?1,?2,?3)",
+                (
+                    &mutation.request_id,
+                    &feature.id,
+                    serde_json::to_string(&mutation).unwrap(),
+                ),
+            )
+            .unwrap();
+
+        let first = engine.snapshot().unwrap();
+        let stale = first["queue"][0]["asset_recovery_sha256"]
+            .as_str()
+            .expect("eligible exact-current checkpoint must expose a digest")
+            .to_owned();
+        fs::write(project.join("result.txt"), b"owner adjusted result\n").unwrap();
+        assert!(engine
+            .reconcile_supported_asset_quarantine(&feature.id, &stale)
+            .unwrap_err()
+            .to_string()
+            .contains("binding changed"));
+        let fresh = engine.snapshot().unwrap()["queue"][0]["asset_recovery_sha256"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_ne!(fresh, stale);
+        engine
+            .reconcile_supported_asset_quarantine(&feature.id, &fresh)
+            .unwrap();
+
+        let database = engine.database.lock().unwrap();
+        let recovered = &database.state.queue[0];
+        assert_eq!(recovered.status, "paused");
+        assert_eq!(recovered.checkpoint, "exact_snapshot_revalidating");
+        assert_eq!(recovered.auto_repair_lifecycle, "inactive");
+        assert!(recovered
+            .auto_repair_reason
+            .contains("validation and independent review only"));
+        assert_eq!(recovered.repair_attempts, REPAIR_LIMIT);
+        assert_eq!(recovered.escalation_count, 34);
+        assert_eq!(recovered.review_attempts, 17);
+        assert_eq!(
+            serde_json::to_vec(&recovered.repair_history).unwrap(),
+            repairs_before
+        );
+        assert_eq!(
+            serde_json::to_vec(&recovered.escalation_proposal).unwrap(),
+            proposal_before
+        );
+        assert_eq!(
+            recovered.edits.as_ref().unwrap()[0].content,
+            "owner adjusted result\n"
+        );
+    }
+
+    #[test]
+    fn exact_current_snapshot_allows_text_only_without_weakening_legacy_asset_recovery() {
+        let project = tempfile::tempdir().unwrap();
+        fs::write(project.path().join("result.txt"), b"current result\n").unwrap();
+        let project = fs::canonicalize(project.path()).unwrap();
+        let mutation = ToolProjectMutation {
+            revision: 1,
+            request_id: Uuid::new_v4().to_string(),
+            feature_id: Some("feature-1".into()),
+            edits: vec![developer_tools::ToolMutationEdit {
+                path: "result.txt".into(),
+                before_sha256: Some(hash(b"original result\n")),
+                after: Some("stale ledger bytes\n".into()),
+                asset: None,
+            }],
+            unreviewable_paths: Vec::new(),
+        };
+        let paths = vec!["result.txt".into()];
+        let legacy_error = recover_supported_asset_mutations(
+            std::slice::from_ref(&mutation),
+            "feature-1",
+            &project,
+            &[],
+            &paths,
+            &paths,
+            None,
+        )
+        .err()
+        .expect("legacy asset recovery must retain its image requirement");
+        assert!(legacy_error
+            .to_string()
+            .contains("no supported image asset"));
+
+        let exact = recover_exact_current_snapshot_mutations(
+            &[mutation],
+            "feature-1",
+            &project,
+            &[],
+            &paths,
+            &paths,
+            None,
+        )
+        .unwrap();
+        assert_eq!(exact.len(), 1);
+        assert_eq!(exact[0].path, "result.txt");
+        assert_eq!(exact[0].content, "current result\n");
+        assert!(exact[0].asset.is_none());
+    }
+
+    #[tokio::test]
+    async fn exact_snapshot_validation_only_stop_and_emergency_never_rearm_writes() {
+        for action in ["stop", "emergency"] {
+            let (_directory, engine) = control_test_engine();
+            let mut feature = exact_current_snapshot_recovery_fixture();
+            feature.status = "running".into();
+            feature.checkpoint = "exact_snapshot_revalidating".into();
+            set_auto_repair_lifecycle(
+                &mut feature,
+                "inactive",
+                "Exact snapshot validation and review only",
+            )
+            .unwrap();
+            let proposal_before = serde_json::to_vec(&feature.escalation_proposal).unwrap();
+            engine
+                .change(|state| {
+                    state.auto_ai_repair_enabled = true;
+                    state.queue[0] = feature;
+                    Ok(())
+                })
+                .unwrap();
+            engine.running.store(true, Ordering::SeqCst);
+            let response = control(
+                State(engine.clone()),
+                authorized_headers(),
+                Json(json!({"action":action})),
+            )
+            .await;
+            engine.running.store(false, Ordering::SeqCst);
+            assert_eq!(response.0, StatusCode::OK, "{action}");
+            engine
+                .change(|state| {
+                    let current = &mut state.queue[0];
+                    pause_after_post_run_cancellation(current);
+                    Ok(())
+                })
+                .unwrap();
+            let database = engine.database.lock().unwrap();
+            let retained = &database.state.queue[0];
+            assert_eq!(retained.status, "paused", "{action}");
+            assert_eq!(
+                retained.checkpoint, "exact_snapshot_revalidating",
+                "{action}"
+            );
+            assert_eq!(retained.auto_repair_lifecycle, "inactive", "{action}");
+            assert_ne!(retained.checkpoint, "auto_repair_effects_quarantined");
+            assert!(checkpoint_reuses_retained_edits(&retained.checkpoint));
+            assert_eq!(
+                serde_json::to_vec(&retained.escalation_proposal).unwrap(),
+                proposal_before,
+                "{action}"
+            );
+            assert_eq!(database.state.emergency_paused, action == "emergency");
+            assert!(!engine.repair_loop_authorized.load(Ordering::SeqCst));
+            let restarted: Feature =
+                serde_json::from_value(serde_json::to_value(retained).unwrap()).unwrap();
+            assert_eq!(restarted.auto_repair_lifecycle, "inactive");
+            assert!(review_checkpoint_requires_revalidation(
+                &restarted.checkpoint
+            ));
+        }
     }
 
     fn automatic_effects_recovery_fixture(engine: &Arc<Engine>) -> Feature {
