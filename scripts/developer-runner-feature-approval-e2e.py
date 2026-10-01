@@ -5,10 +5,12 @@ from developer_planning_fixture import enqueue_with_plan
 from developer_review_fixture import reviewer_arguments
 
 import argparse
+import errno
 import http.server
 import json
 from pathlib import Path
 import shlex
+import shutil
 import socket
 import subprocess
 import sys
@@ -18,6 +20,98 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+
+
+FIXTURE_CLEANUP_TIMEOUT_SECONDS = 2.0
+FIXTURE_CLEANUP_RETRY_SECONDS = 0.05
+
+
+def cleanup_fixture_root(root, *, remove_tree=shutil.rmtree, monotonic=time.monotonic,
+                         sleep=time.sleep, timeout=FIXTURE_CLEANUP_TIMEOUT_SECONDS):
+    """Remove one exact fixture root, retrying only Windows directory-not-empty races."""
+    deadline = monotonic() + timeout
+    while True:
+        try:
+            remove_tree(root)
+            return
+        except OSError as error:
+            retryable = error.errno == errno.ENOTEMPTY or getattr(error, "winerror", None) == 145
+            if not retryable or monotonic() >= deadline:
+                raise
+            sleep(FIXTURE_CLEANUP_RETRY_SECONDS)
+
+
+class FixtureTemporaryDirectory:
+    def __init__(self, prefix):
+        self.root = Path(tempfile.mkdtemp(prefix=prefix)).resolve()
+
+    def __enter__(self):
+        return str(self.root)
+
+    def __exit__(self, _error_type, _error, _traceback):
+        cleanup_root = self.root
+        if sys.platform == "win32":
+            cleanup_root = Path("\\\\?\\" + str(self.root))
+        cleanup_fixture_root(cleanup_root)
+
+
+def cleanup_retry_contract_self_test():
+    clock = [0.0]
+    sleeps = []
+
+    def monotonic():
+        return clock[0]
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        clock[0] += seconds
+
+    attempts = []
+
+    def transient_then_success(root):
+        attempts.append(root)
+        if len(attempts) == 1:
+            raise OSError(errno.ENOTEMPTY, "fixture directory is not empty")
+        if len(attempts) == 2:
+            error = OSError("fixture directory is not empty")
+            error.winerror = 145
+            raise error
+
+    exact_root = Path("/fixture/exact-root")
+    cleanup_fixture_root(exact_root, remove_tree=transient_then_success,
+                         monotonic=monotonic, sleep=sleep, timeout=0.2)
+    assert attempts == [exact_root, exact_root, exact_root]
+    assert sleeps == [FIXTURE_CLEANUP_RETRY_SECONDS, FIXTURE_CLEANUP_RETRY_SECONDS]
+
+    unexpected_attempts = []
+
+    def unexpected(root):
+        unexpected_attempts.append(root)
+        raise OSError(errno.EACCES, "fixture cleanup denied")
+
+    try:
+        cleanup_fixture_root(exact_root, remove_tree=unexpected,
+                             monotonic=monotonic, sleep=sleep, timeout=0.2)
+        raise AssertionError("unexpected fixture cleanup error was retried")
+    except OSError as error:
+        assert error.errno == errno.EACCES
+    assert unexpected_attempts == [exact_root]
+
+    bounded_attempts = []
+    bounded_start = monotonic()
+
+    def still_not_empty(root):
+        bounded_attempts.append(root)
+        raise OSError(errno.ENOTEMPTY, "fixture directory remains not empty")
+
+    try:
+        cleanup_fixture_root(exact_root, remove_tree=still_not_empty,
+                             monotonic=monotonic, sleep=sleep, timeout=0.1)
+        raise AssertionError("bounded fixture cleanup failure was suppressed")
+    except OSError as error:
+        assert error.errno == errno.ENOTEMPTY
+    assert monotonic() - bounded_start >= 0.1
+    assert 2 <= len(bounded_attempts) <= 4
 
 
 def free_port():
@@ -40,6 +134,7 @@ def main():
     binary = str(Path(args.binary).resolve())
     opencode = str(Path(args.opencode_executable).resolve())
     assert Path(opencode).is_file(), opencode
+    cleanup_retry_contract_self_test()
 
     fixture = {"marker": "", "calls": 0, "requests": []}
 
@@ -119,7 +214,7 @@ def main():
     model.daemon_threads = True
     threading.Thread(target=model.serve_forever, daemon=True).start()
 
-    with tempfile.TemporaryDirectory(prefix="assemblywright-feature-approval-e2e-") as temp:
+    with FixtureTemporaryDirectory(prefix="assemblywright-feature-approval-e2e-") as temp:
         root = Path(temp)
         data = root / "state"
         projects = root / "projects"
@@ -263,10 +358,6 @@ def main():
             assert not denied_marker.exists()
             rejected("feature/tool-approval", denied_request)
 
-            print(json.dumps({"feature_tool_approval_native_e2e": "passed",
-                "projection_and_exact_binding": True, "approve_executes_once": True,
-                "deny_rejects_exact_action": True, "replay_rejected": True,
-                "stop_wins": True, "emergency_pause_rejects": True}, sort_keys=True))
         finally:
             if process.poll() is None:
                 try:
@@ -278,6 +369,11 @@ def main():
             output.close()
             model.shutdown()
             model.server_close()
+
+    print(json.dumps({"feature_tool_approval_native_e2e": "passed",
+        "projection_and_exact_binding": True, "approve_executes_once": True,
+        "deny_rejects_exact_action": True, "replay_rejected": True,
+        "stop_wins": True, "emergency_pause_rejects": True}, sort_keys=True))
 
 
 if __name__ == "__main__":

@@ -434,6 +434,22 @@ the final Windows correction found no P0-P3 issues. Hosted checks for the
 repair PR are still required before merge. Installation verification and live
 FFT website acceptance remain separate open boundaries.
 
+Two supplemental Windows feature-approval runs completed every behavioral
+assertion, then failed during fixture cleanup. An extended-path probe identified
+the retained npm-cache leaf: its normal spelling was 277 characters and reported
+absent, while the exact `\\?\` spelling existed and exposed the 27,509,693-byte
+file. No matching runner or provider process remained. This is retained as
+fixture failure rather than product proof. The fixture now waits for runner
+shutdown and model-server shutdown, then removes only its exact temporary root,
+using the extended-length spelling on Windows. Cleanup retains a short bounded
+retry only for `ENOTEMPTY` or Windows error 145. Other errors fail immediately,
+an exhausted retry raises the final error, and the pass receipt is emitted only
+after exact-root removal succeeds. Its focused contract check covers transient
+success, immediate unexpected-error rejection, and bounded persistent failure.
+A fresh Windows run with the corrected fixture was required before this
+correction could contribute native approval evidence; its result is recorded
+below.
+
 ## Exact current-snapshot checkpoint recovery
 
 Independent high-risk review approved the standalone recovery extension with no
@@ -482,3 +498,18 @@ meaningful integration regressions. These are reviewer findings, not a new
 independently researched factual audit. The next phase requires a fresh repair
 proposal followed by validation and independent review. Successful checkpoint
 recovery does not justify bypassing that rejection or publishing the website.
+
+The port onto current main passed six focused Rust cases and 37 focused Swift
+cases. Its authoritative Windows run passed 277 Developer tests (plus the
+separately invoked platform helper) and the complete default native workflow
+wrapper in 351.10 seconds. The default wrapper skips feature-tool approval when
+no pinned runtime is supplied; that boundary was then exercised separately with
+OpenCode 1.18.23. After the fixture cleanup correction, both Windows and macOS
+approval fixtures exited 0 and emitted their pass receipts after cleanup. They
+covered exact projection/binding, one-time approval, denial, replay rejection,
+Stop, and Emergency Pause. Fixture SHA-256:
+`e9729201046da2d76e205c3965827bb6f8b6403b9ba5c852aa7d4686d8e1bdc7`.
+The matching Windows executable SHA-256 is
+`e5fcfab8c532ed7206c13d291c7c68c584c3640b86a919d8f242bd23f002deb3`.
+The earlier failed fixture runs remain failed evidence; their pass assertions do
+not substitute for the corrected runs' successful teardown and exit codes.
