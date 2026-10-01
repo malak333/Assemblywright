@@ -108,3 +108,32 @@ directories, SHA-256
 No candidate was approved or applied, and the live feature was not independently
 reviewed or released from quarantine. Publishing this repair-flow fix does not
 authorize applying the FFT candidate or clearing its quarantine.
+
+## Final candidate installation
+
+The publication candidate was built as optimized Windows and Mac release products
+from the isolated PR branch. Both builds passed. The supervised Developer runner
+was idle before shutdown; its existing configuration and durable state were
+retained. After the connection supervisor's initial ready wait timed out, it
+reconnected and authenticated successfully. Status reported `running: false`,
+`emergency_paused: false`, and revision 678. The live FFT feature remained failed
+at `tool_workspace_changed_requires_proposal`; its saved latest conversation and
+request were returned with the same no-file-changes proposal outcome.
+
+The installed Windows runner SHA-256 is
+`33c0f32ef2bb0fcbf4a998c0f1d6685b80ef56dad6b278c876ab813d95501928`.
+All 145 Rust build-input files in its runtime source were verified against the
+publication candidate; the sorted path/content-hash inventory SHA-256 is
+`dda2e0bd4092ceb3a39e2cd199696ae5577a253bb9b0b957562378710b4d3fff`.
+The Mac app was backed up, updated, ad-hoc signed, verified with
+`codesign --verify --deep --strict`, and relaunched. Its executable SHA-256 is
+`70077e2d6997b3e1cfdbff6fb285e4ca73bf2ca4e6c181d5ee858b344cc25b4a`.
+
+This docs-only installation closeout leaves both binaries unchanged. The
+supervised Developer process owns this app workflow; no protected master-service
+runtime input or protocol/schema changed, so no protected service restart or
+migration was applicable. Before declaring publication complete, the exact final
+PR head must pass all hosted gates and be merged normally, and the authoritative
+Windows Git checkout must fast-forward to published main while preserving its
+untracked evidence. Distribution signing, notarization, and native visual QA
+remain separate unexecuted boundaries.
