@@ -228,13 +228,41 @@ struct DeveloperRepairProposal: Decodable {
   func canApprove(feature: DeveloperRunnerFeature, runner: DeveloperRunnerSnapshot) -> Bool {
     !hasTypedCandidateFields && (source == nil || source == "manual_chat")
       && status == "ready" && proposalId?.isEmpty == false && featureId == feature.id
-      && diagnosis?.isEmpty == false && chatRequestId?.isEmpty == false && diagnosisSha256?.count == 64
+      && diagnosis?.isEmpty == false && chatRequestId?.isEmpty == false
+      && validRepairCandidateDigest(diagnosisSha256)
+      && chatId?.isEmpty == false
       && ["mac", "windows"].contains(chatModelTarget ?? "") && ["mac", "windows"].contains(modelTarget ?? "")
       && binding?.featureId == feature.id && binding?.checkpoint == feature.checkpoint
       && binding?.revision == runner.revision && feature.status == "failed"
       && runner.nextFeature?.id == feature.id && !runner.running && !runner.planningRunning
       && runner.chatRunning != true && !runner.emergencyPaused && runner.escalationRunning != true
       && files?.isEmpty == false
+  }
+}
+
+struct DeveloperRepairDiagnosisBinding: Equatable {
+  let requestId: String
+  let digest: String
+  let chatId: String
+
+  init?(diagnosis: DeveloperChatMessage?, proposal: DeveloperRepairProposal?) {
+    let requestId: String?
+    let digest: String?
+    let chatId: String?
+    if let diagnosis {
+      requestId = diagnosis.requestId
+      digest = diagnosis.contentSha256
+      chatId = diagnosis.chatId
+    } else {
+      requestId = proposal?.chatRequestId
+      digest = proposal?.diagnosisSha256
+      chatId = proposal?.chatId
+    }
+    guard let requestId, !requestId.isEmpty, let digest,
+      validRepairCandidateDigest(digest), let chatId, !chatId.isEmpty else { return nil }
+    self.requestId = requestId
+    self.digest = digest
+    self.chatId = chatId
   }
 }
 
@@ -341,9 +369,9 @@ struct DeveloperRepairEscalationView: View {
     runner.snapshot?.queue.first { $0.id == featureId }
   }
 
-  private var diagnosisRequestId: String? { diagnosis?.requestId ?? model.proposal?.chatRequestId }
-  private var diagnosisDigest: String? { diagnosis?.contentSha256 ?? model.proposal?.diagnosisSha256 }
-  private var diagnosisChatId: String? { diagnosis?.chatId ?? model.proposal?.chatId }
+  private var diagnosisBinding: DeveloperRepairDiagnosisBinding? {
+    DeveloperRepairDiagnosisBinding(diagnosis: diagnosis, proposal: model.proposal)
+  }
 
   private func modelLabel(for id: String?) -> String {
     guard let id else { return "Unavailable model computer" }
@@ -359,7 +387,7 @@ struct DeveloperRepairEscalationView: View {
 
   private var canPrepare: Bool {
     guard let state = runner.snapshot, let feature, model.observed,
-      diagnosisRequestId != nil, diagnosisDigest != nil,
+      diagnosisBinding != nil,
       !["preparing", "ready"].contains(model.proposal?.status ?? "none"), !model.sending else { return false }
     return state.canEscalate(feature) && state.canSelectModel(selectedModel)
   }
@@ -539,13 +567,12 @@ struct DeveloperRepairEscalationView: View {
           }
           if model.proposal == nil || model.proposal?.showsPrepareAction == true {
             Button(model.proposal?.prepareActionTitle ?? "Prepare repair") {
-              guard let feature, let state = runner.snapshot, let id = diagnosisRequestId,
-                let digest = diagnosisDigest else { return }
+              guard let feature, let state = runner.snapshot, let binding = diagnosisBinding else { return }
               Task {
-                var values: [String: Any] = ["action": "prepare", "expected_checkpoint": feature.checkpoint,
+                let values: [String: Any] = ["action": "prepare", "expected_checkpoint": feature.checkpoint,
                   "expected_revision": state.revision, "model_target": selectedModel,
-                  "chat_request_id": id, "diagnosis_sha256": digest]
-                if let chatId = diagnosisChatId { values["chat_id"] = chatId }
+                  "chat_id": binding.chatId, "chat_request_id": binding.requestId,
+                  "diagnosis_sha256": binding.digest]
                 await model.send(featureId: featureId, values: values)
               }
             }.disabled(!canPrepare).accessibilityIdentifier("developer-escalation-prepare")

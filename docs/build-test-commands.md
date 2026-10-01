@@ -40,6 +40,25 @@ Rendered UI, signing, production deployment and hosted gates are separate checks
 `developer_workflow_e2e.rs` includes the history process test in both Mac and
 Windows Cargo gates; the CI contract verifies that registration.
 
+## Repair proposal conversation identity
+
+The proposal response must preserve its saved conversation ID. These focused
+checks cover discard and fresh preparation across conversations, malformed
+diagnosis identities, stale approval rejection, and unchanged project bytes:
+
+```sh
+cargo test -p assemblywright-master --bin assemblywright-developer escalation_snapshot_projects_exact_manual_conversation_binding -- --nocapture
+swift test --disable-sandbox --package-path apps/mac --filter DeveloperRepairEscalationTests
+cargo build -p assemblywright-master --bin assemblywright-developer --example developer_review_fixture
+env ASSEMBLYWRIGHT_DEVELOPER_REVIEW_FIXTURE=target/debug/examples/developer_review_fixture python3 -B scripts/developer-runner-escalation-e2e.py --binary target/debug/assemblywright-developer
+```
+
+The canonical `developer_workflow_e2e` test invokes the escalation process suite
+on Mac and Windows CI. These disposable native fixtures do not approve or change
+an owner's project. See
+[`developer-repair-conversation-binding-validation.md`](developer-repair-conversation-binding-validation.md)
+for scenario coverage and installed proof boundaries.
+
 ## Developer GitHub publication and setup
 
 The restored Developer publication extension has native Rust, Swift, HTTP, process,

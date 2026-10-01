@@ -30,6 +30,10 @@ a likely test defect. It does not change production authority.
   protected test or validation input it would change. Only **Approve and apply**
   authorizes those displayed bytes. Drift, cancellation, stale state, or ambiguous
   recovery requires a fresh proposal.
+- Repair responses retain the diagnosis conversation ID alongside its request
+  ID and digest. Discarding and preparing again uses that complete identity;
+  selecting a newer diagnosis replaces all three fields together. A retry must
+  never combine a selected reply with a previous proposal's conversation.
 - Each escalation permits one application attempt and preserves all ordinary
   repair, checkpoint, validation, and review history. It does not reset the
   three-attempt ordinary repair budget or create a continuing test-edit exemption.
@@ -48,6 +52,14 @@ chat, proposal generation, and feature execution share one inference gate so the
 model work is serialized.
 
 ## Evidence boundary
+
+Conversation retry coverage includes a nonlegacy diagnosis conversation, a
+discarded proposal whose response retains that identity, a newer conversation,
+rejection of the wrong explicit conversation, and successful preparation with the
+retained exact identity. Swift also rejects partial diagnosis identities rather
+than filling their missing fields from an older proposal. A model returning no
+file changes still makes the proposal unavailable; a successful identity retry
+does not imply that project validation or independent candidate review passed.
 
 Focused Rust and Swift tests cover provider selection and attribution, exact
 diagnosis/proposal bindings, stale approval rejection, protected-test approval,
