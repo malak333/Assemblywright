@@ -39,6 +39,7 @@ struct DeveloperRepairEscalationTests {
   private func proposal(_ changes: [String: Any] = [:]) throws -> DeveloperRepairProposal {
     var value: [String: Any] = ["status": "ready", "feature_id": "feature", "proposal_id": "proposal",
       "model_target": "mac", "chat_model_target": "windows", "chat_request_id": "diagnosis-request",
+      "chat_id": "diagnosis-conversation",
       "diagnosis_sha256": String(repeating: "d", count: 64), "diagnosis": "The test checks a stale widget class.",
       "summary": "Correct the widget test while preserving behavior coverage.",
       "binding": ["feature_id": "feature", "checkpoint": "repair_3_applied", "revision": 12],
@@ -85,6 +86,15 @@ struct DeveloperRepairEscalationTests {
       #expect(!(try proposal(["status": status])).canApprove(feature: feature, runner: state))
     }
     #expect(!(try proposal(["diagnosis": NSNull()])).canApprove(feature: feature, runner: state))
+    #expect(!(try proposal(["chat_request_id": ""])).canApprove(feature: feature, runner: state))
+    #expect(!(try proposal(["chat_id": NSNull()])).canApprove(feature: feature, runner: state))
+    #expect(!(try proposal(["chat_id": ""])).canApprove(feature: feature, runner: state))
+    for invalidDigest in ["", String(repeating: "d", count: 63),
+      String(repeating: "d", count: 65), String(repeating: "g", count: 64),
+      String(repeating: "D", count: 64)] {
+      #expect(!(try proposal(["diagnosis_sha256": invalidDigest]))
+        .canApprove(feature: feature, runner: state))
+    }
     #expect(!(try proposal(["chat_model_target": "cloud"])).canApprove(feature: feature, runner: state))
     #expect(!(try proposal(["files": []])).canApprove(feature: feature, runner: state))
     #expect(!(try proposal(["feature_id": "other"])).canApprove(feature: feature, runner: state))
@@ -425,6 +435,113 @@ struct DeveloperRepairEscalationTests {
     #expect(snapshot.messages[2].contentSha256 == "mac-digest")
     #expect(snapshot.modelTarget == "mac")
   }
+
+  @Test
+  func selectedDiagnosisBindingNeverMixesWithRetainedProposalConversation() throws {
+    var selected = DeveloperChatMessage(role: "assistant", content: "Fresh diagnosis", attachments: nil)
+    selected.requestId = "fresh-request"
+    selected.contentSha256 = String(repeating: "a", count: 64)
+    selected.chatId = "fresh-conversation"
+    let retained = try proposal([
+      "chat_id": "retained-conversation",
+      "chat_request_id": "retained-request",
+      "diagnosis_sha256": String(repeating: "b", count: 64),
+    ])
+
+    let binding = try #require(DeveloperRepairDiagnosisBinding(
+      diagnosis: selected, proposal: retained))
+    #expect(binding.requestId == "fresh-request")
+    #expect(binding.digest == String(repeating: "a", count: 64))
+    #expect(binding.chatId == "fresh-conversation")
+  }
+
+  @Test
+  func incompleteSelectedDiagnosisFailsClosedWithoutProposalFallback() throws {
+    let retained = try proposal([
+      "chat_id": "retained-conversation",
+      "chat_request_id": "retained-request",
+      "diagnosis_sha256": String(repeating: "b", count: 64),
+    ])
+    var missingConversation = DeveloperChatMessage(
+      role: "assistant", content: "Fresh diagnosis", attachments: nil)
+    missingConversation.requestId = "fresh-request"
+    missingConversation.contentSha256 = String(repeating: "a", count: 64)
+    #expect(DeveloperRepairDiagnosisBinding(
+      diagnosis: missingConversation, proposal: retained) == nil)
+
+    var invalidDigest = missingConversation
+    invalidDigest.chatId = "fresh-conversation"
+    invalidDigest.contentSha256 = "not-a-digest"
+    #expect(DeveloperRepairDiagnosisBinding(diagnosis: invalidDigest, proposal: retained) == nil)
+
+    #expect(DeveloperRepairDiagnosisBinding(
+      diagnosis: nil, proposal: try proposal(["chat_id": NSNull()])) == nil)
+    let retainedBinding = try #require(DeveloperRepairDiagnosisBinding(
+      diagnosis: nil, proposal: retained))
+    #expect(retainedBinding.chatId == "retained-conversation")
+  }
+
+  @Test
+  func selectedDiagnosisRequiresEveryNonemptyIdentityField() throws {
+    let retained = try proposal([
+      "chat_id": "retained-conversation",
+      "chat_request_id": "retained-request",
+      "diagnosis_sha256": String(repeating: "b", count: 64),
+    ])
+    var complete = DeveloperChatMessage(
+      role: "assistant", content: "Fresh diagnosis", attachments: nil)
+    complete.requestId = "fresh-request"
+    complete.contentSha256 = String(repeating: "a", count: 64)
+    complete.chatId = "fresh-conversation"
+
+    var missingRequest = complete
+    missingRequest.requestId = nil
+    var missingDigest = complete
+    missingDigest.contentSha256 = nil
+    var missingConversation = complete
+    missingConversation.chatId = nil
+    var emptyRequest = complete
+    emptyRequest.requestId = ""
+    var emptyDigest = complete
+    emptyDigest.contentSha256 = ""
+    var emptyConversation = complete
+    emptyConversation.chatId = ""
+    var uppercaseDigest = complete
+    uppercaseDigest.contentSha256 = String(repeating: "A", count: 64)
+
+    for incomplete in [missingRequest, missingDigest, missingConversation,
+      emptyRequest, emptyDigest, emptyConversation, uppercaseDigest] {
+      #expect(DeveloperRepairDiagnosisBinding(
+        diagnosis: incomplete, proposal: retained) == nil)
+    }
+  }
+
+  @Test
+  func retainedCancelledDiagnosisBindingRequiresCompleteIdentity() throws {
+    let cancelled = try proposal([
+      "status": "cancelled",
+      "chat_id": "retained-conversation",
+      "chat_request_id": "retained-request",
+      "diagnosis_sha256": String(repeating: "c", count: 64),
+    ])
+    let binding = try #require(DeveloperRepairDiagnosisBinding(
+      diagnosis: nil, proposal: cancelled))
+    #expect(binding.requestId == "retained-request")
+    #expect(binding.digest == String(repeating: "c", count: 64))
+    #expect(binding.chatId == "retained-conversation")
+
+    let incomplete: [[String: Any]] = [
+      ["chat_request_id": NSNull()], ["diagnosis_sha256": NSNull()],
+      ["chat_id": NSNull()], ["chat_request_id": ""],
+      ["diagnosis_sha256": ""], ["chat_id": ""],
+      ["diagnosis_sha256": String(repeating: "g", count: 64)],
+    ]
+    for changes in incomplete {
+      let malformed = try proposal(changes.merging(["status": "cancelled"]) { _, new in new })
+      #expect(DeveloperRepairDiagnosisBinding(diagnosis: nil, proposal: malformed) == nil)
+    }
+  }
+
   @Test(.enabled(if: ProcessInfo.processInfo.environment["ASSEMBLYWRIGHT_DEVELOPER_LIVE_REPAIR_ID"] != nil))
   @MainActor
   func installedWindowsProposalDecodesAndIsReviewableWithoutApplying() async throws {

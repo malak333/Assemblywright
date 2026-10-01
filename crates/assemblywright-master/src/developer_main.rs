@@ -4277,6 +4277,7 @@ impl Engine {
             "proposal_id":proposal.proposal_id,
             "model_target":proposal.model_target,
             "model":proposal.model,
+            "chat_id":proposal.chat_id,
             "chat_request_id":proposal.chat_request_id,
             "chat_model_target":proposal.chat_model_target,
             "chat_model":proposal.chat_model,
@@ -19393,6 +19394,24 @@ mod tests {
             apply_request_id: proposal.apply_request_id.clone(),
         });
         feature
+    }
+
+    #[test]
+    fn escalation_snapshot_projects_exact_manual_conversation_binding() {
+        let (_directory, engine) = control_test_engine();
+        let chat_id = "2535cc61-187f-40ca-899c-a56f41dcb2c1";
+        let mut feature = feature_with_escalation("failed");
+        let feature_id = feature.id.clone();
+        let proposal = feature.escalation_proposal.as_mut().unwrap();
+        proposal.status = "cancelled".into();
+        proposal.chat_id = Some(chat_id.into());
+        let request_id = proposal.chat_request_id.clone();
+        engine.database.lock().unwrap().state.queue[0] = feature;
+
+        let snapshot = engine.escalation_snapshot(&feature_id).unwrap();
+        assert_eq!(snapshot["status"], "cancelled");
+        assert_eq!(snapshot["chat_id"], chat_id);
+        assert_eq!(snapshot["chat_request_id"], request_id);
     }
 
     fn exact_current_snapshot_recovery_fixture() -> Feature {

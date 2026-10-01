@@ -3107,3 +3107,17 @@ consistency.
   stale hashes, and enters an automatic-repair-inactive validation-only state.
   Stop, Emergency Pause, restart, and review retry cannot reauthorize model calls
   or file writes. This path does not weaken staged-quarantine receipt checks.
+
+- Manual repair retry needs the complete saved diagnosis identity: conversation
+  ID, request ID, and content digest. Omitting the conversation from the repair
+  response can make a discarded proposal retry resolve to the legacy conversation
+  and fail with "Project chat reply belongs to a different conversation". Preserve
+  the server's conversation checks and replace selected diagnosis fields together.
+- Never copy compiled Cargo artifacts across worktrees as proof. Native test
+  executables may embed another checkout's `CARGO_MANIFEST_DIR` and execute stale
+  fixtures. Keep build targets attributable to the checkout being validated; a
+  rebuilt focused harness is separate from a full canonical gate pass.
+- A diagnosis can report content changes already made by project tools. A later
+  repair model may then return no file changes. That is an unavailable proposal,
+  not an approval or a failed conversation binding; passing tests in a disposable
+  copy still cannot clear the live candidate's independent-review quarantine.

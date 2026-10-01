@@ -134,3 +134,10 @@ Every feature or phase closes as one auditable slice. Before publication:
    `unit-testing-test-generate` coverage, `e2e-testing` coverage and technology
    choice, publication/hosted gates, and deployment or its stated
    non-applicability. A silently omitted verdict is an incomplete closeout.
+
+For every new feature or phase, read the available unit and E2E workflow sources
+before claiming they were followed. Record the tested scenarios, remaining gaps,
+fixture isolation, and the CI command that executes each test. A browser matrix
+is inapplicable to a native boundary; state that decision explicitly. Do not
+report an unmeasured coverage percentage or substitute a focused rerun for a full
+canonical gate pass.

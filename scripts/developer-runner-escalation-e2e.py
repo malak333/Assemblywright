@@ -284,13 +284,23 @@ def main():
                 time.sleep(.04)
             raise AssertionError(f"Timed out waiting for {status}: {last}")
 
-        def diagnose(project):
+        def create_conversation(project):
+            return api("chat/conversations", {"id": str(uuid.uuid4()),
+                "project": project})["chat_id"]
+
+        def diagnose(project, conversation_id=None):
             request_id = str(uuid.uuid4())
-            api("chat", {"project": project, "message": "Why did this feature fail?",
-                "id": request_id, "attachments": [], "model_target": "windows"})
+            body = {"project": project, "message": "Why did this feature fail?",
+                "id": request_id, "attachments": [], "model_target": "windows"}
+            if conversation_id is not None:
+                body["chat_id"] = conversation_id
+            api("chat", body)
             deadline = time.monotonic() + 20
             while time.monotonic() < deadline:
-                state = api("chat?project=" + urllib.parse.quote(project))
+                query = {"project": project}
+                if conversation_id is not None:
+                    query["chat_id"] = conversation_id
+                state = api("chat?" + urllib.parse.urlencode(query))
                 if not state["running"]:
                     assert not state["error"], state
                     reply = state["messages"][-1]
@@ -300,13 +310,16 @@ def main():
                 time.sleep(.04)
             raise AssertionError("Chat diagnosis timed out")
 
-        def prepare_body(feature_id, chat_id, diagnosis_sha, state=None, **changes):
+        def prepare_body(feature_id, chat_id, diagnosis_sha, state=None,
+                         conversation_id=None, **changes):
             state = state or api()
             feature = next(item for item in state["queue"] if item["id"] == feature_id)
             body = {"action": "prepare", "feature_id": feature_id,
                 "expected_revision": state["revision"],
                 "expected_checkpoint": feature["checkpoint"], "model_target": "mac",
                 "chat_request_id": chat_id, "diagnosis_sha256": diagnosis_sha}
+            if conversation_id is not None:
+                body["chat_id"] = conversation_id
             body.update(changes)
             return body
 
@@ -346,9 +359,11 @@ def main():
                 "expected_checkpoint": "repair_3_validation_failed",
                 "model_target": "mac", "chat_request_id": str(uuid.uuid4()),
                 "diagnosis_sha256": "0" * 64}, code=401, authenticated=False)
-            chat_id, diagnosis_sha, diagnosis = diagnose("primary")
+            primary_chat = create_conversation("primary")
+            chat_id, diagnosis_sha, diagnosis = diagnose("primary", primary_chat)
             current = api()
-            body = prepare_body(primary, chat_id, diagnosis_sha, current)
+            body = prepare_body(primary, chat_id, diagnosis_sha, current,
+                conversation_id=primary_chat)
             rejected("repair/escalation", dict(body, expected_revision=current["revision"] - 1))
             rejected("repair/escalation", dict(body, diagnosis_sha256="0" * 64))
             before_hashes = {path.name: sha256(path.read_bytes()) for path in
@@ -360,6 +375,7 @@ def main():
             assert ready["binding"]["revision"] == ready_state["revision"]
             assert ready["binding"]["checkpoint"] == "repair_3_validation_failed"
             assert ready["model_target"] == "mac" and ready["model"] == "mac-fixture"
+            assert ready["chat_id"] == primary_chat
             assert ready["chat_request_id"] == chat_id
             assert ready["chat_model_target"] == "windows"
             assert ready["diagnosis"] == diagnosis and ready["diagnosis_sha256"] == diagnosis_sha
@@ -386,9 +402,15 @@ def main():
                 "expected_revision": refreshed["revision"],
                 "expected_checkpoint": ready["binding"]["checkpoint"],
                 "proposal_id": proposal_id}
-            assert api("repair/escalation", cancel)["status"] == "cancelled"
+            cancelled = api("repair/escalation", cancel)
+            assert cancelled["status"] == "cancelled"
+            assert cancelled["chat_id"] == primary_chat
             rejected("repair/escalation", cancel)
-            second_body = prepare_body(primary, chat_id, diagnosis_sha)
+            newer_chat = create_conversation("primary")
+            rejected("repair/escalation", prepare_body(primary, chat_id, diagnosis_sha,
+                conversation_id=newer_chat))
+            second_body = prepare_body(primary, chat_id, diagnosis_sha,
+                conversation_id=cancelled["chat_id"])
             api("repair/escalation", second_body)
             second = wait_escalation(primary, "ready")
             assert second["proposal_id"] != proposal_id and second["count"] == 2
