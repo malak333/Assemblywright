@@ -1,5 +1,10 @@
 # Assemblywright Design
 
+Current product scope: [Production build](docs/production-build.md) makes the
+supervised workflow the default Mac product. References below to protected
+production, service activation, schema-v22, or full-machine cutover describe the
+retained protected-service mode, not the supervised runner's availability.
+
 The owner requested Developer GitHub sign-in, repository discovery, and explicit
 repository creation after a saved Windows login became invalid. The accepted
 [`Developer GitHub setup`](docs/developer-github-setup-design.md) extends the earlier
@@ -23,12 +28,15 @@ remains bounded independently of saved history. Chat/request identity binds
 retries, tool approval, cancellation and repair diagnosis; navigation and chat
 creation grant no execution authority. Production authority remains unchanged.
 
-The owner's 2026-09-05 instruction prioritizes a working supervised developer build
-and defers security hardening. [`docs/developer-build.md`](docs/developer-build.md)
-owns that explicitly selected scope: a Windows master-package runner retains the
-queue and checkpoints, uses the local model, and executes owner-selected validation
-commands under the existing Windows account. It is separate from the protected
-production runtime described below and does not manufacture its readiness evidence.
+The owner selected the working supervised Developer workflow as the production
+product. [`docs/production-build.md`](docs/production-build.md) owns the default
+app selection, release launcher, retained-state compatibility, and evidence scope.
+The Windows master-package runner retains its queue and checkpoints, local model
+execution, and owner-selected validation under the existing Windows account.
+[`docs/developer-build.md`](docs/developer-build.md) remains its workflow guide.
+The protected-service architecture below is a separate explicit mode with its
+existing activation gates; product promotion does not manufacture its readiness
+evidence or change its database, service identity, or unavailable dispatcher.
 
 The owner-approved developer chat extension keeps project questions separate from
 feature planning and execution. Manual chat-derived repair proposals still require

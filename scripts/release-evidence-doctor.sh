@@ -84,7 +84,7 @@ Recommended next evidence commands:
   external handoff directory: ./scripts/release-external-handoff.sh --write target/release-external-handoff
   live-device template: ./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env
   live-device endpoint: set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' in target/release-live-device-qa.env
-  live-device IPC auth: launch Assemblywright with ASSEMBLYWRIGHT_MAC_ENABLE_IPC_CLI_HANDOFF=true, then confirm ASSEMBLYWRIGHT_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path before IPC commands
+  live-device IPC auth: launch the retained protected shell with ASSEMBLYWRIGHT_RUNTIME=protected-service and ASSEMBLYWRIGHT_MAC_ENABLE_IPC_CLI_HANDOFF=true (with ASSEMBLYWRIGHT_DEVELOPER_CONFIG unset), then confirm ASSEMBLYWRIGHT_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path before IPC commands
   live-device command evidence: cargo run -p assemblywright-cli -- command "status check" --endpoint "${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}" --json
   live-device assertion: set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete
   live-device evidence status: ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint "${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}"
@@ -1866,6 +1866,8 @@ PY
   for expected in \
     "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env" \
     "ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT='<release-core-endpoint>'" \
+    "ASSEMBLYWRIGHT_RUNTIME=protected-service" \
+    "ASSEMBLYWRIGHT_DEVELOPER_CONFIG unset" \
     "cargo run -p assemblywright-cli -- command \"status check\" --endpoint \"\${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}\" --json" \
     "source target/release-live-device-qa.env" \
     "ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint \"\${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}\"" \

@@ -1,5 +1,11 @@
 # Developer project chat history
 
+Product scope: this Developer workflow is now the default
+[production product](production-build.md). Historical Developer names remain
+compatibility identifiers. Protected-service activation and signed distribution
+are separate evidence; this promotion does not alter this document's permission,
+review, recovery, or publication contract.
+
 Status: owner-approved design. The original September 8 implementation is being
 restored from its saved Swift edits and frozen Windows validation source. Historical
 evidence below applies to that original run; current restoration evidence is separate.

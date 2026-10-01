@@ -10,6 +10,7 @@ VERSION="${ASSEMBLYWRIGHT_PACKAGE_VERSION_OVERRIDE:-$("$ROOT_DIR/scripts/release
 BUNDLE_ID="com.nobiletechnology.assemblywright"
 CORE_CODE_ID="${BUNDLE_ID}.core"
 APP_NAME="Assemblywright"
+APP_RUNTIME="${ASSEMBLYWRIGHT_APP_RUNTIME:-developer}"
 # Name of the executable inside the bundle. This is a signed-identity and
 # release-evidence contract: signed provenance and live-device QA reports bind
 # `Assemblywright.app/Contents/MacOS/AssemblywrightMacApp`. The SwiftPM product that
@@ -63,15 +64,17 @@ Required for notarization, choose one:
 Optional:
   ASSEMBLYWRIGHT_DISTRIBUTION_DIR          Defaults to target/distribution
   ASSEMBLYWRIGHT_SIGNED_PROVENANCE_PATH    Defaults to target/distribution/Assemblywright-<version>-signed-provenance.json
+  ASSEMBLYWRIGHT_APP_RUNTIME               developer (default) or protected-service
 
 --check validates local tool/template preconditions without signing or notarizing.
 --unsigned-structure-check builds and inspects an unsigned app/pkg layout without
 Developer ID credentials, notarization, stapling, Finder launch, or live device
 validation.
---unsigned-launch-check also launches the release-built app executable with an
-isolated HOME and exercises the supervised core over loopback IPC. It still does
-not prove Developer ID signing, notarization, stapling, Finder launch, or live
-device validation.
+--unsigned-launch-check also launches the default supervised UI from the release
+app with an isolated HOME and missing runtime configuration, and checks that it
+stays up without bootstrap children or TCP listeners. It does not exercise the
+Windows runner or core IPC, or prove Developer ID signing, notarization, stapling,
+Finder launch, or live device validation.
 --check-guidance-self-test verifies the credential-free package preflight still
 prints the required downstream signed-distribution, QA, evidence-bundle, and
 doctor handoff commands.
@@ -178,6 +181,11 @@ EOF
 if [[ -n "${ASSEMBLYWRIGHT_BUNDLE_ID:-}" && "$ASSEMBLYWRIGHT_BUNDLE_ID" != "$BUNDLE_ID" ]]; then
   fail "ASSEMBLYWRIGHT_BUNDLE_ID overrides are unsupported; Assemblywright code identity requires the fixed $BUNDLE_ID app identifier"
 fi
+
+case "$APP_RUNTIME" in
+  developer | protected-service) ;;
+  *) fail "ASSEMBLYWRIGHT_APP_RUNTIME must be exactly developer or protected-service" ;;
+esac
 
 require_output_contains() {
   local label="$1"
@@ -1238,6 +1246,8 @@ build_app_bundle() {
   <string>$APP_NAME</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
+  <key>AssemblywrightRuntime</key>
+  <string>$APP_RUNTIME</string>
   <key>CFBundleShortVersionString</key>
   <string>$VERSION</string>
   <key>CFBundleVersion</key>
@@ -1256,6 +1266,8 @@ PLIST
   require_output_contains "Info.plist" "$INFO_PLIST_CONTENTS" "<string>$APP_EXECUTABLE_NAME</string>"
   require_output_contains "Info.plist" "$INFO_PLIST_CONTENTS" "<string>$BUNDLE_ID</string>"
   require_output_contains "Info.plist" "$INFO_PLIST_CONTENTS" "<string>APPL</string>"
+  [[ "$(plutil -extract AssemblywrightRuntime raw "$APP_PATH/Contents/Info.plist")" == "$APP_RUNTIME" ]] ||
+    fail "Info.plist AssemblywrightRuntime does not match the requested runtime"
   require_output_contains "Info.plist" "$INFO_PLIST_CONTENTS" "CFBundleIconFile"
   require_output_contains "Info.plist" "$INFO_PLIST_CONTENTS" "<string>$APP_ICON_FILE</string>"
   assert_brand_resources "release app" "$APP_PATH"
@@ -1352,7 +1364,7 @@ Next release evidence commands:
   ASSEMBLYWRIGHT_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' ASSEMBLYWRIGHT_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' ASSEMBLYWRIGHT_NOTARYTOOL_APPLE_ID='apple-id@example.com' ASSEMBLYWRIGHT_NOTARYTOOL_TEAM_ID='TEAMID1234' ASSEMBLYWRIGHT_NOTARYTOOL_PASSWORD='app-specific-password' ./scripts/package-distribution.sh
   ./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env
   Set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' in target/release-live-device-qa.env
-  Launch Assemblywright with ASSEMBLYWRIGHT_MAC_ENABLE_IPC_CLI_HANDOFF=true for the operator evidence session, then confirm ASSEMBLYWRIGHT_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path before IPC commands
+  Launch the retained protected shell with ASSEMBLYWRIGHT_RUNTIME=protected-service and ASSEMBLYWRIGHT_MAC_ENABLE_IPC_CLI_HANDOFF=true (with ASSEMBLYWRIGHT_DEVELOPER_CONFIG unset) for the operator evidence session, then confirm ASSEMBLYWRIGHT_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path before IPC commands
   set -a && source target/release-live-device-qa.env && set +a
   cargo run -p assemblywright-cli -- command "status check" --endpoint "${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}" --json
   record the returned task ID as ASSEMBLYWRIGHT_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>' or a task-associated audit ID as 'audit:<uuid>'
@@ -1416,6 +1428,8 @@ run_unsigned_structure_check() {
 }
 
 run_unsigned_launch_check() {
+  [[ "$APP_RUNTIME" == "developer" ]] ||
+    fail "--unsigned-launch-check validates the default developer runtime; unset ASSEMBLYWRIGHT_APP_RUNTIME and retry"
   require_command codesign
   require_command curl
   require_command lsof
@@ -1500,14 +1514,21 @@ run_unsigned_launch_check() {
   }
   trap cleanup_launch EXIT
 
-  printf '\n==> Launching release app in an isolated HOME with Developer Mode default-off\n'
-  env -u ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_EXECUTABLE -u ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER \
-    HOME="$CLEAN_HOME" \
+  # Foundation ignores HOME for homeDirectoryForCurrentUser on macOS; bind its
+  # fixed-user home as well so the smoke cannot kickstart the owner's connection.
+  FOUNDATION_HOME="$(env HOME="$CLEAN_HOME" CFFIXED_USER_HOME="$CLEAN_HOME" \
+    swift -e 'import Foundation; print(FileManager.default.homeDirectoryForCurrentUser.path)')"
+  [[ "$FOUNDATION_HOME" == "$CLEAN_HOME" ]] ||
+    fail "Foundation home isolation could not be verified; no app was launched"
+  printf '\n==> Launching the default Developer workflow in an isolated HOME\n'
+  env -u ASSEMBLYWRIGHT_RUNTIME -u ASSEMBLYWRIGHT_DEVELOPER_CONFIG \
+    -u ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_EXECUTABLE -u ASSEMBLYWRIGHT_MAC_DEVELOPER_BRIDGE_TEAM_IDENTIFIER \
+    HOME="$CLEAN_HOME" CFFIXED_USER_HOME="$CLEAN_HOME" \
     "$APP_PATH/Contents/MacOS/$APP_EXECUTABLE_NAME" >"$APP_LOG" 2>&1 &
   APP_PID="$!"
 
-  # The app must stay up on its own. With Developer Mode opt-in absent it must
-  # not spawn a helper child, open any listener, or write credential state.
+  # A missing Developer runtime configuration is display-only. The app must stay
+  # up without spawning a bootstrap/helper child or opening a listener.
   for _ in {1..20}; do
     if ! kill -0 "$APP_PID" 2>/dev/null; then
       printf 'error: release app exited during the isolated-HOME launch check; app log follows\n' >&2
@@ -1518,7 +1539,7 @@ run_unsigned_launch_check() {
   done
 
   CHILD_PIDS="$(pgrep -P "$APP_PID" 2>/dev/null || true)"
-  [[ -z "$CHILD_PIDS" ]] || fail "default app launch supervised a child process without Developer Mode opt-in"
+  [[ -z "$CHILD_PIDS" ]] || fail "default Developer app launch spawned a bootstrap/helper child"
   LISTENERS="$(lsof -a -p "$APP_PID" -iTCP -sTCP:LISTEN -P -n 2>/dev/null || true)"
   [[ -z "$LISTENERS" ]] || fail "default app launch exposed a TCP listener: $LISTENERS"
 
@@ -1529,7 +1550,7 @@ run_unsigned_launch_check() {
   printf 'Pkg: %s\n' "$PKG_PATH"
   printf 'Signing: %s\n' "$SIGNING_STATUS"
   printf 'Clean HOME: %s\n' "$CLEAN_HOME"
-  printf 'Proof boundary: release-built app executable, bundled CLI, stable ad-hoc app/CLI identifiers, unsigned installer payload structure, and an isolated-HOME launch that stays up with Developer Mode default-off, spawns no helper child, opens no TCP listener, and leaves no orphan after abrupt termination. Ad-hoc cdhash evidence does not prove Developer ID publisher identity, and this lane does not prove Developer ID signing, notarization, stapling, /Applications install, Finder/LaunchServices validation, device authentication, App Sandbox, live Developer Mode bridge connectivity, or manual QA.\n'
+  printf 'Proof boundary: release-built app executable, bundled CLI, stable ad-hoc app/CLI identifiers, unsigned installer payload structure, exact default Developer runtime metadata, and an isolated-HOME launch with missing runtime configuration that stays up, spawns no bootstrap/helper child, opens no TCP listener, and leaves no orphan after abrupt termination. Ad-hoc cdhash evidence does not prove Developer ID publisher identity, and this lane does not prove Developer ID signing, notarization, stapling, /Applications install, Finder/LaunchServices validation, device authentication, App Sandbox, live Developer connection, or manual QA.\n'
 }
 
 if [[ "$UNSIGNED_STRUCTURE_CHECK" == true ]]; then

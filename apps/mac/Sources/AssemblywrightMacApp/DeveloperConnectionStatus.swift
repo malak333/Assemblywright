@@ -13,6 +13,43 @@ struct DeveloperConnectionStatus: Decodable {
   }
 }
 
+struct DeveloperConnectionActivationPolicy {
+  static func shouldKickstart(
+    canActivate: Bool,
+    connectionConfigurationExists: Bool
+  ) -> Bool {
+    canActivate && connectionConfigurationExists
+  }
+
+  static func canActivate(
+    configurationPath: String,
+    environment: [String: String] = ProcessInfo.processInfo.environment,
+    bundleInfo: [String: Any] = Bundle.main.infoDictionary ?? [:],
+    homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
+  ) -> Bool {
+    let expectedConfiguration = homeDirectory.appendingPathComponent(
+      "Library/Application Support/Assemblywright/Developer/runtime.json"
+    )
+    guard URL(fileURLWithPath: configurationPath).standardizedFileURL
+      == expectedConfiguration.standardizedFileURL else {
+      return false
+    }
+    guard case .developer = AssemblywrightAppRuntime.resolve(
+      environment: environment,
+      bundleInfo: bundleInfo,
+      homeDirectory: homeDirectory
+    ) else {
+      return false
+    }
+    let productionDeveloperRuntime =
+      bundleInfo[AssemblywrightAppRuntime.bundleRuntimeKey] as? String
+        == AssemblywrightAppRuntime.developerRuntimeValue
+    let legacyDeveloperBuild =
+      bundleInfo["AssemblywrightDeveloperBuild"] as? Bool == true
+    return productionDeveloperRuntime || legacyDeveloperBuild
+  }
+}
+
 @MainActor
 final class DeveloperConnectionModel: ObservableObject {
   @Published private(set) var status: DeveloperConnectionStatus?
@@ -23,10 +60,9 @@ final class DeveloperConnectionModel: ObservableObject {
 
   init(configurationPath: String) {
     directory = URL(fileURLWithPath: configurationPath).deletingLastPathComponent()
-    let expected = FileManager.default.homeDirectoryForCurrentUser
-      .appendingPathComponent("Library/Application Support/Assemblywright/Developer")
-    canActivate = directory.standardizedFileURL == expected.standardizedFileURL
-      && Bundle.main.object(forInfoDictionaryKey: "AssemblywrightDeveloperBuild") as? Bool == true
+    canActivate = DeveloperConnectionActivationPolicy.canActivate(
+      configurationPath: configurationPath
+    )
   }
 
   var needsAttention: Bool { status?.phase == "needs_attention" || launchError != nil }
@@ -41,7 +77,7 @@ final class DeveloperConnectionModel: ObservableObject {
   }
   var message: String {
     launchError ?? status?.message
-      ?? "The developer build manages its connection in the background. No SSH terminal is required."
+      ?? "Assemblywright manages its Developer connection in the background. No SSH terminal is required."
   }
 
   func refresh(at now: Date = Date()) {
@@ -55,22 +91,28 @@ final class DeveloperConnectionModel: ObservableObject {
 
   func observe() async {
     if canActivate && activation == nil {
-      if FileManager.default.fileExists(atPath: directory.appendingPathComponent("connection.json").path) {
+      let connectionConfigurationExists = FileManager.default.fileExists(
+        atPath: directory.appendingPathComponent("connection.json").path
+      )
+      if DeveloperConnectionActivationPolicy.shouldKickstart(
+        canActivate: canActivate,
+        connectionConfigurationExists: connectionConfigurationExists
+      ) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
         process.arguments = ["kickstart", "gui/\(getuid())/com.nobiletechnology.assemblywright.developer-connection"]
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         do { try process.run(); activation = process }
-        catch { launchError = "Open the developer launcher once to install its background connection." }
+        catch { launchError = "Open Assemblywright.command once to install its background connection." }
       } else {
-        launchError = "Open the developer launcher once to configure its background connection."
+        launchError = "Open Assemblywright.command once to configure its background connection."
       }
     }
     while !Task.isCancelled {
       refresh()
       if status == nil, let activation, !activation.isRunning && activation.terminationStatus != 0 {
-        launchError = "Open the developer launcher once to install its background connection."
+        launchError = "Open Assemblywright.command once to install its background connection."
       }
       try? await Task.sleep(for: .seconds(1))
     }

@@ -250,9 +250,11 @@ claim.
    \`set -a && source release-evidence-bundle.env && set +a\` followed by
    \`./scripts/release-evidence-bundle.sh --bundle\`.
 5. Run \`./scripts/release-evidence-doctor.sh --assert-complete\`.
-6. Start or restart the packaged app with
-   \`ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external\` and the explicit
-   \`ASSEMBLYWRIGHT_MAC_ENABLE_IPC_CLI_HANDOFF=true\` operator-mode opt-in, export
+6. Start or restart the packaged app's retained protected shell with
+   \`ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external\`,
+   \`ASSEMBLYWRIGHT_RUNTIME=protected-service\`, and the explicit
+   \`ASSEMBLYWRIGHT_MAC_ENABLE_IPC_CLI_HANDOFF=true\` operator-mode opt-in, with
+   \`ASSEMBLYWRIGHT_DEVELOPER_CONFIG\` unset. Export
    \`ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT='<release-core-endpoint>'\` and
    \`ASSEMBLYWRIGHT_IPC_TOKEN_FILE='<app-owned-ipc-session-auth.json>'\`, then run
    \`ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint "\${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}"\`
@@ -451,6 +453,11 @@ self_test() {
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "./scripts/release-evidence-bundle.sh --bundle"
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "./scripts/release-evidence-doctor.sh --assert-complete"
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT='<release-core-endpoint>'"
+  require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "ASSEMBLYWRIGHT_RUNTIME=protected-service"
+  require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "ASSEMBLYWRIGHT_DEVELOPER_CONFIG"
+  require_file_contains "signed-distribution runbook snapshot" "$tmp_dir/handoff/signed-distribution-runbook.json" "ASSEMBLYWRIGHT_RUNTIME=protected-service"
+  require_file_contains "live-device runbook snapshot" "$tmp_dir/handoff/live-device-runbook.json" "ASSEMBLYWRIGHT_RUNTIME=protected-service"
+  require_file_contains "evidence-bundle runbook snapshot" "$tmp_dir/handoff/evidence-bundle-runbook.json" "ASSEMBLYWRIGHT_RUNTIME=protected-service"
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" 'ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint "${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}"'
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" 'ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness --endpoint "${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}"'
   require_file_contains "handoff readme" "$tmp_dir/handoff/README.md" "Proof boundary"

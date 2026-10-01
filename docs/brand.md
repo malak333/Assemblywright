@@ -1,5 +1,9 @@
 # Assemblywright Brand
 
+The default [production product](production-build.md) is branded Assemblywright
+and uses the canonical app identity. Assemblywright Developer remains the debug
+compatibility profile; its retained executable and state names are not new brands.
+
 Assemblywright is the product name. It combines an assembly of specialized
 models with the craft implied by a wright.
 

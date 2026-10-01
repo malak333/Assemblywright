@@ -1,5 +1,9 @@
 # Development Agent Workflow
 
+The [production product](production-build.md) is the supervised Developer workflow.
+Default-app promotion and build-profile changes require independent high-risk
+review; protected-service and external release evidence remain separate.
+
 Assemblywright uses repository-scoped Codex agent definitions under `.codex/agents`.
 They support development of Assemblywright; they are not loaded by the Assemblywright product
 runtime and do not grant product capabilities or release readiness.

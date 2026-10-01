@@ -1,5 +1,11 @@
 # Developer GitHub restoration
 
+Product scope: this Developer workflow is now the default
+[production product](production-build.md). Historical Developer names remain
+compatibility identifiers. Protected-service activation and signed distribution
+are separate evidence; this promotion does not alter this document's permission,
+review, recovery, or publication contract.
+
 The Developer GitHub setup and publication feature was recovered from the original
 approved conversation and retained source archive, rather than recreated from the
 later GitHub-link placeholder. The five recorded archive fingerprints match the

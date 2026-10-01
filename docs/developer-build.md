@@ -1,8 +1,8 @@
-# Supervised Developer Build
+# Production Supervised Workflow
 
-The owner requested a working end-to-end application before further security
-hardening on 2026-09-05. This build implements that choice under the existing owner
-accounts. It runs actual model-generated changes and validation on Windows and
+The owner selected this working workflow as the production product.
+[Production build](production-build.md) defines release compilation, default app
+selection, retained data, and packaging. It keeps the existing owner-account contract. It runs actual model-generated changes and validation on Windows and
 presents the queue and controls in the Mac app.
 
 ## Use it
@@ -11,12 +11,13 @@ Configure the app-specific background connection and required Windows Codex
 reviewer paths, then build with:
 
 ```sh
-./scripts/developer-build.py --build
+./scripts/production-build.py --build
 ```
 
-Afterward, open `target/developer/Assemblywright Developer.app` directly. You can
-also use `Open Assemblywright Developer.command` or run
-`./scripts/developer-build.py`. The dedicated background connection reconnects
+Afterward, open `target/production/Assemblywright.app` directly. You can
+also use `Open Assemblywright.command` or run
+`./scripts/production-build.py`. For the compatibility debug profile, use
+`./scripts/developer-build.py --build` and its existing Developer app. The dedicated background connection reconnects
 without requiring an interactive SSH terminal. The launcher
 starts the configured local model if its API is unavailable. It uses the existing
 `local-ai-mac` controller and model; it does not install a new model configuration.
@@ -278,7 +279,7 @@ separate from this build.
 
 The model URL must also be loopback HTTP; use SSH forwarding for the Mac model.
 Validation logs stay in the developer state directory for owner debugging and are
-not automatically redacted. The developer snapshot is not a production append-only
+not automatically redacted. The supervised snapshot is not the protected-service append-only
 audit ledger. If an Emergency Pause cannot be saved, the request reports failure
 and the current runner keeps its emergency latch until a successful explicit clear.
 Storage failure is not reported as a durable acknowledgement; restart never
@@ -389,9 +390,10 @@ The ordinary package gate skips this test without a live configuration. The
 computer-use bridge could launch the app but closed its native pipe while reading
 accessibility state, so this does not claim visual UI automation.
 
-The working developer phase is published separately from unfinished production
-integration drafts. Signed production installation and hostile containment remain
-separate work.
+The supervised workflow is now the default production product. Historical
+Developer names in commands, configuration, and evidence remain compatibility
+identifiers. Signed distribution and hostile containment are separate evidence;
+the protected-service integration remains an explicit mode with its original gates.
 
 ### Windows Qwen/OpenCode acceptance evidence (2026-09-22)
 

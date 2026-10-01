@@ -89,6 +89,65 @@ class ReviewerSettingsTests(unittest.TestCase):
                                                     review_codex_home=home), {})
 
 
+class BuildProfileTests(unittest.TestCase):
+    def test_developer_profile_retains_debug_identity_and_paths(self):
+        profile = launcher.DEVELOPER_BUILD_PROFILE
+        self.assertEqual(profile.app, launcher.ROOT / 'target/developer/Assemblywright Developer.app')
+        self.assertEqual(profile.app_name, 'Assemblywright Developer')
+        self.assertEqual(profile.bundle_id, 'com.nobiletechnology.assemblywright.developer')
+        self.assertEqual(profile.swift_configuration, 'debug')
+        self.assertEqual(profile.windows_configuration, 'debug')
+        self.assertNotIn('-c', launcher.swift_build_command(profile))
+        self.assertEqual(
+            launcher.swift_executable_path(profile),
+            launcher.ROOT / 'apps/mac/.build/debug/AssemblywrightMacApp')
+        self.assertEqual(
+            launcher.windows_executable_path(profile, r'C:\a\assemblywright'),
+            r'C:\a\assemblywright\target\debug\assemblywright-developer.exe')
+
+    def test_production_profile_uses_release_commands_and_fixed_identity(self):
+        profile = launcher.PRODUCTION_BUILD_PROFILE
+        self.assertEqual(profile.app, launcher.ROOT / 'target/production/Assemblywright.app')
+        self.assertEqual(profile.app_name, 'Assemblywright')
+        self.assertEqual(profile.bundle_id, 'com.nobiletechnology.assemblywright')
+        self.assertEqual(profile.swift_configuration, 'release')
+        self.assertEqual(profile.windows_configuration, 'release')
+        self.assertEqual(launcher.swift_build_command(profile)[3:5], ['-c', 'release'])
+        command = launcher.windows_build_command(profile, r'C:\a\assemblywright')
+        self.assertIn('cargo build --release -p assemblywright-master', command)
+        self.assertIn('--bin assemblywright-developer', command)
+        self.assertEqual(
+            launcher.swift_executable_path(profile),
+            launcher.ROOT / 'apps/mac/.build/release/AssemblywrightMacApp')
+        self.assertEqual(
+            launcher.windows_executable_path(profile, r'C:\a\assemblywright'),
+            r'C:\a\assemblywright\target\release\assemblywright-developer.exe')
+
+    def test_both_profiles_use_canonical_version_and_developer_runtime(self):
+        completed = SimpleNamespace(stdout='1.2.3\n')
+        with patch.object(launcher.subprocess, 'run', return_value=completed) as run:
+            version = launcher.release_version()
+        self.assertEqual(version, '1.2.3')
+        run.assert_called_once_with(
+            [str(launcher.ROOT / 'scripts/release-version.sh')],
+            check=True, capture_output=True, text=True)
+
+        developer = launcher.app_info(launcher.DEVELOPER_BUILD_PROFILE, version)
+        production = launcher.app_info(launcher.PRODUCTION_BUILD_PROFILE, version)
+        for info in (developer, production):
+            self.assertEqual(info['CFBundleVersion'], version)
+            self.assertEqual(info['CFBundleShortVersionString'], version)
+            self.assertEqual(info['AssemblywrightRuntime'], 'developer')
+        self.assertTrue(developer['AssemblywrightDeveloperBuild'])
+        self.assertNotIn('AssemblywrightDeveloperBuild', production)
+
+    def test_malformed_canonical_version_is_rejected(self):
+        completed = SimpleNamespace(stdout='1.2; touch /tmp/unsafe\n')
+        with patch.object(launcher.subprocess, 'run', return_value=completed):
+            with self.assertRaisesRegex(SystemExit, 'malformed'):
+                launcher.release_version()
+
+
 class RunnerMaintenanceAdmissionTests(unittest.TestCase):
     def setUp(self):
         self.runtime = {'endpoint': 'http://127.0.0.1:17796',

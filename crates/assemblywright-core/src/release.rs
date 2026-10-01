@@ -290,6 +290,8 @@ fn release_required_evidence_complete(evidence_status: &ReleaseEvidenceStatusRes
             .all(|key| release_evidence_item_present(evidence_status, key))
 }
 
+const RELEASE_PROTECTED_SHELL_GUIDANCE: &str = "Launch the retained protected shell with ASSEMBLYWRIGHT_RUNTIME=protected-service and ASSEMBLYWRIGHT_MAC_ENABLE_IPC_CLI_HANDOFF=true (with ASSEMBLYWRIGHT_DEVELOPER_CONFIG unset), then confirm ASSEMBLYWRIGHT_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path before IPC commands";
+
 fn release_live_device_runbook_from(
     readiness: &ReleaseReadinessResponse,
     evidence_status: &ReleaseEvidenceStatusResponse,
@@ -312,8 +314,7 @@ fn release_live_device_runbook_from(
                 .to_string(),
             "Set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' in target/release-live-device-qa.env before collecting command evidence"
                 .to_string(),
-            "Launch Assemblywright with ASSEMBLYWRIGHT_MAC_ENABLE_IPC_CLI_HANDOFF=true for this operator evidence session, then confirm ASSEMBLYWRIGHT_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path before IPC commands"
-                .to_string(),
+            RELEASE_PROTECTED_SHELL_GUIDANCE.to_string(),
             "cargo run -p assemblywright-cli -- command \"status check\" --endpoint \"${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}\" --json"
                 .to_string(),
             "Record the returned task ID as ASSEMBLYWRIGHT_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>' or a task-associated audit ID as 'audit:<uuid>' in target/release-live-device-qa.env"
@@ -375,8 +376,7 @@ fn release_signed_distribution_runbook_from(
                 .to_string(),
             "Set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks"
                 .to_string(),
-            "Launch Assemblywright with ASSEMBLYWRIGHT_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export ASSEMBLYWRIGHT_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks"
-                .to_string(),
+            RELEASE_PROTECTED_SHELL_GUIDANCE.to_string(),
             "ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint \"${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}\""
                 .to_string(),
             "./scripts/release-evidence-doctor.sh --check".to_string(),
@@ -431,8 +431,7 @@ fn release_evidence_bundle_runbook_from(
             "./scripts/release-evidence-doctor.sh --assert-complete".to_string(),
             "Set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks"
                 .to_string(),
-            "Launch Assemblywright with ASSEMBLYWRIGHT_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export ASSEMBLYWRIGHT_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks"
-                .to_string(),
+            RELEASE_PROTECTED_SHELL_GUIDANCE.to_string(),
             "ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint \"${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}\""
                 .to_string(),
             "Start or restart the core with ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external"
@@ -2121,6 +2120,22 @@ pub fn release_evidence_bundle_runbook() -> ReleaseRunbookResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_release_runbook_requires_explicit_protected_shell_opt_in() {
+        for runbook in [
+            release_live_device_runbook(),
+            release_signed_distribution_runbook(),
+            release_evidence_bundle_runbook(),
+        ] {
+            assert!(runbook
+                .commands
+                .iter()
+                .any(|command| command == RELEASE_PROTECTED_SHELL_GUIDANCE));
+            assert!(!runbook.commands.iter().any(|command| command
+                .starts_with("Launch Assemblywright with ASSEMBLYWRIGHT_MAC_ENABLE")));
+        }
+    }
 
     fn normalized_tokens(text: &str) -> Vec<String> {
         text.split_whitespace()

@@ -1,5 +1,16 @@
 # Architecture Map
 
+## Default production product
+
+The [production build](production-build.md) uses the existing supervised Windows
+runner and Mac `DeveloperRunnerView` as the default app. The canonical launcher
+builds both hosts in release mode; existing Developer connection, queue, projects,
+and history are retained. The owner-account execution contract, independent review,
+publication checks, cancellation, and ambiguity quarantine remain unchanged.
+`ASSEMBLYWRIGHT_RUNTIME=protected-service` explicitly selects the protected shell.
+The remaining map describes that protected-service architecture and its independent
+activation gates; it is not the default supervised product's availability map.
+
 ## Approved full-machine Assembly Line target
 
 The current Windows master is protocol v5/schema v22. Schema v20 added an

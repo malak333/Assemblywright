@@ -1,5 +1,11 @@
 # Scalable Developer repair and complete review
 
+Product scope: this Developer workflow is now the default
+[production product](production-build.md). Historical Developer names remain
+compatibility identifiers. Protected-service activation and signed distribution
+are separate evidence; this promotion does not alter this document's permission,
+review, recovery, or publication contract.
+
 Status: the prior standalone source snapshot was independently reviewed,
 validated by the full local gate and native Windows workflows, and installed
 in the Developer runner. This rebased release branch has additional changes
