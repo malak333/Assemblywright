@@ -4,17 +4,14 @@ This record separates repository validation, installed Developer behavior, and
 the recovered website. It does not establish production signing, notarization,
 hosted publication, or external release readiness.
 
-Prior standalone-source results: the scalability baseline, staged automatic
-repair, validation effect guard, and later exact-current-snapshot recovery were
-implemented and installed. Their full local gates and native Windows workflows
-passed, and independent source reviews approved those exact sources. The live
-FFT feature used digest-bound recovery, passed 32 tests, and reached independent
-review attempt 18; that review rejected the website with 13 substantive findings.
-Its selected Windows model, three repair attempts, 34 escalations, and project
-files remain preserved. The rebased release branch has additional changes and
-needs its own exact-head validation, independent review, and publication
-evidence. The historical sections below retain intermediate failures and
-superseded counts; the final records identify the current live evidence.
+Current result: exact current-snapshot recovery is implemented, independently
+reviewed, validated, and installed. It recovered the retained FFT snapshot and
+completed fresh review attempt 18, which rejected the website with 13 substantive
+findings. Subsequent manual work reached escalation 35/review attempt 19 and a
+new `tool_effects_quarantined` hold. The published-source Developer update
+preserved that exact live state. Website acceptance and publication remain open.
+The historical sections below retain intermediate failures and superseded
+results; the final records identify current evidence.
 
 For the prior standalone source, the `unit-testing-test-generate` workflow was applied to actual Rust and Swift
 units: exact inventory and context selection, batched review and image
@@ -513,3 +510,41 @@ The matching Windows executable SHA-256 is
 `e5fcfab8c532ed7206c13d291c7c68c584c3640b86a919d8f242bd23f002deb3`.
 The earlier failed fixture runs remain failed evidence; their pass assertions do
 not substitute for the corrected runs' successful teardown and exit codes.
+
+
+## Published-source validation and installation closeout
+
+The first isolated local gate used a shared `CARGO_TARGET_DIR` and stopped when
+`mac-local-coding-snapshot-e2e.sh` could not find the worktree-local debug agent.
+It is retained as an invocation/target-layout failure, not a successful gate.
+The full rerun with the standard target layout completed with exit 0 and terminal
+marker `Assemblywright local release verification: ok` at implementation head
+`4cee2187d351af3f4f412ec676240e6c959d3bc5`. It passed 272 macOS Developer
+unit tests, the native Developer workflow in 349.57 seconds, the Mac local-coding
+snapshot boundary, Rust workspace and ignored tests, packaging/unsigned launch,
+305 Swift tests, and the final Swift build. The retained log is
+`target/checkpoint-recovery/published-release-local-default.log`. Hosted gates
+must independently verify the final publication head; a local pass is separate.
+
+The authoritative Windows checkout was advanced to that same implementation
+head with no tracked source modifications. Its explicitly pinned approval fixture
+was rerun from the Git checkout and exited 0. After authenticated idle shutdown,
+the matching native-tested Windows executable was installed with SHA-256
+`e5fcfab8c532ed7206c13d291c7c68c584c3640b86a919d8f242bd23f002deb3`.
+The installed Mac executable SHA-256 is
+`4ac1705dc7ad1af5949755dba868a8f49ea0529825b0b24b1194d48a4d93ca4d`;
+strict ad-hoc signature verification passed, and the existing authenticated
+connection reestablished at revision 671. State and binary backups were retained.
+This updates the supervised Developer runtime, not the production SCM service,
+Developer ID signing, notarization, or external release evidence.
+
+The FFT feature changed during source publication through subsequent manual
+work. Before the runtime update it was idle at `tool_effects_quarantined`, with
+three repairs, 35 escalations, review attempt 19, and a ready manual proposal.
+Its message reports unreviewable tool changes to
+`site/mechanics/job-system/index.html`. The runtime update preserved the entire
+feature JSON hash exactly:
+`75f81b78783d0b7eac74edc99157c85d3720a82490cc43d30f72c86f5fb96061`.
+No Resume, proposal application, checkpoint reset, or website publication was
+performed during this source-publication phase. This later hold is separate
+from the successfully recovered snapshot and review-attempt-18 rejection.
