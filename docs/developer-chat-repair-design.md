@@ -1,5 +1,11 @@
 # Developer Chat Repair Escalation
 
+Product scope: this Developer workflow is now the default
+[production product](production-build.md). Historical Developer names remain
+compatibility identifiers. Protected-service activation and signed distribution
+are separate evidence; this promotion does not alter this document's permission,
+review, recovery, or publication contract.
+
 The implemented [`Developer Auto AI Repair`](developer-auto-ai-repair-design.md)
 extension adds a separate persistent policy-authorized automatic path. This document
 continues to govern manual chat-derived proposals and their explicit approval

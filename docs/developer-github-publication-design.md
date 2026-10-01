@@ -1,5 +1,11 @@
 # Developer GitHub publication
 
+Product scope: this Developer workflow is now the default
+[production product](production-build.md). Historical Developer names remain
+compatibility identifiers. Protected-service activation and signed distribution
+are separate evidence; this promotion does not alter this document's permission,
+review, recovery, or publication contract.
+
 The owner's subsequent [GitHub setup extension](developer-github-setup-design.md)
 adds sign-in, discovery, and explicit creation of repositories. It supersedes the
 existing-repositories-only setup restriction in this design while preserving the

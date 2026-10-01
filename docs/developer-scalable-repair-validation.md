@@ -1,5 +1,11 @@
 # Scalable repair validation evidence
 
+Product scope: this Developer workflow is now the default
+[production product](production-build.md). Historical Developer names remain
+compatibility identifiers. Protected-service activation and signed distribution
+are separate evidence; this promotion does not alter this document's permission,
+review, recovery, or publication contract.
+
 This record separates repository validation, installed Developer behavior, and
 the recovered website. It does not establish production signing, notarization,
 hosted publication, or external release readiness.

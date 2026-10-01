@@ -1,5 +1,11 @@
 # Distributed Developer Mode Design
 
+Runtime scope: this document describes the retained protected-service
+architecture, explicitly selected with `ASSEMBLYWRIGHT_RUNTIME=protected-service`.
+The default [production product](production-build.md) now uses the supervised
+Developer workflow. Its promotion does not activate this document's unavailable
+effects or satisfy its protected-host evidence gates.
+
 ## Bounded local model picker
 
 The already-enrolled designated MLX MacBridge may change only its model ID

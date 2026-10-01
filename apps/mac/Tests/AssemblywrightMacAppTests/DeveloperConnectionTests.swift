@@ -4,6 +4,92 @@ import Testing
 
 @Suite("Developer background connection")
 struct DeveloperConnectionTests {
+  private let canonicalHome = URL(fileURLWithPath: "/Users/owner")
+  private var canonicalRuntimePath: String {
+    "/Users/owner/Library/Application Support/Assemblywright/Developer/runtime.json"
+  }
+
+  @Test("Production and legacy Developer bundles may reactivate only the canonical connection")
+  func activationPolicyAcceptsBoundedDeveloperBundles() {
+    #expect(DeveloperConnectionActivationPolicy.canActivate(
+      configurationPath: canonicalRuntimePath,
+      environment: [:],
+      bundleInfo: [AssemblywrightAppRuntime.bundleRuntimeKey: "developer"],
+      homeDirectory: canonicalHome
+    ))
+    #expect(DeveloperConnectionActivationPolicy.canActivate(
+      configurationPath: canonicalRuntimePath,
+      environment: [:],
+      bundleInfo: ["AssemblywrightDeveloperBuild": true],
+      homeDirectory: canonicalHome
+    ))
+  }
+
+  @Test("Activation policy rejects arbitrary paths and unmarked app binaries")
+  func activationPolicyRejectsUnownedInputs() {
+    let production: [String: Any] = [
+      AssemblywrightAppRuntime.bundleRuntimeKey: "developer"
+    ]
+    #expect(!DeveloperConnectionActivationPolicy.canActivate(
+      configurationPath: "/tmp/runtime.json",
+      environment: [:],
+      bundleInfo: production,
+      homeDirectory: canonicalHome
+    ))
+    #expect(!DeveloperConnectionActivationPolicy.canActivate(
+      configurationPath:
+        "/Users/owner/Library/Application Support/Assemblywright/Developer/arbitrary.json",
+      environment: [:],
+      bundleInfo: production,
+      homeDirectory: canonicalHome
+    ))
+    #expect(!DeveloperConnectionActivationPolicy.canActivate(
+      configurationPath: canonicalRuntimePath,
+      environment: [:],
+      bundleInfo: [:],
+      homeDirectory: canonicalHome
+    ))
+  }
+
+  @Test("Explicit protected runtime cannot reactivate the Developer supervisor")
+  func activationPolicyRejectsProtectedRuntime() {
+    let legacyAndProduction: [String: Any] = [
+      AssemblywrightAppRuntime.bundleRuntimeKey: "developer",
+      "AssemblywrightDeveloperBuild": true,
+    ]
+    #expect(!DeveloperConnectionActivationPolicy.canActivate(
+      configurationPath: canonicalRuntimePath,
+      environment: [AssemblywrightAppRuntime.runtimeEnvironmentKey: "protected-service"],
+      bundleInfo: legacyAndProduction,
+      homeDirectory: canonicalHome
+    ))
+    #expect(!DeveloperConnectionActivationPolicy.canActivate(
+      configurationPath: canonicalRuntimePath,
+      environment: [:],
+      bundleInfo: [
+        AssemblywrightAppRuntime.bundleRuntimeKey: "protected-service",
+        "AssemblywrightDeveloperBuild": true,
+      ],
+      homeDirectory: canonicalHome
+    ))
+  }
+
+  @Test("Supervisor kickstart requires an existing connection configuration")
+  func activationPolicyRejectsUnconfiguredBootstrap() {
+    #expect(!DeveloperConnectionActivationPolicy.shouldKickstart(
+      canActivate: true,
+      connectionConfigurationExists: false
+    ))
+    #expect(!DeveloperConnectionActivationPolicy.shouldKickstart(
+      canActivate: false,
+      connectionConfigurationExists: true
+    ))
+    #expect(DeveloperConnectionActivationPolicy.shouldKickstart(
+      canActivate: true,
+      connectionConfigurationExists: true
+    ))
+  }
+
   @Test
   @MainActor
   func staleSupervisorStatusCannotClaimConnection() throws {

@@ -4,6 +4,7 @@
 import argparse
 import base64
 from contextlib import contextmanager
+from dataclasses import dataclass
 import fcntl
 import importlib.util
 import ipaddress
@@ -28,6 +29,89 @@ STATE = Path.home() / "Library/Application Support/Assemblywright/Developer"
 APP = ROOT / "target/developer/Assemblywright Developer.app"
 CONNECTION_SOURCE = Path(__file__).with_name("developer-connection.py")
 MIGRATION_FILE = "connection-migration.json"
+
+
+@dataclass(frozen=True)
+class BuildProfile:
+    app: Path
+    app_name: str
+    bundle_id: str
+    swift_configuration: str
+    windows_configuration: str
+
+
+DEVELOPER_BUILD_PROFILE = BuildProfile(
+    app=APP,
+    app_name="Assemblywright Developer",
+    bundle_id="com.nobiletechnology.assemblywright.developer",
+    swift_configuration="debug",
+    windows_configuration="debug",
+)
+
+PRODUCTION_BUILD_PROFILE = BuildProfile(
+    app=ROOT / "target/production/Assemblywright.app",
+    app_name="Assemblywright",
+    bundle_id="com.nobiletechnology.assemblywright",
+    swift_configuration="release",
+    windows_configuration="release",
+)
+
+
+def release_version():
+    result = subprocess.run(
+        [str(ROOT / "scripts/release-version.sh")],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    version = result.stdout.strip()
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?", version):
+        raise SystemExit("The canonical release version is malformed.")
+    return version
+
+
+def swift_build_command(profile):
+    command = ["swift", "build", "--disable-sandbox"]
+    if profile.swift_configuration == "release":
+        command.extend(["-c", "release"])
+    command.extend([
+        "--package-path", str(ROOT / "apps/mac"),
+        "--product", "AssemblywrightMacApp",
+    ])
+    return command
+
+
+def windows_build_command(profile, remote):
+    release = " --release" if profile.windows_configuration == "release" else ""
+    return (
+        f"cd /d {remote} && cargo build{release} -p assemblywright-master "
+        "--bin assemblywright-developer && if not exist bin mkdir bin"
+    )
+
+
+def swift_executable_path(profile):
+    return ROOT / f"apps/mac/.build/{profile.swift_configuration}/AssemblywrightMacApp"
+
+
+def windows_executable_path(profile, remote):
+    return f"{remote}\\target\\{profile.windows_configuration}\\assemblywright-developer.exe"
+
+
+def app_info(profile, version):
+    info = {
+        "CFBundleIdentifier": profile.bundle_id,
+        "CFBundleExecutable": "AssemblywrightMacApp",
+        "CFBundleName": profile.app_name,
+        "CFBundleDisplayName": profile.app_name,
+        "CFBundleVersion": version,
+        "CFBundleShortVersionString": version,
+        "CFBundlePackageType": "APPL",
+        "LSMinimumSystemVersion": "14.0",
+        "AssemblywrightRuntime": "developer",
+    }
+    if profile == DEVELOPER_BUILD_PROFILE:
+        info["AssemblywrightDeveloperBuild"] = True
+    return info
 
 
 def _connection_module():
@@ -338,12 +422,11 @@ def write_runtime(connection, saved, windows_settings, reviewer_settings, tools_
     connection.safe_runtime_settings(STATE)
 
 
-def build_products(connection, config, args):
+def build_products(connection, config, args, profile=DEVELOPER_BUILD_PROFILE):
     remote = args.remote_root.replace("/", "\\").rstrip("\\")
     ssh = connection.ssh_base(config)
-    print("Building the Mac app and Windows runner…", flush=True)
-    subprocess.run(["swift", "build", "--disable-sandbox", "--package-path",
-                    str(ROOT / "apps/mac"), "--product", "AssemblywrightMacApp"], check=True)
+    print(f"Building the {profile.app_name} Mac app and Windows runner…", flush=True)
+    subprocess.run(swift_build_command(profile), check=True)
     with tempfile.TemporaryDirectory(prefix="assemblywright-developer-build-") as temp:
         archive = Path(temp) / "source.tar.gz"
         with tarfile.open(archive, "w:gz") as output:
@@ -357,24 +440,22 @@ def build_products(connection, config, args):
     touch_sources = "import os,pathlib; [os.utime(p,None) for p in pathlib.Path('crates').rglob('*.rs')]"
     encoded_touch = base64.b64encode(touch_sources.encode()).decode()
     subprocess.run(ssh + [f"cd /d {remote} && python -c \"import base64;exec(base64.b64decode('{encoded_touch}'))\""], check=True)
-    subprocess.run(ssh + [f"cd /d {remote} && cargo build -p assemblywright-master --bin assemblywright-developer && if not exist bin mkdir bin"], check=True)
-    subprocess.run(ssh + [f"copy /Y {remote}\\target\\debug\\assemblywright-developer.exe {remote}\\bin\\assemblywright-developer.exe >NUL"], check=True)
-    (APP / "Contents/MacOS").mkdir(parents=True, exist_ok=True)
-    replacement = APP / "Contents/MacOS/.AssemblywrightMacApp.new"
-    shutil.copy2(ROOT / "apps/mac/.build/debug/AssemblywrightMacApp", replacement)
-    replacement.replace(APP / "Contents/MacOS/AssemblywrightMacApp")
-    (APP / "Contents/Info.plist").write_bytes(plistlib.dumps({
-        "CFBundleIdentifier": "com.nobiletechnology.assemblywright.developer",
-        "CFBundleExecutable": "AssemblywrightMacApp",
-        "CFBundleName": "Assemblywright Developer",
-        "CFBundleDisplayName": "Assemblywright Developer",
-        "CFBundleVersion": "1",
-        "CFBundleShortVersionString": "0.1.4",
-        "CFBundlePackageType": "APPL",
-        "LSMinimumSystemVersion": "14.0",
-        "AssemblywrightDeveloperBuild": True,
-    }))
-    subprocess.run(["codesign", "--force", "--sign", "-", str(APP)], check=True)
+    subprocess.run(ssh + [windows_build_command(profile, remote)], check=True)
+    subprocess.run(ssh + [
+        f"copy /Y {windows_executable_path(profile, remote)} "
+        f"{remote}\\bin\\assemblywright-developer.exe >NUL"
+    ], check=True)
+    (profile.app / "Contents/MacOS").mkdir(parents=True, exist_ok=True)
+    replacement = profile.app / "Contents/MacOS/.AssemblywrightMacApp.new"
+    shutil.copy2(
+        swift_executable_path(profile),
+        replacement,
+    )
+    replacement.replace(profile.app / "Contents/MacOS/AssemblywrightMacApp")
+    (profile.app / "Contents/Info.plist").write_bytes(
+        plistlib.dumps(app_info(profile, release_version()))
+    )
+    subprocess.run(["codesign", "--force", "--sign", "-", str(profile.app)], check=True)
 
 
 def preflight_connection(connection, config):
@@ -417,8 +498,10 @@ def wait_for_connected(connection, config):
     raise SystemExit("The persistent connection did not reach authenticated ready status. Check connection-status.json.")
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+def main(profile=DEVELOPER_BUILD_PROFILE):
+    parser = argparse.ArgumentParser(
+        description=f"Build and open {profile.app_name} with its persistent Developer connection."
+    )
     parser.add_argument("--host", default="mike@100.64.23.14")
     parser.add_argument("--socket", default=str(Path.home() / ".ssh/assemblywright-codex-windows.sock"),
                         help="Existing bootstrap/build SSH control socket; never used by the runtime")
@@ -517,16 +600,16 @@ def main():
         config = write_connection_config(connection, args)
         write_runtime(connection, saved, windows_settings, reviewer_settings, tools_settings)
         if args.build:
-            build_products(connection, config, args)
+            build_products(connection, config, args, profile)
         start_local_model(args)
         connection.install(STATE, CONNECTION_SOURCE)
     status = wait_for_connected(connection, config)
     print("Connected to " + status["host"] + ". Projects: " + status["workspace_root"])
     if not args.no_open:
-        if not APP.exists():
+        if not profile.app.exists():
             raise SystemExit("Run this command again with --build to create the Mac app.")
-        subprocess.run(["open", str(APP)], check=True)
-    print("Developer app: " + str(APP))
+        subprocess.run(["open", str(profile.app)], check=True)
+    print(profile.app_name + " app: " + str(profile.app))
 
 
 if __name__ == "__main__":

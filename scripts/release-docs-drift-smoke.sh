@@ -1537,4 +1537,14 @@ require_text "knowledge base inert Windows IPC" "$KB" \
 require_text "full-machine design inert Windows IPC" "$FULL_MACHINE_ASSEMBLY_LINE_DESIGN" \
   "authenticated zero-effect Windows IPC source"
 
+require_file "docs/production-build.md"
+require_file "scripts/production-build.py"
+require_file "Open Assemblywright.command"
+require_text "default production workflow" "$README" "./scripts/production-build.py --build"
+require_text "production workflow design" "$DESIGN" "docs/production-build.md"
+require_text "production workflow safety" "$SAFETY_RULES" "production-build.md"
+require_text "protected-service scope" "docs/production-build.md" "ASSEMBLYWRIGHT_RUNTIME=protected-service"
+require_text "retained production state" "docs/production-build.md" "Library/Application Support/Assemblywright/Developer"
+require_text "production build documentation" "$BUILD_DOCS" "./scripts/production-build.py --build"
+
 printf 'Assemblywright release docs drift smoke: ok\n'

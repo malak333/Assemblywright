@@ -1,5 +1,11 @@
 # Developer GitHub Setup
 
+Product scope: this Developer workflow is now the default
+[production product](production-build.md). Historical Developer names remain
+compatibility identifiers. Protected-service activation and signed distribution
+are separate evidence; this promotion does not alter this document's permission,
+review, recovery, or publication contract.
+
 The owner reported failure connecting `malak333/inches-feet-demo` and requested
 one-time GitHub setup, repository discovery, and repository creation from the app.
 Native diagnosis found an invalid saved Windows GitHub login and HTTP 401 from

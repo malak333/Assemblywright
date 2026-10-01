@@ -2,6 +2,12 @@
 
 Status: approved target; reviewed planning/creation, inert execution-control, and authenticated zero-effect Windows IPC source with effects fail-closed; production routing, execution, and live evidence pending; current master is protocol-v5/schema-v22
 
+Runtime scope: this document describes the retained protected-service
+architecture, explicitly selected with `ASSEMBLYWRIGHT_RUNTIME=protected-service`.
+The default [production product](production-build.md) now uses the supervised
+Developer workflow. Its promotion does not activate this document's unavailable
+effects or satisfy its protected-host evidence gates.
+
 This document is the approved replacement target and preserves its required safety
 exception. Strict protocol contracts, schema-v20 Windows planning persistence/routes,
 a schema-v21 durable effect-free execution-control ledger and schema-v22 fail-closed activation controller,

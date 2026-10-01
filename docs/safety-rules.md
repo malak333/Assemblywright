@@ -30,13 +30,15 @@ are never implicitly included. Migration preserves retained legacy provenance.
 Assemblywright is designed for high autonomy with explicit boundaries. These rules are
 release requirements, not optional UX guidance.
 
-The owner explicitly relaxed these production requirements on 2026-09-05 to obtain
-a working end-to-end developer build first. The selected exception is documented in
-[`developer-build.md`](developer-build.md): supervised execution under existing owner
-accounts, local model-generated file changes, and owner-selected validation commands.
-That build keeps durable checkpoints and truthful control/results reporting; VM,
-service-SID, and signing prerequisites do not gate it. The production rules below
-continue to govern claims about the protected production runtime.
+The owner selected the supervised Developer workflow as the production product.
+Its accepted owner-account contract remains documented in
+[`developer-build.md`](developer-build.md), with packaging and default selection in
+[`production-build.md`](production-build.md): local model-generated file changes,
+owner-selected validation, durable checkpoints, and truthful control/results
+reporting. VM and service-SID prerequisites do not gate this supervised workflow.
+Signed distribution still requires Developer ID and notarization evidence. The
+protected-production rules below continue to govern the separately selected
+protected-service runtime; this promotion does not grant it effect authority.
 
 Project chat remains outside execution authority even when the owner selects a
 different local model or supplies attachments. A saved diagnosis may prepare a

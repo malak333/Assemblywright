@@ -5,12 +5,7 @@ import UniformTypeIdentifiers
 
 @main
 struct AssemblywrightMacApp: App {
-  private let developerConfigurationPath =
-    ProcessInfo.processInfo.environment["ASSEMBLYWRIGHT_DEVELOPER_CONFIG"]
-    ?? ((Bundle.main.object(forInfoDictionaryKey: "AssemblywrightDeveloperBuild") as? Bool == true)
-      ? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
-        "Library/Application Support/Assemblywright/Developer/runtime.json"
-      ).path : nil)
+  private let runtime = AssemblywrightAppRuntime.resolve()
   @StateObject private var developerBridge: AssemblywrightDeveloperBridgeProcessLifecycle
 
   init() {
@@ -19,10 +14,11 @@ struct AssemblywrightMacApp: App {
 
   var body: some Scene {
     WindowGroup("Assemblywright", id: AssemblywrightMenuBarContract.mainWindowID) {
-      if let developerConfigurationPath {
+      switch runtime {
+      case .developer(let developerConfigurationPath):
         DeveloperRunnerView(configurationPath: developerConfigurationPath)
           .background(AppActivationView())
-      } else {
+      case .protectedService:
         AssemblywrightShellView(developerBridge: developerBridge)
           .background(AppActivationView())
           .task { await developerBridge.superviseUntilCancelled() }
@@ -30,17 +26,19 @@ struct AssemblywrightMacApp: App {
     }
 
     MenuBarExtra {
-      if developerConfigurationPath == nil {
+      switch runtime {
+      case .protectedService:
         AssemblywrightMenuBarView(developerBridge: developerBridge)
-      } else {
-        Text("Assemblywright developer build")
+      case .developer:
+        Text("Assemblywright")
       }
     } label: {
-      if developerConfigurationPath == nil {
+      switch runtime {
+      case .protectedService:
         AssemblywrightMenuBarLabel(
           presentation: AssemblywrightMenuBarPresentation(status: developerBridge.status)
         )
-      } else {
+      case .developer:
         Image(systemName: "hammer")
       }
     }

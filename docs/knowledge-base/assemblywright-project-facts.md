@@ -1,5 +1,24 @@
 # Assemblywright Project Facts
 
+## Supervised workflow is the production product
+
+- The owner selected the existing Developer workflow as the default Assemblywright
+  product. `docs/production-build.md` owns this decision; historical Developer
+  names remain API, executable, state, and evidence compatibility identifiers.
+- `scripts/production-build.py --build` builds release Mac/Windows binaries and
+  `target/production/Assemblywright.app` with the canonical app identity. The debug
+  Developer launcher is retained. Both share the existing connection and queue;
+  active-work maintenance guards still apply. Promotion performs no DB migration.
+- Plain app launch selects the supervised UI and does not provision a connection.
+  `ASSEMBLYWRIGHT_RUNTIME=protected-service` selects the independently gated shell;
+  an explicit Developer configuration override retains supervised selection.
+- Protected-service dispatch, service identity, signing/notarization, installed
+  Windows source/binary parity, live-device UI, and real-provider proof are separate
+  from product selection and repository validation.
+- macOS Foundation ignores a plain HOME override for homeDirectoryForCurrentUser.
+  Packaged-app smoke must also set CFFIXED_USER_HOME to its disposable directory;
+  otherwise the supervised default could read or kickstart the owner's connection.
+
 ## Developer Project Chat History
 
 - The September 8 history implementation was installed but left uncommitted.

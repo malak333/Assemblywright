@@ -545,6 +545,8 @@ fn format_release_evidence_status(response: &str) -> anyhow::Result<String> {
     Ok(lines.join("\n"))
 }
 
+const RELEASE_PROTECTED_SHELL_GUIDANCE: &str = "Launch the retained protected shell with ASSEMBLYWRIGHT_RUNTIME=protected-service and ASSEMBLYWRIGHT_MAC_ENABLE_IPC_CLI_HANDOFF=true (with ASSEMBLYWRIGHT_DEVELOPER_CONFIG unset), then confirm ASSEMBLYWRIGHT_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path before IPC commands";
+
 fn release_live_device_runbook_json(
     readiness_response: &str,
     evidence_status_response: &str,
@@ -578,7 +580,7 @@ fn release_live_device_runbook_json(
             "./scripts/release-live-device-qa.sh --check",
             "./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env",
             "Set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' in target/release-live-device-qa.env before collecting command evidence",
-            "Launch Assemblywright with ASSEMBLYWRIGHT_MAC_ENABLE_IPC_CLI_HANDOFF=true for this operator evidence session, then confirm ASSEMBLYWRIGHT_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path before IPC commands",
+            RELEASE_PROTECTED_SHELL_GUIDANCE,
             "cargo run -p assemblywright-cli -- command \"status check\" --endpoint \"${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}\" --json",
             "Record the returned task ID as ASSEMBLYWRIGHT_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>' or a task-associated audit ID as 'audit:<uuid>' in target/release-live-device-qa.env",
             "set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete",
@@ -643,7 +645,7 @@ fn format_release_live_device_runbook(
         "- ./scripts/release-live-device-qa.sh --check".to_string(),
         "- ./scripts/release-live-device-qa.sh --write-template target/release-live-device-qa.env".to_string(),
         "- Set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' in target/release-live-device-qa.env before collecting command evidence".to_string(),
-        "- Launch Assemblywright with ASSEMBLYWRIGHT_MAC_ENABLE_IPC_CLI_HANDOFF=true for this operator evidence session, then confirm ASSEMBLYWRIGHT_IPC_TOKEN_FILE points to the app-owned ipc-session-auth.json path before IPC commands".to_string(),
+        format!("- {RELEASE_PROTECTED_SHELL_GUIDANCE}"),
         "- cargo run -p assemblywright-cli -- command \"status check\" --endpoint \"${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}\" --json".to_string(),
         "- Record the returned task ID as ASSEMBLYWRIGHT_QA_COMMAND_RESULT_EVIDENCE_ID='task:<uuid>' or a task-associated audit ID as 'audit:<uuid>' in target/release-live-device-qa.env".to_string(),
         "- set -a && source target/release-live-device-qa.env && set +a && ./scripts/release-live-device-qa.sh --assert-complete".to_string(),
@@ -703,7 +705,7 @@ fn release_signed_distribution_runbook_json(
             "ASSEMBLYWRIGHT_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' ASSEMBLYWRIGHT_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' ASSEMBLYWRIGHT_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh",
             "ASSEMBLYWRIGHT_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' ASSEMBLYWRIGHT_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' ASSEMBLYWRIGHT_NOTARYTOOL_APPLE_ID='apple-id@example.com' ASSEMBLYWRIGHT_NOTARYTOOL_TEAM_ID='TEAMID1234' ASSEMBLYWRIGHT_NOTARYTOOL_PASSWORD='app-specific-password' ./scripts/package-distribution.sh",
             "Set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks",
-            "Launch Assemblywright with ASSEMBLYWRIGHT_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export ASSEMBLYWRIGHT_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks",
+            RELEASE_PROTECTED_SHELL_GUIDANCE,
             "ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint \"${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}\"",
             "./scripts/release-evidence-doctor.sh --check",
             "cargo run -p assemblywright-cli -- release live-device-runbook"
@@ -775,7 +777,7 @@ fn format_release_signed_distribution_runbook(
         "- ASSEMBLYWRIGHT_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' ASSEMBLYWRIGHT_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' ASSEMBLYWRIGHT_NOTARYTOOL_PROFILE='...' ./scripts/package-distribution.sh".to_string(),
         "- ASSEMBLYWRIGHT_DEVELOPER_ID_APPLICATION='Developer ID Application: ...' ASSEMBLYWRIGHT_DEVELOPER_ID_INSTALLER='Developer ID Installer: ...' ASSEMBLYWRIGHT_NOTARYTOOL_APPLE_ID='apple-id@example.com' ASSEMBLYWRIGHT_NOTARYTOOL_TEAM_ID='TEAMID1234' ASSEMBLYWRIGHT_NOTARYTOOL_PASSWORD='app-specific-password' ./scripts/package-distribution.sh".to_string(),
         "- Set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks".to_string(),
-        "- Launch Assemblywright with ASSEMBLYWRIGHT_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export ASSEMBLYWRIGHT_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks".to_string(),
+        format!("- {RELEASE_PROTECTED_SHELL_GUIDANCE}"),
         "- ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint \"${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}\"".to_string(),
         "- ./scripts/release-evidence-doctor.sh --check".to_string(),
         "- cargo run -p assemblywright-cli -- release live-device-runbook".to_string(),
@@ -840,7 +842,7 @@ fn release_evidence_bundle_runbook_json(
             "./scripts/release-evidence-doctor.sh --check",
             "./scripts/release-evidence-doctor.sh --assert-complete",
             "Set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks",
-            "Launch Assemblywright with ASSEMBLYWRIGHT_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export ASSEMBLYWRIGHT_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks",
+            RELEASE_PROTECTED_SHELL_GUIDANCE,
             "ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint \"${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}\"",
             "Start or restart the core with ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external",
             "ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness --endpoint \"${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}\""
@@ -910,7 +912,7 @@ fn format_release_evidence_bundle_runbook(
         "- ./scripts/release-evidence-doctor.sh --check".to_string(),
         "- ./scripts/release-evidence-doctor.sh --assert-complete".to_string(),
         "- Set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT='<release-core-endpoint>' before external evidence checks".to_string(),
-        "- Launch Assemblywright with ASSEMBLYWRIGHT_MAC_ENABLE_IPC_CLI_HANDOFF=true, then export ASSEMBLYWRIGHT_IPC_TOKEN_FILE as the app-owned ipc-session-auth.json path before external IPC checks".to_string(),
+        format!("- {RELEASE_PROTECTED_SHELL_GUIDANCE}"),
         "- ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint \"${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}\"".to_string(),
         "- Start or restart the core with ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external".to_string(),
         "- ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness --endpoint \"${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}\"".to_string(),
@@ -945,7 +947,31 @@ fn is_transport_unavailable(error: &anyhow::Error) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::is_transport_unavailable;
+    use super::{
+        format_release_evidence_bundle_runbook, format_release_live_device_runbook,
+        format_release_signed_distribution_runbook, is_transport_unavailable,
+        release_evidence_bundle_runbook_json, release_live_device_runbook_json,
+        release_signed_distribution_runbook_json, RELEASE_PROTECTED_SHELL_GUIDANCE,
+    };
+
+    #[test]
+    fn every_cli_release_runbook_requires_explicit_protected_shell_opt_in() {
+        let readiness = r#"{"production_ready":false,"pending_features":[]}"#;
+        let evidence = r#"{"items":[]}"#;
+        let runbooks = [
+            release_live_device_runbook_json(readiness, evidence).unwrap(),
+            format_release_live_device_runbook(readiness, evidence).unwrap(),
+            release_signed_distribution_runbook_json(readiness, evidence).unwrap(),
+            format_release_signed_distribution_runbook(readiness, evidence).unwrap(),
+            release_evidence_bundle_runbook_json(readiness, evidence).unwrap(),
+            format_release_evidence_bundle_runbook(readiness, evidence).unwrap(),
+        ];
+        for runbook in runbooks {
+            assert!(runbook.contains(RELEASE_PROTECTED_SHELL_GUIDANCE));
+            assert!(!runbook
+                .contains("Launch Assemblywright with ASSEMBLYWRIGHT_MAC_ENABLE_IPC_CLI_HANDOFF"));
+        }
+    }
 
     #[test]
     fn transport_unavailable_includes_restricted_loopback_errors() {

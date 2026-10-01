@@ -2,9 +2,9 @@
 
 > Orchestrated intelligence. Verified software.
 
-## Working developer build
+## Production workflow
 
-The owner-selected supervised build connects the Mac app to a Windows queue runner
+The production product uses the owner-selected supervised workflow and connects the Mac app to a Windows queue runner
 and the configured local models. New features pass through ChatGPT/Codex
 brainstorming and document approval before entering the queue. Stop, Emergency
 Pause, checkpointed Resume, and auto-run operate on real Windows processes and
@@ -15,23 +15,28 @@ an exhausted failed feature.
 With the app-specific background Windows connection configured, run:
 
 ```sh
-./scripts/developer-build.py --build
+./scripts/production-build.py --build
 ```
 
-Later launches use `./scripts/developer-build.py`. See
-[`docs/developer-build.md`](docs/developer-build.md) for setup, native tests, and
-the distinction between this developer build and the production target below, and
+Later launches use `./scripts/production-build.py` or `Open Assemblywright.command`.
+See [`docs/production-build.md`](docs/production-build.md) for release compilation,
+packaging, retained state, and the explicit protected-service mode,
+[`docs/developer-build.md`](docs/developer-build.md) for workflow setup, and
 [`docs/developer-chat-repair-design.md`](docs/developer-chat-repair-design.md) for
 the bounded repair-escalation contract.
 
-Assemblywright is an owner-controlled developer-agent system. A Windows master
-holds durable authority over an owner-approved feature queue; restricted local
-coding agents implement one feature at a time against credential-free
-repository snapshots; a frontier model may assist with planning and final
-review but never writes to a repository. A macOS app is the owner's control and
-observation surface.
+Assemblywright is an owner-controlled developer-agent system. Its production
+Windows runner holds durable authority over an owner-approved feature queue and
+implements one feature at a time under the existing owner account. A frontier
+model assists with planning and independent review; the configured local coding
+runtime performs implementation. The macOS app presents controls and observations.
+The retained protected-service mode has its own restricted snapshot, identity,
+and activation contracts.
 
-This repository is foundation work. The durable contracts, the master kernel,
+The following implementation inventory describes the separate protected-service
+foundation, which is retained behind `ASSEMBLYWRIGHT_RUNTIME=protected-service`.
+Its availability restrictions do not describe the default supervised product.
+This protected-service architecture is foundation work. The durable contracts, the master kernel,
 the enrollment and mTLS identity path, the Windows service lifecycle, the Mac
 bridge and worker agent, and the release gate are implemented. Registered-
 source-checkout mutation, general reviewer-quality proof, and live GitHub

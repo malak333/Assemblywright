@@ -1,5 +1,11 @@
 # Developer Auto AI Repair Implementation Plan
 
+Product scope: this Developer workflow is now the default
+[production product](production-build.md). Historical Developer names remain
+compatibility identifiers. Protected-service activation and signed distribution
+are separate evidence; this promotion does not alter this document's permission,
+review, recovery, or publication contract.
+
 Status: implementation completed in the repository working tree on
 `codex/developer-auto-ai-repair`; final canonical, Windows, installed-app, visual,
 hosted, and publication evidence remains separately reported.

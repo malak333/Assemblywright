@@ -1,5 +1,21 @@
 # Release Checklist
 
+## Selected product and protected-service scope
+
+The owner selected the [supervised production product](production-build.md).
+Its default app opens the existing Windows-runner workflow; the canonical launcher
+builds Mac and Windows release binaries and retains Developer state. Verify profile
+and default-selection tests, native workflow E2E, distribution isolated-HOME launch,
+and the canonical gate before publishing. Separately verify the installed Windows
+runner, connection, queue/checkpoint/pause state, and Mac UI for deployment claims.
+The production launcher is ad-hoc signed; full distribution still uses
+`package-distribution.sh` with Developer ID and notarization credentials.
+
+The protected-service checklist below applies when claiming that explicit mode,
+its adapters, enrollment, or full-machine activation. Its default-inert restrictions
+do not disable the selected supervised product. Promotion does not satisfy any
+protected-service or external distribution evidence requirement.
+
 Use this checklist before tagging or publishing any Assemblywright release.
 Keep the evidence local-first unless the owner explicitly approves hosted
 infrastructure. This checklist separates repository validation from
@@ -486,7 +502,8 @@ Run the canonical local gate and treat any failure as blocking:
 Nothing in this gate signs, notarizes, staples, installs, or validates on a
 live device. It proves the workspace builds, tests pass including ignored
 release proofs, the crates package, the unsigned distribution layout is valid
-and launches in an isolated HOME with Developer Mode default-off, the release
+and launches the supervised UI in an isolated HOME without connection bootstrap,
+the release
 runbooks render, the evidence preflights and self-tests pass, and the Swift
 package builds and tests.
 

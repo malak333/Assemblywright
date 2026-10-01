@@ -1,10 +1,39 @@
 # Developer Build Test and Phase Closeout
 
+## Production-default promotion coverage
+
+The production product reuses this workflow's queue, model/tool, validation, review,
+and publication implementation. The new boundary is default-app/profile selection.
+`AssemblywrightAppRuntimeTests` and `DeveloperConnectionTests` pass 10 focused
+Swift cases: default/explicit selection, exact protected values, configuration
+precedence, canonical-state activation, production/debug metadata, unmarked/custom
+path rejection, missing-configuration rejection, status freshness, and real HTTP
+credential refresh/disconnect. `scripts/developer-build-tests.py` passes 25 launcher
+and profile cases, including release commands, binary paths, canonical version,
+retained debug identity, and active-work maintenance guards. Independent high-risk
+review approved the complete promotion diff after resolving connection recovery
+and packaging-help evidence scope.
+
+The distribution's isolated-HOME smoke checks the release app's supervised default
+without connection bootstrap or TCP listeners. Existing native workflow E2E covers
+the unchanged runner; browser tests are not applicable. The named
+`unit-testing-test-generate` and `e2e-testing` skills are unavailable in this session;
+the focused unit and native process coverage above fulfills their applicable
+verification boundaries. Full canonical validation and hosted gates are required
+before publication. The local gate passed for the product/profile change; final
+operator-runbook wording is covered by focused core/CLI assertions and shell
+self-tests, and the final default app launch smoke passed again. GitHub gates
+validate the complete published tree; the separate production-build workflow compiles the
+runner in release mode. No live Windows release deployment, Developer ID signing,
+notarization, clean-profile installation, live account publication, or visual QA
+is claimed by this source/build-profile slice.
+
 The accepted requirement is a usable, supervised Mac-to-Windows implementation and
 validation loop. `DESIGN.md`, `docs/safety-rules.md`, and `docs/developer-build.md`
-record the owner's deferred production-hardening scope. This phase preserves the
-production schema and installed service. Its publication checkout excludes the
-unfinished production control, VM, and active-executor drafts.
+record the accepted owner-account execution scope. The
+[production build](production-build.md) makes this workflow the default product.
+The protected-service schema and installed service remain separate; their
+activation, VM, and active-executor requirements are not inferred from these tests.
 
 ## Workflow and coverage matrix
 

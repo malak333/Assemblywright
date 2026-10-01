@@ -1,5 +1,11 @@
 # Durable Feature Conveyor Design
 
+Runtime scope: this document describes the retained protected-service
+architecture, explicitly selected with `ASSEMBLYWRIGHT_RUNTIME=protected-service`.
+The default [production product](production-build.md) now uses the supervised
+Developer workflow. Its promotion does not activate this document's unavailable
+effects or satisfy its protected-host evidence gates.
+
 Status: APPROVED by owner and structured multi-agent design review
 
 Date: 2026-07-24

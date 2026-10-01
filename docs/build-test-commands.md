@@ -1,5 +1,24 @@
 # Build And Test Commands
 
+## Production product build
+
+The [production build](production-build.md) promotes the supervised workflow to
+the default app without changing the protected-service database or activation.
+Build and connect with `./scripts/production-build.py --build`; launch later with
+`./scripts/production-build.py`. The compatibility Developer launcher remains a
+debug profile. Both use the retained Developer state and existing Windows runner.
+Run `python3 -B scripts/developer-build-tests.py` for launcher/profile coverage,
+the Swift runtime-selection tests with the app suite, and
+`./scripts/package-distribution.sh --unsigned-launch-check` for the release app's
+isolated-HOME default launch. The canonical `./scripts/release-local.sh` runs the
+full repository/native fixture gates. Live Windows execution, signing, notarization,
+Finder installation, and real account publication remain separate evidence.
+Sections below about protected production, bridge enrollment, and service effect
+activation refer to the explicit `protected-service` mode.
+The separate `production-build.yml` workflow compiles the supervised production
+runner with `cargo build --release -p assemblywright-master --bin assemblywright-developer --locked`.
+That hosted compilation is separate from installed Windows deployment.
+
 ## Developer chat history restoration
 
 The Developer binary tests exercise this surface; master library tests alone do not.

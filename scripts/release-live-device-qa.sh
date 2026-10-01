@@ -507,8 +507,9 @@ write_env_template() {
 # app has been installed into a clean macOS profile and launched through Finder
 # or LaunchServices.
 #
-# For the operator evidence session, launch Assemblywright with the exact opt-in
-# ASSEMBLYWRIGHT_MAC_ENABLE_IPC_CLI_HANDOFF=true. Then set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT
+# For the operator evidence session, launch the retained protected shell with
+# ASSEMBLYWRIGHT_RUNTIME=protected-service and ASSEMBLYWRIGHT_MAC_ENABLE_IPC_CLI_HANDOFF=true,
+# with ASSEMBLYWRIGHT_DEVELOPER_CONFIG unset. Then set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT
 # to the running release core endpoint and ASSEMBLYWRIGHT_IPC_TOKEN_FILE to the app-owned
 # handoff file, source this template, and capture the command evidence ID from
 # that same authenticated endpoint:
@@ -703,6 +704,8 @@ JSON
   require_file_contains "live QA env template" "$fixture_template" 'ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release evidence-status --endpoint "${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}"'
   require_file_contains "live QA env template" "$fixture_template" 'ASSEMBLYWRIGHT_RELEASE_READINESS_EVIDENCE_MODE=external cargo run -p assemblywright-cli -- release readiness --endpoint "${ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT:?set ASSEMBLYWRIGHT_RELEASE_CORE_ENDPOINT}"'
   require_file_contains "live QA env template" "$fixture_template" 'Do not set ASSEMBLYWRIGHT_QA_SELF_TEST_FIXTURE in release evidence'
+  require_file_contains "live QA env template" "$fixture_template" 'ASSEMBLYWRIGHT_RUNTIME=protected-service'
+  require_file_contains "live QA env template" "$fixture_template" 'ASSEMBLYWRIGHT_DEVELOPER_CONFIG unset'
   if grep -F 'ASSEMBLYWRIGHT_QA_CLEAN_PROFILE_VALIDATED=true' "$fixture_template" >/dev/null 2>&1; then
     fail "live QA self-test expected env template validation flags to default false"
   fi
