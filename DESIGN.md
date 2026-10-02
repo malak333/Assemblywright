@@ -66,6 +66,10 @@ all counters and history, and enters a durable validation-only state for the
 original validation plus independent review. Stop, Emergency Pause, restart, or
 review retry cannot reauthorize repair-model calls or file writes. The stricter
 partially applied staged-repair reconciliation remains a separate contract.
+After later project-chat mutation, the exact durable marker of that prior
+validation-only adoption also permits a fresh, digest-bound adoption under the
+same terminal, effect-free proposal checks; counters and history stay intact,
+and only validation and independent review may run.
 
 This document is the system-level design. Two documents own the detailed
 accepted designs and take precedence within their scope:

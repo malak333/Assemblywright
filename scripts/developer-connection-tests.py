@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import stat
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -182,6 +183,51 @@ class AuthenticationTests(ConnectionFixture):
                     {"endpoint": "http://127.0.0.1:17796", "token": TOKEN}, config))
             self.assertTrue(all(request.method == "GET" for request, _ in observed))
             self.assertTrue(all(request.full_url.endswith("/status") for request, _ in observed))
+            self.assertTrue(all(timeout == connection.AUTHENTICATED_STATUS_TIMEOUT_SECONDS
+                                for _, timeout in observed))
+            self.assertEqual(connection.AUTHENTICATED_STATUS_TIMEOUT_SECONDS, 10)
+
+    def test_authenticated_status_accepts_response_after_legacy_three_second_limit(self):
+        with tempfile.TemporaryDirectory(dir=Path.home()) as root:
+            state, _ = self.make_state(root)
+            config = connection.validate_config(state)
+            value = {
+                "mode": "supervised_developer",
+                "workspace_root": r"\\?\C:\a\aw-developer\projects",
+                "review_required": True,
+                "review_provider": "openai.codex",
+                "review_model": "gpt-5.6-sol",
+                "planning_required": True,
+                "planning_provider": "openai.codex",
+                "planning_model": "gpt-5.6-sol",
+            }
+
+            class Response:
+                def __enter__(self):
+                    return self
+                def __exit__(self, *unused):
+                    return False
+                def read(self):
+                    return json.dumps(value).encode()
+
+            def delayed_urlopen(request, timeout):
+                self.assertEqual(request.method, "GET")
+                self.assertEqual(timeout, 10)
+                time.sleep(3.05)
+                return Response()
+
+            started = time.monotonic()
+            with patch.object(connection.urllib.request, "urlopen", side_effect=delayed_urlopen):
+                self.assertEqual(connection.authenticated_status(
+                    {"endpoint": "http://127.0.0.1:17796", "token": TOKEN}, config), value)
+            self.assertGreater(time.monotonic() - started, 3)
+
+            invalid = dict(value, review_provider="other.provider")
+            value.clear()
+            value.update(invalid)
+            with patch.object(connection.urllib.request, "urlopen", return_value=Response()):
+                self.assertIsNone(connection.authenticated_status(
+                    {"endpoint": "http://127.0.0.1:17796", "token": TOKEN}, config))
 
     def test_status_accepts_bound_owner_models_and_rejects_mismatches(self):
         value = {"review_model": "gpt-5.3-codex-spark", "planning_model": "gpt-6-astra",

@@ -3107,7 +3107,47 @@ consistency.
   stale hashes, and enters an automatic-repair-inactive validation-only state.
   Stop, Emergency Pause, restart, and review retry cannot reauthorize model calls
   or file writes. This path does not weaken staged-quarantine receipt checks.
-
+- A prior exact-current-snapshot adoption is durably identifiable without a new
+  schema field by the inactive lifecycle plus the exact validation-only adoption
+  reason written by Windows. If later project-chat effects return the feature to
+  `tool_workspace_changed_requires_proposal`, repeat adoption is eligible only
+  with that marker and a fresh terminal effect-free manual proposal lineage.
+  Repair, escalation, or review pending state and any proposal effect evidence
+  reject. Adoption preserves counters and histories and authorizes only immutable
+  validation plus independent review.
+- Fully applied staged review post-processing has a phase-specific authority
+  check for the exact durable `review_N_pending` receipt. It binds the pending
+  packet, validation digest, v2 version, ordered batch packets, proposal, staged
+  execution authority, epoch, protected inputs, and complete private snapshot.
+  An explicit unavailable retry requires exactly the next epoch and one unique
+  prior unavailable receipt whose own packet, validation, and ordered batch
+  digests reconstruct the same candidate, with no decision, findings, or batch
+  receipts. Fresh epoch-bound validation may change the new pending receipt.
+  Pending review is not admitted by validation, repair, or replay paths. A legacy
+  binding-v0 `not_run` record can share the numeric attempt only when its exact
+  automatic escalation proves a terminal effect-free proposal with matching
+  authorization-not-run and application-not-run receipts. The record remains in
+  the bound history hash but does not consume a provider slot; malformed lineage
+  and additional provider evidence fail closed before dispatch.
+- Exact `.pytest_cache` path components are validation-environment artifacts for
+  recovery candidate projection, just like `__pycache__`. Current inventory,
+  prior candidate, and historical mutation entries under that component do not
+  become editable review files, including mixed-case and backslash spellings.
+  Repair context retains one generated-tree aggregate rather than retrieving its
+  child paths as source. Their bytes remain in the complete private effect
+  fingerprint, so cache drift still invalidates an exact binding. Lookalike names,
+  sensitive paths, and other reserved dot-directories remain fail-closed; this rule
+  grants no repair-model call, file write, approval, replay, or cancellation
+  exception. Exact-current candidate construction compares complete private effect
+  snapshots before and after its scan and binds the coherent digest into the
+  displayed Resume hash, including equal-length drift that a redacted review
+  manifest cannot expose.
+- The persistent Mac connection must allow ten seconds for one authenticated
+  Windows `/status` GET and thirty seconds for launch readiness. A healthy
+  supervised runner can return after the former three-second client limit while
+  still satisfying the exact token, mode, provider, model, and normalized
+  workspace bindings. A timeout remains unknown status and cannot authorize
+  shutdown, replacement, or any relaxed identity check.
 - Manual repair retry needs the complete saved diagnosis identity: conversation
   ID, request ID, and content digest. Omitting the conversation from the repair
   response can make a discarded proposal retry resolve to the legacy conversation

@@ -209,6 +209,26 @@ fn scalable_review(input: &str, arguments: &[String]) -> Option<Value> {
         std::process::id().to_string(),
     )
     .unwrap();
+    let gate = std::env::current_exe()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("staged-review.gate");
+    if instruction.contains("staged-automatic:") && packet["batch_index"] == 0 && gate.exists() {
+        std::fs::write(
+            gate.with_extension("started"),
+            std::process::id().to_string(),
+        )
+        .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        while gate.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(
+            !gate.exists(),
+            "native fixture review gate was not released"
+        );
+    }
     if instruction.contains("[fixture:malformed]") {
         return Some(json!("malformed"));
     }

@@ -28,6 +28,7 @@ MAX_LOG_BYTES = 512 * 1024
 BACKOFF = (1, 2, 4, 8, 16, 30)
 RUNNER_RETRY_SECONDS = 5
 HEALTH_INTERVAL_SECONDS = 2
+AUTHENTICATED_STATUS_TIMEOUT_SECONDS = 10
 STOP = False
 
 
@@ -395,7 +396,8 @@ def authenticated_status(runtime, config):
     request = urllib.request.Request(endpoint + "/status", method="GET",
                                      headers={"Authorization": "Bearer " + token})
     try:
-        with urllib.request.urlopen(request, timeout=3) as response:
+        with urllib.request.urlopen(
+                request, timeout=AUTHENTICATED_STATUS_TIMEOUT_SECONDS) as response:
             value = json.load(response)
     except (OSError, ValueError, urllib.error.HTTPError):
         return None
