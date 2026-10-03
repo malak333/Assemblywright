@@ -3161,3 +3161,9 @@ consistency.
   repair model may then return no file changes. That is an unavailable proposal,
   not an approval or a failed conversation binding; passing tests in a disposable
   copy still cannot clear the live candidate's independent-review quarantine.
+- Production/debug maintenance requires fresh authenticated idle status before
+  the shutdown POST. The acknowledgement budget is fifteen seconds, distinct from
+  the ten-second status GET budget. Only a parsed JSON object admits supervisor
+  teardown and replacement. Once the POST was sent, HTTP/JSON errors and transport
+  timeouts mean unknown shutdown outcome; retain the supervisor and report that
+  uncertainty rather than claiming no process stopped or retrying the POST.
