@@ -87,6 +87,16 @@ the production launcher, reconnect, and inspect queue/checkpoint, Emergency Paus
 provider, and repository bindings before starting work. Ambiguous effects require
 existing exact recovery; do not replay them or create a replacement queue.
 
+A rebuild first obtains fresh authenticated idle status. An unavailable status
+means no shutdown request was sent and no process was stopped; reconnect before
+retrying. After the shutdown POST is sent, the launcher allows a bounded fifteen
+seconds for a parsed JSON-object acknowledgement. A timeout, HTTP error, malformed
+JSON, or non-object response leaves the shutdown outcome unknown and retains the
+connection supervisor. Inspect and reconnect before another maintenance attempt;
+an acknowledgement error does not prove that the runner ignored the request.
+The launcher does not force-stop the supervisor or continue to replacement after
+an unverified acknowledgement.
+
 For rollback, use the compatibility Developer launcher against the same retained
 state, subject to the existing schema compatibility and maintenance guards. The
 protected Windows service and its database are independently provisioned and are

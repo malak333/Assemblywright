@@ -30,6 +30,8 @@ APP = ROOT / "target/developer/Assemblywright Developer.app"
 CONNECTION_SOURCE = Path(__file__).with_name("developer-connection.py")
 MIGRATION_FILE = "connection-migration.json"
 
+SHUTDOWN_ACK_TIMEOUT_SECONDS = 15
+
 
 @dataclass(frozen=True)
 class BuildProfile:
@@ -200,10 +202,16 @@ def request_shutdown(connection, runtime, config):
         headers={"Authorization": "Bearer " + runtime["token"],
                  "Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(request, timeout=5) as response:
-            json.load(response)
-    except (OSError, ValueError, urllib.error.HTTPError) as error:
-        raise SystemExit("The idle runner did not accept shutdown. No connection process was stopped.") from error
+        with urllib.request.urlopen(request, timeout=SHUTDOWN_ACK_TIMEOUT_SECONDS) as response:
+            body = json.load(response)
+    except urllib.error.HTTPError as error:
+        raise SystemExit("The shutdown acknowledgement was not verified, the outcome is unknown, and the connection supervisor was retained.") from error
+    except ValueError as error:
+        raise SystemExit("The shutdown acknowledgement was not verified, the outcome is unknown, and the connection supervisor was retained.") from error
+    except OSError as error:
+        raise SystemExit("The shutdown acknowledgement is unavailable, the outcome is unknown, and the connection supervisor was retained.") from error
+    if not isinstance(body, dict):
+        raise SystemExit("The shutdown acknowledgement was not verified, the outcome is unknown, and the connection supervisor was retained.")
     return status
 
 

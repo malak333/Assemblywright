@@ -8,7 +8,7 @@ and publication implementation. The new boundary is default-app/profile selectio
 Swift cases: default/explicit selection, exact protected values, configuration
 precedence, canonical-state activation, production/debug metadata, unmarked/custom
 path rejection, missing-configuration rejection, status freshness, and real HTTP
-credential refresh/disconnect. `scripts/developer-build-tests.py` passes 25 launcher
+credential refresh/disconnect. `scripts/developer-build-tests.py` passes 37 launcher
 and profile cases, including release commands, binary paths, canonical version,
 retained debug identity, and active-work maintenance guards. Independent high-risk
 review approved the complete promotion diff after resolving connection recovery
@@ -17,9 +17,10 @@ and packaging-help evidence scope.
 The distribution's isolated-HOME smoke checks the release app's supervised default
 without connection bootstrap or TCP listeners. Existing native workflow E2E covers
 the unchanged runner; browser tests are not applicable. The named
-`unit-testing-test-generate` and `e2e-testing` skills are unavailable in this session;
-the focused unit and native process coverage above fulfills their applicable
-verification boundaries. Full canonical validation and hosted gates are required
+`unit-testing-test-generate` and `e2e-testing` workflows guide scenario selection,
+assertion quality, fixtures, and verification. The focused unit and native process
+coverage fulfills the applicable boundaries; browser tooling applies to actual
+browser surfaces. Full canonical validation and hosted gates are required
 before publication. The local gate passed for the product/profile change; final
 operator-runbook wording is covered by focused core/CLI assertions and shell
 self-tests, and the final default app launch smoke passed again. GitHub gates
@@ -34,6 +35,25 @@ record the accepted owner-account execution scope. The
 [production build](production-build.md) makes this workflow the default product.
 The protected-service schema and installed service remain separate; their
 activation, VM, and active-executor requirements are not inferred from these tests.
+
+## Bounded maintenance acknowledgement coverage
+
+The launcher suite includes fresh-status rejection, all seven active-work guards,
+and real loopback HTTP shutdown acknowledgements. A success response delayed by
+5.1 seconds exercises the unpatched fifteen-second production budget and verifies
+exactly one authenticated shutdown POST. A shorter injected deadline proves a
+transport timeout does not replay the request. HTTP 409/500, malformed JSON, and
+JSON null/list/string/number responses remain unverified outcomes.
+
+The disruptive `--build` regression uses the real maintenance lock and verifies
+that an unverified acknowledgement prevents supervisor teardown, configuration
+and runtime writes, building, model startup, reconnect, and installation. HTTP
+fixtures consume the request body, frame the response, bind ephemeral ports, and
+join their server threads. These process/HTTP proofs do not establish installation,
+visual application readiness, signing, notarization, or successful live recovery.
+
+Run this boundary with `python3 scripts/developer-build-tests.py`. Full canonical
+validation and hosted checks remain publication requirements.
 
 ## Workflow and coverage matrix
 

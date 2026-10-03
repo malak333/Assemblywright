@@ -4,13 +4,16 @@ import importlib.util
 from pathlib import Path
 import sys
 from types import SimpleNamespace
+import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 import tempfile
 import json
 from io import BytesIO
+import http.server
 import os
 import socket
+import time
 from contextlib import ExitStack
 
 sys.dont_write_bytecode = True
@@ -362,6 +365,425 @@ class RunnerMaintenanceAdmissionTests(unittest.TestCase):
                 launcher.preflight_connection(connection, {'host': 'mike@unreachable.test'})
             shutdown.assert_not_called()
             stop.assert_not_called()
+
+
+def _make_server(handler_cls):
+    """Build a ThreadingHTTPServer bound to port 0, start serve_forever in a thread, return (server, port, thread)."""
+    server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), handler_cls)
+    port = server.socket.getsockname()[1]
+    started = threading.Event()
+
+    def _serve():
+        started.set()
+        server.serve_forever()
+
+    thread = threading.Thread(target=_serve)
+    thread.start()
+    started.wait()
+    return server, port, thread
+
+
+class ShutdownAcknowledgementTests(unittest.TestCase):
+    """Bounded shutdown acknowledgement behaviour."""
+
+    def _runtime(self, port=None):
+        return {'endpoint': f'http://127.0.0.1:{port}', 'token': 'test-token'}
+
+    def _connection(self, status=None):
+        return SimpleNamespace(authenticated_status=lambda runtime, config: status)
+
+    def test_valid_acknowledgement_with_delayed_object_success(self):
+        """Produce a real HTTP 200 with a JSON-object acknowledgement arriving after the former 5s deadline."""
+        captured = []
+        delay = 5.1
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                content_length = int(self.headers.get('Content-Length', 0))
+                body = self.rfile.read(content_length)
+                captured.append({
+                    'path': self.path,
+                    'method': self.command,
+                    'headers': dict(self.headers),
+                    'body': body,
+                })
+                time.sleep(delay)
+                payload = json.dumps({'status': 'ok'}).encode()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(payload)))
+                self.send_header('Connection', 'close')
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, format, *args):
+                pass
+
+        server, port, thread = _make_server(Handler)
+        try:
+            self.assertIs(launcher.SHUTDOWN_ACK_TIMEOUT_SECONDS.__class__, int)
+            self.assertEqual(launcher.SHUTDOWN_ACK_TIMEOUT_SECONDS, 15)
+            conn = self._connection({'revision': 1})
+            runtime = self._runtime(port)
+            result = launcher.request_shutdown(conn, runtime, {})
+            self.assertEqual(result, {'revision': 1})
+            self.assertEqual(len(captured), 1)
+            req = captured[0]
+            self.assertEqual(req['path'], '/control')
+            self.assertEqual(req['method'], 'POST')
+            self.assertEqual(req['headers'].get('Content-Type'), 'application/json')
+            self.assertEqual(req['headers'].get('Authorization'), 'Bearer test-token')
+            self.assertEqual(req['body'], json.dumps({'action': 'shutdown'}).encode())
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
+
+    def test_delayed_beyond_bounded_timeout_fails_closed(self):
+        """Client timeout (0.05 s) fires before the server delay (0.15 s); assert unknown-outcome wording and exactly one request."""
+        request_count = [0]
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                content_length = int(self.headers.get('Content-Length', 0))
+                self.rfile.read(content_length)
+                request_count[0] += 1
+                time.sleep(0.15)
+                try:
+                    payload = json.dumps({'status': 'ok'}).encode()
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json')
+                    self.send_header('Content-Length', str(len(payload)))
+                    self.send_header('Connection', 'close')
+                    self.end_headers()
+                    self.wfile.write(payload)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+
+            def log_message(self, format, *args):
+                pass
+
+        server, port, thread = _make_server(Handler)
+        try:
+            conn = self._connection({'revision': 1})
+            runtime = self._runtime(port)
+            with patch.object(launcher, 'SHUTDOWN_ACK_TIMEOUT_SECONDS', 0.05):
+                try:
+                    launcher.request_shutdown(conn, runtime, {})
+                    self.fail("SystemExit was not raised")
+                except SystemExit as exc:
+                    self.assertIn('acknowledgement is unavailable', str(exc))
+                    self.assertIn('outcome is unknown', str(exc))
+                    self.assertIn('connection supervisor was retained', str(exc))
+            self.assertEqual(request_count[0], 1)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
+
+    def test_unavailable_status_rejects_before_any_post(self):
+        status_mock = MagicMock(return_value=None)
+        conn = SimpleNamespace(authenticated_status=status_mock)
+        runtime = self._runtime(17796)
+        with patch.object(launcher.urllib.request, 'urlopen') as request:
+            with self.assertRaises(SystemExit) as ctx:
+                launcher.request_shutdown(conn, runtime, {})
+            self.assertIn('running connection state is unavailable', str(ctx.exception))
+            self.assertIn('No process was stopped', str(ctx.exception))
+            request.assert_not_called()
+        status_mock.assert_called_once_with(runtime, {})
+
+    def test_active_work_rejects_before_any_post(self):
+        for key in ('running', 'chat_running', 'planning_running',
+                     'escalation_running', 'tools_running',
+                     'github_publication_running', 'github_setup_busy'):
+            with self.subTest(key=key):
+                conn = self._connection({key: True})
+                runtime = self._runtime(17796)
+                with patch.object(launcher.urllib.request, 'urlopen') as request:
+                    with self.assertRaisesRegex(SystemExit, 'work to finish'):
+                        launcher.request_shutdown(conn, runtime, {})
+                    request.assert_not_called()
+
+    def test_http_error_fails_with_not_verified(self):
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                content_length = int(self.headers.get('Content-Length', 0))
+                self.rfile.read(content_length)
+                self.send_response(500)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', '0')
+                self.send_header('Connection', 'close')
+                self.end_headers()
+
+            def log_message(self, format, *args):
+                pass
+
+        server, port, thread = _make_server(Handler)
+        try:
+            conn = self._connection({'revision': 1})
+            runtime = self._runtime(port)
+            try:
+                launcher.request_shutdown(conn, runtime, {})
+                self.fail("SystemExit was not raised")
+            except SystemExit as exc:
+                self.assertIsInstance(exc.__cause__, launcher.urllib.error.HTTPError)
+                with exc.__cause__:
+                    self.assertIn('acknowledgement was not verified', str(exc))
+                    self.assertIn('outcome is unknown', str(exc))
+                    self.assertIn('connection supervisor was retained', str(exc))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
+
+    def test_http_409_fails_with_not_verified(self):
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                content_length = int(self.headers.get('Content-Length', 0))
+                self.rfile.read(content_length)
+                self.send_response(409)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', '0')
+                self.send_header('Connection', 'close')
+                self.end_headers()
+
+            def log_message(self, format, *args):
+                pass
+
+        server, port, thread = _make_server(Handler)
+        try:
+            conn = self._connection({'revision': 1})
+            runtime = self._runtime(port)
+            try:
+                launcher.request_shutdown(conn, runtime, {})
+                self.fail("SystemExit was not raised")
+            except SystemExit as exc:
+                self.assertIsInstance(exc.__cause__, launcher.urllib.error.HTTPError)
+                with exc.__cause__:
+                    self.assertIn('acknowledgement was not verified', str(exc))
+                    self.assertIn('outcome is unknown', str(exc))
+                    self.assertIn('connection supervisor was retained', str(exc))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
+
+    def test_malformed_json_fails_with_not_verified(self):
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                content_length = int(self.headers.get('Content-Length', 0))
+                self.rfile.read(content_length)
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(b'{invalid json}')))
+                self.send_header('Connection', 'close')
+                self.end_headers()
+                self.wfile.write(b'{invalid json}')
+
+            def log_message(self, format, *args):
+                pass
+
+        server, port, thread = _make_server(Handler)
+        try:
+            conn = self._connection({'revision': 1})
+            runtime = self._runtime(port)
+            try:
+                launcher.request_shutdown(conn, runtime, {})
+                self.fail("SystemExit was not raised")
+            except SystemExit as exc:
+                self.assertIn('acknowledgement was not verified', str(exc))
+                self.assertIn('outcome is unknown', str(exc))
+                self.assertIn('connection supervisor was retained', str(exc))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
+
+    def test_json_null_fails_with_not_verified(self):
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                content_length = int(self.headers.get('Content-Length', 0))
+                self.rfile.read(content_length)
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(b'null')))
+                self.send_header('Connection', 'close')
+                self.end_headers()
+                self.wfile.write(b'null')
+
+            def log_message(self, format, *args):
+                pass
+
+        server, port, thread = _make_server(Handler)
+        try:
+            conn = self._connection({'revision': 1})
+            runtime = self._runtime(port)
+            try:
+                launcher.request_shutdown(conn, runtime, {})
+                self.fail("SystemExit was not raised")
+            except SystemExit as exc:
+                self.assertIn('acknowledgement was not verified', str(exc))
+                self.assertIn('outcome is unknown', str(exc))
+                self.assertIn('connection supervisor was retained', str(exc))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
+
+    def test_json_array_fails_with_not_verified(self):
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                content_length = int(self.headers.get('Content-Length', 0))
+                self.rfile.read(content_length)
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(b'[1, 2, 3]')))
+                self.send_header('Connection', 'close')
+                self.end_headers()
+                self.wfile.write(b'[1, 2, 3]')
+
+            def log_message(self, format, *args):
+                pass
+
+        server, port, thread = _make_server(Handler)
+        try:
+            conn = self._connection({'revision': 1})
+            runtime = self._runtime(port)
+            try:
+                launcher.request_shutdown(conn, runtime, {})
+                self.fail("SystemExit was not raised")
+            except SystemExit as exc:
+                self.assertIn('acknowledgement was not verified', str(exc))
+                self.assertIn('outcome is unknown', str(exc))
+                self.assertIn('connection supervisor was retained', str(exc))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
+
+    def test_json_string_fails_with_not_verified(self):
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                content_length = int(self.headers.get('Content-Length', 0))
+                self.rfile.read(content_length)
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(b'"ok"')))
+                self.send_header('Connection', 'close')
+                self.end_headers()
+                self.wfile.write(b'"ok"')
+
+            def log_message(self, format, *args):
+                pass
+
+        server, port, thread = _make_server(Handler)
+        try:
+            conn = self._connection({'revision': 1})
+            runtime = self._runtime(port)
+            try:
+                launcher.request_shutdown(conn, runtime, {})
+                self.fail("SystemExit was not raised")
+            except SystemExit as exc:
+                self.assertIn('acknowledgement was not verified', str(exc))
+                self.assertIn('outcome is unknown', str(exc))
+                self.assertIn('connection supervisor was retained', str(exc))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
+
+    def test_json_number_fails_with_not_verified(self):
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                content_length = int(self.headers.get('Content-Length', 0))
+                self.rfile.read(content_length)
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(b'42')))
+                self.send_header('Connection', 'close')
+                self.end_headers()
+                self.wfile.write(b'42')
+
+            def log_message(self, format, *args):
+                pass
+
+        server, port, thread = _make_server(Handler)
+        try:
+            conn = self._connection({'revision': 1})
+            runtime = self._runtime(port)
+            try:
+                launcher.request_shutdown(conn, runtime, {})
+                self.fail("SystemExit was not raised")
+            except SystemExit as exc:
+                self.assertIn('acknowledgement was not verified', str(exc))
+                self.assertIn('outcome is unknown', str(exc))
+                self.assertIn('connection supervisor was retained', str(exc))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
+
+    def test_stop_supervisor_retained_when_ack_unverified(self):
+        """Exercise main's disruptive build path regression: argv-driven --build/--no-open, real maintenance_lock, acknowledgement failure, supervisor retained."""
+        with tempfile.TemporaryDirectory() as temp:
+            state = Path(temp)
+            (state / 'connection.json').write_text('{}')
+            os.chmod(str(state), 0o700)
+
+            saved = {'endpoint': 'http://127.0.0.1:17796', 'token': 'a' * 64,
+                     'review_codex_executable': 'C:/tools/@openai/codex.exe',
+                     'review_codex_home': 'C:/Users/mike/.codex'}
+            existing_config = {'host': 'fixture-host'}
+
+            fake_connection = SimpleNamespace(
+                direct_private_directory=lambda *a, **kw: None,
+                validate_config=lambda s: existing_config,
+                validate_config_payload=lambda *a: existing_config,
+                service_is_loaded=lambda: True,
+            )
+            install_mock = MagicMock()
+            fake_connection.install = install_mock
+
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(launcher, 'STATE', state))
+                stack.enter_context(patch.object(launcher.sys, 'argv', ['developer-build.py', '--build', '--no-open']))
+                stack.enter_context(patch.object(launcher, '_connection_module', return_value=fake_connection))
+                stack.enter_context(patch.object(launcher, 'load_saved_runtime', return_value=saved))
+                stack.enter_context(patch.object(launcher, 'authenticated_status', return_value={'revision': 1}))
+                stack.enter_context(patch.object(launcher, 'load_migration', return_value=None))
+                stack.enter_context(patch.object(launcher, 'legacy_migration_candidate', return_value=False))
+                stack.enter_context(patch.object(launcher, 'request_shutdown', side_effect=SystemExit('The shutdown acknowledgement was not verified, the outcome is unknown, and the connection supervisor was retained.')))
+                stop_mock = stack.enter_context(patch.object(launcher, 'stop_supervisor'))
+                write_config = stack.enter_context(patch.object(launcher, 'write_connection_config'))
+                write_runtime = stack.enter_context(patch.object(launcher, 'write_runtime'))
+                build = stack.enter_context(patch.object(launcher, 'build_products'))
+                start_model = stack.enter_context(patch.object(launcher, 'start_local_model'))
+                wait = stack.enter_context(patch.object(launcher, 'wait_for_connected'))
+                stack.enter_context(patch.object(launcher, 'preflight_connection', return_value=None))
+
+                with self.assertRaises(SystemExit) as exc:
+                    launcher.main()
+                self.assertEqual(exc.exception.args[0],
+                    'The shutdown acknowledgement was not verified, the outcome is unknown, and the connection supervisor was retained.')
+
+                launcher.request_shutdown.assert_called_once_with(fake_connection, saved, existing_config)
+                stop_mock.assert_not_called()
+                write_config.assert_not_called()
+                write_runtime.assert_not_called()
+                build.assert_not_called()
+                start_model.assert_not_called()
+                wait.assert_not_called()
+                install_mock.assert_not_called()
 
 
 if __name__ == '__main__':
