@@ -119,12 +119,53 @@ Emergency Pause, restart, and reviewer retries remain validation/review-only and
 cannot reauthorize a repair model or file write. This does not relax the receipt,
 policy, private-effect, or epoch checks for a partially applied staged proposal.
 
+If later project-chat tools return that same feature to
+`tool_workspace_changed_requires_proposal`, Windows may display a new exact binding
+only when the persisted lifecycle remains inactive with the exact prior
+validation-only adoption reason and the newest manual proposal again has the
+complete terminal effect-free receipts. This repeat adoption preserves every
+counter and history entry and returns only to validation and independent review;
+pending repair, escalation, review, or any proposal write evidence rejects it.
+
+A fully applied staged candidate keeps its original application authority while
+an independent review call is pending. Post-provider admission recognizes only the
+exact host-created `review_N_pending` record: status and lifecycle must still be
+running, the packet, validation receipt, binding version, and ordered batch packet
+digests must match, and no result may already exist for that attempt. An explicit
+retry additionally requires exactly the next epoch and one unique prior v2
+unavailable receipt whose own packet, validation, and ordered batch digests still
+reconstruct the same candidate, with no decision, findings, or batch receipts.
+Fresh validation may produce a different epoch-bound receipt for the new pending
+attempt. The complete private project snapshot and staged execution/protected-input
+authority are then rechecked before the decision is admitted. This phase-specific
+rule does not make pending review eligible for validation, repair, or write replay.
+A historical binding-v0 `not_run` review receipt may share that numeric attempt only
+when its exact automatic escalation has one terminal proposal receipt plus matching
+authorization-not-run and application-not-run receipts and no effect evidence. It
+remains in the history hash but does not occupy a provider attempt; malformed,
+unbound, or additional provider receipts still reject before a provider call.
+
 Legacy tool history can contain dependency-cache files and obsolete outputs.
 Adoption uses the complete current inventory plus retained cumulative review
 files; it does not recreate obsolete ledger-only paths or feed cache binaries to
 image review. Current retained files remain mandatory. Project-chat mutations
 use normal deterministic project targeting without rewriting their original
 attribution. A failed admission exposes a bounded reason in the Developer UI.
+Pytest's exact `.pytest_cache` path component follows the same recovery projection
+rule as `__pycache__`: current inventory paths, retained candidate entries, and
+historical mutation paths beneath that component are omitted from the editable
+recovery candidate. Matching is case-insensitive and separator-normalized, without
+classifying lookalike names or other hidden directories as caches. The cache bytes
+remain covered by the complete private tool-effect fingerprint; this projection
+neither deletes them nor weakens stale-state detection. Sensitive
+paths and every other reserved dot-directory still fail closed through the existing
+admission and checked-path boundaries. Repair context treats the exact cache
+directory as one generated-tree aggregate, so cache children are fingerprinted
+without becoming retrievable source portions. Exact-current candidate construction takes
+the complete private effect snapshot before and after its bounded project scan,
+rejects an incoherent scan, and includes that digest in the displayed recovery
+binding. Equal-length cache or restricted-file drift therefore invalidates Resume
+even when its bytes and path are absent from the editable/cloud review projection.
 
 ## Automatic repair preparation with generated outputs
 
@@ -238,6 +279,11 @@ ledger. The owner request still binds the current epoch and complete recovery
 digest; unchanged private effects, candidate receipts, policy, access, runtime,
 archive, idle tools, and fresh validation/review remain required. This allowance
 authorizes no model call or replay of application writes.
+
+Cache projection grants no new approval or replay authority. Stop, cancellation,
+Emergency Pause, stale bindings, or changed private cache bytes continue to block
+recovery at their existing boundaries; an adopted candidate still enters only fresh
+immutable validation and independent review.
 
 ## Required proof
 

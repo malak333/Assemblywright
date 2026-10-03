@@ -40,7 +40,16 @@ class FailurePreservingTemporaryDirectory:
 
     def __exit__(self, kind, unused_value, unused_traceback):
         if kind is None:
-            shutil.rmtree(self.path)
+            cleanup_path = str(self.path)
+            if os.name == 'nt':
+                cleanup_path = '\\\\?\\' + str(Path(self.path).resolve())
+
+            def missing_descendant(function, path, error):
+                if isinstance(error[1], FileNotFoundError) and path != cleanup_path:
+                    return
+                raise error[1]
+
+            shutil.rmtree(cleanup_path, onerror=missing_descendant)
         else:
             print(f'preserved failed native fixture: {self.path}', file=sys.stderr)
 
@@ -73,6 +82,8 @@ def validation_cache_snapshot(project):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', required=True)
+    parser.add_argument('--provider-retry-success', action='store_true',
+        help='Prove successful frozen review after one real provider exit')
     parser.add_argument('--opencode-executable',
         default=os.environ.get('ASSEMBLYWRIGHT_DEVELOPER_OPENCODE_EXECUTABLE'),
         help='exact pinned OpenCode 1.18.23 executable used by the staged repair proof')
@@ -470,6 +481,16 @@ def main():
             # implementation or erase the retained counters and proposal.
             stop()
             checkpoint_validation_gate = root / 'checkpoint-validation-gate'
+            # Historical chat tests can retain pytest's hidden output among the
+            # cumulative edits. It must survive on disk without becoming an
+            # editable source path in exact-snapshot adoption or review.
+            pytest_cache_path = '.pytest_cache/v/cache/nodeids'
+            pytest_cache_bytes = b'["tests/test_site.py::test_build"]\n'
+            pytest_cache_file = project / pytest_cache_path
+            pytest_cache_file.parent.mkdir(parents=True, exist_ok=True)
+            pytest_cache_file.write_bytes(pytest_cache_bytes)
+            sensitive_cache_file = project / '.pytest_cache/credentials.toml'
+            sensitive_cache_file.write_bytes(b'fixture-cache-value-a\n')
             checkpoint_validation_started = root / 'checkpoint-validation-started'
             checkpoint_validation_gate.write_text('hold exact snapshot validation')
             checkpoint_validation_code = '; '.join([
@@ -492,6 +513,8 @@ def main():
                     'SELECT state FROM developer_state WHERE id=1').fetchone()[0])
                 feature = next(item for item in durable['queue_v12'] if item['id'] == feature_id)
                 durable['auto_ai_repair_max_escalations'] = 100
+                feature['edits'].append({'path': pytest_cache_path,
+                    'content': pytest_cache_bytes.decode(), 'before': None})
                 diagnosis = 'No further correction is needed'
                 diagnosis_sha256 = hashlib.sha256(diagnosis.encode()).hexdigest()
                 proposal_id = str(uuid.uuid4())
@@ -572,6 +595,17 @@ def main():
                 raise AssertionError('Checkpoint recovery accepted a missing snapshot digest')
             except urllib.error.HTTPError as error:
                 assert error.code in (400, 409), error.code
+            sensitive_cache_file.write_bytes(b'fixture-cache-value-b\n')
+            try:
+                api('control', dict(checkpoint_binding,
+                    expected_asset_recovery_sha256=checkpoint_digest))
+                raise AssertionError('Checkpoint recovery accepted redacted cache drift')
+            except urllib.error.HTTPError as error:
+                assert error.code == 409, error.code
+            cache_fresh = api()['queue'][0]
+            cache_digest = cache_fresh.get('asset_recovery_sha256')
+            assert cache_digest and cache_digest != checkpoint_digest, cache_fresh
+            checkpoint_digest = cache_digest
             (project / 'source' / 'new-owner-source.py').write_bytes(
                 b'# Exact checkpoint owner snapshot\n')
             try:
@@ -647,6 +681,10 @@ def main():
                 'Exact checkpoint adoption replayed file writes'
             checkpoint_evidence = [json.loads(line) for line in
                 (root / 'review-fixture/review-input-evidence.jsonl').read_text().splitlines()]
+            assert pytest_cache_file.read_bytes() == pytest_cache_bytes
+            assert not any(entry['path'] == pytest_cache_path
+                for item in checkpoint_evidence if item.get('kind') == 'review_batch'
+                for entry in item['entries']), 'Pytest cache entered source review'
             assert any(item.get('kind') == 'review_batch'
                 and any(entry['path'] == 'source/new-owner-source.py'
                     and entry['content_sha256'] == hashlib.sha256(
@@ -995,8 +1033,7 @@ def main():
                 if progress != last_progress:
                     apply_timeline.append((round(time.monotonic() - apply_started, 3), progress))
                     last_progress = progress
-                review_started = (review_gate_started.exists()
-                    or (os.name == 'nt' and native_review_started.exists()))
+                review_started = review_gate_started.exists()
                 if (not adopted_after_stop and observed['review_status'] == 'reviewing'
                         and review_started):
                     if not provider_unavailable_observed:
@@ -1004,7 +1041,7 @@ def main():
                         # batch is held. The durable unavailable decision must
                         # preserve the exact applied candidate so Resume can
                         # revalidate it without model inference or file replay.
-                        provider_pid = int(native_review_started.read_text())
+                        provider_pid = int(review_gate_started.read_text())
                         unavailable_files = {str(path.relative_to(staged_project)):
                             (hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_mtime_ns)
                             for path in staged_project.rglob('*') if path.is_file()}
@@ -1021,22 +1058,87 @@ def main():
                         unavailable_identity = (unavailable_proposal['proposal_id'],
                             unavailable_proposal['apply_request_id'],
                             unavailable_proposal['application_state_sha256'])
+                        unavailable_receipts = [item for item in
+                            unavailable_feature['escalation_history']
+                            if item['proposal_id'] == unavailable_proposal['proposal_id']]
+                        assert unavailable_receipts
+                        assert all(item['candidate_sha256'] == restart_capture['candidate_sha256']
+                            for item in unavailable_receipts)
+                        candidate_entry_keys = ('path', 'kind', 'content_sha256',
+                            'before_sha256', 'media_type', 'width', 'height')
+                        unavailable_terminal = api('repair/escalation?id=' + staged_feature_id)
+                        assert unavailable_terminal['candidate_sha256'] == \
+                            restart_capture['candidate_sha256']
+                        unavailable_candidate_entries = [{key: entry.get(key)
+                            for key in candidate_entry_keys}
+                            for entry in unavailable_terminal['candidate_entries']]
                         terminate_fixture_process(provider_pid)
-                        # A confirmed dead reviewer process receives one
-                        # automatic exact-candidate retry. Keep the gate shut
-                        # and terminate that second real provider too, proving
-                        # the finite limit before the durable unavailable hold.
-                        retry_deadline = time.monotonic() + 30
-                        retry_pid = None
-                        while time.monotonic() < retry_deadline:
-                            if native_review_started.exists():
-                                observed_pid = int(native_review_started.read_text())
-                                if observed_pid != provider_pid:
-                                    retry_pid = observed_pid
-                                    break
-                            time.sleep(.02)
-                        assert retry_pid is not None, 'safe reviewer outage was not retried'
-                        terminate_fixture_process(retry_pid)
+                        # Runners with bounded provider-outage recovery may
+                        # retry the same frozen review once. Exercise exhaustion
+                        # by terminating that distinct real provider too; older
+                        # runners can expose unavailable after the first exit.
+                        def unavailable_or_provider_retry(state):
+                            current = next(item for item in state['queue']
+                                if item['id'] == staged_feature_id)
+                            if not state['running']:
+                                return True
+                            try:
+                                return int(review_gate_started.read_text()) != provider_pid
+                            except (OSError, ValueError):
+                                return False
+                        outage_state = wait(unavailable_or_provider_retry)
+                        if arguments.provider_retry_success:
+                            assert outage_state['running'], 'bounded provider retry did not start'
+                            retry_pid = int(review_gate_started.read_text())
+                            assert retry_pid != provider_pid
+                            review_gate.unlink()
+                            retry_success = wait(lambda s: not s['running'])
+                            retry_feature = next(item for item in retry_success['queue']
+                                if item['id'] == staged_feature_id)
+                            assert retry_feature['status'] == 'succeeded', retry_feature
+                            assert retry_feature['review_status'] == 'approved', retry_feature
+                            assert unavailable_files == {str(path.relative_to(staged_project)):
+                                (hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_mtime_ns)
+                                for path in staged_project.rglob('*') if path.is_file()}
+                            assert validation_cache_snapshot(staged_project) == unavailable_cache
+                            assert unavailable_model_counts == (len(calls), len(opencode_calls))
+                            assert unavailable_validation_count == len(
+                                (root / 'staged-validation-events').read_text().splitlines())
+                            with closing(sqlite3.connect(data / 'developer.sqlite3')) as database:
+                                retry_durable = json.loads(database.execute(
+                                    'SELECT state FROM developer_state WHERE id=1').fetchone()[0])
+                            retry_record = next(item for item in retry_durable['queue_v12']
+                                if item['id'] == staged_feature_id)
+                            retry_proposal = retry_record['escalation_proposal']
+                            assert unavailable_identity == (retry_proposal['proposal_id'],
+                                retry_proposal['apply_request_id'],
+                                retry_proposal['application_state_sha256'])
+                            retry_receipts = [item for item in
+                                retry_record['escalation_history']
+                                if item['proposal_id'] == retry_proposal['proposal_id']]
+                            assert retry_receipts[:-1] == unavailable_receipts
+                            assert retry_receipts[-1]['outcome'] == 'succeeded'
+                            assert all(item['candidate_sha256'] == restart_capture['candidate_sha256']
+                                for item in retry_receipts)
+                            retry_terminal = api('repair/escalation?id=' + staged_feature_id)
+                            assert retry_terminal['candidate_sha256'] == \
+                                restart_capture['candidate_sha256']
+                            assert [{key: entry.get(key) for key in candidate_entry_keys}
+                                for entry in retry_terminal['candidate_entries']] == \
+                                unavailable_candidate_entries
+                            assert retry_terminal['candidate_payload_state'] == 'hash_only'
+                            assert all('after' not in entry
+                                for entry in retry_terminal['candidate_entries'])
+                            assert retry_record['review_history'][-1]['outcome'] == 'approved'
+                            print(json.dumps({'platform': sys.platform,
+                                'staged_review_success_after_one_provider_exit': True,
+                                'candidate_identity_and_bytes_preserved': True,
+                                'no_model_write_or_validation_replay': True}))
+                            return
+                        if outage_state['running']:
+                            retry_pid = int(review_gate_started.read_text())
+                            assert retry_pid != provider_pid
+                            terminate_fixture_process(retry_pid)
                         unavailable_state = wait(lambda s: not s['running'] and next(item
                             for item in s['queue'] if item['id'] == staged_feature_id
                             )['checkpoint'] == 'review_1_unavailable')
