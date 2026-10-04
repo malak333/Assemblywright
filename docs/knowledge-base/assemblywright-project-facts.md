@@ -3167,3 +3167,8 @@ consistency.
   teardown and replacement. Once the POST was sent, HTTP/JSON errors and transport
   timeouts mean unknown shutdown outcome; retain the supervisor and report that
   uncertainty rather than claiming no process stopped or retrying the POST.
+- Redaction can increase a tool-output byte count. A short secret assignment
+  becomes a longer replacement marker even when the raw output already fits
+  the 32 KiB action limit. Clip on UTF-8 boundaries after the existing redaction
+  chain and before evidence admission for both completed and failed actions;
+  retain the existing details/output limits and request/chat/revision bindings.

@@ -318,6 +318,12 @@ changed, binary, linked,
 or spoofed project cache remains unreviewable and stops the feature; cache-prefix
 creation or confirmed-termination cleanup failure also fails closed.
 
+Completed and failed tool-action output is clipped on UTF-8 byte boundaries before
+redaction and again after redaction, before evidence admission. Secret replacement
+can expand a value, so the persisted output must still satisfy the existing
+32 KiB action-output limit. This retains sanitized evidence without changing
+request, conversation, access-revision, status, or action-budget bindings.
+
 The reviewer executable is hash-bound for each runner lifetime, runs from a separate
 working directory with a cleared environment, and uses strict configuration to
 turn off the supported tool, memory, plugin, browser, and automation features.
