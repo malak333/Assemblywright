@@ -20,8 +20,73 @@ import urllib.error
 import urllib.request
 import uuid
 
+def _parse_fixture_calls_snapshot(data: bytes) -> list:
+    """Parse newline-delimited JSON records from a potentially incomplete snapshot.
+
+    Discards the final segment if it does not end with a newline (incomplete record).
+    Strictly decodes each completed segment (ending with \n) and parses as JSON.
+    Raises on any decode or parse error in completed segments.
+    """
+    if not data:
+        return []
+
+    # Split by newline. The last element might be an empty string if data ends with \n.
+    # Or it might be an incomplete record if data does not end with \n.
+    segments = data.split(b"\n")
+
+    # If the data ends with a newline, the last segment is empty delimiter remainder.
+    # If the data does not end with a newline, the last segment is an incomplete record.
+    if segments and segments[-1] == b"":
+        # Final newline present. Discard the empty delimiter remainder.
+        completed_segments = segments[:-1]
+    else:
+        # No final newline. The last segment is incomplete. Discard it.
+        completed_segments = segments[:-1] if len(segments) > 1 else []
+
+    results = []
+    for seg in completed_segments:
+        # Strict UTF-8 decode
+        text = seg.decode("utf-8")
+        # Strict JSON parse
+        results.append(json.loads(text))
+    return results
+
+
+def _run_self_check():
+    assert _parse_fixture_calls_snapshot(b"") == []
+    assert _parse_fixture_calls_snapshot(b'{"id":1}\n') == [{"id": 1}]
+    assert _parse_fixture_calls_snapshot(b'{"id":1}\n{"id":2}\n') == [{"id": 1}, {"id": 2}]
+    try:
+        _parse_fixture_calls_snapshot(b"\n")
+    except json.JSONDecodeError:
+        pass
+    else:
+        raise AssertionError
+    try:
+        _parse_fixture_calls_snapshot(b'{"id":1}\n\n')
+    except json.JSONDecodeError:
+        pass
+    else:
+        raise AssertionError
+    try:
+        _parse_fixture_calls_snapshot(b"\xff\n")
+    except UnicodeDecodeError:
+        pass
+    else:
+        raise AssertionError
+    assert _parse_fixture_calls_snapshot(b'{"id":2}') == []
+    assert _parse_fixture_calls_snapshot(b'{"id":1}\n{"id":2}') == [{"id": 1}]
+    assert _parse_fixture_calls_snapshot(b'{"id":1}\n{"id":') == [{"id": 1}]
+    assert _parse_fixture_calls_snapshot(b'{"id":1}\n\xc3') == [{"id": 1}]
+    try:
+        _parse_fixture_calls_snapshot(b'{"id":1}\nnot json\n')
+    except json.JSONDecodeError:
+        pass
+    else:
+        raise AssertionError
 
 def main():
+    _run_self_check()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", required=True)
     parser.add_argument("--github-fixture", required=True)
@@ -170,8 +235,8 @@ def main():
             calls_path = fixture_state.with_suffix(".calls")
             if not calls_path.exists():
                 return []
-            return [json.loads(line) for line in calls_path.read_text().splitlines()]
-
+            data = calls_path.read_bytes()
+            return _parse_fixture_calls_snapshot(data)
         def wait_sign_in(operation, state):
             return wait_github(lambda value: (value.get("sign_in") or {}).get("operation_id") == operation
                 and value["sign_in"]["state"] == state)

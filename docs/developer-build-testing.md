@@ -315,3 +315,14 @@ and production readiness are not claimed by this repository evidence and remain
 separately reportable proof layers. Mac fixture success and non-Windows/generic
 hosted checks are not substitutes; running on MIKE-PC is not live Windows
 deployment proof, and hosted Windows evidence remains pending.
+
+## Response-origin test-only checkpoint
+
+The response-origin foundation is gated by `cfg(test)` and has no production
+caller in this checkpoint. Run its 64 tracker/parser tests with
+`cargo test -p assemblywright-master --bin assemblywright-developer response_origin -- --nocapture`.
+The GitHub setup fixture parses newline-committed JSONL snapshots and checks
+incomplete tails separately from malformed committed records. The normal native
+GitHub setup E2E exercises that reader with real runner/fixture processes.
+See [the checkpoint and resume boundaries](developer-response-origin-checkpoint.md);
+parser matrices, runtime reconciliation, installed QA and FFT completion remain pending.
