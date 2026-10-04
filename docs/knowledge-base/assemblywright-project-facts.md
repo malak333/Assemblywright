@@ -3172,3 +3172,19 @@ consistency.
   the 32 KiB action limit. Clip on UTF-8 boundaries after the existing redaction
   chain and before evidence admission for both completed and failed actions;
   retain the existing details/output limits and request/chat/revision bindings.
+
+## Response-origin investigation checkpoint
+
+- Streamed OpenCode assistant hints do not establish authoritative completion.
+  Bind the session, submitted parent and selected assistant to a complete targeted
+  envelope before admission. The checkpoint module is test-only; runtime wiring
+  and complete boundary/network proof remain pending.
+- A concurrently written JSONL fixture snapshot has a commit boundary at LF.
+  Ignore only an unterminated tail; reject malformed committed JSON or UTF-8.
+- Assertion labels do not suppress `assert_eq!` operand Debug output. Use Boolean
+  comparisons with fixed text/row labels for nondisclosure checks.
+- `aw-fft-demo` tests passing does not clear a changed-workspace checkpoint or
+  confer Codex approval. Preserve the ledger and require immutable validation
+  and independent review of the exact current snapshot.
+- [The published checkpoint](../developer-response-origin-checkpoint.md) records
+  the accepted predecessor and remaining parser, network, runtime and FFT work.

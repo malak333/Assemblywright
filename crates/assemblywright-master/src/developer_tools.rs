@@ -31,6 +31,10 @@ use uuid::Uuid;
 mod process;
 use process::{attach_process_tree, prepare_process_tree};
 
+#[cfg(test)]
+#[path = "developer_response_origin.rs"]
+mod response_origin;
+
 const EXPECTED_OPENCODE_VERSION: &str = "1.18.23";
 #[cfg(windows)]
 const EXPECTED_OPENCODE_SHA256: &str =
