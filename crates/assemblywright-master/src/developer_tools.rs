@@ -3421,9 +3421,12 @@ fn record_tool_part(
             Some(if suppress_output {
                 "[REDACTED: sensitive file output]".into()
             } else {
-                redact_output(
-                    &bounded_optional(state, "output", MAX_ACTION_OUTPUT_BYTES),
-                    redactions,
+                bounded(
+                    &redact_output(
+                        &bounded_optional(state, "output", MAX_ACTION_OUTPUT_BYTES),
+                        redactions,
+                    ),
+                    MAX_ACTION_OUTPUT_BYTES,
                 )
             }),
         ),
@@ -3432,9 +3435,12 @@ fn record_tool_part(
             Some(if suppress_output {
                 "[REDACTED: sensitive file output]".into()
             } else {
-                redact_output(
-                    &bounded_optional(state, "error", MAX_ACTION_OUTPUT_BYTES),
-                    redactions,
+                bounded(
+                    &redact_output(
+                        &bounded_optional(state, "error", MAX_ACTION_OUTPUT_BYTES),
+                        redactions,
+                    ),
+                    MAX_ACTION_OUTPUT_BYTES,
                 )
             }),
         ),
@@ -5043,6 +5049,97 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("count")
+        );
+    }
+
+    #[test]
+    fn completed_assignment_expansion() {
+        let (_directory, tools) = service(None);
+        let request = test_request();
+        let tail = "\nTOKENS=abc\n";
+        assert_eq!(tail.len(), 12, "tail byte length must be 12");
+        let raw = "A".repeat(MAX_ACTION_OUTPUT_BYTES - tail.len()) + tail;
+        assert_eq!(
+            raw.len(),
+            MAX_ACTION_OUTPUT_BYTES,
+            "raw byte length must equal the cap"
+        );
+        let event = json!({"sessionID":"s","callID":"tok","tool":"bash","state":{"status":"completed","input":{"command":"x"},"title":"t","output":raw}});
+        record_tool_part(&tools, &request, 1, &event, &[]).unwrap();
+        let snapshot = tools.snapshot("project").unwrap();
+        assert_eq!(snapshot["tool_actions"].as_array().unwrap().len(), 1);
+        let output = snapshot["tool_actions"][0]["output"].as_str().unwrap();
+        assert_eq!(output.len(), MAX_ACTION_OUTPUT_BYTES);
+        assert!(output.ends_with("\nTOKENS=[RED"));
+        assert!(!output.contains("abc"));
+        assert_eq!(snapshot["tool_actions"][0]["status"], "completed");
+        assert_eq!(
+            snapshot["tool_actions"][0]["id"],
+            tool_action_id(&request, 1, "tok")
+        );
+        assert_eq!(
+            snapshot["tool_actions"][0]["request_id"],
+            request.request_id
+        );
+    }
+
+    #[test]
+    fn error_assignment_expansion() {
+        let (_directory, tools) = service(None);
+        let request = test_request();
+        let tail = "\nTOKENS=xyz\n";
+        let raw = "E".repeat(MAX_ACTION_OUTPUT_BYTES - tail.len()) + tail;
+        let event = json!({"sessionID":"s","callID":"err","tool":"bash","state":{"status":"error","input":{"command":"x"},"title":"t","error":raw}});
+        record_tool_part(&tools, &request, 1, &event, &[]).unwrap();
+        let snapshot = tools.snapshot("project").unwrap();
+        assert_eq!(snapshot["tool_actions"].as_array().unwrap().len(), 1);
+        let output = snapshot["tool_actions"][0]["output"].as_str().unwrap();
+        assert_eq!(output.len(), MAX_ACTION_OUTPUT_BYTES);
+        assert!(output.ends_with("\nTOKENS=[RED"));
+        assert!(!output.contains("xyz"));
+        assert_eq!(snapshot["tool_actions"][0]["status"], "failed");
+        assert_eq!(
+            snapshot["tool_actions"][0]["id"],
+            tool_action_id(&request, 1, "err")
+        );
+        assert_eq!(
+            snapshot["tool_actions"][0]["request_id"],
+            request.request_id
+        );
+    }
+
+    #[test]
+    fn utf8_boundary_expansion() {
+        let (_directory, tools) = service(None);
+        let request = test_request();
+        let prefix = "TOKEN=x\n";
+        let suffix = "A\u{00e9}";
+        let raw = format!(
+            "{}{}{}{}",
+            prefix,
+            "A".repeat(MAX_ACTION_OUTPUT_BYTES - 20),
+            suffix,
+            "RRRRRRRRR"
+        );
+        assert_eq!(raw.len(), MAX_ACTION_OUTPUT_BYTES);
+        let event = json!({"sessionID":"s","callID":"utf8","tool":"bash","state":{"status":"completed","input":{"command":"x"},"title":"t","output":raw}});
+        record_tool_part(&tools, &request, 1, &event, &[]).unwrap();
+        let snapshot = tools.snapshot("project").unwrap();
+        assert_eq!(snapshot["tool_actions"].as_array().unwrap().len(), 1);
+        let output = snapshot["tool_actions"][0]["output"].as_str().unwrap();
+        assert_eq!(output.len(), MAX_ACTION_OUTPUT_BYTES);
+        assert!(output.starts_with("TOKEN=[REDACTED]\n"));
+        assert!(output.ends_with(suffix));
+        assert!(!output.ends_with('R'));
+        assert!(!output.contains("TOKEN=x"));
+        assert_eq!(snapshot["tool_actions"][0]["status"], "completed");
+        assert_eq!(
+            snapshot["tool_actions"][0]["id"],
+            tool_action_id(&request, 1, "utf8")
+        );
+        assert_eq!(
+            snapshot["tool_actions"][0]["request_id"],
+            request.request_id
         );
     }
 }
