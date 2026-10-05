@@ -24,8 +24,10 @@ starts the configured local model if its API is unavailable. It uses the existin
 Run `--help` to change the Windows host, SSH control socket, remote root, or model
 controller. Default connection values reflect the owner's current two-machine setup.
 
-1. Enter a simple project folder name. A new folder is created under the displayed
-   Windows workspace root; later features with the same name use that project.
+1. Select an existing Windows project from the **Project** menu, or choose the
+   explicit new-project option and enter a simple folder name. Existing projects
+   include connected repositories available locally; the menu does not clone
+   every repository in your GitHub account.
 2. Describe the feature and enter the command that should validate it. For Python
    projects, `python -m unittest discover -s tests -v` is a useful starting point.
 3. Choose **Brainstorm with ChatGPT**, answer its questions, confirm the requirements
@@ -34,6 +36,27 @@ controller. Default connection values reflect the owner's current two-machine se
    identifies Windows execution, independent cloud review, and automatic advancement.
 5. Review each feature's status, checkpoint, changed files, validation, and review.
    Files remain in the Windows project folder.
+
+The Assembly Line **Active** tab shows unfinished work. Completed features move
+to **Succeeded**, where their validation, review, and publication details remain
+available. These tabs filter the display without deleting queue history.
+
+## Permissions
+
+Click the **shield icon** beside GitHub and the gear to choose global permissions.
+**Ask for approval** is the initial mode. **Approve for me** allows routine file
+changes but still asks for commands and other guarded operations. **Full access**
+permits the configured tools under your Windows account. Save while the runner is
+idle; a stale revision requires reloading. The saved choice applies across
+projects, new chats, and feature execution and survives restart. The chat panel
+shows the global choice.
+
+An approval prompt means the selected tool policy requires a decision; it does
+not necessarily mean Windows denied an operation. Upgrading from project-specific
+permissions starts the global setting at Ask rather than inferring broader
+authority from any old project. Choose your preferred mode explicitly. Emergency
+Pause, independent review, and GitHub publication checks still apply. See
+[global permissions](developer-global-permissions-design.md) for the contract.
 
 Larger repair candidates use bounded context retrieval and complete batched Codex
 review, including supported PNG/JPEG assets through actual image input. An image
@@ -146,7 +169,7 @@ also cover request receipts, attachments and tool evidence.
 
 While a reply or tool action runs, history remains available. **Return to active
 chat** opens its conversation and **Stop** remains visible. A second reply waits
-for the existing global work gate. Creating a chat keeps the project's access
+for the existing global work gate. Creating a chat uses the saved global access
 mode; the current AI and permission choices remain visible before sending.
 
 ## Planning and project chat
@@ -161,7 +184,7 @@ documents remain bound to implementation, repair, and review.
 Use **Project chat** for questions about an existing project. Select the Windows or
 Mac local model explicitly. Replies retain model attribution in Windows-owned,
 conversation-specific history. When the Developer tool runtime is configured,
-the selected project access mode controls file operations and commands: **Ask**,
+the global access mode controls file operations and commands: **Ask**,
 **Approve for me**, or **Full access**. Approvals remain bound to their exact chat
 and request, and chat cannot enqueue or reorder features. Project edits invalidate
 older validation and review evidence before feature work resumes. Without

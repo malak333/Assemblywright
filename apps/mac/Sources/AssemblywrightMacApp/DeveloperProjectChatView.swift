@@ -267,11 +267,6 @@ struct DeveloperProjectChatView: View {
       && state.githubSetupBusy != true && state.githubPublicationRunning != true
       && state.canSelectChatModel(selectedModelTarget)
   }
-  private var workIsIdle: Bool {
-    guard let state = runner.snapshot else { return false }
-    return state.canChangeChatAccess && model.activeChat == nil
-  }
-
   var body: some View {
     GeometryReader { geometry in
       let wide = geometry.size.width >= 740
@@ -505,14 +500,8 @@ struct DeveloperProjectChatView: View {
         }
         .accessibilityIdentifier("developer-chat-model")
         .disabled(model.sending || model.snapshot?.running == true)
-        Picker("Access", selection: toolAccessSelection(renderedAccess,
-          renderedProject: selectedProject, renderedChatId: selection.chatId)) {
-          ForEach(DeveloperToolAccessMode.allCases) { mode in Text(mode.label).tag(mode) }
-        }
+        LabeledContent("Access", value: renderedAccess?.mode.label ?? "Unavailable")
         .accessibilityIdentifier("developer-chat-tool-access")
-        .disabled(!workIsIdle || model.snapshot?.project != selectedProject
-          || model.snapshot?.toolAccess?.available != true || model.sending
-          || model.changingAccess || model.snapshot?.running == true)
       }
       if runner.snapshot?.canSelectChatModel(selectedModelTarget) != true {
         Text(runner.snapshot?.chatModelSelection == true
@@ -668,7 +657,7 @@ struct DeveloperProjectChatView: View {
           .disabled(!canSend || (model.draft.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && model.draft.attachments.isEmpty))
           .accessibilityIdentifier("developer-chat-send")
       }
-      Text("Answers and tool actions stay in chat. Tools run on Windows under the selected access mode. Use Repair this feature to review a failed feature fix, or Add a feature for new work.")
+      Text("Answers and tool actions stay in chat. Tools run on Windows under the global Permissions setting. Use Repair this feature to review a failed feature fix, or Add a feature for new work.")
         .font(.caption).foregroundStyle(.secondary)
     }.padding(16)
       .sheet(isPresented: $showingRepair) {
@@ -709,16 +698,6 @@ struct DeveloperProjectChatView: View {
     try DeveloperChatAttachment.validateSelection(combined)
     model.draft.attachments = combined
     model.draft.error = nil
-  }
-
-  private func toolAccessSelection(_ access: DeveloperToolAccess?, renderedProject: String, renderedChatId: String)
-    -> Binding<DeveloperToolAccessMode>
-  {
-    Binding(get: { access?.mode ?? .ask }, set: { mode in
-      guard let access else { return }
-      Task { await model.setAccessMode(mode, renderedProject: renderedProject, renderedChatId: renderedChatId,
-        expectedRevision: access.revision) }
-    })
   }
 
   private func pasteImage() {

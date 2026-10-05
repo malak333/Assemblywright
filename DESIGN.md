@@ -5,6 +5,13 @@ supervised workflow the default Mac product. References below to protected
 production, service activation, schema-v22, or full-machine cutover describe the
 retained protected-service mode, not the supervised runner's availability.
 
+The owner requested existing-project selection, a Succeeded Assembly Line tab,
+and one Windows-owned permission policy across projects, chats, and features.
+[`Global permissions and project navigation`](docs/developer-global-permissions-design.md)
+owns this extension. Legacy project permissions do not silently grant global
+authority; migration starts at Ask, and only an explicit idle owner save changes
+the policy. Result filtering preserves durable history and execution order.
+
 The owner requested Developer GitHub sign-in, repository discovery, and explicit
 repository creation after a saved Windows login became invalid. The accepted
 [`Developer GitHub setup`](docs/developer-github-setup-design.md) extends the earlier

@@ -1,5 +1,16 @@
 # Safety Rules
 
+The accepted [global permissions design](developer-global-permissions-design.md)
+replaces project-specific supervised tool-access choices with one Windows-owned
+owner policy. Migration starts at Ask and preserves historical evidence without
+reusing legacy approval/execution revisions. Changing permissions requires an
+authenticated, revision-bound idle save with Emergency Pause, attention, and
+publication barriers intact. New Chat, project selection, and succeeded-result
+filtering neither grant authority nor mutate pending execution. Protected-service
+authority and independent review/publication requirements remain separate.
+The persisted global policy must match the latest policy audit entry at startup;
+missing, inconsistent, or rolled-back authority state rejects startup.
+
 The accepted [Developer GitHub setup design](developer-github-setup-design.md)
 permits owner-started device sign-in, bounded repository discovery, and explicitly
 confirmed repository creation. Windows retains credentials and effect authority.

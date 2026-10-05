@@ -246,6 +246,13 @@ def main():
                 headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
             return json.load(urllib.request.urlopen(request, timeout=10))
 
+        def set_global_permissions(mode):
+            current = api('permissions')
+            if current['mode'] == mode:
+                return current
+            return api('permissions', {'mode': mode,
+                'expected_revision': current['revision']})
+
         def wait(predicate, timeout=90):
             deadline = time.monotonic() + timeout
             state = None
@@ -834,8 +841,7 @@ def main():
             stop()
             opencode_enabled = True
             launch()
-            api('chat/access', {'project': 'staged-automatic', 'chat_id': None,
-                'mode': 'full', 'expected_revision': 1})
+            assert set_global_permissions('full')['mode'] == 'full'
             stage_entered.clear()
             stage_release.clear()
             resume_errors = []
@@ -1490,8 +1496,7 @@ def main():
             stop()
             opencode_enabled = True
             launch()
-            api('chat/access', {'project': 'staged-drift', 'chat_id': None,
-                'mode': 'full', 'expected_revision': 1})
+            assert set_global_permissions('full')['mode'] == 'full'
             resume(drift_feature_id)
             drift_state = wait(lambda s: not s['running'] and next(item for item in s['queue']
                 if item['id'] == drift_feature_id)['checkpoint'] ==

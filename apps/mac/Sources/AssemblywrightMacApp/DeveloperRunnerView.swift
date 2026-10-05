@@ -336,7 +336,11 @@ struct DeveloperRunnerSnapshot: Decodable {
       && githubSetupBusy != true && githubSetupUnresolved != true && !emergencyPaused
   }
 
-  var visibleQueue: [DeveloperRunnerFeature] { queue.filter { $0.status != "removed" } }
+  var activeQueue: [DeveloperRunnerFeature] {
+    queue.filter { !["removed", "succeeded"].contains($0.status) }
+  }
+  var succeededQueue: [DeveloperRunnerFeature] { queue.filter { $0.status == "succeeded" } }
+  var visibleQueue: [DeveloperRunnerFeature] { activeQueue }
   var nextFeature: DeveloperRunnerFeature? { queue.first { !$0.isFinished } }
 
   func canRemove(_ feature: DeveloperRunnerFeature) -> Bool {
@@ -769,6 +773,8 @@ struct DeveloperRunnerView: View {
   @State private var escalationFeatureId: String?
   @State private var showingSettings = false
   @State private var showingGitHub = false
+  @State private var showingPermissions = false
+  @State private var assemblyLineTab = "active"
   @State private var reviewerFeature: DeveloperRunnerFeature?
   @State private var autoRepairMaximumText = "100"
   @State private var suppressAutoRepairMaximumBlurSubmission = false
@@ -1023,6 +1029,13 @@ struct DeveloperRunnerView: View {
           .help("GitHub publication")
           .accessibilityLabel("GitHub publication")
           .accessibilityIdentifier("developer-github-publication")
+          Button { showingPermissions = true } label: {
+            Image(systemName: "shield.lefthalf.filled").font(.title2)
+          }
+          .buttonStyle(.plain)
+          .help("Permissions")
+          .accessibilityLabel("Permissions")
+          .accessibilityIdentifier("developer-permissions")
           Button(action: { showingSettings = true }) {
             Image(systemName: "gearshape").font(.title2)
               .foregroundStyle(.primary)
@@ -1080,10 +1093,19 @@ struct DeveloperRunnerView: View {
             )
             .font(.caption).foregroundStyle(.secondary)
             Divider()
-            if model.snapshot?.visibleQueue.isEmpty != false {
-              Text("Add your first feature to begin.").foregroundStyle(.secondary)
+            Picker("Assembly line results", selection: $assemblyLineTab) {
+              Text("Active").tag("active")
+              Text("Succeeded").tag("succeeded")
             }
-            ForEach(model.snapshot?.visibleQueue ?? []) { feature in
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("developer-assembly-line-tab")
+            let features = assemblyLineTab == "succeeded"
+              ? (model.snapshot?.succeededQueue ?? []) : (model.snapshot?.activeQueue ?? [])
+            if features.isEmpty {
+              Text(assemblyLineTab == "succeeded" ? "No succeeded features yet."
+                : "Add your first feature to begin.").foregroundStyle(.secondary)
+            }
+            ForEach(features) { feature in
               featureCard(feature)
             }
           }.padding(10)
@@ -1120,6 +1142,9 @@ struct DeveloperRunnerView: View {
       }
       .sheet(isPresented: $showingSettings) {
         DeveloperSettingsView(runner: model)
+      }
+      .sheet(isPresented: $showingPermissions) {
+        DeveloperPermissionsView(configurationPath: configurationPath, runner: model)
       }
       .sheet(isPresented: $showingGitHub) {
         DeveloperGitHubView(runner: model,

@@ -332,6 +332,16 @@ impl DeveloperTools {
                mode TEXT NOT NULL CHECK(mode IN ('ask','auto','full')),
                revision INTEGER NOT NULL CHECK(revision >= 1)
              );
+             CREATE TABLE IF NOT EXISTS developer_tool_global_access(
+               singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+               mode TEXT NOT NULL CHECK(mode IN ('ask','auto','full')),
+               revision INTEGER NOT NULL CHECK(revision >= 1)
+             );
+             CREATE TABLE IF NOT EXISTS developer_tool_global_access_history(
+               revision INTEGER PRIMARY KEY CHECK(revision >= 1),
+               mode TEXT NOT NULL CHECK(mode IN ('ask','auto','full')),
+               changed_unix INTEGER NOT NULL
+             );
              CREATE TABLE IF NOT EXISTS developer_tool_action(
                id TEXT PRIMARY KEY,
                request_id TEXT NOT NULL,
@@ -405,6 +415,7 @@ impl DeveloperTools {
                 [],
             )?;
         }
+        initialize_global_access(&mut connection)?;
         connection.execute(
             "UPDATE developer_tool_action
              SET status='interrupted', output='Runner restarted while this action was active; it was not replayed.'
@@ -587,14 +598,26 @@ impl DeveloperTools {
         }))
     }
 
-    pub(crate) fn set_access(
+    pub(crate) fn global_access_snapshot(&self) -> Result<Value> {
+        let database = self
+            .database
+            .lock()
+            .map_err(|_| anyhow!("developer tool database lock failed"))?;
+        let access = global_access_with(&database)?;
+        Ok(json!({
+            "mode":access.mode.as_str(),
+            "revision":access.revision,
+            "available":self.available(),
+            "execution_host":"windows"
+        }))
+    }
+
+    pub(crate) fn set_global_access(
         &self,
-        project: &str,
         mode: &str,
         expected_revision: u64,
         idle: bool,
     ) -> Result<Value> {
-        self.project_path(project)?;
         let active = self
             .active
             .lock()
@@ -608,21 +631,34 @@ impl DeveloperTools {
             .lock()
             .map_err(|_| anyhow!("developer tool database lock failed"))?;
         let transaction = database.transaction()?;
-        let current = access_with(&transaction, project)?;
+        let current = global_access_with(&transaction)?;
         if expected_revision != current.revision {
             bail!("Tool access changed; refresh before saving");
         }
         if mode != current.mode {
+            let revision = current
+                .revision
+                .checked_add(1)
+                .filter(|revision| *revision <= i64::MAX as u64)
+                .context("Tool access revision is exhausted")?;
+            let changed = transaction.execute(
+                "UPDATE developer_tool_global_access SET mode=?1,revision=?2
+                 WHERE singleton=1 AND revision=?3",
+                params![mode.as_str(), revision, expected_revision],
+            )?;
+            if changed != 1 {
+                bail!("Tool access changed; refresh before saving");
+            }
             transaction.execute(
-                "INSERT INTO developer_tool_access(project,mode,revision) VALUES(?1,?2,?3)
-                 ON CONFLICT(project) DO UPDATE SET mode=excluded.mode,revision=excluded.revision",
-                params![project, mode.as_str(), current.revision + 1],
+                "INSERT INTO developer_tool_global_access_history(revision,mode,changed_unix)
+                 VALUES(?1,?2,?3)",
+                params![revision, mode.as_str(), now_unix()?],
             )?;
         }
         transaction.commit()?;
         drop(database);
         drop(active);
-        self.snapshot(project)
+        self.global_access_snapshot()
     }
 
     pub(crate) fn project_mutations(
@@ -1378,7 +1414,7 @@ impl DeveloperTools {
             bail!("Staged automatic repair requires Auto or Full tool access");
         }
         // Reserve the sole runtime slot and persist `running` under the same
-        // process-local critical section as the access read. `set_access`
+        // process-local critical section as the access read. `set_global_access`
         // retains this same guard through its database commit, so either the
         // new policy wins or this exact revision owns the runtime; stale Full
         // access can never launch after a downgrade to Ask.
@@ -1832,12 +1868,12 @@ impl DeveloperTools {
         Ok(canonical)
     }
 
-    fn access(&self, project: &str) -> Result<AccessState> {
+    fn access(&self, _project: &str) -> Result<AccessState> {
         let database = self
             .database
             .lock()
             .map_err(|_| anyhow!("developer tool database lock failed"))?;
-        access_with(&database, project)
+        global_access_with(&database)
     }
 
     fn interrupt_request(&self, project: &str, request_id: &str, status: &str) -> Result<()> {
@@ -2790,26 +2826,91 @@ fn compact_recovered_stage(connection: &mut Connection, scope_id: &str) -> Resul
     Ok(())
 }
 
-fn access_with(connection: &Connection, project: &str) -> Result<AccessState> {
-    connection
+fn initialize_global_access(connection: &mut Connection) -> Result<()> {
+    let transaction = connection.transaction()?;
+    let existing: Option<(String, u64)> = transaction
         .query_row(
-            "SELECT mode,revision FROM developer_tool_access WHERE project=?1",
-            [project],
+            "SELECT mode,revision FROM developer_tool_global_access WHERE singleton=1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    if existing.is_none() {
+        let history_count: u64 = transaction.query_row(
+            "SELECT COUNT(*) FROM developer_tool_global_access_history",
+            [],
+            |row| row.get(0),
+        )?;
+        if history_count != 0 {
+            bail!("Global tool access state is missing while audit history exists");
+        }
+        // Old project-scoped grants remain immutable migration evidence. The new
+        // global authority always begins at Ask and beyond every prior binding.
+        let legacy_access: u64 = transaction.query_row(
+            "SELECT COALESCE(MAX(revision),0) FROM developer_tool_access",
+            [],
+            |row| row.get(0),
+        )?;
+        let legacy_action: u64 = transaction.query_row(
+            "SELECT COALESCE(MAX(access_revision),0) FROM developer_tool_action",
+            [],
+            |row| row.get(0),
+        )?;
+        let revision = legacy_access
+            .max(legacy_action)
+            .checked_add(1)
+            .filter(|revision| *revision <= i64::MAX as u64)
+            .context("Tool access revision is exhausted")?;
+        transaction.execute(
+            "INSERT INTO developer_tool_global_access(singleton,mode,revision) VALUES(1,'ask',?1)",
+            [revision],
+        )?;
+        transaction.execute(
+            "INSERT INTO developer_tool_global_access_history(revision,mode,changed_unix)
+             VALUES(?1,'ask',?2)",
+            params![revision, now_unix()?],
+        )?;
+    } else if let Some((mode, revision)) = existing {
+        ToolAccessMode::parse(&mode)?;
+        if revision == 0 || revision > i64::MAX as u64 {
+            bail!("Global tool access revision is invalid");
+        }
+        let latest_history: Option<(u64, String)> = transaction
+            .query_row(
+                "SELECT revision,mode FROM developer_tool_global_access_history
+                 ORDER BY revision DESC LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        if latest_history
+            .as_ref()
+            .map(|(revision, mode)| (*revision, mode.as_str()))
+            != Some((revision, mode.as_str()))
+        {
+            bail!("Global tool access does not match its audit history");
+        }
+    }
+    transaction.commit()?;
+    Ok(())
+}
+
+fn global_access_with(connection: &Connection) -> Result<AccessState> {
+    let (mode, revision) = connection
+        .query_row(
+            "SELECT mode,revision FROM developer_tool_global_access WHERE singleton=1",
+            [],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, u64>(1)?)),
         )
         .optional()?
-        .map(|(mode, revision)| {
-            Ok(AccessState {
-                mode: ToolAccessMode::parse(&mode)?,
-                revision,
-            })
-        })
-        .unwrap_or_else(|| {
-            Ok(AccessState {
-                mode: ToolAccessMode::Ask,
-                revision: 1,
-            })
-        })
+        .context("Global tool access is unavailable")?;
+    if revision == 0 || revision > i64::MAX as u64 {
+        bail!("Global tool access revision is invalid");
+    }
+    Ok(AccessState {
+        mode: ToolAccessMode::parse(&mode)?,
+        revision,
+    })
 }
 
 fn now_unix() -> Result<u64> {
@@ -3699,11 +3800,183 @@ mod tests {
         assert_eq!(snapshot["tool_access"]["mode"], "ask");
         assert_eq!(snapshot["tool_access"]["revision"], 1);
         assert_eq!(snapshot["tool_access"]["available"], false);
-        assert!(tools.set_access("project", "auto", 1, false).is_err());
-        let changed = tools.set_access("project", "auto", 1, true).unwrap();
-        assert_eq!(changed["tool_access"]["revision"], 2);
-        assert!(tools.set_access("project", "full", 1, true).is_err());
-        assert!(tools.set_access("project", "unknown", 2, true).is_err());
+        assert!(tools.set_global_access("auto", 1, false).is_err());
+        let changed = tools.set_global_access("auto", 1, true).unwrap();
+        assert_eq!(changed["revision"], 2);
+        assert!(tools.set_global_access("full", 1, true).is_err());
+        assert!(tools.set_global_access("unknown", 2, true).is_err());
+    }
+
+    #[test]
+    fn global_access_audit_failure_rolls_back_policy_and_history_atomically() {
+        let (_directory, tools) = service(None);
+        let before = tools.global_access_snapshot().unwrap();
+        tools
+            .database
+            .lock()
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER reject_global_access_history
+                 BEFORE INSERT ON developer_tool_global_access_history
+                 WHEN NEW.revision > 1
+                 BEGIN SELECT RAISE(ABORT, 'fixture audit failure'); END;",
+            )
+            .unwrap();
+
+        let error = tools.set_global_access("full", 1, true).unwrap_err();
+        assert!(error.to_string().contains("fixture audit failure"));
+        assert_eq!(tools.global_access_snapshot().unwrap(), before);
+        let history: Vec<(i64, String)> = tools
+            .database
+            .lock()
+            .unwrap()
+            .prepare(
+                "SELECT revision,mode FROM developer_tool_global_access_history ORDER BY revision",
+            )
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(history, vec![(1, "ask".into())]);
+    }
+
+    #[test]
+    fn project_access_migrates_to_fresh_fail_closed_global_policy() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("projects");
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(root.join("first")).unwrap();
+        fs::create_dir(root.join("second")).unwrap();
+        let database_path = directory.path().join("state.sqlite3");
+        let legacy = Connection::open(&database_path).unwrap();
+        legacy
+            .execute_batch(
+                "CREATE TABLE developer_tool_access(
+                   project TEXT PRIMARY KEY,
+                   mode TEXT NOT NULL CHECK(mode IN ('ask','auto','full')),
+                   revision INTEGER NOT NULL CHECK(revision >= 1)
+                 );
+                 INSERT INTO developer_tool_access(project,mode,revision)
+                 VALUES('first','full',41),('second','auto',7);
+                 CREATE TABLE developer_tool_action(
+                   id TEXT PRIMARY KEY, request_id TEXT NOT NULL, project TEXT NOT NULL,
+                   access_revision INTEGER NOT NULL, tool TEXT NOT NULL, summary TEXT NOT NULL,
+                   details TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN
+                     ('pending_approval','running','completed','failed','denied','cancelled','interrupted')),
+                   output TEXT, updated_unix INTEGER NOT NULL
+                 );
+                 INSERT INTO developer_tool_action(
+                   id,request_id,project,access_revision,tool,summary,details,status,output,updated_unix)
+                 VALUES('legacy-action','legacy-request','first',57,'bash','legacy','{}','completed',NULL,1);",
+            )
+            .unwrap();
+        drop(legacy);
+
+        let tools =
+            DeveloperTools::open(&database_path, fs::canonicalize(root).unwrap(), None).unwrap();
+        for project in ["first", "second"] {
+            let snapshot = tools.snapshot(project).unwrap();
+            assert_eq!(snapshot["tool_access"]["mode"], "ask");
+            assert_eq!(snapshot["tool_access"]["revision"], 58);
+        }
+        let changed = tools.set_global_access("full", 58, true).unwrap();
+        assert_eq!(changed["mode"], "full");
+        assert_eq!(changed["revision"], 59);
+        assert_eq!(
+            tools.snapshot("first").unwrap()["tool_access"]["mode"],
+            "full"
+        );
+        assert_eq!(
+            tools.snapshot("second").unwrap()["tool_access"]["mode"],
+            "full"
+        );
+        let legacy_mode: String = tools
+            .database
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT mode FROM developer_tool_access WHERE project='first'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            legacy_mode, "full",
+            "legacy evidence is retained without authority"
+        );
+        let history: Vec<(u64, String)> = tools
+            .database
+            .lock()
+            .unwrap()
+            .prepare(
+                "SELECT revision,mode FROM developer_tool_global_access_history ORDER BY revision",
+            )
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(history, vec![(58, "ask".into()), (59, "full".into())]);
+    }
+
+    #[test]
+    fn missing_global_policy_with_history_fails_closed_on_restart() {
+        let (directory, tools) = service(None);
+        let root = tools.root.clone();
+        let database_path = directory.path().join("state.sqlite3");
+        tools
+            .database
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM developer_tool_global_access", [])
+            .unwrap();
+        drop(tools);
+        let error = DeveloperTools::open(&database_path, root, None)
+            .err()
+            .expect("missing global authority must reject restart");
+        assert!(error.to_string().contains("audit history exists"));
+    }
+
+    #[test]
+    fn rolled_back_global_policy_fails_closed_on_restart() {
+        let (directory, tools) = service(None);
+        let root = tools.root.clone();
+        let database_path = directory.path().join("state.sqlite3");
+        tools.set_global_access("full", 1, true).unwrap();
+        tools.set_global_access("ask", 2, true).unwrap();
+        tools
+            .database
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE developer_tool_global_access SET mode='full',revision=2 WHERE singleton=1",
+                [],
+            )
+            .unwrap();
+        drop(tools);
+        let error = DeveloperTools::open(&database_path, root, None)
+            .err()
+            .expect("rolled-back global authority must reject restart");
+        assert!(error.to_string().contains("audit history"));
+    }
+
+    #[test]
+    fn global_access_rejects_revision_overflow() {
+        let (_directory, tools) = service(None);
+        tools
+            .database
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE developer_tool_global_access SET revision=?1 WHERE singleton=1",
+                [i64::MAX],
+            )
+            .unwrap();
+        let error = tools
+            .set_global_access("full", i64::MAX as u64, true)
+            .unwrap_err();
+        assert!(error.to_string().contains("revision is exhausted"));
     }
 
     #[test]
@@ -4402,7 +4675,7 @@ mod tests {
     #[test]
     fn later_staged_effects_recheck_policy_without_reusing_runtime_authority() {
         let (directory, tools) = service(None);
-        tools.set_access("project", "full", 1, true).unwrap();
+        tools.set_global_access("full", 1, true).unwrap();
         let (binding, request, stage_path) = stage_fixture(&directory, &tools);
         tools
             .transition_stage(&binding, &["registered"], "running")
@@ -4434,7 +4707,7 @@ mod tests {
 
         tools.verify_execution_policy_binding(&execution).unwrap();
         assert!(tools.verify_execution_binding(&execution).is_err());
-        tools.set_access("project", "ask", 2, true).unwrap();
+        tools.set_global_access("ask", 2, true).unwrap();
         assert!(tools.verify_execution_policy_binding(&execution).is_err());
     }
 
@@ -4541,7 +4814,7 @@ mod tests {
     #[test]
     fn concurrent_runtime_loser_leaves_registered_stage_cleanup_eligible() {
         let (directory, tools) = service(None);
-        tools.set_access("project", "auto", 1, true).unwrap();
+        tools.set_global_access("auto", 1, true).unwrap();
         let (binding, request, stage_path) = stage_fixture(&directory, &tools);
         let (existing_cancel, _existing_cancel_rx) = mpsc::unbounded_channel();
         let (existing_approvals, _existing_approvals_rx) = mpsc::unbounded_channel();
@@ -4578,7 +4851,7 @@ mod tests {
     #[test]
     fn cancellation_after_runtime_reservation_makes_unspawned_stage_cleanup_eligible() {
         let (directory, tools) = service(None);
-        tools.set_access("project", "auto", 1, true).unwrap();
+        tools.set_global_access("auto", 1, true).unwrap();
         let (binding, request, stage_path) = stage_fixture(&directory, &tools);
         let (cancel, _cancel_rx) = mpsc::unbounded_channel();
         let (approvals, _approvals_rx) = mpsc::unbounded_channel();
@@ -4621,12 +4894,12 @@ mod tests {
     #[test]
     fn access_downgrade_linearizes_before_staged_runtime_admission() {
         let (directory, tools) = service(None);
-        tools.set_access("project", "full", 1, true).unwrap();
+        tools.set_global_access("full", 1, true).unwrap();
         let (binding, request, stage_path) = stage_fixture(&directory, &tools);
         let database_guard = tools.database.lock().unwrap();
 
         let setter_tools = tools.clone();
-        let setter = std::thread::spawn(move || setter_tools.set_access("project", "ask", 2, true));
+        let setter = std::thread::spawn(move || setter_tools.set_global_access("ask", 2, true));
         let mut setter_holds_runtime_gate = false;
         for _ in 0..200 {
             if tools.active.try_lock().is_err() {
@@ -4650,7 +4923,7 @@ mod tests {
         drop(database_guard);
 
         let changed = setter.join().unwrap().unwrap();
-        assert_eq!(changed["tool_access"]["mode"], "ask");
+        assert_eq!(changed["mode"], "ask");
         let error = runner.join().unwrap().unwrap_err();
         assert!(error
             .to_string()

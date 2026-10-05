@@ -124,7 +124,7 @@ struct DeveloperProjectChatTests {
   }
 
   @Test @MainActor
-  func accessAndApprovalRequestsBindProjectAndRevision() async throws {
+  func approvalRequestsBindProjectAndGlobalRevision() async throws {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -172,20 +172,14 @@ sys.stdout.buffer.write(server.server_port.to_bytes(4,'big'));sys.stdout.buffer.
       try await Task.sleep(for: .milliseconds(50))
     }
     #expect(model.snapshot?.pendingApproval != nil)
-    await model.setAccessMode(.auto, renderedProject: "demo", expectedRevision: 9)
     await model.decideApproval("approve", renderedProject: "demo", approvalId: "approval-1",
       requestId: "request-1", accessRevision: 9)
 
     let lines = try String(contentsOf: requests, encoding: .utf8).split(separator: "\n")
     let values = try lines.map { try JSONSerialization.jsonObject(with: Data($0.utf8)) as! [String: Any] }
-    #expect(values.count == 2)
-    #expect(values[0]["path"] as? String == "/chat/access")
-    let access = try #require(values[0]["body"] as? [String: Any])
-    #expect(access["project"] as? String == "demo")
-    #expect(access["mode"] as? String == "auto")
-    #expect(access["expected_revision"] as? Int == 9)
-    #expect(values[1]["path"] as? String == "/chat/approval")
-    let approvalBody = try #require(values[1]["body"] as? [String: Any])
+    #expect(values.count == 1)
+    #expect(values[0]["path"] as? String == "/chat/approval")
+    let approvalBody = try #require(values[0]["body"] as? [String: Any])
     #expect(approvalBody["request_id"] as? String == "request-1")
     #expect(approvalBody["approval_id"] as? String == "approval-1")
     #expect(approvalBody["access_revision"] as? Int == 9)
@@ -212,7 +206,6 @@ sys.stdout.buffer.write(server.server_port.to_bytes(4,'big'));sys.stdout.buffer.
     model.select(project: "demo")
     model.snapshot = newer
 
-    await model.setAccessMode(.full, renderedProject: "demo", expectedRevision: 9)
     await model.decideApproval("approve", renderedProject: "demo", approvalId: "approval-1",
       requestId: "request-1", accessRevision: 9)
 

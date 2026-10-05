@@ -50,7 +50,9 @@ panel; opening an existing chat in a narrow panel returns to the conversation.
   project/chat and a **Return to active chat** action. Its Stop control remains
   accessible. Send stays unavailable while the existing global work gate is busy.
   Pending approvals are visibly associated with their originating chat.
-- Preserve explicit Windows/Mac AI selection and project-wide access controls.
+- Preserve explicit Windows/Mac AI selection. The later
+  [global permissions design](developer-global-permissions-design.md) replaces
+  project-wide access controls with one Windows-owned policy across projects.
   New Chat does not reset permissions. Sending always shows the selected AI and
   access mode. Historical replies retain their actual model attribution.
 

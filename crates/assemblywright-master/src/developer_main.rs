@@ -17838,11 +17838,67 @@ async fn chat_cancel(
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ChatAccessMutation {
-    project: String,
-    chat_id: Option<String>,
+struct GlobalPermissionsMutation {
     mode: String,
     expected_revision: u64,
+}
+
+async fn permissions_status(State(engine): State<Arc<Engine>>, headers: HeaderMap) -> Api {
+    if authorize(&engine, &headers).is_err() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error":"Unauthorized"})),
+        );
+    }
+    api(engine.tools.global_access_snapshot())
+}
+
+fn global_permissions_lifecycle_admissible(
+    shutting_down: bool,
+    emergency_paused: bool,
+) -> Result<()> {
+    if shutting_down {
+        bail!("Developer runner is shutting down");
+    }
+    if emergency_paused {
+        bail!("Clear Emergency Pause before changing global permissions");
+    }
+    Ok(())
+}
+
+async fn permissions_control(
+    State(engine): State<Arc<Engine>>,
+    headers: HeaderMap,
+    Json(request): Json<GlobalPermissionsMutation>,
+) -> Api {
+    if authorize(&engine, &headers).is_err() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error":"Unauthorized"})),
+        );
+    }
+    api((|| -> Result<Value> {
+        if !engine.developer_work_is_idle() {
+            bail!("Stop Developer work before changing global permissions");
+        }
+        let _effect_guard = engine
+            .effect_gate
+            .lock()
+            .map_err(|_| anyhow!("effect gate failed"))?;
+        let database = engine
+            .database
+            .lock()
+            .map_err(|_| anyhow!("state lock failed"))?;
+        engine.ensure_publication_barrier_clear(&database.state, &database.github_setup)?;
+        global_permissions_lifecycle_admissible(
+            engine.shutdown.load(Ordering::SeqCst),
+            engine.emergency_paused(&database.state),
+        )?;
+        let idle = engine.developer_work_is_idle();
+        engine
+            .tools
+            .set_global_access(&request.mode, request.expected_revision, idle)
+    })())
 }
 
 #[derive(Deserialize)]
@@ -17859,7 +17915,7 @@ struct ChatApprovalMutation {
 async fn chat_access(
     State(engine): State<Arc<Engine>>,
     headers: HeaderMap,
-    Json(request): Json<ChatAccessMutation>,
+    Json(_request): Json<Value>,
 ) -> Api {
     if authorize(&engine, &headers).is_err() {
         return (
@@ -17867,28 +17923,9 @@ async fn chat_access(
             Json(json!({"error":"Unauthorized"})),
         );
     }
-    api((|| -> Result<Value> {
-        let database = engine
-            .database
-            .lock()
-            .map_err(|_| anyhow!("state lock failed"))?;
-        engine.ensure_publication_barrier_clear(&database.state, &database.github_setup)?;
-        if engine.emergency_paused(&database.state) {
-            bail!("Clear Emergency Pause before changing tool access");
-        }
-        let idle = engine.developer_work_is_idle();
-        engine.tools.set_access(
-            &request.project,
-            &request.mode,
-            request.expected_revision,
-            idle,
-        )?;
-        drop(database);
-        let chat_id = engine
-            .chat
-            .resolve_chat_id(&request.project, request.chat_id.as_deref())?;
-        engine.chat.snapshot_chat(&request.project, &chat_id, None)
-    })())
+    api(Err(anyhow!(
+        "Project-specific tool access is no longer supported; update the Developer app and use global Permissions"
+    )))
 }
 
 async fn chat_approval(
@@ -19246,6 +19283,10 @@ async fn main() -> Result<()> {
         .route("/chat/rename", post(chat_conversation_rename))
         .route("/chat/cancel", post(chat_cancel))
         .route("/chat/access", post(chat_access))
+        .route(
+            "/permissions",
+            get(permissions_status).post(permissions_control),
+        )
         .route("/chat/approval", post(chat_approval))
         .route("/feature/tool-approval", post(feature_tool_approval))
         .route(
@@ -20262,8 +20303,8 @@ mod tests {
                 }),
             },
         ];
-        let access = engine.tools.set_access("example", "full", 1, true).unwrap();
-        assert_eq!(access["tool_access"]["revision"], 2);
+        let access = engine.tools.set_global_access("full", 1, true).unwrap();
+        assert_eq!(access["revision"], 2);
         let proposal_id = Uuid::new_v4().to_string();
         let stage = ToolStageBinding {
             scope_id: Uuid::new_v4().to_string(),
@@ -20791,7 +20832,7 @@ mod tests {
         let access_feature = adopted_automatic_effects_validation_fixture(&access_engine);
         access_engine
             .tools
-            .set_access("example", "auto", 2, true)
+            .set_global_access("auto", 2, true)
             .unwrap();
         let access_binding = fully_applied_staged_validation_binding(&access_feature)
             .unwrap()
@@ -21424,7 +21465,7 @@ mod tests {
             .unwrap()
             .to_owned();
 
-        engine.tools.set_access("example", "auto", 2, true).unwrap();
+        engine.tools.set_global_access("auto", 2, true).unwrap();
         let access_error = engine
             .reconcile_supported_asset_quarantine(&feature.id, &digest)
             .unwrap_err();
@@ -23156,18 +23197,15 @@ mod tests {
     }
 
     #[test]
-    fn chat_tool_mutations_are_exact_revision_bound_contracts() {
-        let access: ChatAccessMutation = serde_json::from_value(json!({
-            "project":"example",
+    fn global_tool_mutations_are_exact_revision_bound_contracts() {
+        let access: GlobalPermissionsMutation = serde_json::from_value(json!({
             "mode":"ask",
             "expected_revision":4
         }))
         .unwrap();
-        assert_eq!(access.project, "example");
         assert_eq!(access.mode, "ask");
         assert_eq!(access.expected_revision, 4);
-        assert!(serde_json::from_value::<ChatAccessMutation>(json!({
-            "project":"example",
+        assert!(serde_json::from_value::<GlobalPermissionsMutation>(json!({
             "mode":"ask",
             "expected_revision":4,
             "approved":true
@@ -23193,6 +23231,39 @@ mod tests {
             "remember":true
         }))
         .is_err());
+    }
+
+    #[test]
+    fn global_permissions_reject_emergency_lifecycle() {
+        assert!(global_permissions_lifecycle_admissible(false, false).is_ok());
+        assert!(global_permissions_lifecycle_admissible(false, true)
+            .unwrap_err()
+            .to_string()
+            .contains("Emergency Pause"));
+    }
+
+    #[tokio::test]
+    async fn global_permissions_handler_rejects_shutdown_without_mutating_policy() {
+        let (_directory, engine) = control_test_engine();
+        let before = engine.tools.global_access_snapshot().unwrap();
+        engine.begin_shutdown().unwrap();
+
+        let response = permissions_control(
+            State(engine.clone()),
+            authorized_headers(),
+            Json(GlobalPermissionsMutation {
+                mode: "full".into(),
+                expected_revision: 1,
+            }),
+        )
+        .await;
+
+        assert_eq!(response.0, StatusCode::CONFLICT);
+        assert!(response.1["error"]
+            .as_str()
+            .unwrap()
+            .contains("shutting down"));
+        assert_eq!(engine.tools.global_access_snapshot().unwrap(), before);
     }
 
     #[test]
