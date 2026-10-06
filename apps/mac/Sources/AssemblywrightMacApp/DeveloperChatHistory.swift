@@ -52,7 +52,6 @@ final class DeveloperProjectChatModel: ObservableObject {
   @Published private(set) var loadingEarlier = false
   @Published private(set) var creating = false
   @Published private(set) var renaming = false
-  @Published private(set) var changingAccess = false
   @Published private(set) var resolvingApproval = false
   @Published private(set) var selection = DeveloperChatSelection(project: "", chatId: "")
   var project: String { selection.project }
@@ -408,28 +407,6 @@ final class DeveloperProjectChatModel: ObservableObject {
       actionErrors[selected] = error.localizedDescription
       if stillSelected(selected, token) { self.error = error.localizedDescription }
       else { historyError = error.localizedDescription }
-    }
-  }
-
-  func setAccessMode(_ mode: DeveloperToolAccessMode, renderedProject: String,
-    renderedChatId: String = "", expectedRevision: UInt64) async
-  {
-    let selected = DeveloperChatSelection(project: renderedProject, chatId: renderedChatId)
-    guard selection == selected, snapshot?.project == renderedProject,
-      !project.isEmpty, !changingAccess, !sending,
-      let access = snapshot?.toolAccess, access.available, access.mode != mode,
-      access.revision == expectedRevision else { return }
-    let token = generation
-    changingAccess = true
-    defer { changingAccess = false }
-    do {
-      let state = try await request(path: "chat/access", selected: selected,
-        body: body(["mode": mode.rawValue, "expected_revision": expectedRevision], for: selected))
-      actionErrors[selected] = nil
-      if stillSelected(selected, token) { apply(state) }
-    } catch {
-      actionErrors[selected] = error.localizedDescription
-      if stillSelected(selected, token) { snapshot = nil; self.error = error.localizedDescription }
     }
   }
 

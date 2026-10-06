@@ -1,5 +1,22 @@
 # Assemblywright Project Facts
 
+## Global permissions and Assembly Line navigation
+
+- The supervised runner has one Windows-owned tool-access policy. An approval
+  prompt is evidence of the configured policy, not proof of missing OS rights.
+  New Chat and new features use the saved global choice. Migration starts at Ask
+  and uses a fresh revision above legacy bindings; old project policies remain
+  historical evidence rather than global authority.
+  Startup requires the current policy to match the latest policy history; a
+  formerly valid older Full value cannot override a later revocation. Policy
+  saves and their history commit atomically, and shutdown rejects new saves.
+- Project planning selects local projects known to the runner, including locally
+  connected GitHub repositories, and retains explicit new-project entry. GitHub
+  account discovery does not imply a repository has been cloned or is available
+  for local implementation.
+- Active/Succeeded tabs are presentation filters. Succeeded results retain their
+  durable validation/review/publication evidence and do not change queue order.
+
 ## Supervised workflow is the production product
 
 - The owner selected the existing Developer workflow as the default Assemblywright
@@ -52,7 +69,7 @@
   Mac selection and session drafts are keyed by project and immutable chat ID.
 - A conversation is distinct from an inference request, feature or planning
   session. Creating, selecting or renaming it does not start work or reset the
-  project's tool permission mode. The existing shared inference gate still
+  global tool permission mode. The existing shared inference gate still
   permits only one active local request; browsing must retain an exact active
   chat/request Stop target.
 - Retained legacy history maps to Previous conversation. Saved transcript

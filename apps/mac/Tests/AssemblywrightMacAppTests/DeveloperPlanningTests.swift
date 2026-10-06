@@ -47,6 +47,31 @@ private func planningRequestBody(_ request: URLRequest) throws -> Data {
 final class DeveloperPlanningTests {
   private var configurationFiles: [URL] = []
 
+  @Test
+  func projectChoiceUsesCatalogOrExplicitNewProjectOnly() {
+    let projects = ["alpha", "beta", "__new_project__"]
+    #expect(DeveloperPlanningProjectChoice.resolve(selection: .existing("beta"), newProjectName: "",
+      projects: projects) == "beta")
+    #expect(DeveloperPlanningProjectChoice.resolve(selection: .existing("stale"), newProjectName: "",
+      projects: projects) == nil)
+    #expect(DeveloperPlanningProjectChoice.resolve(selection: .existing("__new_project__"),
+      newProjectName: "ignored", projects: projects) == "__new_project__")
+    #expect(DeveloperPlanningProjectChoice.resolve(selection: .newProject,
+      newProjectName: "  gamma  ", projects: projects) == "gamma")
+    #expect(DeveloperPlanningProjectChoice.resolve(selection: .newProject,
+      newProjectName: "   ", projects: projects) == nil)
+    #expect(DeveloperPlanningProjectChoice.reconcile(selection: .none, projects: []) == .none)
+    #expect(DeveloperPlanningProjectChoice.reconcile(selection: .none, projects: projects) == .none)
+    #expect(DeveloperPlanningProjectChoice.reconcile(selection: .existing("beta"), projects: projects)
+      == .existing("beta"))
+    #expect(DeveloperPlanningProjectChoice.reconcile(selection: .existing("beta"), projects: ["alpha"])
+      == .none)
+    #expect(DeveloperPlanningProjectChoice.reconcile(selection: .existing("__new_project__"),
+      projects: projects) == .existing("__new_project__"))
+    #expect(DeveloperPlanningProjectChoice.reconcile(selection: .newProject, projects: projects)
+      == .newProject)
+  }
+
   deinit {
     for file in configurationFiles { try? FileManager.default.removeItem(at: file) }
   }

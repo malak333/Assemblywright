@@ -1,5 +1,25 @@
 # Build And Test Commands
 
+## Global permissions and project navigation
+
+```sh
+cargo test -p assemblywright-master --bin assemblywright-developer
+cargo build -p assemblywright-master --bin assemblywright-developer --example developer_review_fixture
+swift test --disable-sandbox --package-path apps/mac --filter 'DeveloperPermissionsTests|DeveloperPlanningTests|DeveloperRunnerTests' --skip '^AssemblywrightMacAppTests\.DeveloperRunnerTests/featureApprovalViewOffersBothDecisionsAndEmergencyPauseDisablesThem\(\)(/.*)?$'
+python3 -B scripts/developer-runner-chat-e2e.py --binary target/debug/assemblywright-developer
+./scripts/release-docs-drift-smoke.sh
+./scripts/release-local.sh
+```
+
+The chat process E2E covers authenticated global permission reads/saves,
+cross-project effective access, stale revision and legacy project-save rejection,
+and restart persistence. Rust covers fail-closed migration and retained policy
+history; Swift covers the global route, exact acknowledgement, unsupported runner,
+project choices, and Active/Succeeded filtering. The existing native tool-stage
+tests retain exact access-revision checks. Windows CI runs the same registered
+runner harness with its native executable. These are native API/process checks,
+separate from installed UI, live providers, deployment, signing, and notarization.
+
 ## Production product build
 
 The [production build](production-build.md) promotes the supervised workflow to

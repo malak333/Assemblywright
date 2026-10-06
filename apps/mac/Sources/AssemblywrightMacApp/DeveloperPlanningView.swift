@@ -1,6 +1,33 @@
 import Foundation
 import SwiftUI
 
+enum DeveloperPlanningProjectChoice: Hashable {
+  case none
+  case existing(String)
+  case newProject
+
+  static func resolve(selection: Self, newProjectName: String, projects: [String]) -> String? {
+    switch selection {
+    case .newProject:
+      let name = newProjectName.trimmingCharacters(in: .whitespacesAndNewlines)
+      return name.isEmpty ? nil : name
+    case .existing(let name):
+      return projects.contains(name) ? name : nil
+    case .none:
+      return nil
+    }
+  }
+
+  static func reconcile(selection: Self, projects: [String]) -> Self {
+    switch selection {
+    case .newProject, .none:
+      return selection
+    case .existing(let name):
+      return projects.contains(name) ? selection : .none
+    }
+  }
+}
+
 struct DeveloperPlanningSummary: Decodable, Identifiable {
   let featureId: String
   let project: String
@@ -108,6 +135,7 @@ struct DeveloperPlanningSnapshot: Decodable {
 @MainActor
 final class DeveloperPlanningModel: ObservableObject {
   @Published var snapshot: DeveloperPlanningSnapshot?
+  @Published private(set) var projects: [String] = []
   @Published var error: String?
   @Published var sending = false
   private let configurationPath: String
@@ -182,6 +210,28 @@ final class DeveloperPlanningModel: ObservableObject {
     }
   }
 
+  func observeProjects() async {
+    struct ProjectList: Decodable { let projects: [String] }
+    while !Task.isCancelled {
+      do {
+        let configuration = try JSONDecoder().decode(DeveloperRunnerConfiguration.self,
+          from: Data(contentsOf: URL(fileURLWithPath: configurationPath)))
+        guard let base = URL(string: configuration.endpoint), base.scheme == "http",
+          ["127.0.0.1", "localhost", "::1"].contains(base.host ?? "") else { throw URLError(.badURL) }
+        var request = URLRequest(url: base.appendingPathComponent("chat/projects"))
+        request.setValue("Bearer \(configuration.token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await session.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
+        let observed = try JSONDecoder().decode(ProjectList.self, from: data).projects
+        if !Task.isCancelled { projects = observed }
+      } catch {
+        // The explicit New project path remains available when the catalog is
+        // temporarily unavailable. It does not create a repository by itself.
+      }
+      try? await Task.sleep(for: .seconds(10))
+    }
+  }
+
   func start(id: String, project: String, instruction: String, validation: String,
     modelTarget: String) async -> Bool {
     guard !sending, ["mac", "windows"].contains(modelTarget) else { return false }
@@ -225,7 +275,8 @@ struct DeveloperPlanningView: View {
   let runner: DeveloperRunnerSnapshot?
   @AppStorage("developerPlanningFeature") private var selectedId = ""
   @State private var newId = UUID().uuidString.lowercased()
-  @State private var project = "first-project"
+  @State private var project = DeveloperPlanningProjectChoice.none
+  @State private var newProject = ""
   @State private var instruction = ""
   @State private var validation = "python -m unittest discover -s tests -v"
   @State private var implementationTarget = "mac"
@@ -240,6 +291,10 @@ struct DeveloperPlanningView: View {
   private var disabled: Bool {
     model.sending || runner?.emergencyPaused != false || runner?.running != false
       || runner?.chatRunning == true || runner?.escalationRunning == true
+  }
+  private var selectedProject: String {
+    DeveloperPlanningProjectChoice.resolve(selection: project, newProjectName: newProject,
+      projects: model.projects) ?? ""
   }
   var body: some View {
     GroupBox("Add a feature · Brainstorm with ChatGPT") {
@@ -263,7 +318,24 @@ struct DeveloperPlanningView: View {
             .font(.caption).foregroundStyle(.secondary)
         }
         if selectedId.isEmpty {
-          TextField("Project folder on Windows", text: $project)
+          Picker("Project", selection: $project) {
+            Text("Select a project").tag(DeveloperPlanningProjectChoice.none)
+            ForEach(model.projects, id: \.self) { name in
+              Text(name).tag(DeveloperPlanningProjectChoice.existing(name))
+            }
+            Divider()
+            Text("New project").tag(DeveloperPlanningProjectChoice.newProject)
+          }
+          .accessibilityIdentifier("developer-planning-project")
+          .onChange(of: model.projects) { _, projects in
+            project = DeveloperPlanningProjectChoice.reconcile(selection: project, projects: projects)
+          }
+          if project == .newProject {
+            TextField("New project folder on Windows", text: $newProject)
+              .accessibilityIdentifier("developer-planning-new-project")
+            Text("This names the project for planning. Repository creation remains a separate owner-approved flow.")
+              .font(.caption).foregroundStyle(.secondary)
+          }
           TextField("What should this feature do?", text: $instruction, axis: .vertical).lineLimit(3...8)
           TextField("Validation command", text: $validation)
           Picker("Implement on", selection: $implementationTarget) {
@@ -279,7 +351,7 @@ struct DeveloperPlanningView: View {
             let frozenTarget = implementationTarget
             Task {
               guard runner?.canSelectModel(frozenTarget) == true else { return }
-              if await model.start(id: newId, project: project, instruction: instruction,
+              if await model.start(id: newId, project: selectedProject, instruction: instruction,
                 validation: validation, modelTarget: frozenTarget) {
                 selectedId = newId
                 instruction = ""
@@ -290,7 +362,7 @@ struct DeveloperPlanningView: View {
             .accessibilityIdentifier("developer-brainstorm-start")
             .disabled(disabled || runner?.hasRequiredPlanner != true || runner?.planningRunning == true
               || runner?.canSelectModel(implementationTarget) != true
-              || project.isEmpty || validation.isEmpty || instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+              || selectedProject.isEmpty || validation.isEmpty || instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         } else if let state = model.snapshot, state.featureId == selectedId {
           Text(state.instruction).font(.headline).textSelection(.enabled)
           Text("\(state.project) · ChatGPT/Codex · \(state.model) · \(DeveloperAISelection.effortLabel(state.reasoningEffort ?? "high")) reasoning · implement on \(state.modelTarget == "windows" ? "Windows" : "Mac")")
@@ -331,6 +403,7 @@ struct DeveloperPlanningView: View {
       }.padding(10).textFieldStyle(.roundedBorder)
     }
     .task(id: selectedId) { await model.observe(id: selectedId) }
+    .task { await model.observeProjects() }
     .onChange(of: model.snapshot?.revision) { _, _ in answer = "" }
   }
 

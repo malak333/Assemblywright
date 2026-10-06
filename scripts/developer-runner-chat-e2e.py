@@ -359,9 +359,27 @@ def main():
         try:
             launch()
             rejected('chat/projects', code=401, authenticated=False)
+            rejected('permissions', code=401, authenticated=False)
+            rejected('permissions', {'mode': 'full', 'expected_revision': 1},
+                code=401, authenticated=False)
             rejected('chat?project=alpha', code=401, authenticated=False)
             rejected('chat', {'project': 'alpha', 'message': 'question', 'id': str(uuid.uuid4())}, code=401, authenticated=False)
             assert api('chat/projects')['projects'] == ['alpha', 'beta']
+            global_access = api('permissions')
+            assert global_access == {'mode': 'ask', 'revision': 1, 'available': False,
+                'execution_host': 'windows'}, global_access
+            changed_access = api('permissions', {'mode': 'full', 'expected_revision': 1})
+            assert changed_access == {'mode': 'full', 'revision': 2, 'available': False,
+                'execution_host': 'windows'}, changed_access
+            rejected('permissions', {'mode': 'auto', 'expected_revision': 1})
+            rejected('permissions', {'mode': 'unknown', 'expected_revision': 2})
+            rejected('permissions', {'mode': 'auto', 'expected_revision': 2,
+                'project': 'alpha'}, code=422)
+            rejected('chat/access', {'project': 'alpha', 'chat_id': None,
+                'mode': 'ask', 'expected_revision': 2})
+            assert api('permissions') == changed_access
+            assert api('chat?project=alpha')['tool_access']['mode'] == 'full'
+            assert api('chat?project=beta')['tool_access']['revision'] == 2
             for invalid in ('../outside', 'missing') + (('escape',) if link_created else ()):
                 rejected('chat?project=' + urllib.parse.quote(invalid, safe=''))
 
@@ -550,6 +568,7 @@ def main():
                 if path == '/v1/chat/completions']) == mac_completion_count
 
             terminate(); launch()
+            assert api('permissions') == changed_access
             durable = api('chat?project=alpha')
             assert any(message['attachments'] == [screen, notes]
                 for message in durable['messages']), durable
@@ -609,6 +628,8 @@ def main():
             request, _ = ask('Wait for cancellation')
             assert generation_started('chat generation before cancel and start serialization probes')
             assert api()['chat_running']
+            rejected('permissions', {'mode': 'auto', 'expected_revision': 2})
+            assert api('permissions') == changed_access
             rejected('chat/cancel', {'id': str(uuid.uuid4())})
             rejected('control', {'action': 'shutdown'})
             rejected('chat', {'id': str(uuid.uuid4()), 'project': 'beta', 'message': 'second'})
@@ -626,6 +647,8 @@ def main():
             control('emergency')
             assert complete()['error']
             assert api()['emergency_paused']
+            rejected('permissions', {'mode': 'auto', 'expected_revision': 2})
+            assert api('permissions') == changed_access
             rejected('chat', {'id': str(uuid.uuid4()), 'project': 'alpha', 'message': 'blocked by emergency'})
             control('clear_emergency'); release.set(); fixture['mode'] = 'normal'
 

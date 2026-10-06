@@ -460,10 +460,22 @@ struct DeveloperRunnerTests {
     let queued = feature("next-item", status: "queued")
     let state = snapshot([feature("done", status: "succeeded"), removed, queued])
     #expect(state.nextFeature?.id == queued.id)
-    #expect(state.visibleQueue.map(\.id) == ["done", "next-item"])
+    #expect(state.visibleQueue.map(\.id) == ["next-item"])
+    #expect(state.succeededQueue.map(\.id) == ["done"])
     #expect(snapshot([removed]).visibleQueue.isEmpty)
     #expect(snapshot([removed]).nextFeature == nil)
     #expect(snapshot([]).nextFeature == nil)
+  }
+
+  @Test
+  func succeededPresentationRetainsDurableQueueHistory() {
+    let active = feature("active", status: "queued")
+    let succeeded = feature("done", status: "succeeded")
+    let removed = feature("removed", status: "removed")
+    let state = snapshot([succeeded, removed, active])
+    #expect(state.activeQueue.map(\.id) == [active.id])
+    #expect(state.succeededQueue.map(\.id) == [succeeded.id])
+    #expect(state.queue.map(\.id) == [succeeded.id, removed.id, active.id])
   }
 
   @Test(arguments: ["queued", "paused", "failed", "running", "succeeded", "removed", "unknown"])
