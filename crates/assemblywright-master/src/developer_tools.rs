@@ -71,6 +71,9 @@ const OPENCODE_MODEL_CONTEXT_TOKENS: u64 = 262_144;
 const OPENCODE_MODEL_OUTPUT_TOKENS: u64 = 32_768;
 const OPENCODE_FEATURE_TIMEOUT_SECS: u64 = 1_800;
 const OPENCODE_CHAT_TIMEOUT_SECS: u64 = 900;
+const OPENCODE_EVENT_STREAM_FAILURE: &str = "OpenCode event stream failed";
+const OPENCODE_SESSION_TIMEOUT_FAILURE: &str = "OpenCode project tool session timed out";
+pub(crate) const OPENCODE_PENDING_APPROVAL_SESSION_FAILURE: &str = "OpenCode stopped while waiting for owner approval of an exact tool action. The action was not approved or replayed. Review the interrupted action and project tool access, then start a fresh request.";
 
 fn opencode_session_timeout(feature_id: Option<&str>) -> Duration {
     Duration::from_secs(if feature_id.is_some() {
@@ -1780,7 +1783,18 @@ impl DeveloperTools {
                         let _ = &reply.approval_id;
                     }
                     chunk = event_response.chunk() => {
-                        let Some(chunk) = chunk.context("OpenCode event stream failed")? else {
+                        let chunk = match chunk {
+                            Ok(chunk) => chunk,
+                            Err(error) => {
+                                let failure = self.session_failure_context(
+                                    request,
+                                    access.revision,
+                                    OPENCODE_EVENT_STREAM_FAILURE,
+                                )?;
+                                return Err(error).context(failure);
+                            }
+                        };
+                        let Some(chunk) = chunk else {
                             bail!("OpenCode event stream ended before the tool session completed");
                         };
                         buffer.extend_from_slice(&chunk);
@@ -1813,8 +1827,13 @@ impl DeveloperTools {
                         }
                     }
                     _ = &mut deadline => {
+                        let failure = self.session_failure_context(
+                            request,
+                            access.revision,
+                            OPENCODE_SESSION_TIMEOUT_FAILURE,
+                        )?;
                         self.interrupt_request(&request.project,&request.request_id,"interrupted")?;
-                        bail!("OpenCode project tool session timed out");
+                        bail!("{failure}");
                     }
                 }
             }
@@ -1888,6 +1907,38 @@ impl DeveloperTools {
                 params![project, request_id, status, now_unix()?],
             )?;
         Ok(())
+    }
+
+    fn session_failure_context(
+        &self,
+        request: &ToolChatRequest,
+        access_revision: u64,
+        ordinary_failure: &'static str,
+    ) -> Result<&'static str> {
+        let database = self
+            .database
+            .lock()
+            .map_err(|_| anyhow!("developer tool database lock failed"))?;
+        let pending: bool = database.query_row(
+            "SELECT EXISTS(
+               SELECT 1 FROM developer_tool_action
+               WHERE project=?1 AND request_id=?2 AND chat_id IS ?3
+               AND feature_id IS ?4 AND access_revision=?5 AND status='pending_approval'
+             )",
+            params![
+                request.project,
+                request.request_id,
+                request.chat_id,
+                request.feature_id,
+                access_revision
+            ],
+            |row| row.get(0),
+        )?;
+        Ok(if pending {
+            OPENCODE_PENDING_APPROVAL_SESSION_FAILURE
+        } else {
+            ordinary_failure
+        })
     }
 
     fn finalize_unfinished_actions(&self, project: &str, request_id: &str) -> Result<()> {
@@ -4072,6 +4123,103 @@ mod tests {
             &[],
         )
         .is_err());
+    }
+
+    #[test]
+    fn pending_approval_session_failure_requires_exact_feature_binding() {
+        let (_directory, tools) = service(None);
+        let mut request = test_request();
+        request.feature_id = Some("feature-a".into());
+        tools.database.lock().unwrap().execute(
+            "INSERT INTO developer_tool_action(
+               id,request_id,project,chat_id,access_revision,tool,summary,details,status,output,updated_unix,feature_id)
+             VALUES('approval-a',?1,?2,NULL,7,'bash','exact feature','{}','pending_approval',NULL,1,?3)",
+            params![request.request_id, request.project, request.feature_id],
+        ).unwrap();
+
+        assert_eq!(
+            tools
+                .session_failure_context(&request, 7, OPENCODE_SESSION_TIMEOUT_FAILURE)
+                .unwrap(),
+            OPENCODE_PENDING_APPROVAL_SESSION_FAILURE
+        );
+        request.feature_id = Some("feature-b".into());
+        assert_eq!(
+            tools
+                .session_failure_context(&request, 7, OPENCODE_SESSION_TIMEOUT_FAILURE)
+                .unwrap(),
+            OPENCODE_SESSION_TIMEOUT_FAILURE
+        );
+        request.feature_id = Some("feature-a".into());
+        assert_eq!(
+            tools
+                .session_failure_context(&request, 8, OPENCODE_SESSION_TIMEOUT_FAILURE)
+                .unwrap(),
+            OPENCODE_SESSION_TIMEOUT_FAILURE
+        );
+        tools
+            .interrupt_request(&request.project, &request.request_id, "interrupted")
+            .unwrap();
+        assert_eq!(
+            tools
+                .session_failure_context(&request, 7, OPENCODE_SESSION_TIMEOUT_FAILURE)
+                .unwrap(),
+            OPENCODE_SESSION_TIMEOUT_FAILURE
+        );
+    }
+
+    #[test]
+    fn pending_approval_session_failure_requires_exact_chat_and_request_binding() {
+        let (_directory, tools) = service(None);
+        let mut request = test_request();
+        request.chat_id = Some("chat-a".into());
+        tools.database.lock().unwrap().execute(
+            "INSERT INTO developer_tool_action(
+               id,request_id,project,chat_id,access_revision,tool,summary,details,status,output,updated_unix,feature_id)
+             VALUES('approval-chat',?1,?2,?3,4,'bash','exact chat','{}','pending_approval',NULL,1,NULL)",
+            params![request.request_id, request.project, request.chat_id],
+        ).unwrap();
+
+        assert_eq!(
+            tools
+                .session_failure_context(&request, 4, OPENCODE_EVENT_STREAM_FAILURE)
+                .unwrap(),
+            OPENCODE_PENDING_APPROVAL_SESSION_FAILURE
+        );
+        request.chat_id = Some("chat-b".into());
+        assert_eq!(
+            tools
+                .session_failure_context(&request, 4, OPENCODE_EVENT_STREAM_FAILURE)
+                .unwrap(),
+            OPENCODE_EVENT_STREAM_FAILURE
+        );
+        request.chat_id = Some("chat-a".into());
+        request.request_id = Uuid::new_v4().to_string();
+        assert_eq!(
+            tools
+                .session_failure_context(&request, 4, OPENCODE_EVENT_STREAM_FAILURE)
+                .unwrap(),
+            OPENCODE_EVENT_STREAM_FAILURE
+        );
+    }
+
+    #[test]
+    fn session_timeout_without_exact_pending_approval_keeps_ordinary_error() {
+        let (_directory, tools) = service(None);
+        let request = test_request();
+        tools.database.lock().unwrap().execute(
+            "INSERT INTO developer_tool_action(
+               id,request_id,project,chat_id,access_revision,tool,summary,details,status,output,updated_unix,feature_id)
+             VALUES('unrelated',?1,?2,NULL,1,'bash','finished','{}','completed',NULL,1,NULL)",
+            params![request.request_id, request.project],
+        ).unwrap();
+
+        assert_eq!(
+            tools
+                .session_failure_context(&request, 1, OPENCODE_SESSION_TIMEOUT_FAILURE)
+                .unwrap(),
+            OPENCODE_SESSION_TIMEOUT_FAILURE
+        );
     }
 
     #[test]

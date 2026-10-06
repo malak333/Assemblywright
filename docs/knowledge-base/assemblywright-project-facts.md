@@ -3205,3 +3205,19 @@ consistency.
   and independent review of the exact current snapshot.
 - [The published checkpoint](../developer-response-origin-checkpoint.md) records
   the accepted predecessor and remaining parser, network, runtime and FFT work.
+
+## Developer permission waits and empty projects
+
+- An OpenCode tool part marked running can still be waiting for permission.
+  Inspect the Developer action's retained permission identifier and exact access
+  revision before diagnosing a hung subprocess. Changing global access later
+  does not answer an already issued permission request.
+- A generic SSE timeout can conceal that approval wait. Failure classification
+  must inspect the exact project, request, chat, feature, and access revision
+  before interruption terminalizes the action.
+- An empty project has no retrievable files. A hallucinated context request can
+  receive one bounded model correction to propose new files, with no invalid
+  path read and no stale-inventory admission. Repeated retrieval remains rejected.
+- The primary checkout can lag the installed Developer source. Verify source
+  hashes and use an isolated checkout of the installed baseline before deploying
+  a narrow fix, preserving newer permission behavior and unrelated local changes.

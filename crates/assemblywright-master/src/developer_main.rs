@@ -69,7 +69,7 @@ use developer_settings::{
 use developer_tools::{
     DeveloperTools, OpenCodeRuntimeConfig, ToolApprovalDecision, ToolChatRequest,
     ToolEffectSnapshot, ToolExecutionBinding, ToolModelConfig, ToolProjectMutation,
-    ToolStageBinding, ToolStageMutationSummary,
+    ToolStageBinding, ToolStageMutationSummary, OPENCODE_PENDING_APPROVAL_SESSION_FAILURE,
 };
 
 const REPAIR_LIMIT: u32 = 3;
@@ -1388,7 +1388,10 @@ fn clean_staged_tool_hold_recoverable(feature: &Feature) -> bool {
             "OpenCode project tool session timed out",
         ) || feature.message.starts_with(
             "OpenCode tool action count exceeded its reserved limit",
-        ))
+        ) || feature
+            .message
+            .starts_with(OPENCODE_PENDING_APPROVAL_SESSION_FAILURE)
+        )
 }
 
 fn legacy_tool_quarantine_recovery(feature: &Feature) -> bool {
@@ -4954,47 +4957,27 @@ impl Engine {
             )
         };
         let system_prompt = if proposal.source == "automatic_failure" {
-            "Prepare one bounded automatic repair proposal for a failed feature. Do not execute commands or claim that files were changed. Preserve the original requirements and immutable validation command. You may modify any admitted source, test, build, or project configuration file when necessary, but must not weaken, delete, or skip coverage, modify .git, access secrets, or name paths outside the project. Focus on the smallest coherent correction, preferably four or fewer changed files; later attempts can address remaining findings. The supplied context has a complete manifest plus selected source portions. If a required text portion is absent, return ONLY JSON with manifest_sha256 and context_requests (path, start_byte, length); the runner permits one bounded retrieval round. Otherwise return ONLY JSON with summary and files. Each file has path and complete UTF-8 content. No markdown fences."
+            "Prepare one bounded automatic repair proposal for a failed feature. Do not execute commands or claim that files were changed. Preserve the original requirements and immutable validation command. You may modify any admitted source, test, build, or project configuration file when necessary, but must not weaken, delete, or skip coverage, modify .git, access secrets, or name paths outside the project. Focus on the smallest coherent correction, preferably four or fewer changed files; later attempts can address remaining findings. The supplied context has a complete manifest plus selected source portions. If the manifest inventory is empty, the project has no admitted files: create the necessary new files directly and do not request absent paths. If a required admitted text portion is absent, return ONLY JSON with manifest_sha256 and context_requests (path, start_byte, length); the runner permits one bounded retrieval round. Otherwise return ONLY JSON with summary and files. Each file has path and complete UTF-8 content. No markdown fences."
         } else {
-            "Prepare one reviewable repair proposal for a failed feature. Do not execute commands or claim that files were changed. Preserve the original requested behavior and immutable validation command. You may propose an existing test or validation-input change only when the test contradicts the original feature or approved plan; keep that change minimal and include it for explicit owner review. Do not weaken, delete, skip, or broadly rewrite tests. The supplied context has a complete manifest plus selected source portions. If a required text portion is absent, return ONLY JSON with manifest_sha256 and context_requests (path, start_byte, length); the runner permits one bounded retrieval round. Otherwise return ONLY JSON with summary and files. Each file has path and complete UTF-8 content. Include only changed files, do not delete files, modify .git, dependencies, or secrets. No markdown fences."
+            "Prepare one reviewable repair proposal for a failed feature. Do not execute commands or claim that files were changed. Preserve the original requested behavior and immutable validation command. You may propose an existing test or validation-input change only when the test contradicts the original feature or approved plan; keep that change minimal and include it for explicit owner review. Do not weaken, delete, skip, or broadly rewrite tests. The supplied context has a complete manifest plus selected source portions. If the manifest inventory is empty, the project has no admitted files: create the necessary new files directly and do not request absent paths. If a required admitted text portion is absent, return ONLY JSON with manifest_sha256 and context_requests (path, start_byte, length); the runner permits one bounded retrieval round. Otherwise return ONLY JSON with summary and files. Each file has path and complete UTF-8 content. Include only changed files, do not delete files, modify .git, dependencies, or secrets. No markdown fences."
         };
         let automatic = proposal.source == "automatic_failure";
-        let (mut generated, mut malformed_retry_bytes) = request_repair_model(
-            target,
-            system_prompt,
-            &prompt,
-            automatic,
-            automatic,
-            cancellation,
+        let (generated, malformed_retry_bytes) = request_repair_model_with_bounded_context(
+            BoundedRepairModelRequest {
+                target,
+                initial_system_prompt: system_prompt,
+                initial_prompt: &prompt,
+                final_system_prompt: "Use only the exact bounded project evidence supplied by the host and return the final repair proposal JSON with summary and files. Do not request more context or name unavailable paths.",
+                final_response_instruction:
+                    "Return only the final repair proposal JSON with summary and files; no further context request is allowed.",
+                project: &project,
+                context: &files,
+                automatic,
+                allow_json_correction: automatic,
+                cancellation,
+            },
         )
         .await?;
-        if generated.get("context_requests").is_some() {
-            let requested = repair_context_requests(&project, &files, &generated)?;
-            if cancellation.load(Ordering::SeqCst) != 0 {
-                bail!("Repair proposal was cancelled before bounded context retrieval");
-            }
-            let followup = format!(
-                "{prompt}\n\nThe model requested these additional exact bounded portions from manifest {}. This is the only retrieval round; now return the repair proposal JSON with summary and files:\n{}",
-                files.manifest_sha256,
-                serde_json::to_string(&requested)?
-            );
-            let (followup_generated, followup_retry_bytes) = request_repair_model(
-                target,
-                system_prompt,
-                &followup,
-                automatic,
-                automatic && malformed_retry_bytes.is_none(),
-                cancellation,
-            )
-            .await?;
-            generated = followup_generated;
-            if followup_retry_bytes.is_some() {
-                malformed_retry_bytes = followup_retry_bytes;
-            }
-            if generated.get("context_requests").is_some() {
-                bail!("Repair model requested more than one bounded context retrieval round");
-            }
-        }
         let model_summary = generated["summary"]
             .as_str()
             .context("Repair proposal has no summary")?;
@@ -8974,9 +8957,9 @@ impl Engine {
                 std::collections::HashMap::new()
             };
             let system_prompt = if feature.repair_pending {
-                "Repair the failed feature in this project. Preserve the original requested behavior. Existing tests and files named by the validation command are read-only repair inputs: do not output or modify them. Do not create files in conventional test/spec locations. Do not delete, weaken, skip, or rewrite tests merely to pass. Do not change the validation command. Fix the implementation and return ONLY a JSON object with a files array. Each item has path (relative path) and content (complete UTF-8 file contents). Include only new or changed implementation files. Do not delete files, modify .git, dependencies, or secrets. If the selected portions are insufficient, instead return exactly manifest_sha256 and a context_requests array of path/start_byte/length; the host permits one bounded retrieval round before any file changes. No markdown fences."
+                "Repair the failed feature in this project. Preserve the original requested behavior. Existing tests and files named by the validation command are read-only repair inputs: do not output or modify them. Do not create files in conventional test/spec locations. Do not delete, weaken, skip, or rewrite tests merely to pass. Do not change the validation command. Fix the implementation and return ONLY a JSON object with a files array. Each item has path (relative path) and content (complete UTF-8 file contents). Include only new or changed implementation files. Do not delete files, modify .git, dependencies, or secrets. If the manifest inventory is empty, the project has no admitted files: create the necessary new implementation files directly and do not request absent paths. If the selected admitted text portions are insufficient, instead return exactly manifest_sha256 and a context_requests array of path/start_byte/length; the host permits one bounded retrieval round before any file changes. No markdown fences."
             } else {
-                "Implement the requested feature in this project. Return ONLY a JSON object with a files array. Each item has path (relative path) and content (complete UTF-8 file contents). Include only new or changed files. Do not delete files, modify .git, dependencies, or secrets. Preserve existing behavior. Add meaningful tests. If the selected portions are insufficient, instead return exactly manifest_sha256 and a context_requests array of path/start_byte/length; the host permits one bounded retrieval round before any file changes. No markdown fences. The user supplies the validation command; implement code that really passes it."
+                "Implement the requested feature in this project. Return ONLY a JSON object with a files array. Each item has path (relative path) and content (complete UTF-8 file contents). Include only new or changed files. Do not delete files, modify .git, dependencies, or secrets. Preserve existing behavior. Add meaningful tests. If the manifest inventory is empty, the project has no admitted files: create the necessary new files directly and do not request absent paths. If the selected admitted text portions are insufficient, instead return exactly manifest_sha256 and a context_requests array of path/start_byte/length; the host permits one bounded retrieval round before any file changes. No markdown fences. The user supplies the validation command; implement code that really passes it."
             };
             let plan_context = approved_plan
                 .as_deref()
@@ -9121,36 +9104,23 @@ impl Engine {
                 prepared
             } else {
                 let automatic = feature.auto_repair_lifecycle == "running";
-                let (mut generated, _) = request_repair_model(
-                    target,
-                    system_prompt,
-                    &user_prompt,
-                    automatic,
-                    false,
-                    &self.cancellation,
-                )
-                .await?;
-                if generated.get("context_requests").is_some() {
-                    let requested = repair_context_requests(&project, &files, &generated)?;
-                    let follow_up = format!(
-                        "The one permitted bounded retrieval follows. Return only the final files JSON; no further context request is allowed.\nOriginal request:\n{}\nRetrieved portions: {}",
-                        user_prompt,
-                        serde_json::to_string(&requested)?
-                    );
-                    generated = request_repair_model(
+                let generated = request_repair_model_with_bounded_context(
+                    BoundedRepairModelRequest {
                         target,
-                        "Use the exact bounded project evidence supplied by the host and return only the final JSON object with a files array. Do not request more context and do not change tests, validation inputs, dependencies, .git, or secrets.",
-                        &follow_up,
+                        initial_system_prompt: system_prompt,
+                        initial_prompt: &user_prompt,
+                        final_system_prompt: "Use only the exact bounded project evidence supplied by the host and return the final JSON object with a files array. Do not request more context, name unavailable paths, or change tests, validation inputs, dependencies, .git, or secrets.",
+                        final_response_instruction:
+                            "Return only the final JSON object with a files array; no further context request is allowed.",
+                        project: &project,
+                        context: &files,
                         automatic,
-                        false,
-                        &self.cancellation,
-                    )
-                    .await?
-                    .0;
-                    if generated.get("context_requests").is_some() {
-                        bail!("Model requested more than one bounded context retrieval round");
-                    }
-                }
+                        allow_json_correction: false,
+                        cancellation: &self.cancellation,
+                    },
+                )
+                .await?
+                .0;
                 let entries = generated["files"]
                     .as_array()
                     .context("Model response has no files array")?;
@@ -15749,6 +15719,105 @@ fn project_repair_context_with_cancellation_epoch(
     })
 }
 
+struct BoundedRepairModelRequest<'a> {
+    target: &'a ModelTarget,
+    initial_system_prompt: &'a str,
+    initial_prompt: &'a str,
+    final_system_prompt: &'a str,
+    final_response_instruction: &'a str,
+    project: &'a Path,
+    context: &'a RepairProjectContext,
+    automatic: bool,
+    allow_json_correction: bool,
+    cancellation: &'a AtomicU8,
+}
+
+async fn request_repair_model_with_bounded_context(
+    request: BoundedRepairModelRequest<'_>,
+) -> Result<(Value, Option<usize>)> {
+    let BoundedRepairModelRequest {
+        target,
+        initial_system_prompt,
+        initial_prompt,
+        final_system_prompt,
+        final_response_instruction,
+        project,
+        context,
+        automatic,
+        allow_json_correction,
+        cancellation,
+    } = request;
+    let (generated, mut malformed_retry_bytes) = request_repair_model(
+        target,
+        initial_system_prompt,
+        initial_prompt,
+        automatic,
+        allow_json_correction,
+        cancellation,
+    )
+    .await?;
+    if generated.get("context_requests").is_none() {
+        return Ok((generated, malformed_retry_bytes));
+    }
+    if cancellation.load(Ordering::SeqCst) != 0 {
+        bail!("Repair proposal was cancelled before bounded context retrieval");
+    }
+    let context_result = match repair_context_requests_classified(project, context, &generated) {
+        Ok(portions) => format!(
+            "The host accepted the one permitted bounded retrieval from manifest {}. Retrieved portions: {}",
+            context.manifest_sha256,
+            serde_json::to_string(&portions)?
+        ),
+        Err(RepairContextRequestError::Invalid(error)) if context.inventory.is_empty() => {
+            drop(error);
+            format!(
+                "The host rejected the context request without reading an unadmitted path. Manifest {} has an empty inventory, so there are no existing admitted files to retrieve. Create the necessary new files directly from the original request.",
+                context.manifest_sha256
+            )
+        }
+        Err(RepairContextRequestError::Invalid(error)) => {
+            drop(error);
+            format!(
+                "The host rejected the context request without reading an unadmitted path because it was invalid or did not match manifest {}. Use only the complete manifest and already supplied selected portions.",
+                context.manifest_sha256
+            )
+        }
+        Err(RepairContextRequestError::State(error)) => {
+            return Err(error.context(
+                "Project context changed or became unavailable during bounded retrieval",
+            ));
+        }
+    };
+    let current_context = project_repair_context_with_cancellation(
+        project,
+        "bounded repair context manifest revalidation",
+        Some(cancellation),
+    )
+    .context("Project context could not be revalidated before the final proposal attempt")?;
+    if current_context.manifest_sha256 != context.manifest_sha256 {
+        bail!("Project context changed before the final repair proposal attempt");
+    }
+    let follow_up = format!(
+        "Original request and project evidence:\n{initial_prompt}\n\n{context_result}\n{final_response_instruction}"
+    );
+    let (final_generated, final_retry_bytes) = request_repair_model(
+        target,
+        final_system_prompt,
+        &follow_up,
+        automatic,
+        allow_json_correction && malformed_retry_bytes.is_none(),
+        cancellation,
+    )
+    .await?;
+    if final_retry_bytes.is_some() {
+        malformed_retry_bytes = final_retry_bytes;
+    }
+    if final_generated.get("context_requests").is_some() {
+        bail!("Repair model requested more than one bounded context retrieval round");
+    }
+    Ok((final_generated, malformed_retry_bytes))
+}
+
 async fn request_repair_model(
     target: &ModelTarget,
     system_prompt: &str,
@@ -15905,99 +15974,145 @@ fn read_repair_context_file(project: &Path, path: &str) -> Result<Vec<u8>> {
     bail!("Repair context retrieval is unsupported on this host")
 }
 
+#[derive(Debug)]
+enum RepairContextRequestError {
+    Invalid(anyhow::Error),
+    State(anyhow::Error),
+}
+
+fn repair_context_requests_classified(
+    project: &Path,
+    context: &RepairProjectContext,
+    response: &Value,
+) -> std::result::Result<Vec<RepairContextPortion>, RepairContextRequestError> {
+    let validated = (|| -> Result<Vec<(String, usize, usize, String)>> {
+        let object = response
+            .as_object()
+            .context("Repair context request must be a JSON object")?;
+        if object
+            .keys()
+            .any(|key| key != "manifest_sha256" && key != "context_requests")
+            || response["manifest_sha256"].as_str() != Some(context.manifest_sha256.as_str())
+        {
+            bail!("Repair context request does not match the complete manifest");
+        }
+        let requests = response["context_requests"]
+            .as_array()
+            .context("Repair context request has no requests array")?;
+        if requests.is_empty() || requests.len() > REPAIR_CONTEXT_REQUEST_LIMIT {
+            bail!("Repair context request count is outside the bounded limit");
+        }
+        let admitted = context
+            .inventory
+            .iter()
+            .filter(|entry| entry.kind == "text")
+            .filter_map(|entry| Some((entry.path.as_ref()?.to_ascii_lowercase(), entry)))
+            .collect::<std::collections::HashMap<_, _>>();
+        let mut total = 0usize;
+        let mut seen = std::collections::HashSet::new();
+        let mut validated = Vec::new();
+        for request in requests {
+            let request = request
+                .as_object()
+                .context("Repair context request entry is invalid")?;
+            if request
+                .keys()
+                .any(|key| !matches!(key.as_str(), "path" | "start_byte" | "length"))
+            {
+                bail!("Repair context request entry has unknown fields");
+            }
+            let requested_path = request
+                .get("path")
+                .and_then(Value::as_str)
+                .context("Repair context request path is missing")?;
+            let start = usize::try_from(
+                request
+                    .get("start_byte")
+                    .and_then(Value::as_u64)
+                    .context("Repair context request start is missing")?,
+            )?;
+            let length = usize::try_from(
+                request
+                    .get("length")
+                    .and_then(Value::as_u64)
+                    .context("Repair context request length is missing")?,
+            )?;
+            if length == 0
+                || length > REPAIR_CONTEXT_FILE_BYTE_LIMIT as usize
+                || !seen.insert((requested_path.to_ascii_lowercase(), start, length))
+            {
+                bail!("Repair context request is duplicate or outside its per-portion bound");
+            }
+            total = total
+                .checked_add(length)
+                .context("Repair context request byte count overflow")?;
+            if total > REPAIR_CONTEXT_TOTAL_BYTE_LIMIT {
+                bail!("Repair context requests exceed the total byte bound");
+            }
+            let entry = admitted
+                .get(&requested_path.to_ascii_lowercase())
+                .context("Repair context request names a non-text or unadmitted path")?;
+            let end = start
+                .checked_add(length)
+                .context("Repair context range overflow")?;
+            if u64::try_from(end)? > entry.byte_length {
+                bail!("Repair context request range is outside UTF-8 boundaries");
+            }
+            validated.push((
+                entry
+                    .path
+                    .clone()
+                    .context("Admitted repair context path is unavailable")?,
+                start,
+                end,
+                entry.content_sha256.clone(),
+            ));
+        }
+        Ok(validated)
+    })()
+    .map_err(RepairContextRequestError::Invalid)?;
+
+    let mut portions = Vec::new();
+    for (path, start, end, expected_sha256) in validated {
+        let bytes =
+            read_repair_context_file(project, &path).map_err(RepairContextRequestError::State)?;
+        if hash(&bytes) != expected_sha256 {
+            return Err(RepairContextRequestError::State(anyhow!(
+                "Repair context file changed before bounded retrieval"
+            )));
+        }
+        let content = String::from_utf8(bytes).map_err(|error| {
+            RepairContextRequestError::State(
+                anyhow!(error).context("Repair context request file is no longer UTF-8"),
+            )
+        })?;
+        if !content.is_char_boundary(start) || !content.is_char_boundary(end) {
+            return Err(RepairContextRequestError::Invalid(anyhow!(
+                "Repair context request range is outside UTF-8 boundaries"
+            )));
+        }
+        portions.push(RepairContextPortion {
+            path,
+            start_byte: start,
+            end_byte: end,
+            file_sha256: expected_sha256,
+            content: content[start..end].into(),
+        });
+    }
+    Ok(portions)
+}
+
+#[cfg(test)]
 fn repair_context_requests(
     project: &Path,
     context: &RepairProjectContext,
     response: &Value,
 ) -> Result<Vec<RepairContextPortion>> {
-    let object = response
-        .as_object()
-        .context("Repair context request must be a JSON object")?;
-    if object
-        .keys()
-        .any(|key| key != "manifest_sha256" && key != "context_requests")
-        || response["manifest_sha256"].as_str() != Some(context.manifest_sha256.as_str())
-    {
-        bail!("Repair context request does not match the complete manifest");
-    }
-    let requests = response["context_requests"]
-        .as_array()
-        .context("Repair context request has no requests array")?;
-    if requests.is_empty() || requests.len() > REPAIR_CONTEXT_REQUEST_LIMIT {
-        bail!("Repair context request count is outside the bounded limit");
-    }
-    let admitted = context
-        .inventory
-        .iter()
-        .filter(|entry| entry.kind == "text")
-        .filter_map(|entry| Some((entry.path.as_ref()?.to_ascii_lowercase(), entry)))
-        .collect::<std::collections::HashMap<_, _>>();
-    let mut total = 0usize;
-    let mut seen = std::collections::HashSet::new();
-    let mut portions = Vec::new();
-    for request in requests {
-        let request = request
-            .as_object()
-            .context("Repair context request entry is invalid")?;
-        if request
-            .keys()
-            .any(|key| !matches!(key.as_str(), "path" | "start_byte" | "length"))
-        {
-            bail!("Repair context request entry has unknown fields");
+    repair_context_requests_classified(project, context, response).map_err(|error| match error {
+        RepairContextRequestError::Invalid(error) | RepairContextRequestError::State(error) => {
+            error
         }
-        let path = request
-            .get("path")
-            .and_then(Value::as_str)
-            .context("Repair context request path is missing")?;
-        let start = usize::try_from(
-            request
-                .get("start_byte")
-                .and_then(Value::as_u64)
-                .context("Repair context request start is missing")?,
-        )?;
-        let length = usize::try_from(
-            request
-                .get("length")
-                .and_then(Value::as_u64)
-                .context("Repair context request length is missing")?,
-        )?;
-        if length == 0
-            || length > REPAIR_CONTEXT_FILE_BYTE_LIMIT as usize
-            || !seen.insert((path.to_ascii_lowercase(), start, length))
-        {
-            bail!("Repair context request is duplicate or outside its per-portion bound");
-        }
-        total = total
-            .checked_add(length)
-            .context("Repair context request byte count overflow")?;
-        if total > REPAIR_CONTEXT_TOTAL_BYTE_LIMIT {
-            bail!("Repair context requests exceed the total byte bound");
-        }
-        let entry = admitted
-            .get(&path.to_ascii_lowercase())
-            .context("Repair context request names a non-text or unadmitted path")?;
-        let bytes = read_repair_context_file(project, path)?;
-        if hash(&bytes) != entry.content_sha256 {
-            bail!("Repair context file changed before bounded retrieval");
-        }
-        let content =
-            String::from_utf8(bytes).context("Repair context request file is no longer UTF-8")?;
-        let end = start
-            .checked_add(length)
-            .context("Repair context range overflow")?;
-        if end > content.len() || !content.is_char_boundary(start) || !content.is_char_boundary(end)
-        {
-            bail!("Repair context request range is outside UTF-8 boundaries");
-        }
-        portions.push(RepairContextPortion {
-            path: path.into(),
-            start_byte: start,
-            end_byte: end,
-            file_sha256: entry.content_sha256.clone(),
-            content: content[start..end].into(),
-        });
-    }
-    Ok(portions)
+    })
 }
 
 #[cfg(test)]
@@ -24432,6 +24547,15 @@ mod tests {
         assert!(clean_staged_tool_hold_recoverable(&timed_out_stage));
         timed_out_stage.message = "OpenCode project tool session timed out".into();
         assert!(clean_staged_tool_hold_recoverable(&timed_out_stage));
+        let mut approval_wait_stage = feature.clone();
+        approval_wait_stage.message = OPENCODE_PENDING_APPROVAL_SESSION_FAILURE.into();
+        assert!(clean_staged_tool_hold_recoverable(&approval_wait_stage));
+        approval_wait_stage.message = OPENCODE_PENDING_APPROVAL_SESSION_FAILURE.replacen(
+            "owner approval of an exact tool action",
+            "owner approval of an inexact tool action",
+            1,
+        );
+        assert!(!clean_staged_tool_hold_recoverable(&approval_wait_stage));
         let mut with_live_edits = feature.clone();
         with_live_edits.edits = Some(Vec::new());
         assert!(!clean_staged_tool_hold_recoverable(&with_live_edits));
@@ -29207,6 +29331,196 @@ mod tests {
 
         let error = read_repair_context_file(&root, "grown.bin").unwrap_err();
         assert!(error.to_string().contains("bounded retrieval size"));
+    }
+
+    #[derive(Clone)]
+    struct RepairModelFixture {
+        responses: Arc<Mutex<std::collections::VecDeque<Value>>>,
+        requests: Arc<Mutex<Vec<Value>>>,
+    }
+
+    async fn repair_model_fixture_handler(
+        State(fixture): State<RepairModelFixture>,
+        Json(request): Json<Value>,
+    ) -> Json<Value> {
+        fixture.requests.lock().unwrap().push(request);
+        let content = fixture
+            .responses
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("fixture response")
+            .to_string();
+        Json(json!({
+            "choices": [{
+                "message": {"content": content},
+                "finish_reason": "stop"
+            }]
+        }))
+    }
+
+    async fn start_repair_model_fixture(
+        responses: Vec<Value>,
+    ) -> (String, RepairModelFixture, tokio::task::JoinHandle<()>) {
+        let fixture = RepairModelFixture {
+            responses: Arc::new(Mutex::new(responses.into())),
+            requests: Arc::new(Mutex::new(Vec::new())),
+        };
+        let app = Router::new()
+            .route("/chat/completions", post(repair_model_fixture_handler))
+            .with_state(fixture.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (url, fixture, server)
+    }
+
+    #[tokio::test]
+    async fn empty_inventory_hallucinated_context_path_gets_one_generic_final_attempt() {
+        let project = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(project.path()).unwrap();
+        let context = project_repair_context(&root, "new empty project").unwrap();
+        assert!(context.inventory.is_empty());
+        let invented_path = "private/invented-source.txt";
+        let (url, fixture, server) = start_repair_model_fixture(vec![
+            json!({
+                "manifest_sha256": context.manifest_sha256,
+                "context_requests": [{
+                    "path": invented_path,
+                    "start_byte": 0,
+                    "length": 64
+                }]
+            }),
+            json!({
+                "files": [{"path": "index.html", "content": "<h1>ready</h1>\n"}]
+            }),
+        ])
+        .await;
+        let target = ModelTarget {
+            id: "mac",
+            name: "fixture model",
+            url,
+            model: "fixture".into(),
+        };
+
+        let generated = request_repair_model_with_bounded_context(BoundedRepairModelRequest {
+            target: &target,
+            initial_system_prompt: "Return a proposal.",
+            initial_prompt: "Create a small website from this empty project.",
+            final_system_prompt: "Return final files.",
+            final_response_instruction: "Return only final files JSON.",
+            project: &root,
+            context: &context,
+            automatic: false,
+            allow_json_correction: false,
+            cancellation: &AtomicU8::new(0),
+        })
+        .await
+        .unwrap()
+        .0;
+        server.abort();
+
+        assert_eq!(generated["files"][0]["path"], "index.html");
+        assert!(fs::read_dir(&root).unwrap().next().is_none());
+        let requests = fixture.requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        let follow_up = requests[1]["messages"][1]["content"].as_str().unwrap();
+        assert!(follow_up.contains("empty inventory"));
+        assert!(follow_up.contains("Create the necessary new files directly"));
+        assert!(follow_up.contains(&context.manifest_sha256));
+        assert!(!follow_up.contains(invented_path));
+    }
+
+    #[tokio::test]
+    async fn second_context_request_remains_an_unrecoverable_final_result() {
+        let project = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(project.path()).unwrap();
+        let context = project_repair_context(&root, "new empty project").unwrap();
+        let context_request = json!({
+            "manifest_sha256": context.manifest_sha256,
+            "context_requests": [{
+                "path": "still-not-present.txt",
+                "start_byte": 0,
+                "length": 32
+            }]
+        });
+        let (url, fixture, server) =
+            start_repair_model_fixture(vec![context_request.clone(), context_request]).await;
+        let target = ModelTarget {
+            id: "mac",
+            name: "fixture model",
+            url,
+            model: "fixture".into(),
+        };
+
+        let error = request_repair_model_with_bounded_context(BoundedRepairModelRequest {
+            target: &target,
+            initial_system_prompt: "Return a proposal.",
+            initial_prompt: "Create the requested files.",
+            final_system_prompt: "Return final files.",
+            final_response_instruction: "Return only final files JSON.",
+            project: &root,
+            context: &context,
+            automatic: true,
+            allow_json_correction: true,
+            cancellation: &AtomicU8::new(0),
+        })
+        .await
+        .unwrap_err();
+        server.abort();
+
+        assert!(error
+            .to_string()
+            .contains("more than one bounded context retrieval round"));
+        assert_eq!(fixture.requests.lock().unwrap().len(), 2);
+        assert!(fs::read_dir(&root).unwrap().next().is_none());
+    }
+
+    #[tokio::test]
+    async fn invalid_context_request_does_not_mask_manifest_drift() {
+        let project = tempfile::tempdir().unwrap();
+        fs::write(project.path().join("existing.txt"), "original\n").unwrap();
+        let root = fs::canonicalize(project.path()).unwrap();
+        let context = project_repair_context(&root, "repair existing file").unwrap();
+        let (url, fixture, server) = start_repair_model_fixture(vec![json!({
+            "manifest_sha256": context.manifest_sha256,
+            "context_requests": [{
+                "path": "invented.txt",
+                "start_byte": 0,
+                "length": 32
+            }]
+        })])
+        .await;
+        fs::write(root.join("existing.txt"), "owner changed it\n").unwrap();
+        let target = ModelTarget {
+            id: "mac",
+            name: "fixture model",
+            url,
+            model: "fixture".into(),
+        };
+
+        let error = request_repair_model_with_bounded_context(BoundedRepairModelRequest {
+            target: &target,
+            initial_system_prompt: "Return a proposal.",
+            initial_prompt: "Repair the existing file.",
+            final_system_prompt: "Return final files.",
+            final_response_instruction: "Return only final files JSON.",
+            project: &root,
+            context: &context,
+            automatic: false,
+            allow_json_correction: false,
+            cancellation: &AtomicU8::new(0),
+        })
+        .await
+        .unwrap_err();
+        server.abort();
+
+        assert!(error
+            .to_string()
+            .contains("Project context changed before the final repair proposal attempt"));
+        assert_eq!(fixture.requests.lock().unwrap().len(), 1);
     }
 
     #[test]
