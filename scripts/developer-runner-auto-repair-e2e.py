@@ -314,7 +314,7 @@ def main():
             with closing(sqlite3.connect(data / "developer.sqlite3")) as database:
                 state = json.loads(database.execute(
                     "SELECT state FROM developer_state WHERE id=1").fetchone()[0])
-            return next(item for item in state["queue_v12"] if item["id"] == feature_id)
+            return next(item for item in state["queue_v13"] if item["id"] == feature_id)
 
         def reviewer_call_count():
             evidence = root / "review-fixture/review-input-evidence.jsonl"
@@ -836,7 +836,7 @@ def main():
                 backup = database.execute(
                     "SELECT state FROM developer_state_v2_backup WHERE id=1").fetchone()[0]
             assert backup == legacy
-            assert "queue_v12" in durable and "queue_v2" not in durable
+            assert "queue_v13" in durable and "queue_v2" not in durable
             proof = {
                 "native_platform": sys.platform,
                 "migration_defaults_and_atomic_control": True,

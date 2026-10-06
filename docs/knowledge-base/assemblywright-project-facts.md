@@ -3221,3 +3221,56 @@ consistency.
 - The primary checkout can lag the installed Developer source. Verify source
   hashes and use an isolated checkout of the installed baseline before deploying
   a narrow fix, preserving newer permission behavior and unrelated local changes.
+
+
+## Generated output and explicit repair deletions
+
+- A staged repair can successfully fix a generator yet fail candidate capture when
+  it removes obsolete generated HTML. A retained list of deleted paths is not
+  sufficient review or application evidence; before-text, its hash, and the
+  operation must be captured while the baseline still exists.
+- Do not solve stale output by silently omitting its directory from review or by
+  encoding deletion as an empty-file write. Candidate review, durable recovery,
+  and Git publication must agree on explicit removal and expected absence.
+- A new deletion contract cannot reinterpret an old unavailable proposal. Preserve
+  its history and counters, verify terminal cleanup and unchanged complete private
+  live state, then use a newly bound Resume to prepare fresh evidence.
+- Developer queue versions guard behavior as well as data shape. An older runner
+  must reject a deletion-bearing queue instead of defaulting missing text content
+  to an empty write. Legacy non-deletion digest bindings remain intact.
+
+- Automatic escalation has broader admitted-file authority than ordinary repair.
+  Treating every existing test as immutable can force implementation to satisfy
+  an incorrect test and prevent recovery. Bind and independently review the exact
+  correction, derive protected-input transitions from the complete authorized
+  candidate, and preserve the original validation command and ordinary limits.
+
+- A cumulative deletion has two baselines: immediate prior text for review and
+  the original remote bytes for publication. Keeping only the immediate hash
+  rejects a valid write-then-delete against the remote base. Preserve both through
+  restart, recovery, and later recreation; a newly created then deleted file has
+  no final repository effect and cannot justify a phantom Git deletion.
+
+- Codex `--output-schema` uses strict structured output: every object property's
+  name must occur in its `required` array. Adding optional deletion fields to an
+  existing response object can pass fixture decoding yet fail live review with
+  HTTP 400 `invalid_json_schema`. Use distinct strict legacy/deletion variants and
+  validate the emitted schema, while preserving legacy receipt serialization.
+
+- Extending typed mutation kinds requires updating both live candidate validation
+  and compact terminal-manifest validation. An application can pass review yet
+  fail after restart if the compact validator still recognizes only text/assets.
+  Exercise apply, compaction, serialization, reload, and drift negatives together.
+- Disposable-stage population must include admitted generated text/assets that
+  a complete build may remove. Excluding `dist` while expecting explicit deletion
+  makes the preimage absent before the tool runs; admission cannot reconstruct
+  missing prior bytes afterward. Keep sensitive/binary/link exclusions and bounds.
+
+- Escalation-slot `not_run` evidence and real independent review attempts use
+  different counters even when stored in the same history structure. Exclude
+  exact provider-free markers only from provider-attempt collision comparisons;
+  preserve history hashing and the stricter provenance checks for eligibility.
+- Operational quarantine need not increment the automatic epoch, while Stop
+  does. A fresh bound Resume is the required newer epoch for recovered validation;
+  do not require two increments merely because cancellation fixtures had two.
+  Preserve exact snapshot adoption, policy/identity checks, and lineage bounds.

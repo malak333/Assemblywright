@@ -154,6 +154,12 @@ def main():
                     for item in request['tools'] if item.get('type') == 'function'}
                 assert 'bash' in tools, sorted(tools)
                 image_base64 = base64.b64encode(staged_image).decode()
+                corrected_test_base64 = base64.b64encode((
+                    'from pathlib import Path\nimport sys\n'
+                    f"with Path({str(root / 'staged-validation-events')!r}).open('a') as log: "
+                    "log.write('validated\\n')\n"
+                    'sys.path.insert(0,str(Path(__file__).parents[1]))\n'
+                    'import app\nassert app.VALUE == 1\n').encode()).decode()
                 protected_rejection = 'staged-protected' in json.dumps(request)
                 code = ''.join([
                     "from pathlib import Path; import base64; ",
@@ -161,11 +167,13 @@ def main():
                     "Path('tests').mkdir(exist_ok=True); ",
                     ("Path('tests/test_existing.py').write_bytes(b'assert False\\n'); "
                      if protected_rejection else
+                     f"Path('tests/test_existing.py').write_bytes(base64.b64decode('{corrected_test_base64}')); "
                      "Path('tests/test_staged_regression.py').write_bytes("
                      "b'from pathlib import Path\\nimport sys\\nsys.path.insert(0,str(Path(__file__).parents[1]))"
                      "\\nimport app\\nassert app.VALUE == 1\\n'); "
                      "Path('dist').mkdir(exist_ok=True); "
                      "Path('dist/index.html').write_bytes(b'<main>rebuilt staged output</main>\\n'); "
+                     "Path('dist/obsolete-generated.html').unlink(); "
                      "[Path(f'dist/staged-{index:03}.html').write_bytes("
                      "f'<p>staged generated {index}</p>\\n'.encode()) for index in range(44)]; "),
                     f"Path('dist/route.png').write_bytes(base64.b64decode('{image_base64}')); ",
@@ -194,9 +202,11 @@ def main():
                            'from pathlib import Path\nimport sys\n'
                            f"with Path({str(root / 'staged-validation-events')!r}).open('a') as log: log.write('validated\\n')\n"
                            'sys.path.insert(0,str(Path(__file__).parents[1]))\n'
-                           'import app\nassert app.VALUE == 1\n'},
+                           'import app\nassert app.VALUE == 999\n'},
                           {'path': 'dist/index.html', 'content':
-                           '<main>stale generated output</main>\n'}]
+                           '<main>stale generated output</main>\n'},
+                          {'path': 'dist/obsolete-generated.html', 'content':
+                           '<main>obsolete generated output</main>\n'}]
                          if not repair else [{'path': 'app.py', 'content': f'VALUE = {value}\n'}])
             else:
                 files = [{'path': 'app.py', 'content': 'VALUE = 1\n' if repair else 'VALUE = 0\n'}]
@@ -365,7 +375,7 @@ def main():
             (project / 'route.png').write_bytes(image)
             with closing(sqlite3.connect(data / 'developer.sqlite3')) as database, database:
                 durable = json.loads(database.execute('SELECT state FROM developer_state WHERE id=1').fetchone()[0])
-                feature = next(item for item in durable['queue_v12'] if item['id'] == feature_id)
+                feature = next(item for item in durable['queue_v13'] if item['id'] == feature_id)
                 feature.update(status='failed', checkpoint='applied', review_status='interrupted',
                                review_pending=None, last_failure_kind='operational')
                 feature['edits'].append({'path': 'route.png', 'content': '', 'before': None,
@@ -402,7 +412,7 @@ def main():
             retained_generated.write_text('<main>retained generated output</main>\n')
             with closing(sqlite3.connect(data / 'developer.sqlite3')) as database, database:
                 durable = json.loads(database.execute('SELECT state FROM developer_state WHERE id=1').fetchone()[0])
-                feature = next(item for item in durable['queue_v12'] if item['id'] == feature_id)
+                feature = next(item for item in durable['queue_v13'] if item['id'] == feature_id)
                 # Match the live feature's exhausted ordinary-repair budget.
                 # Copy exact retained prior evidence into two additional fixture
                 # attempts; no actual provider calls are made while seeding.
@@ -518,7 +528,7 @@ def main():
             with closing(sqlite3.connect(data / 'developer.sqlite3')) as database, database:
                 durable = json.loads(database.execute(
                     'SELECT state FROM developer_state WHERE id=1').fetchone()[0])
-                feature = next(item for item in durable['queue_v12'] if item['id'] == feature_id)
+                feature = next(item for item in durable['queue_v13'] if item['id'] == feature_id)
                 durable['auto_ai_repair_max_escalations'] = 100
                 feature['edits'].append({'path': pytest_cache_path,
                     'content': pytest_cache_bytes.decode(), 'before': None})
@@ -572,7 +582,7 @@ def main():
             with closing(sqlite3.connect(data / 'developer.sqlite3')) as database, database:
                 durable = json.loads(database.execute(
                     'SELECT state FROM developer_state WHERE id=1').fetchone()[0])
-                feature = next(item for item in durable['queue_v12'] if item['id'] == feature_id)
+                feature = next(item for item in durable['queue_v13'] if item['id'] == feature_id)
                 feature['escalation_proposal']['review_slot_terminal'] = True
                 feature['escalation_history'].extend([
                     dict(terminal_metadata, outcome='unavailable'),
@@ -658,7 +668,7 @@ def main():
                 with closing(sqlite3.connect(data / 'developer.sqlite3')) as database, database:
                     durable = json.loads(database.execute(
                         'SELECT state FROM developer_state WHERE id=1').fetchone()[0])
-                    feature = next(item for item in durable['queue_v12']
+                    feature = next(item for item in durable['queue_v13']
                         if item['id'] == feature_id)
                     feature.update(status='failed',
                         checkpoint='tool_workspace_changed_requires_proposal',
@@ -708,7 +718,7 @@ def main():
             with closing(sqlite3.connect(data / 'developer.sqlite3')) as database, database:
                 durable = json.loads(database.execute(
                     'SELECT state FROM developer_state WHERE id=1').fetchone()[0])
-                feature = next(item for item in durable['queue_v12'] if item['id'] == feature_id)
+                feature = next(item for item in durable['queue_v13'] if item['id'] == feature_id)
                 feature.update(status='failed',
                     checkpoint='tool_workspace_changed_requires_proposal',
                     repair_pending=False, escalation_pending=False,
@@ -752,7 +762,7 @@ def main():
             with closing(sqlite3.connect(data / 'developer.sqlite3')) as database:
                 emergency_durable = json.loads(database.execute(
                     'SELECT state FROM developer_state WHERE id=1').fetchone()[0])
-            emergency_durable_feature = next(item for item in emergency_durable['queue_v12']
+            emergency_durable_feature = next(item for item in emergency_durable['queue_v13']
                 if item['id'] == feature_id)
             emergency_proposal = emergency_durable_feature['escalation_proposal']
             assert emergency_proposal['source'] == 'manual_chat'
@@ -769,7 +779,7 @@ def main():
                 with closing(sqlite3.connect(data / 'developer.sqlite3')) as database, database:
                     durable = json.loads(database.execute(
                         'SELECT state FROM developer_state WHERE id=1').fetchone()[0])
-                    feature = next(item for item in durable['queue_v12']
+                    feature = next(item for item in durable['queue_v13']
                         if item['id'] == feature_id)
                     feature.update(status='failed',
                         checkpoint='tool_workspace_changed_requires_proposal',
@@ -829,9 +839,15 @@ def main():
             live_app_before_authorization = (staged_project / 'app.py').read_bytes()
             protected_test = staged_project / 'tests/test_existing.py'
             protected_test_before = protected_test.read_bytes()
+            protected_test_after = protected_test_before.replace(
+                b'assert app.VALUE == 999\n', b'assert app.VALUE == 1\n')
             existing_generated = staged_project / 'dist/index.html'
             existing_generated_before = existing_generated.read_bytes()
             existing_generated_before_sha256 = hashlib.sha256(existing_generated_before).hexdigest()
+            obsolete_generated = staged_project / 'dist/obsolete-generated.html'
+            obsolete_generated_before = obsolete_generated.read_bytes()
+            obsolete_generated_before_sha256 = hashlib.sha256(
+                obsolete_generated_before).hexdigest()
             (staged_project / '.env.local').write_text('PRIVATE=live-only\n')
             (staged_project / '.aws').mkdir()
             (staged_project / '.aws/credentials').write_text('live-only credentials\n')
@@ -872,7 +888,9 @@ def main():
             assert not (stage_project_path / 'ordinary-notes.txt').exists()
             assert (staged_project / '.env.local').read_text() == 'PRIVATE=live-only\n'
             assert live_app_before_authorization != b'VALUE = 1\n'
+            assert protected_test.read_bytes() == protected_test_before
             assert existing_generated.read_bytes() == existing_generated_before
+            assert obsolete_generated.read_bytes() == obsolete_generated_before
             assert not (staged_project / 'dist/route.png').exists()
             assert not (staged_project / 'tests/test_staged_regression.py').exists()
             assert validation_cache_snapshot(staged_project) == staged_cache_before
@@ -895,7 +913,7 @@ def main():
                                 timeout=.05)) as database:
                             durable = json.loads(database.execute(
                                 'SELECT state FROM developer_state WHERE id=1').fetchone()[0])
-                        current = next(item for item in durable['queue_v12']
+                        current = next(item for item in durable['queue_v13']
                             if item['id'] == staged_feature_id)
                         proposal = current.get('escalation_proposal') or {}
                         applied_paths = proposal.get('applied_paths') or []
@@ -920,7 +938,7 @@ def main():
                                     ('staged-automatic',)).fetchone()
                                 raw_stage_rows = database.execute(
                                     'SELECT COUNT(*) FROM developer_tool_stage_mutation').fetchone()[0]
-                            frozen_feature = next(item for item in frozen['queue_v12']
+                            frozen_feature = next(item for item in frozen['queue_v13']
                                 if item['id'] == staged_feature_id)
                             frozen_proposal = frozen_feature['escalation_proposal']
                             candidate = frozen_proposal['staged_candidate']
@@ -931,7 +949,9 @@ def main():
                             for entry in candidate:
                                 path = staged_project / entry['path']
                                 current_bytes = path.read_bytes() if path.is_file() else None
-                                if entry.get('asset') is not None:
+                                if entry.get('delete'):
+                                    after = None
+                                elif entry.get('asset') is not None:
                                     after = base64.b64decode(entry['asset']['data_base64'])
                                 else:
                                     after = entry['content'].encode()
@@ -961,10 +981,12 @@ def main():
                                 'proposal_id': frozen_proposal['proposal_id'],
                                 'candidate_sha256': ready[0]['candidate_sha256'],
                                 'stage_mutation_sha256': stage_archive[1],
+                                'candidate_count': len(candidate),
                                 'applied_paths': exact_applied,
                                 'pending_paths': exact_pending,
                                 'applied_mtimes': {path: (staged_project / path).stat().st_mtime_ns
-                                    for path in exact_applied},
+                                    for path in exact_applied
+                                    if (staged_project / path).is_file()},
                                 'opencode_calls': len(opencode_calls),
                             })
                             negative_state.mkdir()
@@ -1005,9 +1027,10 @@ def main():
             restart_observer.join(5)
             assert not restart_observer.is_alive() and not restart_capture_errors, \
                 restart_capture_errors
-            assert 0 < len(restart_capture['applied_paths']) < 48
+            assert 0 < len(restart_capture['applied_paths']) < \
+                restart_capture['candidate_count']
             assert len(restart_capture['pending_paths']) + len(
-                restart_capture['applied_paths']) == 48
+                restart_capture['applied_paths']) == restart_capture['candidate_count']
             apply_started = time.monotonic()
             review_gate = root / 'review-fixture/staged-review.gate'
             review_gate.write_text('Hold the first completed-candidate review for a real Stop')
@@ -1058,7 +1081,7 @@ def main():
                         with closing(sqlite3.connect(data / 'developer.sqlite3')) as database:
                             unavailable_durable = json.loads(database.execute(
                                 'SELECT state FROM developer_state WHERE id=1').fetchone()[0])
-                        unavailable_feature = next(item for item in unavailable_durable['queue_v12']
+                        unavailable_feature = next(item for item in unavailable_durable['queue_v13']
                             if item['id'] == staged_feature_id)
                         unavailable_proposal = unavailable_feature['escalation_proposal']
                         unavailable_identity = (unavailable_proposal['proposal_id'],
@@ -1113,7 +1136,7 @@ def main():
                             with closing(sqlite3.connect(data / 'developer.sqlite3')) as database:
                                 retry_durable = json.loads(database.execute(
                                     'SELECT state FROM developer_state WHERE id=1').fetchone()[0])
-                            retry_record = next(item for item in retry_durable['queue_v12']
+                            retry_record = next(item for item in retry_durable['queue_v13']
                                 if item['id'] == staged_feature_id)
                             retry_proposal = retry_record['escalation_proposal']
                             assert unavailable_identity == (retry_proposal['proposal_id'],
@@ -1157,7 +1180,7 @@ def main():
                         with closing(sqlite3.connect(data / 'developer.sqlite3')) as database:
                             unavailable_durable = json.loads(database.execute(
                                 'SELECT state FROM developer_state WHERE id=1').fetchone()[0])
-                        unavailable_feature = next(item for item in unavailable_durable['queue_v12']
+                        unavailable_feature = next(item for item in unavailable_durable['queue_v13']
                             if item['id'] == staged_feature_id)
                         unavailable_proposal = unavailable_feature['escalation_proposal']
                         assert unavailable_proposal['status'] == 'applied'
@@ -1203,19 +1226,21 @@ def main():
                     assert held_terminal['status'] == 'interrupted', held_terminal
                     assert held_terminal['files'] == []
                     assert held_terminal['candidate_payload_state'] == 'hash_only'
-                    assert len(held_terminal['candidate_entries']) == 48
+                    assert len(held_terminal['candidate_entries']) == \
+                        restart_capture['candidate_count']
                     assert all('after' not in entry
                         for entry in held_terminal['candidate_entries'])
                     assert 'data_base64' not in json.dumps(held_terminal)
                     with closing(sqlite3.connect(data / 'developer.sqlite3')) as database:
                         held_durable = json.loads(database.execute(
                             'SELECT state FROM developer_state WHERE id=1').fetchone()[0])
-                    held_durable_feature = next(item for item in held_durable['queue_v12']
+                    held_durable_feature = next(item for item in held_durable['queue_v13']
                         if item['id'] == staged_feature_id)
                     held_proposal = held_durable_feature['escalation_proposal']
                     assert held_proposal['status'] == 'interrupted'
                     assert 'staged_candidate' not in held_proposal
-                    assert len(held_proposal['staged_candidate_manifest']) == 48
+                    assert len(held_proposal['staged_candidate_manifest']) == \
+                        restart_capture['candidate_count']
                     held_receipts = [item for item in held_durable_feature['escalation_history']
                         if item['proposal_id'] == held_proposal['proposal_id']]
                     assert [item['outcome'] for item in held_receipts] == [
@@ -1302,9 +1327,10 @@ def main():
             assert staged_feature['escalation_count'] == 2
             assert staged_feature['review_status'] == 'approved'
             assert (staged_project / 'app.py').read_bytes() == b'VALUE = 1\n'
-            assert protected_test.read_bytes() == protected_test_before
+            assert protected_test.read_bytes() == protected_test_after
             assert (staged_project / 'tests/test_staged_regression.py').is_file()
             assert existing_generated.read_text() == '<main>rebuilt staged output</main>\n'
+            assert not obsolete_generated.exists()
             assert (staged_project / 'dist/route.png').read_bytes() == staged_image
             assert len(list((staged_project / 'dist').glob('staged-*.html'))) == 44
             assert all((staged_project / path).stat().st_mtime_ns == modified
@@ -1317,11 +1343,11 @@ def main():
             assert terminal['status'] == 'interrupted', terminal
             assert terminal['source'] == 'automatic_failure'
             assert terminal['files'] == []
-            assert terminal['candidate_schema_version'] == 1
+            assert terminal['candidate_schema_version'] == 2
             assert terminal['candidate_payload_state'] == 'hash_only'
             assert len(terminal['candidate_sha256']) == 64
             candidate_entries = terminal['candidate_entries']
-            assert len(candidate_entries) == 48, len(candidate_entries)
+            assert len(candidate_entries) == 50, len(candidate_entries)
             assert [entry['path'] for entry in candidate_entries] == sorted(
                 entry['path'] for entry in candidate_entries)
             text_entry = next(entry for entry in candidate_entries if entry['path'] == 'app.py')
@@ -1329,6 +1355,8 @@ def main():
                 if entry['path'] == 'dist/index.html')
             asset_entry = next(entry for entry in candidate_entries
                 if entry['path'] == 'dist/route.png')
+            deletion_entry = next(entry for entry in candidate_entries
+                if entry['path'] == 'dist/obsolete-generated.html')
             assert text_entry['kind'] == 'text' and 'after' not in text_entry
             assert generated_entry['kind'] == 'text'
             assert generated_entry['before_sha256'] == existing_generated_before_sha256
@@ -1337,13 +1365,15 @@ def main():
             assert asset_entry['kind'] == 'asset'
             assert asset_entry['media_type'] == 'image/png'
             assert asset_entry['width'] == 128 and asset_entry['height'] == 128
+            assert deletion_entry['kind'] == 'delete'
+            assert deletion_entry['before_sha256'] == obsolete_generated_before_sha256
             assert 'data_base64' not in json.dumps(terminal)
             assert not list(projects.glob('aw-repair-stage-*'))
 
             with closing(sqlite3.connect(data / 'developer.sqlite3')) as database:
                 durable = json.loads(database.execute(
                     'SELECT state FROM developer_state WHERE id=1').fetchone()[0])
-                durable_staged = next(item for item in durable['queue_v12']
+                durable_staged = next(item for item in durable['queue_v13']
                     if item['id'] == staged_feature_id)
                 stage_archive = database.execute(
                     'SELECT scope_id,status,mutation_sha256,mutation_count,text_bytes,asset_bytes,serialized_bytes '
@@ -1376,7 +1406,7 @@ def main():
             assert stage_archive[2] == restart_capture['stage_mutation_sha256']
             assert len(opencode_calls) == restart_capture['opencode_calls']
             assert 'staged_candidate' not in durable_staged['escalation_proposal']
-            assert len(durable_staged['escalation_proposal']['staged_candidate_manifest']) == 48
+            assert len(durable_staged['escalation_proposal']['staged_candidate_manifest']) == 50
 
             staged_evidence = [json.loads(line) for line in
                 (root / 'review-fixture/review-input-evidence.jsonl').read_text().splitlines()]
@@ -1386,10 +1416,16 @@ def main():
             staged_reviewed = {(entry['path'], entry['content_sha256'])
                 for item in staged_evidence if item.get('kind') == 'review_batch'
                 for entry in item['entries']}
-            for path in ('app.py', 'dist/index.html', 'dist/route.png',
+            for path in ('app.py', 'dist/index.html', 'dist/route.png', 'tests/test_existing.py',
                          'tests/test_staged_regression.py', 'dist/staged-043.html'):
                 assert (path, hashlib.sha256((staged_project / path).read_bytes()).hexdigest()) \
                     in staged_reviewed, path
+            deletion_reviews = [entry for item in staged_evidence
+                if item.get('kind') == 'review_batch' for entry in item['entries']
+                if entry['path'] == 'dist/obsolete-generated.html']
+            assert deletion_reviews and deletion_reviews[0]['delete'] is True
+            assert deletion_reviews[0]['before_sha256'] == obsolete_generated_before_sha256
+            assert deletion_reviews[0]['content_sha256'] == hashlib.sha256(b'').hexdigest()
 
             negative_project = negative_projects / 'staged-automatic'
             drift = negative_project / 'unrelated-restart-drift.txt'
@@ -1454,7 +1490,7 @@ def main():
                     negative_stage = database.execute(
                         'SELECT status,mutation_sha256 FROM developer_tool_stage '
                         'WHERE project=?', ('staged-automatic',)).fetchone()
-                negative_durable_feature = next(item for item in negative_durable['queue_v12']
+                negative_durable_feature = next(item for item in negative_durable['queue_v13']
                     if item['id'] == staged_feature_id)
                 negative_proposal = negative_durable_feature['escalation_proposal']
                 assert negative_proposal['apply_request_id'] == \
@@ -1509,7 +1545,7 @@ def main():
             with closing(sqlite3.connect(data / 'developer.sqlite3')) as database:
                 drift_durable = json.loads(database.execute(
                     'SELECT state FROM developer_state WHERE id=1').fetchone()[0])
-            drift_record = next(item for item in drift_durable['queue_v12']
+            drift_record = next(item for item in drift_durable['queue_v13']
                 if item['id'] == drift_feature_id)
             drift_proposal = drift_record['escalation_proposal']
             drift_receipts = [item for item in drift_record['escalation_history']
@@ -1524,7 +1560,8 @@ def main():
                 'legacy_quarantine_exact_owner_adoption': True, 'stale_adoption_rejected': True,
                 'staged_live_workspace_unchanged_until_authorized': True,
                 'staged_typed_text_and_png_candidate': True,
-                'staged_existing_test_immutable_new_regression_allowed': True,
+                'staged_typed_generated_text_deletion': True,
+                'staged_existing_test_corrected_and_new_regression_added': True,
                 'staged_partial_restart_continued_exact_remaining_paths': True,
                 'staged_review_stop_requires_exact_owner_adoption': True,
                 'staged_owner_adoption_revalidates_without_model_or_write_replay': True,

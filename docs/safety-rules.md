@@ -62,6 +62,17 @@ Automatic repair keeps the validation command immutable, requires fresh independ
 Codex review, rejects prohibited paths and secret-bearing material, and quarantines
 ambiguous effects. Changed bytes or stale state invalidate either authorization.
 See also [`developer-chat-repair-design.md`](developer-chat-repair-design.md).
+Supported staged automatic-failure text deletions require snapshotted Full access,
+complete admitted prior text and its exact hash, explicit operation-bound review,
+identity-checked removal, durable absence/restart proof, and deletion-aware frozen
+publication. Unknown, sensitive, binary, linked, or legacy path-only removals remain
+holds. An empty-file write cannot stand in for deletion. Queue format `queue_v13`
+prevents older runners from interpreting a deletion as a legacy empty write.
+Automatic escalation may correct existing admitted test inputs under that exact
+candidate and independent-review authority. Its protected-input state must be
+computed from the baseline plus authorized applied paths; ordinary repairs retain
+their narrower restrictions. Changing the validation command remains prohibited.
+See [`developer-scalable-repair-design.md`](developer-scalable-repair-design.md).
 
 Developer validation runs in an owned, closed environment: the runner snapshots an
 explicit environment before spawn instead of inheriting ambient state at process
