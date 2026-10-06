@@ -41,6 +41,12 @@ appropriate protected evidence without disclosing secret contents to providers.
 Hard inventory capacity failure stops before project mutation rather than
 silently dropping entries.
 
+A model request for absent or otherwise inadmissible context receives one
+bounded correction attempt using the same complete inventory. No inadmissible
+path is read. An empty inventory explicitly directs the model to propose new
+files. The host rechecks the inventory before the final call; changed project
+evidence stops preparation. The final call cannot request another retrieval.
+
 Repair prompts prioritize the actual failure, approved plan, source, and relevant
 tests. Generated output remains in the inventory and candidate evidence but does
 not displace relevant source in the initial text budget. Bounded retrieval of
