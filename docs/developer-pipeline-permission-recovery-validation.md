@@ -82,11 +82,46 @@ Codex review. Review rejected eight content/rendering/coverage findings; the
 runner automatically reserved and began ordinary repair 2 without another
 permission prompt or parent model/file write.
 
-Live FFT acceptance remains in progress. At 03:06:53 UTC on October 6, the owner
+Ordinary repair 2 applied a candidate but immutable validation failed with 15
+errors, including an undefined Python variable and invalid job data. Ordinary
+repair 3 passed all 15 tests; it reintroduced a fabricated Chapter 5 to satisfy
+one of the existing tests. Exact independent review rejected that candidate with
+16 factual, link, schema, discovery, and coverage findings. The runner then
+automatically reserved escalation 5, which can propose changes to the incorrect
+existing test rather than forcing ordinary repair to preserve it. Neither a
+passing test command nor active automatic repair establishes feature acceptance.
+
+Live FFT acceptance remains unproven. At 03:06:53 UTC on October 6, the owner
 requested a one-hour investigation bound, a durable summary, and GitHub push and
 merge of the reviewed application fixes. The deadline is 04:06:53 UTC. The FFT
 project remains local-only; application-source publication does not establish
 FFT completion.
+
+At the bounded investigation snapshot, **03:31:55 UTC on October 6**, revision
+984 retained feature `835329ad-4bc2-4dc8-80e0-3f7df4993d54` at
+`escalation_5_preparing`, with 3 ordinary repair attempts, 5 escalations, the
+latest review rejected with 16 findings, and Auto AI lifecycle `running` at
+epoch 2. Global Full access remained revision 5; there was no pending tool
+approval. The exact durable feature-record SHA-256 at that instant was
+`f132af3b1e78e6bd9184a1ac635713541582d54cb3addfa99ce84b86e9fd4eb5`.
+This is a timestamped observation, not a terminal state or Resume authorization.
+The parent ended investigation to reserve time for publication; the autonomous
+runner was left active without a counter reset, fabricated approval, project-file
+edit, or Stop request.
+
+The installed Windows Developer source directory is a transferred tree, not a
+Git checkout. All 146 tracked runtime inputs (`Cargo.toml`, `Cargo.lock`,
+`rust-toolchain.toml`, and `crates/`) matched the reviewed source byte for byte.
+The canonical input hash-manifest digest was
+`9a3eab829799b8fd2d90ca3261408896b63cd3c6e2737dfad2fb5e97bd36aac5`.
+Subsequent closeout edits are documentation only, so they require no binary
+replacement or interruption of the active feature. Protected-service executable
+inputs were unchanged; protected SCM deployment is outside this Developer slice.
+
+Application publication is [PR #432](https://github.com/malak333/Assemblywright/pull/432).
+Its final documentation commit must pass all three hosted gates on its own SHA
+before the normal merge path. GitHub retains exact-head check and merge receipts;
+local source validation and installed source parity remain distinct proof layers.
 
 ## Closeout verdicts
 
@@ -106,5 +141,7 @@ FFT completion.
 - Deployment: Windows runner rebuilt and reconnected with exact source hashes and
   preserved feature state; Mac bundle rebuilt with ad hoc signing. Developer ID
   signing, notarization, and protected-service release readiness are unverified.
-- Publication: requested; hosted checks and merge evidence will be recorded at
-  closeout. Live feature acceptance remains a separate outcome.
+- Publication: requested through PR #432, with exact-head hosted gates required
+  before merge. The final publication result is recorded by GitHub and the
+  parent closeout. Live feature acceptance remains unproven at the timestamped
+  snapshot and is separate from application-source publication.
