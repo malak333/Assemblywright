@@ -49,8 +49,37 @@ Publication requires hosted macOS/Windows checks on the PR candidate and final
 merged SHA. Those immutable results are retained with the GitHub pull request
 and workflow runs; a local pass alone does not establish hosted publication.
 
-Deployment and installed UI: the installed owner runner had active feature,
-chat, and tool work during this slice. It was not stopped or rebuilt. The source
-and fixture evidence does not establish installed Windows source/binary parity,
-rendered live UI, real-provider execution, signing, notarization, or distribution
-readiness. A guarded rebuild must wait for idle owner work.
+Publication: [PR #430](https://github.com/malak333/Assemblywright/pull/430)
+merged after all three hosted candidate gates passed on
+`889643249ec5685810214ccb28ebfe91f1d32ab3`. Published main
+`860d1344326e1f14d02475312dfba21f5bb066b7` contains that reviewed commit and has
+the same tree. The isolated local checkout was fast-forwarded to published main;
+the unrelated dirty checkout was preserved.
+
+Deployment on 2026-10-05: owner work initially prevented rebuilding. After work
+finished, `python3 -B scripts/production-build.py --build --no-open` verified
+authenticated idle state, rebuilt the release Mac app and Windows Developer
+runner, and reconnected to MIKE-PC. This updates the supervised owner-account
+Developer runtime, not the separate protected-service installation.
+
+Post-rebuild authenticated status reported `supervised_developer`, revision 911,
+all seven activity guards false, Emergency Pause false, and planning/review still
+required. Authenticated `GET /permissions` reported available Windows execution,
+mode `ask`, revision 4. No permission save or feature execution was performed.
+The first global policy intentionally starts in Ask; legacy project Full access
+does not authorize global Full access.
+
+All 146 tracked Cargo/toolchain/crate build inputs on Windows matched published
+main by SHA-256. The installed Windows runner matched its release build output,
+SHA-256 `7cb858ff6db582323171ec1074894b7267bf20cd22a879d6e78eb71e5ef0d41f`.
+The Mac app's 36 compiled Mach-O sections and build UUID
+`F903CC76-C504-3CE0-9557-CA94B6254B02` matched its release build. Section parity
+excludes code-signing metadata, which changes when the bundle is signed. The
+rebuilt bundle executable SHA-256 was
+`747ce22fd2d046018b349be4c14e76839c7cfe41ddd6b022bb70402d8a1d0147`;
+`codesign --verify --strict --deep` passed for the local ad hoc bundle signature.
+
+Rendered live UI remains unverified because the Mac was locked. The rebuilt app
+was prepared with `--no-open`. No real-provider execution, Developer feature
+acceptance, Developer ID signing, notarization, or distribution readiness is
+claimed. The protected-service schema/service lifecycle is outside this slice.
