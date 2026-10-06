@@ -189,17 +189,26 @@ Full access runs under the owner account, and snapshot checks cannot prove the
 absence of transient or external effects. The separate production containment
 requirements remain deferred under the documented Developer exception.
 
-The proposal must retain the exact combined text and supported image bytes,
+The proposal must retain the exact combined text, supported image bytes, and
+explicit supported text deletions,
 current live baselines, complete review findings, protected inputs, project
 snapshot, and cancellation/epoch bindings. One proposal digest authorizes the
 whole resulting change. A separate application manifest records the exact
 workspace after durably recorded progress without changing that immutable
-proposal digest. Resuming partial application must match this recorded state and
+proposal digest. An automatic escalation may correct existing admitted tests as required by the
+approved feature; ordinary repairs keep their narrower protected-input rules.
+The stage's protected-input map must equal the original baseline transformed
+only by its complete typed candidate. Before authorization the live map stays
+unchanged; during application it advances only for exactly authorized applied
+paths. These corrections receive complete independent review, including whether
+coverage or requirements were weakened.
+
+Resuming partial application must match this recorded state and
 its original one-shot request, unique preparation and authorization receipts,
 candidate digest, feature attempt, and current policy. An unexpected restart
 may continue only remaining paths after those proofs are rechecked. Explicit
 Stop or Emergency Pause revokes continuation. Unrelated drift stops further writes. Drift, protected-input changes, unsupported binaries,
-deletions without a supported contract, uncertain cleanup, or missing tool
+unsupported deletions, uncertain cleanup, or missing tool
 approval remain holds. Application remains restart-safe; immutable validation
 and complete independent review still follow it. A tool response claiming a
 successful build cannot substitute for those gates. The bounded JSON path may
@@ -223,11 +232,37 @@ payloads; automatic candidates cannot be manually approved through the legacy
 text-only UI. Durable payload retention is bounded and compacted only when the
 exact candidate and interruption-recovery evidence are safely retained elsewhere.
 
-The staged authority fields require Developer queue format `queue_v12`. Forward
-migration accepts `queue_v11` and saves its original snapshot before rewriting;
+The staged authority fields and explicit deletion operations require Developer
+queue format `queue_v13`. Forward migration accepts `queue_v12` and saves its
+original snapshot before rewriting;
 older runners must reject the new queue rather than interpret an active typed
 candidate as an empty legacy text proposal. This is Developer persistence
 versioning, separate from the production wire protocol and master schema.
+
+### Explicit staged text deletion
+
+A bound automatic-failure stage under snapshotted Full access may capture removal
+of an admitted regular UTF-8 text file. Deletion is an explicit operation with the
+complete prior text and exact prior SHA-256. An empty text write remains a write.
+Unknown baselines, binary or sensitive files, links, and unsupported paths remain
+unreviewable. Legacy manual JSON proposals retain their existing write-only
+contract. A historical path-only mutation cannot be upgraded into deletion proof.
+
+Candidate capture, immutable review disclosure, digest binding, restart recovery,
+and frozen Git publication must all retain the operation and its prior bytes.
+Deletion application verifies the exact baseline and file/parent identity before
+removal; its recorded result is absence. Recovery must distinguish an already
+applied deletion from a stale or substituted file. Git publication stages and
+verifies the deletion as a real removed path rather than recreating an empty file.
+Cumulative review retains the immediate deletion source separately from the
+original repository baseline used for publication. Earlier writes followed by
+deletion must not overwrite that original baseline. A file created and deleted
+within the feature remains review evidence but contributes no repository change;
+publication still requires a non-empty set of actual reviewed changes.
+Existing protected-input and independent review requirements still apply, including
+review of test changes during escalation. The validation command stays immutable.
+New deletion-bearing evidence uses distinct digest/schema versions; retained
+write/image evidence keeps its original bindings.
 
 The native boundary and deployment evidence is recorded separately from the
 remaining live website acceptance in the validation document.
@@ -239,7 +274,10 @@ Stop interrupted its validation or review, a new owner-bound Resume may adopt
 the exact retained result for fresh validation and independent review. This is
 not continuation of the interrupted application authorization. The original
 interrupted proposal, attempts, escalation count, and receipts remain intact;
-recovery must not replay file writes or invoke implementation again.
+recovery must not replay file writes or invoke implementation again. Operational
+quarantine may preserve the proposal epoch; the bound Resume must advance it
+strictly beyond that epoch. Stop-origin recovery may have an additional increment.
+Exact snapshot adoption and the history-derived upper epoch bound still apply.
 
 The recovery digest must bind the feature, project, current checkpoint, policy
 and execution identities, retained candidate, and complete private application
@@ -271,7 +309,10 @@ including explicitly written bytecode, dependencies, or generated output.
 The staged validation evidence digest binds its exact proposal, application,
 candidate, command, policy, access/runtime/archive identities, successful exit,
 and equal pre/post private snapshots. The existing application checkpoint remains
-immutable. The runner rechecks it under the effect gate through review-packet
+immutable. Synthetic escalation-slot `not_run` records have their own counter;
+provider-attempt collision checks exclude only binding-v0 records with no provider
+decision, batches, receipts, or findings. History hashing and provenance-based
+recovery eligibility remain unchanged. The runner rechecks it under the effect gate through review-packet
 construction and persistence of pending review evidence, closing the gap between
 validation and review. Restart must validate again when complete review admission
 evidence is absent. These guarantees do not prove validation had no external
@@ -300,7 +341,8 @@ immutable validation and independent review.
   the previous context and 40-file limits, assets, and retained failure history.
 - Independent complete-diff review and canonical repository validation.
 - For `aw-fft-demo`, a meaningful original or permitted map with source notes,
-  unchanged existing tests, successful full build, browser navigation/search/
+  meaningful test coverage with any escalation correction independently reviewed,
+  successful full build, browser navigation/search/
   image checks, responsive and no-JavaScript checks, and real independent review.
 - Exact deployed Windows binary/source evidence and explicit recovery outcome.
   No hosted publication, signing, notarization, or production readiness is

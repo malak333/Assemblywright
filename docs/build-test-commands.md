@@ -165,6 +165,15 @@ Mac ARM64 or Windows AMD64 release into `target/developer-fixtures`, verifies
 both archive and production executable SHA-256 values, and reuses that verified
 cache. The first uncached run needs network access; an invalid explicit runtime
 fails rather than skipping the boundary.
+The staged scenario also corrects an existing false test under automatic
+escalation, retains the exact preauthorization live baseline, deletes an obsolete
+UTF-8 generated page, and checks deletion-aware review, compaction, restart, and
+absence. Ordinary-repair protected-input limits stay covered separately. Focused
+Rust publication tests use a real local Git repository to prove original-versus-
+immediate deletion baselines, staged status `D`, and final index/tree absence.
+Review schema tests require every object property and preserve strict legacy and
+delete variants; a controlled fixture remains separate from actual provider
+schema admission and live feature acceptance.
 
 ## Local Model Selection Focused Validation
 

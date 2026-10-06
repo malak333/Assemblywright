@@ -67,7 +67,7 @@ use developer_settings::{
     DEFAULT_MODEL as REVIEW_MODEL_ID, DEFAULT_REASONING_EFFORT,
 };
 use developer_tools::{
-    DeveloperTools, OpenCodeRuntimeConfig, ToolApprovalDecision, ToolChatRequest,
+    DeveloperTools, OpenCodeRuntimeConfig, ToolAccessMode, ToolApprovalDecision, ToolChatRequest,
     ToolEffectSnapshot, ToolExecutionBinding, ToolModelConfig, ToolProjectMutation,
     ToolStageBinding, ToolStageMutationSummary, OPENCODE_PENDING_APPROVAL_SESSION_FAILURE,
 };
@@ -174,6 +174,12 @@ struct Edit {
     #[serde(default)]
     content: String,
     before: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    publication_before: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    delete: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    before_text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     asset: Option<BinaryAsset>,
 }
@@ -445,6 +451,10 @@ struct FrozenPublicationFile {
     content_sha256: String,
     #[serde(default)]
     content: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    delete: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    before_text: Option<String>,
     #[serde(default)]
     asset: Option<BinaryAsset>,
     #[serde(default = "legacy_unclassified_review_file")]
@@ -456,6 +466,29 @@ fn legacy_unclassified_review_file() -> String {
 }
 
 fn frozen_publication_bytes(file: &FrozenPublicationFile) -> Result<Vec<u8>> {
+    if file.delete {
+        let edit = Edit {
+            path: file.path.clone(),
+            content: file.content.clone(),
+            before: file
+                .before_text
+                .as_ref()
+                .map(|before| hash(before.as_bytes())),
+            delete: true,
+            before_text: file.before_text.clone(),
+            asset: file.asset.clone(),
+
+            publication_before: None,
+        };
+        edit_bytes(&edit)?;
+        if file.content_sha256 != hash(b"") {
+            bail!("Frozen publication deletion binding changed");
+        }
+        return Ok(Vec::new());
+    }
+    if file.before_text.is_some() {
+        bail!("Frozen publication write contains deletion source evidence");
+    }
     let bytes = match &file.asset {
         Some(asset) => {
             if !file.content.is_empty() {
@@ -569,7 +602,8 @@ struct Snapshot {
     auto_ai_repair_last_request_sha256: String,
     emergency_paused: bool,
     #[serde(
-        rename = "queue_v12",
+        rename = "queue_v13",
+        alias = "queue_v12",
         alias = "queue_v11",
         alias = "queue_v10",
         alias = "queue_v9",
@@ -1196,7 +1230,7 @@ fn validate_auto_repair_feature(feature: &Feature) -> Result<()> {
                 if let Some(before) = &entry.before_sha256 {
                     validate_sha256(before, "terminal candidate prior digest")?;
                 }
-                if !matches!(entry.kind.as_str(), "text" | "asset") {
+                if !matches!(entry.kind.as_str(), "text" | "asset" | "delete") {
                     bail!("Terminal staged candidate kind is invalid");
                 }
                 if !seen.insert(entry.path.replace('\\', "/").to_ascii_lowercase()) {
@@ -1228,6 +1262,12 @@ fn validate_auto_repair_feature(feature: &Feature) -> Result<()> {
                             bail!("Terminal staged asset metadata is invalid");
                         }
                     }
+                    "delete"
+                        if entry.before_sha256.is_some()
+                            && entry.media_type.is_none()
+                            && entry.width.is_none()
+                            && entry.height.is_none() => {}
+                    "delete" => bail!("Terminal staged deletion metadata is invalid"),
                     _ => bail!("Terminal staged text metadata is invalid"),
                 }
             }
@@ -1610,6 +1650,7 @@ fn validate_fully_applied_staged_recovery_candidate(
             .get(&entry.path.to_ascii_lowercase())
             .context("A fully applied staged path is missing from cumulative review evidence")?;
         if edit_sha256(edit)? != entry.content_sha256
+            || edit.delete != (entry.kind == "delete")
             || (edit.asset.is_some()) != (entry.kind == "asset")
             || edit.asset.as_ref().map(|asset| asset.media_type.as_str())
                 != entry.media_type.as_deref()
@@ -1620,12 +1661,21 @@ fn validate_fully_applied_staged_recovery_candidate(
         }
         let mut exact = (*edit).clone();
         exact.before = entry.before_sha256.clone();
+        exact.publication_before = None;
         reconstructed.push(exact);
     }
-    let candidate_sha256 = hash(&serde_json::to_vec(&json!({
-        "schema_version":1,
-        "typed_entries":reconstructed,
-    }))?);
+    let candidate_sha256 = if reconstructed.iter().any(|edit| edit.delete) {
+        hash(&serde_json::to_vec(&json!({
+            "domain":"assemblywright.repair-escalation-candidate.v2",
+            "schema_version":2,
+            "typed_entries":reconstructed,
+        }))?)
+    } else {
+        hash(&serde_json::to_vec(&json!({
+            "schema_version":1,
+            "typed_entries":reconstructed,
+        }))?)
+    };
     let exact_receipt = |outcome: &str| {
         feature
             .escalation_history
@@ -1910,6 +1960,15 @@ fn terminal_effect_free_escalation_review_not_run(
         && application_receipts == 1
 }
 
+fn provider_free_escalation_review_not_run(review: &ReviewAttemptEvidence) -> bool {
+    review.outcome == "not_run"
+        && review.binding_version == 0
+        && review.decision_sha256.is_none()
+        && review.batch_packet_sha256s.is_empty()
+        && review.batch_receipt_sha256s.is_empty()
+        && review.blocking_findings.is_empty()
+}
+
 fn fully_applied_staged_validation_binding(
     feature: &Feature,
 ) -> Result<Option<FullyAppliedStagedValidationBinding>> {
@@ -1967,7 +2026,7 @@ fn fully_applied_staged_validation_binding(
             "Fully applied staged proposal has no execution binding".into(),
         )
     })?;
-    let recovery_epoch = proposal_automatic_epoch.checked_add(2).ok_or_else(|| {
+    let recovery_epoch = proposal_automatic_epoch.checked_add(1).ok_or_else(|| {
         FullyAppliedRecoveryOperationalFailure("Recovered staged proposal epoch overflow".into())
     })?;
     if proposal.feature_id != feature.id
@@ -2099,7 +2158,7 @@ fn fully_applied_staged_pending_review_binding(
         || expected_pending.binding_version != 2
         || feature.review_history.iter().any(|attempt| {
             attempt.attempt >= expected_pending.attempt
-                && !terminal_effect_free_escalation_review_not_run(feature, attempt)
+                && !provider_free_escalation_review_not_run(attempt)
         })
     {
         bail!("Recovered review pending evidence or phase changed");
@@ -2296,29 +2355,18 @@ fn fully_applied_staged_expected_protected_inputs(
     proposal: &RepairEscalationProposal,
     validation_paths: &[String],
 ) -> Result<std::collections::BTreeMap<String, String>> {
-    let mut expected = proposal.protected_inputs.clone();
-    for edit in &proposal.staged_candidate {
-        if edit.before.is_none()
-            && edit.asset.is_none()
-            && is_protected_repair_input(&edit.path, validation_paths)
-        {
-            let normalized = edit.path.replace('\\', "/").to_ascii_lowercase();
-            if expected.insert(normalized, edit_sha256(edit)?).is_some() {
-                bail!("Fully applied staged validation protected input binding collides");
-            }
-        }
-    }
+    let mut expected = expected_protected_inputs_after_edits(
+        &proposal.protected_inputs,
+        &proposal.staged_candidate,
+        validation_paths,
+    )?;
     for entry in &proposal.staged_candidate_manifest {
-        if entry.before_sha256.is_none()
-            && entry.kind == "text"
-            && is_protected_repair_input(&entry.path, validation_paths)
-        {
+        if is_protected_repair_input(&entry.path, validation_paths) {
             let normalized = entry.path.replace('\\', "/").to_ascii_lowercase();
-            if expected
-                .insert(normalized, entry.content_sha256.clone())
-                .is_some()
-            {
-                bail!("Fully applied staged validation protected input binding collides");
+            if entry.kind == "delete" {
+                expected.remove(&normalized);
+            } else {
+                expected.insert(normalized, entry.content_sha256.clone());
             }
         }
     }
@@ -4510,17 +4558,25 @@ impl Engine {
             .iter()
             .map(|edit| {
                 let content_sha256 = edit_sha256(edit)?;
-                Ok(match &edit.asset {
-                    Some(asset) => json!({
-                        "kind":"asset","path":edit.path,
+                Ok(if edit.delete {
+                    json!({
+                        "kind":"delete","path":edit.path,
                         "before_sha256":edit.before,"content_sha256":content_sha256,
-                        "media_type":asset.media_type,"width":asset.width,"height":asset.height,
-                    }),
-                    None => json!({
-                        "kind":"text","path":edit.path,
-                        "before_sha256":edit.before,"content_sha256":content_sha256,
-                        "after":edit.content,
-                    }),
+                        "before_text":edit.before_text,
+                    })
+                } else {
+                    match &edit.asset {
+                        Some(asset) => json!({
+                            "kind":"asset","path":edit.path,
+                            "before_sha256":edit.before,"content_sha256":content_sha256,
+                            "media_type":asset.media_type,"width":asset.width,"height":asset.height,
+                        }),
+                        None => json!({
+                            "kind":"text","path":edit.path,
+                            "before_sha256":edit.before,"content_sha256":content_sha256,
+                            "after":edit.content,
+                        }),
+                    }
                 })
             })
             .collect::<Result<Vec<_>>>()?;
@@ -4568,7 +4624,11 @@ impl Engine {
             "error":proposal.error,
             "files":proposal.files,
             "source":proposal.source,
-            "candidate_schema_version":(!typed_entries.is_empty()).then_some(1),
+            "candidate_schema_version":(!typed_entries.is_empty()).then_some(
+                if proposal.staged_candidate.iter().any(|edit| edit.delete)
+                    || proposal.staged_candidate_manifest.iter().any(|entry| entry.kind == "delete")
+                { 2 } else { 1 }
+            ),
             "candidate_payload_state":if proposal.staged_candidate.is_empty() && !proposal.staged_candidate_manifest.is_empty() {
                 Some("hash_only")
             } else if !proposal.staged_candidate.is_empty() {
@@ -5108,7 +5168,7 @@ impl Engine {
         let findings_json = serde_json::to_string(&findings)?;
         let environment_guidance = staged_repair_environment_guidance(project)?;
         let prompt = format!(
-            "Implement the approved feature correction directly in this disposable project copy using project tools. Run the actual complete project build so every generated text file and image is synchronized before finishing, then run the immutable validation command. Every existing test and validation file is an immutable protected input: do not change, delete, weaken, or skip it. Add focused new regression test files when needed and permitted. The staged proposal supports retained-path edits and new files only; do not delete or rename files. It admits bounded UTF-8 text plus valid bounded PNG or JPEG assets, at most 320 entries, 6 MiB total text, and 32 MiB total decoded assets. Prefer redirects or new retained paths over renames. Do not modify .git, access secrets, or write outside this project. Report actual commands and outcomes.\n\nOriginal feature: {}\nApproved immutable implementation plan:\n{}\nImmutable validation command: {}\nCurrent bounded failure summary: {}\nComplete retained blocking findings canonical JSON: {}",
+            "Implement the approved feature correction directly in this disposable project copy using project tools. Run the actual complete project build so every generated text file and image is synchronized before finishing, then run the immutable validation command. The validation command is immutable: do not change, weaken, or skip it. Existing admitted source and tests may change only when the approved correction requires it, and every changed path must remain in the exact staged candidate for independent review. Add focused regression tests when needed. The staged proposal supports retained-path edits, new files, and explicit deletion of an existing ordinary UTF-8 text file; do not use an empty write to represent deletion. It admits bounded UTF-8 text plus valid bounded PNG or JPEG assets, at most 320 entries, 6 MiB total text disclosure including deleted before-text, and 32 MiB total decoded assets. Do not rename files, modify .git, access secrets, or write outside this project. Report actual commands and outcomes.\n\nOriginal feature: {}\nApproved immutable implementation plan:\n{}\nImmutable validation command: {}\nCurrent bounded failure summary: {}\nComplete retained blocking findings canonical JSON: {}",
             feature.instruction,
             approved_plan,
             feature.validation,
@@ -5172,17 +5232,7 @@ impl Engine {
             Ok(())
         })();
         let mutations = self.tools.stage_mutations(&stage_binding);
-        let staged_protected = repair_protected_inputs(stage.project_path(), validation_paths)
-            .and_then(|observed| {
-                if protected_inputs
-                    .iter()
-                    .all(|(path, digest)| observed.get(path) == Some(digest))
-                {
-                    Ok(())
-                } else {
-                    bail!("Staged automatic repair changed an existing protected input")
-                }
-            });
+        let staged_protected = repair_protected_inputs(stage.project_path(), validation_paths);
         let cleanup_preparation = self.tools.mark_stage_cleanup_pending(&stage_binding);
         let cleanup = if cleanup_preparation.is_ok() {
             stage.cleanup()
@@ -5206,30 +5256,46 @@ impl Engine {
         };
         let candidate = (|| {
             live_integrity?;
-            staged_protected?;
-            let mutations = mutations?;
-            let mut edits = tool_mutation_edits_unbounded(&mutations, Some(&feature.id))?;
-            rebind_staged_candidate_to_live(project, &mut edits)?;
-            escalation_application_edits(&RepairEscalationProposal {
-                source: "automatic_failure".into(),
-                staged_candidate: edits.clone(),
-                ..Default::default()
-            })?;
             let result = result?;
             if cancellation.load(Ordering::SeqCst) != 0
                 || self.tool_cancellation.load(Ordering::SeqCst)
             {
                 bail!("Staged automatic preparation was cancelled");
             }
+            let execution = result
+                .execution_binding
+                .context("Staged tool execution returned no authority binding")?;
+            self.tools.verify_execution_binding(&execution)?;
+            if !matches!(
+                execution.access_mode,
+                ToolAccessMode::Auto | ToolAccessMode::Full
+            ) || execution.stage != stage_binding
+                || execution.stage.proposal_id.as_deref() != Some(proposal_id)
+            {
+                bail!("Staged execution authority is absent or changed");
+            }
+            let mutations = mutations?;
+            let mut edits =
+                staged_tool_mutation_edits(&mutations, Some(&feature.id), execution.access_mode)?;
+            rebind_staged_candidate_to_live(project, &mut edits)?;
+            let observed_staged_protected = staged_protected?
+                .into_iter()
+                .collect::<std::collections::BTreeMap<_, _>>();
+            let expected_staged_protected =
+                expected_protected_inputs_after_edits(protected_inputs, &edits, validation_paths)?;
+            if observed_staged_protected != expected_staged_protected {
+                bail!("Staged protected inputs do not match the complete typed candidate");
+            }
+            escalation_application_edits(&RepairEscalationProposal {
+                source: "automatic_failure".into(),
+                staged_candidate: edits.clone(),
+                ..Default::default()
+            })?;
             if edits.is_empty() {
                 bail!(
                     "Selected Windows model produced no staged implementation or generated output"
                 );
             }
-            let execution = result
-                .execution_binding
-                .context("Staged tool execution returned no authority binding")?;
-            self.tools.verify_execution_binding(&execution)?;
             Ok(StagedAutomaticCandidate {
                 edits,
                 binding: StagedCandidateBinding {
@@ -6194,7 +6260,7 @@ impl Engine {
         let allowed = after_entry
             .as_deref()
             .or(before_entry.as_deref())
-            .context("Authorized staged path is absent from the post-write effect inventory")?;
+            .context("Authorized staged path is absent from the bounded effect inventory")?;
         let without_allowed = |entries: &std::collections::BTreeMap<String, String>| {
             entries
                 .iter()
@@ -6206,9 +6272,19 @@ impl Engine {
             bail!("Live project effects outside the authorized staged path changed during application; inspect the live workspace");
         }
         if allowed.eq_ignore_ascii_case(&edit.path) {
-            let expected = edit_sha256(edit)?;
-            if after.entries.get(allowed).map(String::as_str) != Some(expected.as_str()) {
-                bail!("Authorized staged path bytes do not match the approved candidate");
+            if edit.delete {
+                if after.entries.contains_key(allowed)
+                    || before.entries.get(allowed).map(String::as_str) != edit.before.as_deref()
+                {
+                    bail!(
+                        "Authorized staged deletion does not match exact prior bytes and absence"
+                    );
+                }
+            } else {
+                let expected = edit_sha256(edit)?;
+                if after.entries.get(allowed).map(String::as_str) != Some(expected.as_str()) {
+                    bail!("Authorized staged path bytes do not match the approved candidate");
+                }
             }
         }
         let validation_paths = validation_path_references(project, &feature.validation)?;
@@ -8589,33 +8665,51 @@ impl Engine {
             .rev()
             .find(|attempt| attempt.outcome == "approved" && attempt.decision_sha256.is_some())
             .context("Required Codex review approval evidence is missing")?;
+        let cumulative_edits = current
+            .edits
+            .as_deref()
+            .context("Approved review has no generated-file evidence")?;
         let packet = developer_review_batch_set(
             current,
             &project,
-            current
-                .edits
-                .as_deref()
-                .context("Approved review has no generated-file evidence")?,
+            cumulative_edits,
             &approved.validation_evidence_sha256,
         )?;
         let mut publication_candidate = packet
             .packet
             .files
             .iter()
-            .map(|file| FrozenPublicationFile {
-                path: file.path.clone(),
-                before_sha256: file.before_sha256.clone(),
-                content_sha256: file.content_sha256.clone(),
-                content: file.content.clone(),
-                asset: None,
-                classification: file.classification.clone(),
+            .map(|file| {
+                let edit = cumulative_edits
+                    .iter()
+                    .find(|edit| edit.path.eq_ignore_ascii_case(&file.path))
+                    .context("Reviewed publication file has no cumulative typed evidence")?;
+                if file.delete && file.publication_before_sha256 != edit.publication_before {
+                    bail!("Reviewed deletion publication baseline changed");
+                }
+                Ok(FrozenPublicationFile {
+                    path: file.path.clone(),
+                    before_sha256: if file.delete {
+                        file.publication_before_sha256.clone()
+                    } else {
+                        file.before_sha256.clone()
+                    },
+                    content_sha256: file.content_sha256.clone(),
+                    content: file.content.clone(),
+                    delete: file.delete,
+                    before_text: file.before_text.clone(),
+                    asset: None,
+                    classification: file.classification.clone(),
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
         publication_candidate.extend(packet.assets.iter().map(|asset| FrozenPublicationFile {
             path: asset.path.clone(),
             before_sha256: asset.before_sha256.clone(),
             content_sha256: asset.content_sha256.clone(),
             content: String::new(),
+            delete: false,
+            before_text: None,
             asset: Some(BinaryAsset {
                 media_type: asset.media_type.clone(),
                 data_base64: asset.data_base64.clone(),
@@ -8893,7 +8987,11 @@ impl Engine {
                             path: edit.path.clone(),
                             content,
                             before: edit.before.clone(),
+                            delete: false,
+                            before_text: None,
                             asset: None,
+
+                            publication_before: None,
                         })
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -9182,7 +9280,11 @@ impl Engine {
                         path: path.into(),
                         content: content.into(),
                         before,
+                        delete: false,
+                        before_text: None,
                         asset: None,
+
+                        publication_before: None,
                     });
                 }
                 if feature.repair_pending && edits.is_empty() {
@@ -11114,7 +11216,6 @@ fn copy_repair_stage_with_directory_opened(
                 "target",
                 "node_modules",
                 "__pycache__",
-                "dist",
             ]
             .contains(&name.as_str())
             {
@@ -11199,7 +11300,6 @@ fn copy_repair_stage_with_directory_opened(
                 "target",
                 "node_modules",
                 "__pycache__",
-                "dist",
             ]
             .contains(&name.as_str())
             {
@@ -11823,8 +11923,13 @@ fn validate_prepared_repair_application_state(project: &Path, edits: &[Edit]) ->
         } else {
             None
         };
-        let final_sha256 = edit_sha256(edit)?;
-        if current != edit.before && current.as_deref() != Some(final_sha256.as_str()) {
+        let final_sha256 = (!edit.delete).then(|| edit_sha256(edit)).transpose()?;
+        let final_matches = if edit.delete {
+            current.is_none()
+        } else {
+            current.as_deref() == final_sha256.as_deref()
+        };
+        if current != edit.before && !final_matches {
             bail!(
                 "{} changed after its prepared repair was saved; preserve it and reconcile manually",
                 edit.path
@@ -11847,13 +11952,20 @@ fn validate_current_review_edits(edits: &[Edit], project: &Path) -> Result<()> {
         if !seen.insert(edit.path.to_lowercase()) {
             bail!("Cumulative generated-file evidence contains a duplicate path");
         }
-        let bytes = read_repair_context_file(project, &edit.path).with_context(|| {
-            format!(
-                "Generated file {} changed before escalation approval",
-                edit.path
-            )
-        })?;
-        if hash(&bytes) != edit_sha256(edit)? {
+        let full = checked_path(project, &edit.path)?;
+        let valid = if edit.delete {
+            edit_bytes(edit)?;
+            !full.try_exists()?
+        } else {
+            let bytes = read_repair_context_file(project, &edit.path).with_context(|| {
+                format!(
+                    "Generated file {} changed before escalation approval",
+                    edit.path
+                )
+            })?;
+            hash(&bytes) == edit_sha256(edit)?
+        };
+        if !valid {
             bail!(
                 "Generated file {} changed before escalation approval",
                 edit.path
@@ -11880,11 +11992,27 @@ fn merge_review_edits(current: &[Edit], applied: &[Edit]) -> Result<Vec<Edit>> {
         if let Some(index) = indices.get(&normalized).copied() {
             // `before` is the earliest known feature baseline. Later repairs or
             // escalations update only the expected final bytes.
+            let was_delete = merged[index].delete;
             merged[index].content = edit.content.clone();
+            if edit.delete {
+                merged[index].publication_before = merged[index]
+                    .publication_before
+                    .clone()
+                    .or_else(|| merged[index].before.clone());
+                merged[index].before = edit.before.clone();
+            } else if was_delete {
+                merged[index].before = merged[index].publication_before.take();
+            }
+            merged[index].delete = edit.delete;
+            merged[index].before_text = edit.before_text.clone();
             merged[index].asset = edit.asset.clone();
         } else {
             indices.insert(normalized, merged.len());
-            merged.push(edit.clone());
+            let mut admitted = edit.clone();
+            if admitted.delete {
+                admitted.publication_before = admitted.before.clone();
+            }
+            merged.push(admitted);
         }
     }
     if merged.is_empty() || merged.len() > MAX_REVIEW_CANDIDATE_ENTRIES {
@@ -11925,7 +12053,11 @@ fn reconcile_limit_recovery_edits(
                 path: path.clone(),
                 content: content.clone(),
                 before: before.cloned(),
+                delete: false,
+                before_text: None,
                 asset: None,
+
+                publication_before: None,
             })
         })
         .collect::<Vec<_>>();
@@ -11972,7 +12104,11 @@ fn prepare_limit_recovery_edits(
             // baseline. Recording their exact digest avoids claiming they are
             // new while still forcing every admitted byte through Codex review.
             before: Some(digest.clone()),
+            delete: false,
+            before_text: None,
             asset: None,
+
+            publication_before: None,
         })
         .collect())
 }
@@ -12009,7 +12145,11 @@ fn merge_escalation_review_edits(
             path: file.path.clone(),
             content: file.after.clone(),
             before: file.before.as_ref().map(|before| hash(before.as_bytes())),
+            delete: false,
+            before_text: None,
             asset: None,
+
+            publication_before: None,
         })
         .collect::<Vec<_>>();
     merge_review_edits(current, &proposed)
@@ -12033,8 +12173,13 @@ fn escalation_application_edits(proposal: &RepairEscalationProposal) -> Result<V
                     .checked_add(bytes.len())
                     .context("Typed staged asset byte count overflow")?;
             } else {
+                let disclosed = if edit.delete {
+                    edit.before_text.as_ref().map_or(0, String::len)
+                } else {
+                    bytes.len()
+                };
                 text_bytes = text_bytes
-                    .checked_add(bytes.len())
+                    .checked_add(disclosed)
                     .context("Typed staged text byte count overflow")?;
             }
         }
@@ -12059,7 +12204,11 @@ fn escalation_application_edits(proposal: &RepairEscalationProposal) -> Result<V
                 path: file.path.clone(),
                 content: file.after.clone(),
                 before: file.before.as_ref().map(|before| hash(before.as_bytes())),
+                delete: false,
+                before_text: None,
                 asset: None,
+
+                publication_before: None,
             })
         })
         .collect()
@@ -12083,7 +12232,9 @@ fn compact_terminal_staged_candidate(proposal: &mut RepairEscalationProposal) ->
                 path: edit.path.clone(),
                 before_sha256: edit.before.clone(),
                 content_sha256: edit_sha256(edit)?,
-                kind: if edit.asset.is_some() {
+                kind: if edit.delete {
+                    "delete".into()
+                } else if edit.asset.is_some() {
                     "asset".into()
                 } else {
                     "text".into()
@@ -12110,6 +12261,7 @@ fn merge_typed_escalation_review_edits(
 fn tool_mutation_edits_unbounded(
     mutations: &[ToolProjectMutation],
     expected_feature_id: Option<&str>,
+    allow_deletions: bool,
 ) -> Result<Vec<Edit>> {
     let mut edits = Vec::<Edit>::new();
     let mut indices = std::collections::HashMap::<String, usize>::new();
@@ -12136,14 +12288,28 @@ fn tool_mutation_edits_unbounded(
                 width: asset.width,
                 height: asset.height,
             });
-            let after = match (&mutation_edit.after, &asset) {
-                (Some(after), None) => after.clone(),
-                (None, Some(_)) => String::new(),
-                (None, None) => bail!(
-                    "Tool-assisted feature deleted {}; deletion cannot enter bounded review",
+            let (after, delete, before_text) = match (
+                &mutation_edit.after,
+                &asset,
+                mutation_edit.delete,
+                &mutation_edit.before_text,
+            ) {
+                (Some(after), None, false, None) => (after.clone(), false, None),
+                (None, Some(_), false, None) => (String::new(), false, None),
+                (None, None, true, Some(before_text)) if allow_deletions => {
+                    (String::new(), true, Some(before_text.clone()))
+                }
+                (None, None, true, _) => {
+                    bail!("Tool-assisted feature deletion cannot enter this bounded review")
+                }
+                (None, None, false, _) => bail!(
+                    "Tool-assisted feature deleted {}; legacy deletion evidence is unreviewable",
                     mutation_edit.path
                 ),
-                (Some(_), Some(_)) => bail!("Tool mutation mixed text and binary asset evidence"),
+                (Some(_), Some(_), _, _) => {
+                    bail!("Tool mutation mixed text and binary asset evidence")
+                }
+                _ => bail!("Tool mutation has inconsistent typed deletion evidence"),
             };
             if mutation_edit.before_sha256.as_ref().is_some_and(|digest| {
                 digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -12152,6 +12318,9 @@ fn tool_mutation_edits_unbounded(
             }
             let normalized = mutation_edit.path.replace('\\', "/").to_lowercase();
             if let Some(index) = indices.get(&normalized).copied() {
+                if edits[index].delete || delete {
+                    bail!("Tool mutation contains duplicate or write-delete collision evidence");
+                }
                 edits[index].content = after;
                 edits[index].asset = asset;
             } else {
@@ -12160,7 +12329,11 @@ fn tool_mutation_edits_unbounded(
                     path: mutation_edit.path.clone(),
                     content: after,
                     before: mutation_edit.before_sha256.clone(),
+                    delete,
+                    before_text,
                     asset,
+
+                    publication_before: None,
                 };
                 edit_bytes(&edit)?;
                 edits.push(edit);
@@ -12174,9 +12347,22 @@ fn tool_mutation_edits(
     mutations: &[ToolProjectMutation],
     expected_feature_id: Option<&str>,
 ) -> Result<Vec<Edit>> {
-    let edits = tool_mutation_edits_unbounded(mutations, expected_feature_id)?;
+    let edits = tool_mutation_edits_unbounded(mutations, expected_feature_id, false)?;
     if edits.len() > MAX_REVIEW_CANDIDATE_ENTRIES {
         bail!("Tool-assisted feature changed more than 320 reviewable files");
+    }
+    Ok(edits)
+}
+
+fn staged_tool_mutation_edits(
+    mutations: &[ToolProjectMutation],
+    expected_feature_id: Option<&str>,
+    access_mode: ToolAccessMode,
+) -> Result<Vec<Edit>> {
+    let allow_deletions = access_mode == ToolAccessMode::Full;
+    let edits = tool_mutation_edits_unbounded(mutations, expected_feature_id, allow_deletions)?;
+    if edits.iter().any(|edit| edit.delete) && !allow_deletions {
+        bail!("Staged deletion requires Full tool access");
     }
     Ok(edits)
 }
@@ -12203,6 +12389,15 @@ fn rebind_staged_candidate_to_live(project: &Path, edits: &mut Vec<Edit>) -> Res
                 "{} changed between the live project and disposable repair stage",
                 edit.path
             ),
+        }
+        if edit.delete {
+            let live = read_repair_context_file(project, &edit.path)?;
+            if edit.before_text.as_deref().map(str::as_bytes) != Some(live.as_slice()) {
+                bail!(
+                    "{} deletion source changed before proposal admission",
+                    edit.path
+                );
+            }
         }
         retained.push(edit);
     }
@@ -12534,7 +12729,11 @@ fn recover_current_snapshot_mutations_with_limits(
                     path,
                     content,
                     before,
+                    delete: false,
+                    before_text: None,
                     asset: None,
+
+                    publication_before: None,
                 });
             }
             Err(error) => {
@@ -12578,7 +12777,11 @@ fn recover_current_snapshot_mutations_with_limits(
                     path,
                     content: String::new(),
                     before,
+                    delete: false,
+                    before_text: None,
                     asset: Some(asset),
+
+                    publication_before: None,
                 });
             }
         }
@@ -12761,25 +12964,49 @@ fn preflight_developer_review_capacity(
     let mut files = Vec::with_capacity(generated.len());
     let mut assets = Vec::new();
     for (path, (before_sha256, expected_content_sha256)) in generated {
-        let edit = current_by_path
-            .get(&path.to_ascii_lowercase())
-            .context("Review capacity preflight is missing cumulative candidate bytes")?;
-        let bytes = edit_bytes(edit)?;
+        let edit = current_by_path.get(&path.to_ascii_lowercase()).copied();
+        let bytes = if let Some(edit) = edit {
+            if edit_sha256(edit)? != expected_content_sha256 {
+                bail!("Review capacity preflight candidate binding changed");
+            }
+            if edit.delete {
+                Vec::new()
+            } else {
+                edit_bytes(edit)?
+            }
+        } else {
+            let bytes = read_repair_context_file(project, &path)?;
+            if hash(&bytes) != expected_content_sha256 {
+                bail!("Review capacity preflight historical bytes changed");
+            }
+            bytes
+        };
         let content_sha256 = hex_digest(&bytes);
-        if content_sha256 != expected_content_sha256 {
-            bail!("Review capacity preflight candidate binding changed");
-        }
+        let review_before_sha256 = edit
+            .filter(|edit| edit.delete)
+            .and_then(|edit| edit.before.clone())
+            .or_else(|| before_sha256.clone());
         let classification = trusted_review_file_classification(&path, &validation_paths);
         match String::from_utf8(bytes) {
             Ok(content) => files.push(DeveloperReviewFile {
                 classification,
                 path,
-                before_sha256,
+                before_sha256: review_before_sha256,
                 content_sha256,
-                content,
+                content: if edit.is_some_and(|edit| edit.delete) {
+                    String::new()
+                } else {
+                    content
+                },
+                delete: edit.is_some_and(|edit| edit.delete),
+                before_text: edit.and_then(|edit| edit.before_text.clone()),
+                publication_before_sha256: edit
+                    .filter(|edit| edit.delete)
+                    .and_then(|edit| edit.publication_before.clone()),
             }),
             Err(_) => {
                 let asset = edit
+                    .context("Review capacity preflight found untyped historical binary bytes")?
                     .asset
                     .as_ref()
                     .context("Review capacity preflight found untyped binary candidate bytes")?;
@@ -12801,7 +13028,11 @@ fn preflight_developer_review_capacity(
         }
     }
     let packet = DeveloperReviewPacket {
-        schema_version: 1,
+        schema_version: if current_edits.iter().any(|edit| edit.delete) {
+            2
+        } else {
+            1
+        },
         feature_id: feature.id.clone(),
         project: feature.project.clone(),
         instruction: feature.instruction.clone(),
@@ -12850,27 +13081,53 @@ fn developer_review_batch_set(
     let mut files = Vec::with_capacity(generated.len());
     let mut assets = Vec::new();
     for (path, (before_sha256, expected_content_sha256)) in generated {
-        let bytes = read_repair_context_file(project, &path)
-            .with_context(|| format!("Generated file {path} is unavailable for required review"))?;
+        let edit = current_edits
+            .iter()
+            .find(|edit| edit.path.eq_ignore_ascii_case(&path));
+        let bytes = if edit.is_some_and(|edit| edit.delete) {
+            if checked_path(project, &path)?.try_exists()? {
+                bail!("Deleted file {path} reappeared before required review");
+            }
+            Vec::new()
+        } else {
+            read_repair_context_file(project, &path).with_context(|| {
+                format!("Generated file {path} is unavailable for required review")
+            })?
+        };
         let content_sha256 = hex_digest(&bytes);
-        if content_sha256 != expected_content_sha256 {
+        let observed_binding = if let Some(edit) = edit {
+            edit_sha256(edit)?
+        } else {
+            content_sha256.clone()
+        };
+        if observed_binding != expected_content_sha256 {
             bail!("Generated file {path} changed after the local model prepared it");
         }
+        let review_before_sha256 = edit
+            .filter(|edit| edit.delete)
+            .and_then(|edit| edit.before.clone())
+            .or_else(|| before_sha256.clone());
         let classification = trusted_review_file_classification(&path, &validation_paths);
         match String::from_utf8(bytes) {
             Ok(content) => files.push(DeveloperReviewFile {
                 classification,
                 path,
-                before_sha256,
+                before_sha256: review_before_sha256,
                 content_sha256,
-                content,
+                content: if edit.is_some_and(|edit| edit.delete) {
+                    String::new()
+                } else {
+                    content
+                },
+                delete: edit.is_some_and(|edit| edit.delete),
+                before_text: edit.and_then(|edit| edit.before_text.clone()),
+                publication_before_sha256: edit
+                    .filter(|edit| edit.delete)
+                    .and_then(|edit| edit.publication_before.clone()),
             }),
             Err(_) => {
-                let edit = current_edits
-                    .iter()
-                    .find(|edit| edit.path.eq_ignore_ascii_case(&path))
-                    .context("Generated binary file has no retained typed asset evidence")?;
                 let asset = edit
+                    .context("Generated binary file has no retained typed asset evidence")?
                     .asset
                     .as_ref()
                     .context("Generated binary file is not a reviewable image asset")?;
@@ -12892,7 +13149,11 @@ fn developer_review_batch_set(
         }
     }
     let packet = DeveloperReviewPacket {
-        schema_version: 1,
+        schema_version: if current_edits.iter().any(|edit| edit.delete) {
+            2
+        } else {
+            1
+        },
         feature_id: feature.id.clone(),
         project: feature.project.clone(),
         instruction: feature.instruction.clone(),
@@ -12990,12 +13251,16 @@ fn publication_input(feature: &Feature) -> Result<PublicationInput> {
     let mut candidate_files = Vec::new();
     for file in &feature.publication_candidate {
         let bytes = frozen_publication_bytes(file)?;
-        candidate_files.push(CandidateFile {
-            path: file.path.clone(),
-            before_sha256: file.before_sha256.clone(),
-            content_sha256: file.content_sha256.clone(),
-            content: bytes,
-        });
+        if !(file.delete && file.before_sha256.is_none()) {
+            candidate_files.push(CandidateFile {
+                path: file.path.clone(),
+                before_sha256: file.before_sha256.clone(),
+                content_sha256: file.content_sha256.clone(),
+                content: bytes,
+                delete: file.delete,
+                before_text: file.before_text.clone(),
+            });
+        }
         if let Some(asset) = &file.asset {
             assets.push(DeveloperReviewAsset {
                 path: file.path.clone(),
@@ -13011,14 +13276,30 @@ fn publication_input(feature: &Feature) -> Result<PublicationInput> {
             files.push(DeveloperReviewFile {
                 classification: file.classification.clone(),
                 path: file.path.clone(),
-                before_sha256: file.before_sha256.clone(),
+                before_sha256: if file.delete {
+                    file.before_text
+                        .as_ref()
+                        .map(|before| hash(before.as_bytes()))
+                } else {
+                    file.before_sha256.clone()
+                },
                 content_sha256: file.content_sha256.clone(),
                 content: file.content.clone(),
+                delete: file.delete,
+                before_text: file.before_text.clone(),
+                publication_before_sha256: file
+                    .delete
+                    .then(|| file.before_sha256.clone())
+                    .flatten(),
             });
         }
     }
     let packet = DeveloperReviewPacket {
-        schema_version: 1,
+        schema_version: if feature.publication_candidate.iter().any(|file| file.delete) {
+            2
+        } else {
+            1
+        },
         feature_id: feature.id.clone(),
         project: feature.project.clone(),
         instruction: feature.instruction.clone(),
@@ -13396,22 +13677,34 @@ fn staged_application_protected_inputs(
     validation_paths: &[String],
     pending_edit: Option<&Edit>,
 ) -> Result<std::collections::BTreeMap<String, String>> {
-    let mut expected = proposal.protected_inputs.clone();
-    for edit in &proposal.staged_candidate {
-        let applied = proposal
-            .applied_paths
-            .iter()
-            .any(|path| path.eq_ignore_ascii_case(&edit.path));
-        let pending =
-            pending_edit.is_some_and(|pending| pending.path.eq_ignore_ascii_case(&edit.path));
-        if (applied || pending)
-            && edit.before.is_none()
-            && edit.asset.is_none()
-            && is_protected_repair_input(&edit.path, validation_paths)
-        {
+    let selected = proposal
+        .staged_candidate
+        .iter()
+        .filter(|edit| {
+            proposal
+                .applied_paths
+                .iter()
+                .any(|path| path.eq_ignore_ascii_case(&edit.path))
+                || pending_edit.is_some_and(|pending| pending.path.eq_ignore_ascii_case(&edit.path))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    expected_protected_inputs_after_edits(&proposal.protected_inputs, &selected, validation_paths)
+}
+
+fn expected_protected_inputs_after_edits(
+    baseline: &std::collections::BTreeMap<String, String>,
+    edits: &[Edit],
+    validation_paths: &[String],
+) -> Result<std::collections::BTreeMap<String, String>> {
+    let mut expected = baseline.clone();
+    for edit in edits {
+        if is_protected_repair_input(&edit.path, validation_paths) {
             let normalized = edit.path.replace('\\', "/").to_ascii_lowercase();
-            if expected.insert(normalized, edit_sha256(edit)?).is_some() {
-                bail!("Authorized additive protected input collides with the immutable baseline");
+            if edit.delete {
+                expected.remove(&normalized);
+            } else {
+                expected.insert(normalized, edit_sha256(edit)?);
             }
         }
     }
@@ -13450,7 +13743,12 @@ fn staged_restart_remaining_edits(feature: &Feature, project: &Path) -> Result<V
             None
         };
         if recorded.contains(&normalized) {
-            if current.as_deref() != Some(edit_bytes(&edit)?.as_slice()) {
+            let matches_after = if edit.delete {
+                current.is_none()
+            } else {
+                current.as_deref() == Some(edit_bytes(&edit)?.as_slice())
+            };
+            if !matches_after {
                 bail!("Recorded staged repair bytes changed after restart");
             }
         } else {
@@ -13809,7 +14107,11 @@ fn reconcile_interrupted_escalation_edits(feature: &mut Feature, project: &Path)
             None
         };
         let after = edit_bytes(candidate)?;
-        let matches_after = current.as_deref() == Some(after.as_slice());
+        let matches_after = if candidate.delete {
+            current.is_none()
+        } else {
+            current.as_deref() == Some(after.as_slice())
+        };
         let matches_before = match (&current, &candidate.before) {
             (None, None) => true,
             (Some(current), Some(before)) => hash(current) == *before,
@@ -14085,9 +14387,17 @@ fn repair_escalation_candidate_sha256(proposal: &RepairEscalationProposal) -> Re
             "files": proposal.files,
         }))?));
     }
+    let edits = escalation_application_edits(proposal)?;
+    if edits.iter().any(|edit| edit.delete) {
+        return Ok(hash(&serde_json::to_vec(&json!({
+            "domain":"assemblywright.repair-escalation-candidate.v2",
+            "schema_version":2,
+            "typed_entries":edits,
+        }))?));
+    }
     Ok(hash(&serde_json::to_vec(&json!({
         "schema_version": 1,
-        "typed_entries": escalation_application_edits(proposal)?,
+        "typed_entries": edits,
     }))?))
 }
 fn model_target_name(id: &str) -> &str {
@@ -14205,6 +14515,40 @@ fn validated_asset_bytes(path: &str, asset: &BinaryAsset) -> Result<Vec<u8>> {
 }
 
 fn edit_bytes(edit: &Edit) -> Result<Vec<u8>> {
+    if edit.delete {
+        if !edit.content.is_empty() || edit.asset.is_some() {
+            bail!("Repair deletion cannot contain replacement bytes");
+        }
+        let before = edit
+            .before
+            .as_deref()
+            .context("Repair deletion has no exact prior-content digest")?;
+        if before.len() != 64
+            || !before
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            bail!("Repair deletion has an invalid prior-content digest");
+        }
+        let before_text = edit
+            .before_text
+            .as_deref()
+            .context("Repair deletion has no retained UTF-8 source")?;
+        validate_repair_file_admission(&edit.path, before_text)?;
+        if hash(before_text.as_bytes()) != before {
+            bail!("Repair deletion source does not match its exact prior-content digest");
+        }
+        return Ok(serde_json::to_vec(&json!({
+            "domain": "assemblywright.typed-delete.v1",
+            "operation": "delete",
+            "path": edit.path,
+            "before_sha256": before,
+            "before_text_sha256": hash(before_text.as_bytes()),
+        }))?);
+    }
+    if edit.before_text.is_some() {
+        bail!("Repair write unexpectedly contains deletion source evidence");
+    }
     match &edit.asset {
         Some(asset) if edit.content.is_empty() => validated_asset_bytes(&edit.path, asset),
         Some(_) => bail!("Repair edit cannot contain both text and binary asset bytes"),
@@ -14339,7 +14683,7 @@ fn apply_edit_with_parent_opened(
         let root_handle = hold_unix_recovery_root(root)?;
         let mut parent = root_handle.try_clone()?;
         for component in parents {
-            parent = open_directory_at(&parent, component, true)?;
+            parent = open_directory_at(&parent, component, !edit.delete)?;
         }
         if let Some(hook) = parent_opened {
             hook(relative.parent().unwrap_or_else(|| Path::new("")));
@@ -14385,7 +14729,7 @@ fn apply_edit_with_parent_opened(
         } else {
             Some(hash(&current_bytes))
         };
-        if current == Some(hash(&replacement_bytes)) {
+        if !edit.delete && current == Some(hash(&replacement_bytes)) {
             return Ok(());
         }
         if current != edit.before {
@@ -14414,6 +14758,33 @@ fn apply_edit_with_parent_opened(
         if metadata.dev() != leaf_stat.st_dev as u64 || metadata.ino() != leaf_stat.st_ino {
             bail!("Repair target changed before file write");
         }
+        if edit.delete {
+            if edit.before_text.as_deref().map(str::as_bytes) != Some(current_bytes.as_slice()) {
+                bail!("{} deletion source changed after planning", edit.path);
+            }
+            if unsafe { libc::unlinkat(parent.as_raw_fd(), leaf_c.as_ptr(), 0) } != 0 {
+                return Err(std::io::Error::last_os_error().into());
+            }
+            parent.sync_all()?;
+            let rebound_parent = reopen_parent(&root_handle, parents)?;
+            if !same_unix_identity(&parent.metadata()?, &rebound_parent.metadata()?) {
+                bail!("Repair parent changed during file deletion");
+            }
+            let mut absent_stat = std::mem::MaybeUninit::<libc::stat>::zeroed();
+            if unsafe {
+                libc::fstatat(
+                    parent.as_raw_fd(),
+                    leaf_c.as_ptr(),
+                    absent_stat.as_mut_ptr(),
+                    libc::AT_SYMLINK_NOFOLLOW,
+                )
+            } == 0
+                || std::io::Error::last_os_error().raw_os_error() != Some(libc::ENOENT)
+            {
+                bail!("Repair deletion did not leave the exact target absent");
+            }
+            return Ok(());
+        }
         file.seek(std::io::SeekFrom::Start(0))?;
         file.set_len(0)?;
         file.write_all(&replacement_bytes)?;
@@ -14430,7 +14801,9 @@ fn apply_edit_with_parent_opened(
         use std::io::{Seek as _, Write as _};
         use std::os::windows::fs::OpenOptionsExt as _;
         use windows_sys::Win32::Storage::FileSystem::{
-            FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE,
+            FileDispositionInfo, SetFileInformationByHandle, DELETE, FILE_DISPOSITION_INFO,
+            FILE_FLAG_OPEN_REPARSE_POINT, FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_DELETE,
+            FILE_SHARE_READ, FILE_SHARE_WRITE,
         };
 
         let mut guards = vec![hold_windows_recovery_directory(root)?];
@@ -14444,6 +14817,12 @@ fn apply_edit_with_parent_opened(
                     }
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    if edit.delete {
+                        bail!(
+                            "{} changed after planning; preserve it and reconcile manually",
+                            edit.path
+                        );
+                    }
                     fs::create_dir(&parent_path)?;
                 }
                 Err(error) => return Err(error.into()),
@@ -14458,8 +14837,14 @@ fn apply_edit_with_parent_opened(
         options
             .read(true)
             .write(true)
-            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        if edit.delete {
+            options
+                .access_mode(FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE)
+                .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
+        } else {
+            options.share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE);
+        }
         let (mut file, created) = match options.open(&path) {
             Ok(file) => (file, false),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -14486,7 +14871,7 @@ fn apply_edit_with_parent_opened(
         } else {
             Some(hash(&current_bytes))
         };
-        if current == Some(hash(&replacement_bytes)) {
+        if !edit.delete && current == Some(hash(&replacement_bytes)) {
             return Ok(());
         }
         if current != edit.before {
@@ -14494,6 +14879,31 @@ fn apply_edit_with_parent_opened(
                 "{} changed after planning; preserve it and reconcile manually",
                 edit.path
             );
+        }
+        if edit.delete {
+            use std::mem::size_of;
+            use std::os::windows::io::AsRawHandle as _;
+            if edit.before_text.as_deref().map(str::as_bytes) != Some(current_bytes.as_slice()) {
+                bail!("{} deletion source changed after planning", edit.path);
+            }
+            let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+            if unsafe {
+                SetFileInformationByHandle(
+                    file.as_raw_handle() as _,
+                    FileDispositionInfo,
+                    &disposition as *const _ as _,
+                    size_of::<FILE_DISPOSITION_INFO>() as u32,
+                )
+            } == 0
+            {
+                return Err(std::io::Error::last_os_error().into());
+            }
+            drop(file);
+            if path.try_exists()? {
+                bail!("Repair deletion did not leave the exact target absent");
+            }
+            let _ = guards;
+            return Ok(());
         }
         file.seek(std::io::SeekFrom::Start(0))?;
         file.set_len(0)?;
@@ -18990,7 +19400,7 @@ async fn main() -> Result<()> {
     }
     let token = fs::read_to_string(&token_path)?;
     let connection = Connection::open(args.data_dir.join("developer.sqlite3"))?;
-    connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS developer_state(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v1_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v2_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v3_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v4_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v5_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v6_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v7_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v8_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v9_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v10_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v11_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL);")?;
+    connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS developer_state(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v1_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v2_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v3_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v4_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v5_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v6_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v7_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v8_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v9_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v10_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v11_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL); CREATE TABLE IF NOT EXISTS developer_state_v12_backup(id INTEGER PRIMARY KEY CHECK(id=1),state TEXT NOT NULL);")?;
     let github_setup = GithubSetupState::initialize_and_load(&connection)?;
     let (mut state, loaded_queue_version): (Snapshot, u8) =
         match connection.query_row("SELECT state FROM developer_state WHERE id=1", [], |r| {
@@ -18998,7 +19408,9 @@ async fn main() -> Result<()> {
         }) {
             Ok(data) => {
                 let value: Value = serde_json::from_str(&data)?;
-                let loaded_queue_version = if value.get("queue_v12").is_some() {
+                let loaded_queue_version = if value.get("queue_v13").is_some() {
+                    13
+                } else if value.get("queue_v12").is_some() {
                     12
                 } else if value.get("queue_v11").is_some() {
                     11
@@ -19079,6 +19491,12 @@ async fn main() -> Result<()> {
                         [&data],
                     )?;
                 }
+                if value.get("queue_v12").is_some() && value.get("queue_v13").is_none() {
+                    connection.execute(
+                        "INSERT OR IGNORE INTO developer_state_v12_backup(id,state) VALUES(1,?1)",
+                        [&data],
+                    )?;
+                }
                 (serde_json::from_value(value)?, loaded_queue_version)
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => (
@@ -19086,7 +19504,7 @@ async fn main() -> Result<()> {
                     auto_run: true,
                     ..Default::default()
                 },
-                12,
+                13,
             ),
             Err(e) => return Err(e.into()),
         };
@@ -19692,6 +20110,11 @@ mod tests {
                 content: "saved".into(),
                 before: None,
                 asset: None,
+
+                delete: false,
+                before_text: None,
+
+                publication_before: None,
             }]),
             repair_attempts: 0,
             repair_pending: false,
@@ -20140,18 +20563,33 @@ mod tests {
                 content: "current result\n".into(),
                 before: Some(hash(b"original result\n")),
                 asset: None,
+
+                delete: false,
+                before_text: None,
+
+                publication_before: None,
             },
             Edit {
                 path: ".pytest_cache/credentials.toml".into(),
                 content: "fixture-cache-value-a\n".into(),
                 before: Some(hash(b"fixture-cache-value-0\n")),
                 asset: None,
+
+                delete: false,
+                before_text: None,
+
+                publication_before: None,
             },
             Edit {
                 path: ".pytest_cache/v/cache/nodeids".into(),
                 content: "[\"tests/test_site.py::test_build\"]\n".into(),
                 before: None,
                 asset: None,
+
+                delete: false,
+                before_text: None,
+
+                publication_before: None,
             },
         ]);
         let proposal_before = serde_json::to_vec(&feature.escalation_proposal).unwrap();
@@ -20172,18 +20610,27 @@ mod tests {
                     before_sha256: Some(hash(b"original result\n")),
                     after: Some("stale ledger bytes\n".into()),
                     asset: None,
+
+                    delete: false,
+                    before_text: None,
                 },
                 developer_tools::ToolMutationEdit {
                     path: ".pytest_cache/credentials.toml".into(),
                     before_sha256: Some(hash(b"fixture-cache-value-0\n")),
                     after: Some("fixture-cache-value-a\n".into()),
                     asset: None,
+
+                    delete: false,
+                    before_text: None,
                 },
                 developer_tools::ToolMutationEdit {
                     path: ".pytest_cache/v/cache/nodeids".into(),
                     before_sha256: None,
                     after: Some("[\"tests/test_site.py::test_build\"]\n".into()),
                     asset: None,
+
+                    delete: false,
+                    before_text: None,
                 },
             ],
             unreviewable_paths: Vec::new(),
@@ -20283,6 +20730,9 @@ mod tests {
                 before_sha256: Some(hash(b"original result\n")),
                 after: Some("stale ledger bytes\n".into()),
                 asset: None,
+
+                delete: false,
+                before_text: None,
             }],
             unreviewable_paths: Vec::new(),
         };
@@ -20394,6 +20844,11 @@ mod tests {
                 content: "repaired\n".into(),
                 before: Some(hash(b"saved")),
                 asset: None,
+
+                delete: false,
+                before_text: None,
+
+                publication_before: None,
             },
             Edit {
                 path: "content/maps/a.png".into(),
@@ -20405,6 +20860,11 @@ mod tests {
                     width: 4,
                     height: 3,
                 }),
+
+                delete: false,
+                before_text: None,
+
+                publication_before: None,
             },
             Edit {
                 path: "content/maps/b.png".into(),
@@ -20416,6 +20876,11 @@ mod tests {
                     width: 4,
                     height: 3,
                 }),
+
+                delete: false,
+                before_text: None,
+
+                publication_before: None,
             },
         ];
         let access = engine.tools.set_global_access("full", 1, true).unwrap();
@@ -20903,20 +21368,21 @@ mod tests {
         );
 
         let (_directory, engine) = control_test_engine();
-        let feature = adopted_automatic_effects_validation_fixture(&engine);
-        assert!(fully_applied_staged_validation_binding(&feature)
-            .unwrap()
-            .is_some());
-
-        let mut epoch = feature.clone();
-        epoch.auto_repair_epoch = epoch
+        let mut feature = adopted_automatic_effects_validation_fixture(&engine);
+        let proposal_epoch = feature
             .escalation_proposal
             .as_ref()
             .unwrap()
             .automatic_epoch
+            .unwrap();
+        feature.auto_repair_epoch = proposal_epoch + 1;
+        assert!(fully_applied_staged_validation_binding(&feature)
             .unwrap()
-            + 1;
-        assert!(fully_applied_staged_validation_binding(&epoch).is_err());
+            .is_some());
+
+        let mut stale_epoch = feature.clone();
+        stale_epoch.auto_repair_epoch = proposal_epoch;
+        assert!(fully_applied_staged_validation_binding(&stale_epoch).is_err());
 
         let mut resumed_epoch = feature.clone();
         resumed_epoch.auto_repair_epoch += 1;
@@ -20933,6 +21399,10 @@ mod tests {
         let mut proposal = feature.clone();
         proposal.escalation_proposal.as_mut().unwrap().proposal_id = Uuid::new_v4().to_string();
         assert!(fully_applied_staged_validation_binding(&proposal).is_err());
+
+        let mut policy = feature.clone();
+        policy.escalation_proposal.as_mut().unwrap().policy_revision = Some(8);
+        assert!(fully_applied_staged_validation_binding(&policy).is_err());
 
         let mut apply = feature.clone();
         apply.escalation_proposal.as_mut().unwrap().apply_request_id =
@@ -20979,6 +21449,11 @@ mod tests {
             before: None,
             content: "def test_repaired():\n    assert True\n".into(),
             asset: None,
+
+            delete: false,
+            before_text: None,
+
+            publication_before: None,
         };
         feature.edits.as_mut().unwrap().push(test_edit.clone());
         let proposal = feature.escalation_proposal.as_mut().unwrap();
@@ -21689,6 +22164,9 @@ mod tests {
             content: "saved".into(),
             asset: None,
             classification: "ordinary_source".into(),
+
+            delete: false,
+            before_text: None,
         }];
         let validation_evidence_sha256 = "1".repeat(64);
         let packet = DeveloperReviewPacket {
@@ -21709,6 +22187,10 @@ mod tests {
                 before_sha256: None,
                 content_sha256: hash(b"saved"),
                 content: "saved".into(),
+
+                delete: false,
+                before_text: None,
+                publication_before_sha256: None,
             }],
         };
         feature.review_history.push(ReviewAttemptEvidence {
@@ -21769,6 +22251,192 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("content changed"));
+    }
+
+    #[test]
+    fn frozen_reviewed_deletion_enters_publication_as_absence_not_operation_bytes() {
+        let mut feature = feature_with_publication("running");
+        let publication_before = "original remote output\n";
+        let before_text = "locally rebuilt obsolete output\n";
+        let net_new_before = "temporary local output\n";
+        feature.publication_candidate = vec![
+            FrozenPublicationFile {
+                path: "dist/obsolete.html".into(),
+                before_sha256: Some(hash(publication_before.as_bytes())),
+                content_sha256: hash(b""),
+                content: String::new(),
+                delete: true,
+                before_text: Some(before_text.into()),
+                asset: None,
+                classification: "project_configuration".into(),
+            },
+            FrozenPublicationFile {
+                path: "dist/temporary.html".into(),
+                before_sha256: None,
+                content_sha256: hash(b""),
+                content: String::new(),
+                delete: true,
+                before_text: Some(net_new_before.into()),
+                asset: None,
+                classification: "project_configuration".into(),
+            },
+        ];
+        let validation_evidence_sha256 = "1".repeat(64);
+        let packet = DeveloperReviewPacket {
+            schema_version: 2,
+            feature_id: feature.id.clone(),
+            project: feature.project.clone(),
+            instruction: feature.instruction.clone(),
+            approved_plan_sha256: None,
+            approved_plan: None,
+            validation_command: feature.validation.clone(),
+            validation_evidence_sha256: validation_evidence_sha256.clone(),
+            provider_id: REVIEW_PROVIDER_ID.into(),
+            model_id: feature.review_model.clone(),
+            reasoning_effort: feature.review_reasoning_effort.clone(),
+            files: vec![
+                DeveloperReviewFile {
+                    path: "dist/obsolete.html".into(),
+                    before_sha256: Some(hash(before_text.as_bytes())),
+                    content_sha256: hash(b""),
+                    content: String::new(),
+                    delete: true,
+                    before_text: Some(before_text.into()),
+                    publication_before_sha256: Some(hash(publication_before.as_bytes())),
+                    classification: "project_configuration".into(),
+                },
+                DeveloperReviewFile {
+                    path: "dist/temporary.html".into(),
+                    before_sha256: Some(hash(net_new_before.as_bytes())),
+                    content_sha256: hash(b""),
+                    content: String::new(),
+                    delete: true,
+                    before_text: Some(net_new_before.into()),
+                    publication_before_sha256: None,
+                    classification: "project_configuration".into(),
+                },
+            ],
+        };
+        let set = DeveloperReviewBatchSet::new(packet, Vec::new()).unwrap();
+        feature.review_history = vec![ReviewAttemptEvidence {
+            attempt: 1,
+            binding_version: 2,
+            packet_sha256: set.aggregate_sha256().to_owned(),
+            batch_packet_sha256s: set
+                .batches
+                .iter()
+                .map(|batch| batch.sha256().unwrap())
+                .collect(),
+            batch_receipt_sha256s: vec!["3".repeat(64); set.batches.len()],
+            validation_evidence_sha256,
+            outcome: "approved".into(),
+            decision_sha256: Some("2".repeat(64)),
+            blocking_findings: Vec::new(),
+            summary: "approved deletion".into(),
+        }];
+        let input = publication_input(&feature).unwrap();
+        assert_eq!(input.files.len(), 1);
+        assert!(input.files[0].delete);
+        assert!(input.files[0].content.is_empty());
+        assert_eq!(
+            input.files[0].before_sha256,
+            Some(hash(publication_before.as_bytes()))
+        );
+        assert_eq!(input.files[0].before_text.as_deref(), Some(before_text));
+        assert!(!input
+            .files
+            .iter()
+            .any(|file| file.path == "dist/temporary.html"));
+
+        let mut net_only = feature.clone();
+        net_only
+            .publication_candidate
+            .retain(|file| file.path == "dist/temporary.html");
+        let mut net_packet = set.packet.clone();
+        net_packet
+            .files
+            .retain(|file| file.path == "dist/temporary.html");
+        let net_set = DeveloperReviewBatchSet::new(net_packet, Vec::new()).unwrap();
+        net_only.review_history[0].packet_sha256 = net_set.aggregate_sha256().to_owned();
+        net_only.review_history[0].batch_packet_sha256s = net_set
+            .batches
+            .iter()
+            .map(|batch| batch.sha256().unwrap())
+            .collect();
+        net_only.review_history[0].batch_receipt_sha256s =
+            vec!["4".repeat(64); net_set.batches.len()];
+        net_only.publication = None;
+        let review_attempts = net_only.review_attempts;
+        let review_history = net_only.review_history.clone();
+        let input = publication_input(&net_only).unwrap();
+        assert!(input.files.is_empty());
+        assert!(PublicationRecord::pending(&input)
+            .unwrap_err()
+            .to_string()
+            .contains("Publication requires 1 to 320 reviewed files"));
+        assert_eq!(net_only.review_attempts, review_attempts);
+        assert_eq!(
+            serde_json::to_value(&net_only.review_history).unwrap(),
+            serde_json::to_value(review_history).unwrap()
+        );
+        assert!(net_only.publication.is_none());
+    }
+
+    #[test]
+    fn cumulative_write_then_delete_retains_remote_and_immediate_baselines_separately() {
+        let remote = "remote baseline\n";
+        let rebuilt = "rebuilt local output\n";
+        let write = Edit {
+            path: "dist/page.html".into(),
+            content: rebuilt.into(),
+            before: Some(hash(remote.as_bytes())),
+            publication_before: None,
+            delete: false,
+            before_text: None,
+            asset: None,
+        };
+        let deletion = deletion_edit("dist/page.html", rebuilt);
+        let merged = merge_review_edits(&[write], &[deletion]).unwrap();
+        assert_eq!(merged[0].before, Some(hash(rebuilt.as_bytes())));
+        assert_eq!(merged[0].publication_before, Some(hash(remote.as_bytes())));
+        let rewritten = Edit {
+            path: "dist/page.html".into(),
+            content: "final output\n".into(),
+            before: None,
+            publication_before: None,
+            delete: false,
+            before_text: None,
+            asset: None,
+        };
+        let rewritten = merge_review_edits(&merged, &[rewritten]).unwrap();
+        assert_eq!(rewritten[0].before, Some(hash(remote.as_bytes())));
+        assert_eq!(rewritten[0].publication_before, None);
+
+        let new_file = Edit {
+            path: "dist/new.html".into(),
+            content: rebuilt.into(),
+            before: None,
+            publication_before: None,
+            delete: false,
+            before_text: None,
+            asset: None,
+        };
+        let net_delete = deletion_edit("dist/new.html", rebuilt);
+        let merged = merge_review_edits(&[new_file], &[net_delete]).unwrap();
+        assert_eq!(merged[0].before, Some(hash(rebuilt.as_bytes())));
+        assert_eq!(merged[0].publication_before, None);
+        let recreated = Edit {
+            path: "dist/new.html".into(),
+            content: "recreated\n".into(),
+            before: None,
+            publication_before: None,
+            delete: false,
+            before_text: None,
+            asset: None,
+        };
+        let recreated = merge_review_edits(&merged, &[recreated]).unwrap();
+        assert_eq!(recreated[0].before, None);
+        assert_eq!(recreated[0].publication_before, None);
     }
 
     #[test]
@@ -21903,6 +22571,9 @@ mod tests {
                 before_sha256: None,
                 after: Some("VALUE = 2\n".into()),
                 asset: None,
+
+                delete: false,
+                before_text: None,
             }],
             unreviewable_paths: Vec::new(),
         };
@@ -22165,6 +22836,11 @@ mod tests {
             content: "pytest==9.0.0\n".into(),
             before: None,
             asset: None,
+
+            delete: false,
+            before_text: None,
+
+            publication_before: None,
         }];
         let cleanup_error = engine
             .fail_closed_validation_result::<()>(
@@ -22770,6 +23446,48 @@ mod tests {
     }
 
     #[test]
+    fn approved_deletion_review_binds_the_remote_publication_baseline() {
+        let project = tempfile::tempdir().unwrap();
+        let project_root = fs::canonicalize(project.path()).unwrap();
+        let validation_evidence_sha256 = "1".repeat(64);
+        let mut deletion = deletion_edit("dist/obsolete.html", "rebuilt local output\n");
+        deletion.publication_before = Some(hash(b"remote baseline\n"));
+        let mut feature = feature_with_status("running");
+        feature.edits = Some(vec![deletion]);
+        feature.review_status = "approved".into();
+        feature.review_attempts = 1;
+        let set = developer_review_batch_set(
+            &feature,
+            &project_root,
+            feature.edits.as_deref().unwrap(),
+            &validation_evidence_sha256,
+        )
+        .unwrap();
+        feature.review_history.push(ReviewAttemptEvidence {
+            attempt: 1,
+            binding_version: 2,
+            packet_sha256: set.aggregate_sha256().to_owned(),
+            batch_packet_sha256s: set
+                .batches
+                .iter()
+                .map(|batch| batch.sha256().unwrap())
+                .collect(),
+            batch_receipt_sha256s: vec!["3".repeat(64); set.batches.len()],
+            validation_evidence_sha256,
+            outcome: "approved".into(),
+            decision_sha256: Some("2".repeat(64)),
+            blocking_findings: Vec::new(),
+            summary: "approved deletion".into(),
+        });
+        verify_approved_review_binding(&feature, &project_root).unwrap();
+
+        feature.edits.as_mut().unwrap()[0].publication_before =
+            Some(hash(b"different remote baseline\n"));
+        let error = verify_approved_review_binding(&feature, &project_root).unwrap_err();
+        assert!(error.to_string().contains("changed"));
+    }
+
+    #[test]
     fn review_packet_preserves_the_earliest_baseline_across_noop_repairs() {
         let project = tempfile::tempdir().unwrap();
         let current_gui = "struct DeveloperView { let title = \"Feature Conveyor\" }\n";
@@ -22818,6 +23536,11 @@ mod tests {
                 before: Some(hash(current_gui.as_bytes())),
                 content: current_gui.into(),
                 asset: None,
+
+                delete: false,
+                before_text: None,
+
+                publication_before: None,
             }]);
 
             let packet = developer_review_packet(
@@ -22884,6 +23607,11 @@ mod tests {
             before: Some(hash("prior GUI revision".as_bytes())),
             content: current_gui.into(),
             asset: None,
+
+            delete: false,
+            before_text: None,
+
+            publication_before: None,
         }]);
         let proposal_files = vec![RepairEscalationFile {
             path: "tests/test_gui.py".into(),
@@ -22945,12 +23673,22 @@ mod tests {
             before: None,
             content: "first revision\n".into(),
             asset: None,
+
+            delete: false,
+            before_text: None,
+
+            publication_before: None,
         };
         let updated_new_file = Edit {
             path: "NewView.swift".into(),
             before: Some(hash(new_file.content.as_bytes())),
             content: "second revision\n".into(),
             asset: None,
+
+            delete: false,
+            before_text: None,
+
+            publication_before: None,
         };
         let merged = merge_review_edits(
             std::slice::from_ref(&new_file),
@@ -22966,12 +23704,22 @@ mod tests {
             before: Some(original_sha256.clone()),
             content: "first generated revision\n".into(),
             asset: None,
+
+            delete: false,
+            before_text: None,
+
+            publication_before: None,
         };
         let updated_existing = Edit {
             path: "ExistingView.swift".into(),
             before: Some(hash(existing.content.as_bytes())),
             content: "second generated revision\n".into(),
             asset: None,
+
+            delete: false,
+            before_text: None,
+
+            publication_before: None,
         };
         let merged = merge_review_edits(
             std::slice::from_ref(&existing),
@@ -23096,7 +23844,7 @@ mod tests {
     }
 
     #[test]
-    fn queue_v12_reads_legacy_state_defaults_and_fails_closed_for_old_parsers() {
+    fn queue_v13_reads_v12_legacy_state_and_fails_closed_for_downlevel_parsers() {
         let legacy_v1 = r#"{"revision":7,"auto_run":true,"emergency_paused":false,"queue":[]}"#;
         let legacy_v2 = r#"{"revision":8,"auto_run":true,"emergency_paused":false,"queue_v2":[]}"#;
         let legacy_v3 = format!(
@@ -23179,9 +23927,21 @@ mod tests {
             11
         );
 
+        let legacy_v12 = format!(
+            "{{\"revision\":12,\"auto_run\":true,\"emergency_paused\":false,\"queue_v12\":[{}]}}",
+            serde_json::to_string(&feature_with_status("queued")).unwrap()
+        );
+        assert_eq!(
+            serde_json::from_str::<Snapshot>(&legacy_v12)
+                .unwrap()
+                .revision,
+            12
+        );
+
         let current = serde_json::to_string(&decoded).unwrap();
         let current_value: Value = serde_json::from_str(&current).unwrap();
-        assert!(current_value.get("queue_v12").is_some());
+        assert!(current_value.get("queue_v13").is_some());
+        assert!(current_value.get("queue_v12").is_none());
         assert!(current_value.get("queue_v11").is_none());
         assert!(current_value.get("queue_v10").is_none());
         assert!(current_value.get("queue_v9").is_none());
@@ -23266,6 +24026,13 @@ mod tests {
             queue: Vec<Feature>,
         }
         assert!(serde_json::from_str::<V11Snapshot>(&current).is_err());
+        #[derive(Deserialize)]
+        struct V12Snapshot {
+            #[allow(dead_code)]
+            #[serde(rename = "queue_v12", alias = "queue_v11")]
+            queue: Vec<Feature>,
+        }
+        assert!(serde_json::from_str::<V12Snapshot>(&current).is_err());
     }
 
     #[test]
@@ -23382,7 +24149,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_session_changes_become_exact_review_edits_and_reject_deletions() {
+    fn tool_session_changes_admit_deletion_only_for_explicit_staged_authority() {
         let changes = vec![ToolProjectMutation {
             revision: 3,
             request_id: "8d919ad1-449f-4089-a6ef-2c6ea4806f1e".into(),
@@ -23393,12 +24160,18 @@ mod tests {
                     before_sha256: Some(hash(b"VALUE = 1\n")),
                     after: Some("VALUE = 2\n".into()),
                     asset: None,
+
+                    delete: false,
+                    before_text: None,
                 },
                 developer_tools::ToolMutationEdit {
                     path: "tests/test_app.py".into(),
                     before_sha256: None,
                     after: Some("assert True\n".into()),
                     asset: None,
+
+                    delete: false,
+                    before_text: None,
                 },
             ],
             unreviewable_paths: Vec::new(),
@@ -23410,14 +24183,33 @@ mod tests {
         assert_eq!(edits[0].content, "VALUE = 2\n");
         assert_eq!(edits[1].path, "tests/test_app.py");
         assert_eq!(edits[1].before, None);
+        assert_eq!(
+            staged_tool_mutation_edits(&changes, Some("feature-1"), ToolAccessMode::Auto,)
+                .unwrap()
+                .len(),
+            2
+        );
 
         let mut deleted = changes.clone();
         deleted[0].edits[0].after = None;
+        deleted[0].edits[0].delete = true;
+        deleted[0].edits[0].before_text = Some("VALUE = 1\n".into());
         assert!(tool_mutation_edits(&deleted, Some("feature-1"))
             .err()
             .unwrap()
             .to_string()
-            .contains("deletion cannot enter bounded review"));
+            .contains("deletion cannot enter this bounded review"));
+        assert!(
+            staged_tool_mutation_edits(&deleted, Some("feature-1"), ToolAccessMode::Auto,)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("deletion cannot enter this bounded review")
+        );
+        let deletion =
+            staged_tool_mutation_edits(&deleted, Some("feature-1"), ToolAccessMode::Full).unwrap();
+        assert!(deletion[0].delete);
+        assert_eq!(deletion[0].before_text.as_deref(), Some("VALUE = 1\n"));
         assert!(tool_mutation_edits(&changes, None)
             .err()
             .unwrap()
@@ -23545,6 +24337,11 @@ mod tests {
             content: "owner result\n".into(),
             before: Some(hash(b"original result\n")),
             asset: None,
+
+            delete: false,
+            before_text: None,
+
+            publication_before: None,
         }]);
         set_auto_repair_lifecycle(
             &mut feature,
@@ -23561,6 +24358,9 @@ mod tests {
                 before_sha256: Some(hash(b"original result\n")),
                 after: Some("owner result\n".into()),
                 asset: None,
+
+                delete: false,
+                before_text: None,
             }],
             unreviewable_paths: Vec::new(),
         };
@@ -23636,6 +24436,91 @@ mod tests {
             retained
         );
         assert!(!engine.repair_loop_authorized.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn recovered_review_attempt_namespace_ignores_only_provider_free_escalation_slots() {
+        let (_directory, engine) = control_test_engine();
+        let project = engine.root.join("example");
+        let validation_evidence_sha256 = "7".repeat(64);
+        let mut feature = active_automatic_staged_validation_fixture(&engine);
+        feature.review_attempts = 2;
+        for attempt in [3, 4, 6] {
+            feature.review_history.push(ReviewAttemptEvidence {
+                attempt,
+                packet_sha256: hash(format!("escalation-slot-{attempt}").as_bytes()),
+                validation_evidence_sha256: hash(b"prior validation failure"),
+                outcome: "not_run".into(),
+                decision_sha256: None,
+                binding_version: 0,
+                batch_packet_sha256s: Vec::new(),
+                batch_receipt_sha256s: Vec::new(),
+                blocking_findings: Vec::new(),
+                summary: "Independent review was not run because validation failed".into(),
+            });
+        }
+        let expected_binding = fully_applied_staged_validation_binding(&feature)
+            .unwrap()
+            .unwrap();
+        let packet = developer_review_batch_set(
+            &feature,
+            &project,
+            feature.edits.as_deref().unwrap(),
+            &validation_evidence_sha256,
+        )
+        .unwrap();
+        let pending = ReviewPendingEvidence {
+            attempt: 3,
+            packet_sha256: packet.aggregate_sha256().to_owned(),
+            validation_evidence_sha256,
+            binding_version: 2,
+            batch_packet_sha256s: packet
+                .batches
+                .iter()
+                .map(|batch| batch.sha256().unwrap())
+                .collect(),
+        };
+        let expected_history_sha256 = hash(&serde_json::to_vec(&feature.review_history).unwrap());
+        feature.review_attempts = pending.attempt;
+        feature.review_pending = Some(pending.clone());
+        feature.review_status = "reviewing".into();
+        feature.checkpoint = format!("review_{}_pending", pending.attempt);
+
+        assert_eq!(
+            fully_applied_staged_pending_review_binding(
+                &feature,
+                &project,
+                &pending,
+                &expected_history_sha256,
+            )
+            .unwrap(),
+            expected_binding
+        );
+
+        let mut competing_provider_attempt = feature;
+        competing_provider_attempt
+            .review_history
+            .push(ReviewAttemptEvidence {
+                attempt: pending.attempt,
+                packet_sha256: "8".repeat(64),
+                validation_evidence_sha256: "9".repeat(64),
+                outcome: "interrupted".into(),
+                decision_sha256: None,
+                binding_version: 2,
+                batch_packet_sha256s: vec!["a".repeat(64)],
+                batch_receipt_sha256s: Vec::new(),
+                blocking_findings: Vec::new(),
+                summary: "competing provider attempt".into(),
+            });
+        let competing_history_sha256 =
+            hash(&serde_json::to_vec(&competing_provider_attempt.review_history).unwrap());
+        assert!(fully_applied_staged_pending_review_binding(
+            &competing_provider_attempt,
+            &project,
+            &pending,
+            &competing_history_sha256,
+        )
+        .is_err());
     }
 
     #[test]
@@ -23717,20 +24602,23 @@ mod tests {
             &malformed_history_sha256,
         )
         .is_err());
-        let mut incomplete_inert_lineage = initial.clone();
-        incomplete_inert_lineage
+        let mut bounded_out_inert_lineage = initial.clone();
+        bounded_out_inert_lineage
             .escalation_history
             .retain(|evidence| {
                 evidence.proposal_id != inert_proposal_id
                     || evidence.outcome != "application_not_run"
             });
-        assert!(fully_applied_staged_pending_review_binding(
-            &incomplete_inert_lineage,
-            &project,
-            &pending,
-            &initial_review_history_sha256,
-        )
-        .is_err());
+        assert_eq!(
+            fully_applied_staged_pending_review_binding(
+                &bounded_out_inert_lineage,
+                &project,
+                &pending,
+                &initial_review_history_sha256,
+            )
+            .unwrap(),
+            initial_binding
+        );
         let mut provider_collision = initial.clone();
         provider_collision
             .review_history
@@ -24019,12 +24907,18 @@ mod tests {
                     before_sha256: Some(hash(b"VALUE = 1\n")),
                     after: Some("stale source bytes\n".into()),
                     asset: None,
+
+                    delete: false,
+                    before_text: None,
                 },
                 developer_tools::ToolMutationEdit {
                     path: ".pytest_cache/v/cache/nodeids".into(),
                     before_sha256: Some(hash(b"older cache bytes\n")),
                     after: Some("historical cache bytes\n".into()),
                     asset: None,
+
+                    delete: false,
+                    before_text: None,
                 },
             ],
             unreviewable_paths: vec!["nested/.PYTEST_CACHE/v/cache/lastfailed".into()],
@@ -24035,12 +24929,22 @@ mod tests {
                 content: "VALUE = 2\n".into(),
                 before: Some(hash(b"VALUE = 1\n")),
                 asset: None,
+
+                delete: false,
+                before_text: None,
+
+                publication_before: None,
             },
             Edit {
                 path: ".pytest_cache/v/cache/nodeids".into(),
                 content: "historical cache bytes\n".into(),
                 before: Some(hash(b"older cache bytes\n")),
                 asset: None,
+
+                delete: false,
+                before_text: None,
+
+                publication_before: None,
             },
         ];
         let manifest = vec![
@@ -24210,6 +25114,11 @@ mod tests {
             before: None,
             content: "VALUE = 2\n".into(),
             asset: None,
+
+            delete: false,
+            before_text: None,
+
+            publication_before: None,
         }];
         reconcile_feature_tool_mutation(&mut first, 9, &Ok(owned)).unwrap();
         reconcile_feature_tool_mutation(&mut second, 9, &Ok(Vec::new())).unwrap();
@@ -24473,6 +25382,11 @@ mod tests {
             before: Some(hash(b"old\n")),
             content: "new\n".into(),
             asset: None,
+
+            delete: false,
+            before_text: None,
+
+            publication_before: None,
         };
         quarantine_tool_candidate(
             &mut feature,
@@ -24594,12 +25508,22 @@ mod tests {
             before: Some(hash(b"old\n")),
             content: "new\n".into(),
             asset: None,
+
+            delete: false,
+            before_text: None,
+
+            publication_before: None,
         };
         let candidate = Edit {
             path: "converter/core.py".into(),
             before: Some(hash(b"VALUE = 1\n")),
             content: "VALUE = 2\n".into(),
             asset: None,
+
+            delete: false,
+            before_text: None,
+
+            publication_before: None,
         };
         let (review, application) = tool_review_and_application_edits(
             std::slice::from_ref(&environment),
@@ -24654,6 +25578,45 @@ mod tests {
     }
 
     #[test]
+    fn repair_stage_copies_reviewable_dist_baseline_without_private_or_binary_bytes() {
+        let workspace = tempfile::tempdir().unwrap();
+        let workspace_root = fs::canonicalize(workspace.path()).unwrap();
+        let source = workspace_root.join("project");
+        fs::create_dir_all(source.join("dist")).unwrap();
+        fs::write(
+            source.join("dist/obsolete.html"),
+            b"<main>obsolete generated output</main>\n",
+        )
+        .unwrap();
+        fs::write(source.join("dist/.env.local"), b"PRIVATE=stage-secret\n").unwrap();
+        fs::write(source.join("dist/opaque.bin"), [0xff, 0x00, 0x80]).unwrap();
+        let image = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            8,
+            8,
+            image::Rgba([20, 40, 60, 255]),
+        ));
+        let mut png = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let png = png.into_inner();
+        fs::write(source.join("dist/route.png"), &png).unwrap();
+        let source = fs::canonicalize(source).unwrap();
+
+        let mut stage = RepairStage::reserve(&workspace_root, &source).unwrap();
+        stage.populate(&source).unwrap();
+        assert_eq!(
+            fs::read(stage.project_path().join("dist/obsolete.html")).unwrap(),
+            b"<main>obsolete generated output</main>\n"
+        );
+        assert_eq!(
+            fs::read(stage.project_path().join("dist/route.png")).unwrap(),
+            png
+        );
+        assert!(!stage.project_path().join("dist/.env.local").exists());
+        assert!(!stage.project_path().join("dist/opaque.bin").exists());
+        stage.cleanup().unwrap();
+    }
+
+    #[test]
     fn staged_candidate_rebinds_excluded_generated_outputs_to_exact_live_bytes() {
         let directory = tempfile::tempdir().unwrap();
         let project = fs::canonicalize(directory.path()).unwrap();
@@ -24666,18 +25629,33 @@ mod tests {
                 before: None,
                 content: "new generated\n".into(),
                 asset: None,
+
+                delete: false,
+                before_text: None,
+
+                publication_before: None,
             },
             Edit {
                 path: "app.py".into(),
                 before: Some(hash(b"old source\n")),
                 content: "new source\n".into(),
                 asset: None,
+
+                delete: false,
+                before_text: None,
+
+                publication_before: None,
             },
             Edit {
                 path: "tests/test_new.py".into(),
                 before: None,
                 content: "def test_new():\n    assert True\n".into(),
                 asset: None,
+
+                delete: false,
+                before_text: None,
+
+                publication_before: None,
             },
         ];
         rebind_staged_candidate_to_live(&project, &mut edits).unwrap();
@@ -24704,6 +25682,11 @@ mod tests {
                 before: None,
                 content,
                 asset: None,
+
+                delete: false,
+                before_text: None,
+
+                publication_before: None,
             });
         }
         fs::write(project.join("dist/page-000.html"), b"<p>old</p>\n").unwrap();
@@ -24732,6 +25715,11 @@ mod tests {
             before: Some(hash(b"old\n")),
             content: "new\n".into(),
             asset: None,
+
+            delete: false,
+            before_text: None,
+
+            publication_before: None,
         }];
         compact_terminal_staged_candidate(proposal).unwrap();
         assert!(proposal.staged_candidate.is_empty());
@@ -24745,6 +25733,76 @@ mod tests {
             .unwrap()
             .contains(&hash(b"new\n")));
         assert!(!serde_json::to_string(proposal).unwrap().contains("new\\n"));
+    }
+
+    #[test]
+    fn terminal_staged_deletion_manifest_round_trips_persisted_validation_fail_closed() {
+        let (_directory, engine) = control_test_engine();
+        let mut feature = automatic_effects_recovery_fixture(&engine);
+        let proposal = feature.escalation_proposal.as_mut().unwrap();
+        proposal.status = "succeeded".into();
+        proposal.staged_candidate_manifest.clear();
+        proposal.staged_candidate = vec![deletion_edit(
+            "dist/obsolete-generated.html",
+            "obsolete generated output\n",
+        )];
+        proposal.applied_paths = vec!["dist/obsolete-generated.html".into()];
+        compact_terminal_staged_candidate(proposal).unwrap();
+
+        let persisted = serde_json::to_vec(&feature).unwrap();
+        assert!(!persisted
+            .windows(b"obsolete generated output".len())
+            .any(|window| window == b"obsolete generated output"));
+        let reloaded: Feature = serde_json::from_slice(&persisted).unwrap();
+        validate_auto_repair_feature(&reloaded).unwrap();
+        let manifest = &reloaded
+            .escalation_proposal
+            .as_ref()
+            .unwrap()
+            .staged_candidate_manifest;
+        assert_eq!(manifest.len(), 1);
+        assert_eq!(manifest[0].kind, "delete");
+        assert_eq!(
+            manifest[0].before_sha256,
+            Some(hash(b"obsolete generated output\n"))
+        );
+        assert!(manifest[0].media_type.is_none());
+
+        let mut missing_prior = reloaded.clone();
+        missing_prior
+            .escalation_proposal
+            .as_mut()
+            .unwrap()
+            .staged_candidate_manifest[0]
+            .before_sha256 = None;
+        assert!(validate_auto_repair_feature(&missing_prior)
+            .unwrap_err()
+            .to_string()
+            .contains("deletion metadata"));
+
+        let mut disguised_asset = reloaded.clone();
+        disguised_asset
+            .escalation_proposal
+            .as_mut()
+            .unwrap()
+            .staged_candidate_manifest[0]
+            .media_type = Some("image/png".into());
+        assert!(validate_auto_repair_feature(&disguised_asset)
+            .unwrap_err()
+            .to_string()
+            .contains("deletion metadata"));
+
+        let mut unknown_kind = reloaded;
+        unknown_kind
+            .escalation_proposal
+            .as_mut()
+            .unwrap()
+            .staged_candidate_manifest[0]
+            .kind = "directory".into();
+        assert!(validate_auto_repair_feature(&unknown_kind)
+            .unwrap_err()
+            .to_string()
+            .contains("kind is invalid"));
     }
 
     #[test]
@@ -24789,6 +25847,11 @@ mod tests {
                 before: None,
                 content: "x".repeat(MAX_REVIEW_TEXT_TOTAL_BYTES + 1),
                 asset: None,
+
+                delete: false,
+                before_text: None,
+
+                publication_before: None,
             }],
             ..Default::default()
         };
@@ -24838,6 +25901,11 @@ mod tests {
                 before: Some(hash(b"saved")),
                 content: "repaired".into(),
                 asset: None,
+
+                delete: false,
+                before_text: None,
+
+                publication_before: None,
             }],
             ..Default::default()
         };
@@ -24878,12 +25946,22 @@ mod tests {
             before: Some(hash(b"old first")),
             content: "new first".into(),
             asset: None,
+
+            delete: false,
+            before_text: None,
+
+            publication_before: None,
         };
         let second = Edit {
             path: "second.txt".into(),
             before: Some(hash(b"old second")),
             content: "new second".into(),
             asset: None,
+
+            delete: false,
+            before_text: None,
+
+            publication_before: None,
         };
         let proposal = RepairEscalationProposal {
             proposal_id: Uuid::new_v4().to_string(),
@@ -25025,12 +26103,22 @@ mod tests {
             before: Some(hash(b"old first")),
             content: "new first".into(),
             asset: None,
+
+            delete: false,
+            before_text: None,
+
+            publication_before: None,
         };
         let second = Edit {
             path: "second.txt".into(),
             before: Some(hash(b"old second")),
             content: "new second".into(),
             asset: None,
+
+            delete: false,
+            before_text: None,
+
+            publication_before: None,
         };
         let mut feature = feature_with_status("failed");
         feature.auto_repair_lifecycle = "running".into();
@@ -25110,6 +26198,11 @@ mod tests {
                 before: Some(hash(b"old")),
                 content: "new".into(),
                 asset: None,
+
+                delete: false,
+                before_text: None,
+
+                publication_before: None,
             }],
             apply_request_id: Some(Uuid::new_v4().to_string()),
             ..Default::default()
@@ -25160,6 +26253,11 @@ mod tests {
             before: None,
             content: "def test_new():\n    assert True\n".into(),
             asset: None,
+
+            delete: false,
+            before_text: None,
+
+            publication_before: None,
         };
         let proposal = RepairEscalationProposal {
             protected_inputs: std::collections::BTreeMap::from([(
@@ -25320,6 +26418,11 @@ mod tests {
                 .as_ref()
                 .map(|before| hash(before.as_bytes())),
             asset: None,
+
+            delete: false,
+            before_text: None,
+
+            publication_before: None,
         };
 
         apply_edit(&project_root, &edit).unwrap();
@@ -25389,6 +26492,11 @@ mod tests {
             before: None,
             content: "retained\n".into(),
             asset: None,
+
+            delete: false,
+            before_text: None,
+
+            publication_before: None,
         }]);
         let proposal = feature.escalation_proposal.as_mut().unwrap();
         proposal.files = vec![
@@ -25439,6 +26547,11 @@ mod tests {
             before: None,
             content: "before overlap\n".into(),
             asset: None,
+
+            delete: false,
+            before_text: None,
+
+            publication_before: None,
         }]);
         let proposal = overlap.escalation_proposal.as_mut().unwrap();
         proposal.files = vec![RepairEscalationFile {
@@ -25493,6 +26606,11 @@ mod tests {
             content: "repaired".into(),
             before: Some(hash(b"saved")),
             asset: None,
+
+            delete: false,
+            before_text: None,
+
+            publication_before: None,
         };
         engine
             .change(|state| {
@@ -25638,6 +26756,11 @@ mod tests {
             before: None,
             content: gui.into(),
             asset: None,
+
+            delete: false,
+            before_text: None,
+
+            publication_before: None,
         }]);
 
         let mut current = feature_with_escalation("failed");
@@ -25648,6 +26771,11 @@ mod tests {
             before: Some(hash(b"assert widget == 'old'\n")),
             content: corrected_test.into(),
             asset: None,
+
+            delete: false,
+            before_text: None,
+
+            publication_before: None,
         }]);
         let proposal = current.escalation_proposal.as_mut().unwrap();
         proposal.feature_checkpoint = prior.checkpoint.clone();
@@ -25721,6 +26849,11 @@ mod tests {
             before: Some(hash(b"assert widget == 'old'\n")),
             content: corrected_test.into(),
             asset: None,
+
+            delete: false,
+            before_text: None,
+
+            publication_before: None,
         }]);
         pending.review_attempts = 1;
         pending.checkpoint = "escalation_1_applying".into();
@@ -25898,6 +27031,11 @@ mod tests {
             content: "implemented".into(),
             before: None,
             asset: None,
+
+            delete: false,
+            before_text: None,
+
+            publication_before: None,
         };
         apply_edit(&root, &edit).unwrap();
         apply_edit(&root, &edit).unwrap();
@@ -25926,12 +27064,22 @@ mod tests {
                 content: "prior candidate\n".into(),
                 before: Some(original_sha256.clone()),
                 asset: None,
+
+                delete: false,
+                before_text: None,
+
+                publication_before: None,
             },
             Edit {
                 path: "src/unchanged.rs".into(),
                 content: "unchanged candidate\n".into(),
                 before: None,
                 asset: None,
+
+                delete: false,
+                before_text: None,
+
+                publication_before: None,
             },
         ]);
         reserve_repair_attempt(&mut feature).unwrap();
@@ -25945,12 +27093,22 @@ mod tests {
                     content: "repaired candidate\n".into(),
                     before: Some(prior_sha256.clone()),
                     asset: None,
+
+                    delete: false,
+                    before_text: None,
+
+                    publication_before: None,
                 },
                 Edit {
                     path: "src/new.rs".into(),
                     content: "new repair file\n".into(),
                     before: None,
                     asset: None,
+
+                    delete: false,
+                    before_text: None,
+
+                    publication_before: None,
                 },
             ],
         )
@@ -26000,6 +27158,11 @@ mod tests {
                     content: "prior candidate\n".into(),
                     before: None,
                     asset: None,
+
+                    delete: false,
+                    before_text: None,
+
+                    publication_before: None,
                 }]);
                 Ok(())
             })
@@ -26190,12 +27353,22 @@ mod tests {
                 content: "{}\n".into(),
                 before: None,
                 asset: None,
+
+                delete: false,
+                before_text: None,
+
+                publication_before: None,
             },
             Edit {
                 path: "src/config.rs".into(),
                 content: "api_key = supersecretvalue123\n".into(),
                 before: None,
                 asset: None,
+
+                delete: false,
+                before_text: None,
+
+                publication_before: None,
             },
         ] {
             assert!(validate_repair_file_admission(&edit.path, &edit.content).is_err());
@@ -27988,6 +29161,11 @@ mod tests {
                 content: "fn main() {}\n".into(),
                 before: None,
                 asset: None,
+
+                delete: false,
+                before_text: None,
+
+                publication_before: None,
             }],
             &"1".repeat(64),
         )
@@ -28032,6 +29210,10 @@ mod tests {
                 before_sha256: None,
                 content_sha256: hash(b"saved"),
                 content: "saved".into(),
+
+                delete: false,
+                before_text: None,
+                publication_before_sha256: None,
             }],
         };
         approved.packet_sha256 = packet.legacy_sha256_without_classification().unwrap();
@@ -28327,6 +29509,11 @@ mod tests {
             content: "fn value() -> i32 { 4 }\n".into(),
             before: Some(baseline_digest.clone()),
             asset: None,
+
+            delete: false,
+            before_text: None,
+
+            publication_before: None,
         }]);
         feature.auto_repair_limit_project_baseline = baseline
             .files
@@ -28747,6 +29934,11 @@ mod tests {
             content: "fn value() -> i32 { 1 }\n".into(),
             before: None,
             asset: None,
+
+            delete: false,
+            before_text: None,
+
+            publication_before: None,
         }]);
 
         fs::write(project.join("main.rs"), "fn value() -> i32 { 2 }\n").unwrap();
@@ -29084,7 +30276,7 @@ mod tests {
         drop(engine.inference_gate.try_acquire().unwrap());
         let persisted = persisted_developer_state(engine);
         assert_eq!(persisted["revision"].as_u64().unwrap(), revision_before + 1);
-        let feature = &persisted["queue_v12"][0];
+        let feature = &persisted["queue_v13"][0];
         assert_eq!(feature["auto_repair_lifecycle"], expected_lifecycle);
         assert_eq!(feature["auto_repair_reason"], expected_reason);
         assert_eq!(feature["auto_ai_repair_limit"], expected_limit);
@@ -29132,8 +30324,8 @@ mod tests {
         drop(engine.inference_gate.try_acquire().unwrap());
         let persisted = persisted_developer_state(engine);
         assert_eq!(persisted["revision"].as_u64().unwrap(), revision_before + 2);
-        assert_eq!(persisted["queue_v12"][0]["escalation_count"], count_before);
-        assert!(persisted["queue_v12"][0]["escalation_proposal"].is_null());
+        assert_eq!(persisted["queue_v13"][0]["escalation_count"], count_before);
+        assert!(persisted["queue_v13"][0]["escalation_proposal"].is_null());
     }
 
     fn prepare_escalation_request(
@@ -29603,6 +30795,11 @@ mod tests {
             content: "a".repeat(768 * 1024 + 1),
             before: Some(hash(b"VALUE = 0\n")),
             asset: None,
+
+            delete: false,
+            before_text: None,
+
+            publication_before: None,
         };
         let error =
             preflight_developer_review_capacity(&feature, &root, std::slice::from_ref(&candidate))
@@ -29680,12 +30877,18 @@ mod tests {
                     before_sha256: Some(hash(b"MAP = None\n")),
                     after: Some("stale tool evidence\n".into()),
                     asset: None,
+
+                    delete: false,
+                    before_text: None,
                 },
                 developer_tools::ToolMutationEdit {
                     path: "content/maps/fort-bellona.png".into(),
                     before_sha256: None,
                     after: Some("legacy binary marker".into()),
                     asset: None,
+
+                    delete: false,
+                    before_text: None,
                 },
             ],
             unreviewable_paths: vec!["content/maps/fort-bellona.png".into()],
@@ -29699,6 +30902,9 @@ mod tests {
                 before_sha256: Some(hash(b"intermediate bytes")),
                 after: Some("later legacy binary marker".into()),
                 asset: None,
+
+                delete: false,
+                before_text: None,
             }],
             unreviewable_paths: Vec::new(),
         };
@@ -29826,18 +31032,27 @@ mod tests {
                     before_sha256: Some(hash(b"MAP = None\n")),
                     after: Some("historical source bytes\n".into()),
                     asset: None,
+
+                    delete: false,
+                    before_text: None,
                 },
                 developer_tools::ToolMutationEdit {
                     path: "pip/cache/selfcheck/state.json".into(),
                     before_sha256: None,
                     after: Some("historical cache bytes\n".into()),
                     asset: None,
+
+                    delete: false,
+                    before_text: None,
                 },
                 developer_tools::ToolMutationEdit {
                     path: "tests/test_obsolete.py".into(),
                     before_sha256: None,
                     after: Some("assert False\n".into()),
                     asset: None,
+
+                    delete: false,
+                    before_text: None,
                 },
             ],
             unreviewable_paths: vec![
@@ -29854,6 +31069,9 @@ mod tests {
                 before_sha256: Some(hash(b"title: original\n")),
                 after: Some("stale side-chat bytes\n".into()),
                 asset: None,
+
+                delete: false,
+                before_text: None,
             }],
             unreviewable_paths: Vec::new(),
         };
@@ -29884,12 +31102,22 @@ mod tests {
                 content: "historical cache bytes\n".into(),
                 before: None,
                 asset: None,
+
+                delete: false,
+                before_text: None,
+
+                publication_before: None,
             },
             Edit {
                 path: "site/retained.html".into(),
                 content: "<main>retained generated page</main>\n".into(),
                 before: None,
                 asset: None,
+
+                delete: false,
+                before_text: None,
+
+                publication_before: None,
             },
         ];
         let recovered = recover_supported_asset_mutations(
@@ -30025,6 +31253,11 @@ mod tests {
             content: "prior".into(),
             before: Some(hash(b"original prior")),
             asset: None,
+
+            delete: false,
+            before_text: None,
+
+            publication_before: None,
         };
         let retained_text_error = recover_supported_asset_mutations_with_limits(
             &[mutation(&["a.png"])],
@@ -30053,6 +31286,11 @@ mod tests {
                 width: 4,
                 height: 3,
             }),
+
+            delete: false,
+            before_text: None,
+
+            publication_before: None,
         };
         let retained_asset_error = recover_supported_asset_mutations_with_limits(
             &[mutation(&["a.png"])],
@@ -30119,5 +31357,188 @@ mod tests {
                 "{name} asset must fail closed"
             );
         }
+    }
+
+    fn deletion_edit(path: &str, before_text: &str) -> Edit {
+        Edit {
+            path: path.into(),
+            content: String::new(),
+            before: Some(hash(before_text.as_bytes())),
+            delete: true,
+            before_text: Some(before_text.into()),
+            asset: None,
+
+            publication_before: None,
+        }
+    }
+
+    #[test]
+    fn typed_text_deletion_binds_prior_bytes_and_domain_separates_operation_digest() {
+        let edit = deletion_edit("output/obsolete.html", "obsolete\n");
+        let digest = edit_sha256(&edit).unwrap();
+        assert_ne!(digest, hash(b""));
+        assert_ne!(digest, hash(b"obsolete\n"));
+
+        let mut stale = edit.clone();
+        stale.before = Some(hash(b"different\n"));
+        assert!(edit_sha256(&stale)
+            .unwrap_err()
+            .to_string()
+            .contains("does not match"));
+
+        let mut disguised_empty_write = edit;
+        disguised_empty_write.delete = false;
+        assert!(edit_sha256(&disguised_empty_write)
+            .unwrap_err()
+            .to_string()
+            .contains("deletion source evidence"));
+    }
+
+    #[test]
+    fn typed_text_deletion_applies_once_and_fails_closed_for_stale_missing_and_link_targets() {
+        let project = tempfile::tempdir().unwrap();
+        fs::create_dir(project.path().join("output")).unwrap();
+        fs::write(project.path().join("output/obsolete.html"), "obsolete\n").unwrap();
+        let root = fs::canonicalize(project.path()).unwrap();
+        let edit = deletion_edit("output/obsolete.html", "obsolete\n");
+        apply_edit(&root, &edit).unwrap();
+        assert!(!root.join("output/obsolete.html").exists());
+        assert!(
+            apply_edit(&root, &edit).is_err(),
+            "missing targets are not replayed"
+        );
+
+        fs::write(root.join("output/obsolete.html"), "owner drift\n").unwrap();
+        assert!(apply_edit(&root, &edit)
+            .unwrap_err()
+            .to_string()
+            .contains("changed after planning"));
+        assert_eq!(
+            fs::read_to_string(root.join("output/obsolete.html")).unwrap(),
+            "owner drift\n"
+        );
+
+        #[cfg(unix)]
+        {
+            fs::write(root.join("outside.html"), "obsolete\n").unwrap();
+            std::os::unix::fs::symlink(root.join("outside.html"), root.join("output/link.html"))
+                .unwrap();
+            let linked = deletion_edit("output/link.html", "obsolete\n");
+            assert!(apply_edit(&root, &linked).is_err());
+            assert!(root.join("outside.html").exists());
+        }
+    }
+
+    #[test]
+    fn deletion_review_discloses_exact_prior_text_and_requires_post_application_absence() {
+        let project = tempfile::tempdir().unwrap();
+        fs::create_dir(project.path().join("output")).unwrap();
+        let root = fs::canonicalize(project.path()).unwrap();
+        let edit = deletion_edit("output/obsolete.html", "obsolete\n");
+        let mut feature = feature_with_status("running");
+        feature.project = "example".into();
+        feature.validation = "python -B validate.py".into();
+        let packet = developer_review_batch_set(&feature, &root, &[edit], &"1".repeat(64)).unwrap();
+        assert_eq!(packet.packet.schema_version, 2);
+        assert!(packet.packet.files[0].delete);
+        assert_eq!(
+            packet.packet.files[0].before_text.as_deref(),
+            Some("obsolete\n")
+        );
+        assert_eq!(packet.packet.files[0].content_sha256, hash(b""));
+        assert!(packet.packet.files[0].content.is_empty());
+    }
+
+    #[test]
+    fn cumulative_deletion_review_separates_immediate_and_publication_baselines() {
+        let project = tempfile::tempdir().unwrap();
+        fs::create_dir(project.path().join("dist")).unwrap();
+        let root = fs::canonicalize(project.path()).unwrap();
+        let remote = "remote output\n";
+        let rebuilt = "rebuilt output\n";
+        let mut edit = deletion_edit("dist/obsolete.html", rebuilt);
+        edit.publication_before = Some(hash(remote.as_bytes()));
+        let mut feature = feature_with_status("running");
+        feature.validation = "python -B validate.py".into();
+        feature.repair_attempts = 1;
+        feature.repair_history = vec![RepairAttemptEvidence {
+            attempt: 1,
+            prior_checkpoint: "applied".into(),
+            prior_message: "earlier generated output".into(),
+            prior_edits: vec![RepairEditEvidence {
+                path: edit.path.clone(),
+                before: Some(hash(remote.as_bytes())),
+                content_hash: hash(rebuilt.as_bytes()),
+            }],
+        }];
+
+        preflight_developer_review_capacity(&feature, &root, &[edit.clone()]).unwrap();
+        let packet = developer_review_batch_set(&feature, &root, &[edit], &"1".repeat(64)).unwrap();
+        let reviewed = &packet.packet.files[0];
+        assert_eq!(reviewed.before_sha256, Some(hash(rebuilt.as_bytes())));
+        assert_eq!(
+            reviewed.publication_before_sha256,
+            Some(hash(remote.as_bytes()))
+        );
+        assert_eq!(reviewed.before_text.as_deref(), Some(rebuilt));
+    }
+
+    #[test]
+    fn staged_restart_treats_recorded_deletion_as_absent_and_never_replays_it() {
+        let project = tempfile::tempdir().unwrap();
+        fs::create_dir(project.path().join("output")).unwrap();
+        let root = fs::canonicalize(project.path()).unwrap();
+        let edit = deletion_edit("output/obsolete.html", "obsolete\n");
+        let mut feature = feature_with_status("running");
+        feature.escalation_pending = true;
+        feature.auto_repair_lifecycle = "running".into();
+        feature.escalation_proposal = Some(RepairEscalationProposal {
+            source: "automatic_failure".into(),
+            status: "applying".into(),
+            staged_candidate: vec![edit.clone()],
+            applied_paths: vec![edit.path.clone()],
+            ..Default::default()
+        });
+        assert!(staged_restart_remaining_edits(&feature, &root)
+            .unwrap()
+            .is_empty());
+        feature
+            .escalation_proposal
+            .as_mut()
+            .unwrap()
+            .applied_paths
+            .clear();
+        assert!(staged_restart_remaining_edits(&feature, &root).is_err());
+    }
+
+    #[test]
+    fn protected_input_expectation_advances_only_through_exact_typed_edits() {
+        let before = "assert old\n";
+        let after = "assert corrected\n";
+        let baseline = std::collections::BTreeMap::from([(
+            "tests/test_site.py".into(),
+            hash(before.as_bytes()),
+        )]);
+        let write = Edit {
+            path: "tests/test_site.py".into(),
+            content: after.into(),
+            before: Some(hash(before.as_bytes())),
+            delete: false,
+            before_text: None,
+            asset: None,
+
+            publication_before: None,
+        };
+        let expected =
+            expected_protected_inputs_after_edits(&baseline, std::slice::from_ref(&write), &[])
+                .unwrap();
+        assert_eq!(expected["tests/test_site.py"], hash(after.as_bytes()));
+        let deletion = deletion_edit("tests/test_site.py", before);
+        assert!(
+            expected_protected_inputs_after_edits(&baseline, &[deletion], &[])
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(baseline["tests/test_site.py"], hash(before.as_bytes()));
     }
 }

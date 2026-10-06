@@ -76,7 +76,8 @@ assets are attached as actual images; inspect the image itself against the owner
 alone is not visual evidence. The trusted ordered_image_attachments array maps each zero-based attachment_index to its exact
 project path, digest, media type, dimensions, and staged filename in the same order as the attached images. The complete
 immutable candidate manifest is supplied for context, but approve this batch only
-after reviewing every disclosed file and attached asset in it. Copy every trusted response field defined by the output schema
+after reviewing every disclosed file and attached asset in it. A file with delete=true is an explicit deletion candidate: review
+its complete before_text and exact before_sha256 as the removed source, and never reinterpret it as an empty-file write. Copy every trusted response field defined by the output schema
 exactly; ordered_image_attachments is trusted context and must not be returned. Reject on any
 incorrect, incomplete, unsafe, placeholder, weakly tested, mismatched, corrupt, or unreviewable entry. Provide a substantive
 review_summary and list interfaces and dependencies the final aggregate reviewer must use to assess cross-batch integration.
@@ -309,13 +310,14 @@ const OUTPUT_SCHEMA: &str = r##"{
     "blocking_findings":{"type":"array","maxItems":64,"items":{"$ref":"#/$defs/finding"}},
     "non_blocking_findings":{"type":"array","maxItems":64,"items":{"$ref":"#/$defs/finding"}},
     "validation_evidence_sha256":{"$ref":"#/$defs/digest"},
-    "reviewed_files":{"type":"array","minItems":1,"maxItems":40,"items":{"$ref":"#/$defs/file"}}
+    "reviewed_files":{"type":"array","minItems":1,"maxItems":40,"items":{"anyOf":[{"$ref":"#/$defs/write_file"},{"$ref":"#/$defs/delete_file"}]}}
   },
   "required":["schema_version","review_packet_sha256","provider_id","model_id","reasoning_effort","decision","blocking_findings","non_blocking_findings","validation_evidence_sha256","reviewed_files"],
   "$defs":{
     "digest":{"type":"string","pattern":"^[0-9a-f]{64}$"},
     "path":{"type":"string","minLength":1,"maxLength":240},
-    "file":{"type":"object","additionalProperties":false,"properties":{"path":{"$ref":"#/$defs/path"},"content_sha256":{"$ref":"#/$defs/digest"},"classification":{"type":"string","enum":["ordinary_source","test_or_validation_input","project_configuration"]}},"required":["path","content_sha256","classification"]},
+    "write_file":{"type":"object","additionalProperties":false,"properties":{"path":{"$ref":"#/$defs/path"},"content_sha256":{"$ref":"#/$defs/digest"},"classification":{"type":"string","enum":["ordinary_source","test_or_validation_input","project_configuration"]}},"required":["path","content_sha256","classification"]},
+    "delete_file":{"type":"object","additionalProperties":false,"properties":{"path":{"$ref":"#/$defs/path"},"before_sha256":{"$ref":"#/$defs/digest"},"publication_before_sha256":{"anyOf":[{"$ref":"#/$defs/digest"},{"type":"null"}]},"content_sha256":{"$ref":"#/$defs/digest"},"delete":{"type":"boolean","const":true},"classification":{"type":"string","enum":["ordinary_source","test_or_validation_input","project_configuration"]}},"required":["path","before_sha256","publication_before_sha256","content_sha256","delete","classification"]},
     "finding":{"type":"object","additionalProperties":false,"properties":{"finding_id":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9][A-Za-z0-9._-]*$"},"path":{"$ref":"#/$defs/path"},"message":{"type":"string","minLength":1,"maxLength":1000}},"required":["finding_id","path","message"]}
   }
 }"##;
@@ -348,8 +350,14 @@ fn review_output_schema(model: &str, reasoning_effort: &str) -> Result<String> {
 pub struct DeveloperReviewFile {
     pub path: String,
     pub before_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub publication_before_sha256: Option<String>,
     pub content_sha256: String,
     pub content: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub delete: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_text: Option<String>,
     #[serde(default = "legacy_unclassified_review_file")]
     pub classification: String,
 }
@@ -492,7 +500,15 @@ impl DeveloperReviewPacket {
     }
 
     pub fn sha256(&self) -> Result<String> {
-        Ok(hex_digest(&self.canonical_bytes()?))
+        let canonical = self.canonical_bytes()?;
+        if self.schema_version == 2 {
+            let mut digest = Sha256::new();
+            digest.update(b"assemblywright-developer-review-packet-delete-v2\0");
+            digest.update(&canonical);
+            Ok(format!("{:x}", digest.finalize()))
+        } else {
+            Ok(hex_digest(&canonical))
+        }
     }
 
     pub fn legacy_sha256_without_reasoning(&self) -> Result<String> {
@@ -615,7 +631,10 @@ impl DeveloperReviewPacket {
     }
 
     fn validate_with_file_limit(&self, file_limit: usize, allow_empty_files: bool) -> Result<()> {
-        if self.schema_version != 1
+        let contains_delete = self.files.iter().any(|file| file.delete);
+        if !matches!(self.schema_version, 1 | 2)
+            || (self.schema_version == 1 && contains_delete)
+            || (self.schema_version == 2 && !contains_delete)
             || self.provider_id != PROVIDER_ID
             || validate_model_id(&self.model_id).is_err()
             || validate_reasoning_effort(&self.reasoning_effort).is_err()
@@ -644,14 +663,30 @@ impl DeveloperReviewPacket {
         }
         let mut seen = BTreeSet::new();
         for file in &self.files {
+            let deletion_binding_valid = if file.delete {
+                file.before_sha256.is_some()
+                    && file.before_text.as_ref().is_some_and(|before| {
+                        file.before_sha256.as_deref()
+                            == Some(hex_digest(before.as_bytes()).as_str())
+                    })
+                    && file.content.is_empty()
+                    && file.content_sha256 == hex_digest(b"")
+            } else {
+                file.before_text.is_none() && file.publication_before_sha256.is_none()
+            };
             if !valid_relative_path(&file.path)
                 || !seen.insert(file.path.to_ascii_lowercase())
                 || file
                     .before_sha256
                     .as_deref()
                     .is_some_and(|value| !valid_digest(value))
+                || file
+                    .publication_before_sha256
+                    .as_deref()
+                    .is_some_and(|value| !valid_digest(value))
                 || !valid_digest(&file.content_sha256)
                 || file.content_sha256 != hex_digest(file.content.as_bytes())
+                || !deletion_binding_valid
                 || !valid_review_file_classification(&file.classification)
             {
                 bail!("Review file binding is invalid");
@@ -666,19 +701,87 @@ impl DeveloperReviewPacket {
             .iter()
             .map(|file| DeveloperReviewedFile {
                 path: file.path.clone(),
+                before_sha256: file.delete.then(|| file.before_sha256.clone()).flatten(),
+                publication_before_sha256: file
+                    .delete
+                    .then(|| file.publication_before_sha256.clone())
+                    .flatten(),
                 content_sha256: file.content_sha256.clone(),
+                delete: file.delete,
                 classification: file.classification.clone(),
             })
             .collect()
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeveloperReviewedFile {
     pub path: String,
+    pub before_sha256: Option<String>,
+    pub publication_before_sha256: Option<String>,
     pub content_sha256: String,
+    pub delete: bool,
     pub classification: String,
+}
+
+impl Serialize for DeveloperReviewedFile {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer
+            .serialize_struct("DeveloperReviewedFile", if self.delete { 6 } else { 3 })?;
+        state.serialize_field("path", &self.path)?;
+        if self.delete {
+            state.serialize_field("before_sha256", &self.before_sha256)?;
+            state.serialize_field("publication_before_sha256", &self.publication_before_sha256)?;
+        }
+        state.serialize_field("content_sha256", &self.content_sha256)?;
+        if self.delete {
+            state.serialize_field("delete", &true)?;
+        }
+        state.serialize_field("classification", &self.classification)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for DeveloperReviewedFile {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct WireFile {
+            path: String,
+            #[serde(default)]
+            before_sha256: Option<String>,
+            #[serde(default)]
+            publication_before_sha256: Option<String>,
+            content_sha256: String,
+            #[serde(default)]
+            delete: bool,
+            classification: String,
+        }
+        let wire = WireFile::deserialize(deserializer)?;
+        if (!wire.delete
+            && (wire.before_sha256.is_some() || wire.publication_before_sha256.is_some()))
+            || (wire.delete && wire.before_sha256.is_none())
+        {
+            return Err(serde::de::Error::custom(
+                "reviewed file operation binding is invalid",
+            ));
+        }
+        Ok(Self {
+            path: wire.path,
+            before_sha256: wire.before_sha256,
+            publication_before_sha256: wire.publication_before_sha256,
+            content_sha256: wire.content_sha256,
+            delete: wire.delete,
+            classification: wire.classification,
+        })
+    }
 }
 
 impl DeveloperReviewBatchSet {
@@ -700,11 +803,16 @@ impl DeveloperReviewBatchSet {
         });
         packet.validate_for_batching()?;
         let total_text_bytes = packet.files.iter().try_fold(0usize, |total, file| {
-            if file.content.len() > MAX_BATCH_DISCLOSURE_BYTES {
+            let disclosed = file
+                .content
+                .len()
+                .checked_add(file.before_text.as_ref().map_or(0, String::len))
+                .context("Review text byte count overflow")?;
+            if disclosed > MAX_BATCH_DISCLOSURE_BYTES {
                 bail!("A single review file exceeds the bounded batch disclosure");
             }
             total
-                .checked_add(file.content.len())
+                .checked_add(disclosed)
                 .context("Review text byte count overflow")
         })?;
         if total_text_bytes > MAX_REVIEW_TEXT_TOTAL_BYTES {
@@ -737,7 +845,13 @@ impl DeveloperReviewBatchSet {
             .map(|file| {
                 DeveloperReviewedEntry::File(DeveloperReviewedFile {
                     path: file.path.clone(),
+                    before_sha256: file.delete.then(|| file.before_sha256.clone()).flatten(),
+                    publication_before_sha256: file
+                        .delete
+                        .then(|| file.publication_before_sha256.clone())
+                        .flatten(),
                     content_sha256: file.content_sha256.clone(),
+                    delete: file.delete,
                     classification: file.classification.clone(),
                 })
             })
@@ -758,12 +872,19 @@ impl DeveloperReviewBatchSet {
                 .cmp(&right.path().to_ascii_lowercase())
                 .then_with(|| left.path().cmp(right.path()))
         });
-        let aggregate_candidate_sha256 =
-            hex_digest(&serde_json::to_vec(&DeveloperReviewCandidateBinding {
-                schema_version: 2,
-                packet: &packet,
-                assets: &assets,
-            })?);
+        let candidate_binding = serde_json::to_vec(&DeveloperReviewCandidateBinding {
+            schema_version: 2,
+            packet: &packet,
+            assets: &assets,
+        })?;
+        let aggregate_candidate_sha256 = if packet.schema_version == 2 {
+            let mut digest = Sha256::new();
+            digest.update(b"assemblywright-developer-review-candidate-delete-v2\0");
+            digest.update(candidate_binding);
+            format!("{:x}", digest.finalize())
+        } else {
+            hex_digest(&candidate_binding)
+        };
 
         let mut batches = Vec::new();
         let mut batch_files = Vec::new();
@@ -938,7 +1059,14 @@ impl DeveloperReviewBatch {
                 DeveloperReviewedEntry::File(file) => {
                     valid_relative_path(&file.path)
                         && !sensitive_path(&file.path)
+                        && file.before_sha256.as_deref().is_none_or(valid_digest)
+                        && file
+                            .publication_before_sha256
+                            .as_deref()
+                            .is_none_or(valid_digest)
                         && valid_digest(&file.content_sha256)
+                        && (!file.delete || file.before_sha256.is_some())
+                        && (file.delete || file.publication_before_sha256.is_none())
                         && valid_review_file_classification(&file.classification)
                 }
                 DeveloperReviewedEntry::Asset(asset) => {
@@ -961,6 +1089,17 @@ impl DeveloperReviewBatch {
         }
         let mut selected_paths = BTreeSet::new();
         for file in &self.files {
+            let deletion_binding_valid = if file.delete {
+                file.before_sha256.is_some()
+                    && file.before_text.as_ref().is_some_and(|before| {
+                        file.before_sha256.as_deref()
+                            == Some(hex_digest(before.as_bytes()).as_str())
+                    })
+                    && file.content.is_empty()
+                    && file.content_sha256 == hex_digest(b"")
+            } else {
+                file.before_text.is_none() && file.publication_before_sha256.is_none()
+            };
             if !valid_relative_path(&file.path)
                 || sensitive_path(&file.path)
                 || !selected_paths.insert(file.path.to_ascii_lowercase())
@@ -968,15 +1107,30 @@ impl DeveloperReviewBatch {
                     .before_sha256
                     .as_deref()
                     .is_some_and(|value| !valid_digest(value))
+                || file
+                    .publication_before_sha256
+                    .as_deref()
+                    .is_some_and(|value| !valid_digest(value))
                 || !valid_digest(&file.content_sha256)
                 || file.content_sha256 != hex_digest(file.content.as_bytes())
+                || !deletion_binding_valid
                 || !valid_review_file_classification(&file.classification)
                 || contains_secret_shape(&file.content)
+                || file
+                    .before_text
+                    .as_ref()
+                    .is_some_and(|text| contains_secret_shape(text))
                 || !self
                     .candidate_manifest
                     .contains(&DeveloperReviewedEntry::File(DeveloperReviewedFile {
                         path: file.path.clone(),
+                        before_sha256: file.delete.then(|| file.before_sha256.clone()).flatten(),
+                        publication_before_sha256: file
+                            .delete
+                            .then(|| file.publication_before_sha256.clone())
+                            .flatten(),
                         content_sha256: file.content_sha256.clone(),
+                        delete: file.delete,
                         classification: file.classification.clone(),
                     }))
             {
@@ -1243,7 +1397,13 @@ impl DeveloperReviewBatchOutput {
             .map(|file| {
                 DeveloperReviewedEntry::File(DeveloperReviewedFile {
                     path: file.path.clone(),
+                    before_sha256: file.delete.then(|| file.before_sha256.clone()).flatten(),
+                    publication_before_sha256: file
+                        .delete
+                        .then(|| file.publication_before_sha256.clone())
+                        .flatten(),
                     content_sha256: file.content_sha256.clone(),
+                    delete: file.delete,
                     classification: file.classification.clone(),
                 })
             })
@@ -1414,16 +1574,16 @@ fn validate_review_findings(
 
 const BATCH_OUTPUT_SCHEMA: &str = r##"{
   "$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,
-  "properties":{"schema_version":{"type":"integer","const":2},"review_batch_sha256":{"$ref":"#/$defs/digest"},"aggregate_candidate_sha256":{"$ref":"#/$defs/digest"},"batch_index":{"type":"integer","minimum":0},"batch_count":{"type":"integer","minimum":1},"provider_id":{"type":"string","const":"openai.codex"},"model_id":{"type":"string","const":"gpt-5.6-sol"},"reasoning_effort":{"type":"string","const":"high"},"decision":{"type":"string","enum":["approved","rejected"]},"blocking_findings":{"type":"array","maxItems":8,"items":{"$ref":"#/$defs/finding"}},"non_blocking_findings":{"type":"array","maxItems":64,"items":{"$ref":"#/$defs/finding"}},"validation_evidence_sha256":{"$ref":"#/$defs/digest"},"reviewed_entries":{"type":"array","minItems":1,"maxItems":40,"items":{"anyOf":[{"$ref":"#/$defs/file"},{"$ref":"#/$defs/asset"}]}},"review_summary":{"type":"string","minLength":1,"maxLength":4000},"interfaces_and_dependencies":{"type":"array","maxItems":64,"items":{"type":"string","minLength":1,"maxLength":500}}},
+  "properties":{"schema_version":{"type":"integer","const":2},"review_batch_sha256":{"$ref":"#/$defs/digest"},"aggregate_candidate_sha256":{"$ref":"#/$defs/digest"},"batch_index":{"type":"integer","minimum":0},"batch_count":{"type":"integer","minimum":1},"provider_id":{"type":"string","const":"openai.codex"},"model_id":{"type":"string","const":"gpt-5.6-sol"},"reasoning_effort":{"type":"string","const":"high"},"decision":{"type":"string","enum":["approved","rejected"]},"blocking_findings":{"type":"array","maxItems":8,"items":{"$ref":"#/$defs/finding"}},"non_blocking_findings":{"type":"array","maxItems":64,"items":{"$ref":"#/$defs/finding"}},"validation_evidence_sha256":{"$ref":"#/$defs/digest"},"reviewed_entries":{"type":"array","minItems":1,"maxItems":40,"items":{"anyOf":[{"$ref":"#/$defs/write_file"},{"$ref":"#/$defs/delete_file"},{"$ref":"#/$defs/asset"}]}},"review_summary":{"type":"string","minLength":1,"maxLength":4000},"interfaces_and_dependencies":{"type":"array","maxItems":64,"items":{"type":"string","minLength":1,"maxLength":500}}},
   "required":["schema_version","review_batch_sha256","aggregate_candidate_sha256","batch_index","batch_count","provider_id","model_id","reasoning_effort","decision","blocking_findings","non_blocking_findings","validation_evidence_sha256","reviewed_entries","review_summary","interfaces_and_dependencies"],
-  "$defs":{"digest":{"type":"string","pattern":"^[0-9a-f]{64}$"},"path":{"type":"string","minLength":1,"maxLength":240},"classification":{"type":"string","enum":["ordinary_source","test_or_validation_input","project_configuration"]},"file":{"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","const":"file"},"path":{"$ref":"#/$defs/path"},"content_sha256":{"$ref":"#/$defs/digest"},"classification":{"$ref":"#/$defs/classification"}},"required":["kind","path","content_sha256","classification"]},"asset":{"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","const":"asset"},"path":{"$ref":"#/$defs/path"},"content_sha256":{"$ref":"#/$defs/digest"},"media_type":{"type":"string","enum":["image/png","image/jpeg"]},"width":{"type":"integer","minimum":2,"maximum":4096},"height":{"type":"integer","minimum":2,"maximum":4096},"classification":{"$ref":"#/$defs/classification"}},"required":["kind","path","content_sha256","media_type","width","height","classification"]},"finding":{"type":"object","additionalProperties":false,"properties":{"finding_id":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9][A-Za-z0-9._-]*$"},"path":{"$ref":"#/$defs/path"},"message":{"type":"string","minLength":1,"maxLength":1000}},"required":["finding_id","path","message"]}}
+  "$defs":{"digest":{"type":"string","pattern":"^[0-9a-f]{64}$"},"path":{"type":"string","minLength":1,"maxLength":240},"classification":{"type":"string","enum":["ordinary_source","test_or_validation_input","project_configuration"]},"write_file":{"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","const":"file"},"path":{"$ref":"#/$defs/path"},"content_sha256":{"$ref":"#/$defs/digest"},"classification":{"$ref":"#/$defs/classification"}},"required":["kind","path","content_sha256","classification"]},"delete_file":{"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","const":"file"},"path":{"$ref":"#/$defs/path"},"before_sha256":{"$ref":"#/$defs/digest"},"publication_before_sha256":{"anyOf":[{"$ref":"#/$defs/digest"},{"type":"null"}]},"content_sha256":{"$ref":"#/$defs/digest"},"delete":{"type":"boolean","const":true},"classification":{"$ref":"#/$defs/classification"}},"required":["kind","path","before_sha256","publication_before_sha256","content_sha256","delete","classification"]},"asset":{"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","const":"asset"},"path":{"$ref":"#/$defs/path"},"content_sha256":{"$ref":"#/$defs/digest"},"media_type":{"type":"string","enum":["image/png","image/jpeg"]},"width":{"type":"integer","minimum":2,"maximum":4096},"height":{"type":"integer","minimum":2,"maximum":4096},"classification":{"$ref":"#/$defs/classification"}},"required":["kind","path","content_sha256","media_type","width","height","classification"]},"finding":{"type":"object","additionalProperties":false,"properties":{"finding_id":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9][A-Za-z0-9._-]*$"},"path":{"$ref":"#/$defs/path"},"message":{"type":"string","minLength":1,"maxLength":1000}},"required":["finding_id","path","message"]}}
 }"##;
 
 const AGGREGATE_OUTPUT_SCHEMA: &str = r##"{
   "$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,
   "properties":{"schema_version":{"type":"integer","const":2},"review_packet_sha256":{"$ref":"#/$defs/digest"},"provider_id":{"type":"string","const":"openai.codex"},"model_id":{"type":"string","const":"gpt-5.6-sol"},"reasoning_effort":{"type":"string","const":"high"},"decision":{"type":"string","enum":["approved","rejected"]},"blocking_findings":{"type":"array","maxItems":64,"items":{"$ref":"#/$defs/finding"}},"non_blocking_findings":{"type":"array","maxItems":64,"items":{"$ref":"#/$defs/finding"}},"validation_evidence_sha256":{"$ref":"#/$defs/digest"},"reviewed_manifest_sha256":{"$ref":"#/$defs/digest"},"reviewed_entry_count":{"type":"integer","minimum":1,"maximum":320},"ordered_batch_receipt_sha256s":{"type":"array","minItems":1,"maxItems":8,"items":{"$ref":"#/$defs/digest"}}},
   "required":["schema_version","review_packet_sha256","provider_id","model_id","reasoning_effort","decision","blocking_findings","non_blocking_findings","validation_evidence_sha256","reviewed_manifest_sha256","reviewed_entry_count","ordered_batch_receipt_sha256s"],
-  "$defs":{"digest":{"type":"string","pattern":"^[0-9a-f]{64}$"},"path":{"type":"string","minLength":1,"maxLength":240},"classification":{"type":"string","enum":["ordinary_source","test_or_validation_input","project_configuration"]},"file":{"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","const":"file"},"path":{"$ref":"#/$defs/path"},"content_sha256":{"$ref":"#/$defs/digest"},"classification":{"$ref":"#/$defs/classification"}},"required":["kind","path","content_sha256","classification"]},"asset":{"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","const":"asset"},"path":{"$ref":"#/$defs/path"},"content_sha256":{"$ref":"#/$defs/digest"},"media_type":{"type":"string","enum":["image/png","image/jpeg"]},"width":{"type":"integer","minimum":2,"maximum":4096},"height":{"type":"integer","minimum":2,"maximum":4096},"classification":{"$ref":"#/$defs/classification"}},"required":["kind","path","content_sha256","media_type","width","height","classification"]},"finding":{"type":"object","additionalProperties":false,"properties":{"finding_id":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9][A-Za-z0-9._-]*$"},"path":{"$ref":"#/$defs/path"},"message":{"type":"string","minLength":1,"maxLength":1000}},"required":["finding_id","path","message"]}}
+  "$defs":{"digest":{"type":"string","pattern":"^[0-9a-f]{64}$"},"path":{"type":"string","minLength":1,"maxLength":240},"classification":{"type":"string","enum":["ordinary_source","test_or_validation_input","project_configuration"]},"write_file":{"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","const":"file"},"path":{"$ref":"#/$defs/path"},"content_sha256":{"$ref":"#/$defs/digest"},"classification":{"$ref":"#/$defs/classification"}},"required":["kind","path","content_sha256","classification"]},"delete_file":{"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","const":"file"},"path":{"$ref":"#/$defs/path"},"before_sha256":{"$ref":"#/$defs/digest"},"publication_before_sha256":{"anyOf":[{"$ref":"#/$defs/digest"},{"type":"null"}]},"content_sha256":{"$ref":"#/$defs/digest"},"delete":{"type":"boolean","const":true},"classification":{"$ref":"#/$defs/classification"}},"required":["kind","path","before_sha256","publication_before_sha256","content_sha256","delete","classification"]},"asset":{"type":"object","additionalProperties":false,"properties":{"kind":{"type":"string","const":"asset"},"path":{"$ref":"#/$defs/path"},"content_sha256":{"$ref":"#/$defs/digest"},"media_type":{"type":"string","enum":["image/png","image/jpeg"]},"width":{"type":"integer","minimum":2,"maximum":4096},"height":{"type":"integer","minimum":2,"maximum":4096},"classification":{"$ref":"#/$defs/classification"}},"required":["kind","path","content_sha256","media_type","width","height","classification"]},"finding":{"type":"object","additionalProperties":false,"properties":{"finding_id":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9][A-Za-z0-9._-]*$"},"path":{"$ref":"#/$defs/path"},"message":{"type":"string","minLength":1,"maxLength":1000}},"required":["finding_id","path","message"]}}
 }"##;
 
 fn selected_review_schema(schema: &str, model: &str, reasoning_effort: &str) -> Result<String> {
@@ -1777,7 +1937,13 @@ impl DeveloperReviewer {
                 .map(|file| {
                     DeveloperReviewedEntry::File(DeveloperReviewedFile {
                         path: file.path.clone(),
+                        before_sha256: file.delete.then(|| file.before_sha256.clone()).flatten(),
+                        publication_before_sha256: file
+                            .delete
+                            .then(|| file.publication_before_sha256.clone())
+                            .flatten(),
                         content_sha256: file.content_sha256.clone(),
+                        delete: file.delete,
                         classification: file.classification.clone(),
                     })
                 })
@@ -3306,8 +3472,11 @@ mod tests {
             files: vec![DeveloperReviewFile {
                 path: "app.py".into(),
                 before_sha256: None,
+                publication_before_sha256: None,
                 content_sha256: hex_digest(b"def add(a, b): return a + b\n"),
                 content: "def add(a, b): return a + b\n".into(),
+                delete: false,
+                before_text: None,
                 classification: "ordinary_source".into(),
             }],
         }
@@ -3321,8 +3490,11 @@ mod tests {
         packet.files.push(DeveloperReviewFile {
             path: "tests/test_app.py".into(),
             before_sha256: Some(hex_digest(b"old test bytes")),
+            publication_before_sha256: None,
             content_sha256: hex_digest(b"def test_add(): assert add(1, 2) == 3\n"),
             content: "def test_add(): assert add(1, 2) == 3\n".into(),
+            delete: false,
+            before_text: None,
             classification: "test_or_validation_input".into(),
         });
         packet
@@ -3384,7 +3556,16 @@ mod tests {
                     .map(|file| {
                         DeveloperReviewedEntry::File(DeveloperReviewedFile {
                             path: file.path.clone(),
+                            before_sha256: file
+                                .delete
+                                .then(|| file.before_sha256.clone())
+                                .flatten(),
+                            publication_before_sha256: file
+                                .delete
+                                .then(|| file.publication_before_sha256.clone())
+                                .flatten(),
                             content_sha256: file.content_sha256.clone(),
+                            delete: file.delete,
                             classification: file.classification.clone(),
                         })
                     })
@@ -3496,17 +3677,72 @@ mod tests {
         }
         assert!(items.get("oneOf").is_none());
         let branches = items["anyOf"].as_array().unwrap();
-        assert_eq!(branches.len(), 2);
-        assert_eq!(branches[0]["$ref"], "#/$defs/file");
-        assert_eq!(branches[1]["$ref"], "#/$defs/asset");
+        assert_eq!(branches.len(), 3);
+        assert_eq!(branches[0]["$ref"], "#/$defs/write_file");
+        assert_eq!(branches[1]["$ref"], "#/$defs/delete_file");
+        assert_eq!(branches[2]["$ref"], "#/$defs/asset");
         assert_eq!(
-            schema["$defs"]["file"]["properties"]["kind"]["const"],
+            schema["$defs"]["write_file"]["properties"]["kind"]["const"],
             "file"
+        );
+        assert_eq!(
+            schema["$defs"]["delete_file"]["properties"]["delete"]["const"],
+            true
         );
         assert_eq!(
             schema["$defs"]["asset"]["properties"]["kind"]["const"],
             "asset"
         );
+        assert_eq!(
+            schema["$defs"]["delete_file"]["properties"]["publication_before_sha256"]["anyOf"][1]
+                ["type"],
+            "null"
+        );
+    }
+
+    #[test]
+    fn provider_schema_objects_require_every_declared_property() {
+        fn assert_strict_objects(value: &Value, path: &str) {
+            match value {
+                Value::Object(object) => {
+                    if object.get("type").and_then(Value::as_str) == Some("object") {
+                        assert_eq!(
+                            object.get("additionalProperties").and_then(Value::as_bool),
+                            Some(false),
+                            "object schema at {path} must reject extra properties"
+                        );
+                        let properties = object["properties"].as_object().unwrap();
+                        let required = object["required"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|value| value.as_str().unwrap())
+                            .collect::<BTreeSet<_>>();
+                        assert_eq!(
+                            required,
+                            properties.keys().map(String::as_str).collect(),
+                            "object schema at {path} must require every property"
+                        );
+                    }
+                    for (key, nested) in object {
+                        assert_strict_objects(nested, &format!("{path}/{key}"));
+                    }
+                }
+                Value::Array(values) => {
+                    for (index, nested) in values.iter().enumerate() {
+                        assert_strict_objects(nested, &format!("{path}/{index}"));
+                    }
+                }
+                _ => {}
+            }
+        }
+        for (name, schema) in [
+            ("legacy", OUTPUT_SCHEMA),
+            ("batch", BATCH_OUTPUT_SCHEMA),
+            ("aggregate", AGGREGATE_OUTPUT_SCHEMA),
+        ] {
+            assert_strict_objects(&serde_json::from_str(schema).unwrap(), name);
+        }
     }
 
     #[test]
@@ -3630,6 +3866,108 @@ mod tests {
     }
 
     #[test]
+    fn write_only_review_keeps_legacy_packet_and_manifest_serialization() {
+        let packet = spark_packet();
+        let canonical_bytes = packet.canonical_bytes().unwrap();
+        assert_eq!(packet.sha256().unwrap(), hex_digest(&canonical_bytes));
+        let canonical: Value = serde_json::from_slice(&canonical_bytes).unwrap();
+        assert!(canonical["files"][0].get("delete").is_none());
+        assert!(canonical["files"][0].get("before_text").is_none());
+        let set = DeveloperReviewBatchSet::new(packet, vec![]).unwrap();
+        let legacy_binding = serde_json::to_vec(&DeveloperReviewCandidateBinding {
+            schema_version: 2,
+            packet: &set.packet,
+            assets: &set.assets,
+        })
+        .unwrap();
+        assert_eq!(set.aggregate_candidate_sha256, hex_digest(&legacy_binding));
+        let manifest = serde_json::to_value(&set.candidate_manifest).unwrap();
+        let first = &manifest.as_array().unwrap()[0];
+        assert!(first.get("delete").is_none());
+        assert!(first.get("before_sha256").is_none());
+        set.validate().unwrap();
+    }
+
+    #[test]
+    fn deletion_review_binds_complete_prior_text_operation_and_digest_domain() {
+        let mut deletion = packet();
+        let legacy_digest = deletion.sha256().unwrap();
+        let publication_before = "<html>remote base output</html>\n";
+        let before = "<html>obsolete generated output</html>\n";
+        deletion.schema_version = 2;
+        deletion.files[0].before_sha256 = Some(hex_digest(before.as_bytes()));
+        deletion.files[0].publication_before_sha256 =
+            Some(hex_digest(publication_before.as_bytes()));
+        deletion.files[0].content_sha256 = hex_digest(b"");
+        deletion.files[0].content.clear();
+        deletion.files[0].delete = true;
+        deletion.files[0].before_text = Some(before.into());
+        assert_ne!(deletion.sha256().unwrap(), legacy_digest);
+
+        let set = DeveloperReviewBatchSet::new(deletion.clone(), vec![]).unwrap();
+        assert_eq!(set.candidate_manifest.len(), 1);
+        let manifest = serde_json::to_value(&set.candidate_manifest).unwrap();
+        assert_eq!(manifest[0]["kind"], "file");
+        assert_eq!(manifest[0]["delete"], true);
+        assert_eq!(
+            manifest[0]["before_sha256"],
+            deletion.files[0].before_sha256.as_deref().unwrap()
+        );
+        assert_eq!(
+            manifest[0]["publication_before_sha256"],
+            deletion.files[0]
+                .publication_before_sha256
+                .as_deref()
+                .unwrap()
+        );
+        assert!(set.batches[0].files[0]
+            .before_text
+            .as_deref()
+            .is_some_and(|text| text == before));
+        let receipts = batch_receipts(&set);
+        receipts[0].validate_exact(&set.batches[0]).unwrap();
+
+        let mut old_schema = deletion.clone();
+        old_schema.schema_version = 1;
+        assert!(DeveloperReviewBatchSet::new(old_schema, vec![]).is_err());
+        let mut stale_prior = deletion.clone();
+        stale_prior.files[0].before_text = Some("different prior text\n".into());
+        assert!(DeveloperReviewBatchSet::new(stale_prior, vec![]).is_err());
+        let mut changed_publication_baseline = deletion.clone();
+        changed_publication_baseline.files[0].publication_before_sha256 =
+            Some(hex_digest(b"different remote baseline"));
+        assert_ne!(
+            changed_publication_baseline.sha256().unwrap(),
+            deletion.sha256().unwrap()
+        );
+        let mut publication_baseline_tamper = receipts[0].clone();
+        match &mut publication_baseline_tamper.reviewed_entries[0] {
+            DeveloperReviewedEntry::File(file) => {
+                file.publication_before_sha256 = Some(hex_digest(b"tampered remote baseline"))
+            }
+            DeveloperReviewedEntry::Asset(_) => unreachable!(),
+        }
+        assert!(publication_baseline_tamper
+            .validate_exact(&set.batches[0])
+            .is_err());
+        let mut operation_tamper = receipts[0].clone();
+        match &mut operation_tamper.reviewed_entries[0] {
+            DeveloperReviewedEntry::File(file) => file.delete = false,
+            DeveloperReviewedEntry::Asset(_) => unreachable!(),
+        }
+        assert!(operation_tamper.validate_exact(&set.batches[0]).is_err());
+
+        let mut net_new_deletion = deletion;
+        net_new_deletion.files[0].publication_before_sha256 = None;
+        let net_new_set = DeveloperReviewBatchSet::new(net_new_deletion, vec![]).unwrap();
+        assert!(
+            serde_json::to_value(&net_new_set.candidate_manifest).unwrap()[0]
+                ["publication_before_sha256"]
+                .is_null()
+        );
+    }
+
+    #[test]
     fn batch_set_partitions_every_entry_and_keeps_asset_bytes_out_of_text() {
         let mut packet = packet();
         packet.files.clear();
@@ -3638,8 +3976,11 @@ mod tests {
             packet.files.push(DeveloperReviewFile {
                 path: format!("src/file-{index:03}.js"),
                 before_sha256: None,
+                publication_before_sha256: None,
                 content_sha256: hex_digest(content.as_bytes()),
                 content,
+                delete: false,
+                before_text: None,
                 classification: "ordinary_source".into(),
             });
         }
@@ -3711,8 +4052,11 @@ mod tests {
             packet.files.push(DeveloperReviewFile {
                 path: format!("src/{index:02}.py"),
                 before_sha256: None,
+                publication_before_sha256: None,
                 content_sha256: hex_digest(content.as_bytes()),
                 content,
+                delete: false,
+                before_text: None,
                 classification: "ordinary_source".into(),
             });
         }

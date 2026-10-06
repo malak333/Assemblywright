@@ -48,6 +48,8 @@ pub(super) struct CandidateFile {
     pub before_sha256: Option<String>,
     pub content_sha256: String,
     pub content: Vec<u8>,
+    pub delete: bool,
+    pub before_text: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1032,28 +1034,54 @@ impl Runtime {
         }
         for file in &input.files {
             let target = checked_candidate_path(&checkout, &file.path)?;
-            let current = fs::read(&target).ok();
-            match (&file.before_sha256, current.as_deref()) {
-                (None, None) => {}
-                (None, Some(_)) => bail!(
-                    "Reviewed new file {} already exists in the remote base",
-                    file.path
-                ),
-                (Some(expected), Some(bytes)) if sha256(bytes) == *expected => {}
-                (Some(_), Some(_)) => bail!(
-                    "Remote base content for {} differs from the reviewed original hash",
-                    file.path
-                ),
-                (Some(_), None) => bail!(
-                    "Reviewed original file {} is absent from the remote base",
-                    file.path
-                ),
-            }
+            let current = match fs::symlink_metadata(&target) {
+                Ok(metadata) => {
+                    if metadata.file_type().is_symlink() || !metadata.is_file() {
+                        bail!(
+                            "Publication target {} is not a direct regular file",
+                            file.path
+                        );
+                    }
+                    Some(fs::read(&target).with_context(|| {
+                        format!("Could not read reviewed remote-base file {}", file.path)
+                    })?)
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error.into()),
+            };
+            validate_candidate_baseline(file, current.as_deref())?;
             if sha256(&file.content) != file.content_sha256 {
                 bail!(
                     "Reviewed candidate bytes for {} changed before publication",
                     file.path
                 );
+            }
+            if file.delete {
+                file.before_text
+                    .as_ref()
+                    .context("Reviewed deletion is missing its complete immediate prior text")?;
+                let target = checked_candidate_path(&checkout, &file.path)?;
+                let metadata = fs::symlink_metadata(&target)?;
+                if metadata.file_type().is_symlink()
+                    || !metadata.is_file()
+                    || sha256(&fs::read(&target)?)
+                        != file.before_sha256.as_deref().unwrap_or_default()
+                {
+                    bail!(
+                        "Reviewed deletion target {} changed before removal",
+                        file.path
+                    );
+                }
+                fs::remove_file(&target)?;
+                match fs::symlink_metadata(&target) {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Ok(_) => bail!(
+                        "Reviewed deletion target {} remained after removal",
+                        file.path
+                    ),
+                    Err(error) => return Err(error.into()),
+                }
+                continue;
             }
             if let Some(parent) = target.parent() {
                 fs::create_dir_all(parent)?;
@@ -1081,7 +1109,7 @@ impl Runtime {
         if changed != expected {
             bail!("Private checkout changed set does not exactly match the reviewed file set");
         }
-        let mut add_args = vec!["add", "--"];
+        let mut add_args = vec!["add", "-A", "--"];
         add_args.extend(input.files.iter().map(|file| file.path.as_str()));
         self.command(
             &self.git,
@@ -1094,6 +1122,45 @@ impl Runtime {
         )
         .await?;
         for file in &input.files {
+            if file.delete {
+                let index = self
+                    .command(
+                        &self.git,
+                        &["ls-files", "--stage", "-z", "--", &file.path],
+                        Some(&checkout),
+                        cancellation,
+                        &[0],
+                        COMMAND_TIMEOUT,
+                        true,
+                    )
+                    .await?;
+                if !index.stdout.is_empty() {
+                    bail!("Reviewed deletion {} remained in the Git index", file.path);
+                }
+                let deleted = self
+                    .command(
+                        &self.git,
+                        &[
+                            "diff",
+                            "--cached",
+                            "--name-only",
+                            "-z",
+                            "--diff-filter=D",
+                            "--",
+                            &file.path,
+                        ],
+                        Some(&checkout),
+                        cancellation,
+                        &[0],
+                        COMMAND_TIMEOUT,
+                        true,
+                    )
+                    .await?;
+                if parse_name_only_paths(&deleted.stdout)? != BTreeSet::from([file.path.clone()]) {
+                    bail!("Reviewed deletion {} was not staged exactly", file.path);
+                }
+                continue;
+            }
             let index_path = format!(":{}", file.path);
             let blob = self
                 .command(
@@ -1121,7 +1188,7 @@ impl Runtime {
                     "--cached",
                     "--name-only",
                     "-z",
-                    "--diff-filter=ACMRTUXB",
+                    "--diff-filter=ACDMRTUXB",
                 ],
                 Some(&checkout),
                 cancellation,
@@ -2618,17 +2685,53 @@ fn validate_candidate_files(files: &[CandidateFile]) -> Result<()> {
         if let Some(before) = &file.before_sha256 {
             validate_sha256(before)?;
         }
-        if sha256(&file.content) != file.content_sha256 {
+        // A deletion has two intentionally distinct baselines. before_sha256
+        // binds the connected repository's remote base, while before_text is
+        // the immediate local text reviewed before deletion. The frozen
+        // review-to-publication handoff validates the latter against its own
+        // digest before constructing this input.
+        let deletion_binding_valid = if file.delete {
+            file.before_sha256.is_some()
+                && file.before_text.is_some()
+                && file.content.is_empty()
+                && file.content_sha256 == sha256(b"")
+        } else {
+            file.before_text.is_none()
+        };
+        if sha256(&file.content) != file.content_sha256 || !deletion_binding_valid {
             bail!("Publication candidate content hash is invalid");
         }
         total_bytes = total_bytes
             .checked_add(file.content.len())
+            .and_then(|total| total.checked_add(file.before_text.as_ref().map_or(0, String::len)))
             .context("Publication candidate size overflow")?;
         if total_bytes > 40 * 1024 * 1024 {
             bail!("Publication candidate exceeds its byte bound");
         }
     }
     Ok(())
+}
+
+fn validate_candidate_baseline(file: &CandidateFile, current: Option<&[u8]>) -> Result<()> {
+    // Publication compares only the original remote baseline here. The
+    // immediate pre-deletion text can differ after earlier cumulative edits.
+    match (&file.before_sha256, current) {
+        (None, None) if !file.delete => Ok(()),
+        (None, None) => bail!("Reviewed deletion {} has no original file", file.path),
+        (None, Some(_)) => bail!(
+            "Reviewed new file {} already exists in the remote base",
+            file.path
+        ),
+        (Some(expected), Some(bytes)) if sha256(bytes) == *expected => Ok(()),
+        (Some(_), Some(_)) => bail!(
+            "Remote base content for {} differs from the reviewed original hash",
+            file.path
+        ),
+        (Some(_), None) => bail!(
+            "Reviewed original file {} is absent from the remote base",
+            file.path
+        ),
+    }
 }
 
 fn validate_pull_request_text(title: &str, body: &str) -> Result<()> {
@@ -3102,6 +3205,8 @@ mod tests {
             before_sha256: None,
             content_sha256: sha256(b"new"),
             content: b"new".to_vec(),
+            delete: false,
+            before_text: None,
         };
         assert!(validate_candidate_files(std::slice::from_ref(&valid)).is_ok());
         let mut drifted = valid.clone();
@@ -3110,7 +3215,210 @@ mod tests {
         let mut git = valid.clone();
         git.path = ".git/config".into();
         assert!(validate_candidate_files(&[git]).is_err());
+        let before = "generated output\n";
+        let deletion = CandidateFile {
+            path: "dist/obsolete.html".into(),
+            before_sha256: Some(sha256(before.as_bytes())),
+            content_sha256: sha256(b""),
+            content: Vec::new(),
+            delete: true,
+            before_text: Some(before.into()),
+        };
+        assert!(validate_candidate_files(std::slice::from_ref(&deletion)).is_ok());
+        let mut missing_immediate_prior = deletion.clone();
+        missing_immediate_prior.before_text = None;
+        assert!(validate_candidate_files(&[missing_immediate_prior]).is_err());
+        let mut empty_write_masquerade = deletion;
+        empty_write_masquerade.delete = false;
+        assert!(validate_candidate_files(&[empty_write_masquerade]).is_err());
         assert!(validate_candidate_files(&[]).is_err());
+    }
+
+    #[test]
+    fn deletion_baseline_uses_remote_base_hash_independently_of_immediate_review_text() {
+        let remote_before = "remote base text\n";
+        let immediate_before = "locally revised text reviewed before deletion\n";
+        let deletion = CandidateFile {
+            path: "dist/obsolete.txt".into(),
+            before_sha256: Some(sha256(remote_before.as_bytes())),
+            content_sha256: sha256(b""),
+            content: Vec::new(),
+            delete: true,
+            before_text: Some(immediate_before.into()),
+        };
+        validate_candidate_baseline(&deletion, Some(remote_before.as_bytes())).unwrap();
+        assert!(validate_candidate_baseline(&deletion, Some(b"stale\n")).is_err());
+        assert!(validate_candidate_baseline(&deletion, None).is_err());
+        assert!(validate_candidate_baseline(&deletion, Some(&[0xff, 0xfe])).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn candidate_path_rejects_symbolic_target_and_parent() {
+        use std::os::unix::fs::symlink;
+        let root = std::env::temp_dir().join(format!(
+            "assemblywright-publication-link-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let outside = root.with_extension("outside");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("file.txt"), b"outside").unwrap();
+        symlink(&outside, root.join("linked-parent")).unwrap();
+        symlink(outside.join("file.txt"), root.join("linked-file.txt")).unwrap();
+        assert!(checked_candidate_path(&root, "linked-parent/file.txt").is_err());
+        assert!(checked_candidate_path(&root, "linked-file.txt").is_err());
+        fs::remove_dir_all(&root).unwrap();
+        fs::remove_dir_all(&outside).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn publication_stages_reviewed_text_deletion_as_git_d_and_index_absence() {
+        use std::os::unix::fs::PermissionsExt;
+        fn run_git(cwd: &Path, args: &[&str]) -> std::process::Output {
+            let output = std::process::Command::new("git")
+                .args(args)
+                .current_dir(cwd)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&output.stderr)
+            );
+            output
+        }
+
+        let root = std::env::temp_dir().join(format!(
+            "assemblywright-publication-delete-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let source = root.join("source");
+        let remote = root.join("remote.git");
+        let data = root.join("data");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&data).unwrap();
+        run_git(&source, &["init", "--initial-branch=main"]);
+        run_git(&source, &["config", "user.name", "Assemblywright Test"]);
+        run_git(
+            &source,
+            &["config", "user.email", "assemblywright@example.invalid"],
+        );
+        let remote_before = "remote base generated output\n";
+        fs::write(source.join("obsolete.html"), remote_before).unwrap();
+        run_git(&source, &["add", "--", "obsolete.html"]);
+        run_git(&source, &["commit", "-m", "base"]);
+        run_git(
+            &root,
+            &[
+                "clone",
+                "--bare",
+                source.to_str().unwrap(),
+                remote.to_str().unwrap(),
+            ],
+        );
+
+        let git = resolve_executable(None, "git").unwrap();
+        let test_git = data.join("git-test-wrapper");
+        fs::write(
+            &test_git,
+            format!(
+                "#!/bin/sh\nexec env GIT_CONFIG_COUNT=0 '{}' \"$@\"\n",
+                git.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&test_git, fs::Permissions::from_mode(0o700)).unwrap();
+        let test_git = fs::canonicalize(test_git).unwrap();
+        let checkout_root = data.join("developer-publication-checkouts");
+        let empty_hooks = data.join("developer-publication-empty-hooks");
+        fs::create_dir_all(&checkout_root).unwrap();
+        fs::create_dir_all(&empty_hooks).unwrap();
+        let runtime = Runtime {
+            git: test_git,
+            gh: git,
+            checkout_root: fs::canonicalize(checkout_root).unwrap(),
+            empty_hooks: fs::canonicalize(empty_hooks).unwrap(),
+        };
+        let feature_id = "a8e78ac7-c9a9-47f0-92dc-b35777880967";
+        let deletion = CandidateFile {
+            path: "obsolete.html".into(),
+            before_sha256: Some(sha256(remote_before.as_bytes())),
+            content_sha256: sha256(b""),
+            content: Vec::new(),
+            delete: true,
+            before_text: Some("locally revised output reviewed before deletion\n".into()),
+        };
+        let input = PublicationInput {
+            feature_id: feature_id.into(),
+            title: "Delete obsolete output".into(),
+            body: "Removes exact reviewed generated output.".into(),
+            binding: ProjectBinding {
+                project: "demo".into(),
+                repository_url: remote.to_string_lossy().into_owned(),
+                repository_slug: "owner/repo".into(),
+                base_branch: "main".into(),
+                required_checks: vec![RequiredCheck {
+                    context: "release-local".into(),
+                    integration_id: Some(42),
+                }],
+                strict_required_checks: true,
+            },
+            files: vec![deletion],
+        };
+        let mut record = PublicationRecord {
+            schema_version: 1,
+            status: "pending".into(),
+            stage: "prepare_candidate".into(),
+            message: "pending".into(),
+            repository_url: input.binding.repository_url.clone(),
+            repository_slug: input.binding.repository_slug.clone(),
+            base_branch: "main".into(),
+            feature_branch: format!("codex/feature-{feature_id}"),
+            started_unix_seconds: 1_700_000_000,
+            author_name: Some("Assemblywright Test".into()),
+            author_email: Some("assemblywright@example.invalid".into()),
+            base_sha: None,
+            candidate_tree_sha: None,
+            commit_sha: None,
+            pr_number: None,
+            pr_url: None,
+            merged_sha: None,
+            required_checks: input.binding.required_checks.clone(),
+            strict_required_checks: true,
+            events: Vec::new(),
+        };
+        let cancellation = AtomicU8::new(0);
+        runtime
+            .prepare_candidate(&input, &mut record, &cancellation, &mut |_| Ok(()))
+            .await
+            .unwrap();
+
+        let checkout = runtime.checkout_root.join(feature_id);
+        assert!(!checkout.join("obsolete.html").exists());
+        let indexed = run_git(&checkout, &["ls-tree", "-r", "--name-only", "HEAD"]);
+        assert!(!String::from_utf8(indexed.stdout)
+            .unwrap()
+            .lines()
+            .any(|path| path == "obsolete.html"));
+        let deleted = run_git(
+            &checkout,
+            &[
+                "diff-tree",
+                "--no-commit-id",
+                "--name-status",
+                "-r",
+                "HEAD^",
+                "HEAD",
+            ],
+        );
+        assert_eq!(
+            String::from_utf8(deleted.stdout).unwrap(),
+            "D\tobsolete.html\n"
+        );
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
@@ -3135,6 +3443,8 @@ mod tests {
                 before_sha256: None,
                 content_sha256: sha256(b"ok"),
                 content: b"ok".to_vec(),
+                delete: false,
+                before_text: None,
             }],
         };
         let mut record = PublicationRecord::pending(&input).unwrap();
@@ -3237,6 +3547,8 @@ mod tests {
                 before_sha256: None,
                 content_sha256: sha256(b"ok"),
                 content: b"ok".to_vec(),
+                delete: false,
+                before_text: None,
             }],
         };
         let mut record = PublicationRecord::pending(&input).unwrap();

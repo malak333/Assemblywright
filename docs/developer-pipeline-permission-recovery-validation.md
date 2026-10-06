@@ -145,3 +145,19 @@ local source validation and installed source parity remain distinct proof layers
   before merge. The final publication result is recorded by GitHub and the
   parent closeout. Live feature acceptance remains unproven at the timestamped
   snapshot and is separate from application-source publication.
+
+
+## Subsequent receipt and publication
+
+All three required hosted gates passed on final head
+`9b788a4d69e4671a22d2727c56c06b082f252145`. PR #432 was merged normally on
+October 6 at 10:53:44 UTC; merge commit
+`de42e35a869bff6860547820e91a1fc206609e21` contains that reviewed head.
+The next authenticated observation at 11:13:40 UTC retained FFT at
+`escalation_5_unavailable`, with all prior counters and history. The full private
+feature-record SHA-256 was
+`55694d4cdf139667508471c5f4ad96345e42cb54ddcfd8d21fbafcde03041e2a`.
+The failed staged proposal had removed obsolete HTML pages that the write/image
+candidate contract could not admit. That subsequent boundary is addressed in
+[the generated-output recovery phase](developer-generated-output-recovery-validation.md).
+The published permission fix does not establish FFT acceptance.

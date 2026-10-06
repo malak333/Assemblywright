@@ -71,6 +71,9 @@ const OPENCODE_MODEL_CONTEXT_TOKENS: u64 = 262_144;
 const OPENCODE_MODEL_OUTPUT_TOKENS: u64 = 32_768;
 const OPENCODE_FEATURE_TIMEOUT_SECS: u64 = 1_800;
 const OPENCODE_CHAT_TIMEOUT_SECS: u64 = 900;
+pub(crate) const DELETION_MUTATION_SUMMARY_SCHEMA_VERSION: u64 = 2;
+pub(crate) const DELETION_MUTATION_SUMMARY_DOMAIN: &str =
+    "assemblywright-developer-stage-mutation-summary-v2";
 const OPENCODE_EVENT_STREAM_FAILURE: &str = "OpenCode event stream failed";
 const OPENCODE_SESSION_TIMEOUT_FAILURE: &str = "OpenCode project tool session timed out";
 pub(crate) const OPENCODE_PENDING_APPROVAL_SESSION_FAILURE: &str = "OpenCode stopped while waiting for owner approval of an exact tool action. The action was not approved or replayed. Review the interrupted action and project tool access, then start a fresh request.";
@@ -258,6 +261,14 @@ pub(crate) struct ToolMutationEdit {
     pub(crate) after: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) asset: Option<ToolMutationAsset>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) delete: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) before_text: Option<String>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -283,6 +294,15 @@ struct ProjectFileSnapshot {
     sha256: String,
     text: Option<String>,
     asset: Option<ToolMutationAsset>,
+    reviewable_delete: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CaptureFileIdentity {
+    volume: u64,
+    file: u64,
+    link_count: u64,
+    trustworthy: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1273,6 +1293,8 @@ impl DeveloperTools {
         let (approval_tx, mut approval_rx) = mpsc::unbounded_channel();
         let access =
             self.reserve_runtime_slot(&request, request_stage.as_ref(), cancel_tx, approval_tx)?;
+        let reviewable_deletion_authorized =
+            deletion_evidence_authorized(&access, request_stage.as_ref());
         let execution_binding = match (|| -> Result<_> {
             if let Some(stage) = &request_stage {
                 let runtime_sha256 = verify_runtime_executable(&runtime.executable)?;
@@ -1347,7 +1369,12 @@ impl DeveloperTools {
             request_stage.is_some(),
         ) {
             Ok(after) => {
-                if let Err(error) = self.record_project_mutation(&request, &before, &after) {
+                if let Err(error) = self.record_project_mutation(
+                    &request,
+                    &before,
+                    &after,
+                    reviewable_deletion_authorized,
+                ) {
                     if self.record_uncertain_mutation(&request).is_err() {
                         self.latch_attention(
                             "Project mutation evidence could not be persisted after tool execution.",
@@ -1499,6 +1526,7 @@ impl DeveloperTools {
         request: &ToolChatRequest,
         before: &BTreeMap<String, ProjectFileSnapshot>,
         after: &BTreeMap<String, ProjectFileSnapshot>,
+        reviewable_deletion_authorized: bool,
     ) -> Result<()> {
         let mut paths = BTreeSet::new();
         paths.extend(before.keys().cloned());
@@ -1518,6 +1546,8 @@ impl DeveloperTools {
                         before_sha256: old.map(|file| file.sha256.clone()),
                         after: new.text.clone(),
                         asset: None,
+                        delete: false,
+                        before_text: None,
                     });
                 }
                 (old, Some(new)) if new.asset.is_some() && !sensitive_path(&path) => {
@@ -1526,6 +1556,24 @@ impl DeveloperTools {
                         before_sha256: old.map(|file| file.sha256.clone()),
                         after: None,
                         asset: new.asset.clone(),
+                        delete: false,
+                        before_text: None,
+                    });
+                }
+                (Some(old), None)
+                    if reviewable_deletion_authorized
+                        && old.reviewable_delete
+                        && old.text.is_some()
+                        && !sensitive_path(&path)
+                        && !protected_tool_path(&path, &request.forbidden_write_paths) =>
+                {
+                    edits.push(ToolMutationEdit {
+                        path,
+                        before_sha256: Some(old.sha256.clone()),
+                        after: None,
+                        asset: None,
+                        delete: true,
+                        before_text: old.text.clone(),
                     });
                 }
                 _ => unreviewable_paths.push(path),
@@ -2006,6 +2054,10 @@ fn tool_python_bytecode_cache(
     Ok(cache)
 }
 
+fn deletion_evidence_authorized(access: &AccessState, stage: Option<&ToolStageBinding>) -> bool {
+    access.mode == ToolAccessMode::Full && stage.is_some_and(|stage| stage.proposal_id.is_some())
+}
+
 fn validate_runtime_config(runtime: &OpenCodeRuntimeConfig) -> Result<()> {
     if !runtime.executable.is_absolute() || !runtime.data_dir.is_absolute() {
         bail!("OpenCode executable and data directory must be absolute");
@@ -2121,9 +2173,11 @@ fn capture_project_with_limits_and_byte_cancellation(
         cancellation,
         byte_cancellation,
     };
+    let root_directory = open_capture_directory(root)?;
     capture_walk(
         root,
         root,
+        &root_directory,
         &mut output,
         0,
         &mut captured_asset_bytes,
@@ -2174,6 +2228,7 @@ impl MutationCaptureBudget<'_> {
 fn capture_walk(
     root: &Path,
     directory: &Path,
+    directory_handle: &fs::File,
     output: &mut BTreeMap<String, ProjectFileSnapshot>,
     depth: usize,
     captured_asset_bytes: &mut u64,
@@ -2185,8 +2240,6 @@ fn capture_walk(
     if depth > 32 {
         bail!("Project mutation scan exceeded its directory depth limit");
     }
-    #[cfg(windows)]
-    let _directory_guard = hold_windows_capture_directory(directory)?;
     let mut entries = fs::read_dir(directory)?.collect::<std::io::Result<Vec<_>>>()?;
     entries.sort_by_key(|entry| entry.file_name());
     for entry in entries {
@@ -2210,6 +2263,7 @@ fn capture_walk(
                     sha256: "symlink".into(),
                     text: None,
                     asset: None,
+                    reviewable_delete: false,
                 },
             );
             continue;
@@ -2221,9 +2275,12 @@ fn capture_walk(
             {
                 output.insert(relative, directory_fingerprint(&path, capture_budget)?);
             } else {
+                let child_directory =
+                    open_capture_directory_at(directory_handle, &entry.file_name(), &path)?;
                 capture_walk(
                     root,
                     &path,
+                    &child_directory,
                     output,
                     depth + 1,
                     captured_asset_bytes,
@@ -2241,15 +2298,18 @@ fn capture_walk(
                     sha256: "special".into(),
                     text: None,
                     asset: None,
+                    reviewable_delete: false,
                 },
             );
             continue;
         }
-        let mut file = open_capture_file(&path)?;
+        let mut file = open_capture_file_at(directory_handle, &entry.file_name(), &path)?;
         let opened_metadata = file.metadata()?;
+        let opened_identity = capture_file_identity(&file)?;
         if !opened_metadata.is_file()
             || is_reparse_point(&opened_metadata)
             || opened_metadata.len() != metadata.len()
+            || !capture_path_metadata_matches(&metadata, &opened_metadata)
         {
             bail!("Project mutation scan observed a file changing before capture");
         }
@@ -2282,10 +2342,22 @@ fn capture_walk(
             }
         }
         let final_metadata = file.metadata()?;
+        let final_identity = capture_file_identity(&file)?;
+        let final_path_metadata = fs::symlink_metadata(&path)?;
+        let final_path_file = open_capture_file_at(directory_handle, &entry.file_name(), &path)?;
+        let final_path_opened_metadata = final_path_file.metadata()?;
+        let final_path_identity = capture_file_identity(&final_path_file)?;
         if !final_metadata.is_file()
             || is_reparse_point(&final_metadata)
             || observed_bytes != opened_metadata.len()
             || final_metadata.len() != opened_metadata.len()
+            || opened_identity != final_identity
+            || !final_path_metadata.is_file()
+            || is_reparse_point(&final_path_metadata)
+            || !final_path_opened_metadata.is_file()
+            || is_reparse_point(&final_path_opened_metadata)
+            || !capture_path_metadata_matches(&final_path_metadata, &final_path_opened_metadata)
+            || final_path_identity != opened_identity
         {
             bail!("Project mutation scan observed a file changing during capture");
         }
@@ -2314,15 +2386,181 @@ fn capture_walk(
                 sha256: format!("{:x}", digest.finalize()),
                 text,
                 asset,
+                reviewable_delete: opened_identity.trustworthy && opened_identity.link_count == 1,
             },
         );
+    }
+    let final_directory_metadata = fs::symlink_metadata(directory)?;
+    let final_directory_handle_metadata = directory_handle.metadata()?;
+    if !final_directory_metadata.is_dir()
+        || is_reparse_point(&final_directory_metadata)
+        || !final_directory_handle_metadata.is_dir()
+        || is_reparse_point(&final_directory_handle_metadata)
+        || !capture_path_metadata_matches(
+            &final_directory_metadata,
+            &final_directory_handle_metadata,
+        )
+    {
+        bail!("Project mutation scan observed a directory changing during capture");
     }
     Ok(())
 }
 
-#[cfg(not(windows))]
+#[cfg(unix)]
+fn open_capture_directory(path: &Path) -> Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let mut options = fs::OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let directory = options.open(path)?;
+    if !directory.metadata()?.is_dir() {
+        bail!("Project mutation scan refuses a non-direct directory");
+    }
+    Ok(directory)
+}
+
+#[cfg(windows)]
+fn open_capture_directory(path: &Path) -> Result<fs::File> {
+    hold_windows_capture_directory(path)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_capture_directory(path: &Path) -> Result<fs::File> {
+    let directory = fs::File::open(path)?;
+    if !directory.metadata()?.is_dir() {
+        bail!("Project mutation scan refuses a non-direct directory");
+    }
+    Ok(directory)
+}
+
+#[cfg(unix)]
+fn open_capture_directory_at(
+    parent: &fs::File,
+    name: &std::ffi::OsStr,
+    _path: &Path,
+) -> Result<fs::File> {
+    open_unix_capture_entry(parent, name, true)
+}
+
+#[cfg(not(unix))]
+fn open_capture_directory_at(
+    _parent: &fs::File,
+    _name: &std::ffi::OsStr,
+    path: &Path,
+) -> Result<fs::File> {
+    open_capture_directory(path)
+}
+
+#[cfg(unix)]
+fn open_capture_file_at(
+    parent: &fs::File,
+    name: &std::ffi::OsStr,
+    _path: &Path,
+) -> Result<fs::File> {
+    open_unix_capture_entry(parent, name, false)
+}
+
+#[cfg(not(unix))]
+fn open_capture_file_at(
+    _parent: &fs::File,
+    _name: &std::ffi::OsStr,
+    path: &Path,
+) -> Result<fs::File> {
+    open_capture_file(path)
+}
+
+#[cfg(unix)]
+fn open_unix_capture_entry(
+    parent: &fs::File,
+    name: &std::ffi::OsStr,
+    directory: bool,
+) -> Result<fs::File> {
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd as _, FromRawFd as _};
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let name = CString::new(name.as_bytes()).context("Project entry name contains NUL")?;
+    let mut flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+    if directory {
+        flags |= libc::O_DIRECTORY;
+    }
+    let descriptor = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags) };
+    if descriptor < 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    // SAFETY: `descriptor` is a fresh successful `openat` result and ownership
+    // transfers exactly once to this `File`.
+    let file = unsafe { fs::File::from_raw_fd(descriptor) };
+    let metadata = file.metadata()?;
+    if (directory && !metadata.is_dir()) || (!directory && !metadata.is_file()) {
+        bail!("Project mutation scan observed an entry changing type before capture");
+    }
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn open_capture_file(path: &Path) -> Result<fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let mut options = fs::OpenOptions::new();
+    options.read(true).custom_flags(libc::O_NOFOLLOW);
+    Ok(options.open(path)?)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn open_capture_file(path: &Path) -> Result<fs::File> {
     Ok(fs::File::open(path)?)
+}
+
+#[cfg(unix)]
+fn capture_file_identity(file: &fs::File) -> Result<CaptureFileIdentity> {
+    use std::os::unix::fs::MetadataExt as _;
+    let metadata = file.metadata()?;
+    Ok(CaptureFileIdentity {
+        volume: metadata.dev(),
+        file: metadata.ino(),
+        link_count: metadata.nlink(),
+        trustworthy: true,
+    })
+}
+
+#[cfg(windows)]
+fn capture_file_identity(file: &fs::File) -> Result<CaptureFileIdentity> {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+    let mut information = BY_HANDLE_FILE_INFORMATION::default();
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle().cast(), &mut information) } == 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    Ok(CaptureFileIdentity {
+        volume: u64::from(information.dwVolumeSerialNumber),
+        file: (u64::from(information.nFileIndexHigh) << 32) | u64::from(information.nFileIndexLow),
+        link_count: u64::from(information.nNumberOfLinks),
+        trustworthy: true,
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn capture_file_identity(_file: &fs::File) -> Result<CaptureFileIdentity> {
+    Ok(CaptureFileIdentity {
+        volume: 0,
+        file: 0,
+        link_count: 0,
+        trustworthy: false,
+    })
+}
+
+#[cfg(unix)]
+fn capture_path_metadata_matches(path: &fs::Metadata, opened: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    path.dev() == opened.dev() && path.ino() == opened.ino()
+}
+
+#[cfg(not(unix))]
+fn capture_path_metadata_matches(_path: &fs::Metadata, _opened: &fs::Metadata) -> bool {
+    true
 }
 
 #[cfg(windows)]
@@ -2539,10 +2777,51 @@ fn directory_fingerprint_with_limits(
         sha256: format!("{:x}", digest.finalize()),
         text: None,
         asset: None,
+        reviewable_delete: false,
     })
 }
 
 use crate::developer_review::sensitive_path;
+
+fn protected_tool_path(path: &str, forbidden_write_paths: &[String]) -> bool {
+    let path = path.replace('\\', "/").to_lowercase();
+    forbidden_write_paths.iter().any(|pattern| {
+        let pattern = pattern.to_lowercase();
+        if pattern.is_empty()
+            || pattern.contains('\\')
+            || pattern.contains(':')
+            || pattern.contains(['?', '[', ']'])
+        {
+            return true;
+        }
+        conservative_wildcard_match(&pattern, &path)
+    })
+}
+
+// Treat every `*` as matching across path separators. This can conservatively
+// protect more paths than OpenCode's glob dialect, but can never make a denied
+// path eligible for reviewable deletion.
+fn conservative_wildcard_match(pattern: &str, candidate: &str) -> bool {
+    let pattern = pattern.as_bytes();
+    let candidate = candidate.as_bytes();
+    let mut previous = vec![false; candidate.len() + 1];
+    previous[0] = true;
+    for pattern_byte in pattern {
+        let mut current = vec![false; candidate.len() + 1];
+        if *pattern_byte == b'*' {
+            current[0] = previous[0];
+            for index in 1..=candidate.len() {
+                current[index] = previous[index] || current[index - 1];
+            }
+        } else {
+            for index in 1..=candidate.len() {
+                current[index] = previous[index - 1] && *pattern_byte == candidate[index - 1];
+            }
+        }
+        previous = current;
+    }
+    previous[candidate.len()]
+}
 
 fn verify_runtime_executable(path: &Path) -> Result<String> {
     let metadata = fs::symlink_metadata(path)?;
@@ -2722,17 +3001,25 @@ fn stage_scope_id(
 fn summarize_stage_mutations(encoded: &[String]) -> Result<ToolStageMutationSummary> {
     let mut text_bytes = 0_u64;
     let mut asset_bytes = 0_u64;
+    let mut contains_delete = false;
     for evidence in encoded {
         let mutation: ToolProjectMutation = serde_json::from_str(evidence)?;
         for edit in mutation.edits {
-            if let Some(text) = edit.after {
+            validate_tool_mutation_edit(&edit)?;
+            contains_delete |= edit.delete;
+            if let Some(text) = edit.after.as_ref() {
                 text_bytes = text_bytes
                     .checked_add(text.len() as u64)
                     .context("Stage text byte count overflow")?;
             }
-            if let Some(asset) = edit.asset {
+            if let Some(before_text) = edit.before_text.as_ref() {
+                text_bytes = text_bytes
+                    .checked_add(before_text.len() as u64)
+                    .context("Stage deletion text byte count overflow")?;
+            }
+            if let Some(asset) = edit.asset.as_ref() {
                 asset_bytes = asset_bytes
-                    .checked_add(BASE64_STANDARD.decode(asset.data_base64)?.len() as u64)
+                    .checked_add(BASE64_STANDARD.decode(&asset.data_base64)?.len() as u64)
                     .context("Stage asset byte count overflow")?;
             }
         }
@@ -2742,19 +3029,65 @@ fn summarize_stage_mutations(encoded: &[String]) -> Result<ToolStageMutationSumm
             .checked_add(item.len() as u64)
             .context("Stage serialized byte count overflow")
     })?;
+    let digest_input = if contains_delete {
+        json!({
+            "schema_version":DELETION_MUTATION_SUMMARY_SCHEMA_VERSION,
+            "domain":DELETION_MUTATION_SUMMARY_DOMAIN,
+            "mutations":encoded,
+        })
+    } else {
+        // Preserve the exact legacy digest for non-deletion ledgers. A path-only
+        // historical deletion remains unreviewable and cannot acquire v2 meaning.
+        json!({
+            "schema_version":1,
+            "mutations":encoded,
+        })
+    };
     Ok(ToolStageMutationSummary {
-        mutation_sha256: format!(
-            "{:x}",
-            Sha256::digest(serde_json::to_vec(&json!({
-                "schema_version":1,
-                "mutations":encoded,
-            }))?)
-        ),
+        mutation_sha256: format!("{:x}", Sha256::digest(serde_json::to_vec(&digest_input)?)),
         mutation_count: encoded.len() as u64,
         text_bytes,
         asset_bytes,
         serialized_bytes,
     })
+}
+
+fn validate_tool_mutation_edit(edit: &ToolMutationEdit) -> Result<()> {
+    if edit
+        .before_sha256
+        .as_deref()
+        .is_some_and(|digest| !valid_lower_sha256(digest))
+    {
+        bail!("Tool mutation before digest is invalid");
+    }
+    if edit.delete {
+        let before_text = edit
+            .before_text
+            .as_ref()
+            .context("Deletion mutation has no retained prior text")?;
+        let before_sha256 = edit
+            .before_sha256
+            .as_deref()
+            .context("Deletion mutation has no retained prior digest")?;
+        if edit.after.is_some()
+            || edit.asset.is_some()
+            || before_sha256 != format!("{:x}", Sha256::digest(before_text.as_bytes()))
+        {
+            bail!("Deletion mutation evidence is inconsistent");
+        }
+    } else if edit.before_text.is_some() {
+        bail!("Non-deletion mutation contains prior text");
+    } else if edit.after.is_some() == edit.asset.is_some() {
+        bail!("Tool mutation must contain exactly one replacement payload");
+    }
+    Ok(())
+}
+
+fn valid_lower_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn recover_orphaned_stages(connection: &mut Connection, root: &Path) -> Result<Option<String>> {
@@ -4699,7 +5032,7 @@ mod tests {
     }
 
     #[test]
-    fn mutation_evidence_binds_exact_text_and_quarantines_deletions() {
+    fn live_mutation_evidence_binds_exact_text_and_quarantines_deletions() {
         let (directory, tools) = service(None);
         let project = directory.path().join("projects/project");
         fs::write(project.join("existing.txt"), "before").unwrap();
@@ -4726,7 +5059,7 @@ mod tests {
             cancellation: Arc::new(AtomicBool::new(false)),
         };
         tools
-            .record_project_mutation(&request, &before, &after)
+            .record_project_mutation(&request, &before, &after, false)
             .unwrap();
         let mutations = tools.project_mutations("project", 0).unwrap();
         assert_eq!(mutations.len(), 1);
@@ -4735,7 +5068,9 @@ mod tests {
         assert_eq!(mutations[0].edits.len(), 2);
         assert!(mutations[0].edits.iter().any(|edit| edit.path == "new.txt"
             && edit.before_sha256.is_none()
-            && edit.after.as_deref() == Some("new")));
+            && edit.after.as_deref() == Some("new")
+            && !edit.delete
+            && edit.before_text.is_none()));
         assert_eq!(mutations[0].unreviewable_paths, vec!["deleted.txt"]);
         assert!(tools.project_mutations("project", 1).unwrap().is_empty());
         assert_eq!(tools.snapshot("project").unwrap()["workspace_revision"], 1);
@@ -4780,6 +5115,275 @@ mod tests {
     }
 
     #[test]
+    fn deletion_authority_requires_automatic_stage_and_full_access() {
+        let (_directory, tools) = service(None);
+        let stage = ToolStageBinding {
+            scope_id: Uuid::new_v4().to_string(),
+            project: "project".into(),
+            stage_project: format!("aw-repair-stage-{}", Uuid::new_v4().simple()),
+            request_id: Uuid::new_v4().to_string(),
+            feature_id: "feature-1".into(),
+            proposal_id: Some(Uuid::new_v4().to_string()),
+            automatic_epoch: 7,
+        };
+        let full = AccessState {
+            mode: ToolAccessMode::Full,
+            revision: 2,
+        };
+        let automatic = AccessState {
+            mode: ToolAccessMode::Auto,
+            revision: 2,
+        };
+        assert!(deletion_evidence_authorized(&full, Some(&stage)));
+        assert!(!deletion_evidence_authorized(&automatic, Some(&stage)));
+        assert!(!deletion_evidence_authorized(&full, None));
+        let mut ordinary_stage = stage;
+        ordinary_stage.proposal_id = None;
+        assert!(!deletion_evidence_authorized(&full, Some(&ordinary_stage)));
+        drop(tools);
+    }
+
+    #[test]
+    fn protected_path_wildcards_do_not_miss_repeated_anchored_suffixes() {
+        assert!(conservative_wildcard_match("*foo", "foo/foo"));
+        assert!(conservative_wildcard_match(
+            "tests/**/test.py",
+            "tests/test.py/tests/test.py"
+        ));
+        assert!(protected_tool_path(
+            "tests/test.py/tests/test.py",
+            &["tests/**/test.py".into()]
+        ));
+        assert!(!conservative_wildcard_match("*foo", "foo/bar"));
+    }
+
+    #[test]
+    fn staged_automatic_delete_retains_exact_prior_text_and_v2_summary() {
+        let (directory, tools) = service(None);
+        let (binding, request, stage_path) = stage_fixture(&directory, &tools);
+        let prior = "generated page before deletion\n";
+        fs::write(stage_path.join("obsolete.html"), prior).unwrap();
+        let before = capture_project(&stage_path).unwrap();
+        fs::remove_file(stage_path.join("obsolete.html")).unwrap();
+        let after = capture_project(&stage_path).unwrap();
+        tools
+            .transition_stage(&binding, &["registered"], "running")
+            .unwrap();
+        tools
+            .record_project_mutation(&request, &before, &after, true)
+            .unwrap();
+        tools
+            .transition_stage(&binding, &["running"], "captured")
+            .unwrap();
+
+        let mutations = tools.stage_mutations(&binding).unwrap();
+        assert_eq!(mutations.len(), 1);
+        assert!(mutations[0].unreviewable_paths.is_empty());
+        let edit = &mutations[0].edits[0];
+        assert_eq!(edit.path, "obsolete.html");
+        assert!(edit.delete);
+        assert_eq!(edit.before_text.as_deref(), Some(prior));
+        let prior_sha256 = format!("{:x}", Sha256::digest(prior.as_bytes()));
+        assert_eq!(edit.before_sha256.as_deref(), Some(prior_sha256.as_str()));
+        assert!(edit.after.is_none());
+        assert!(edit.asset.is_none());
+
+        let encoded: Vec<String> = tools
+            .database
+            .lock()
+            .unwrap()
+            .prepare(
+                "SELECT evidence FROM developer_tool_stage_mutation
+                 WHERE scope_id=?1 ORDER BY revision",
+            )
+            .unwrap()
+            .query_map([&binding.scope_id], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        let summary = summarize_stage_mutations(&encoded).unwrap();
+        assert_eq!(summary.text_bytes, prior.len() as u64);
+        let expected = json!({
+            "schema_version":DELETION_MUTATION_SUMMARY_SCHEMA_VERSION,
+            "domain":DELETION_MUTATION_SUMMARY_DOMAIN,
+            "mutations":encoded,
+        });
+        assert_eq!(
+            summary.mutation_sha256,
+            format!(
+                "{:x}",
+                Sha256::digest(serde_json::to_vec(&expected).unwrap())
+            )
+        );
+    }
+
+    #[test]
+    fn staged_delete_keeps_binary_sensitive_protected_and_linked_paths_unreviewable() {
+        let (directory, tools) = service(None);
+        let (binding, mut request, stage_path) = stage_fixture(&directory, &tools);
+        request.forbidden_write_paths = vec!["tests/**".into()];
+        fs::create_dir(stage_path.join("tests")).unwrap();
+        fs::write(stage_path.join("safe.txt"), "safe prior\n").unwrap();
+        fs::write(stage_path.join("binary.bin"), [0xff, 0xfe, 0xfd]).unwrap();
+        fs::write(stage_path.join(".env"), "TOKEN=secret\n").unwrap();
+        fs::write(stage_path.join("tests/test_site.py"), "assert True\n").unwrap();
+        fs::write(stage_path.join("hard.txt"), "linked prior\n").unwrap();
+        fs::hard_link(
+            stage_path.join("hard.txt"),
+            stage_path.join("hard-peer.txt"),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            fs::write(stage_path.join("target.txt"), "target\n").unwrap();
+            symlink("target.txt", stage_path.join("linked.txt")).unwrap();
+        }
+        let before = capture_project(&stage_path).unwrap();
+        for path in [
+            "safe.txt",
+            "binary.bin",
+            ".env",
+            "tests/test_site.py",
+            "hard.txt",
+        ] {
+            fs::remove_file(stage_path.join(path)).unwrap();
+        }
+        #[cfg(unix)]
+        fs::remove_file(stage_path.join("linked.txt")).unwrap();
+        let after = capture_project(&stage_path).unwrap();
+        tools
+            .transition_stage(&binding, &["registered"], "running")
+            .unwrap();
+        tools
+            .record_project_mutation(&request, &before, &after, true)
+            .unwrap();
+        tools
+            .transition_stage(&binding, &["running"], "captured")
+            .unwrap();
+
+        let mutations = tools.stage_mutations(&binding).unwrap();
+        let mutation = &mutations[0];
+        assert_eq!(mutation.edits.len(), 1);
+        assert_eq!(mutation.edits[0].path, "safe.txt");
+        assert!(mutation.edits[0].delete);
+        for rejected in [".env", "binary.bin", "hard.txt", "tests/test_site.py"] {
+            assert!(mutation
+                .unreviewable_paths
+                .iter()
+                .any(|path| path == rejected));
+        }
+        #[cfg(unix)]
+        assert!(mutation
+            .unreviewable_paths
+            .iter()
+            .any(|path| path == "linked.txt"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn capture_open_refuses_symlinks_and_identity_detects_same_size_path_swap() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let original = directory.path().join("original.txt");
+        let replacement = directory.path().join("replacement.txt");
+        let link = directory.path().join("linked.txt");
+        fs::write(&original, "first").unwrap();
+        fs::write(&replacement, "other").unwrap();
+        symlink("original.txt", &link).unwrap();
+        assert!(open_capture_file(&link).is_err());
+
+        let original_file = open_capture_file(&original).unwrap();
+        let original_identity = capture_file_identity(&original_file).unwrap();
+        fs::rename(&original, directory.path().join("moved.txt")).unwrap();
+        fs::rename(&replacement, &original).unwrap();
+        let replacement_file = open_capture_file(&original).unwrap();
+        assert_ne!(
+            capture_file_identity(&replacement_file).unwrap(),
+            original_identity
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn held_directory_open_cannot_be_redirected_by_ancestor_replacement() {
+        use std::io::Read as _;
+
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("project");
+        let moved = directory.path().join("moved-project");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("evidence.txt"), "admitted\n").unwrap();
+        let held = open_capture_directory(&root).unwrap();
+
+        fs::rename(&root, &moved).unwrap();
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("evidence.txt"), "redirected\n").unwrap();
+
+        let mut opened = open_capture_file_at(
+            &held,
+            std::ffi::OsStr::new("evidence.txt"),
+            &root.join("evidence.txt"),
+        )
+        .unwrap();
+        let mut content = String::new();
+        opened.read_to_string(&mut content).unwrap();
+        assert_eq!(content, "admitted\n");
+        assert!(!capture_path_metadata_matches(
+            &fs::symlink_metadata(&root).unwrap(),
+            &held.metadata().unwrap(),
+        ));
+    }
+
+    #[test]
+    fn deletion_summary_rejects_missing_or_tampered_prior_evidence() {
+        let digest = format!("{:x}", Sha256::digest(b"before\n"));
+        let mutation = |before_sha256: Option<String>, before_text: Option<String>| {
+            serde_json::to_string(&ToolProjectMutation {
+                revision: 1,
+                request_id: Uuid::new_v4().to_string(),
+                feature_id: Some("feature-1".into()),
+                edits: vec![ToolMutationEdit {
+                    path: "obsolete.txt".into(),
+                    before_sha256,
+                    after: None,
+                    asset: None,
+                    delete: true,
+                    before_text,
+                }],
+                unreviewable_paths: Vec::new(),
+            })
+            .unwrap()
+        };
+        assert!(summarize_stage_mutations(&[mutation(None, Some("before\n".into()))]).is_err());
+        assert!(summarize_stage_mutations(&[mutation(Some(digest.clone()), None)]).is_err());
+        assert!(
+            summarize_stage_mutations(&[mutation(Some(digest), Some("tampered\n".into()))])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn legacy_path_only_deletion_keeps_v1_summary_and_never_becomes_an_edit() {
+        let encoded = serde_json::to_string(&ToolProjectMutation {
+            revision: 1,
+            request_id: Uuid::new_v4().to_string(),
+            feature_id: Some("feature-1".into()),
+            edits: Vec::new(),
+            unreviewable_paths: vec!["deleted.txt".into()],
+        })
+        .unwrap();
+        let summary = summarize_stage_mutations(std::slice::from_ref(&encoded)).unwrap();
+        let legacy = json!({"schema_version":1,"mutations":[encoded]});
+        assert_eq!(
+            summary.mutation_sha256,
+            format!("{:x}", Sha256::digest(serde_json::to_vec(&legacy).unwrap()))
+        );
+        assert_eq!(summary.text_bytes, 0);
+    }
+
+    #[test]
     fn staged_mutations_never_increment_live_revision_and_compact_exact_payload() {
         let (directory, tools) = service(None);
         let (binding, request, stage_path) = stage_fixture(&directory, &tools);
@@ -4791,7 +5395,7 @@ mod tests {
             .transition_stage(&binding, &["registered"], "running")
             .unwrap();
         tools
-            .record_project_mutation(&request, &before, &after)
+            .record_project_mutation(&request, &before, &after, false)
             .unwrap();
         tools
             .transition_stage(&binding, &["running"], "captured")
@@ -4889,7 +5493,7 @@ mod tests {
             .transition_stage(&binding, &["registered"], "running")
             .unwrap();
         tools
-            .record_project_mutation(&request, &before, &after)
+            .record_project_mutation(&request, &before, &after, false)
             .unwrap();
         tools
             .transition_stage(&binding, &["running"], "captured")
@@ -4923,7 +5527,7 @@ mod tests {
             .transition_stage(&cleaned, &["registered"], "running")
             .unwrap();
         tools
-            .record_project_mutation(&request, &before, &after)
+            .record_project_mutation(&request, &before, &after, false)
             .unwrap();
         tools
             .transition_stage(&cleaned, &["running"], "captured")
