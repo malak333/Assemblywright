@@ -3293,3 +3293,14 @@ consistency.
   does. A fresh bound Resume is the required newer epoch for recovered validation;
   do not require two increments merely because cancellation fixtures had two.
   Preserve exact snapshot adoption, policy/identity checks, and lineage bounds.
+
+- Ordinary repair protects existing test/validation inputs even when independent
+  review requests a test correction. With Auto AI repair enabled, those findings
+  must advance to its separately authorized broader stage; a passing disposable
+  test run does not imply the ordinary candidate was applied. Keep the protected
+  candidate rejection and broader-stage receipts distinct in completion reports.
+- For a bounded pipeline demonstration, test the requested page's parsed contract
+  rather than scanning the test source for prohibited command or URL text. A
+  diagnostic label or documented validation command is not execution evidence.
+  Preserve unfinished candidates and histories when narrowing a new feature's
+  scope; success belongs only to its validated, reviewed, published candidate.
