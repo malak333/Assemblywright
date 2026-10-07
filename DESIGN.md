@@ -63,6 +63,9 @@ review in bounded batches with a final aggregate decision, genuine image review,
 and preflight/recovery that avoids replaying uncertain effects. This extends the
 Developer repair contract; Windows authority, immutable validation, independent
 review, and the separate production/publication proof boundaries remain required.
+Pinned OpenCode sessions allow 128 inference steps for feature repair and 48 for
+project chat. The durable action ledger independently counts individual tool calls
+at the corresponding 128/48 caps; existing feature/chat deadlines are unchanged.
 An exhausted failed feature at `tool_workspace_changed_requires_proposal` may use
 the same explicit exact-current-snapshot adoption only when its latest manual
 proposal is terminal and effect-free, all repair/proposal/review work is idle,
@@ -77,6 +80,16 @@ After later project-chat mutation, the exact durable marker of that prior
 validation-only adoption also permits a fresh, digest-bound adoption under the
 same terminal, effect-free proposal checks; counters and history stay intact,
 and only validation and independent review may run.
+The same validation-only adoption is available when the predecessor is a fully
+applied automatic staged proposal followed by attributable project-chat changes.
+Windows requires the complete ordered ready/authorization/interruption receipts,
+the exact staged execution/access/model/archive and failure-evidence bindings,
+the complete applied-path manifest, idle work, and a coherent fresh-current scan.
+It never replays the staged writes or reuses their approval. Resume binds the
+new current digest, preserves every counter and receipt, and authorizes only the
+original immutable validation plus a fresh independent review. Any rejection may
+enter a separately authorized future repair cycle under the current Auto AI policy;
+it cannot revive the interrupted proposal.
 
 This document is the system-level design. Two documents own the detailed
 accepted designs and take precedence within their scope:

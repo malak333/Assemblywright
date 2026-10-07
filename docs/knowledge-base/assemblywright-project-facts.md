@@ -2172,6 +2172,12 @@ Full-machine target phase: planning/creation containment has bounded native Wind
   only from the successful `Release local gate` check on that commit. Any
   missing, stale, failed, late, or ambiguous result after durable intent
   quarantines without automatic retry.
+- A cached product `signed_in` projection can outlive the credential currently
+  usable by GitHub CLI. Before publication, verify the actual Windows account
+  through the fixed `gh api user` boundary without printing credential material.
+  If the authorized same-account credential expired, refresh it through the
+  stdin-only credential path and the product `refresh_account` flow, then recheck
+  the fixed identity before admitting publication authority.
 - Feature 4 Windows provisioning must not start Cargo's release output in place:
   Cargo may hard-link it to `target\release\deps` and leave checkout ACLs that
   the provisioned adapter rejects at service startup. After the exact service
@@ -3203,6 +3209,19 @@ consistency.
 - `aw-fft-demo` tests passing does not clear a changed-workspace checkpoint or
   confer Codex approval. Preserve the ledger and require immutable validation
   and independent review of the exact current snapshot.
+- A changed-workspace checkpoint can retain a complete automatic staged lineage
+  even after later project-chat edits replace staged bytes. Admit a fresh current
+  snapshot only when the automatic proposal was fully applied and terminal, its
+  ordered ready/authorization/interruption receipts and stage archive still match
+  the exact execution/access/model/policy/failure bindings, all work is idle, and
+  the displayed current digest is supplied. This recovery never replays prior
+  writes or spends or resets counters; it enters validation-only state for immutable
+  validation and fresh independent review. A subsequent rejection needs separate
+  current Auto AI authorization. Sensitive inventory remains excluded from review
+  contents but locally bound by the complete current-manifest digest; targeted
+  unreviewable mutations remain ineligible. Retained deletions are carried into
+  review/publication evidence without reading an absent path only when the current
+  manifest confirms absence; a recreated path becomes current content instead.
 - [The published checkpoint](../developer-response-origin-checkpoint.md) records
   the accepted predecessor and remaining parser, network, runtime and FFT work.
 
