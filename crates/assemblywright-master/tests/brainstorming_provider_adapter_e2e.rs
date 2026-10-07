@@ -156,7 +156,7 @@ fn assert_linked_private_directory_rejected(directory_name: &str, repository_nam
         draft: Some(&draft),
     };
 
-    let output = invoke(root, &request);
+    let output = invoke_expected_early_rejection(root, &request);
     assert_eq!(output.status.code(), Some(11));
     assert!(!root.join("codex-home/calls").exists());
     assert!(output.stdout.is_empty());
@@ -164,6 +164,30 @@ fn assert_linked_private_directory_rejected(directory_name: &str, repository_nam
 }
 
 fn invoke(root: &Path, request: &ProviderRequest<'_>) -> std::process::Output {
+    let (output, write_result) = invoke_process(root, request);
+    write_result.unwrap();
+    output
+}
+
+fn invoke_expected_early_rejection(
+    root: &Path,
+    request: &ProviderRequest<'_>,
+) -> std::process::Output {
+    let (output, write_result) = invoke_process(root, request);
+    if let Err(error) = write_result {
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::BrokenPipe,
+            "unexpected request transport failure: {error}"
+        );
+    }
+    output
+}
+
+fn invoke_process(
+    root: &Path,
+    request: &ProviderRequest<'_>,
+) -> (std::process::Output, std::io::Result<()>) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_assemblywright-brainstorming-provider"))
         .current_dir(root)
         .env_clear()
@@ -172,13 +196,13 @@ fn invoke(root: &Path, request: &ProviderRequest<'_>) -> std::process::Output {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child
+    let write_result = child
         .stdin
         .take()
         .unwrap()
-        .write_all(&serde_json::to_vec(request).unwrap())
-        .unwrap();
-    child.wait_with_output().unwrap()
+        .write_all(&serde_json::to_vec(request).unwrap());
+    let output = child.wait_with_output().unwrap();
+    (output, write_result)
 }
 
 fn provision(root: &Path) {

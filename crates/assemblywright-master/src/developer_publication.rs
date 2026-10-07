@@ -305,6 +305,28 @@ impl PublicationRecord {
     }
 }
 
+pub(super) fn validate_completed_reverification(
+    input: &PublicationInput,
+    record: &PublicationRecord,
+) -> Result<()> {
+    validate_candidate_files(&input.files)?;
+    validate_pull_request_text(&input.title, &input.body)?;
+    record.validate()?;
+    if record.status != "succeeded" || record.stage != "complete" {
+        bail!("Only a complete publication can use observation-only reverification");
+    }
+    if record.repository_url != input.binding.repository_url
+        || record.repository_slug != input.binding.repository_slug
+        || record.base_branch != input.binding.base_branch
+        || record.feature_branch != format!("codex/feature-{}", input.feature_id)
+        || record.required_checks != input.binding.required_checks
+        || record.strict_required_checks != input.binding.strict_required_checks
+    {
+        bail!("Completed publication binding changed after approval");
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct Runtime {
     git: PathBuf,
@@ -942,6 +964,156 @@ impl Runtime {
         Ok(())
     }
 
+    pub(super) async fn reverify_completed(
+        &self,
+        input: &PublicationInput,
+        record: &mut PublicationRecord,
+        cancellation: &AtomicU8,
+        mut persist: impl FnMut(&PublicationRecord) -> Result<()>,
+    ) -> Result<()> {
+        validate_completed_reverification(input, record)?;
+        check_cancelled(cancellation)?;
+        let commit = record
+            .commit_sha
+            .clone()
+            .context("Completed publication is missing its exact commit")?;
+        let expected_merged = record
+            .merged_sha
+            .clone()
+            .context("Completed publication is missing its exact merge commit")?;
+        let view = self.pr_view(record, cancellation).await?;
+        bind_pr(record, &view, &commit)?;
+        if view.get("state").and_then(Value::as_str) != Some("MERGED") {
+            bail!("Previously completed pull request is no longer observed as merged");
+        }
+        let merged = view
+            .get("mergeCommit")
+            .and_then(|value| value.get("oid"))
+            .and_then(Value::as_str)
+            .context("Merged pull request has no merge commit")?;
+        validate_git_oid(merged)?;
+        if merged != expected_merged {
+            bail!("Previously completed merge commit changed during reverification");
+        }
+        let reference = format!("refs/heads/{}", record.base_branch);
+        let current_base = self
+            .ls_remote(&record.repository_url, &reference, cancellation)
+            .await?
+            .context(
+                "Selected remote base is unavailable during completed publication reverification",
+            )?;
+        self.verify_merged_tree(record, &expected_merged, cancellation)
+            .await?;
+        self.verify_completed_candidate_at_descendant(
+            input,
+            record,
+            &expected_merged,
+            &current_base,
+            cancellation,
+        )
+        .await?;
+        if self
+            .ls_remote(&record.repository_url, &reference, cancellation)
+            .await?
+            .as_deref()
+            != Some(current_base.as_str())
+        {
+            bail!("Selected remote base changed during completed publication reverification");
+        }
+        check_cancelled(cancellation)?;
+        record.event(
+            "receipt",
+            "verify_remote_base",
+            Some(&current_base),
+            "The current remote base was verified as a descendant that still contains every exact reviewed candidate path",
+        )?;
+        record.event(
+            "receipt",
+            "complete",
+            Some(&expected_merged),
+            "Previously completed pull request, remote base, and exact reviewed tree were reverified without another publication write",
+        )?;
+        record.status = "succeeded".into();
+        record.stage = "complete".into();
+        record.message =
+            "Previously completed publication was reverified without another write".into();
+        persist(record)
+    }
+
+    async fn verify_completed_candidate_at_descendant(
+        &self,
+        input: &PublicationInput,
+        record: &PublicationRecord,
+        completed_merge: &str,
+        current_base: &str,
+        cancellation: &AtomicU8,
+    ) -> Result<()> {
+        validate_git_oid(current_base)?;
+        let checkout = self.checkout_for_branch(&record.feature_branch)?;
+        self.command(
+            &self.git,
+            &["fetch", "--no-tags", &record.repository_url, current_base],
+            Some(&checkout),
+            cancellation,
+            &[0],
+            COMMAND_TIMEOUT,
+            true,
+        )
+        .await
+        .context(
+            "Could not fetch the current remote base for completed publication reverification",
+        )?;
+        self.command(
+            &self.git,
+            &["merge-base", "--is-ancestor", completed_merge, current_base],
+            Some(&checkout),
+            cancellation,
+            &[0],
+            COMMAND_TIMEOUT,
+            true,
+        )
+        .await
+        .context("Current remote base does not descend from the completed publication merge")?;
+        for file in &input.files {
+            let tree_entry = self
+                .command(
+                    &self.git,
+                    &["ls-tree", "-z", current_base, "--", &file.path],
+                    Some(&checkout),
+                    cancellation,
+                    &[0],
+                    COMMAND_TIMEOUT,
+                    true,
+                )
+                .await?;
+            let observed_oid = parse_exact_candidate_tree_entry(&tree_entry.stdout, &file.path)?;
+            if file.delete {
+                validate_reverified_candidate(file, observed_oid.as_deref(), None)?;
+                continue;
+            }
+            let observed_oid = observed_oid.as_deref().with_context(|| {
+                format!(
+                    "Reviewed candidate {} is missing from the current remote base",
+                    file.path
+                )
+            })?;
+            let expression = format!("{current_base}:{}", file.path);
+            let observed = self
+                .command(
+                    &self.git,
+                    &["show", &expression],
+                    Some(&checkout),
+                    cancellation,
+                    &[0],
+                    COMMAND_TIMEOUT,
+                    true,
+                )
+                .await?;
+            validate_reverified_candidate(file, Some(observed_oid), Some(&observed.stdout))?;
+        }
+        Ok(())
+    }
+
     async fn prepare_candidate(
         &self,
         input: &PublicationInput,
@@ -1468,10 +1640,7 @@ impl Runtime {
         cancellation: &AtomicU8,
         persist: &mut impl FnMut(&PublicationRecord) -> Result<()>,
     ) -> Result<()> {
-        let number = record
-            .pr_number
-            .context("Pull request number is missing")?
-            .to_string();
+        record.pr_number.context("Pull request number is missing")?;
         let commit = record
             .commit_sha
             .clone()
@@ -1488,68 +1657,8 @@ impl Runtime {
             check_cancelled(cancellation)?;
             let view = self.pr_view(record, cancellation).await?;
             bind_pr(record, &view, &commit)?;
-            let checks = self
-                .command(
-                    &self.gh,
-                    &[
-                        "pr",
-                        "checks",
-                        &number,
-                        "--repo",
-                        &record.repository_slug,
-                        "--required",
-                        "--json",
-                        "name,state,bucket",
-                    ],
-                    None,
-                    cancellation,
-                    &[0, 8],
-                    COMMAND_TIMEOUT,
-                    false,
-                )
-                .await?;
-            let values: Vec<Value> = serde_json::from_slice(&checks.stdout)
-                .context("Required-check response is invalid")?;
-            if values.is_empty() {
-                bail!("The pull request has no required GitHub checks");
-            }
-            let mut pending = false;
-            let mut evidence_rows = Vec::new();
-            let mut observed_names = BTreeSet::new();
-            for value in values {
-                let name = value
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .context("Required check name is missing")?;
-                let state = value
-                    .get("state")
-                    .and_then(Value::as_str)
-                    .context("Required check state is missing")?;
-                let bucket = value
-                    .get("bucket")
-                    .and_then(Value::as_str)
-                    .context("Required check bucket is missing")?;
-                evidence_rows.push(format!("{name}:{state}:{bucket}"));
-                if !observed_names.insert(name.to_owned()) {
-                    bail!("GitHub returned duplicate required-check identities");
-                }
-                match bucket {
-                    "pass" => {}
-                    "pending" => pending = true,
-                    _ => bail!("Required GitHub check {name} did not pass ({state})"),
-                }
-            }
-            let required_names: BTreeSet<String> = record
-                .required_checks
-                .iter()
-                .map(|check| check.context.clone())
-                .collect();
-            if observed_names != required_names {
-                bail!("GitHub required-check set changed from the saved branch policy");
-            }
-            if !pending {
-                self.verify_required_check_apps(record, cancellation, true)
-                    .await?;
+            let observation = self.observe_required_checks(record, cancellation).await?;
+            if let RequiredChecksObservation::Passed(mut evidence_rows) = observation {
                 evidence_rows.sort();
                 evidence_rows.extend(record.required_checks.iter().map(|check| {
                     format!(
@@ -1571,8 +1680,6 @@ impl Runtime {
                 persist(record)?;
                 return Ok(());
             }
-            self.verify_required_check_apps(record, cancellation, false)
-                .await?;
             if tokio::time::Instant::now() >= deadline {
                 bail!("Timed out waiting for required GitHub checks");
             }
@@ -1837,18 +1944,17 @@ impl Runtime {
         Ok((checks, true))
     }
 
-    async fn verify_required_check_apps(
+    async fn observe_required_checks(
         &self,
         record: &PublicationRecord,
         cancellation: &AtomicU8,
-        require_success: bool,
-    ) -> Result<()> {
+    ) -> Result<RequiredChecksObservation> {
         let commit = record
             .commit_sha
             .as_deref()
             .context("Publication commit is missing")?;
         let endpoint = format!(
-            "repos/{}/commits/{commit}/check-runs?per_page=100",
+            "repos/{}/commits/{commit}/check-runs?filter=latest&per_page=100",
             record.repository_slug
         );
         let output = self
@@ -1863,48 +1969,7 @@ impl Runtime {
             )
             .await
             .context("GitHub check-run identity evidence is unavailable")?;
-        let value: Value = serde_json::from_slice(&output.stdout)
-            .context("GitHub check-run identity response is invalid")?;
-        let runs = value
-            .get("check_runs")
-            .and_then(Value::as_array)
-            .context("GitHub check-run list is missing")?;
-        let total: usize = value
-            .get("total_count")
-            .and_then(Value::as_u64)
-            .context("GitHub check-run total is missing")?
-            .try_into()?;
-        if total != runs.len() {
-            bail!("GitHub check-run identity list is incomplete");
-        }
-        for required in &record.required_checks {
-            let expected_id = required
-                .integration_id
-                .filter(|value| *value != 0)
-                .context("Saved required-check app identity is missing")?;
-            let matching: Vec<&Value> = runs
-                .iter()
-                .filter(|run| {
-                    run.get("name").and_then(Value::as_str) == Some(required.context.as_str())
-                        && run.get("head_sha").and_then(Value::as_str) == Some(commit)
-                        && run
-                            .get("app")
-                            .and_then(|app| app.get("id"))
-                            .and_then(Value::as_u64)
-                            == Some(expected_id)
-                })
-                .collect();
-            if matching.is_empty()
-                || (require_success
-                    && matching.iter().any(|run| {
-                        run.get("status").and_then(Value::as_str) != Some("completed")
-                            || run.get("conclusion").and_then(Value::as_str) != Some("success")
-                    }))
-            {
-                bail!("Required GitHub check app identity does not match the saved policy");
-            }
-        }
-        Ok(())
+        parse_required_check_runs(&output.stdout, &record.required_checks, commit)
     }
 
     async fn verify_merged_tree(
@@ -2218,8 +2283,8 @@ impl Runtime {
             .code()
             .context("GitHub publication command ended without an exit code")?;
         if !accepted.contains(&code) {
-            let _ = stderr;
-            bail!("GitHub publication command failed with exit code {code}");
+            let detail = durable_publication_stderr(&stderr);
+            bail!("GitHub publication command failed with exit code {code}: {detail}");
         }
         if let Some(tree) = tree.as_mut() {
             tree.disarm();
@@ -2234,6 +2299,114 @@ impl Runtime {
 struct CommandOutput {
     status: i32,
     stdout: Vec<u8>,
+}
+
+fn durable_publication_stderr(stderr: &[u8]) -> String {
+    let stderr = String::from_utf8_lossy(stderr);
+    if stderr.trim().is_empty() {
+        "No stderr detail was returned".into()
+    } else {
+        super::durable_failure_summary(
+            &stderr,
+            "Publication command stderr was unsafe to retain",
+            1000,
+        )
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum RequiredChecksObservation {
+    Pending,
+    Passed(Vec<String>),
+}
+
+fn parse_required_check_runs(
+    bytes: &[u8],
+    required_checks: &[RequiredCheck],
+    commit: &str,
+) -> Result<RequiredChecksObservation> {
+    validate_git_oid(commit)?;
+    validate_required_checks(required_checks)?;
+    let value: Value =
+        serde_json::from_slice(bytes).context("GitHub check-run identity response is invalid")?;
+    let runs = value
+        .get("check_runs")
+        .and_then(Value::as_array)
+        .context("GitHub check-run list is missing")?;
+    let total: usize = value
+        .get("total_count")
+        .and_then(Value::as_u64)
+        .context("GitHub check-run total is missing")?
+        .try_into()?;
+    if total != runs.len() {
+        bail!("GitHub check-run identity list is incomplete");
+    }
+    let required_names = required_checks
+        .iter()
+        .map(|check| check.context.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut observed_names = BTreeSet::new();
+    let mut pending = false;
+    let mut evidence_rows = Vec::new();
+    for run in runs {
+        let name = run
+            .get("name")
+            .and_then(Value::as_str)
+            .context("GitHub check-run name is missing")?;
+        if !required_names.contains(name) {
+            continue;
+        }
+        if !observed_names.insert(name.to_owned()) {
+            bail!("GitHub returned duplicate required-check identities");
+        }
+        let required = required_checks
+            .iter()
+            .find(|check| check.context == name)
+            .context("Required GitHub check identity is unavailable")?;
+        let expected_app = required
+            .integration_id
+            .filter(|value| *value != 0)
+            .context("Saved required-check app identity is missing")?;
+        let head = run
+            .get("head_sha")
+            .and_then(Value::as_str)
+            .context("Required GitHub check head is missing")?;
+        let app = run
+            .get("app")
+            .and_then(|app| app.get("id"))
+            .and_then(Value::as_u64)
+            .context("Required GitHub check app identity is missing")?;
+        if head != commit || app != expected_app {
+            bail!("Required GitHub check identity does not match the saved policy and head");
+        }
+        let status = run
+            .get("status")
+            .and_then(Value::as_str)
+            .context("Required GitHub check status is missing")?;
+        let conclusion = run
+            .get("conclusion")
+            .context("Required GitHub check conclusion is missing")?;
+        match status {
+            "queued" | "in_progress" | "waiting" | "pending" | "requested"
+                if conclusion.is_null() =>
+            {
+                pending = true;
+                evidence_rows.push(format!("{name}:{status}:pending:{app}"));
+            }
+            "completed" if conclusion.as_str() == Some("success") => {
+                evidence_rows.push(format!("{name}:{status}:success:{app}"));
+            }
+            "completed" => {
+                let conclusion = conclusion.as_str().unwrap_or("invalid");
+                bail!("Required GitHub check {name} did not pass ({conclusion})");
+            }
+            _ => bail!("Required GitHub check {name} has an invalid state"),
+        }
+    }
+    if observed_names.len() != required_checks.len() || pending {
+        return Ok(RequiredChecksObservation::Pending);
+    }
+    Ok(RequiredChecksObservation::Passed(evidence_rows))
 }
 
 fn bind_pr(record: &mut PublicationRecord, value: &Value, commit: &str) -> Result<()> {
@@ -3070,6 +3243,65 @@ fn parse_ls_remote(bytes: &[u8], reference: &str) -> Result<String> {
     Ok(sha.into())
 }
 
+fn parse_exact_candidate_tree_entry(bytes: &[u8], expected_path: &str) -> Result<Option<String>> {
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+    let entries = bytes
+        .strip_suffix(&[0])
+        .context("Remote-base tree entry is not NUL terminated")?
+        .split(|byte| *byte == 0)
+        .collect::<Vec<_>>();
+    if entries.len() != 1 {
+        bail!("Remote-base candidate path resolved to multiple tree entries");
+    }
+    let entry = std::str::from_utf8(entries[0]).context("Remote-base tree entry is not UTF-8")?;
+    let (metadata, path) = entry
+        .split_once('\t')
+        .context("Remote-base tree entry is malformed")?;
+    if path != expected_path {
+        bail!("Remote-base tree entry path changed during reverification");
+    }
+    let mut fields = metadata.split(' ');
+    let mode = fields.next().unwrap_or_default();
+    let kind = fields.next().unwrap_or_default();
+    let oid = fields.next().unwrap_or_default();
+    if fields.next().is_some() || !matches!(mode, "100644" | "100755") || kind != "blob" {
+        bail!("Remote-base candidate path is not one exact regular Git blob");
+    }
+    validate_git_oid(oid).context("Remote-base candidate blob identity is invalid")?;
+    Ok(Some(oid.to_ascii_lowercase()))
+}
+
+fn validate_reverified_candidate(
+    file: &CandidateFile,
+    observed_oid: Option<&str>,
+    observed_content: Option<&[u8]>,
+) -> Result<()> {
+    if file.delete {
+        if observed_oid.is_some() || observed_content.is_some() {
+            bail!(
+                "Reviewed deletion {} is no longer absent from the current remote base",
+                file.path
+            );
+        }
+        return Ok(());
+    }
+    if observed_oid.is_none() {
+        bail!(
+            "Reviewed candidate {} is missing from the current remote base",
+            file.path
+        );
+    }
+    if observed_content != Some(file.content.as_slice()) {
+        bail!(
+            "Reviewed candidate {} changed on the current remote base",
+            file.path
+        );
+    }
+    Ok(())
+}
+
 fn validate_git_oid(value: &str) -> Result<()> {
     if value.len() != 40 || !value.bytes().all(|b| b.is_ascii_hexdigit()) {
         bail!("Git commit identity is invalid");
@@ -3169,6 +3401,7 @@ fn git_process_path(path: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn repository_and_branch_validation_reject_command_and_path_confusion() {
@@ -3460,6 +3693,73 @@ mod tests {
     }
 
     #[test]
+    fn descendant_candidate_tree_entry_requires_one_exact_regular_blob() {
+        let oid = "a".repeat(40);
+        assert_eq!(
+            parse_exact_candidate_tree_entry(
+                format!("100644 blob {oid}\tapp.py\0").as_bytes(),
+                "app.py"
+            )
+            .unwrap(),
+            Some(oid.clone())
+        );
+        assert_eq!(
+            parse_exact_candidate_tree_entry(b"", "deleted.txt").unwrap(),
+            None
+        );
+        for entry in [
+            format!("120000 blob {oid}\tapp.py\0"),
+            format!("160000 commit {oid}\tapp.py\0"),
+            format!("040000 tree {oid}\tapp.py\0"),
+            format!("100644 blob {oid}\tother.py\0"),
+            format!("100644 blob {oid}\tapp.py\0extra"),
+        ] {
+            assert!(parse_exact_candidate_tree_entry(entry.as_bytes(), "app.py").is_err());
+        }
+    }
+
+    #[test]
+    fn descendant_candidate_bytes_and_deletion_absence_remain_exact() {
+        let retained = CandidateFile {
+            path: "app.py".into(),
+            before_sha256: None,
+            content_sha256: sha256(b"VALUE = 1\n"),
+            content: b"VALUE = 1\n".to_vec(),
+            delete: false,
+            before_text: None,
+        };
+        assert!(validate_reverified_candidate(
+            &retained,
+            Some("a3da85c8f5d24ad09216bcec7e9a2c09afedc466"),
+            Some(b"VALUE = 1\n")
+        )
+        .is_ok());
+        assert!(validate_reverified_candidate(&retained, None, None).is_err());
+        assert!(validate_reverified_candidate(
+            &retained,
+            Some("a3da85c8f5d24ad09216bcec7e9a2c09afedc466"),
+            Some(b"VALUE = 2\n")
+        )
+        .is_err());
+
+        let deletion = CandidateFile {
+            path: "obsolete.txt".into(),
+            before_sha256: Some(sha256(b"old\n")),
+            content_sha256: sha256(b""),
+            content: Vec::new(),
+            delete: true,
+            before_text: Some("old\n".into()),
+        };
+        assert!(validate_reverified_candidate(&deletion, None, None).is_ok());
+        assert!(validate_reverified_candidate(
+            &deletion,
+            Some("a3da85c8f5d24ad09216bcec7e9a2c09afedc466"),
+            None
+        )
+        .is_err());
+    }
+
+    #[test]
     fn status_parser_preserves_spaces_and_rejects_renames() {
         let parsed = parse_status_paths(b" M src/file one.rs\0?? new.txt\0").unwrap();
         assert_eq!(
@@ -3493,6 +3793,102 @@ mod tests {
         )
         .is_err());
         assert!(validate_required_checks(&parse_required_checks(b"[]").unwrap().0).is_err());
+    }
+
+    #[test]
+    fn required_check_run_registration_and_execution_remain_pending() {
+        let commit = "a".repeat(40);
+        let required = vec![
+            RequiredCheck {
+                context: "Validate".into(),
+                integration_id: Some(42),
+            },
+            RequiredCheck {
+                context: "release-local".into(),
+                integration_id: Some(42),
+            },
+        ];
+        for value in [
+            json!({"total_count":0,"check_runs":[]}),
+            json!({"total_count":1,"check_runs":[{
+                "name":"Validate","head_sha":commit,"status":"queued",
+                "conclusion":null,"app":{"id":42}
+            }]}),
+            json!({"total_count":2,"check_runs":[
+                {"name":"Validate","head_sha":commit,"status":"in_progress","conclusion":null,"app":{"id":42}},
+                {"name":"release-local","head_sha":commit,"status":"completed","conclusion":"success","app":{"id":42}}
+            ]}),
+        ] {
+            assert_eq!(
+                parse_required_check_runs(&serde_json::to_vec(&value).unwrap(), &required, &commit)
+                    .unwrap(),
+                RequiredChecksObservation::Pending
+            );
+        }
+        let passed = json!({"total_count":3,"check_runs":[
+            {"name":"unrelated","head_sha":commit,"status":"completed","conclusion":"failure","app":{"id":99}},
+            {"name":"Validate","head_sha":commit,"status":"completed","conclusion":"success","app":{"id":42}},
+            {"name":"release-local","head_sha":commit,"status":"completed","conclusion":"success","app":{"id":42}}
+        ]});
+        assert!(matches!(
+            parse_required_check_runs(
+                &serde_json::to_vec(&passed).unwrap(),
+                &required,
+                &commit
+            )
+            .unwrap(),
+            RequiredChecksObservation::Passed(rows) if rows.len() == 2
+        ));
+    }
+
+    #[test]
+    fn required_check_run_identity_and_terminal_failures_reject() {
+        let commit = "a".repeat(40);
+        let required = vec![RequiredCheck {
+            context: "Validate".into(),
+            integration_id: Some(42),
+        }];
+        let run = |head: &str, app: u64, status: &str, conclusion: Value| {
+            json!({"name":"Validate","head_sha":head,"status":status,
+                "conclusion":conclusion,"app":{"id":app}})
+        };
+        let failures = vec![
+            json!({"total_count":1,"check_runs":[run(&"b".repeat(40),42,"completed",json!("success"))]}),
+            json!({"total_count":1,"check_runs":[run(&commit,7,"completed",json!("success"))]}),
+            json!({"total_count":2,"check_runs":[
+                run(&commit,42,"completed",json!("success")),
+                run(&commit,42,"completed",json!("success"))
+            ]}),
+            json!({"total_count":1,"check_runs":[run(&commit,42,"completed",json!("failure"))]}),
+            json!({"total_count":1,"check_runs":[run(&commit,42,"completed",json!("cancelled"))]}),
+            json!({"total_count":1,"check_runs":[run(&commit,42,"mystery",Value::Null)]}),
+            json!({"total_count":1,"check_runs":[run(&commit,42,"in_progress",json!("success"))]}),
+            json!({"total_count":2,"check_runs":[run(&commit,42,"completed",json!("success"))]}),
+            json!({"total_count":1,"check_runs":[{"name":"Validate"}]}),
+        ];
+        for failure in failures {
+            assert!(parse_required_check_runs(
+                &serde_json::to_vec(&failure).unwrap(),
+                &required,
+                &commit
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn publication_command_stderr_is_bounded_and_redacted() {
+        let secret = "ghp_123456789012345678901234567890123456";
+        let summary = durable_publication_stderr(
+            format!(
+                "HTTP 503 while using token {secret}: {}",
+                "detail ".repeat(300)
+            )
+            .as_bytes(),
+        );
+        assert!(!summary.contains(secret));
+        assert!(summary.chars().count() <= 1000);
+        assert!(durable_publication_stderr(b"").contains("No stderr detail"));
     }
 
     #[test]

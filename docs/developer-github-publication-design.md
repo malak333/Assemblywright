@@ -98,6 +98,18 @@ reconciliation action may inspect the existing branch, PR, checks, and merge to
 recover only the same immutable operation; uncertain state remains attention.
 Publication failure cannot consume a model-repair attempt or authorize new code.
 
+A separate idempotent completion case applies when the persisted publication record
+is already valid `succeeded`/`complete` but the local feature promotion was not
+durable. Restart preserves that contradiction and Resume bypasses model execution,
+file mutation, validation replay, and publication effects. The publication runtime
+must rebind the exact frozen review candidate and completed PR, verify the original
+merge tree, prove the current base is that merge or a descendant, and verify every
+reviewed path still has the exact bytes or required absence. Tree entries must be one
+regular Git blob; links, gitlinks, trees, missing paths, changed bytes, non-descendant
+bases, base movement, cancellation, and any identity mismatch reject. A later
+unrelated descendant is compatible. The original merged SHA remains the completion
+receipt and the newly observed base SHA is appended as audit evidence.
+
 ### User interface
 
 Show connection state per project, publication stage, error/recovery guidance, and
@@ -139,6 +151,12 @@ checkpoint and are identified as `local_only`.
 | Explicit project connection, existing repository | Infer destination; silently create a public repository | Avoids uploading project code to an unintended destination. |
 | Frozen candidate and durable publication stages | Push whatever is in the project after review | Prevents stale review and duplicate or ambiguous effects. |
 | Reconcile interrupted publication explicitly | Automatic retry; regenerate the feature | Preserves existing PR and merge evidence without replaying uncertain effects. |
+| Reverify an already-complete receipt before local promotion | Trust startup state; replay publication | Closes the receipt/promotion crash window through observation-only PR, ancestry, tree, and reviewed-path evidence. |
+| Rebind an approval hidden by one later no-review proposal marker | Treat any trailing history entry as a new review; search backward over arbitrary outcomes | Accepts only the retained unavailable manual proposal's exact provider-free marker and no-effect lineage, then rebinds the immediately preceding approval without deleting evidence. |
+| Observe exact-head check runs while GitHub registers workflows | Treat empty/subset output or `gh pr checks` exit 1 as terminal; retry publication | Keeps empty, subset, queued, and in-progress observations pending inside the fixed deadline while exact head/app identity and terminal failures remain fail-closed. |
+| Keep validated publication completion terminal across later tool ledgers | Reopen every prior feature whenever any project tool revision appears | Preserves the exact durable review/publication history and lets later queued work proceed; only the observation cursor advances, while incomplete receipts still invalidate normally. |
+| Recover legacy tool-ledger interruptions through exact rebind plus remote observation | Mark them succeeded at startup; rerun implementation/review/publication | Startup validates the frozen candidate against the last retained approval, and Resume verifies that frozen candidate and the completed remote receipt without importing later workspace bytes or replaying effects. |
+| Validate removed completed-receipt tombstones without resurrection | Reject startup; restore the removed feature | Reuses the exact retained approval only to validate the frozen persisted candidate, preserves every tombstone field, and leaves the feature ineligible for reverification or execution. |
 | Base plus exact cumulative edit overlay | Copy a bounded project-context snapshot | Design-review objection accepted: a truncated context is not a complete publication manifest; original hashes and resulting tree must bind the commit. |
 | Protected required checks and expected-head merge guard | Check head only before an unbound merge | Design-review objection accepted: guards the merge request against a concurrent PR head change and rejects repositories without required checks. |
 

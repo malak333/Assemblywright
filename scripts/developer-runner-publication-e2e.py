@@ -5,6 +5,8 @@ from developer_planning_fixture import enqueue_with_plan
 from developer_review_fixture import reviewer_arguments
 
 import argparse
+from contextlib import closing
+import hashlib
 import http.server
 import io
 import json
@@ -12,6 +14,7 @@ import os
 from pathlib import Path
 import shutil
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -115,8 +118,18 @@ def main():
             "--git-executable", str(git_fixture),
             "--gh-executable", str(gh_fixture),
         ] + reviewer_arguments(root)
-        output = (root / "runner.log").open("wb")
-        process = subprocess.Popen(command, env=runner_env, stdin=subprocess.DEVNULL, stdout=output, stderr=output)
+        output = None
+        process = None
+
+        def start_runner(append=False):
+            nonlocal output, process
+            output = (root / "runner.log").open("ab" if append else "wb")
+            process = subprocess.Popen(
+                command, env=runner_env, stdin=subprocess.DEVNULL,
+                stdout=output, stderr=output,
+            )
+
+        start_runner()
         token = ""
 
         def api(path="status", body=None, timeout=60):
@@ -264,6 +277,234 @@ def main():
             assert feature["publication_commit_sha"] == feature["publication_merged_sha"]
             assert git("--git-dir", str(remote), "show", "main:app.py", capture=True) == "VALUE = 1"
 
+            # Reproduce the historical ledger bug as persisted state: a later
+            # unrelated project-tool revision interrupted an already-complete
+            # feature even though its last substantive review was the exact
+            # approval. Startup must retain the contradiction, and Resume must
+            # observe the remote receipt without replaying any effect.
+            api("control", {"action": "shutdown"})
+            process.wait(timeout=10)
+            output.close()
+            with closing(sqlite3.connect(data / "developer.sqlite3")) as connection_db, connection_db:
+                durable = json.loads(connection_db.execute(
+                    "SELECT state FROM developer_state WHERE id=1"
+                ).fetchone()[0])
+                interrupted = next(item for item in durable["queue_v13"] if item["id"] == feature_id)
+                interrupted["status"] = "paused"
+                interrupted["checkpoint"] = "review_tool_workspace_changed"
+                interrupted["review_status"] = "interrupted"
+                interrupted["review_summary"] = "Project tools changed the workspace; immutable validation and Codex review must run again."
+                interrupted["message"] = interrupted["review_summary"]
+                retained_ordinary_history = interrupted["review_history"]
+                retained_ordinary_publication = interrupted["publication"]
+                durable["revision"] += 1
+                connection_db.execute(
+                    "UPDATE developer_state SET state=? WHERE id=1",
+                    (json.dumps(durable, separators=(",", ":")),),
+                )
+            calls_path = fixture_state.with_suffix(".calls")
+            ordinary_calls_before = calls_path.read_text().splitlines()
+            start_runner(append=True)
+            restarted = wait(lambda value: not value["running"])
+            restarted_feature = next(item for item in restarted["queue"] if item["id"] == feature_id)
+            assert restarted_feature["status"] == "failed"
+            assert restarted_feature["checkpoint"] == "publication_completion_reverify"
+            control("resume")
+            ordinary_recovered = wait(lambda value: (
+                not value["github_publication_running"]
+                and next(item for item in value["queue"] if item["id"] == feature_id)["status"] == "succeeded"
+            ))
+            ordinary_feature = next(item for item in ordinary_recovered["queue"] if item["id"] == feature_id)
+            assert ordinary_feature["checkpoint"] == "publication_merged"
+            assert ordinary_feature["review_status"] == "approved"
+            with closing(sqlite3.connect(data / "developer.sqlite3")) as connection_db, connection_db:
+                ordinary_durable = json.loads(connection_db.execute(
+                    "SELECT state FROM developer_state WHERE id=1"
+                ).fetchone()[0])
+            ordinary_record = next(item for item in ordinary_durable["queue_v13"] if item["id"] == feature_id)
+            assert ordinary_record["review_history"] == retained_ordinary_history
+            for receipt_field in (
+                "status", "stage", "repository_url", "repository_slug", "base_branch",
+                "feature_branch", "base_sha", "candidate_tree_sha", "commit_sha", "pr_number",
+                "pr_url", "merged_sha",
+            ):
+                assert ordinary_record["publication"][receipt_field] == retained_ordinary_publication[receipt_field]
+            ordinary_retry_calls = [json.loads(line) for line in calls_path.read_text().splitlines()[len(ordinary_calls_before):]]
+            assert not any(
+                call["tool"] == "git" and "push" in call["arguments"]
+                or call["tool"] == "gh" and call["arguments"][:2] in (["pr", "create"], ["pr", "merge"])
+                for call in ordinary_retry_calls
+            ), ordinary_retry_calls
+
+            # A still later ledger revision may advance the completed feature's
+            # cursor, but cannot reopen or rewrite the durable completion.
+            api("control", {"action": "shutdown"})
+            process.wait(timeout=10)
+            output.close()
+            late_revision = ordinary_record["tool_workspace_revision"] + 1
+            late_request = str(uuid.uuid4())
+            late_mutation = {
+                "revision": late_revision,
+                "request_id": late_request,
+                "feature_id": None,
+                "edits": [],
+                "unreviewable_paths": [],
+            }
+            with closing(sqlite3.connect(data / "developer.sqlite3")) as connection_db, connection_db:
+                connection_db.execute(
+                    "INSERT OR REPLACE INTO developer_tool_workspace(project,revision) VALUES(?,?)",
+                    ("connected", late_revision),
+                )
+                connection_db.execute(
+                    "INSERT OR REPLACE INTO developer_tool_mutation(project,revision,request_id,feature_id,evidence) VALUES(?,?,?,?,?)",
+                    ("connected", late_revision, late_request, None, json.dumps(late_mutation)),
+                )
+            start_runner(append=True)
+            terminal = wait(lambda value: next(
+                item for item in value["queue"] if item["id"] == feature_id
+            )["tool_workspace_revision"] == late_revision)
+            terminal_feature = next(item for item in terminal["queue"] if item["id"] == feature_id)
+            assert terminal_feature["status"] == "succeeded"
+            assert terminal_feature["checkpoint"] == "publication_merged"
+            assert terminal_feature["review_status"] == "approved"
+
+            # Advance main with an unrelated descendant, then reproduce the legacy
+            # crash window where the complete publication receipt was durable but
+            # the local feature promotion was not. Resume must only observe the
+            # exact old PR/merge/tree plus retained candidate bytes at current main.
+            descendant = root / "descendant"
+            git("clone", str(remote), str(descendant), cwd=root)
+            git("config", "user.name", "Publication Owner", cwd=descendant)
+            git("config", "user.email", "owner@example.invalid", cwd=descendant)
+            (descendant / "unrelated.txt").write_text("later publication\n")
+            git("add", "unrelated.txt", cwd=descendant)
+            git("commit", "-m", "later unrelated publication", cwd=descendant)
+            git("push", "origin", "main", cwd=descendant)
+            descendant_sha = git("rev-parse", "HEAD", cwd=descendant, capture=True)
+            calls_path = fixture_state.with_suffix(".calls")
+            calls_before_retry = calls_path.read_text().splitlines()
+
+            api("control", {"action": "shutdown"})
+            process.wait(timeout=10)
+            output.close()
+            with closing(sqlite3.connect(data / "developer.sqlite3")) as connection_db, connection_db:
+                state_text = connection_db.execute(
+                    "SELECT state FROM developer_state WHERE id=1"
+                ).fetchone()[0]
+                durable = json.loads(state_text)
+                retained = next(item for item in durable["queue_v13"] if item["id"] == feature_id)
+                assert retained["publication"]["status"] == "succeeded"
+                assert retained["publication"]["stage"] == "complete"
+                assert retained["escalation_history"] == []
+                proposal_id = "23ae09d8-67a6-4c9b-ab0b-c2314e23a291"
+                diagnosis_sha256 = "d" * 64
+                candidate_sha256 = hashlib.sha256(b'{"files":[]}').hexdigest()
+                marker_summary = "Proposal preparation did not produce an authorized application; independent review was not run"
+                retained["escalation_count"] = 1
+                retained["escalation_evidence_reserved"] = 3
+                retained["review_evidence_reserved"] += 1
+                retained["escalation_pending"] = False
+                retained["escalation_proposal"] = {
+                    "proposal_id": proposal_id,
+                    "attempt": 1,
+                    "feature_id": feature_id,
+                    "feature_checkpoint": "review_1_approved",
+                    "binding_revision": durable["revision"] + 1,
+                    "model_target": retained["model_target"],
+                    "model": "fixture-model",
+                    "chat_id": "9b93aed7-a70e-4b94-985a-0e7f09c88bfb",
+                    "chat_request_id": "e6c289ac-a382-4632-902a-a4bb81942bfe",
+                    "chat_model_target": retained["model_target"],
+                    "chat_model": "fixture-model",
+                    "diagnosis": "The completed publication needs observation, not a file correction",
+                    "diagnosis_sha256": diagnosis_sha256,
+                    "status": "unavailable",
+                    "summary": "The selected local AI could not prepare a repair proposal",
+                    "error": "Expected 1 to 40 proposed files",
+                    "files": [],
+                    "protected_inputs": {},
+                    "applied_paths": [],
+                    "apply_request_id": None,
+                    "source": "manual_chat",
+                    "automatic_epoch": None,
+                    "policy_revision": None,
+                    "limit_snapshot": retained["auto_ai_repair_limit"],
+                    "project_state_sha256": None,
+                    "review_slot_terminal": True,
+                }
+                lineage = {
+                    "proposal_id": proposal_id,
+                    "attempt": 1,
+                    "model_target": retained["model_target"],
+                    "model": "fixture-model",
+                    "chat_id": "9b93aed7-a70e-4b94-985a-0e7f09c88bfb",
+                    "chat_request_id": "e6c289ac-a382-4632-902a-a4bb81942bfe",
+                    "diagnosis_sha256": diagnosis_sha256,
+                    "proposal_sha256": None,
+                    "source": "manual_chat",
+                    "automatic_epoch": None,
+                    "policy_revision": None,
+                    "limit_snapshot": retained["auto_ai_repair_limit"],
+                    "project_state_sha256": None,
+                    "authorization_revision": None,
+                    "apply_request_id": None,
+                }
+                retained["escalation_history"] = [
+                    dict(lineage, outcome="unavailable", candidate_sha256=None,
+                         summary="The selected local AI could not prepare a repair proposal"),
+                    dict(lineage, outcome="authorization_not_run", candidate_sha256=candidate_sha256,
+                         summary=marker_summary),
+                    dict(lineage, outcome="application_not_run", candidate_sha256=candidate_sha256,
+                         summary=marker_summary),
+                ]
+                retained["review_history"].append({
+                    "attempt": 1,
+                    "packet_sha256": candidate_sha256,
+                    "validation_evidence_sha256": diagnosis_sha256,
+                    "outcome": "not_run",
+                    "decision_sha256": None,
+                    "binding_version": 0,
+                    "batch_packet_sha256s": [],
+                    "batch_receipt_sha256s": [],
+                    "blocking_findings": [],
+                    "summary": marker_summary,
+                })
+                retained_review_history = retained["review_history"]
+                retained["status"] = "failed"
+                retained["checkpoint"] = "review_binding_changed"
+                retained["review_status"] = "interrupted"
+                retained["review_summary"] = "Prior completion retry could not find the retained approval"
+                retained["message"] = retained["review_summary"]
+                durable["revision"] += 1
+                connection_db.execute(
+                    "UPDATE developer_state SET state=? WHERE id=1",
+                    (json.dumps(durable, separators=(",", ":")),),
+                )
+            start_runner(append=True)
+            wait(lambda value: not value["running"])
+            control("resume")
+            recovered = wait(lambda value: (
+                not value["github_publication_running"]
+                and next(item for item in value["queue"] if item["id"] == feature_id)["status"] == "succeeded"
+            ))
+            recovered_feature = next(item for item in recovered["queue"] if item["id"] == feature_id)
+            assert recovered_feature["checkpoint"] == "publication_merged"
+            assert recovered_feature["review_status"] == "approved"
+            assert recovered_feature["publication_merged_sha"] == feature["publication_merged_sha"]
+            assert git("--git-dir", str(remote), "rev-parse", "main", capture=True) == descendant_sha
+            with closing(sqlite3.connect(data / "developer.sqlite3")) as connection_db, connection_db:
+                recovered_durable = json.loads(connection_db.execute(
+                    "SELECT state FROM developer_state WHERE id=1"
+                ).fetchone()[0])
+            recovered_record = next(item for item in recovered_durable["queue_v13"] if item["id"] == feature_id)
+            assert recovered_record["review_history"] == retained_review_history
+            retry_calls = [json.loads(line) for line in calls_path.read_text().splitlines()[len(calls_before_retry):]]
+            assert not any(
+                call["tool"] == "git" and "push" in call["arguments"]
+                or call["tool"] == "gh" and call["arguments"][:2] in (["pr", "create"], ["pr", "merge"])
+                for call in retry_calls
+            ), retry_calls
+
             local_id = enqueue("local-only", "[publication:local-only]")
             control("start")
             local = wait(lambda value: next(item for item in value["queue"] if item["id"] == local_id)["status"] == "succeeded")
@@ -273,14 +514,19 @@ def main():
 
             state = json.loads(fixture_state.read_text())
             assert state["pr_number"] == 17 and state["merged"] == feature["publication_merged_sha"]
+            assert state["check_run_observations"] >= 3
             print(json.dumps({
                 "native_platform": sys.platform,
                 "real_bare_git_transport": True,
                 "canonical_existing_repository_connection": True,
                 "unbound_or_non_strict_policy_rejected": True,
                 "required_checks_exact_commit_and_app": True,
+                "required_check_registration_delay_tolerated": True,
                 "stop_blocks_queue_and_reconcile_merges": True,
                 "exact_reviewed_commit_merged": True,
+                "completed_receipt_descendant_reverified_without_effect_replay": True,
+                "completed_receipt_workspace_interruption_recovered_after_restart": True,
+                "terminal_publication_survives_late_tool_revision": True,
                 "unconnected_project_local_only": True,
                 "live_github_credentials_used": False,
             }))
@@ -292,10 +538,12 @@ def main():
                 api("control", {"action": "shutdown"})
             except Exception:
                 pass
-            if process.poll() is None:
+            if process is not None and process.poll() is None:
                 process.terminate()
-            process.wait(timeout=10)
-            output.close()
+            if process is not None:
+                process.wait(timeout=10)
+            if output is not None and not output.closed:
+                output.close()
             model.shutdown()
             if failure is not None and args.output:
                 destination = Path(args.output).resolve()
