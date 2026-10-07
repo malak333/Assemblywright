@@ -132,6 +132,19 @@ The supported production launcher rebuilt and restarted the Developer runner
 without replacing its projects or queue. The Mac production bundle passed
 `codesign --verify --deep --strict` with its local ad-hoc signature.
 
+## Hosted validation correction
+
+The first source PR Mac gate exposed a test-harness race in the existing
+brainstorming adapter rejection fixture: the adapter correctly rejected a linked
+private directory and exited before the fixture finished writing stdin. The
+fixture panicked on `BrokenPipe` before checking the rejection result. Only the
+expected early-rejection helper now accepts that transport result; successful
+request paths still reject every write error. The negative fixture still requires
+exit code 11, empty output and no Codex invocation. All three adapter E2E tests
+pass independently. This correction changes test infrastructure only; the installed
+runtime and autonomous proof binary remain unchanged. Canonical validation and
+all exact-head hosted gates are repeated for the corrected source before merge.
+
 ## Closeout verdicts
 
 - Documentation and safety: design, publication contract and safety rules describe
