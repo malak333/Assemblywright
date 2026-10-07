@@ -145,6 +145,17 @@ pass independently. This correction changes test infrastructure only; the instal
 runtime and autonomous proof binary remain unchanged. Canonical validation and
 all exact-head hosted gates are repeated for the corrected source before merge.
 
+The first corrected-source Windows gate also failed while its scalable fixture
+waited for partial application: the durable proposal was `unavailable` with no
+candidate or applied paths. That log omitted the proposal error, so its cause
+is not established. An exact 300-output native reproduction on MIKE-PC reached
+306-entry application, ruling out a general candidate-capacity failure. The
+fixture now retains bounded proposal/feature/history diagnostics and fails
+immediately if preparation becomes terminal before application. The 300-output
+fixture and all exact partition, crash/restart and no-replay assertions remain.
+This diagnostic correction changes no production behavior; the corrected-source
+canonical and hosted gates are required again before merge.
+
 ## Closeout verdicts
 
 - Documentation and safety: design, publication contract and safety rules describe

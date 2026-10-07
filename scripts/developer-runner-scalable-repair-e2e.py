@@ -1013,12 +1013,33 @@ def main():
                         proposal = current.get('escalation_proposal') or {}
                         applied_paths = proposal.get('applied_paths') or []
                         staged_candidate = proposal.get('staged_candidate') or []
+                        escalation_history = current.get('escalation_history') or []
                         last_observed_state = {
                             'proposal_status': proposal.get('status'),
+                            'proposal_summary': (proposal.get('summary') or '')[:1_000],
+                            'proposal_error': (proposal.get('error') or '')[:1_000],
                             'applied_count': len(applied_paths),
                             'candidate_count': len(staged_candidate),
+                            'feature_checkpoint': current.get('checkpoint'),
+                            'feature_message': (current.get('message') or '')[:1_000],
+                            'auto_repair_lifecycle': current.get('auto_repair_lifecycle'),
+                            'last_escalation_history': [{
+                                'proposal_id': item.get('proposal_id'),
+                                'attempt': item.get('attempt'),
+                                'outcome': item.get('outcome'),
+                                'summary': (item.get('summary') or '')[:1_000],
+                            } for item in escalation_history[-3:]],
                             'runner_exit_code': process.poll(),
                         }
+                        terminal_proposal = proposal.get('status') in {
+                            'unavailable', 'cancelled', 'no_op', 'duplicate', 'interrupted'}
+                        terminal_lifecycle = current.get('auto_repair_lifecycle') in {
+                            'held', 'quarantined', 'limit_reached'}
+                        if not applied_paths and (terminal_proposal or terminal_lifecycle):
+                            raise AssertionError({
+                                'error': 'staged preparation terminated before partial application',
+                                'last_observed_state': last_observed_state,
+                            })
                         if (proposal.get('status') != 'applying' or not applied_paths
                                 or len(applied_paths) >= len(staged_candidate)):
                             time.sleep(.001)
