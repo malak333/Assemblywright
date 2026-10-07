@@ -1,0 +1,76 @@
+[
+  {
+    "snapshot": "owner-workspace",
+    "base_commit": "01e0d5296ca36965c25968314c5a4f537a43c8f9",
+    "patch": "owner-workspace.patch.json",
+    "sha256": "60f397c3e05309eebca390bdbfc523a5bb14332e524a656ebfa5f1c34c451dde",
+    "tracked_paths": [
+      ".gitignore",
+      "DESIGN.md",
+      "apps/mac/Sources/AssemblywrightMacApp/DeveloperRepairEscalationView.swift",
+      "apps/mac/Sources/AssemblywrightMacApp/DeveloperRunnerView.swift",
+      "apps/mac/Tests/AssemblywrightMacAppTests/DeveloperProjectChatTests.swift",
+      "apps/mac/Tests/AssemblywrightMacAppTests/DeveloperRepairEscalationTests.swift",
+      "apps/mac/Tests/AssemblywrightMacAppTests/DeveloperRunnerTests.swift",
+      "crates/assemblywright-master/examples/developer_review_fixture.rs",
+      "crates/assemblywright-master/src/developer_main.rs",
+      "crates/assemblywright-master/src/developer_publication.rs",
+      "crates/assemblywright-master/src/developer_review.rs",
+      "crates/assemblywright-master/src/developer_tools.rs",
+      "crates/assemblywright-master/tests/developer_workflow_e2e.rs",
+      "docs/build-test-commands.md",
+      "docs/developer-auto-ai-repair-design.md",
+      "docs/developer-build-testing.md",
+      "docs/developer-build.md",
+      "docs/developer-chat-repair-design.md",
+      "docs/knowledge-base/assemblywright-project-facts.md",
+      "scripts/developer-runner-auto-repair-e2e.py",
+      "scripts/developer-runner-chat-e2e.py",
+      "scripts/developer-runner-e2e.py",
+      "scripts/developer-runner-escalation-e2e.py",
+      "scripts/developer-runner-model-target-e2e.py",
+      "scripts/developer-runner-planning-e2e.py",
+      "scripts/developer-runner-repair-e2e.py",
+      "scripts/developer-runner-review-e2e.py",
+      "scripts/developer-runner-settings-e2e.py",
+      "scripts/developer_review_fixture.py"
+    ],
+    "untracked_source_paths": [
+      "docs/developer-pytest-cache-recovery-validation.md",
+      "docs/developer-repair-conversation-binding-validation.md",
+      "docs/developer-scalable-repair-design.md",
+      "docs/developer-scalable-repair-validation.md",
+      "scripts/developer-runner-scalable-repair-e2e.py",
+      "scripts/developer_opencode_runtime.py",
+      "scripts/developer_review_scalable_fixture.py",
+      "scripts/local_codex_worker.py",
+      "scripts/local_codex_worker_tests.py"
+    ],
+    "purpose": "Historical untrusted proposal, not applied to runtime source",
+    "sha256_scope": "UTF-8 bytes of concatenated lines in the JSON archive"
+  },
+  {
+    "snapshot": "metalgear-recovery",
+    "base_commit": "01e0d5296ca36965c25968314c5a4f537a43c8f9",
+    "patch": "metalgear-recovery.patch.json",
+    "sha256": "7dcc5051dc21b5e71362098c06fc70e4585d9468298fa4a897eb10492399a305",
+    "tracked_paths": [
+      "crates/assemblywright-cli/src/main.rs",
+      "crates/assemblywright-core/src/release.rs",
+      "crates/assemblywright-master/examples/developer_review_fixture.rs",
+      "crates/assemblywright-master/src/developer_main.rs",
+      "crates/assemblywright-master/src/developer_publication.rs",
+      "crates/assemblywright-master/src/developer_review.rs",
+      "crates/assemblywright-master/src/developer_tools.rs",
+      "crates/assemblywright-master/tests/developer_workflow_e2e.rs",
+      "crates/assemblywright-master/tests/review_provider_e2e.rs"
+    ],
+    "untracked_source_paths": [
+      "crates/assemblywright-executor/src/windows_active_control.rs",
+      "crates/assemblywright-master/tests/assembly_line_execution_status_http.rs",
+      "crates/assemblywright-master/tests/assembly_line_execution_status_mtls.rs"
+    ],
+    "purpose": "Historical untrusted proposal, not applied to runtime source",
+    "sha256_scope": "UTF-8 bytes of concatenated lines in the JSON archive"
+  }
+]

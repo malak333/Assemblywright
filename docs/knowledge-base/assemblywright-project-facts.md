@@ -3386,3 +3386,16 @@ consistency.
   `developer.sqlite3`. Wrap connections in `contextlib.closing` outside their
   transaction context so commits remain intact and handles close before cleanup.
   Keep cleanup errors visible; do not suppress them or weaken publication tests.
+
+## Publishing divergent local workspace snapshots
+
+- Older dirty worktrees can contain cumulative versions of features already
+  merged later. Compare their base commit, working edits and current main before
+  integration; a byte difference alone is not an unpublished feature.
+- When the owner requests all pending source to be published, preserve divergent
+  or incomplete proposals as inert archives with base commits, path inventories
+  and exact-byte digests. Do not apply obsolete cumulative patches over newer
+  fixes. The 2026-10-07 archive is under
+  `docs/archive/2026-10-07-pending-worktrees/`; JSON diff lines preserve whitespace.
+  Generated caches/build outputs remain local, and retired worker source remains
+  archival material with no execution authority.
