@@ -52,7 +52,11 @@ pub(crate) const CHAT_ACTION_EVIDENCE_RESERVE_BYTES: u64 = 64 * 1024 * 1024;
 const FEATURE_ACTION_EVIDENCE_BOUND_BYTES: u64 = 192 * 1024 * 1024;
 
 fn action_limit(request: &ToolChatRequest) -> u64 {
-    if request.feature_id.is_some() {
+    action_limit_for_feature(request.feature_id.as_deref())
+}
+
+fn action_limit_for_feature(feature_id: Option<&str>) -> u64 {
+    if feature_id.is_some() {
         MAX_FEATURE_ACTIONS_PER_REQUEST
     } else {
         MAX_CHAT_ACTIONS_PER_REQUEST
@@ -1618,6 +1622,7 @@ impl DeveloperTools {
             access.mode,
             project_path,
             &request.forbidden_write_paths,
+            request.feature_id.as_deref(),
         )?;
         let isolated = runtime.data_dir.join("opencode-runtime");
         let temporary = isolated.join("tmp");
@@ -1754,6 +1759,7 @@ impl DeveloperTools {
                 &request.model,
                 access.mode,
                 &request.forbidden_write_paths,
+                request.feature_id.as_deref(),
             )
             .await?;
             let session: Value = post_project_json(
@@ -3331,6 +3337,7 @@ fn opencode_config(
     mode: ToolAccessMode,
     project: &Path,
     forbidden_write_paths: &[String],
+    feature_id: Option<&str>,
 ) -> Result<Value> {
     validate_tool_model(model)?;
     let provider = provider_id(&model.target);
@@ -3345,7 +3352,7 @@ fn opencode_config(
         "instructions":[],
         "tools":{"task":false,"skill":false,"lsp":false,"question":false,"todowrite":false},
         "permission":permission,
-        "agent":{"build":{"temperature":0.1,"steps":24,"tools":{"task":false,"skill":false,"lsp":false,"question":false,"todowrite":false}}},
+        "agent":{"build":{"temperature":0.1,"steps":action_limit_for_feature(feature_id),"tools":{"task":false,"skill":false,"lsp":false,"question":false,"todowrite":false}}},
         "mcp":{},
         "plugin":[],
         "provider":{
@@ -3568,13 +3575,14 @@ async fn verify_resolved_config(
     model: &ToolModelConfig,
     mode: ToolAccessMode,
     forbidden_write_paths: &[String],
+    feature_id: Option<&str>,
 ) -> Result<()> {
     let resolved: Value = get_project(client, base, "config", project)
         .await?
         .error_for_status()?
         .json()
         .await?;
-    let expected = opencode_config(model, mode, project, forbidden_write_paths)?;
+    let expected = opencode_config(model, mode, project, forbidden_write_paths, feature_id)?;
     let mut mismatches = Vec::new();
     if resolved["share"] != expected["share"] {
         mismatches.push("share");
@@ -3597,7 +3605,8 @@ async fn verify_resolved_config(
     if resolved["tools"] != expected["tools"] {
         mismatches.push("tools");
     }
-    if resolved["agent"]["build"]["tools"] != expected["agent"]["build"]["tools"]
+    if resolved["agent"]["build"]["steps"] != expected["agent"]["build"]["steps"]
+        || resolved["agent"]["build"]["tools"] != expected["agent"]["build"]["tools"]
         || !resolved_agent_permission_matches(&resolved["agent"]["build"]["permission"])
     {
         mismatches.push("agent.build");
@@ -4420,6 +4429,7 @@ mod tests {
             ToolAccessMode::Auto,
             Path::new("C:/projects/project"),
             &[],
+            Some("feature-id"),
         )
         .unwrap();
         assert_eq!(config["share"], "disabled");
@@ -4431,6 +4441,22 @@ mod tests {
         assert_eq!(config["tools"]["task"], false);
         assert_eq!(config["tools"]["skill"], false);
         assert_eq!(config["tools"]["lsp"], false);
+        assert_eq!(
+            config["agent"]["build"]["steps"],
+            json!(MAX_FEATURE_ACTIONS_PER_REQUEST)
+        );
+        let chat_config = opencode_config(
+            &model,
+            ToolAccessMode::Auto,
+            Path::new("C:/projects/project"),
+            &[],
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            chat_config["agent"]["build"]["steps"],
+            json!(MAX_CHAT_ACTIONS_PER_REQUEST)
+        );
         let limits =
             &config["provider"]["assemblywright-windows"]["models"]["windows-coder"]["limit"];
         assert_eq!(limits["context"], json!(262_144));
@@ -4454,6 +4480,7 @@ mod tests {
             ToolAccessMode::Ask,
             Path::new("C:/projects/project"),
             &[],
+            None,
         )
         .is_err());
     }
@@ -4567,6 +4594,7 @@ mod tests {
             ToolAccessMode::Auto,
             Path::new("C:/projects/project"),
             &[],
+            None,
         )
         .unwrap();
         let mut resolved = expected.clone();
@@ -4589,7 +4617,14 @@ mod tests {
             model: "windows-coder".into(),
         };
         let project = Path::new("C:/projects/project");
-        let expected = opencode_config(&model, ToolAccessMode::Auto, project, &[]).unwrap();
+        let expected = opencode_config(
+            &model,
+            ToolAccessMode::Auto,
+            project,
+            &[],
+            Some("feature-id"),
+        )
+        .unwrap();
         let mut resolved = expected.clone();
         resolved["agent"]["build"]["permission"] = json!({
             "task":"deny",
@@ -4601,31 +4636,70 @@ mod tests {
         let client = Client::builder().no_proxy().build().unwrap();
 
         let (base, served) = resolved_config_server(resolved.clone()).await;
-        verify_resolved_config(&client, &base, project, &model, ToolAccessMode::Auto, &[])
-            .await
-            .unwrap();
+        verify_resolved_config(
+            &client,
+            &base,
+            project,
+            &model,
+            ToolAccessMode::Auto,
+            &[],
+            Some("feature-id"),
+        )
+        .await
+        .unwrap();
         served.await.unwrap();
 
         let mut drifted = resolved.clone();
         drifted["provider"]["assemblywright-windows"]["models"]["windows-coder"]["limit"]
             ["output"] = json!(4_096);
         let (base, served) = resolved_config_server(drifted).await;
-        let error =
-            verify_resolved_config(&client, &base, project, &model, ToolAccessMode::Auto, &[])
-                .await
-                .unwrap_err();
+        let error = verify_resolved_config(
+            &client,
+            &base,
+            project,
+            &model,
+            ToolAccessMode::Auto,
+            &[],
+            Some("feature-id"),
+        )
+        .await
+        .unwrap_err();
         assert!(error.to_string().contains("provider.model.limit"));
         served.await.unwrap();
 
-        let mut timeout_drifted = resolved;
+        let mut timeout_drifted = resolved.clone();
         timeout_drifted["provider"]["assemblywright-windows"]["options"]["timeout"] =
             json!(900_000);
         let (base, served) = resolved_config_server(timeout_drifted).await;
-        let error =
-            verify_resolved_config(&client, &base, project, &model, ToolAccessMode::Auto, &[])
-                .await
-                .unwrap_err();
+        let error = verify_resolved_config(
+            &client,
+            &base,
+            project,
+            &model,
+            ToolAccessMode::Auto,
+            &[],
+            Some("feature-id"),
+        )
+        .await
+        .unwrap_err();
         assert!(error.to_string().contains("provider.options.timeout"));
+        served.await.unwrap();
+
+        let mut step_drifted = resolved.clone();
+        step_drifted["agent"]["build"]["steps"] = json!(23);
+        let (base, served) = resolved_config_server(step_drifted).await;
+        let error = verify_resolved_config(
+            &client,
+            &base,
+            project,
+            &model,
+            ToolAccessMode::Auto,
+            &[],
+            Some("feature-id"),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("agent.build"));
         served.await.unwrap();
     }
     #[test]
@@ -5020,6 +5094,7 @@ mod tests {
             ToolAccessMode::Full,
             project,
             &["tests/**".into(), "validation.py".into()],
+            Some("feature-id"),
         )
         .unwrap();
         assert_eq!(config["permission"]["*"], "allow");

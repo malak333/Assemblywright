@@ -22,6 +22,7 @@ import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 import zlib
@@ -97,6 +98,9 @@ def main():
         parser.error(f'pinned OpenCode executable does not exist: {opencode}')
     calls = []
     opencode_calls = []
+    long_stage_opencode_calls = []
+    attributable_chat_opencode_calls = []
+    long_stage_probe_count = 25
     stage_entered = threading.Event()
     stage_release = threading.Event()
     staged_image = png()
@@ -132,27 +136,101 @@ def main():
         def log_message(self, *unused):
             pass
 
+        def do_GET(self):
+            if self.path != '/props':
+                self.send_error(404)
+                return
+            body = json.dumps({
+                'total_slots': 1,
+                'modalities': {'vision': False},
+                'n_ctx': 262144,
+                'default_generation_settings': {'n_ctx': 262144},
+            }).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         def do_POST(self):
             request = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
             if request.get('tools'):
                 prompt_text = json.dumps(request.get('messages', []))
+                attributable_chat = 'fixture:attributable-chat-mutation' in prompt_text
+                long_stage = 'staged-automatic:' in prompt_text
+                if attributable_chat:
+                    opencode_calls.append(request)
+                    attributable_chat_opencode_calls.append(request)
+                    tool_results = [message for message in request.get('messages', [])
+                        if message.get('role') == 'tool']
+                    if tool_results:
+                        return model_reply(self, request,
+                            {'content': 'Applied the attributable project-chat mutation.'},
+                            'stop')
+                    tools = {item['function']['name']: item['function']
+                        for item in request['tools'] if item.get('type') == 'function'}
+                    assert 'bash' in tools, sorted(tools)
+                    mutation_code = (
+                        "from pathlib import Path; "
+                        "Path('chat-attributable.txt').write_bytes("
+                        "b'attributable project-chat mutation\\n')")
+                    mutation_command = (subprocess.list2cmdline(
+                        [sys.executable, '-B', '-c', mutation_code])
+                        if os.name == 'nt' else shlex.join(
+                            [sys.executable, '-B', '-c', mutation_code]))
+                    mutation_arguments = {
+                        'command': mutation_command,
+                        'description': 'write attributable project-chat mutation',
+                    }
+                    for required in tools['bash'].get('parameters', {}).get('required', []):
+                        mutation_arguments.setdefault(required,
+                            'attributable project-chat mutation')
+                    return model_reply(self, request, {'content': None, 'tool_calls': [{
+                        'index': 0, 'id': 'attributable-chat-write', 'type': 'function',
+                        'function': {'name': 'bash',
+                                     'arguments': json.dumps(mutation_arguments)}}]}, 'tool_calls')
                 assert 'Staged build environment:' in prompt_text
                 assert 'Never install packages into global Python' in prompt_text
                 if os.name == 'nt':
                     assert 'Windows PowerShell' in prompt_text
                 opencode_calls.append(request)
+                if long_stage:
+                    long_stage_opencode_calls.append(request)
                 stage_entered.set()
                 if not stage_release.wait(90):
                     raise AssertionError('staged repair fixture was not released')
-                has_tool_result = any(message.get('role') == 'tool'
-                    for message in request.get('messages', []))
-                if has_tool_result:
-                    return model_reply(self, request,
-                        {'content': 'Implemented the staged correction, generated the PNG, and ran validation.'},
-                        'stop')
+                tool_results = [message for message in request.get('messages', [])
+                    if message.get('role') == 'tool']
                 tools = {item['function']['name']: item['function']
                     for item in request['tools'] if item.get('type') == 'function'}
                 assert 'bash' in tools, sorted(tools)
+                schema = tools['bash'].get('parameters', {})
+                if long_stage and len(tool_results) < long_stage_probe_count:
+                    probe_index = len(tool_results)
+                    marker = f'aw-long-stage-probe-{probe_index:02}'
+                    probe_code = (
+                        "from pathlib import Path; "
+                        "assert Path('app.py').is_file(); "
+                        f"print('{marker}')")
+                    probe_command = (subprocess.list2cmdline(
+                        [sys.executable, '-B', '-c', probe_code])
+                        if os.name == 'nt' else shlex.join(
+                            [sys.executable, '-B', '-c', probe_code]))
+                    probe_arguments = {
+                        'command': probe_command,
+                        'description': f'bounded staged probe {probe_index:02}',
+                    }
+                    for required in schema.get('required', []):
+                        probe_arguments.setdefault(required, 'bounded staged probe')
+                    return model_reply(self, request, {'content': None, 'tool_calls': [{
+                        'index': 0, 'id': marker, 'type': 'function',
+                        'function': {'name': 'bash',
+                                     'arguments': json.dumps(probe_arguments)}}]}, 'tool_calls')
+                if tool_results and (not long_stage
+                        or len(tool_results) > long_stage_probe_count):
+                    return model_reply(self, request,
+                        {'content': 'Implemented the staged correction, generated the PNG, and ran validation.'},
+                        'stop')
                 image_base64 = base64.b64encode(staged_image).decode()
                 corrected_test_base64 = base64.b64encode((
                     'from pathlib import Path\nimport sys\n'
@@ -181,7 +259,6 @@ def main():
                 ])
                 command = (subprocess.list2cmdline([sys.executable, '-c', code])
                     if os.name == 'nt' else shlex.join([sys.executable, '-c', code]))
-                schema = tools['bash'].get('parameters', {})
                 arguments = {'command': command, 'description': 'write staged repair and PNG'}
                 for required in schema.get('required', []):
                     arguments.setdefault(required, 'staged repair fixture')
@@ -902,9 +979,13 @@ def main():
             restart_capture_errors = []
             negative_state = root / 'restart-negative-state'
             negative_projects = root / 'restart-negative-projects'
+            partial_application_timeout = 180
 
             def capture_partial_application():
-                deadline = time.monotonic() + 90
+                # The pinned OpenCode session performs 25 audited probes before
+                # the staged write. Hosted Windows can spend more than 90 seconds
+                # in that real tool loop under CI load, before application begins.
+                deadline = time.monotonic() + partial_application_timeout
                 last_observed = 0
                 while time.monotonic() < deadline:
                     try:
@@ -1023,7 +1104,8 @@ def main():
             stage_release.set()
             resume_thread.join(30)
             assert not resume_thread.is_alive() and not resume_errors, resume_errors
-            assert restart_captured.wait(90), 'partial staged application was not captured'
+            assert restart_captured.wait(partial_application_timeout + 5), \
+                'partial staged application was not captured'
             restart_observer.join(5)
             assert not restart_observer.is_alive() and not restart_capture_errors, \
                 restart_capture_errors
@@ -1220,8 +1302,8 @@ def main():
                     held = next(item for item in stopped['queue'] if item['id'] == staged_feature_id)
                     assert held['checkpoint'] == 'auto_repair_effects_quarantined', held
                     assert held['auto_repair_lifecycle'] == 'quarantined'
-                    digest = held.get('asset_recovery_sha256')
-                    assert digest and len(digest) == 64, held
+                    pre_chat_digest = held.get('asset_recovery_sha256')
+                    assert pre_chat_digest and len(pre_chat_digest) == 64, held
                     held_terminal = api('repair/escalation?id=' + staged_feature_id)
                     assert held_terminal['status'] == 'interrupted', held_terminal
                     assert held_terminal['files'] == []
@@ -1267,6 +1349,47 @@ def main():
                         for key in receipt_binding_keys)
                     held_escalation_history = held_durable_feature['escalation_history']
                     held_escalation_count = held_durable_feature['escalation_count']
+                    chat_created = api('chat/conversations', {
+                        'id': str(uuid.uuid4()), 'project': 'staged-automatic'})
+                    chat_id = chat_created['chat_id']
+                    chat_request_id = str(uuid.uuid4())
+                    chat_admitted = api('chat', {
+                        'project': 'staged-automatic', 'chat_id': chat_id,
+                        'message': 'fixture:attributable-chat-mutation',
+                        'id': chat_request_id, 'attachments': [],
+                        'model_target': 'windows'})
+                    assert chat_admitted['running']
+                    chat_path = 'chat?' + urllib.parse.urlencode({
+                        'project': 'staged-automatic', 'chat_id': chat_id})
+                    chat_deadline = time.monotonic() + 90
+                    while True:
+                        chat_answer = api(chat_path)
+                        if not chat_answer['running']:
+                            break
+                        if time.monotonic() >= chat_deadline:
+                            raise AssertionError((chat_answer,
+                                (root / 'runner.log').read_text(errors='replace')))
+                        time.sleep(.05)
+                    assert not chat_answer['error'], chat_answer
+                    assert chat_answer['messages'][-1]['request_id'] == chat_request_id
+                    assert chat_answer['messages'][-1]['content'] == \
+                        'Applied the attributable project-chat mutation.'
+                    assert len(attributable_chat_opencode_calls) == 2, \
+                        len(attributable_chat_opencode_calls)
+                    attributable_path = staged_project / 'chat-attributable.txt'
+                    assert attributable_path.read_text() == \
+                        'attributable project-chat mutation\n'
+                    mutated_state = wait(lambda s: not s['tools_running'] and next(
+                        item for item in s['queue'] if item['id'] == staged_feature_id
+                        )['checkpoint'] == 'tool_workspace_changed_requires_proposal')
+                    held = next(item for item in mutated_state['queue']
+                        if item['id'] == staged_feature_id)
+                    assert held['auto_repair_lifecycle'] == 'quarantined'
+                    digest = held.get('asset_recovery_sha256')
+                    assert digest and len(digest) == 64 and digest != pre_chat_digest, held
+                    restart_capture['attributable_chat_workspace_revision'] = \
+                        held['tool_workspace_revision']
+                    restart_capture['opencode_calls_after_attributable_chat'] = len(opencode_calls)
                     assert validation_cache_snapshot(staged_project) == staged_cache_before
                     saved_files = {str(path.relative_to(staged_project)):
                         (hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_mtime_ns)
@@ -1278,7 +1401,9 @@ def main():
                     binding = {'action': 'resume', 'expected_feature_id': staged_feature_id,
                         'expected_model_target': held['model_target'], 'expected_status': held['status'],
                         'expected_checkpoint': held['checkpoint']}
-                    for bad in (binding, dict(binding, expected_asset_recovery_sha256='0' * 64)):
+                    for bad in (binding,
+                            dict(binding, expected_asset_recovery_sha256='0' * 64),
+                            dict(binding, expected_asset_recovery_sha256=pre_chat_digest)):
                         try:
                             api('control', bad)
                             raise AssertionError('missing/stale owner adoption was accepted')
@@ -1332,6 +1457,8 @@ def main():
             assert existing_generated.read_text() == '<main>rebuilt staged output</main>\n'
             assert not obsolete_generated.exists()
             assert (staged_project / 'dist/route.png').read_bytes() == staged_image
+            assert (staged_project / 'chat-attributable.txt').read_text() == \
+                'attributable project-chat mutation\n'
             assert len(list((staged_project / 'dist').glob('staged-*.html'))) == 44
             assert all((staged_project / path).stat().st_mtime_ns == modified
                 for path, modified in restart_capture['applied_mtimes'].items()), \
@@ -1384,10 +1511,43 @@ def main():
                 final_live_workspace_revision = database.execute(
                     'SELECT revision FROM developer_tool_workspace WHERE project=?',
                     ('staged-automatic',)).fetchone()
+                attributable_chat_mutation = database.execute(
+                    'SELECT revision,request_id,feature_id,evidence '
+                    'FROM developer_tool_mutation WHERE project=? AND request_id=?',
+                    ('staged-automatic', chat_request_id)).fetchone()
+                long_stage_actions = database.execute(
+                    'SELECT request_id,tool,summary,status,output '
+                    'FROM developer_tool_action WHERE feature_id=? ORDER BY updated_unix,id',
+                    (staged_feature_id,)).fetchall()
             assert stage_archive[1] == 'compacted'
             assert len(stage_archive[2]) == 64 and all(value > 0 for value in stage_archive[3:])
             assert stage_payload_count == 0
-            assert final_live_workspace_revision is None or final_live_workspace_revision[0] == 0
+            assert final_live_workspace_revision == (
+                restart_capture['attributable_chat_workspace_revision'],)
+            assert attributable_chat_mutation[:3] == (
+                restart_capture['attributable_chat_workspace_revision'],
+                chat_request_id, None)
+            attributable_chat_evidence = json.loads(attributable_chat_mutation[3])
+            assert attributable_chat_evidence['feature_id'] is None
+            assert attributable_chat_evidence['edits'] == [{
+                'path': 'chat-attributable.txt', 'before_sha256': None,
+                'after': 'attributable project-chat mutation\n'}]
+            assert len(long_stage_opencode_calls) == long_stage_probe_count + 2, \
+                len(long_stage_opencode_calls)
+            assert len(long_stage_actions) == long_stage_probe_count + 1, long_stage_actions
+            assert len({row[0] for row in long_stage_actions}) == 1
+            assert all(row[1] == 'bash' and row[3] == 'completed'
+                for row in long_stage_actions), long_stage_actions
+            probe_actions = [row for row in long_stage_actions
+                if 'aw-long-stage-probe-' in row[2] and
+                'aw-long-stage-probe-' in (row[4] or '')]
+            write_actions = [row for row in long_stage_actions
+                if 'aw-long-stage-probe-' not in row[2]]
+            assert len(probe_actions) == long_stage_probe_count, probe_actions
+            assert len(write_actions) == 1, write_actions
+            assert 'maximum steps' not in json.dumps(durable_staged).lower()
+            assert 'maximum steps' not in (root / 'runner.log').read_text(
+                errors='replace').lower()
             assert durable_staged['escalation_count'] == held_escalation_count
             assert durable_staged['escalation_history'] == held_escalation_history
             staged_outcomes = [item for item in durable_staged['escalation_history']
@@ -1404,7 +1564,8 @@ def main():
             assert terminal['proposal_id'] == restart_capture['proposal_id']
             assert terminal['candidate_sha256'] == restart_capture['candidate_sha256']
             assert stage_archive[2] == restart_capture['stage_mutation_sha256']
-            assert len(opencode_calls) == restart_capture['opencode_calls']
+            assert len(opencode_calls) == \
+                restart_capture['opencode_calls_after_attributable_chat']
             assert 'staged_candidate' not in durable_staged['escalation_proposal']
             assert len(durable_staged['escalation_proposal']['staged_candidate_manifest']) == 50
 
@@ -1417,7 +1578,8 @@ def main():
                 for item in staged_evidence if item.get('kind') == 'review_batch'
                 for entry in item['entries']}
             for path in ('app.py', 'dist/index.html', 'dist/route.png', 'tests/test_existing.py',
-                         'tests/test_staged_regression.py', 'dist/staged-043.html'):
+                         'tests/test_staged_regression.py', 'dist/staged-043.html',
+                         'chat-attributable.txt'):
                 assert (path, hashlib.sha256((staged_project / path).read_bytes()).hexdigest()) \
                     in staged_reviewed, path
             deletion_reviews = [entry for item in staged_evidence
@@ -1483,7 +1645,8 @@ def main():
                 assert negative_after == negative_before, \
                     'restart drift rejection performed another live write'
                 assert validation_cache_snapshot(negative_project) == negative_cache_before
-                assert len(opencode_calls) == restart_capture['opencode_calls']
+                assert len(opencode_calls) == \
+                    restart_capture['opencode_calls_after_attributable_chat']
                 with closing(sqlite3.connect(negative_state / 'developer.sqlite3')) as database:
                     negative_durable = json.loads(database.execute(
                         'SELECT state FROM developer_state WHERE id=1').fetchone()[0])
@@ -1571,6 +1734,9 @@ def main():
                 'staged_post_apply_validation_drift_single_quarantine_receipt': True,
                 'staged_immutable_validation_and_batched_review': True,
                 'staged_mutation_payloads_compacted': True,
+                'staged_opencode_calls': len(long_stage_opencode_calls),
+                'staged_tool_actions': len(long_stage_actions),
+                'staged_later_attributable_chat_recovery': True,
                 'staged_apply_progress_events': len(apply_timeline),
                 'staged_apply_elapsed_seconds': round(time.monotonic() - apply_started, 3)}))
         finally:

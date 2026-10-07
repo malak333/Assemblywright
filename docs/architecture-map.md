@@ -8,6 +8,11 @@ builds both hosts in release mode; existing Developer connection, queue, project
 and history are retained. The owner-account execution contract, independent review,
 publication checks, cancellation, and ambiguity quarantine remain unchanged.
 `ASSEMBLYWRIGHT_RUNTIME=protected-service` explicitly selects the protected shell.
+For supervised Developer recovery, Windows may convert a terminal fully applied
+automatic stage plus later attributable chat mutations into a digest-bound current
+candidate. The transition is validation-only: archived execution/policy receipts
+and the fresh project scan must both verify, no prior write is replayed, and success
+still requires immutable validation and independent review.
 The remaining map describes that protected-service architecture and its independent
 activation gates; it is not the default supervised product's availability map.
 

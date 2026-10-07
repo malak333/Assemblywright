@@ -135,6 +135,25 @@ python3 -B scripts/developer-runner-auto-repair-e2e.py --binary target/debug/ass
 python3 -B scripts/developer-runner-scalable-repair-e2e.py --binary target/debug/assemblywright-developer
 ```
 
+Focused current-snapshot recovery checks can be run with:
+
+```sh
+cargo test -p assemblywright-master --bin assemblywright-developer automatic_staged_current_snapshot -- --nocapture
+cargo test -p assemblywright-master --bin assemblywright-developer terminal_automatic_stage_plus_tool_changes_adopts_fresh_current_snapshot_only -- --nocapture
+cargo test -p assemblywright-master --bin assemblywright-developer current_snapshot_recovery_preserves_confirmed_absent_prior_deletion -- --nocapture
+cargo test -p assemblywright-master --bin assemblywright-developer resumed_review_requires_retained_deletion_to_remain_absent -- --nocapture
+```
+
+The terminal-stage test also proves that sensitive inventory stays out of the
+review candidate while a byte change still changes the locally computed recovery
+digest. The grouped test rejects partial or reordered application evidence,
+receipt/archive drift, manifest splices, and non-text successor substitution.
+The deletion check proves that a manifest-confirmed absent staged deletion stays
+in review/publication evidence without an invalid read or file resurrection, and
+that a recreated path is captured as current content.
+The resumed-review check revalidates the retained deletion evidence and absence
+before validation, rejecting malformed evidence or unexpected recreation.
+
 On Windows use `python` and the native `.exe` path. The fixture harness receipt
 now carries 21 proof keys, including migration/defaults, atomic policy mutation,
 three ordinary repairs before escalation, source/test/configuration application
@@ -174,6 +193,12 @@ immediate deletion baselines, staged status `D`, and final index/tree absence.
 Review schema tests require every object property and preserve strict legacy and
 delete variants; a controlled fixture remains separate from actual provider
 schema admission and live feature acceptance.
+Its current-snapshot scenario proves that a fully applied terminal stage followed
+by an attributable chat mutation yields an exact Resume binding, performs no write
+replay, preserves counters and histories, and proceeds through fresh validation
+and review. See
+[`developer-autonomous-pipeline-validation.md`](developer-autonomous-pipeline-validation.md)
+for the bounded source and runtime evidence from this slice.
 
 ## Local Model Selection Focused Validation
 

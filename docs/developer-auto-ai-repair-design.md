@@ -66,8 +66,11 @@ runs under the Windows owner account and is not hostile-process containment.
   its 15-minute deadline. Confirmed timeout cleanup is still an operational hold.
   OpenCode's resolved selected-provider timeout and model limits must match the
   pinned request configuration before a session starts; drift stops the session.
-  Feature tool sessions may record up to 128 bounded actions; project chat keeps
-  its 48-action cap. Exhausting either cap stops that session.
+  OpenCode receives a 128-step ceiling for feature repair and a 48-step ceiling
+  for project chat. Independently, the durable action budget counts each unique
+  tool call and caps feature repair at 128 actions and chat at 48 actions; model
+  turns do not substitute for action receipts. Exhausting either bound stops that
+  session, and the existing 30-minute/15-minute deadlines remain unchanged.
   Quota or entitlement failure is operational and enters `held`; it is never retried
   as a code failure.
 
@@ -280,6 +283,20 @@ secret-bearing project material is never admitted to the repair packet.
   interrupted and may be followed by a newly reserved attempt.
 - Interrupted application, validation, review, persistence, publication, or any
   uncertain external effect is quarantined and never retried automatically.
+- A terminal fully applied staged proposal followed by attributable project-chat
+  mutations may expose one fresh-current Resume digest only after Windows verifies
+  its ordered proposal/authorization/interruption receipts, complete applied set,
+  archived stage and execution policy, idle state, and a coherent bounded scan.
+  Sensitive inventory is excluded from candidate and cloud-review contents while
+  remaining locally hash-bound by the complete project manifest; a targeted
+  unreviewable mutation still rejects recovery.
+  Adoption preserves all history and enters validation-only state; it does not
+  replay prior writes, call an implementation model, or reuse prior approval.
+  The exact-snapshot checkpoint and lifecycle marker explicitly select ordinary
+  immutable validation/review while preserving the terminal staged proposal only
+  as audit lineage; malformed markers cannot fall through to legacy validation.
+  A later validation or review rejection requires a separately authorized repair
+  cycle under the current Auto AI policy.
 - Completed receipts are reused only when every exact binding remains valid.
 - An operational failure durably enters `held`, preventing restart or status polling
   from silently relaunching work. Only an explicit admissible owner action clears it.
@@ -338,7 +355,10 @@ real bounded workspace, file writes, validation processes, HTTP controls, and
 persistence. It covers success after multiple cycles, the 100-attempt boundary,
 review rejection, app disconnection, toggle-off cancellation, ready-proposal
 recovery, ambiguous-application quarantine, and automatic source/test/configuration
-changes with immutable validation.
+changes with immutable validation. Scalable recovery also covers a fully applied
+automatic candidate, a later attributable project-chat mutation, exact-current
+digest adoption without replay, and fresh validation/review; tampered lineage and
+stale bindings fail closed.
 
 Required native macOS UI validation covers narrow and wide layouts, keyboard
 navigation, three-digit input, cancellation, and status readability. This is a

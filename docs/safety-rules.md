@@ -73,6 +73,26 @@ candidate and independent-review authority. Its protected-input state must be
 computed from the baseline plus authorized applied paths; ordinary repairs retain
 their narrower restrictions. Changing the validation command remains prohibited.
 See [`developer-scalable-repair-design.md`](developer-scalable-repair-design.md).
+If a fully applied automatic staged proposal is terminally quarantined and later
+attributable project-chat changes replace some of its bytes, recovery may admit a
+fresh exact-current candidate without replaying either write set. Eligibility
+requires idle repair, escalation, and review state; the complete applied manifest;
+ordered, unique ready/authorization/interruption receipts; exact epoch, policy,
+model, access, tool-catalog, archive, and failure-evidence bindings; and a coherent
+bounded current scan. The owner-supplied displayed digest authorizes validation
+and independent review only. Stale digests, missing or spliced evidence, archive
+drift, an unreviewable targeted mutation, Stop, or Emergency Pause reject. Sensitive
+inventory such as `.env.local` stays outside the review candidate and cloud packet
+while its bytes remain locally bound by the complete current-manifest digest.
+A retained staged deletion is preserved as review and publication evidence only
+while the complete current manifest still proves that path absent; a recreated
+path is captured as current content. Resumed validation rechecks both the exact
+deletion evidence and continued absence before independent review. Historical
+counters and audit evidence remain immutable.
+The durable `exact_snapshot_revalidating` plus validation-only lifecycle marker
+routes that fresh current candidate through ordinary immutable validation and
+review; it cannot reuse fully-applied staged execution authority. Missing or
+changed markers fail closed instead of falling through.
 
 Developer validation runs in an owned, closed environment: the runner snapshots an
 explicit environment before spawn instead of inheriting ambient state at process

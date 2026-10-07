@@ -1573,12 +1573,7 @@ fn automatic_effects_quarantine_recovery(feature: &Feature) -> bool {
             .is_some_and(|edits| !edits.is_empty())
 }
 
-fn fully_applied_staged_quarantine_proposal(
-    feature: &Feature,
-) -> Result<&RepairEscalationProposal> {
-    if !automatic_effects_quarantine_recovery(feature) {
-        bail!("Feature has no exact automatic-effects recovery candidate");
-    }
+fn terminal_fully_applied_staged_proposal(feature: &Feature) -> Result<&RepairEscalationProposal> {
     let proposal = feature
         .escalation_proposal
         .as_ref()
@@ -1591,6 +1586,7 @@ fn fully_applied_staged_quarantine_proposal(
         || !proposal.files.is_empty()
         || proposal.staged_candidate_manifest.is_empty()
         || proposal.apply_request_id.is_none()
+        || !proposal.review_slot_terminal
     {
         bail!("Quarantined automatic repair is not a fully applied terminal staged proposal");
     }
@@ -1615,19 +1611,224 @@ fn fully_applied_staged_quarantine_proposal(
         .applied_paths
         .iter()
         .map(|path| path.replace('\\', "/").to_ascii_lowercase())
-        .collect::<std::collections::HashSet<_>>();
+        .collect::<Vec<_>>();
     let manifest = proposal
         .staged_candidate_manifest
         .iter()
         .map(|entry| entry.path.replace('\\', "/").to_ascii_lowercase())
-        .collect::<std::collections::HashSet<_>>();
-    if applied.len() != proposal.applied_paths.len()
-        || manifest.len() != proposal.staged_candidate_manifest.len()
+        .collect::<Vec<_>>();
+    let applied_unique = applied.iter().collect::<std::collections::HashSet<_>>();
+    let manifest_unique = manifest.iter().collect::<std::collections::HashSet<_>>();
+    if applied_unique.len() != applied.len()
+        || manifest_unique.len() != manifest.len()
         || applied != manifest
     {
         bail!("Quarantined staged proposal was not fully applied before validation or review");
     }
+    for entry in &proposal.staged_candidate_manifest {
+        validate_sha256(
+            &entry.content_sha256,
+            "quarantined staged candidate content digest",
+        )?;
+        if let Some(before) = entry.before_sha256.as_deref() {
+            validate_sha256(before, "quarantined staged candidate baseline digest")?;
+        }
+        if !matches!(entry.kind.as_str(), "text" | "asset" | "delete") {
+            bail!("Quarantined staged candidate has an invalid entry kind");
+        }
+    }
     Ok(proposal)
+}
+
+fn fully_applied_staged_quarantine_proposal(
+    feature: &Feature,
+) -> Result<&RepairEscalationProposal> {
+    if !automatic_effects_quarantine_recovery(feature) {
+        bail!("Feature has no exact automatic-effects recovery candidate");
+    }
+    terminal_fully_applied_staged_proposal(feature)
+}
+
+fn validate_terminal_fully_applied_staged_receipts(
+    feature: &Feature,
+    proposal: &RepairEscalationProposal,
+) -> Result<()> {
+    let exact_receipt = |outcome: &str| {
+        feature
+            .escalation_history
+            .iter()
+            .filter(|evidence| {
+                evidence.proposal_id == proposal.proposal_id && evidence.outcome == outcome
+            })
+            .collect::<Vec<_>>()
+    };
+    let ready = exact_receipt("ready");
+    let authorized = exact_receipt("policy_authorized");
+    let interrupted = exact_receipt("interrupted");
+    if ready.len() != 1 || authorized.len() != 1 || interrupted.len() != 1 {
+        bail!("Quarantined staged proposal terminal evidence changed");
+    }
+    let proposal_sha256 = ready[0]
+        .proposal_sha256
+        .as_deref()
+        .context("Quarantined staged proposal receipt has no original proposal digest")?;
+    let candidate_sha256 = ready[0]
+        .candidate_sha256
+        .as_deref()
+        .context("Quarantined staged proposal receipt has no candidate digest")?;
+    validate_sha256(
+        proposal_sha256,
+        "quarantined staged proposal receipt digest",
+    )?;
+    validate_sha256(
+        candidate_sha256,
+        "quarantined staged candidate receipt digest",
+    )?;
+    let receipt_index = |outcome: &str| {
+        feature.escalation_history.iter().position(|evidence| {
+            evidence.proposal_id == proposal.proposal_id && evidence.outcome == outcome
+        })
+    };
+    if !matches!(
+        (
+            receipt_index("ready"),
+            receipt_index("policy_authorized"),
+            receipt_index("interrupted")
+        ),
+        (Some(ready), Some(authorized), Some(interrupted))
+            if ready < authorized && authorized < interrupted
+    ) || authorized[0].proposal_sha256.as_deref() != Some(proposal_sha256)
+        || interrupted[0].proposal_sha256.as_deref() != Some(proposal_sha256)
+        || authorized[0].candidate_sha256.as_deref() != Some(candidate_sha256)
+        || interrupted[0].candidate_sha256.as_deref() != Some(candidate_sha256)
+        || ready[0].apply_request_id.is_some()
+        || authorized[0].apply_request_id != proposal.apply_request_id
+        || interrupted[0].apply_request_id != proposal.apply_request_id
+        || authorized[0]
+            .authorization_revision
+            .is_none_or(|revision| revision == 0)
+        || ready[0].authorization_revision.is_some()
+        || interrupted[0].authorization_revision.is_some()
+        || ready[0].chat_id != proposal.chat_id
+        || ready[0].chat_request_id != proposal.chat_request_id
+        || authorized[0].chat_id.is_some()
+        || !authorized[0].chat_request_id.is_empty()
+        || interrupted[0].chat_id != proposal.chat_id
+        || interrupted[0].chat_request_id != proposal.chat_request_id
+        || [ready[0], authorized[0], interrupted[0]]
+            .into_iter()
+            .any(|evidence| {
+                evidence.attempt != proposal.attempt
+                    || evidence.model_target != proposal.model_target
+                    || evidence.model != proposal.model
+                    || evidence.diagnosis_sha256 != proposal.diagnosis_sha256
+                    || evidence.source != proposal.source
+                    || evidence.automatic_epoch != proposal.automatic_epoch
+                    || evidence.policy_revision != proposal.policy_revision
+                    || evidence.limit_snapshot != proposal.limit_snapshot
+                    || evidence.project_state_sha256 != proposal.project_state_sha256
+            })
+    {
+        bail!("Quarantined staged proposal terminal evidence changed");
+    }
+    Ok(())
+}
+
+fn validate_terminal_staged_manifest_successors(
+    proposal: &RepairEscalationProposal,
+    current_edits: &[Edit],
+    mutations: &[ToolProjectMutation],
+) -> Result<()> {
+    let normalized = |path: &str| path.replace('\\', "/").to_ascii_lowercase();
+    for entry in &proposal.staged_candidate_manifest {
+        let retained = current_edits
+            .iter()
+            .find(|edit| normalized(&edit.path) == normalized(&entry.path));
+        let retained_matches = retained.is_some_and(|edit| {
+            edit_sha256(edit).ok().as_deref() == Some(entry.content_sha256.as_str())
+                && edit.delete == (entry.kind == "delete")
+                && (edit.asset.is_some()) == (entry.kind == "asset")
+                && edit.asset.as_ref().map(|asset| asset.media_type.as_str())
+                    == entry.media_type.as_deref()
+                && edit.asset.as_ref().map(|asset| asset.width) == entry.width
+                && edit.asset.as_ref().map(|asset| asset.height) == entry.height
+        });
+        if retained_matches {
+            continue;
+        }
+        if entry.kind != "text" {
+            bail!("A terminal staged non-text entry has no exact current successor lineage");
+        }
+        let first_successor = mutations
+            .iter()
+            .flat_map(|mutation| &mutation.edits)
+            .find(|edit| normalized(&edit.path) == normalized(&entry.path));
+        if first_successor.and_then(|edit| edit.before_sha256.as_deref())
+            != Some(entry.content_sha256.as_str())
+        {
+            bail!("A terminal staged manifest entry is not the exact predecessor of current bytes");
+        }
+    }
+    Ok(())
+}
+
+fn automatic_staged_current_snapshot_checkpoint_recovery(feature: &Feature) -> bool {
+    if feature.status != "failed"
+        || feature.checkpoint != "tool_workspace_changed_requires_proposal"
+        || feature.auto_repair_lifecycle != "quarantined"
+        || feature.repair_attempts != REPAIR_LIMIT
+        || feature.repair_history.len() != feature.repair_attempts as usize
+        || feature.repair_pending
+        || feature.escalation_pending
+        || feature.review_pending.is_some()
+        || feature.edits.as_ref().is_none_or(|edits| edits.is_empty())
+    {
+        return false;
+    }
+    let Ok(proposal) = terminal_fully_applied_staged_proposal(feature) else {
+        return false;
+    };
+    validate_terminal_fully_applied_staged_receipts(feature, proposal).is_ok()
+}
+
+fn current_snapshot_checkpoint_recovery(feature: &Feature) -> bool {
+    exact_current_snapshot_checkpoint_recovery(feature)
+        || automatic_staged_current_snapshot_checkpoint_recovery(feature)
+}
+
+fn exact_snapshot_rejection_is_resumable(feature: &Feature) -> bool {
+    feature.status == "failed"
+        && feature.auto_repair_lifecycle == "inactive"
+        && feature.auto_repair_reason == EXACT_SNAPSHOT_VALIDATION_ONLY_REASON
+        && feature.repair_attempts >= REPAIR_LIMIT
+        && feature.repair_history.len() == feature.repair_attempts as usize
+        && !feature.repair_pending
+        && !feature.escalation_pending
+        && feature.review_pending.is_none()
+        && feature
+            .edits
+            .as_ref()
+            .is_some_and(|edits| !edits.is_empty())
+        && checkpoint_reuses_retained_edits(&feature.checkpoint)
+        && automatic_code_failure_is_eligible(feature)
+}
+
+fn automatic_staged_exact_snapshot_validation_only(feature: &Feature) -> bool {
+    if !matches!(feature.status.as_str(), "paused" | "running")
+        || feature.checkpoint != "exact_snapshot_revalidating"
+        || feature.auto_repair_lifecycle != "inactive"
+        || feature.auto_repair_reason != EXACT_SNAPSHOT_VALIDATION_ONLY_REASON
+        || feature.repair_pending
+        || feature.escalation_pending
+        || feature.review_pending.is_some()
+        || feature.edits.as_ref().is_none_or(|edits| edits.is_empty())
+    {
+        return false;
+    }
+    let Ok(proposal) = terminal_fully_applied_staged_proposal(feature) else {
+        return false;
+    };
+    validate_terminal_fully_applied_staged_receipts(feature, proposal).is_ok()
 }
 
 fn validate_fully_applied_staged_recovery_candidate(
@@ -1980,6 +2181,12 @@ fn fully_applied_staged_validation_binding(
             || !proposal.staged_candidate.is_empty()
             || !proposal.staged_candidate_manifest.is_empty());
     if !automatic_staged_lineage {
+        return Ok(None);
+    }
+    if automatic_staged_exact_snapshot_validation_only(feature) {
+        // Exact-current adoption is a new validation-only candidate. The old
+        // staged writes and their authority remain immutable audit lineage,
+        // but cannot control or be replayed by this validation/review cycle.
         return Ok(None);
     }
     let complete_staged_evidence = proposal.staged_binding.is_some()
@@ -2977,7 +3184,7 @@ impl Engine {
                     .filter(|feature| {
                         feature.status == "failed"
                             && (legacy_tool_quarantine_recovery(feature)
-                                || exact_current_snapshot_checkpoint_recovery(feature)
+                                || current_snapshot_checkpoint_recovery(feature)
                                 || automatic_effects_quarantine_recovery(feature))
                     })
                     .cloned()
@@ -3089,7 +3296,7 @@ impl Engine {
                 object.insert("last_failure_kind".into(), json!(f.last_failure_kind));
                 if f.status == "failed"
                     && (legacy_tool_quarantine_recovery(f)
-                        || exact_current_snapshot_checkpoint_recovery(f)
+                        || current_snapshot_checkpoint_recovery(f)
                         || automatic_effects_quarantine_recovery(f))
                 {
                     if let Some(projection) = recovery_projections.get(&f.id) {
@@ -3702,10 +3909,25 @@ impl Engine {
         recovery_epoch: u64,
     ) -> Result<(String, Vec<Edit>)> {
         let legacy_tool_quarantine = legacy_tool_quarantine_recovery(feature);
-        let exact_current_snapshot = exact_current_snapshot_checkpoint_recovery(feature);
+        let exact_current_snapshot = current_snapshot_checkpoint_recovery(feature);
+        let automatic_staged_current =
+            automatic_staged_current_snapshot_checkpoint_recovery(feature);
         let automatic_effects_quarantine = automatic_effects_quarantine_recovery(feature);
         if !legacy_tool_quarantine && !exact_current_snapshot && !automatic_effects_quarantine {
             bail!("Feature has no supported asset quarantine recovery candidate");
+        }
+        if automatic_staged_current {
+            let proposal = terminal_fully_applied_staged_proposal(feature)?;
+            validate_terminal_fully_applied_staged_receipts(feature, proposal)?;
+            let staged = proposal
+                .staged_binding
+                .as_ref()
+                .context("Quarantined staged repair has no execution binding")?;
+            // Later audited project-chat mutations intentionally change the
+            // live effect hash. The archived stage, access/model policy, and
+            // failure evidence still have to be exact before current bytes can
+            // be offered as a new validation-only candidate.
+            self.verify_staged_proposal_policy(feature, proposal, staged)?;
         }
         let project = fs::canonicalize(self.root.join(&feature.project))?;
         if !project.starts_with(&self.root) {
@@ -3773,6 +3995,19 @@ impl Engine {
                         )
                     })
                     .collect::<Vec<_>>();
+                if automatic_staged_current {
+                    validate_terminal_staged_manifest_successors(
+                        feature
+                            .escalation_proposal
+                            .as_ref()
+                            .context("Quarantined automatic repair has no proposal evidence")?,
+                        feature
+                            .edits
+                            .as_deref()
+                            .context("Quarantined automatic repair has no retained edits")?,
+                        &owned,
+                    )?;
+                }
                 let mut additional_paths = context
                     .inventory
                     .iter()
@@ -3780,16 +4015,30 @@ impl Engine {
                         !entry.generated && matches!(entry.kind.as_str(), "text" | "image")
                     })
                     .filter_map(|entry| entry.path.clone())
+                    .filter(|path| !repair_sensitive_path(path))
                     .collect::<Vec<_>>();
-                additional_paths.extend(context.generated_asset_paths.iter().cloned());
+                additional_paths.extend(
+                    context
+                        .generated_asset_paths
+                        .iter()
+                        .filter(|path| !repair_sensitive_path(path))
+                        .cloned(),
+                );
                 additional_paths.sort();
                 additional_paths.dedup();
                 let mut current_manifest_paths = context
                     .inventory
                     .iter()
                     .filter_map(|entry| entry.path.clone())
+                    .filter(|path| !repair_sensitive_path(path))
                     .collect::<Vec<_>>();
-                current_manifest_paths.extend(context.generated_asset_paths.iter().cloned());
+                current_manifest_paths.extend(
+                    context
+                        .generated_asset_paths
+                        .iter()
+                        .filter(|path| !repair_sensitive_path(path))
+                        .cloned(),
+                );
                 current_manifest_paths.sort();
                 current_manifest_paths.dedup();
                 let edits = if exact_current_snapshot {
@@ -3951,7 +4200,7 @@ impl Engine {
                 .context("feature missing")?;
             if current.status != "failed"
                 || (!legacy_tool_quarantine_recovery(current)
-                    && !exact_current_snapshot_checkpoint_recovery(current)
+                    && !current_snapshot_checkpoint_recovery(current)
                     && !automatic_effects_quarantine_recovery(current))
                 || current.auto_repair_epoch != feature.auto_repair_epoch
                 || current.tool_workspace_revision != feature.tool_workspace_revision
@@ -3968,6 +4217,14 @@ impl Engine {
                 // committing, so this in-transaction recheck closes the gap
                 // between the displayed scan and exact owner adoption.
                 self.verify_staged_proposal_policy(current, proposal, staged)?;
+            } else if automatic_staged_current_snapshot_checkpoint_recovery(current) {
+                let proposal = terminal_fully_applied_staged_proposal(current)?;
+                validate_terminal_fully_applied_staged_receipts(current, proposal)?;
+                let staged = proposal
+                    .staged_binding
+                    .as_ref()
+                    .context("Quarantined staged repair has no execution binding")?;
+                self.verify_staged_proposal_policy(current, proposal, staged)?;
             }
             // `reconciled` is the complete exact current review candidate. It
             // already carries forward reviewable prior edits and deliberately
@@ -3975,7 +4232,7 @@ impl Engine {
             // immutable tool ledger and complete manifest binding.
             current.edits = Some(reconciled);
             current.status = "paused".into();
-            current.checkpoint = if exact_current_snapshot_checkpoint_recovery(&feature) {
+            current.checkpoint = if current_snapshot_checkpoint_recovery(&feature) {
                 "exact_snapshot_revalidating".into()
             } else {
                 "applied".into()
@@ -3990,7 +4247,7 @@ impl Engine {
                     "held",
                     "The owner explicitly adopted the displayed exact post-application snapshot for fresh immutable validation and independent review",
                 )?;
-            } else if exact_current_snapshot_checkpoint_recovery(&feature) {
+            } else if current_snapshot_checkpoint_recovery(&feature) {
                 set_auto_repair_lifecycle(
                     current,
                     "inactive",
@@ -4116,7 +4373,7 @@ impl Engine {
         }
         if feature.as_ref().is_some_and(|feature| {
             legacy_tool_quarantine_recovery(feature)
-                || exact_current_snapshot_checkpoint_recovery(feature)
+                || current_snapshot_checkpoint_recovery(feature)
                 || automatic_effects_quarantine_recovery(feature)
         }) {
             let recovery_sha256 = expected_asset_recovery_sha256
@@ -4168,7 +4425,8 @@ impl Engine {
             db.state.auto_ai_repair_enabled
                 && feature.repair_attempts >= REPAIR_LIMIT
                 && ((feature.auto_repair_lifecycle == "held" && feature.status == "failed")
-                    || paused_preauthorization_cancellation_is_resumable(feature))
+                    || paused_preauthorization_cancellation_is_resumable(feature)
+                    || exact_snapshot_rejection_is_resumable(feature))
         });
         let revalidates_at_limit = feature
             .as_ref()
@@ -4341,6 +4599,7 @@ impl Engine {
                             && candidate.status == "queued"
                             && candidate.checkpoint == "not_started")
                         || (policy_enabled && candidate.auto_repair_lifecycle == "held")
+                        || (policy_enabled && exact_snapshot_rejection_is_resumable(candidate))
                         || (policy_enabled
                             && paused_preauthorization_cancellation_is_resumable(candidate))
                 });
@@ -4352,7 +4611,8 @@ impl Engine {
                     .find(|candidate| candidate.id == feature_id)
                     .context("feature missing")?;
                 let changed = if policy_enabled
-                    && paused_preauthorization_cancellation_is_resumable(current)
+                    && (paused_preauthorization_cancellation_is_resumable(current)
+                        || exact_snapshot_rejection_is_resumable(current))
                 {
                     enable_auto_repair_for_failed_feature(
                         current,
@@ -8963,6 +9223,10 @@ impl Engine {
                 let refreshed = saved_edits
                     .iter()
                     .map(|edit| {
+                        if edit.delete {
+                            validate_retained_deletion_for_resume(&project, edit)?;
+                            return Ok(edit.clone());
+                        }
                         if edit.asset.is_some() {
                             let bytes = read_repair_context_file(&project, &edit.path).with_context(|| {
                                 format!("Generated asset {} is unavailable for resumed validation and review", edit.path)
@@ -11975,6 +12239,20 @@ fn validate_current_review_edits(edits: &[Edit], project: &Path) -> Result<()> {
     Ok(())
 }
 
+fn validate_retained_deletion_for_resume(project: &Path, edit: &Edit) -> Result<()> {
+    if !edit.delete {
+        bail!("Resumed deletion validation requires deletion evidence");
+    }
+    edit_bytes(edit)?;
+    if checked_path(project, &edit.path)?.try_exists()? {
+        bail!(
+            "Generated deletion {} changed before resumed review",
+            edit.path
+        );
+    }
+    Ok(())
+}
+
 fn merge_review_edits(current: &[Edit], applied: &[Edit]) -> Result<Vec<Edit>> {
     let mut merged = current.to_vec();
     let mut indices = std::collections::HashMap::new();
@@ -12605,7 +12883,12 @@ fn recover_current_snapshot_mutations_with_limits(
     for path in additional_paths
         .iter()
         .filter(|path| !is_validation_environment_artifact(path))
-        .chain(reviewable_prior.iter().map(|edit| &edit.path))
+        .chain(
+            reviewable_prior
+                .iter()
+                .filter(|edit| !edit.delete)
+                .map(|edit| &edit.path),
+        )
     {
         let normalized = path.to_ascii_lowercase();
         if scope
@@ -21071,6 +21354,38 @@ mod tests {
         feature
     }
 
+    fn automatic_staged_current_snapshot_fixture(engine: &Arc<Engine>) -> Feature {
+        let mut feature = automatic_effects_recovery_fixture(engine);
+        feature.checkpoint = "tool_workspace_changed_requires_proposal".into();
+        feature.tool_workspace_revision = 1;
+        feature.repair_history = (1..=REPAIR_LIMIT)
+            .map(|attempt| RepairAttemptEvidence {
+                attempt,
+                prior_checkpoint: format!("repair_{}_applied", attempt.saturating_sub(1)),
+                prior_message: "retained repair evidence".into(),
+                prior_edits: Vec::new(),
+            })
+            .collect();
+        fs::write(
+            engine.root.join("example/result.txt"),
+            b"project chat correction\n",
+        )
+        .unwrap();
+        let result = feature
+            .edits
+            .as_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|edit| edit.path == "result.txt")
+            .unwrap();
+        result.content = "project chat correction\n".into();
+        feature.review_summary =
+            "Project tools changed the workspace; immutable validation and Codex review must run again."
+                .into();
+        feature.message = feature.review_summary.clone();
+        feature
+    }
+
     fn active_automatic_staged_validation_fixture(engine: &Arc<Engine>) -> Feature {
         let mut feature = automatic_effects_recovery_fixture(engine);
         let (proposal_id, attempt, proposal_epoch, proposal_sha256) = {
@@ -21143,6 +21458,11 @@ mod tests {
             .unwrap();
 
         let projected = engine.snapshot().unwrap();
+        assert!(
+            projected["queue"][0]["asset_recovery_sha256"].is_string(),
+            "{}",
+            projected["queue"][0]
+        );
         let digest = projected["queue"][0]["asset_recovery_sha256"]
             .as_str()
             .expect("fully applied exact candidate must be offered")
@@ -21176,6 +21496,445 @@ mod tests {
             &engine.root.join("example"),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn terminal_automatic_stage_plus_tool_changes_adopts_fresh_current_snapshot_only() {
+        let (directory, engine) = control_test_engine();
+        let feature = automatic_staged_current_snapshot_fixture(&engine);
+        fs::write(
+            engine.root.join("example/.env.local"),
+            b"RESTRICTED_FIXTURE=must-stay-local\n",
+        )
+        .unwrap();
+        assert!(automatic_staged_current_snapshot_checkpoint_recovery(
+            &feature
+        ));
+        let mutation = ToolProjectMutation {
+            revision: 1,
+            request_id: Uuid::new_v4().to_string(),
+            feature_id: Some(feature.id.clone()),
+            edits: vec![developer_tools::ToolMutationEdit {
+                path: "result.txt".into(),
+                before_sha256: Some(hash(b"repaired\n")),
+                after: Some("project chat correction\n".into()),
+                asset: None,
+                delete: false,
+                before_text: None,
+            }],
+            unreviewable_paths: Vec::new(),
+        };
+        let connection =
+            Connection::open(directory.path().join("data").join("developer.sqlite3")).unwrap();
+        connection
+            .execute(
+                "INSERT INTO developer_tool_workspace(project,revision) VALUES('example',1)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO developer_tool_mutation(project,revision,request_id,feature_id,evidence)
+                 VALUES('example',1,?1,?2,?3)",
+                (
+                    &mutation.request_id,
+                    &feature.id,
+                    serde_json::to_string(&mutation).unwrap(),
+                ),
+            )
+            .unwrap();
+        let retained = serde_json::to_vec(&(
+            &feature.repair_history,
+            &feature.escalation_history,
+            &feature.review_history,
+            &feature.escalation_proposal,
+        ))
+        .unwrap();
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = true;
+                state.auto_ai_repair_max_escalations = 100;
+                state.auto_ai_repair_policy_revision = 7;
+                state.queue[0] = feature.clone();
+                Ok(())
+            })
+            .unwrap();
+
+        let projected = engine.snapshot().unwrap();
+        assert!(
+            projected["queue"][0]["asset_recovery_sha256"].is_string(),
+            "{}",
+            projected["queue"][0]
+        );
+        let restricted_digest = projected["queue"][0]["asset_recovery_sha256"]
+            .as_str()
+            .expect("fresh current snapshot binding must be offered")
+            .to_owned();
+        fs::write(
+            engine.root.join("example/.env.local"),
+            b"RESTRICTED_FIXTURE=changed-but-still-local\n",
+        )
+        .unwrap();
+        let changed_projection = engine.snapshot().unwrap();
+        let digest = changed_projection["queue"][0]["asset_recovery_sha256"]
+            .as_str()
+            .expect("restricted bytes remain locally hash-bound")
+            .to_owned();
+        assert_ne!(digest, restricted_digest);
+        engine
+            .reconcile_supported_asset_quarantine(&feature.id, &digest)
+            .unwrap();
+
+        let database = engine.database.lock().unwrap();
+        let recovered = &database.state.queue[0];
+        assert_eq!(recovered.status, "paused");
+        assert_eq!(recovered.checkpoint, "exact_snapshot_revalidating");
+        assert_eq!(recovered.auto_repair_lifecycle, "inactive");
+        assert_eq!(
+            recovered.auto_repair_reason,
+            EXACT_SNAPSHOT_VALIDATION_ONLY_REASON
+        );
+        assert_eq!(recovered.repair_attempts, REPAIR_LIMIT);
+        assert_eq!(recovered.escalation_count, 1);
+        assert_eq!(
+            serde_json::to_vec(&(
+                &recovered.repair_history,
+                &recovered.escalation_history,
+                &recovered.review_history,
+                &recovered.escalation_proposal,
+            ))
+            .unwrap(),
+            retained
+        );
+        assert_eq!(recovered.review_status, "pending");
+        assert!(recovered.review_pending.is_none());
+        assert!(automatic_staged_exact_snapshot_validation_only(recovered));
+        assert!(fully_applied_staged_validation_binding(recovered)
+            .unwrap()
+            .is_none());
+        let mut invalid_validation_only = recovered.clone();
+        invalid_validation_only.auto_repair_reason = "changed lineage marker".into();
+        assert!(fully_applied_staged_validation_binding(&invalid_validation_only).is_err());
+        let result = recovered
+            .edits
+            .as_deref()
+            .unwrap()
+            .iter()
+            .find(|edit| edit.path == "result.txt")
+            .unwrap();
+        assert_eq!(result.content, "project chat correction\n");
+        assert!(recovered
+            .edits
+            .as_deref()
+            .unwrap()
+            .iter()
+            .all(|edit| edit.path != ".env.local"));
+    }
+
+    #[test]
+    fn current_snapshot_recovery_preserves_confirmed_absent_prior_deletion() {
+        let (_directory, engine) = control_test_engine();
+        let project = engine.root.join("example");
+        fs::write(project.join("current.txt"), b"current bytes\n").unwrap();
+        let feature_id = Uuid::new_v4().to_string();
+        let prior_deletion = Edit {
+            path: "obsolete.txt".into(),
+            content: String::new(),
+            before: Some(hash(b"obsolete bytes\n")),
+            delete: true,
+            before_text: Some("obsolete bytes\n".into()),
+            asset: None,
+            publication_before: None,
+        };
+        let mutation = ToolProjectMutation {
+            revision: 1,
+            request_id: Uuid::new_v4().to_string(),
+            feature_id: Some(feature_id.clone()),
+            edits: vec![developer_tools::ToolMutationEdit {
+                path: "current.txt".into(),
+                before_sha256: None,
+                after: Some("current bytes\n".into()),
+                asset: None,
+                delete: false,
+                before_text: None,
+            }],
+            unreviewable_paths: Vec::new(),
+        };
+
+        let recovered = recover_exact_current_snapshot_mutations(
+            std::slice::from_ref(&mutation),
+            &feature_id,
+            &project,
+            std::slice::from_ref(&prior_deletion),
+            &["current.txt".into()],
+            &["current.txt".into()],
+            Some(&feature_id),
+        )
+        .unwrap();
+        let deletion = recovered
+            .iter()
+            .find(|edit| edit.path == "obsolete.txt")
+            .expect("confirmed absent deletion remains review and publication evidence");
+        assert!(deletion.delete);
+        assert_eq!(deletion.before, prior_deletion.before);
+        assert_eq!(deletion.before_text, prior_deletion.before_text);
+        validate_current_review_edits(&recovered, &project).unwrap();
+
+        fs::write(project.join("obsolete.txt"), b"recreated bytes\n").unwrap();
+        let recreated = recover_exact_current_snapshot_mutations(
+            std::slice::from_ref(&mutation),
+            &feature_id,
+            &project,
+            std::slice::from_ref(&prior_deletion),
+            &["current.txt".into(), "obsolete.txt".into()],
+            &["current.txt".into(), "obsolete.txt".into()],
+            Some(&feature_id),
+        )
+        .unwrap();
+        let live = recreated
+            .iter()
+            .find(|edit| edit.path == "obsolete.txt")
+            .expect("a recreated path becomes current content");
+        assert!(!live.delete);
+        assert_eq!(live.content, "recreated bytes\n");
+    }
+
+    #[test]
+    fn resumed_review_requires_retained_deletion_to_remain_absent() {
+        let (_directory, engine) = control_test_engine();
+        let project = engine.root.join("example");
+        let deletion = Edit {
+            path: "obsolete.txt".into(),
+            content: String::new(),
+            before: Some(hash(b"obsolete bytes\n")),
+            delete: true,
+            before_text: Some("obsolete bytes\n".into()),
+            asset: None,
+            publication_before: None,
+        };
+
+        validate_retained_deletion_for_resume(&project, &deletion).unwrap();
+        fs::write(project.join("obsolete.txt"), b"unexpected recreation\n").unwrap();
+        assert!(validate_retained_deletion_for_resume(&project, &deletion)
+            .unwrap_err()
+            .to_string()
+            .contains("changed before resumed review"));
+
+        fs::remove_file(project.join("obsolete.txt")).unwrap();
+        let mut malformed = deletion;
+        malformed.before_text = Some("different bytes\n".into());
+        assert!(validate_retained_deletion_for_resume(&project, &malformed)
+            .unwrap_err()
+            .to_string()
+            .contains("does not match"));
+    }
+
+    #[test]
+    fn automatic_staged_current_snapshot_rejects_incomplete_or_spliced_lineage() {
+        let (_directory, engine) = control_test_engine();
+        let feature = automatic_staged_current_snapshot_fixture(&engine);
+        let successor = ToolProjectMutation {
+            revision: 1,
+            request_id: Uuid::new_v4().to_string(),
+            feature_id: Some(feature.id.clone()),
+            edits: vec![developer_tools::ToolMutationEdit {
+                path: "result.txt".into(),
+                before_sha256: Some(hash(b"repaired\n")),
+                after: Some("project chat correction\n".into()),
+                asset: None,
+                delete: false,
+                before_text: None,
+            }],
+            unreviewable_paths: Vec::new(),
+        };
+        validate_terminal_staged_manifest_successors(
+            feature.escalation_proposal.as_ref().unwrap(),
+            feature.edits.as_deref().unwrap(),
+            std::slice::from_ref(&successor),
+        )
+        .unwrap();
+
+        let mut manifest_splice = feature.clone();
+        manifest_splice
+            .escalation_proposal
+            .as_mut()
+            .unwrap()
+            .staged_candidate_manifest[0]
+            .content_sha256 = "f".repeat(64);
+        assert!(validate_terminal_staged_manifest_successors(
+            manifest_splice.escalation_proposal.as_ref().unwrap(),
+            manifest_splice.edits.as_deref().unwrap(),
+            std::slice::from_ref(&successor),
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("not the exact predecessor"));
+
+        let mut unterminated_review = feature.clone();
+        unterminated_review
+            .escalation_proposal
+            .as_mut()
+            .unwrap()
+            .review_slot_terminal = false;
+        assert!(!automatic_staged_current_snapshot_checkpoint_recovery(
+            &unterminated_review
+        ));
+
+        let mut pending = feature.clone();
+        pending.escalation_pending = true;
+        assert!(!automatic_staged_current_snapshot_checkpoint_recovery(
+            &pending
+        ));
+
+        let mut incomplete_repairs = feature.clone();
+        incomplete_repairs.repair_history.pop();
+        assert!(!automatic_staged_current_snapshot_checkpoint_recovery(
+            &incomplete_repairs
+        ));
+
+        let mut partial_application = feature.clone();
+        partial_application
+            .escalation_proposal
+            .as_mut()
+            .unwrap()
+            .applied_paths
+            .pop();
+        assert!(!automatic_staged_current_snapshot_checkpoint_recovery(
+            &partial_application
+        ));
+
+        let mut reordered_application = feature.clone();
+        let reordered_proposal = reordered_application.escalation_proposal.as_mut().unwrap();
+        let mut second_entry = reordered_proposal.staged_candidate_manifest[0].clone();
+        second_entry.path = "second.txt".into();
+        reordered_proposal
+            .staged_candidate_manifest
+            .push(second_entry);
+        reordered_proposal.applied_paths.push("second.txt".into());
+        reordered_proposal.applied_paths.reverse();
+        assert!(
+            terminal_fully_applied_staged_proposal(&reordered_application)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("not fully applied")
+        );
+
+        let mut asset_successor = feature.clone();
+        asset_successor
+            .escalation_proposal
+            .as_mut()
+            .unwrap()
+            .staged_candidate_manifest[0]
+            .kind = "asset".into();
+        assert!(validate_terminal_staged_manifest_successors(
+            asset_successor.escalation_proposal.as_ref().unwrap(),
+            asset_successor.edits.as_deref().unwrap(),
+            std::slice::from_ref(&successor),
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("non-text"));
+
+        let mut duplicate_receipt = feature.clone();
+        let ready = duplicate_receipt
+            .escalation_history
+            .iter()
+            .find(|evidence| evidence.outcome == "ready")
+            .unwrap()
+            .clone();
+        duplicate_receipt.escalation_history.push(ready);
+        assert!(!automatic_staged_current_snapshot_checkpoint_recovery(
+            &duplicate_receipt
+        ));
+
+        let mut changed_candidate = feature.clone();
+        changed_candidate
+            .escalation_history
+            .iter_mut()
+            .find(|evidence| evidence.outcome == "interrupted")
+            .unwrap()
+            .candidate_sha256 = Some("f".repeat(64));
+        assert!(!automatic_staged_current_snapshot_checkpoint_recovery(
+            &changed_candidate
+        ));
+
+        let mut policy_drift = feature.clone();
+        policy_drift.auto_repair_policy_revision = Some(8);
+        assert!(!automatic_staged_current_snapshot_checkpoint_recovery(
+            &policy_drift
+        ));
+
+        let mut archive_drift = feature;
+        archive_drift
+            .escalation_proposal
+            .as_mut()
+            .unwrap()
+            .staged_binding
+            .as_mut()
+            .unwrap()
+            .mutation_summary
+            .mutation_sha256 = "f".repeat(64);
+        assert!(automatic_staged_current_snapshot_checkpoint_recovery(
+            &archive_drift
+        ));
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = true;
+                state.auto_ai_repair_max_escalations = 100;
+                state.auto_ai_repair_policy_revision = 7;
+                state.queue[0] = archive_drift;
+                Ok(())
+            })
+            .unwrap();
+        let projected = engine.snapshot().unwrap();
+        assert!(projected["queue"][0].get("asset_recovery_sha256").is_none());
+        assert_eq!(
+            projected["queue"][0]["asset_recovery_unavailable_reason"],
+            "The exact current project snapshot cannot enter bounded recovery safely."
+        );
+    }
+
+    #[test]
+    fn rejected_fresh_current_review_requires_resume_before_new_automatic_attempt() {
+        let (_directory, engine) = control_test_engine();
+        let mut feature = automatic_staged_current_snapshot_fixture(&engine);
+        feature.status = "failed".into();
+        feature.checkpoint = "review_5_rejected".into();
+        feature.last_failure_kind = "review_rejection".into();
+        feature.review_status = "rejected".into();
+        feature.review_attempts = 5;
+        set_auto_repair_lifecycle(
+            &mut feature,
+            "inactive",
+            EXACT_SNAPSHOT_VALIDATION_ONLY_REASON,
+        )
+        .unwrap();
+        let retained_proposal = serde_json::to_vec(&feature.escalation_proposal).unwrap();
+        let retained_count = feature.escalation_count;
+        let retained_epoch = feature.auto_repair_epoch;
+
+        assert!(exact_snapshot_rejection_is_resumable(&feature));
+        assert!(enable_auto_repair_for_failed_feature(&mut feature, true, 100, 8).unwrap());
+        assert_eq!(feature.auto_repair_lifecycle, "running");
+        assert_eq!(feature.auto_repair_epoch, retained_epoch + 1);
+        assert_eq!(feature.auto_repair_policy_revision, Some(8));
+        assert_eq!(feature.escalation_count, retained_count);
+        assert_eq!(
+            serde_json::to_vec(&feature.escalation_proposal).unwrap(),
+            retained_proposal
+        );
+        assert!(!exact_snapshot_rejection_is_resumable(&feature));
+
+        let mut operational = feature;
+        set_auto_repair_lifecycle(
+            &mut operational,
+            "inactive",
+            EXACT_SNAPSHOT_VALIDATION_ONLY_REASON,
+        )
+        .unwrap();
+        operational.last_failure_kind = "operational".into();
+        assert!(!exact_snapshot_rejection_is_resumable(&operational));
     }
 
     #[test]
