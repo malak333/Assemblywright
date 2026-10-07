@@ -12,7 +12,9 @@ struct DeveloperGitHubTests {
     publicationRunning: Bool = false,
     planningModel: String = "gpt-5.6-sol", reviewModel: String = "gpt-5.6-sol",
     planningEffort: String? = nil, reviewEffort: String? = nil,
-    aiSettings: [String: Any]? = nil) throws -> DeveloperRunnerSnapshot {
+    aiSettings: [String: Any]? = nil, localProjects: [String]? = ["demo"],
+    includeFeature: Bool = true
+  ) throws -> DeveloperRunnerSnapshot {
     var feature: [String: Any] = [
       "id": "feature-1", "project": "demo", "instruction": "Add publishing",
       "validation": "swift test", "status": featureStatus, "checkpoint": featureCheckpoint,
@@ -23,12 +25,14 @@ struct DeveloperGitHubTests {
       if featureCheckpoint == "publication_attention" {
         feature["publication_status"] = "attention"
         feature["can_reconcile_publication"] = true
+        feature["can_abandon_publication"] = true
       }
     }
     var wire: [String: Any] = [
       "mode": "supervised_developer", "host": "fixture", "workspace_root": "/fixture",
       "revision": revision, "auto_run": true, "emergency_paused": false, "running": false,
-      "chat_running": false, "queue": [feature], "repair_limit": 3, "repair_active": false,
+      "chat_running": false, "queue": includeFeature ? [feature] : [], "repair_limit": 3,
+      "repair_active": false,
       "review_required": true, "review_provider": "openai.codex", "review_model": reviewModel,
       "planning_required": true, "planning_provider": "openai.codex",
       "planning_model": planningModel, "planning_running": false, "planning_sessions": [],
@@ -45,6 +49,7 @@ struct DeveloperGitHubTests {
     wire["github_connections"] = [["project": "demo",
       "repository_url": connectionRepository, "base_branch": "main",
       "automatic_merge": true]]
+    if let localProjects { wire["local_projects"] = localProjects }
     let decoder = JSONDecoder()
     decoder.keyDecodingStrategy = .convertFromSnakeCase
     return try decoder.decode(DeveloperRunnerSnapshot.self,
@@ -81,7 +86,8 @@ struct DeveloperGitHubTests {
     #expect(DeveloperGitHubPresentation.statusLabel(legacy) ==
       "Earlier local result · GitHub publication not recorded")
 
-    let legacySnapshot = try decodeSnapshot(publicationSupported: nil, unresolved: nil)
+    let legacySnapshot = try decodeSnapshot(publicationSupported: nil, unresolved: nil,
+      localProjects: nil)
     #expect(legacySnapshot.githubPublicationSupported == nil)
     #expect(!legacySnapshot.canStartFeature)
   }
@@ -224,6 +230,10 @@ struct DeveloperGitHubTests {
 
   @Test
   func connectionAndReconciliationBodiesBindRenderedState() {
+    let create = DeveloperGitHubRequest.createProject(project: "aw-demo-3", expectedRevision: 8)
+    #expect(create["action"] as? String == "create_project")
+    #expect(create["project"] as? String == "aw-demo-3")
+    #expect(create["expected_revision"] as? UInt64 == 8)
     let save = DeveloperGitHubRequest.saveConnection(project: "demo",
       repositoryURL: "https://github.com/owner/demo", baseBranch: "main", expectedRevision: 9)
     #expect(save["action"] as? String == "save_connection")
@@ -239,6 +249,11 @@ struct DeveloperGitHubTests {
     #expect(reconcile["action"] as? String == "reconcile")
     #expect(reconcile["feature_id"] as? String == "feature-1")
     #expect(reconcile["expected_checkpoint"] as? String == "publication_attention")
+    let abandon = DeveloperGitHubRequest.abandon(featureID: "feature-1",
+      expectedRevision: 12, expectedCheckpoint: "publication_attention")
+    #expect(abandon["action"] as? String == "abandon")
+    #expect(abandon["feature_id"] as? String == "feature-1")
+    #expect(abandon["expected_checkpoint"] as? String == "publication_attention")
   }
 
   @Test
@@ -256,6 +271,37 @@ struct DeveloperGitHubTests {
       featureCheckpoint: "publication_attention")
     #expect(!DeveloperGitHubAcknowledgement.reconciled(attention, expectedRevision: 9,
       featureID: "feature-1"))
+    let created = try decodeSnapshot(revision: 10, localProjects: ["aw-demo-3", "demo"])
+    #expect(DeveloperGitHubAcknowledgement.createdLocalProject(created,
+      expectedRevision: 9, project: "aw-demo-3"))
+    #expect(!DeveloperGitHubAcknowledgement.createdLocalProject(created,
+      expectedRevision: 8, project: "aw-demo-3"))
+    #expect(!DeveloperGitHubAcknowledgement.createdLocalProject(created,
+      expectedRevision: 9, project: "other"))
+    let abandoned = try decodeSnapshot(unresolved: false, revision: 10,
+      includeFeature: false)
+    #expect(DeveloperGitHubAcknowledgement.abandoned(abandoned,
+      expectedRevision: 9, featureID: "feature-1"))
+    #expect(!DeveloperGitHubAcknowledgement.abandoned(abandoned,
+      expectedRevision: 8, featureID: "feature-1"))
+    #expect(!DeveloperGitHubAcknowledgement.abandoned(attention,
+      expectedRevision: 9, featureID: "feature-1"))
+  }
+
+  @Test
+  func localProjectNamesMirrorWindowsValidationAndRepositorySuggestions() {
+    for accepted in ["aw-fft-demo3", "project_2", "A1"] {
+      #expect(DeveloperGitHubPresentation.validLocalProjectName(accepted))
+    }
+    for rejected in ["", "../escape", "has.dot", "nested/project", "project name", "café"] {
+      #expect(!DeveloperGitHubPresentation.validLocalProjectName(rejected))
+    }
+    #expect(DeveloperGitHubPresentation.suggestedLocalProjectName(
+      repositoryURL: "https://github.com/owner/aw-fft-demo3") == "aw-fft-demo3")
+    #expect(DeveloperGitHubPresentation.suggestedLocalProjectName(
+      repositoryURL: "https://github.com/owner/demo.site") == "demo-site")
+    #expect(DeveloperGitHubPresentation.suggestedLocalProjectName(
+      repositoryURL: "https://github.com.evil.test/owner/demo") == nil)
   }
 
   @Test @MainActor
@@ -272,17 +318,23 @@ snapshot={'mode':'supervised_developer','host':'fixture','workspace_root':'/fixt
  'review_model':'gpt-5.6-sol','planning_required':True,'planning_provider':'openai.codex',
  'planning_model':'gpt-5.6-sol','planning_running':False,'planning_sessions':[],
  'github_publication_supported':True,'github_publication_running':False,
- 'github_publication_unresolved':False,'can_manage_github_connections':True,'github_connections':[]}
+ 'github_publication_unresolved':False,'can_manage_github_connections':True,'github_connections':[],
+ 'local_projects':['demo']}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_POST(self):
   body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
   with open(sys.argv[1],'a') as f:f.write(json.dumps({'path':self.path,'authorization':self.headers.get('Authorization'),'body':body})+'\n')
   response=dict(snapshot)
-  if body['action']=='save_connection':
+  response['revision']=body['expected_revision']+1
+  if body['action']=='create_project':
+   response['local_projects']=sorted(set(response['local_projects']+[body['project']]))
+  elif body['action']=='save_connection':
    response['github_connections']=[{'project':body['project'],'repository_url':body['repository_url'],'base_branch':body['base_branch'],'automatic_merge':True}]
   elif body['action']=='reconcile':
    response['running']=True;response['github_publication_running']=True;response['github_publication_unresolved']=True
    response['queue']=[{'id':body['feature_id'],'project':'demo','instruction':'feature','validation':'tests','status':'running','checkpoint':'publication_reconciling','message':'','changed_files':[],'publication_status':'pending','publication_stage':'wait_required_checks','can_reconcile_publication':False}]
+  elif body['action']=='abandon':
+   response['github_publication_unresolved']=False;response['queue']=[]
   data=json.dumps(response).encode();self.send_response(200);self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data)
  def log_message(self,*args):pass
 server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler)
@@ -307,8 +359,9 @@ sys.stdout.buffer.write(server.server_port.to_bytes(4,'big'));sys.stdout.buffer.
     ]).write(to: config)
     let model = DeveloperRunnerModel(configurationPath: config.path)
     model.snapshot = try decodeSnapshot()
+    try await model.createLocalProject("aw-demo-3", expectedRevision: 9)
     try await model.saveGitHubConnection(project: "demo",
-      repositoryURL: "https://github.com/owner/demo", baseBranch: "main", expectedRevision: 9)
+      repositoryURL: "https://github.com/owner/demo", baseBranch: "main", expectedRevision: 10)
     model.snapshot = try decodeSnapshot()
     try await model.disconnectGitHub(project: "demo", expectedRevision: 9)
     let decoder = JSONDecoder()
@@ -321,15 +374,18 @@ sys.stdout.buffer.write(server.server_port.to_bytes(4,'big'));sys.stdout.buffer.
     model.snapshot = try decodeSnapshot(unresolved: true, featureStatus: "failed",
       featureCheckpoint: "publication_attention")
     try await model.reconcilePublication(feature, expectedRevision: 9)
+    model.snapshot = try decodeSnapshot(unresolved: true, featureStatus: "failed",
+      featureCheckpoint: "publication_attention")
+    try await model.abandonPublication(feature, expectedRevision: 9)
 
     let lines = try String(contentsOf: requests, encoding: .utf8).split(separator: "\n")
     let captured = try lines.map {
       try JSONSerialization.jsonObject(with: Data($0.utf8)) as! [String: Any]
     }
-    #expect(captured.count == 3)
+    #expect(captured.count == 5)
     #expect(captured.allSatisfy { $0["path"] as? String == "/publication" })
     #expect(captured.allSatisfy { $0["authorization"] as? String == "Bearer fixture-token" })
     let actions = try captured.map { try #require($0["body"] as? [String: Any])["action"] as? String }
-    #expect(actions == ["save_connection", "disconnect", "reconcile"])
+    #expect(actions == ["create_project", "save_connection", "disconnect", "reconcile", "abandon"])
   }
 }

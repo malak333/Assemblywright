@@ -3316,6 +3316,20 @@ impl Engine {
                     && !self.publication_running.load(Ordering::SeqCst)
                     && !self.publication_connection_running.load(Ordering::SeqCst)
                     && f.publication.as_ref().is_some_and(|publication| publication.status == "attention"),
+                "can_abandon_publication":self.publication_runtime.is_some()
+                    && !emergency_paused
+                    && !self.shutdown.load(Ordering::SeqCst)
+                    && !self.publication_running.load(Ordering::SeqCst)
+                    && !self.publication_connection_running.load(Ordering::SeqCst)
+                    && f.status == "failed"
+                    && f.checkpoint == "publication_attention"
+                    && f.publication.as_ref().is_some_and(|publication| {
+                        publication.status == "attention"
+                            && publication.commit_sha.is_some()
+                            && publication.pr_number.is_some()
+                            && publication.pr_url.is_some()
+                            && publication.merged_sha.is_none()
+                    }),
                 "changed_files":f.edits.as_ref().map(|e| e.iter().map(|e| &e.path).collect::<Vec<_>>()).unwrap_or_default()
                 });
                 let object = projected.as_object_mut().unwrap();
@@ -3389,6 +3403,7 @@ impl Engine {
                 })
             })
             .collect();
+        let local_projects = self.chat.project_names()?;
         let publication_running = self.publication_running.load(Ordering::SeqCst);
         let can_manage_github_connections = !publication_unresolved
             && !github_setup_unresolved
@@ -3421,6 +3436,7 @@ impl Engine {
             "can_manage_github_connections":can_manage_github_connections,
             "github_publication_message":self.publication_unavailable_reason,
             "github_connections":github_connections,
+            "local_projects":local_projects,
             "github_setup_busy":github_setup_busy,
             "github_setup_unresolved":github_setup_unresolved,
             "ai_settings":db.state.ai_settings,
@@ -7959,6 +7975,87 @@ impl Engine {
         self.snapshot()
     }
 
+    fn create_local_project(&self, project: &str, expected_revision: u64) -> Result<Value> {
+        developer_planning::validate_project(project)?;
+        {
+            let database = self
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?;
+            self.reserve_github_setup_operation(&database, expected_revision, false)?;
+        }
+
+        let result = (|| -> Result<()> {
+            let _effect_guard = self
+                .effect_gate
+                .lock()
+                .map_err(|_| anyhow!("effect gate failed"))?;
+            let database = self
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?;
+            if database.state.revision != expected_revision {
+                bail!("Runner revision changed before creating the local project");
+            }
+            if self.shutdown.load(Ordering::SeqCst)
+                || self.emergency_paused(&database.state)
+                || self.publication_cancellation.load(Ordering::SeqCst) != 0
+            {
+                bail!("Local project creation was cancelled or paused");
+            }
+            if self.running.load(Ordering::SeqCst)
+                || self.planning_running.load(Ordering::SeqCst)
+                || self.escalation_running.load(Ordering::SeqCst)
+                || self.chat.is_running()
+                || self.tools.blocks_work()
+                || self.publication_running.load(Ordering::SeqCst)
+                || Self::publication_unresolved(&database.state)
+                || database.github_setup.blocks_dependent_work()
+            {
+                bail!("Stop developer work and resolve GitHub operations before creating a local project");
+            }
+            drop(database);
+
+            if observe_local_project(&self.root, project)?.is_some() {
+                return Ok(());
+            }
+            if self.shutdown.load(Ordering::SeqCst)
+                || self.cancellation.load(Ordering::SeqCst) != 0
+                || self.publication_cancellation.load(Ordering::SeqCst) != 0
+            {
+                bail!("Local project creation was cancelled or paused");
+            }
+            let target = self.root.join(project);
+            fs::create_dir(&target).context("Could not create the local project directory")?;
+            if let Err(error) = observe_local_project(&self.root, project)
+                .and_then(|observed| observed.context("Created local project is unavailable"))
+            {
+                let _ = fs::remove_dir(&target);
+                return Err(error);
+            }
+            if self.cancellation.load(Ordering::SeqCst) != 0
+                || self.publication_cancellation.load(Ordering::SeqCst) != 0
+            {
+                fs::remove_dir(&target).context(
+                    "Local project creation was cancelled but its empty directory could not be rolled back",
+                )?;
+                bail!("Local project creation was cancelled or paused");
+            }
+            if let Err(error) = self.change(|_| Ok(())) {
+                fs::remove_dir(&target).with_context(|| {
+                    format!(
+                        "Local project state could not be recorded and rollback failed: {error}"
+                    )
+                })?;
+                return Err(error.context("Local project state could not be recorded"));
+            }
+            Ok(())
+        })();
+        self.release_github_setup_operation();
+        result?;
+        self.snapshot()
+    }
+
     fn disconnect_github_connection(&self, project: &str, expected_revision: u64) -> Result<Value> {
         self.publication_connection_running
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -8084,6 +8181,140 @@ impl Engine {
             }
         });
         Ok(accepted)
+    }
+
+    async fn abandon_publication(
+        self: &Arc<Self>,
+        feature_id: &str,
+        expected_revision: u64,
+        expected_checkpoint: &str,
+    ) -> Result<Value> {
+        Uuid::parse_str(feature_id).context("Invalid feature ID")?;
+        let runtime = self
+            .publication_runtime
+            .as_ref()
+            .cloned()
+            .context("GitHub publication tools are unavailable")?;
+        let idempotent = {
+            let database = self
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?;
+            if database.state.revision != expected_revision {
+                bail!("Runner revision changed; refresh before abandoning publication");
+            }
+            let existing = database
+                .state
+                .queue
+                .iter()
+                .find(|feature| feature.id == feature_id)
+                .context("Feature not found")?;
+            expected_checkpoint == "publication_abandoned"
+                && existing.status == "removed"
+                && existing.checkpoint == "publication_abandoned"
+                && existing
+                    .publication
+                    .as_ref()
+                    .is_some_and(|publication| publication.status == "abandoned")
+        };
+        if idempotent {
+            return self.snapshot();
+        }
+        if self.publication_connection_running.load(Ordering::SeqCst) {
+            bail!("Wait for the GitHub connection operation to finish");
+        }
+        self.publication_running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .map_err(|_| anyhow!("Another GitHub publication is running"))?;
+        let _running_guard = PublicationRunningGuard(&self.publication_running);
+        self.publication_cancellation.store(0, Ordering::SeqCst);
+        let (input, original) = {
+            let database = self
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?;
+            if database.state.revision != expected_revision {
+                bail!("Runner revision changed; refresh before abandoning publication");
+            }
+            if self.shutdown.load(Ordering::SeqCst) || self.emergency_paused(&database.state) {
+                bail!("Clear shutdown or Emergency Pause before abandoning publication");
+            }
+            if database.github_setup.blocks_dependent_work() {
+                bail!("Reconcile the unfinished GitHub setup operation before publication");
+            }
+            if self.running.load(Ordering::SeqCst)
+                || self.planning_running.load(Ordering::SeqCst)
+                || self.escalation_running.load(Ordering::SeqCst)
+                || self.chat.is_running()
+                || self.tools.blocks_work()
+            {
+                bail!("Stop other developer work before abandoning publication");
+            }
+            let feature = database
+                .state
+                .queue
+                .iter()
+                .find(|feature| feature.id == feature_id)
+                .context("Feature not found")?;
+            if feature.status != "failed"
+                || feature.checkpoint != expected_checkpoint
+                || expected_checkpoint != "publication_attention"
+            {
+                bail!("Publication checkpoint changed; refresh before abandoning");
+            }
+            let input = publication_input(feature)?;
+            let publication = feature
+                .publication
+                .clone()
+                .context("Publication record is missing")?;
+            if publication.status != "attention" {
+                bail!("Only a publication needing attention can be abandoned");
+            }
+            (input, publication)
+        };
+        let mut abandoned = original.clone();
+        runtime
+            .observe_closed_unmerged(&input, &mut abandoned, &self.publication_cancellation)
+            .await?;
+        let mut database = self
+            .database
+            .lock()
+            .map_err(|_| anyhow!("state lock failed"))?;
+        mutate_database(&mut database, |state, github_setup| {
+            if state.revision != expected_revision {
+                bail!("Runner revision changed during publication abandonment");
+            }
+            if self.shutdown.load(Ordering::SeqCst)
+                || self.emergency_paused(state)
+                || self.publication_cancellation.load(Ordering::SeqCst) != 0
+            {
+                bail!("Publication abandonment was cancelled or paused");
+            }
+            if github_setup.blocks_dependent_work() {
+                bail!("GitHub setup changed during publication abandonment");
+            }
+            let feature = state
+                .queue
+                .iter_mut()
+                .find(|feature| feature.id == feature_id)
+                .context("Feature not found")?;
+            if feature.status != "failed"
+                || feature.checkpoint != expected_checkpoint
+                || feature.publication.as_ref() != Some(&original)
+            {
+                bail!("Publication state changed during abandonment");
+            }
+            publication_input(feature)?;
+            abandoned.validate()?;
+            feature.publication = Some(abandoned.clone());
+            feature.status = "removed".into();
+            feature.checkpoint = "publication_abandoned".into();
+            feature.message = "The exact retained pull request was observed closed and unmerged. Publication evidence is preserved, and this feature was removed from the active queue without a remote write.".into();
+            feature.repair_pending = false;
+            Ok(())
+        })?;
+        drop(database);
+        self.snapshot()
     }
     async fn run_queue(&self, mut inference_lease: Option<InferenceLease>) -> Result<()> {
         loop {
@@ -12233,11 +12464,21 @@ fn validated_completed_publication_is_mutation_immune(feature: &Feature) -> Resu
 
 fn validate_and_recover_persisted_publication(feature: &mut Feature) -> Result<()> {
     let Some(publication) = feature.publication.as_ref() else {
+        if feature.checkpoint == "publication_abandoned" {
+            bail!("Persisted publication tombstone is missing abandonment evidence");
+        }
         return Ok(());
     };
     publication
         .validate()
         .context("Persisted Developer publication is invalid")?;
+    if publication.status == "abandoned" {
+        if feature.status != "removed" || feature.checkpoint != "publication_abandoned" {
+            bail!("Persisted abandoned publication is not paired with its feature tombstone");
+        }
+    } else if feature.checkpoint == "publication_abandoned" {
+        bail!("Persisted publication tombstone is missing abandonment evidence");
+    }
     let input = publication_input(feature).context("Persisted publication candidate is invalid")?;
     if publication.status == "succeeded" && publication.stage == "complete" {
         validate_completed_reverification(&input, publication)
@@ -18257,6 +18498,27 @@ fn admitted_project_snapshot_with_cancellation(
         })
     }
 }
+fn observe_local_project(root: &Path, project: &str) -> Result<Option<PathBuf>> {
+    developer_planning::validate_project(project)?;
+    let target = root.join(project);
+    let metadata = match fs::symlink_metadata(&target) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).context("Could not inspect the local project path"),
+    };
+    if metadata.file_type().is_symlink()
+        || planning_metadata_is_reparse(&metadata)
+        || !metadata.is_dir()
+    {
+        bail!("Local project path collides with a file, link, or reparse point");
+    }
+    let canonical = fs::canonicalize(&target)?;
+    if canonical.parent() != Some(root) || !canonical.starts_with(root) {
+        bail!("Local project directory leaves the configured workspace root");
+    }
+    Ok(Some(canonical))
+}
+
 fn authorize(engine: &Engine, headers: &HeaderMap) -> Result<()> {
     if headers.get("authorization").and_then(|h| h.to_str().ok())
         != Some(format!("Bearer {}", engine.token).as_str())
@@ -18572,6 +18834,10 @@ async fn github_control(
 #[derive(Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
 enum PublicationMutation {
+    CreateProject {
+        project: String,
+        expected_revision: u64,
+    },
     SaveConnection {
         project: String,
         repository_url: String,
@@ -18583,6 +18849,11 @@ enum PublicationMutation {
         expected_revision: u64,
     },
     Reconcile {
+        feature_id: String,
+        expected_revision: u64,
+        expected_checkpoint: String,
+    },
+    Abandon {
         feature_id: String,
         expected_revision: u64,
         expected_checkpoint: String,
@@ -18615,6 +18886,10 @@ async fn publication_control(
         Err(error) => return api(Err(error.into())),
     };
     let result = match request {
+        PublicationMutation::CreateProject {
+            project,
+            expected_revision,
+        } => engine.create_local_project(&project, expected_revision),
         PublicationMutation::SaveConnection {
             project,
             repository_url,
@@ -18634,6 +18909,15 @@ async fn publication_control(
             expected_revision,
             expected_checkpoint,
         } => engine.reconcile_publication(&feature_id, expected_revision, &expected_checkpoint),
+        PublicationMutation::Abandon {
+            feature_id,
+            expected_revision,
+            expected_checkpoint,
+        } => {
+            engine
+                .abandon_publication(&feature_id, expected_revision, &expected_checkpoint)
+                .await
+        }
     };
     api(result)
 }
@@ -23369,6 +23653,44 @@ mod tests {
         feature
     }
 
+    fn feature_with_abandoned_publication() -> Feature {
+        let mut feature = feature_with_completed_publication("removed", "publication_abandoned");
+        let publication = feature.publication.as_mut().unwrap();
+        publication.status = "abandoned".into();
+        publication.stage = "abandoned".into();
+        publication.merged_sha = None;
+        publication.events = vec![developer_publication::PublicationEvent {
+            sequence: 1,
+            kind: "receipt".into(),
+            stage: "abandoned".into(),
+            evidence_sha256: publication.commit_sha.clone(),
+            summary: "fixture abandoned publication".into(),
+        }];
+        publication.validate().unwrap();
+        feature
+    }
+
+    #[test]
+    fn abandoned_publication_requires_exact_persisted_feature_tombstone() {
+        let mut valid = feature_with_abandoned_publication();
+        validate_and_recover_persisted_publication(&mut valid).unwrap();
+        assert_eq!(valid.status, "removed");
+        assert_eq!(valid.checkpoint, "publication_abandoned");
+
+        let mut missing_tombstone = feature_with_abandoned_publication();
+        missing_tombstone.status = "failed".into();
+        missing_tombstone.checkpoint = "publication_attention".into();
+        assert!(validate_and_recover_persisted_publication(&mut missing_tombstone).is_err());
+
+        let mut missing_receipt =
+            feature_with_completed_publication("removed", "publication_abandoned");
+        assert!(validate_and_recover_persisted_publication(&mut missing_receipt).is_err());
+
+        let mut missing_publication = feature_with_abandoned_publication();
+        missing_publication.publication = None;
+        assert!(validate_and_recover_persisted_publication(&mut missing_publication).is_err());
+    }
+
     fn bind_completed_feature_review(feature: &mut Feature, project: &Path) {
         let validation_evidence_sha256 =
             feature.review_history[0].validation_evidence_sha256.clone();
@@ -23851,6 +24173,21 @@ mod tests {
 
     #[test]
     fn publication_request_is_action_specific_and_rejects_unknown_fields() {
+        let create = json!({
+            "action":"create_project",
+            "project":"example-2",
+            "expected_revision":7
+        });
+        assert!(matches!(
+            serde_json::from_value::<PublicationMutation>(create.clone()).unwrap(),
+            PublicationMutation::CreateProject {
+                expected_revision: 7,
+                ..
+            }
+        ));
+        let mut create_unknown = create;
+        create_unknown["clone"] = Value::Bool(true);
+        assert!(serde_json::from_value::<PublicationMutation>(create_unknown).is_err());
         let save = json!({
             "action":"save_connection",
             "project":"example",
@@ -23874,6 +24211,104 @@ mod tests {
             "expected_revision":8
         }))
         .is_err());
+        let abandon = json!({
+            "action":"abandon",
+            "feature_id":"a8e78ac7-c9a9-47f0-92dc-b35777880967",
+            "expected_revision":8,
+            "expected_checkpoint":"publication_attention"
+        });
+        assert!(matches!(
+            serde_json::from_value::<PublicationMutation>(abandon.clone()).unwrap(),
+            PublicationMutation::Abandon {
+                expected_revision: 8,
+                ..
+            }
+        ));
+        let mut abandon_unknown = abandon;
+        abandon_unknown["delete_branch"] = Value::Bool(true);
+        assert!(serde_json::from_value::<PublicationMutation>(abandon_unknown).is_err());
+    }
+
+    #[test]
+    fn local_project_creation_is_exact_idempotent_and_projected() {
+        let (_directory, engine) = control_test_engine();
+        let revision = engine.snapshot().unwrap()["revision"].as_u64().unwrap();
+        let created = engine.create_local_project("aw-demo-3", revision).unwrap();
+        assert_eq!(created["revision"], revision + 1);
+        assert_eq!(created["local_projects"], json!(["aw-demo-3", "example"]));
+        let metadata = fs::symlink_metadata(engine.root.join("aw-demo-3")).unwrap();
+        assert!(metadata.is_dir());
+        assert!(!metadata.file_type().is_symlink());
+        assert!(fs::read_dir(engine.root.join("aw-demo-3"))
+            .unwrap()
+            .next()
+            .is_none());
+
+        let idempotent_revision = created["revision"].as_u64().unwrap();
+        let observed = engine
+            .create_local_project("aw-demo-3", idempotent_revision)
+            .unwrap();
+        assert_eq!(observed["revision"], idempotent_revision);
+        assert_eq!(observed["local_projects"], created["local_projects"]);
+    }
+
+    #[test]
+    fn local_project_creation_rejects_invalid_collision_stale_and_busy_requests() {
+        let (_directory, engine) = control_test_engine();
+        let revision = engine.snapshot().unwrap()["revision"].as_u64().unwrap();
+        for invalid in ["", "../escape", "nested/project", "with space", "has.dot"] {
+            assert!(engine.create_local_project(invalid, revision).is_err());
+        }
+        fs::write(engine.root.join("file-project"), b"collision").unwrap();
+        assert!(engine
+            .create_local_project("file-project", revision)
+            .unwrap_err()
+            .to_string()
+            .contains("collides"));
+        assert!(engine
+            .create_local_project("stale", revision + 1)
+            .unwrap_err()
+            .to_string()
+            .contains("revision changed"));
+        engine.running.store(true, Ordering::SeqCst);
+        assert!(engine
+            .create_local_project("busy", revision)
+            .unwrap_err()
+            .to_string()
+            .contains("Stop developer work"));
+        engine.running.store(false, Ordering::SeqCst);
+        assert!(!engine.root.join("busy").exists());
+        engine.cancellation.store(1, Ordering::SeqCst);
+        assert!(engine
+            .create_local_project("cancelled", revision)
+            .unwrap_err()
+            .to_string()
+            .contains("cancelled"));
+        assert!(!engine.root.join("cancelled").exists());
+        engine.cancellation.store(0, Ordering::SeqCst);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_project_creation_rejects_workspace_links() {
+        use std::os::unix::fs::symlink;
+
+        let (directory, engine) = control_test_engine();
+        let outside = directory.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        symlink(&outside, engine.root.join("linked-project")).unwrap();
+        let revision = engine.snapshot().unwrap()["revision"].as_u64().unwrap();
+        assert!(engine
+            .create_local_project("linked-project", revision)
+            .unwrap_err()
+            .to_string()
+            .contains("collides"));
+        assert!(!engine.snapshot().unwrap()["local_projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|project| project.as_str() == Some("linked-project")));
+        assert!(outside.is_dir());
     }
 
     #[test]

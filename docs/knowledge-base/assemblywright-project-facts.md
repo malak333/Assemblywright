@@ -1,5 +1,19 @@
 # Assemblywright Project Facts
 
+## GitHub selection and local Developer projects
+
+- A GitHub repository selection fills connection details; it does not create a
+  Windows Developer project by itself.
+- The GitHub publication dialog can explicitly create one empty direct directory
+  under the configured Windows workspace using a simple 80-character ASCII project
+  name. This action does not clone, import, upload, connect, plan, enqueue, or start.
+- Real direct workspace directories are projected as `local_projects` and feed the
+  main planning, project-chat, and publication pickers. Queue history and saved
+  repository bindings are not filesystem existence evidence.
+- Creation is exact-revision and idle-gated, observes an existing direct directory
+  idempotently without overwrite, and rejects files, links, Windows reparse points,
+  nested names, and paths outside the workspace.
+
 ## Global permissions and Assembly Line navigation
 
 - The supervised runner has one Windows-owned tool-access policy. An approval
@@ -3361,6 +3375,14 @@ consistency.
   receipt. Startup may rebind its last exact approval only to validate the frozen
   candidate and must preserve the serialized tombstone byte-for-byte. It never
   becomes completion-reverify eligible; later substantive review evidence rejects.
+- A publication attention record can block every later feature after its PR is
+  intentionally closed without merge. Recovery is an authenticated owner action,
+  not an automatic retry: bind the exact feature/revision/checkpoint, observe the
+  retained repository, PR identity, base branch, reviewed head, `CLOSED` state and
+  absent merge commit, then append one terminal abandonment receipt and tombstone
+  the feature atomically. Preserve candidate, review, PR, check and event evidence;
+  open, merged, missing, drifted, cancelled or paused observations leave attention
+  unchanged. The action performs no remote mutation and never becomes success proof.
 
 ## Developer model catalog and installed-provider compatibility
 

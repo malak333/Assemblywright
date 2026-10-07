@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -19,6 +20,36 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+
+def _is_reparse_entry(path: Path) -> bool:
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return False
+    if sys.platform == "win32":
+        return bool(info.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+    return stat.S_ISLNK(info.st_mode)
+
+def _cmd_windows_builtin(argv, check=False):
+    assert sys.platform == "win32"
+    command = subprocess.list2cmdline([str(part) for part in argv])
+    completed = subprocess.run('cmd.exe /d /s /c "' + command + '"',
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if check:
+        assert completed.returncode == 0, (command, completed.returncode,
+            completed.stdout.decode(errors="replace"),
+            completed.stderr.decode(errors="replace"))
+    return completed
+
+def _remove_reparse_entry(path: Path):
+    assert _is_reparse_entry(path), "expected a reparse fixture: " + str(path)
+    if sys.platform == "win32":
+        cleanup = _cmd_windows_builtin(["rmdir", path])
+        assert cleanup.returncode == 0, (str(path), cleanup.returncode,
+            cleanup.stderr.decode(errors="replace"))
+    else:
+        path.unlink()
+    assert not _is_reparse_entry(path) and not path.exists()
 
 def _parse_fixture_calls_snapshot(data: bytes) -> list:
     """Parse newline-delimited JSON records from a potentially incomplete snapshot.
@@ -254,6 +285,7 @@ def main():
             assert waiting["sign_in"]["verification_url"] == "https://github.com/login/device"
             return operation, waiting
 
+        workspace_link = None
         failure = None
         failure_traceback = None
         try:
@@ -350,6 +382,59 @@ def main():
             assert unmasked["sign_in"]["state"] == "succeeded"
             assert unmasked["account"]["state"] == "signed_in"
             assert unmasked["account"]["login"] == "owner"
+
+            runner = request("status")
+            rejected("publication", {
+                "action": "create_project", "project": "aw-fft-demo3",
+                "expected_revision": runner["revision"],
+            }, code=401, authorization=False)
+            rejected("publication", {
+                "action": "create_project", "project": "../escape",
+                "expected_revision": runner["revision"],
+            })
+            collision = projects / "file-collision"
+            collision.write_text("must remain a file")
+            rejected("publication", {
+                "action": "create_project", "project": collision.name,
+                "expected_revision": runner["revision"],
+            })
+            outside = root / "outside-project"
+            outside.mkdir()
+            link = projects / "linked-project"
+            try:
+                link.symlink_to(outside, target_is_directory=True)
+            except OSError:
+                if sys.platform == "win32":
+                    _cmd_windows_builtin(["mklink", "/J", link, outside], check=True)
+                else:
+                    link = None
+            if link is not None:
+                workspace_link = link
+                rejected("publication", {
+                    "action": "create_project", "project": link.name,
+                    "expected_revision": runner["revision"],
+                })
+                assert link.name not in request("status")["local_projects"]
+                assert link.name not in request("chat/projects")["projects"]
+            created = request("publication", {
+                "action": "create_project", "project": "aw-fft-demo3",
+                "expected_revision": runner["revision"],
+            })
+            assert created["revision"] == runner["revision"] + 1
+            assert "aw-fft-demo3" in created["local_projects"]
+            assert list((projects / "aw-fft-demo3").iterdir()) == []
+            assert "aw-fft-demo3" in request("chat/projects")["projects"]
+            idempotent = request("publication", {
+                "action": "create_project", "project": "aw-fft-demo3",
+                "expected_revision": created["revision"],
+            })
+            assert idempotent["revision"] == created["revision"]
+            assert idempotent["local_projects"] == created["local_projects"]
+            rejected("publication", {
+                "action": "create_project", "project": "stale-project",
+                "expected_revision": runner["revision"],
+            })
+            assert not (projects / "stale-project").exists()
 
             set_mode("setup-pages")
             page_one = post("list_repositories", page=1)
@@ -455,6 +540,7 @@ def main():
                 "ambient_credentials_reconciled": True,
                 "device_challenge_cancel_and_postcheck": True,
                 "restart_attention_reconciled": True,
+                "local_project_create_reject_and_idempotence": True,
                 "repository_pages_and_empty_default_branch": True,
                 "creation_collision_ambiguous_absent_and_success": True,
                 "creation_receipt_immutable_id": True,
@@ -473,6 +559,8 @@ def main():
             except Exception:
                 pass
             stop_runner()
+            if workspace_link is not None and _is_reparse_entry(workspace_link):
+                _remove_reparse_entry(workspace_link)
             for handle in log_handles:
                 handle.close()
             model.shutdown()

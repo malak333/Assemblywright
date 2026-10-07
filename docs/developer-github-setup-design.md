@@ -33,6 +33,26 @@ An empty repository selection links to that repository's GitHub setup page and
 explains that it needs an initial README/base branch and protected required checks;
 it must not be presented as ready or silently supplied a fictional default branch.
 
+Selecting a repository fills its URL and base branch and suggests a bounded local
+project name. It does not make that repository a Developer project. The owner may
+explicitly create one empty directory directly under the configured Windows
+workspace. The action accepts one ASCII alphanumeric, hyphen, or underscore path
+component of at most 80 characters. It never clones or imports the repository,
+downloads or uploads files, saves the GitHub connection, starts planning, enqueues
+a feature, or changes permissions. The new directory appears in the main feature,
+project-chat, and publication pickers while the selected repository draft remains
+available for the separate Save connection action.
+
+Local project creation is authenticated and bound to the exact runner revision. It
+uses the existing idle GitHub/setup exclusion and filesystem effect gate, rechecks
+Stop, Emergency Pause, shutdown, cancellation, unresolved setup/publication, and
+other Developer work immediately before the effect, and creates one directory. A
+file, symbolic link, Windows reparse point, nested name, or canonical path outside
+the workspace is rejected. Repeating the request for an existing direct directory
+is an observable no-op and does not overwrite or initialize it. A new directory
+advances the durable runner revision. If revision recording fails, the still-empty
+directory is removed or rollback failure is reported instead of success.
+
 Create repository is a separate explicit action: the owner chooses a valid name
 and public/private visibility (private initially selected) and confirms the exact
 account/name/visibility before any request. Initial creation is limited to the
@@ -72,6 +92,13 @@ where they can be long-running or create external state. Account/list requests a
 bounded. Setup writes reserve the existing idle/connection-operation exclusion so
 feature starts, publication, tools, and planning cannot race credential changes.
 Stop, Emergency Pause, shutdown, and cancellation retain their authority.
+
+The existing authenticated `POST /publication` action set additionally accepts
+`create_project` with only `project` and `expected_revision`. Successful runner
+snapshots include optional `local_projects` for forward-compatible native clients;
+older snapshots remain decodable. `GET /chat/projects` and `local_projects` use the
+same bounded direct-directory enumeration, so queue entries and saved publication
+bindings cannot manufacture a selectable local workspace.
 
 Response fields: `revision`, `account` (`state`, `login`, `message`),
 `repositories` (`name_with_owner`, `url`, `visibility`, `default_branch`, `can_push`),
@@ -119,7 +146,8 @@ Connection failures remain inside the GitHub dialog and explain the next step.
 Use the unit-testing-test-generate and native e2e-testing workflows: invalid/expired
 auth, network errors, malformed identities/challenges, unauthorized/stale/busy
 requests, repository pagination, creation confirmation/collision/uncertainty,
-cancellation/restart, retained publication safeguards, and Swift selection/ack logic.
+cancellation/restart, retained publication safeguards, local-project path rejection,
+idempotent create-only observation, and Swift selection/ack logic.
 Run native Windows processes and Mac Swift tests, independent high-risk review,
 documentation checks, and the canonical gate. Verify installed account/setup state
 and unchanged owner queue separately from fixture tests. Real creation requires an

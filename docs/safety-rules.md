@@ -18,6 +18,13 @@ Creation binds the confirmed account/name/visibility and immutable repository ID
 device challenges never authorize model actions. Cancellation or unknown credential
 and creation effects require truthful observation and operation-bound recovery.
 Repository creation does not publish project files or bypass publication checks.
+Selecting a discovered repository also grants no local filesystem effect. The owner
+must separately request creation of one simple, direct workspace directory against
+the exact runner revision while Developer and GitHub work are idle. Existing direct
+directories are observed idempotently without overwrite; files, links, reparse
+points, nested names, and paths outside the configured workspace fail closed. The
+action does not clone, import, upload, connect, plan, enqueue, or start work. Stop,
+Emergency Pause, shutdown, and GitHub-operation cancellation remain authoritative.
 
 The accepted [Developer GitHub publication design](developer-github-publication-design.md)
 permits automatic publication only to the project's explicitly connected repository.
@@ -27,6 +34,15 @@ cannot choose publication destinations or approve effects. No direct base push,
 force push, branch-protection bypass, or automatic replay after an uncertain effect
 is permitted. Connected features cannot succeed or advance until the merge is
 verified. Existing local-only results and production provisioning remain distinct.
+An unresolved publication may be abandoned only by an authenticated, explicit owner
+action bound to the exact feature, runner revision, and attention checkpoint after
+the owner has closed its PR without merging. Observe the retained PR identity,
+repository, base branch, reviewed head, closed state, and absent merge receipt;
+reject open, merged, missing, or drifted observations. Preserve candidate, review,
+PR, check, and event history, append one abandonment receipt, tombstone the feature,
+and clear the barrier atomically. Do not close or delete a PR or branch, retry an
+effect, infer success, or let Stop, Emergency Pause, shutdown, or restart convert an
+incomplete observation into abandonment.
 
 The accepted [Developer chat history design](developer-chat-history-design.md)
 adds Windows-owned conversations within each Developer project. Chat IDs and

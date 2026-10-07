@@ -181,7 +181,7 @@ impl PublicationRecord {
         }
         if !matches!(
             self.status.as_str(),
-            "pending" | "running" | "attention" | "succeeded"
+            "pending" | "running" | "attention" | "succeeded" | "abandoned"
         ) {
             bail!("Persisted Developer publication status is invalid");
         }
@@ -265,8 +265,24 @@ impl PublicationRecord {
             {
                 bail!("Completed publication evidence is incomplete");
             }
-        } else if self.stage == "complete" {
-            bail!("Incomplete publication cannot claim the complete stage");
+        } else if self.status == "abandoned" {
+            if self.stage != "abandoned"
+                || self.base_sha.is_none()
+                || self.candidate_tree_sha.is_none()
+                || self.commit_sha.is_none()
+                || self.pr_number.is_none()
+                || self.pr_url.is_none()
+                || self.merged_sha.is_some()
+                || !self.events.last().is_some_and(|event| {
+                    event.kind == "receipt"
+                        && event.stage == "abandoned"
+                        && event.evidence_sha256.as_deref() == self.commit_sha.as_deref()
+                })
+            {
+                bail!("Abandoned publication evidence is incomplete");
+            }
+        } else if matches!(self.stage.as_str(), "complete" | "abandoned") {
+            bail!("Incomplete publication cannot claim a terminal stage");
         }
         Ok(())
     }
@@ -301,6 +317,22 @@ impl PublicationRecord {
             evidence_sha256: evidence.map(str::to_owned),
             summary: summary.chars().take(1000).collect(),
         });
+        Ok(())
+    }
+
+    fn mark_abandoned(&mut self) -> Result<()> {
+        let commit = self
+            .commit_sha
+            .clone()
+            .context("Publication abandonment is missing its exact commit")?;
+        self.event(
+            "receipt",
+            "abandoned",
+            Some(&commit),
+            "Exact retained pull request was observed closed and unmerged; publication evidence was preserved without a remote write",
+        )?;
+        self.status = "abandoned".into();
+        self.stage = "abandoned".into();
         Ok(())
     }
 }
@@ -1038,6 +1070,44 @@ impl Runtime {
         record.message =
             "Previously completed publication was reverified without another write".into();
         persist(record)
+    }
+
+    pub(super) async fn observe_closed_unmerged(
+        &self,
+        input: &PublicationInput,
+        record: &mut PublicationRecord,
+        cancellation: &AtomicU8,
+    ) -> Result<()> {
+        validate_candidate_files(&input.files)?;
+        validate_pull_request_text(&input.title, &input.body)?;
+        record.validate()?;
+        if record.status != "attention" {
+            bail!("Only a publication needing attention can be abandoned");
+        }
+        if record.repository_url != input.binding.repository_url
+            || record.repository_slug != input.binding.repository_slug
+            || record.base_branch != input.binding.base_branch
+            || record.feature_branch != format!("codex/feature-{}", input.feature_id)
+            || record.required_checks != input.binding.required_checks
+            || record.strict_required_checks != input.binding.strict_required_checks
+        {
+            bail!("Publication binding changed after approval");
+        }
+        if record.base_sha.is_none()
+            || record.candidate_tree_sha.is_none()
+            || record.commit_sha.is_none()
+            || record.pr_number.is_none()
+            || record.pr_url.is_none()
+            || record.merged_sha.is_some()
+        {
+            bail!("Publication does not retain the exact unmerged pull request evidence");
+        }
+        check_cancelled(cancellation)?;
+        let view = self.pr_view(record, cancellation).await?;
+        check_cancelled(cancellation)?;
+        bind_closed_unmerged_pr(record, &view)?;
+        record.mark_abandoned()?;
+        record.validate()
     }
 
     async fn verify_completed_candidate_at_descendant(
@@ -2467,6 +2537,52 @@ fn bind_pr(record: &mut PublicationRecord, value: &Value, commit: &str) -> Resul
     Ok(())
 }
 
+fn bind_closed_unmerged_pr(record: &PublicationRecord, value: &Value) -> Result<()> {
+    let number = value
+        .get("number")
+        .and_then(Value::as_u64)
+        .context("Pull request number is missing")?;
+    let url = value
+        .get("url")
+        .and_then(Value::as_str)
+        .context("Pull request URL is missing")?;
+    let head = value
+        .get("headRefOid")
+        .and_then(Value::as_str)
+        .context("Pull request head is missing")?;
+    let base = value
+        .get("baseRefName")
+        .and_then(Value::as_str)
+        .context("Pull request base is missing")?;
+    if value.get("state").and_then(Value::as_str) != Some("CLOSED") {
+        bail!("Pull request must be closed and unmerged before abandonment");
+    }
+    if !value.get("mergeCommit").is_some_and(Value::is_null) {
+        bail!("Closed pull request has merge evidence and cannot be abandoned");
+    }
+    if Some(head) != record.commit_sha.as_deref() {
+        bail!("Pull request head changed from the exact reviewed commit");
+    }
+    if base != record.base_branch {
+        bail!("Pull request base changed from the selected branch");
+    }
+    let expected_number = record
+        .pr_number
+        .context("Publication pull request number is missing")?;
+    let expected_url = record
+        .pr_url
+        .as_deref()
+        .context("Publication pull request URL is missing")?;
+    let canonical_url = format!(
+        "https://github.com/{}/pull/{expected_number}",
+        record.repository_slug
+    );
+    if number != expected_number || url != expected_url || url != canonical_url {
+        bail!("Pull request identity changed during abandonment observation");
+    }
+    Ok(())
+}
+
 pub(super) fn validate_binding(binding: &ProjectBinding) -> Result<()> {
     validate_project(&binding.project)?;
     if canonical_repository(&binding.repository_url)? != binding.repository_slug {
@@ -2930,6 +3046,7 @@ fn validate_stage(stage: &str) -> Result<()> {
             | "merge_pull_request"
             | "verify_remote_base"
             | "complete"
+            | "abandoned"
     ) {
         bail!("Persisted Developer publication stage is invalid");
     }
@@ -3958,6 +4075,75 @@ mod tests {
         let mut moved_base = exact;
         moved_base["baseRefOid"] = serde_json::json!("c".repeat(40));
         assert!(bind_pr(&mut record, &moved_base, &"a".repeat(40)).is_err());
+    }
+
+    #[test]
+    fn abandonment_requires_exact_closed_unmerged_pull_request_and_retains_evidence() {
+        let input = PublicationInput {
+            feature_id: "a8e78ac7-c9a9-47f0-92dc-b35777880967".into(),
+            title: "Feature".into(),
+            body: "Body".into(),
+            binding: ProjectBinding {
+                project: "demo".into(),
+                repository_url: "https://github.com/owner/repo.git".into(),
+                repository_slug: "owner/repo".into(),
+                base_branch: "main".into(),
+                required_checks: vec![RequiredCheck {
+                    context: "release-local".into(),
+                    integration_id: Some(42),
+                }],
+                strict_required_checks: true,
+            },
+            files: vec![CandidateFile {
+                path: "app.txt".into(),
+                before_sha256: None,
+                content_sha256: sha256(b"ok"),
+                content: b"ok".to_vec(),
+                delete: false,
+                before_text: None,
+            }],
+        };
+        let mut record = PublicationRecord::pending(&input).unwrap();
+        let commit = "a".repeat(40);
+        record.status = "attention".into();
+        record.stage = "wait_required_checks".into();
+        record.base_sha = Some("b".repeat(40));
+        record.candidate_tree_sha = Some("c".repeat(40));
+        record.commit_sha = Some(commit.clone());
+        record.pr_number = Some(17);
+        record.pr_url = Some("https://github.com/owner/repo/pull/17".into());
+        let closed = json!({"number":17,"url":"https://github.com/owner/repo/pull/17",
+            "headRefOid":commit,"baseRefName":"main","baseRefOid":"d".repeat(40),
+            "state":"CLOSED","mergeCommit":null});
+        bind_closed_unmerged_pr(&record, &closed).unwrap();
+        for drifted in [
+            json!({"number":17,"url":"https://github.com/owner/repo/pull/17",
+                "headRefOid":"e".repeat(40),"baseRefName":"main","state":"CLOSED","mergeCommit":null}),
+            json!({"number":17,"url":"https://github.com/owner/repo/pull/17",
+                "headRefOid":commit,"baseRefName":"other","state":"CLOSED","mergeCommit":null}),
+            json!({"number":17,"url":"https://github.com/owner/repo/pull/17",
+                "headRefOid":commit,"baseRefName":"main","state":"OPEN","mergeCommit":null}),
+            json!({"number":17,"url":"https://github.com/owner/repo/pull/17",
+                "headRefOid":commit,"baseRefName":"main","state":"MERGED",
+                "mergeCommit":{"oid":"f".repeat(40)}}),
+        ] {
+            assert!(bind_closed_unmerged_pr(&record, &drifted).is_err());
+        }
+        let evidence_before = record.clone();
+        record.mark_abandoned().unwrap();
+        record.validate().unwrap();
+        assert_eq!(record.base_sha, evidence_before.base_sha);
+        assert_eq!(
+            record.candidate_tree_sha,
+            evidence_before.candidate_tree_sha
+        );
+        assert_eq!(record.commit_sha, evidence_before.commit_sha);
+        assert_eq!(record.pr_number, evidence_before.pr_number);
+        assert_eq!(record.pr_url, evidence_before.pr_url);
+        assert_eq!(record.required_checks, evidence_before.required_checks);
+        assert_eq!(record.events.len(), evidence_before.events.len() + 1);
+        assert_eq!(record.status, "abandoned");
+        assert_eq!(record.stage, "abandoned");
     }
 
     #[test]

@@ -40,6 +40,7 @@ struct DeveloperRunnerFeature: Decodable, Identifiable {
   var publicationPrUrl: String? = nil
   var publicationMergedSha: String? = nil
   var canReconcilePublication: Bool? = nil
+  var canAbandonPublication: Bool? = nil
   var autoAiRepairLimit: Int? = nil
   var autoRepairLifecycle: String? = nil
   var autoRepairReason: String? = nil
@@ -248,6 +249,7 @@ struct DeveloperRunnerSnapshot: Decodable {
   var githubPublicationUnresolved: Bool? = nil
   var canManageGithubConnections: Bool? = nil
   var githubConnections: [DeveloperGitHubConnection]? = nil
+  var localProjects: [String]? = nil
   var githubSetupBusy: Bool? = nil
   var githubSetupUnresolved: Bool? = nil
   var autoAiRepairEnabled: Bool? = nil
@@ -700,6 +702,37 @@ final class DeveloperRunnerModel: ObservableObject {
       }
   }
 
+  func createLocalProject(_ project: String, expectedRevision: UInt64) async throws {
+    guard !sending, let current = snapshot, current.revision == expectedRevision,
+      current.githubPublicationSupported == true,
+      current.canManageGithubConnections == true, current.githubPublicationUnresolved != true,
+      current.githubSetupBusy != true, current.githubSetupUnresolved != true,
+      DeveloperGitHubPresentation.validLocalProjectName(project) else {
+      throw githubStateChangedError()
+    }
+    sending = true
+    defer { sending = false }
+    do {
+      let updated = try await request(path: "publication",
+        body: DeveloperGitHubRequest.createProject(project: project,
+          expectedRevision: expectedRevision))
+      guard DeveloperGitHubAcknowledgement.createdLocalProject(updated,
+        expectedRevision: expectedRevision, project: project),
+        updated.revision >= (snapshot?.revision ?? expectedRevision) else {
+        throw NSError(domain: "Developer GitHub", code: 3,
+          userInfo: [NSLocalizedDescriptionKey:
+            "Windows did not confirm the exact local project directory. Reload before continuing."])
+      }
+      snapshot = updated
+      actionError = nil
+      error = nil
+    } catch {
+      actionError = error.localizedDescription
+      self.error = actionError
+      throw error
+    }
+  }
+
   func disconnectGitHub(project: String, expectedRevision: UInt64) async throws {
     guard let current = snapshot, current.revision == expectedRevision,
       current.githubPublicationSupported == true,
@@ -726,6 +759,38 @@ final class DeveloperRunnerModel: ObservableObject {
         DeveloperGitHubAcknowledgement.reconciled(updated, expectedRevision: expectedRevision,
           featureID: feature.id)
       }
+  }
+
+  func abandonPublication(_ feature: DeveloperRunnerFeature,
+    expectedRevision: UInt64) async throws {
+    guard !sending, let current = snapshot, current.revision == expectedRevision,
+      current.githubPublicationSupported == true, current.githubPublicationUnresolved == true,
+      current.queue.contains(where: { $0.id == feature.id && $0.checkpoint == feature.checkpoint
+        && $0.status == "failed" && $0.publicationStatus == "attention"
+        && $0.canAbandonPublication == true })
+      else { throw githubStateChangedError() }
+    sending = true
+    defer { sending = false }
+    do {
+      let updated = try await request(path: "publication",
+        body: DeveloperGitHubRequest.abandon(featureID: feature.id,
+          expectedRevision: expectedRevision, expectedCheckpoint: feature.checkpoint),
+        timeoutInterval: 210)
+      guard DeveloperGitHubAcknowledgement.abandoned(updated,
+        expectedRevision: expectedRevision, featureID: feature.id),
+        updated.revision >= (snapshot?.revision ?? expectedRevision) else {
+        throw NSError(domain: "Developer GitHub", code: 3,
+          userInfo: [NSLocalizedDescriptionKey:
+            "Windows did not confirm exact closed and unmerged pull request abandonment. Reload before continuing."])
+      }
+      snapshot = updated
+      actionError = nil
+      error = nil
+    } catch {
+      actionError = error.localizedDescription
+      self.error = actionError
+      throw error
+    }
   }
 
   private func githubStateChangedError() -> NSError {
@@ -789,6 +854,10 @@ struct DeveloperRunnerView: View {
   }
   private var next: DeveloperRunnerFeature? {
     model.snapshot?.nextFeature
+  }
+  private var availableProjects: [String] {
+    Array(Set(model.snapshot?.localProjects
+      ?? model.snapshot?.queue.map(\.project) ?? [])).sorted()
   }
   private var startLabel: String {
     if let next, ["paused", "failed"].contains(next.status) { return next.resumeActionLabel }
@@ -1113,7 +1182,7 @@ struct DeveloperRunnerView: View {
       }.padding(28)
     }.frame(minWidth: 650, minHeight: 680)
       DeveloperProjectChatView(configurationPath: configurationPath,
-        projects: Array(Set(model.snapshot?.queue.map(\.project) ?? [])).sorted(),
+        projects: availableProjects,
         runner: model)
         .frame(minWidth: 340, idealWidth: 520, maxWidth: .infinity)
     }.frame(minWidth: 1000, minHeight: 680)
@@ -1148,7 +1217,7 @@ struct DeveloperRunnerView: View {
       }
       .sheet(isPresented: $showingGitHub) {
         DeveloperGitHubView(runner: model,
-          projects: Array(Set(model.snapshot?.queue.map(\.project) ?? [])).sorted(),
+          projects: availableProjects,
           configurationPath: configurationPath)
       }
       .sheet(isPresented: $showingEscalation) {
