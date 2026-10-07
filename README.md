@@ -87,12 +87,16 @@ setup and safety requirements.
 
 This mode provides device enrollment, encrypted connections, a saved queue, and
 recovery after service restarts. Coding workers can only write or delete the files
-specified in an approved task inside a private workspace. They cannot run shell
+specified in an approved task inside a private workspace. Workers apply only the
+exact file changes supplied in the task; they do not decide what to edit. They
+cannot run shell
 commands or tests, call models, use credentials, or access the network. Your
 controls are checked against the current saved state so an outdated request cannot
 silently change newer work.
 
-Independent review is unavailable until its Codex adapter is configured. A limited
+Independent review is unavailable until its Codex adapter is configured. Review
+requests must come from the owner on Windows itself and use that fixed adapter.
+A limited
 live test checks that this review connection works; it does not establish general
 reviewer quality or readiness for deployment. Autonomous dispatch, changes to the
 registered source checkout, and GitHub publication remain unavailable in this mode.

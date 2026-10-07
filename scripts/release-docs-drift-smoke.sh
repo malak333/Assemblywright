@@ -1154,6 +1154,8 @@ require_text "knowledge base review boundary" "$KB" \
 require_text "readme review default" "$README" \
   "Independent review is unavailable until its Codex adapter is configured."
 require_text "readme current review boundary" "$README" \
+  "requests must come from the owner on Windows itself and use that fixed adapter."
+require_text "readme limited review proof" "$README" \
   "reviewer quality or readiness for deployment"
 require_text "publication protocol contract present" "$PROTOCOL_PUBLICATION_E2E" \
   "publication_request_is_strict_path_free_and_every_binding_changes_identity"
@@ -1207,6 +1209,8 @@ require_text "review provider post-response cancellation coverage" "$MASTER_REVI
   "post_response_cancellation_suppresses_an_otherwise_valid_output"
 require_text "readme current general worker" "$README" \
   "specified in an approved task inside a private workspace"
+require_text "readme fixed worker edits" "$README" \
+  "exact file changes supplied in the task; they do not decide what to edit."
 require_text "knowledge base current protocol" "$KB" \
   '`PROTOCOL_VERSION` is 5'
 forbid_text "architecture stale current schema" "$ARCHITECTURE" \
