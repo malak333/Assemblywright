@@ -55,3 +55,62 @@ The checkout correction added `* text=auto eol=lf` through normally merged
 Windows Git checkout with `core.autocrlf=true` then reproduced the original
 833-byte LF artifact and exact digest. This correction fixes validation inputs;
 it does not change the expected digest or convert a failed check into approval.
+
+## Reviewed installation and retained failure recovery
+
+Independent high-risk review approved the complete implementation and its clean
+integration with the already installed model-diagnostics and delivered-behavior
+review fix from Assemblywright PR #438. The supported production launcher rebuilt
+the Mac release app and Windows release runner from the combined source. All 146
+current Cargo/toolchain/crate input hashes matched that checkout. The installed
+Windows executable matched its release build at SHA-256
+`3df572f6f4d8a14814c594f896bb3a7c6e2c51e9f25788903cde318c2ecb56ce`.
+The installed Mac executable matched its packaged build at SHA-256
+`aa343375ddbf15fda6a107d808767821e9a730790b737b76820f37b5560ebfce`.
+The previous binary, consistent SQLite backup, and Mac app bundle were retained.
+The separate protected-service app was not replaced.
+
+Authenticated observation included both demo3 and demo4 in `local_projects`.
+The new `abandon` action observed demo3 PR #2 closed and unmerged, advanced revision
+1695 to 1696, durably recorded `removed / publication_abandoned` and
+`abandoned / abandoned`, and cleared the unresolved-publication barrier. A read-only
+SQLite observation confirmed that the exact prior commit, PR, approved review,
+zero repair/escalation counters, and frozen candidate remained retained. This is
+recovery evidence, not successful publication evidence.
+
+Windows focused unit tests passed for local project creation/rejection, abandoned
+persistence invariants, and exact closed-unmerged PR binding. Both native Windows
+setup/publication E2Es passed using disposable native reviewer/GitHub fixtures,
+including mandatory junction rejection and abandonment/restart/history coverage.
+Those fixtures used no live GitHub credentials. The E2E harness explicitly built
+`developer_review_fixture` and configured
+`ASSEMBLYWRIGHT_DEVELOPER_REVIEW_FIXTURE` for Windows.
+
+Visual GUI inspection remains unverified: the computer-use native pipe failed
+before returning a snapshot. Packaged-process, Swift, API, Windows and publication
+proofs are recorded separately; none establish signing, notarization or general
+production readiness.
+
+## Successful installed autonomous pipeline proof
+
+Feature `efd43e66-fd89-44d4-8940-1392a6e69e66` in `aw-fft-demo4` completed real
+Codex planning; the parent inspected and approved the exact single-page plan and
+started execution. From that start onward the app performed Windows model
+implementation, immutable validation, independent Codex review, branch/PR
+publication, required hosted checks, normal merge and remote-base verification
+without parent candidate edits or publication intervention.
+
+The terminal state was `succeeded / publication_merged`, review `approved`,
+publication `succeeded / complete`, with zero repairs and zero escalations. Only
+`index.html` changed. [Demo4 PR #3](https://github.com/malak333/aw-fft-demo4/pull/3)
+merged at `2026-10-07T23:38:07Z`; its exact reviewed head was
+`effc2cab3abd12f63f1cdaec8e6d7418ba8de5cb`, and its merge/main SHA was
+`39065f5e0f51d390c36d50f0f9428535f6168dfc`. The required Windows `Validate`
+check passed on that head before merge. Separate GitHub and Windows observations
+both returned the same 833-byte LF artifact and expected SHA-256
+`decf9751aa786629cc557cb1856f9a012b0d1ceb2fe9ae3bd8cd20a077d202e2`.
+The runner was idle afterward, with no unresolved publication barrier.
+
+This proves the configured pipeline completed this bounded feature. It does not
+establish that arbitrary future model tasks cannot fail. The picker repair,
+retained-failure recovery and line-ending setup are independently described above.

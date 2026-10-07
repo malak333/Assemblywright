@@ -3429,3 +3429,15 @@ consistency.
 - The narrow unsupported-model diagnostic drains stderr concurrently, retains only 16 KiB with zeroizing storage, and emits fixed guidance for the exact selected-model rejection. It never discloses raw stderr or silently switches models.
 - Exact-candidate review blocks actual defects, unmet requirements, nonfunctional validators and missing implemented-behavior coverage. Speculative test hardening for unused APIs, resource attributes, URI variants or future behavior is nonblocking only after complete source inspection confirms no actual requirement or safety violation; aggregation still preserves every rejected batch and blocker.
 - A fixed inert static HTML artifact can use an owner-supplied immutable SHA-256 validation command instead of generated project tests. The installed `aw-fft-working` proof reached success with fresh independent review and zero repairs/escalations; this does not prove arbitrary model-generated content or larger retained FFT projects.
+
+### Windows exact-byte publication checkout (2026-10-07)
+
+- Windows GitHub Actions checkout can convert a validated LF Git blob into CRLF
+  with `core.autocrlf=true`. Exact-byte validators need an explicit base-repository
+  line-ending contract such as `* text=auto eol=lf`; preserve the expected digest
+  and repair checkout inputs through a normally checked/merged prerequisite PR.
+- The installed `aw-fft-demo4` proof completed approved planning, Windows
+  implementation, immutable validation, independent review, required checks and
+  normal merge without candidate or publication intervention after start. See
+  [project picker and publication recovery evidence](../developer-project-picker-validation.md).
+  The abandoned demo3 attempt remains failure evidence, not a successful run.
