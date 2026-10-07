@@ -3371,3 +3371,9 @@ consistency.
 - Restore a verified supported selection through the revision-bound AI-settings
   control and preserve failed planning evidence. Do not fabricate candidate
   approval or infer successful provider execution from the catalog alone.
+
+- The 2026-10-07 hosted Windows failure was caused by PowerShell creating
+  `Microsoft/Windows/PowerShell/ModuleAnalysisCache` in a staged project. Bind
+  `PSModuleAnalysisCachePath` to the canonical regular file in the unique external
+  OpenCode session cache; retain candidate guards. A separate 300-output Windows
+  proof passed; the routine fixture uses 120 outputs to bound validation cost.

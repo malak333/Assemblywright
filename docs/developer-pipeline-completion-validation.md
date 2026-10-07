@@ -125,9 +125,11 @@ to the retained pre-recovery history; its two review attempts, zero repair
 attempts and original merge SHA remain unchanged. The deadline watcher exited
 on success, so it will not issue a delayed Stop after this run ends.
 
-The final installed Windows binary and its release build both hash to
+The successful live-proof Windows binary and its release build both hash to
 `1ae9d1017b60d8bc49dde2330d499dd16495c90a6e6ffeef3c9e7bfa486ac4e4`.
-All 146 tracked Cargo/toolchain/runtime source inputs match the reviewed worktree.
+At live-proof time, all 146 tracked Cargo/toolchain/runtime source inputs matched
+that reviewed worktree. The later PowerShell cache correction has separate final
+build, deployment and source-parity receipts.
 The supported production launcher rebuilt and restarted the Developer runner
 without replacing its projects or queue. The Mac production bundle passed
 `codesign --verify --deep --strict` with its local ad-hoc signature.
@@ -145,16 +147,24 @@ pass independently. This correction changes test infrastructure only; the instal
 runtime and autonomous proof binary remain unchanged. Canonical validation and
 all exact-head hosted gates are repeated for the corrected source before merge.
 
-The first corrected-source Windows gate also failed while its scalable fixture
-waited for partial application: the durable proposal was `unavailable` with no
-candidate or applied paths. That log omitted the proposal error, so its cause
-is not established. An exact 300-output native reproduction on MIKE-PC reached
-306-entry application, ruling out a general candidate-capacity failure. The
-fixture now retains bounded proposal/feature/history diagnostics and fails
-immediately if preparation becomes terminal before application. The 300-output
-fixture and all exact partition, crash/restart and no-replay assertions remain.
-This diagnostic correction changes no production behavior; the corrected-source
-canonical and hosted gates are required again before merge.
+The Windows hosted gate exposed a concrete staged-runtime cache problem:
+PowerShell wrote `Microsoft/Windows/PowerShell/ModuleAnalysisCache` inside the
+staged project, so candidate capture correctly rejected an unreviewable binary
+file. The improved diagnostics identified this after the first log omitted its
+cause. PowerShell now receives `PSModuleAnalysisCachePath` bound to a unique,
+canonical regular file under the existing private session cache outside the
+project. Ambient overrides cannot win; candidate discovery and path guards are
+unchanged. The same cleanup and ambiguity-retention lifecycle covers the cache.
+Focused cache coverage and all 408 runner units pass independently.
+
+A separate exact 300-output native Windows reproduction passed completely: 306
+staged entries, 307 recovery entries, eight review batches, real crash/restart and
+no write replay. The routine fixture now uses 120 outputs (126 staged entries,
+127 recovery entries and four review batches) to bound validation cost within
+the owner time limit. Its 300-second observer and every exact partition,
+crash/restart, deletion and no-replay assertion remain. Sizing is a test-cost
+change; the production correction is external PowerShell cache routing. Final
+canonical and exact-source hosted checks are repeated before merge.
 
 ## Closeout verdicts
 

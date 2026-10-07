@@ -1631,6 +1631,8 @@ impl DeveloperTools {
         let project_tool_path = tool_path(project_path)?;
         let encoded_config = serde_json::to_string(&config)?;
         let python_cache = tool_python_bytecode_cache(&isolated, project_path)?;
+        let powershell_module_cache =
+            tool_powershell_module_analysis_cache(&python_cache, project_path)?;
         let password = Uuid::new_v4().simple().to_string();
         let mut command = Command::new(&runtime.executable);
         command
@@ -1651,7 +1653,6 @@ impl DeveloperTools {
             .env("LOCALAPPDATA", &isolated)
             .env("TEMP", &temporary)
             .env("TMP", &temporary)
-            .env("PYTHONPYCACHEPREFIX", python_cache.path())
             .env("OPENCODE_CONFIG_CONTENT", encoded_config)
             .env("OPENCODE_CONFIG_DIR", &isolated)
             .env("XDG_CONFIG_HOME", &isolated)
@@ -1666,6 +1667,7 @@ impl DeveloperTools {
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        bind_runtime_cache_environment(&mut command, python_cache.path(), &powershell_module_cache);
         copy_required_os_environment(&mut command);
         prepare_process_tree(&mut command);
         let mut child = match command.spawn() {
@@ -2058,6 +2060,41 @@ fn tool_python_bytecode_cache(
         bail!("OpenCode Python bytecode cache must stay outside the project");
     }
     Ok(cache)
+}
+
+fn tool_powershell_module_analysis_cache(
+    cache: &ToolPythonBytecodeCache,
+    project: &Path,
+) -> Result<PathBuf> {
+    let project = fs::canonicalize(project)?;
+    let path = cache.path().join("powershell-module-analysis-cache");
+    drop(
+        fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&path)?,
+    );
+    let path = fs::canonicalize(path)?;
+    let metadata = fs::symlink_metadata(&path)?;
+    if !path.starts_with(cache.path())
+        || path.starts_with(&project)
+        || !metadata.is_file()
+        || metadata.file_type().is_symlink()
+        || is_reparse_point(&metadata)
+    {
+        bail!("PowerShell module analysis cache must be a regular private runtime file outside the project");
+    }
+    Ok(path)
+}
+
+fn bind_runtime_cache_environment(
+    command: &mut Command,
+    python_cache: &Path,
+    powershell_module_cache: &Path,
+) {
+    command
+        .env("PYTHONPYCACHEPREFIX", python_cache)
+        .env("PSModuleAnalysisCachePath", powershell_module_cache);
 }
 
 fn deletion_evidence_authorized(access: &AccessState, stage: Option<&ToolStageBinding>) -> bool {
@@ -4720,10 +4757,13 @@ mod tests {
     fn opencode_python_cache_is_unique_outside_project_and_removed() {
         let directory = tempfile::tempdir().unwrap();
         let project = directory.path().join("projects/project");
+        let live_project = directory.path().join("projects/live-project");
         let isolated = directory.path().join("state/opencode-runtime");
         fs::create_dir_all(&project).unwrap();
+        fs::create_dir_all(&live_project).unwrap();
         fs::create_dir_all(&isolated).unwrap();
         let project = fs::canonicalize(project).unwrap();
+        let live_project = fs::canonicalize(live_project).unwrap();
         let first = tool_python_bytecode_cache(&isolated, &project).unwrap();
         let second = tool_python_bytecode_cache(&isolated, &project).unwrap();
         let first_path = first.path().to_owned();
@@ -4731,6 +4771,26 @@ mod tests {
         assert_ne!(first_path, second_path);
         assert!(!first_path.starts_with(&project));
         assert!(!second_path.starts_with(&project));
+        let powershell_cache = tool_powershell_module_analysis_cache(&first, &project).unwrap();
+        assert!(powershell_cache.starts_with(&first_path));
+        assert!(!powershell_cache.starts_with(&project));
+        assert!(!powershell_cache.starts_with(&live_project));
+        assert!(fs::symlink_metadata(&powershell_cache).unwrap().is_file());
+        fs::write(&powershell_cache, b"fixture module cache").unwrap();
+        assert!(!project
+            .join("Microsoft/Windows/PowerShell/ModuleAnalysisCache")
+            .exists());
+        let hostile = project.join("ambient-module-cache");
+        let mut command = Command::new("fixture-opencode");
+        command.env("PSModuleAnalysisCachePath", &hostile);
+        bind_runtime_cache_environment(&mut command, &first_path, &powershell_cache);
+        let bound = command
+            .as_std()
+            .get_envs()
+            .find(|(name, _)| *name == "PSModuleAnalysisCachePath")
+            .and_then(|(_, value)| value)
+            .unwrap();
+        assert_eq!(bound, powershell_cache.as_os_str());
         first.close().unwrap();
         second.close().unwrap();
         assert!(!first_path.exists());

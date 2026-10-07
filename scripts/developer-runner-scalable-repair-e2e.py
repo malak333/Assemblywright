@@ -103,7 +103,7 @@ def main():
     long_stage_probe_count = 25
     review_batch_entry_limit = 40
     review_candidate_entry_limit = 320
-    staged_generated_file_count = 300
+    staged_generated_file_count = 120
     staged_candidate_entry_count = staged_generated_file_count + 6
     staged_recovery_entry_count = staged_candidate_entry_count + 1
     staged_review_batch_count = (

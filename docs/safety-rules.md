@@ -1565,3 +1565,9 @@ Safety regressions should fail release verification:
 - Event batches or audit surfaces containing prompt text, retrieved context,
   results, credentials, paths, or raw errors.
 - Diagnostics containing raw secrets.
+
+PowerShell module analysis caches produced by Developer OpenCode must stay in the
+owned private session cache outside live/staged projects. Bind the canonical
+regular file through the cleared child environment; do not accept ambient paths
+or exempt project cache files from candidate capture. Preserve session cleanup
+and ambiguity retention.

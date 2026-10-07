@@ -1271,3 +1271,8 @@ read-only release CLI, validated bundle and installer metadata, a running-app
 guard, and an isolated-HOME launch check. Developer ID signing, notarization,
 stapling, and clean-profile installation remain owner-recorded external
 evidence, assembled through the release evidence bundle.
+
+Developer OpenCode sessions bind PowerShell module analysis caching to a unique
+canonical regular file inside the existing private per-session cache outside the
+active project. The owned child environment overrides ambient cache paths; this
+shares Python cache cleanup/ambiguity retention and adds no candidate exclusions.
