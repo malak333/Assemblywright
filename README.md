@@ -2,11 +2,20 @@
 
 > Orchestrated intelligence. Verified software.
 
-Assemblywright is an owner-controlled developer-agent system. A macOS app provides
-planning, queue controls, project chat, and review results. A Windows runner owns
-the durable state and implements one feature at a time from an owner-approved feature queue.
-Frontier models assist with planning and independent review; the configured local
-coding runtime performs implementation under the existing Windows owner account.
+Assemblywright gives you a Mac app for running a queue of software features on a
+Windows machine. Describe what you want, work through the plan with ChatGPT/Codex,
+then approve it and add it to the queue. A local coding model makes the changes;
+your validation command and an independent Codex review check the result before
+connected projects move through a GitHub pull request and merge. You can watch
+progress, stop work, and resume from saved checkpoints. If you already use Claude
+Code or Codex with CI, the reason to use Assemblywright is the workflow around the
+coding: approved plans, a persistent feature queue, repair limits, and a recorded
+history of validation, review, and publication in one place. It is useful when you
+want to supervise a sequence of features without manually coordinating each handoff.
+
+The Mac app is the control panel; Windows stores the queue and runs the work under
+your existing Windows account. Setup currently requires both machines and the
+configured model services. See the [workflow guide](docs/developer-build.md).
 
 ## Build and launch
 
@@ -28,7 +37,7 @@ local app; Developer ID signing and notarized distribution require separate
 credentials and evidence. The compatibility debug profile remains available through
 `./scripts/developer-build.py --build`.
 
-## Supervised workflow
+## Using the queue
 
 1. Select an existing Windows project or create a new project folder.
 2. Describe a feature and specify its validation command.
@@ -36,16 +45,18 @@ credentials and evidence. The compatibility debug profile remains available thro
 4. Add the approved feature to the queue and start execution.
 5. Inspect the changed files, validation results, and independent Codex review.
 
-Stop, Emergency Pause, checkpointed Resume, and auto-run operate on Windows
-processes and saved files. Global tool permissions apply across projects, chats,
-and features. Project chat is separate from the queue; manual repair proposals
-require approval of their exact displayed bytes. A separately enabled Auto AI
-Repair policy permits bounded repairs while preserving validation and fresh
-independent review requirements.
+Use Stop to interrupt work, Resume to continue from a saved checkpoint, or
+Emergency Pause to halt the queue. Auto-run moves to the next feature after the
+current one finishes successfully. Your tool permission settings apply across
+projects, chats, and features. Project chat lets you discuss a project separately
+from its queue. If a failed feature needs a manual repair, you review and approve
+the proposed changes before they are applied. You can also enable Auto AI Repair
+with a repair limit; repaired work still has to pass validation and a new
+independent review.
 
-For connected GitHub projects, the publication workflow binds the reviewed commit
-to a feature branch and pull request, waits for required checks, merges, and
-verifies the remote base before advancing the queue. Models cannot choose a
+For connected GitHub projects, the runner opens a pull request for the reviewed
+changes, waits for required checks, merges, and confirms the result on GitHub
+before advancing the queue. Models cannot choose a
 publication destination, bypass review, or approve a merge.
 
 See the [workflow guide](docs/developer-build.md),
@@ -70,29 +81,26 @@ recovery details.
 
 ## Protected-service mode
 
-The separate protected-service foundation is retained behind
-`ASSEMBLYWRIGHT_RUNTIME=protected-service`. Its restrictions and activation gates
-are distinct from the default supervised workflow.
+The default app uses the workflow above. A separate, more restricted service mode
+is available through `ASSEMBLYWRIGHT_RUNTIME=protected-service`. It has its own
+setup and safety requirements.
 
-It implements durable device lifecycle and queue contracts, enrollment and mTLS
-identity, Windows service recovery, repository snapshots, isolated artifact
-integration, validation gates, and revision-bound owner controls. The bounded
-coding lane permits packet-bound deterministic writes/deletes in private
-workspaces without shell, provider, test, credential, or network authority.
+This mode provides device enrollment, encrypted connections, a saved queue, and
+recovery after service restarts. Coding workers can only write or delete the files
+specified in an approved task inside a private workspace. They cannot run shell
+commands or tests, call models, use credentials, or access the network. Your
+controls are checked against the current saved state so an outdated request cannot
+silently change newer work.
 
-The default-unavailable owner-loopback independent-review gateway requires explicit
-provisioning. The protected service implements an
-independent-review gateway with a separately provisioned pinned Codex adapter
-and a narrow live semantic proof controller. That proof does not establish general
-reviewer quality or deployment readiness.
+Independent review is unavailable until its Codex adapter is configured. A limited
+live test checks that this review connection works; it does not establish general
+reviewer quality or readiness for deployment. Autonomous dispatch, changes to the
+registered source checkout, and GitHub publication remain unavailable in this mode.
+Activation requires six separately admitted live test records on Windows. Selecting
+this mode does not bypass those requirements or change identity checks, permissions,
+cancellation, Emergency Pause, or the audit history.
 
-Autonomous dispatch, registered-source-checkout mutation, and live GitHub
-publication authority remain unavailable in this mode. Activation requires
-Windows to admit all six required live proof receipts. Selecting the mode does
-not grant effect authority or relax identity, policy, cancellation, Emergency
-Pause, or audit rules.
-
-For the complete inventory and evidence boundaries, read the
+For the technical contracts and test evidence, read the
 [architecture map](docs/architecture-map.md),
 [Feature Conveyor design](docs/feature-conveyor-design.md), and
 [distributed Developer Mode design](docs/distributed-developer-mode-design.md).

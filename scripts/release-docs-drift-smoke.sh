@@ -356,10 +356,10 @@ done
 require_text "README product name" "$README" "# Assemblywright"
 require_text "README positioning" "$README" "Orchestrated intelligence. Verified software."
 require_text "README license" "$README" "Apache License 2.0"
-require_text "README conveyor framing" "$README" "owner-approved feature queue"
+require_text "README feature queue" "$README" "approve it and add it to the queue"
 require_text "README non-claims" "$README" "Autonomous dispatch"
 require_text "README selected review-provider integration" "$README" \
-  "narrow live semantic proof controller"
+  "live test checks that this review connection works"
 
 require_text "DESIGN conveyor pointer" "$DESIGN" "docs/feature-conveyor-design.md"
 require_text "DESIGN distributed pointer" "$DESIGN" "docs/distributed-developer-mode-design.md"
@@ -1152,9 +1152,9 @@ require_text "release checklist review boundary" "$CHECKLIST" \
 require_text "knowledge base review boundary" "$KB" \
   "Independent Review Gateway"
 require_text "readme review default" "$README" \
-  "default-unavailable owner-loopback independent-review gateway"
+  "Independent review is unavailable until its Codex adapter is configured."
 require_text "readme current review boundary" "$README" \
-  "independent-review gateway with a separately provisioned pinned Codex adapter"
+  "reviewer quality or readiness for deployment"
 require_text "publication protocol contract present" "$PROTOCOL_PUBLICATION_E2E" \
   "publication_request_is_strict_path_free_and_every_binding_changes_identity"
 require_text "publication adapter default boundary" "$MASTER_PUBLICATION" \
@@ -1206,7 +1206,7 @@ require_text "review provider capability boundary coverage" "$MASTER_REVIEW_PROV
 require_text "review provider post-response cancellation coverage" "$MASTER_REVIEW_PROVIDER_E2E" \
   "post_response_cancellation_suppresses_an_otherwise_valid_output"
 require_text "readme current general worker" "$README" \
-  "packet-bound deterministic writes/deletes"
+  "specified in an approved task inside a private workspace"
 require_text "knowledge base current protocol" "$KB" \
   '`PROTOCOL_VERSION` is 5'
 forbid_text "architecture stale current schema" "$ARCHITECTURE" \
