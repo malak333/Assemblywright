@@ -979,9 +979,13 @@ def main():
             restart_capture_errors = []
             negative_state = root / 'restart-negative-state'
             negative_projects = root / 'restart-negative-projects'
+            partial_application_timeout = 180
 
             def capture_partial_application():
-                deadline = time.monotonic() + 90
+                # The pinned OpenCode session performs 25 audited probes before
+                # the staged write. Hosted Windows can spend more than 90 seconds
+                # in that real tool loop under CI load, before application begins.
+                deadline = time.monotonic() + partial_application_timeout
                 last_observed = 0
                 while time.monotonic() < deadline:
                     try:
@@ -1100,7 +1104,8 @@ def main():
             stage_release.set()
             resume_thread.join(30)
             assert not resume_thread.is_alive() and not resume_errors, resume_errors
-            assert restart_captured.wait(90), 'partial staged application was not captured'
+            assert restart_captured.wait(partial_application_timeout + 5), \
+                'partial staged application was not captured'
             restart_observer.join(5)
             assert not restart_observer.is_alive() and not restart_capture_errors, \
                 restart_capture_errors

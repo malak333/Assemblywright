@@ -31,6 +31,16 @@ configuration supplies 48 chat steps or 128 feature steps and verifies the resol
 configuration. Individual tool-action bounds remain separately enforced, along
 with deadlines, cancellation, Emergency Pause, and audit evidence.
 
+A hosted Windows run exceeded the native fixture's 90-second observation window
+before it could capture the durable partial application following 25 audited
+OpenCode probes. The fixture now allows a bounded 180-second observation window
+and a 185-second outer event wait. Production deadlines and every exact-byte,
+partial partition, archive, receipt, and no-ambiguity assertion are unchanged.
+Independent review approved this harness adjustment. Its Mac native rerun passed
+with the same 27 calls, 26 actions, and exact partial restart/current-adoption
+assertions (staged application 136.073s). Windows rerun and final hosted results
+will be recorded in the closeout receipts.
+
 Windows GitHub authentication had expired despite the cached signed-in display.
 The same authorized account was refreshed through the credential stdin path;
 identity and product account refresh were verified without logging credentials.
