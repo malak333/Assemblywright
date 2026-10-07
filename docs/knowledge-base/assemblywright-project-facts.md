@@ -3399,3 +3399,11 @@ consistency.
   `docs/archive/2026-10-07-pending-worktrees/`; JSON diff lines preserve whitespace.
   Generated caches/build outputs remain local, and retired worker source remains
   archival material with no execution authority.
+
+### Developer planning model entitlement diagnosis (2026-10-07)
+
+- The Windows Codex 0.153.4 runtime can reject a model advertised by `models_cache.json`: the live `gpt-6.1-sol`/medium probe returned HTTP 400 stating it is unsupported with that ChatGPT account, while `gpt-5.6-sol`/medium returned a planning decision. Cached visibility is not a successful inference proof.
+- Changing Settings updates new planning sessions and newly queued reviewers. An existing failed planning session retains its original model; cancel it and start a new session to use the saved supported model.
+- The narrow unsupported-model diagnostic drains stderr concurrently, retains only 16 KiB with zeroizing storage, and emits fixed guidance for the exact selected-model rejection. It never discloses raw stderr or silently switches models.
+- Exact-candidate review blocks actual defects, unmet requirements, nonfunctional validators and missing implemented-behavior coverage. Speculative test hardening for unused APIs, resource attributes, URI variants or future behavior is nonblocking only after complete source inspection confirms no actual requirement or safety violation; aggregation still preserves every rejected batch and blocker.
+- A fixed inert static HTML artifact can use an owner-supplied immutable SHA-256 validation command instead of generated project tests. The installed `aw-fft-working` proof reached success with fresh independent review and zero repairs/escalations; this does not prove arbitrary model-generated content or larger retained FFT projects.
