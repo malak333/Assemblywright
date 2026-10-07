@@ -3377,3 +3377,12 @@ consistency.
   `PSModuleAnalysisCachePath` to the canonical regular file in the unique external
   OpenCode session cache; retain candidate guards. A separate 300-output Windows
   proof passed; the routine fixture uses 120 outputs to bound validation cost.
+
+## Windows publication fixture database cleanup
+
+- Python SQLite connection context managers commit or roll back transactions but
+  do not close the connection. Native Windows publication E2E can pass every
+  assertion and still fail temporary-directory removal with WinError 32 on
+  `developer.sqlite3`. Wrap connections in `contextlib.closing` outside their
+  transaction context so commits remain intact and handles close before cleanup.
+  Keep cleanup errors visible; do not suppress them or weaken publication tests.

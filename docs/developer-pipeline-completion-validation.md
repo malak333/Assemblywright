@@ -201,3 +201,15 @@ canonical and exact-source hosted checks are repeated before merge.
   acceptance remains unverified because the native computer-use pipe failed.
   Ad-hoc signing does not establish Developer ID signing, notarization, stapling,
   clean-profile installation or protected-service live-device release readiness.
+
+## Publication fixture cleanup follow-up
+
+At the initial three-hour cutoff, source PR #435 remained open: Production
+Windows had passed, Mac remained in progress, and distributed Windows completed its publication
+assertions but failed temporary-directory cleanup with WinError 32 on
+`developer.sqlite3`. SQLite transaction contexts did not close their connection
+handles. The follow-up explicitly closes all five fixture connections while
+retaining commit/rollback behavior and strict cleanup. This changes the native
+test harness; runtime publication authority and success assertions remain intact.
+The owner subsequently requested publication and merge of all pending changes.
+Exact final hosted results are recorded on PR #435.

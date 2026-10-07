@@ -5,6 +5,7 @@ from developer_planning_fixture import enqueue_with_plan
 from developer_review_fixture import reviewer_arguments
 
 import argparse
+from contextlib import closing
 import hashlib
 import http.server
 import io
@@ -284,7 +285,7 @@ def main():
             api("control", {"action": "shutdown"})
             process.wait(timeout=10)
             output.close()
-            with sqlite3.connect(data / "developer.sqlite3") as connection_db:
+            with closing(sqlite3.connect(data / "developer.sqlite3")) as connection_db, connection_db:
                 durable = json.loads(connection_db.execute(
                     "SELECT state FROM developer_state WHERE id=1"
                 ).fetchone()[0])
@@ -316,7 +317,7 @@ def main():
             ordinary_feature = next(item for item in ordinary_recovered["queue"] if item["id"] == feature_id)
             assert ordinary_feature["checkpoint"] == "publication_merged"
             assert ordinary_feature["review_status"] == "approved"
-            with sqlite3.connect(data / "developer.sqlite3") as connection_db:
+            with closing(sqlite3.connect(data / "developer.sqlite3")) as connection_db, connection_db:
                 ordinary_durable = json.loads(connection_db.execute(
                     "SELECT state FROM developer_state WHERE id=1"
                 ).fetchone()[0])
@@ -349,7 +350,7 @@ def main():
                 "edits": [],
                 "unreviewable_paths": [],
             }
-            with sqlite3.connect(data / "developer.sqlite3") as connection_db:
+            with closing(sqlite3.connect(data / "developer.sqlite3")) as connection_db, connection_db:
                 connection_db.execute(
                     "INSERT OR REPLACE INTO developer_tool_workspace(project,revision) VALUES(?,?)",
                     ("connected", late_revision),
@@ -386,7 +387,7 @@ def main():
             api("control", {"action": "shutdown"})
             process.wait(timeout=10)
             output.close()
-            with sqlite3.connect(data / "developer.sqlite3") as connection_db:
+            with closing(sqlite3.connect(data / "developer.sqlite3")) as connection_db, connection_db:
                 state_text = connection_db.execute(
                     "SELECT state FROM developer_state WHERE id=1"
                 ).fetchone()[0]
@@ -491,7 +492,7 @@ def main():
             assert recovered_feature["review_status"] == "approved"
             assert recovered_feature["publication_merged_sha"] == feature["publication_merged_sha"]
             assert git("--git-dir", str(remote), "rev-parse", "main", capture=True) == descendant_sha
-            with sqlite3.connect(data / "developer.sqlite3") as connection_db:
+            with closing(sqlite3.connect(data / "developer.sqlite3")) as connection_db, connection_db:
                 recovered_durable = json.loads(connection_db.execute(
                     "SELECT state FROM developer_state WHERE id=1"
                 ).fetchone()[0])
