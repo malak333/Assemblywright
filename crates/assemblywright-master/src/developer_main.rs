@@ -49,9 +49,10 @@ use developer_planning::{
     PlanningProviderOutput, PlanningSession, MAX_PLANNING_SESSIONS,
 };
 use developer_publication::{
-    validate_binding as validate_publication_binding, CandidateFile, GithubAccountObservation,
-    GithubRepositoryLookup, GithubRepositoryObservation, GithubRepositoryPage, GithubSignInOutcome,
-    ProjectBinding, PublicationInput, PublicationRecord, Runtime as PublicationRuntime,
+    validate_binding as validate_publication_binding, validate_completed_reverification,
+    CandidateFile, GithubAccountObservation, GithubRepositoryLookup, GithubRepositoryObservation,
+    GithubRepositoryPage, GithubSignInOutcome, ProjectBinding, PublicationInput, PublicationRecord,
+    Runtime as PublicationRuntime,
 };
 use developer_review::{
     hex_digest, sanitize_and_validate_cloud_text, sensitive_path as repair_sensitive_path,
@@ -666,6 +667,13 @@ impl Drop for PublicationRunningGuard<'_> {
     fn drop(&mut self) {
         self.0.store(false, Ordering::SeqCst);
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReviewedCompletionAction {
+    Finished,
+    Publish,
+    ReverifyCompleted,
 }
 
 struct RunningStartGuard<'a> {
@@ -2168,6 +2176,39 @@ fn provider_free_escalation_review_not_run(review: &ReviewAttemptEvidence) -> bo
         && review.batch_packet_sha256s.is_empty()
         && review.batch_receipt_sha256s.is_empty()
         && review.blocking_findings.is_empty()
+}
+
+const UNAUTHORIZED_PROPOSAL_REVIEW_NOT_RUN_SUMMARY: &str =
+    "Proposal preparation did not produce an authorized application; independent review was not run";
+
+fn completed_publication_trailing_review_not_run(
+    feature: &Feature,
+    review: &ReviewAttemptEvidence,
+) -> bool {
+    let Some(proposal) = feature.escalation_proposal.as_ref() else {
+        return false;
+    };
+    provider_free_escalation_review_not_run(review)
+        && review.summary == UNAUTHORIZED_PROPOSAL_REVIEW_NOT_RUN_SUMMARY
+        && proposal.source == manual_escalation_source()
+        && proposal.status == "unavailable"
+        && proposal.feature_id == feature.id
+        && proposal.attempt == feature.escalation_count
+        && proposal.review_slot_terminal
+        && !feature.escalation_pending
+        && proposal.files.is_empty()
+        && proposal.staged_candidate.is_empty()
+        && proposal.staged_binding.is_none()
+        && proposal.staged_candidate_manifest.is_empty()
+        && proposal.protected_inputs.is_empty()
+        && proposal.applied_paths.is_empty()
+        && proposal.apply_request_id.is_none()
+        && proposal.application_state_sha256.is_none()
+        && review.attempt == proposal.attempt
+        && review.validation_evidence_sha256 == proposal.diagnosis_sha256
+        && repair_escalation_candidate_sha256(proposal)
+            .is_ok_and(|digest| digest == review.packet_sha256)
+        && validate_exact_current_snapshot_terminal_provenance(feature, proposal).is_ok()
 }
 
 fn fully_applied_staged_validation_binding(
@@ -4261,25 +4302,54 @@ impl Engine {
 
     fn clear_cancellation_for_start(
         &self,
+        start_epoch: u64,
         adopted_recovery_epoch: Option<u64>,
         between_epoch_checks: impl FnOnce(),
     ) -> Result<()> {
-        if adopted_recovery_epoch
-            .is_some_and(|expected| self.recovery_scan_epoch.load(Ordering::SeqCst) != expected)
+        let current_epoch = self.recovery_scan_epoch.load(Ordering::SeqCst);
+        if current_epoch != start_epoch
+            || adopted_recovery_epoch.is_some_and(|expected| current_epoch != expected)
         {
-            bail!("Stop or Emergency Pause superseded exact recovery adoption");
+            self.relatch_start_cancellation(1);
+            bail!("Stop or Emergency Pause superseded Start or Resume admission");
         }
+        let expected_cancellation = self.cancellation.load(Ordering::SeqCst);
+        let expected_publication = self.publication_cancellation.load(Ordering::SeqCst);
         between_epoch_checks();
-        self.cancellation.store(0, Ordering::SeqCst);
-        self.tool_cancellation.store(false, Ordering::SeqCst);
-        if adopted_recovery_epoch
-            .is_some_and(|expected| self.recovery_scan_epoch.load(Ordering::SeqCst) != expected)
+        if self
+            .cancellation
+            .compare_exchange(expected_cancellation, 0, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
         {
-            self.cancellation.fetch_max(1, Ordering::SeqCst);
-            self.tool_cancellation.store(true, Ordering::SeqCst);
-            bail!("Stop or Emergency Pause superseded exact recovery adoption");
+            self.relatch_start_cancellation(expected_cancellation.max(expected_publication).max(1));
+            bail!("Stop or Emergency Pause superseded Start or Resume admission");
+        }
+        if self
+            .publication_cancellation
+            .compare_exchange(expected_publication, 0, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            self.relatch_start_cancellation(expected_cancellation.max(expected_publication).max(1));
+            bail!("Stop or Emergency Pause superseded Start or Resume admission");
+        }
+        self.tool_cancellation.store(false, Ordering::SeqCst);
+        if self.recovery_scan_epoch.load(Ordering::SeqCst) != start_epoch {
+            self.relatch_start_cancellation(expected_cancellation.max(expected_publication).max(1));
+            bail!("Stop or Emergency Pause superseded Start or Resume admission");
         }
         Ok(())
+    }
+
+    fn relatch_start_cancellation(&self, minimum_severity: u8) {
+        let severity = self
+            .cancellation
+            .load(Ordering::SeqCst)
+            .max(self.publication_cancellation.load(Ordering::SeqCst))
+            .max(minimum_severity);
+        self.cancellation.fetch_max(severity, Ordering::SeqCst);
+        self.publication_cancellation
+            .fetch_max(severity, Ordering::SeqCst);
+        self.tool_cancellation.store(true, Ordering::SeqCst);
     }
     fn approved_plan_text(&self, feature: &Feature) -> Result<Option<String>> {
         let Some(metadata) = &feature.planning else {
@@ -4318,6 +4388,7 @@ impl Engine {
         expected_checkpoint: Option<&str>,
         expected_asset_recovery_sha256: Option<&str>,
     ) -> Result<()> {
+        let start_epoch = self.recovery_scan_epoch.load(Ordering::SeqCst);
         self.reconcile_completed_tool_mutations()?;
         let mut db = self
             .database
@@ -4393,22 +4464,28 @@ impl Engine {
                 .find(|feature| feature.status != "succeeded" && feature.status != "removed")
                 .cloned();
         }
+        let completed_publication_recovery = feature
+            .as_ref()
+            .is_some_and(completed_publication_requires_reverification);
         if let Some(feature) = feature.as_ref() {
-            validate_selection(
-                &self.ai_catalog,
-                &AiSelection {
-                    model: feature.review_model.clone(),
-                    reasoning_effort: feature.review_reasoning_effort.clone(),
-                },
-            )
-            .context("Pinned feature reviewer is unavailable")?;
+            if !completed_publication_recovery {
+                validate_selection(
+                    &self.ai_catalog,
+                    &AiSelection {
+                        model: feature.review_model.clone(),
+                        reasoning_effort: feature.review_reasoning_effort.clone(),
+                    },
+                )
+                .context("Pinned feature reviewer is unavailable")?;
+            }
             if escalation_apply_is_quarantined(feature) {
                 bail!("Prepare and explicitly approve a new repair proposal after the interrupted application");
             }
             if feature.auto_repair_lifecycle == "quarantined" {
                 bail!("Automatic repair cannot Resume from a quarantine state");
             }
-            if feature.status == "failed"
+            if !completed_publication_recovery
+                && feature.status == "failed"
                 && feature.repair_attempts > 0
                 && !feature.repair_pending
                 && !checkpoint_reuses_retained_edits(&feature.checkpoint)
@@ -4482,7 +4559,8 @@ impl Engine {
         let inference_lease = feature
             .as_ref()
             .filter(|_| {
-                !resumes_at_escalation
+                !completed_publication_recovery
+                    && !resumes_at_escalation
                     && !revalidates_at_limit
                     && !validation_only_snapshot_recovery
             })
@@ -4583,94 +4661,101 @@ impl Engine {
             )?;
             db.state = next;
         }
-        if let Some(feature_id) = feature.as_ref().map(|feature| feature.id.as_str()) {
-            let max_escalations = db.state.auto_ai_repair_max_escalations;
-            let policy_revision = db.state.auto_ai_repair_policy_revision;
-            let policy_enabled = db.state.auto_ai_repair_enabled;
-            let needs_execution_binding = db
-                .state
-                .queue
-                .iter()
-                .find(|candidate| candidate.id == feature_id)
-                .is_some_and(|candidate| {
-                    candidate.auto_ai_repair_limit.is_none()
-                        || (policy_enabled
-                            && candidate.auto_repair_lifecycle == "inactive"
-                            && candidate.status == "queued"
-                            && candidate.checkpoint == "not_started")
-                        || (policy_enabled && candidate.auto_repair_lifecycle == "held")
-                        || (policy_enabled && exact_snapshot_rejection_is_resumable(candidate))
-                        || (policy_enabled
-                            && paused_preauthorization_cancellation_is_resumable(candidate))
-                });
-            if needs_execution_binding {
-                let mut next = db.state.clone();
-                let current = next
-                    .queue
-                    .iter_mut()
-                    .find(|candidate| candidate.id == feature_id)
-                    .context("feature missing")?;
-                let changed = if policy_enabled
-                    && (paused_preauthorization_cancellation_is_resumable(current)
-                        || exact_snapshot_rejection_is_resumable(current))
-                {
-                    enable_auto_repair_for_failed_feature(
-                        current,
-                        true,
-                        max_escalations,
-                        policy_revision,
-                    )?
-                } else if current.auto_repair_lifecycle == "held" && policy_enabled {
-                    let resume_rejected_stage = clean_staged_tool_hold_recoverable(current);
-                    snapshot_feature_auto_repair_limit(current, max_escalations, policy_revision)?;
-                    current.auto_repair_epoch = current
-                        .auto_repair_epoch
-                        .checked_add(1)
-                        .context("Automatic repair epoch overflow")?;
-                    set_auto_repair_lifecycle(
-                        current,
-                        "running",
-                        "The owner explicitly resumed Auto AI repair after an operational hold",
-                    )?;
-                    if resume_rejected_stage {
-                        if current.repair_attempts < REPAIR_LIMIT {
-                            reserve_repair_attempt(current)?;
-                        } else {
-                            current.last_failure_kind = "candidate_rejection".into();
-                        }
-                    }
-                    true
-                } else {
-                    arm_auto_repair_at_execution_start(
-                        current,
-                        policy_enabled,
-                        max_escalations,
-                        policy_revision,
-                    )?
-                };
-                if !changed {
-                    self.running.store(false, Ordering::SeqCst);
-                    bail!("Feature execution binding did not change as expected");
-                }
-                next.revision = next.revision.checked_add(1).context("Revision overflow")?;
-                let data = serde_json::to_string(&next)?;
-                db.connection.execute(
-                    "INSERT INTO developer_state(id,state) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET state=excluded.state",
-                    [data],
-                )?;
-                db.state = next;
-            }
-        }
-        self.clear_cancellation_for_start(adopted_recovery_epoch, || {})?;
-        let automatic_authorized = feature.as_ref().is_some_and(|observed| {
-            db.state.auto_ai_repair_enabled
-                && db
+        if !completed_publication_recovery {
+            if let Some(feature_id) = feature.as_ref().map(|feature| feature.id.as_str()) {
+                let max_escalations = db.state.auto_ai_repair_max_escalations;
+                let policy_revision = db.state.auto_ai_repair_policy_revision;
+                let policy_enabled = db.state.auto_ai_repair_enabled;
+                let needs_execution_binding = db
                     .state
                     .queue
                     .iter()
-                    .find(|current| current.id == observed.id)
-                    .is_some_and(|current| current.auto_repair_lifecycle == "running")
-        });
+                    .find(|candidate| candidate.id == feature_id)
+                    .is_some_and(|candidate| {
+                        candidate.auto_ai_repair_limit.is_none()
+                            || (policy_enabled
+                                && candidate.auto_repair_lifecycle == "inactive"
+                                && candidate.status == "queued"
+                                && candidate.checkpoint == "not_started")
+                            || (policy_enabled && candidate.auto_repair_lifecycle == "held")
+                            || (policy_enabled && exact_snapshot_rejection_is_resumable(candidate))
+                            || (policy_enabled
+                                && paused_preauthorization_cancellation_is_resumable(candidate))
+                    });
+                if needs_execution_binding {
+                    let mut next = db.state.clone();
+                    let current = next
+                        .queue
+                        .iter_mut()
+                        .find(|candidate| candidate.id == feature_id)
+                        .context("feature missing")?;
+                    let changed = if policy_enabled
+                        && (paused_preauthorization_cancellation_is_resumable(current)
+                            || exact_snapshot_rejection_is_resumable(current))
+                    {
+                        enable_auto_repair_for_failed_feature(
+                            current,
+                            true,
+                            max_escalations,
+                            policy_revision,
+                        )?
+                    } else if current.auto_repair_lifecycle == "held" && policy_enabled {
+                        let resume_rejected_stage = clean_staged_tool_hold_recoverable(current);
+                        snapshot_feature_auto_repair_limit(
+                            current,
+                            max_escalations,
+                            policy_revision,
+                        )?;
+                        current.auto_repair_epoch = current
+                            .auto_repair_epoch
+                            .checked_add(1)
+                            .context("Automatic repair epoch overflow")?;
+                        set_auto_repair_lifecycle(
+                            current,
+                            "running",
+                            "The owner explicitly resumed Auto AI repair after an operational hold",
+                        )?;
+                        if resume_rejected_stage {
+                            if current.repair_attempts < REPAIR_LIMIT {
+                                reserve_repair_attempt(current)?;
+                            } else {
+                                current.last_failure_kind = "candidate_rejection".into();
+                            }
+                        }
+                        true
+                    } else {
+                        arm_auto_repair_at_execution_start(
+                            current,
+                            policy_enabled,
+                            max_escalations,
+                            policy_revision,
+                        )?
+                    };
+                    if !changed {
+                        self.running.store(false, Ordering::SeqCst);
+                        bail!("Feature execution binding did not change as expected");
+                    }
+                    next.revision = next.revision.checked_add(1).context("Revision overflow")?;
+                    let data = serde_json::to_string(&next)?;
+                    db.connection.execute(
+                    "INSERT INTO developer_state(id,state) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET state=excluded.state",
+                    [data],
+                )?;
+                    db.state = next;
+                }
+            }
+        }
+        self.clear_cancellation_for_start(start_epoch, adopted_recovery_epoch, || {})?;
+        let automatic_authorized = !completed_publication_recovery
+            && feature.as_ref().is_some_and(|observed| {
+                db.state.auto_ai_repair_enabled
+                    && db
+                        .state
+                        .queue
+                        .iter()
+                        .find(|current| current.id == observed.id)
+                        .is_some_and(|current| current.auto_repair_lifecycle == "running")
+            });
         self.repair_loop_authorized
             .store(automatic_authorized, Ordering::SeqCst);
         drop(db);
@@ -5809,7 +5894,7 @@ impl Engine {
                     outcome,
                     "authorization_not_run",
                     outcome,
-                    "Proposal preparation did not produce an authorized application; independent review was not run",
+                    UNAUTHORIZED_PROPOSAL_REVIEW_NOT_RUN_SUMMARY,
                 )?;
                 if automatic_transition.0
                     && automatic_transition.1 == Some(feature.auto_repair_epoch)
@@ -8092,11 +8177,15 @@ impl Engine {
                 })?;
                 break;
             }
+            let completed_publication_recovery =
+                completed_publication_requires_reverification(&feature);
             let validation_only_recovery = matches!(
                 feature.checkpoint.as_str(),
                 "auto_repair_limit_revalidating" | "exact_snapshot_revalidating"
             );
-            let active_inference_lease = if validation_only_recovery {
+            let active_inference_lease = if validation_only_recovery
+                || completed_publication_recovery
+            {
                 None
             } else {
                 Some(match inference_lease.take() {
@@ -8118,7 +8207,11 @@ impl Engine {
                     },
                 })
             };
-            let result = self.run_feature(&feature).await;
+            let result = if completed_publication_recovery {
+                self.complete_reviewed_feature(&feature.id).await
+            } else {
+                self.run_feature(&feature).await
+            };
             drop(active_inference_lease);
             if result
                 .as_ref()
@@ -8340,28 +8433,30 @@ impl Engine {
                 }
                 break;
             }
-            if let Err(error) = self.complete_reviewed_feature(&feature.id).await {
-                let message = format!("Feature completion failed closed: {error:#}");
-                self.change(|state| {
-                    let current = state
-                        .queue
-                        .iter_mut()
-                        .find(|candidate| candidate.id == feature.id)
-                        .context("feature missing")?;
-                    if current.checkpoint != "publication_attention" {
-                        current.status = "failed".into();
-                        current.message = message.chars().take(4000).collect();
-                    }
-                    if current.auto_repair_lifecycle == "running" {
-                        set_auto_repair_lifecycle(
-                            current,
-                            "held",
-                            "Automatic repair stopped because reviewed completion failed. Inspect the retained validation and review evidence, correct the operational condition, then explicitly Resume.",
-                        )?;
-                    }
-                    Ok(())
-                })?;
-                return Err(error);
+            if !completed_publication_recovery {
+                if let Err(error) = self.complete_reviewed_feature(&feature.id).await {
+                    let message = format!("Feature completion failed closed: {error:#}");
+                    self.change(|state| {
+                        let current = state
+                            .queue
+                            .iter_mut()
+                            .find(|candidate| candidate.id == feature.id)
+                            .context("feature missing")?;
+                        if current.checkpoint != "publication_attention" {
+                            current.status = "failed".into();
+                            current.message = message.chars().take(4000).collect();
+                        }
+                        if current.auto_repair_lifecycle == "running" {
+                            set_auto_repair_lifecycle(
+                                current,
+                                "held",
+                                "Automatic repair stopped because reviewed completion failed. Inspect the retained validation and review evidence, correct the operational condition, then explicitly Resume.",
+                            )?;
+                        }
+                        Ok(())
+                    })?;
+                    return Err(error);
+                }
             }
             if feature.repair_pending {
                 self.repair_loop_authorized.store(false, Ordering::SeqCst);
@@ -8824,13 +8919,16 @@ impl Engine {
     }
 
     async fn complete_reviewed_feature(&self, feature_id: &str) -> Result<()> {
-        if !self.prepare_reviewed_completion(feature_id)? {
-            return Ok(());
+        match self.prepare_reviewed_completion(feature_id)? {
+            ReviewedCompletionAction::Finished => Ok(()),
+            ReviewedCompletionAction::Publish => self.execute_publication(feature_id).await,
+            ReviewedCompletionAction::ReverifyCompleted => {
+                self.reverify_completed_publication(feature_id).await
+            }
         }
-        self.execute_publication(feature_id).await
     }
 
-    fn prepare_reviewed_completion(&self, feature_id: &str) -> Result<bool> {
+    fn prepare_reviewed_completion(&self, feature_id: &str) -> Result<ReviewedCompletionAction> {
         // Keep the durable state lock across the final filesystem rebind and success
         // transition. A review decision alone is never sufficient: the current bytes
         // must still match the exact packet approved by Codex immediately before the
@@ -8848,6 +8946,18 @@ impl Engine {
             .find(|candidate| candidate.id == feature_id)
             .context("feature missing")?;
         if completion_cancelled {
+            if current.publication.as_ref().is_some_and(|publication| {
+                publication.status == "succeeded" && publication.stage == "complete"
+            }) {
+                current.status = "paused".into();
+                current.checkpoint = "publication_completion_reverify".into();
+                current.message = "Completed publication reverification was stopped before local promotion. The exact approval and remote receipt remain retained; Resume retries observation only.".into();
+                next.revision = completion_revision;
+                let data = serde_json::to_string(&next)?;
+                db.connection.execute("INSERT INTO developer_state(id,state) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET state=excluded.state", [data])?;
+                db.state = next;
+                bail!("Completed publication reverification was stopped");
+            }
             current.status = "paused".into();
             current.review_status = "interrupted".into();
             current.review_summary = "ChatGPT Codex approval was invalidated because the run stopped before completion. Resume revalidates the current bytes and starts a fresh review.".into();
@@ -8859,34 +8969,54 @@ impl Engine {
             db.state = next;
             bail!("Cloud review completion was stopped");
         }
-        let binding_result = (|| {
-            let project = fs::canonicalize(self.root.join(&current.project))?;
-            if !project.starts_with(&self.root) {
-                bail!("Project escapes the workspace root");
+        let has_completed_publication = current.publication.as_ref().is_some_and(|publication| {
+            publication.status == "succeeded" && publication.stage == "complete"
+        });
+        let binding_result = if has_completed_publication {
+            // Completed-publication recovery has no file effect. Rebind the
+            // approval to the immutable frozen candidate here; later project work
+            // may legitimately have changed the live workspace. The publication
+            // runtime separately rechecks that exact candidate at the remote base.
+            publication_input(current)
+                .and_then(|_| approved_review_binding_evidence(current).map(|evidence| evidence.1))
+        } else {
+            (|| {
+                let project = fs::canonicalize(self.root.join(&current.project))?;
+                if !project.starts_with(&self.root) {
+                    bail!("Project escapes the workspace root");
+                }
+                verify_approved_review_binding(current, &project)
+            })()
+        };
+        let recovered_trailing_review_marker = match binding_result {
+            Ok(recovered) => recovered,
+            Err(error) => {
+                if current.auto_repair_lifecycle == "running" {
+                    quarantine_automatic_post_apply(
+                        current,
+                        completion_revision,
+                        "Generated files changed after ChatGPT Codex approval. Automatic repair stopped at an ambiguous post-review binding boundary; prepare a fresh owner-approved proposal after inspection.",
+                    )?;
+                    current.review_status = "interrupted".into();
+                    current.review_summary = current.message.clone();
+                } else {
+                    current.status = "failed".into();
+                    current.review_status = "interrupted".into();
+                    current.review_summary = "Generated files changed after ChatGPT Codex approval. Resume revalidates the current bytes and starts a fresh review.".into();
+                    current.checkpoint = "review_binding_changed".into();
+                    current.message = current.review_summary.clone();
+                }
+                next.revision = completion_revision;
+                let data = serde_json::to_string(&next)?;
+                db.connection.execute("INSERT INTO developer_state(id,state) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET state=excluded.state", [data])?;
+                db.state = next;
+                return Err(error);
             }
-            verify_approved_review_binding(current, &project)
-        })();
-        if let Err(error) = binding_result {
-            if current.auto_repair_lifecycle == "running" {
-                quarantine_automatic_post_apply(
-                    current,
-                    completion_revision,
-                    "Generated files changed after ChatGPT Codex approval. Automatic repair stopped at an ambiguous post-review binding boundary; prepare a fresh owner-approved proposal after inspection.",
-                )?;
-                current.review_status = "interrupted".into();
-                current.review_summary = current.message.clone();
-            } else {
-                current.status = "failed".into();
-                current.review_status = "interrupted".into();
-                current.review_summary = "Generated files changed after ChatGPT Codex approval. Resume revalidates the current bytes and starts a fresh review.".into();
-                current.checkpoint = "review_binding_changed".into();
-                current.message = current.review_summary.clone();
-            }
-            next.revision = completion_revision;
-            let data = serde_json::to_string(&next)?;
-            db.connection.execute("INSERT INTO developer_state(id,state) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET state=excluded.state", [data])?;
-            db.state = next;
-            return Err(error);
+        };
+        if recovered_trailing_review_marker {
+            let approved_summary = approved_review_binding_evidence(current)?.0.summary.clone();
+            current.review_status = "approved".into();
+            current.review_summary = approved_summary;
         }
         if !current.publication_selection_frozen {
             bail!("Feature publication selection was not frozen before implementation");
@@ -8913,10 +9043,33 @@ impl Engine {
             let data = serde_json::to_string(&next)?;
             db.connection.execute("INSERT INTO developer_state(id,state) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET state=excluded.state", [data])?;
             db.state = next;
-            return Ok(false);
+            return Ok(ReviewedCompletionAction::Finished);
         }
         if current.publication.is_some() || !current.publication_candidate.is_empty() {
-            bail!("Publication was already prepared; use explicit reconciliation");
+            let input = publication_input(current)?;
+            let publication = current
+                .publication
+                .as_ref()
+                .context("Frozen publication candidate has no publication record")?;
+            if publication.status != "succeeded" || publication.stage != "complete" {
+                bail!("Publication was already prepared; use explicit reconciliation");
+            }
+            validate_completed_reverification(&input, publication)?;
+            if current.status == "succeeded" && current.checkpoint == "publication_merged" {
+                return Ok(ReviewedCompletionAction::Finished);
+            }
+            // A complete remote receipt can be durable before the local feature
+            // transition when the process stops between those two commits. Keep
+            // the frozen candidate and receipt intact. The runtime will perform
+            // an observation-only exact PR/base/tree recheck before promotion.
+            current.status = "running".into();
+            current.checkpoint = "publication_reconciling".into();
+            current.message = "A previously completed publication is being reverified against the exact pull request, remote base, and reviewed tree without replaying publication effects".into();
+            next.revision = completion_revision;
+            let data = serde_json::to_string(&next)?;
+            db.connection.execute("INSERT INTO developer_state(id,state) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET state=excluded.state", [data])?;
+            db.state = next;
+            return Ok(ReviewedCompletionAction::ReverifyCompleted);
         }
         let project = fs::canonicalize(self.root.join(&current.project))?;
         let approved = current
@@ -8996,7 +9149,87 @@ impl Engine {
         let data = serde_json::to_string(&next)?;
         db.connection.execute("INSERT INTO developer_state(id,state) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET state=excluded.state", [data])?;
         db.state = next;
-        Ok(true)
+        Ok(ReviewedCompletionAction::Publish)
+    }
+
+    async fn reverify_completed_publication(&self, feature_id: &str) -> Result<()> {
+        let runtime = self
+            .publication_runtime
+            .as_ref()
+            .cloned()
+            .with_context(|| {
+                self.publication_unavailable_reason
+                    .clone()
+                    .unwrap_or_else(|| "Git and GitHub CLI are unavailable".into())
+            })?;
+        {
+            let database = self
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?;
+            if self.publication_connection_running.load(Ordering::SeqCst)
+                || database.github_setup.blocks_dependent_work()
+            {
+                bail!("GitHub setup changed before completed publication reverification");
+            }
+            if self.cancelled()
+                || self.shutdown.load(Ordering::SeqCst)
+                || self.emergency_paused(&database.state)
+            {
+                bail!("Stop or Emergency Pause blocks completed publication reverification");
+            }
+            self.publication_running
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .map_err(|_| anyhow!("Another GitHub publication is running"))?;
+        }
+        let _running_guard = PublicationRunningGuard(&self.publication_running);
+        let (input, original, mut observed) = {
+            let database = self
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?;
+            let feature = database
+                .state
+                .queue
+                .iter()
+                .find(|feature| feature.id == feature_id)
+                .context("Feature not found")?;
+            if feature.status != "running" || feature.checkpoint != "publication_reconciling" {
+                bail!("Completed publication reverification binding changed");
+            }
+            let input = publication_input(feature)?;
+            let original = feature
+                .publication
+                .clone()
+                .context("Publication record is missing")?;
+            (input, original.clone(), original)
+        };
+        runtime
+            .reverify_completed(
+                &input,
+                &mut observed,
+                &self.publication_cancellation,
+                |updated| {
+                    self.change(|state| {
+                        let feature = state
+                            .queue
+                            .iter_mut()
+                            .find(|feature| feature.id == feature_id)
+                            .context("Feature not found")?;
+                        if feature.status != "running"
+                            || feature.checkpoint != "publication_reconciling"
+                            || feature.publication.as_ref() != Some(&original)
+                        {
+                            bail!("Completed publication reverification binding changed");
+                        }
+                        feature.publication = Some(updated.clone());
+                        feature.message = updated.message.clone();
+                        Ok(())
+                    })
+                },
+            )
+            .await?;
+        self.finish_publication(feature_id)
     }
 
     async fn execute_publication(&self, feature_id: &str) -> Result<()> {
@@ -11973,6 +12206,73 @@ fn publication_completion_is_cancelled(cancellation: &AtomicU8, emergency_paused
     emergency_paused || cancellation.load(Ordering::SeqCst) != 0
 }
 
+fn completed_publication_requires_reverification(feature: &Feature) -> bool {
+    feature.status != "removed"
+        && feature.publication.as_ref().is_some_and(|publication| {
+            publication.status == "succeeded"
+                && publication.stage == "complete"
+                && (feature.status != "succeeded" || feature.checkpoint != "publication_merged")
+        })
+}
+
+fn validated_completed_publication_is_mutation_immune(feature: &Feature) -> Result<bool> {
+    if feature.status == "removed" {
+        return Ok(false);
+    }
+    let Some(publication) = feature.publication.as_ref() else {
+        return Ok(false);
+    };
+    if publication.status != "succeeded" || publication.stage != "complete" {
+        return Ok(false);
+    }
+    publication.validate()?;
+    let input = publication_input(feature)?;
+    validate_completed_reverification(&input, publication)?;
+    Ok(true)
+}
+
+fn validate_and_recover_persisted_publication(feature: &mut Feature) -> Result<()> {
+    let Some(publication) = feature.publication.as_ref() else {
+        return Ok(());
+    };
+    publication
+        .validate()
+        .context("Persisted Developer publication is invalid")?;
+    let input = publication_input(feature).context("Persisted publication candidate is invalid")?;
+    if publication.status == "succeeded" && publication.stage == "complete" {
+        validate_completed_reverification(&input, publication)
+            .context("Persisted completed publication binding is invalid")?;
+    }
+    recover_publication_checkpoint_after_restart(feature);
+    Ok(())
+}
+
+fn recover_publication_checkpoint_after_restart(feature: &mut Feature) {
+    if feature.status == "removed" {
+        return;
+    }
+    let Some(publication) = feature.publication.as_mut() else {
+        return;
+    };
+    if matches!(publication.status.as_str(), "pending" | "running") {
+        publication.status = "attention".into();
+        publication.message = "Runner restarted during GitHub publication. Use explicit reconciliation to inspect the existing branch, pull request, checks, and merge; no external effect was replayed.".into();
+        feature.status = "failed".into();
+        feature.checkpoint = "publication_attention".into();
+        feature.message = publication.message.clone();
+    } else if publication.status == "attention" {
+        feature.status = "failed".into();
+        feature.checkpoint = "publication_attention".into();
+        feature.message = publication.message.clone();
+    } else if feature.status == "succeeded" && feature.checkpoint == "publication_merged" {
+        // The local promotion was already durable before restart.
+    } else {
+        feature.status = "failed".into();
+        feature.checkpoint = "publication_completion_reverify".into();
+        feature.message = "A complete publication receipt was durable before local feature completion. Resume performs observation-only exact PR, merge, descendant-base, reviewed-path, and tree reverification without replaying publication effects.".into();
+    }
+}
+
 fn pause_after_post_run_cancellation(feature: &mut Feature) {
     if feature.status == "succeeded" {
         return;
@@ -13151,6 +13451,13 @@ fn reconcile_feature_tool_mutation(
     owned_edits: &Result<Vec<Edit>>,
 ) -> Result<()> {
     feature.tool_workspace_revision = latest_revision;
+    if validated_completed_publication_is_mutation_immune(feature)? {
+        // The exact reviewed candidate and completed remote receipt were already
+        // validated on load. Later project-tool revisions belong to later work.
+        // They may advance this feature's observation cursor, but cannot rewrite
+        // terminal history or contaminate an unfinished observation-only recovery.
+        return Ok(());
+    }
     let has_review_evidence = feature.edits.is_some()
         || feature.review_attempts > 0
         || feature.status == "succeeded"
@@ -13455,15 +13762,65 @@ fn developer_review_batch_set(
     DeveloperReviewBatchSet::new(packet, assets)
 }
 
-fn verify_approved_review_binding(feature: &Feature, project: &Path) -> Result<()> {
-    if feature.review_status != "approved" || feature.review_pending.is_some() {
+fn approved_review_binding_evidence(feature: &Feature) -> Result<(&ReviewAttemptEvidence, bool)> {
+    if feature.review_pending.is_some() {
         bail!("Required Codex review approval is missing");
     }
-    let approved = feature
-        .review_history
-        .last()
-        .filter(|attempt| attempt.outcome == "approved" && attempt.decision_sha256.is_some())
-        .context("Required Codex review approval evidence is missing")?;
+    if feature.review_status == "approved" {
+        if let Some(approved) = feature
+            .review_history
+            .last()
+            .filter(|attempt| attempt.outcome == "approved" && attempt.decision_sha256.is_some())
+        {
+            return Ok((approved, false));
+        }
+    }
+    let completed_receipt = feature.publication.as_ref().is_some_and(|publication| {
+        publication.status == "succeeded" && publication.stage == "complete"
+    });
+    let interrupted_completion_binding = feature.review_status == "interrupted"
+        && completed_receipt
+        && (completed_publication_requires_reverification(feature) || feature.status == "removed")
+        && matches!(
+            feature.checkpoint.as_str(),
+            "review_binding_changed"
+                | "publication_completion_reverify"
+                | "publication_reconciling"
+                | "review_tool_workspace_changed"
+        );
+    if interrupted_completion_binding {
+        if let Some(approved) = feature
+            .review_history
+            .last()
+            .filter(|attempt| attempt.outcome == "approved" && attempt.decision_sha256.is_some())
+        {
+            // Legacy tool-ledger reconciliation could interrupt a feature after
+            // its exact publication had completed. Publication reconstruction
+            // rebinds the frozen candidate; an unfinished feature still requires
+            // remote reverification. A removed tombstone uses this only for load
+            // validation and remains ineligible for execution.
+            return Ok((approved, true));
+        }
+    }
+    if !completed_receipt
+        || !(feature.review_status == "approved" || interrupted_completion_binding)
+        || feature.review_history.len() < 2
+    {
+        bail!("Required Codex review approval evidence is missing");
+    }
+    let trailing = feature.review_history.last().unwrap();
+    if !completed_publication_trailing_review_not_run(feature, trailing) {
+        bail!("Required Codex review approval evidence is missing");
+    }
+    let approved = &feature.review_history[feature.review_history.len() - 2];
+    if approved.outcome != "approved" || approved.decision_sha256.is_none() {
+        bail!("Required Codex review approval evidence is missing");
+    }
+    Ok((approved, true))
+}
+
+fn verify_approved_review_binding(feature: &Feature, project: &Path) -> Result<bool> {
+    let (approved, recovered_trailing_marker) = approved_review_binding_evidence(feature)?;
     let edits = feature
         .edits
         .as_deref()
@@ -13503,7 +13860,7 @@ fn verify_approved_review_binding(feature: &Feature, project: &Path) -> Result<(
             bail!("Generated files changed after ChatGPT Codex approval; validation and review must run again");
         }
     }
-    Ok(())
+    Ok(recovered_trailing_marker)
 }
 
 fn publication_input(feature: &Feature) -> Result<PublicationInput> {
@@ -13523,12 +13880,7 @@ fn publication_input(feature: &Feature) -> Result<PublicationInput> {
     {
         bail!("Frozen publication candidate is missing or exceeds its file bound");
     }
-    let approved = feature
-        .review_history
-        .iter()
-        .rev()
-        .find(|attempt| attempt.outcome == "approved" && attempt.decision_sha256.is_some())
-        .context("Required Codex review approval evidence is missing")?;
+    let (approved, _) = approved_review_binding_evidence(feature)?;
     let mut files = Vec::new();
     let mut assets = Vec::new();
     let mut candidate_files = Vec::new();
@@ -19890,27 +20242,7 @@ async fn main() -> Result<()> {
             migrate_legacy_publication_classifications(feature, &project, loaded_queue_version)
                 .context("Legacy frozen publication classification migration failed")?;
         }
-        if let Some(publication) = feature.publication.as_ref() {
-            publication
-                .validate()
-                .context("Persisted Developer publication is invalid")?;
-            publication_input(feature).context("Persisted publication candidate is invalid")?;
-            let publication = feature.publication.as_mut().unwrap();
-            if matches!(publication.status.as_str(), "pending" | "running") {
-                publication.status = "attention".into();
-                publication.message = "Runner restarted during GitHub publication. Use explicit reconciliation to inspect the existing branch, pull request, checks, and merge; no external effect was replayed.".into();
-                feature.status = "failed".into();
-                feature.checkpoint = "publication_attention".into();
-                feature.message = publication.message.clone();
-            } else if publication.status == "attention" {
-                feature.status = "failed".into();
-                feature.checkpoint = "publication_attention".into();
-                feature.message = publication.message.clone();
-            } else {
-                feature.status = "succeeded".into();
-                feature.checkpoint = "publication_merged".into();
-            }
-        }
+        validate_and_recover_persisted_publication(feature)?;
         recover_interrupted_escalation_preparation(feature, recovery_revision)?;
         if feature.escalation_pending
             && (feature.checkpoint.ends_with("_approved")
@@ -22883,20 +23215,65 @@ mod tests {
     fn concurrent_stop_after_recovery_adoption_cannot_be_cleared_before_launch() {
         let (_directory, engine) = control_test_engine();
         engine.cancellation.store(1, Ordering::SeqCst);
+        engine.publication_cancellation.store(1, Ordering::SeqCst);
         engine.tool_cancellation.store(true, Ordering::SeqCst);
         let adopted_epoch = 8;
         engine
             .recovery_scan_epoch
             .store(adopted_epoch, Ordering::SeqCst);
         let error = engine
-            .clear_cancellation_for_start(Some(adopted_epoch), || {
+            .clear_cancellation_for_start(adopted_epoch, Some(adopted_epoch), || {
                 engine.recovery_scan_epoch.fetch_add(1, Ordering::SeqCst);
                 engine.cancellation.fetch_max(1, Ordering::SeqCst);
+                engine
+                    .publication_cancellation
+                    .fetch_max(1, Ordering::SeqCst);
                 engine.tool_cancellation.store(true, Ordering::SeqCst);
             })
             .unwrap_err();
-        assert!(error.to_string().contains("superseded exact recovery"));
+        assert!(error.to_string().contains("superseded Start or Resume"));
         assert_eq!(engine.cancellation.load(Ordering::SeqCst), 1);
+        assert_eq!(engine.publication_cancellation.load(Ordering::SeqCst), 1);
+        assert!(engine.tool_cancellation.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn concurrent_emergency_during_normal_start_clear_is_relatched() {
+        let (_directory, engine) = control_test_engine();
+        let start_epoch = engine.recovery_scan_epoch.load(Ordering::SeqCst);
+        engine.cancellation.store(1, Ordering::SeqCst);
+        engine.publication_cancellation.store(1, Ordering::SeqCst);
+        engine.tool_cancellation.store(true, Ordering::SeqCst);
+        let error = engine
+            .clear_cancellation_for_start(start_epoch, None, || {
+                engine.recovery_scan_epoch.fetch_add(1, Ordering::SeqCst);
+                engine.cancellation.fetch_max(2, Ordering::SeqCst);
+                engine
+                    .publication_cancellation
+                    .fetch_max(2, Ordering::SeqCst);
+                engine.tool_cancellation.store(true, Ordering::SeqCst);
+            })
+            .unwrap_err();
+        assert!(error.to_string().contains("superseded Start or Resume"));
+        assert_eq!(engine.cancellation.load(Ordering::SeqCst), 2);
+        assert_eq!(engine.publication_cancellation.load(Ordering::SeqCst), 2);
+        assert!(engine.tool_cancellation.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn stop_before_start_clear_cannot_be_erased_or_downgraded() {
+        let (_directory, engine) = control_test_engine();
+        let start_epoch = engine.recovery_scan_epoch.load(Ordering::SeqCst);
+        engine.recovery_scan_epoch.fetch_add(1, Ordering::SeqCst);
+        engine.cancellation.store(2, Ordering::SeqCst);
+        engine.publication_cancellation.store(1, Ordering::SeqCst);
+        engine.tool_cancellation.store(true, Ordering::SeqCst);
+
+        assert!(engine
+            .clear_cancellation_for_start(start_epoch, None, || {})
+            .is_err());
+        assert_eq!(engine.cancellation.load(Ordering::SeqCst), 2);
+        assert_eq!(engine.publication_cancellation.load(Ordering::SeqCst), 2);
         assert!(engine.tool_cancellation.load(Ordering::SeqCst));
     }
 
@@ -22967,6 +23344,509 @@ mod tests {
         let input = publication_input(&feature).unwrap();
         feature.publication = Some(PublicationRecord::pending(&input).unwrap());
         feature
+    }
+
+    fn feature_with_completed_publication(status: &str, checkpoint: &str) -> Feature {
+        let mut feature = feature_with_publication(status);
+        feature.checkpoint = checkpoint.into();
+        let publication = feature.publication.as_mut().unwrap();
+        publication.status = "succeeded".into();
+        publication.stage = "complete".into();
+        publication.base_sha = Some("1".repeat(40));
+        publication.candidate_tree_sha = Some("2".repeat(40));
+        publication.commit_sha = Some("3".repeat(40));
+        publication.pr_number = Some(17);
+        publication.pr_url = Some("https://github.com/owner/example/pull/17".into());
+        publication.merged_sha = Some("4".repeat(40));
+        publication.events = vec![developer_publication::PublicationEvent {
+            sequence: 1,
+            kind: "receipt".into(),
+            stage: "complete".into(),
+            evidence_sha256: publication.merged_sha.clone(),
+            summary: "fixture completed publication".into(),
+        }];
+        publication.validate().unwrap();
+        feature
+    }
+
+    fn bind_completed_feature_review(feature: &mut Feature, project: &Path) {
+        let validation_evidence_sha256 =
+            feature.review_history[0].validation_evidence_sha256.clone();
+        let packet = developer_review_batch_set(
+            feature,
+            project,
+            feature.edits.as_deref().unwrap(),
+            &validation_evidence_sha256,
+        )
+        .unwrap();
+        for frozen in &mut feature.publication_candidate {
+            if let Some(reviewed) = packet
+                .packet
+                .files
+                .iter()
+                .find(|reviewed| reviewed.path == frozen.path)
+            {
+                frozen.classification = reviewed.classification.clone();
+            }
+        }
+        let approved = feature.review_history.last_mut().unwrap();
+        approved.binding_version = 2;
+        approved.packet_sha256 = packet.aggregate_sha256().into();
+        approved.batch_packet_sha256s = packet
+            .batches
+            .iter()
+            .map(|batch| batch.sha256().unwrap())
+            .collect();
+        approved.batch_receipt_sha256s = vec!["5".repeat(64); packet.batches.len()];
+    }
+
+    fn append_unavailable_manual_proposal_review_marker(feature: &mut Feature) {
+        feature.escalation_count = 1;
+        feature.escalation_pending = false;
+        feature.escalation_proposal = Some(RepairEscalationProposal {
+            proposal_id: Uuid::new_v4().to_string(),
+            attempt: 1,
+            feature_id: feature.id.clone(),
+            feature_checkpoint: "review_1_approved".into(),
+            binding_revision: 42,
+            model_target: feature.model_target.clone(),
+            model: "fixture-model".into(),
+            chat_id: Some(Uuid::new_v4().to_string()),
+            chat_request_id: Uuid::new_v4().to_string(),
+            chat_model_target: feature.model_target.clone(),
+            chat_model: "fixture-model".into(),
+            diagnosis: "The completed publication needs observation, not a file correction".into(),
+            diagnosis_sha256: hash(
+                b"The completed publication needs observation, not a file correction",
+            ),
+            status: "preparing".into(),
+            summary: "The selected local AI could not prepare a repair proposal".into(),
+            error: Some("Expected 1 to 40 proposed files".into()),
+            source: manual_escalation_source(),
+            ..Default::default()
+        });
+        terminalize_unapplied_escalation(
+            feature,
+            "unavailable",
+            "authorization_not_run",
+            "unavailable",
+            UNAUTHORIZED_PROPOSAL_REVIEW_NOT_RUN_SUMMARY,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn duplicate_review_completion_reserves_observation_only_reverification() {
+        let (_directory, engine) = control_test_engine();
+        fs::write(engine.root.join("example/result.txt"), b"saved").unwrap();
+        let mut feature = feature_with_completed_publication("failed", "review_1_approved");
+        bind_completed_feature_review(&mut feature, &engine.root.join("example"));
+        let feature_id = feature.id.clone();
+        let retained = feature.publication.clone().unwrap();
+        engine
+            .change(|state| {
+                state.queue[0] = feature;
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(
+            engine.prepare_reviewed_completion(&feature_id).unwrap(),
+            ReviewedCompletionAction::ReverifyCompleted
+        );
+        let database = engine.database.lock().unwrap();
+        let feature = &database.state.queue[0];
+        assert_eq!(feature.status, "running");
+        assert_eq!(feature.checkpoint, "publication_reconciling");
+        assert_eq!(feature.publication.as_ref(), Some(&retained));
+    }
+
+    #[test]
+    fn completed_publication_rebinds_immediately_preceding_approval_past_exact_not_run_marker() {
+        let (_directory, engine) = control_test_engine();
+        fs::write(engine.root.join("example/result.txt"), b"saved").unwrap();
+        let mut feature = feature_with_completed_publication("failed", "review_binding_changed");
+        bind_completed_feature_review(&mut feature, &engine.root.join("example"));
+        append_unavailable_manual_proposal_review_marker(&mut feature);
+        feature.review_status = "interrupted".into();
+        feature.review_summary =
+            "Prior completion retry could not find the retained approval".into();
+        let feature_id = feature.id.clone();
+        let retained_history = serde_json::to_vec(&feature.review_history).unwrap();
+        let approved_summary = feature.review_history[0].summary.clone();
+        engine
+            .change(|state| {
+                state.queue[0] = feature;
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(
+            engine.prepare_reviewed_completion(&feature_id).unwrap(),
+            ReviewedCompletionAction::ReverifyCompleted
+        );
+        let database = engine.database.lock().unwrap();
+        let recovered = &database.state.queue[0];
+        assert_eq!(recovered.review_status, "approved");
+        assert_eq!(recovered.review_summary, approved_summary);
+        assert_eq!(
+            serde_json::to_vec(&recovered.review_history).unwrap(),
+            retained_history
+        );
+    }
+
+    #[test]
+    fn completed_publication_recovery_rejects_forged_or_duplicated_not_run_marker() {
+        let (_directory, engine) = control_test_engine();
+        fs::write(engine.root.join("example/result.txt"), b"saved").unwrap();
+        let mut feature = feature_with_completed_publication("failed", "review_binding_changed");
+        bind_completed_feature_review(&mut feature, &engine.root.join("example"));
+        append_unavailable_manual_proposal_review_marker(&mut feature);
+        feature.review_status = "interrupted".into();
+
+        let mut forged = feature.clone();
+        forged.review_history.last_mut().unwrap().packet_sha256 = "f".repeat(64);
+        assert!(publication_input(&forged).is_err());
+
+        let mut duplicated = feature;
+        duplicated
+            .review_history
+            .push(duplicated.review_history.last().unwrap().clone());
+        assert!(publication_input(&duplicated).is_err());
+    }
+
+    #[test]
+    fn completed_publication_recovery_does_not_skip_later_review_outcomes() {
+        let (_directory, engine) = control_test_engine();
+        fs::write(engine.root.join("example/result.txt"), b"saved").unwrap();
+        let mut feature = feature_with_completed_publication("failed", "review_binding_changed");
+        bind_completed_feature_review(&mut feature, &engine.root.join("example"));
+        append_unavailable_manual_proposal_review_marker(&mut feature);
+        feature.review_status = "interrupted".into();
+
+        for (outcome, decision) in [
+            ("rejected", Some("e".repeat(64))),
+            ("unavailable", None),
+            ("interrupted", None),
+        ] {
+            let mut invalidated = feature.clone();
+            invalidated.review_history.push(ReviewAttemptEvidence {
+                attempt: 2,
+                packet_sha256: "a".repeat(64),
+                validation_evidence_sha256: "b".repeat(64),
+                outcome: outcome.into(),
+                decision_sha256: decision,
+                binding_version: 0,
+                batch_packet_sha256s: Vec::new(),
+                batch_receipt_sha256s: Vec::new(),
+                blocking_findings: Vec::new(),
+                summary: format!("later {outcome}"),
+            });
+            assert!(publication_input(&invalidated).is_err(), "{outcome}");
+        }
+    }
+
+    #[test]
+    fn completed_publication_retry_rejects_review_or_destination_drift() {
+        let (_directory, engine) = control_test_engine();
+        fs::write(engine.root.join("example/result.txt"), b"saved").unwrap();
+        let mut destination_drift =
+            feature_with_completed_publication("failed", "review_1_approved");
+        bind_completed_feature_review(&mut destination_drift, &engine.root.join("example"));
+        destination_drift
+            .publication
+            .as_mut()
+            .unwrap()
+            .repository_slug = "owner/other".into();
+        destination_drift
+            .publication
+            .as_mut()
+            .unwrap()
+            .repository_url = "https://github.com/owner/other.git".into();
+        let feature_id = destination_drift.id.clone();
+        engine
+            .change(|state| {
+                state.queue[0] = destination_drift;
+                Ok(())
+            })
+            .unwrap();
+        assert!(engine
+            .prepare_reviewed_completion(&feature_id)
+            .unwrap_err()
+            .to_string()
+            .contains("binding changed"));
+
+        let mut review_drift = feature_with_completed_publication("failed", "review_1_approved");
+        bind_completed_feature_review(&mut review_drift, &engine.root.join("example"));
+        review_drift.publication_candidate[0].content = "changed".into();
+        engine
+            .change(|state| {
+                state.queue[0] = review_drift;
+                Ok(())
+            })
+            .unwrap();
+        assert!(engine.prepare_reviewed_completion(&feature_id).is_err());
+    }
+
+    #[test]
+    fn incomplete_prepared_publication_still_requires_explicit_reconciliation() {
+        let (_directory, engine) = control_test_engine();
+        fs::write(engine.root.join("example/result.txt"), b"saved").unwrap();
+        let mut feature = feature_with_completed_publication("failed", "review_1_approved");
+        bind_completed_feature_review(&mut feature, &engine.root.join("example"));
+        feature.publication.as_mut().unwrap().status = "attention".into();
+        feature.publication.as_mut().unwrap().stage = "verify_remote_base".into();
+        let feature_id = feature.id.clone();
+        engine
+            .change(|state| {
+                state.queue[0] = feature;
+                Ok(())
+            })
+            .unwrap();
+        assert!(engine
+            .prepare_reviewed_completion(&feature_id)
+            .unwrap_err()
+            .to_string()
+            .contains("explicit reconciliation"));
+    }
+
+    #[test]
+    fn cancellation_dominates_completed_publication_retry() {
+        let (_directory, engine) = control_test_engine();
+        fs::write(engine.root.join("example/result.txt"), b"saved").unwrap();
+        let mut feature = feature_with_completed_publication("failed", "review_1_approved");
+        bind_completed_feature_review(&mut feature, &engine.root.join("example"));
+        let feature_id = feature.id.clone();
+        let retained = feature.publication.clone().unwrap();
+        engine
+            .change(|state| {
+                state.queue[0] = feature;
+                Ok(())
+            })
+            .unwrap();
+        engine.cancellation.store(1, Ordering::SeqCst);
+
+        assert!(engine.prepare_reviewed_completion(&feature_id).is_err());
+        let database = engine.database.lock().unwrap();
+        let feature = &database.state.queue[0];
+        assert_eq!(feature.status, "paused");
+        assert_eq!(feature.checkpoint, "publication_completion_reverify");
+        assert_eq!(feature.review_status, "approved");
+        assert_eq!(feature.publication.as_ref(), Some(&retained));
+    }
+
+    #[test]
+    fn already_promoted_completed_publication_is_idempotent() {
+        let (_directory, engine) = control_test_engine();
+        fs::write(engine.root.join("example/result.txt"), b"saved").unwrap();
+        let mut feature = feature_with_completed_publication("succeeded", "publication_merged");
+        bind_completed_feature_review(&mut feature, &engine.root.join("example"));
+        let feature_id = feature.id.clone();
+        engine
+            .change(|state| {
+                state.queue[0] = feature;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            engine.prepare_reviewed_completion(&feature_id).unwrap(),
+            ReviewedCompletionAction::Finished
+        );
+    }
+
+    #[test]
+    fn restart_preserves_complete_receipt_but_requires_fresh_observation_before_promotion() {
+        let mut interrupted = feature_with_completed_publication("failed", "review_1_approved");
+        let retained = interrupted.publication.clone();
+        recover_publication_checkpoint_after_restart(&mut interrupted);
+        assert_eq!(interrupted.status, "failed");
+        assert_eq!(interrupted.checkpoint, "publication_completion_reverify");
+        assert_eq!(interrupted.publication, retained);
+
+        let mut promoted = feature_with_completed_publication("succeeded", "publication_merged");
+        recover_publication_checkpoint_after_restart(&mut promoted);
+        assert_eq!(promoted.status, "succeeded");
+        assert_eq!(promoted.checkpoint, "publication_merged");
+
+        let mut removed = feature_with_completed_publication("removed", "removed");
+        let retained_publication = removed.publication.clone();
+        recover_publication_checkpoint_after_restart(&mut removed);
+        assert_eq!(removed.status, "removed");
+        assert_eq!(removed.checkpoint, "removed");
+        assert_eq!(removed.publication, retained_publication);
+        assert!(!completed_publication_requires_reverification(&removed));
+    }
+
+    #[test]
+    fn persisted_workspace_interruption_rebinds_last_approval_before_observation_only_resume() {
+        let (_directory, engine) = control_test_engine();
+        fs::write(engine.root.join("example/result.txt"), b"saved").unwrap();
+        let mut feature =
+            feature_with_completed_publication("paused", "review_tool_workspace_changed");
+        bind_completed_feature_review(&mut feature, &engine.root.join("example"));
+        feature.review_status = "interrupted".into();
+        fs::write(
+            engine.root.join("example/result.txt"),
+            b"later local work\n",
+        )
+        .unwrap();
+        feature.review_summary =
+            "Project tools changed the workspace; immutable validation and Codex review must run again."
+                .into();
+
+        // Exercise the same serialized representation consumed during runner
+        // startup, rather than only an in-memory fixture.
+        let encoded = serde_json::to_vec(&feature).unwrap();
+        let mut loaded: Feature = serde_json::from_slice(&encoded).unwrap();
+        let retained_history = serde_json::to_vec(&loaded.review_history).unwrap();
+        let retained_publication = serde_json::to_vec(&loaded.publication).unwrap();
+        let retained_repairs = loaded.repair_attempts;
+        validate_and_recover_persisted_publication(&mut loaded).unwrap();
+
+        assert_eq!(loaded.status, "failed");
+        assert_eq!(loaded.checkpoint, "publication_completion_reverify");
+        assert_eq!(loaded.review_status, "interrupted");
+        assert_eq!(
+            serde_json::to_vec(&loaded.review_history).unwrap(),
+            retained_history
+        );
+        assert_eq!(
+            serde_json::to_vec(&loaded.publication).unwrap(),
+            retained_publication
+        );
+        assert_eq!(loaded.repair_attempts, retained_repairs);
+        assert!(publication_input(&loaded).is_ok());
+
+        let mut invalidated: Feature = serde_json::from_slice(&encoded).unwrap();
+        invalidated.review_history.push(ReviewAttemptEvidence {
+            attempt: 2,
+            packet_sha256: "a".repeat(64),
+            validation_evidence_sha256: "b".repeat(64),
+            outcome: "rejected".into(),
+            decision_sha256: Some("c".repeat(64)),
+            binding_version: 0,
+            batch_packet_sha256s: Vec::new(),
+            batch_receipt_sha256s: Vec::new(),
+            blocking_findings: Vec::new(),
+            summary: "later substantive rejection".into(),
+        });
+        assert!(validate_and_recover_persisted_publication(&mut invalidated).is_err());
+    }
+
+    #[test]
+    fn removed_completed_interruption_round_trips_without_recovery_or_evidence_loss() {
+        let (_directory, engine) = control_test_engine();
+        fs::write(engine.root.join("example/result.txt"), b"saved").unwrap();
+        let mut feature =
+            feature_with_completed_publication("paused", "review_tool_workspace_changed");
+        bind_completed_feature_review(&mut feature, &engine.root.join("example"));
+        feature.review_status = "interrupted".into();
+        let mut state = Snapshot {
+            queue: vec![feature],
+            ..Default::default()
+        };
+        assert!(remove_feature(&mut state, "a8e78ac7-c9a9-47f0-92dc-b35777880967").unwrap());
+        let encoded = serde_json::to_vec(&state.queue[0]).unwrap();
+        let mut loaded: Feature = serde_json::from_slice(&encoded).unwrap();
+        validate_and_recover_persisted_publication(&mut loaded).unwrap();
+        assert_eq!(serde_json::to_vec(&loaded).unwrap(), encoded);
+        assert_eq!(loaded.status, "removed");
+        assert!(!completed_publication_requires_reverification(&loaded));
+
+        let mut invalidated: Feature = serde_json::from_slice(&encoded).unwrap();
+        invalidated.review_history.push(ReviewAttemptEvidence {
+            attempt: 2,
+            packet_sha256: "a".repeat(64),
+            validation_evidence_sha256: "b".repeat(64),
+            outcome: "rejected".into(),
+            decision_sha256: Some("c".repeat(64)),
+            binding_version: 0,
+            batch_packet_sha256s: Vec::new(),
+            batch_receipt_sha256s: Vec::new(),
+            blocking_findings: Vec::new(),
+            summary: "later substantive rejection".into(),
+        });
+        assert!(validate_and_recover_persisted_publication(&mut invalidated).is_err());
+        assert_eq!(invalidated.status, "removed");
+        assert!(!completed_publication_requires_reverification(&invalidated));
+    }
+
+    #[test]
+    fn completed_publication_rebinds_last_approval_after_workspace_interruption() {
+        let (_directory, engine) = control_test_engine();
+        fs::write(engine.root.join("example/result.txt"), b"saved").unwrap();
+        let mut feature =
+            feature_with_completed_publication("paused", "review_tool_workspace_changed");
+        bind_completed_feature_review(&mut feature, &engine.root.join("example"));
+        feature.review_status = "interrupted".into();
+        fs::write(
+            engine.root.join("example/result.txt"),
+            b"later local work\n",
+        )
+        .unwrap();
+        let feature_id = feature.id.clone();
+        let retained_history = serde_json::to_vec(&feature.review_history).unwrap();
+        let approved_summary = feature.review_history.last().unwrap().summary.clone();
+        engine
+            .change(|state| {
+                state.queue[0] = feature;
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(
+            engine.prepare_reviewed_completion(&feature_id).unwrap(),
+            ReviewedCompletionAction::ReverifyCompleted
+        );
+        let database = engine.database.lock().unwrap();
+        let recovered = &database.state.queue[0];
+        assert_eq!(recovered.review_status, "approved");
+        assert_eq!(recovered.review_summary, approved_summary);
+        assert_eq!(
+            serde_json::to_vec(&recovered.review_history).unwrap(),
+            retained_history
+        );
+    }
+
+    #[tokio::test]
+    async fn completed_publication_resume_skips_repair_and_inference_admission() {
+        let (_directory, engine) = control_test_engine();
+        fs::write(engine.root.join("example/result.txt"), b"saved").unwrap();
+        let mut feature =
+            feature_with_completed_publication("failed", "publication_completion_reverify");
+        bind_completed_feature_review(&mut feature, &engine.root.join("example"));
+        feature.repair_attempts = 2;
+        feature.repair_pending = false;
+        let feature_id = feature.id.clone();
+        let model_target = feature.model_target.clone();
+        let checkpoint = feature.checkpoint.clone();
+        engine
+            .change(|state| {
+                state.queue[0] = feature;
+                Ok(())
+            })
+            .unwrap();
+        let _occupied_inference = engine.inference_gate.try_acquire().unwrap();
+
+        engine
+            .start(
+                Some(&feature_id),
+                Some(&model_target),
+                Some("failed"),
+                Some(&checkpoint),
+                None,
+            )
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        while engine.running.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let database = engine.database.lock().unwrap();
+        assert_eq!(database.state.queue[0].repair_attempts, 2);
+        assert!(!database.state.queue[0].repair_pending);
+        assert_eq!(database.state.queue[0].auto_ai_repair_limit, None);
+        assert_eq!(database.state.queue[0].auto_repair_epoch, 0);
+        assert_eq!(database.state.queue[0].auto_repair_lifecycle, "inactive");
     }
 
     #[test]
@@ -25899,6 +26779,75 @@ mod tests {
             .unwrap()
             .iter()
             .any(|edit| edit.path == "sidechat.py"));
+    }
+
+    #[test]
+    fn late_tool_revision_cannot_reopen_validated_terminal_publication() {
+        let mut completed = feature_with_completed_publication("succeeded", "publication_merged");
+        completed.message = "Verified publication completed".into();
+        let retained_review = serde_json::to_vec(&completed.review_history).unwrap();
+        let retained_publication = serde_json::to_vec(&completed.publication).unwrap();
+        let retained_edits = serde_json::to_vec(&completed.edits).unwrap();
+        let retained_summary = completed.review_summary.clone();
+        let late_edit = Edit {
+            path: "later-feature.txt".into(),
+            before: None,
+            content: "later work\n".into(),
+            asset: None,
+            delete: false,
+            before_text: None,
+            publication_before: None,
+        };
+
+        reconcile_feature_tool_mutation(&mut completed, 9, &Ok(vec![late_edit.clone()])).unwrap();
+        assert_eq!(completed.tool_workspace_revision, 9);
+        assert_eq!(completed.status, "succeeded");
+        assert_eq!(completed.checkpoint, "publication_merged");
+        assert_eq!(completed.review_status, "approved");
+        assert_eq!(completed.review_summary, retained_summary);
+        assert_eq!(completed.message, "Verified publication completed");
+        assert_eq!(
+            serde_json::to_vec(&completed.review_history).unwrap(),
+            retained_review
+        );
+        assert_eq!(
+            serde_json::to_vec(&completed.publication).unwrap(),
+            retained_publication
+        );
+        assert_eq!(
+            serde_json::to_vec(&completed.edits).unwrap(),
+            retained_edits
+        );
+
+        let mut recovering =
+            feature_with_completed_publication("failed", "publication_completion_reverify");
+        recovering.review_status = "interrupted".into();
+        let retained_recovery_edits = serde_json::to_vec(&recovering.edits).unwrap();
+        reconcile_feature_tool_mutation(&mut recovering, 9, &Ok(vec![late_edit.clone()])).unwrap();
+        assert_eq!(recovering.status, "failed");
+        assert_eq!(recovering.checkpoint, "publication_completion_reverify");
+        assert_eq!(recovering.review_status, "interrupted");
+        assert_eq!(recovering.tool_workspace_revision, 9);
+        assert_eq!(
+            serde_json::to_vec(&recovering.edits).unwrap(),
+            retained_recovery_edits
+        );
+
+        let mut queued = feature_with_status("queued");
+        queued.edits = None;
+        queued.review_attempts = 0;
+        queued.checkpoint = "not_started".into();
+        reconcile_feature_tool_mutation(&mut queued, 9, &Ok(Vec::new())).unwrap();
+        assert_eq!(queued.status, "queued");
+        assert_eq!(queued.checkpoint, "not_started");
+        assert_eq!(queued.tool_workspace_revision, 9);
+
+        let mut incomplete = feature_with_publication("succeeded");
+        incomplete.checkpoint = "publication_merged".into();
+        reconcile_feature_tool_mutation(&mut incomplete, 9, &Ok(vec![late_edit])).unwrap();
+        assert_eq!(incomplete.status, "paused");
+        assert_eq!(incomplete.review_status, "interrupted");
+        assert_eq!(incomplete.checkpoint, "review_tool_workspace_changed");
     }
 
     #[test]

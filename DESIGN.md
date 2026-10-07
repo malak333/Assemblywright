@@ -544,6 +544,41 @@ never request, argv, environment, file, audit, log, or receipt data. The master
 persists an immutable intent before each possible effect, releases its process
 lock during external work, monitors current authority and cancellation, and
 quarantines every ambiguous or late result without retry.
+Required-check waiting observes the exact candidate commit's latest check runs
+directly. An empty or incomplete frozen required set and valid queued/in-progress
+runs remain pending within the existing deadline so GitHub registration lag is not
+misclassified as failure. A wrong head/app, duplicate identity, malformed or unknown
+state, or any non-success terminal conclusion fails closed; unrelated check names
+cannot satisfy the frozen policy.
+Developer feature publication also preserves a completed remote receipt that raced
+with its local feature-promotion write. Restart does not manufacture local success.
+Resume uses the Windows-owned frozen candidate and publication runtime for
+observation-only reverification of the exact PR and original merge tree, current-base
+ancestry, and exact regular-blob bytes or deletion absence at every reviewed path.
+It records the observed descendant head and performs no push, PR creation, merge, or
+model/file replay. Identity drift, candidate drift, a non-descendant or moving base,
+and cancellation remain fail-closed.
+If an unavailable manual proposal appended its provider-free `not_run` marker after
+the publication receipt, completion recovery may rebind only the immediately
+preceding approval. The marker must match the retained terminal proposal, its exact
+three-stage no-effect lineage, candidate and diagnosis digests, and canonical
+summary. The full history remains durable; malformed, duplicate, or intervening
+review outcomes reject recovery.
+A validated `succeeded`/`complete` publication receipt and its exactly bound frozen
+candidate are mutation-immune history. Later project-tool ledger revisions advance
+only that feature's observation cursor; they cannot merge later edits into its
+candidate or reopen review/publication. This makes the fully promoted tuple
+`succeeded`/`publication_merged` monotonic while retaining failed or paused crash-gap
+states for observation-only recovery. Local-only success and incomplete/attention
+receipts do not receive the exemption. Legacy completed receipts interrupted by the
+old tool-ledger behavior remain unfinished: startup first rebinds the frozen
+candidate to the last exact approval, then normal Resume performs remote
+reverification before restoring local success. Mutable project bytes from later work
+are neither recovery authority nor publication input. Any later substantive review
+outcome or remote candidate drift rejects recovery.
+Removing an interrupted completed receipt creates a permanent tombstone. Startup
+may use the same exact retained approval solely to validate its frozen candidate;
+the removed feature is never reverify-eligible and no metadata is rewritten.
 Provisioning stops the exact service and waits for its process to exit before
 building. Because Cargo may hard-link the release output into `deps` and leave
 checkout ACLs on it, the control copies those exact bytes into a fresh

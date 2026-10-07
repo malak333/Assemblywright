@@ -101,6 +101,17 @@ def main():
     long_stage_opencode_calls = []
     attributable_chat_opencode_calls = []
     long_stage_probe_count = 25
+    review_batch_entry_limit = 40
+    review_candidate_entry_limit = 320
+    staged_generated_file_count = 300
+    staged_candidate_entry_count = staged_generated_file_count + 6
+    staged_recovery_entry_count = staged_candidate_entry_count + 1
+    staged_review_batch_count = (
+        staged_recovery_entry_count + review_batch_entry_limit - 1
+    ) // review_batch_entry_limit
+    assert staged_recovery_entry_count <= review_candidate_entry_limit
+    assert staged_review_batch_count <= \
+        review_candidate_entry_limit // review_batch_entry_limit
     stage_entered = threading.Event()
     stage_release = threading.Event()
     staged_image = png()
@@ -253,7 +264,8 @@ def main():
                      "Path('dist/index.html').write_bytes(b'<main>rebuilt staged output</main>\\n'); "
                      "Path('dist/obsolete-generated.html').unlink(); "
                      "[Path(f'dist/staged-{index:03}.html').write_bytes("
-                     "f'<p>staged generated {index}</p>\\n'.encode()) for index in range(44)]; "),
+                     f"f'<p>staged generated {{index}}</p>\\n'.encode()) for index in "
+                     f"range({staged_generated_file_count})]; "),
                     f"Path('dist/route.png').write_bytes(base64.b64decode('{image_base64}')); ",
                     "assert Path('dist/route.png').read_bytes().startswith(b'\\x89PNG\\r\\n\\x1a\\n')",
                 ])
@@ -979,7 +991,7 @@ def main():
             restart_capture_errors = []
             negative_state = root / 'restart-negative-state'
             negative_projects = root / 'restart-negative-projects'
-            partial_application_timeout = 180
+            partial_application_timeout = 300
 
             def capture_partial_application():
                 # The pinned OpenCode session performs 25 audited probes before
@@ -987,6 +999,8 @@ def main():
                 # in that real tool loop under CI load, before application begins.
                 deadline = time.monotonic() + partial_application_timeout
                 last_observed = 0
+                last_observed_state = None
+                last_observation_error = None
                 while time.monotonic() < deadline:
                     try:
                         with closing(sqlite3.connect(
@@ -998,8 +1012,15 @@ def main():
                             if item['id'] == staged_feature_id)
                         proposal = current.get('escalation_proposal') or {}
                         applied_paths = proposal.get('applied_paths') or []
+                        staged_candidate = proposal.get('staged_candidate') or []
+                        last_observed_state = {
+                            'proposal_status': proposal.get('status'),
+                            'applied_count': len(applied_paths),
+                            'candidate_count': len(staged_candidate),
+                            'runner_exit_code': process.poll(),
+                        }
                         if (proposal.get('status') != 'applying' or not applied_paths
-                                or len(applied_paths) >= len(proposal.get('staged_candidate') or [])):
+                                or len(applied_paths) >= len(staged_candidate)):
                             time.sleep(.001)
                             continue
                         if len(applied_paths) == last_observed:
@@ -1048,6 +1069,12 @@ def main():
                                 else:
                                     ambiguous.append(entry['path'])
                             if ambiguous or not exact_applied or not exact_pending:
+                                last_observed_state.update({
+                                    'frozen_applied_count': len(frozen_applied),
+                                    'exact_applied_count': len(exact_applied),
+                                    'exact_pending_count': len(exact_pending),
+                                    'ambiguous_count': len(ambiguous),
+                                })
                                 resume_runner(suspension)
                                 continue
                             ready = [item for item in frozen_feature['escalation_history']
@@ -1088,9 +1115,18 @@ def main():
                             if process.poll() is None:
                                 resume_runner(suspension)
                             raise
-                    except (OSError, sqlite3.Error):
+                    except (OSError, sqlite3.Error) as error:
+                        last_observation_error = f'{type(error).__name__}: {error}'
                         time.sleep(.001)
-                raise AssertionError('runner did not expose a durable partial staged application')
+                raise AssertionError({
+                    'error': 'runner did not expose a durable partial staged application',
+                    'timeout_seconds': partial_application_timeout,
+                    'last_observed_state': last_observed_state,
+                    'last_observation_error': last_observation_error,
+                    'runner_exit_code': process.poll(),
+                    'runner_log_tail': (root / 'runner.log').read_text(
+                        errors='replace')[-8_000:],
+                })
 
             def observe_restart():
                 try:
@@ -1459,7 +1495,8 @@ def main():
             assert (staged_project / 'dist/route.png').read_bytes() == staged_image
             assert (staged_project / 'chat-attributable.txt').read_text() == \
                 'attributable project-chat mutation\n'
-            assert len(list((staged_project / 'dist').glob('staged-*.html'))) == 44
+            assert len(list((staged_project / 'dist').glob('staged-*.html'))) == \
+                staged_generated_file_count
             assert all((staged_project / path).stat().st_mtime_ns == modified
                 for path, modified in restart_capture['applied_mtimes'].items()), \
                 'a durably recorded path was rewritten after restart'
@@ -1474,7 +1511,8 @@ def main():
             assert terminal['candidate_payload_state'] == 'hash_only'
             assert len(terminal['candidate_sha256']) == 64
             candidate_entries = terminal['candidate_entries']
-            assert len(candidate_entries) == 50, len(candidate_entries)
+            assert len(candidate_entries) == staged_candidate_entry_count, \
+                len(candidate_entries)
             assert [entry['path'] for entry in candidate_entries] == sorted(
                 entry['path'] for entry in candidate_entries)
             text_entry = next(entry for entry in candidate_entries if entry['path'] == 'app.py')
@@ -1567,18 +1605,22 @@ def main():
             assert len(opencode_calls) == \
                 restart_capture['opencode_calls_after_attributable_chat']
             assert 'staged_candidate' not in durable_staged['escalation_proposal']
-            assert len(durable_staged['escalation_proposal']['staged_candidate_manifest']) == 50
+            assert len(durable_staged['escalation_proposal']['staged_candidate_manifest']) == \
+                staged_candidate_entry_count
 
             staged_evidence = [json.loads(line) for line in
                 (root / 'review-fixture/review-input-evidence.jsonl').read_text().splitlines()]
             staged_batches = [item for item in staged_evidence if item.get('kind') == 'review_batch'
                 and any(entry['path'] == 'dist/route.png' for entry in item['entries'])]
-            assert staged_batches and any(item['batch_count'] >= 2 for item in staged_batches)
+            assert staged_batches and all(
+                item['batch_count'] == staged_review_batch_count for item in staged_batches), \
+                staged_batches
             staged_reviewed = {(entry['path'], entry['content_sha256'])
                 for item in staged_evidence if item.get('kind') == 'review_batch'
                 for entry in item['entries']}
             for path in ('app.py', 'dist/index.html', 'dist/route.png', 'tests/test_existing.py',
-                         'tests/test_staged_regression.py', 'dist/staged-043.html',
+                         'tests/test_staged_regression.py',
+                         f'dist/staged-{staged_generated_file_count - 1:03}.html',
                          'chat-attributable.txt'):
                 assert (path, hashlib.sha256((staged_project / path).read_bytes()).hexdigest()) \
                     in staged_reviewed, path
@@ -1734,6 +1776,10 @@ def main():
                 'staged_post_apply_validation_drift_single_quarantine_receipt': True,
                 'staged_immutable_validation_and_batched_review': True,
                 'staged_mutation_payloads_compacted': True,
+                'staged_generated_files': staged_generated_file_count,
+                'staged_candidate_entries': staged_candidate_entry_count,
+                'staged_recovery_entries': staged_recovery_entry_count,
+                'staged_review_batches': staged_review_batch_count,
                 'staged_opencode_calls': len(long_stage_opencode_calls),
                 'staged_tool_actions': len(long_stage_actions),
                 'staged_later_attributable_chat_recovery': True,

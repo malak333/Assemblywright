@@ -755,6 +755,45 @@ For the approved target, these additional rules are release requirements:
   Missing, failed, stale, cancelled, deadline-expired, late, or ambiguous
   evidence after intent creation quarantines with effect possible and is never
   automatically retried.
+- Poll required checks from the exact candidate commit's latest check-run API.
+  Empty or incomplete required-name observations are registration-pending until the
+  existing bounded deadline; valid queued/in-progress states are also pending.
+  Require each observed frozen name once, at the exact head and frozen nonzero app
+  identity. Reject duplicates, malformed/unknown states, wrong identity, every
+  non-success terminal conclusion, cancellation, and timeout. Ignore unrelated
+  names for satisfaction and never retry a publication effect from this loop.
+- A durable Developer publication record at `succeeded`/`complete` does not by
+  itself repair a missing local feature-promotion write. Preserve the contradiction
+  across restart and require a normal Resume to perform observation-only runtime
+  reverification. Bind the exact frozen review and PR, verify the original merge
+  tree, require current remote base to equal or descend from that merge, and require
+  each reviewed path to remain one exact regular Git blob or the reviewed deletion
+  to remain absent. Recheck the base head before recording the observation. Do not
+  rerun a model, mutate project files, push, create a PR, or merge. Mismatch,
+  non-descendant history, type drift, concurrent base movement, Stop, or Emergency
+  Pause rejects before local success.
+- Completion-only recovery may look past exactly one trailing provider-free
+  `not_run` marker only when it is the canonical terminal receipt for the retained
+  unavailable manual proposal: exact proposal identity, three-stage no-effect
+  lineage, candidate and diagnosis digests, and summary must match. Rebind the
+  immediately preceding approved review to current edits and the frozen candidate,
+  retain all history, and reject duplicate, malformed, or intervening outcomes.
+- Treat a fully validated `succeeded`/`complete` publication receipt and its exact
+  frozen approval candidate as mutation-immune under later project-tool ledger
+  revisions. Advance its observation cursor without merging later edits or changing
+  review, history, receipt, checkpoint, message, or status. A failed or paused
+  crash-gap state remains unfinished for observation-only recovery; incomplete,
+  attention, and local-only publication states retain ordinary invalidation.
+- A legacy `review_tool_workspace_changed` interruption with a complete receipt may
+  start only when its last retained approval exactly rebinds the frozen candidate.
+  Preserve the interrupted state across startup, then require normal Resume to
+  rebind the frozen candidate and observe the exact remote publication before
+  promotion. Later mutable project bytes are not imported or published. A later
+  substantive review outcome, packet drift, or remote drift remains fatal.
+- A removed complete-receipt tombstone may rebind its last exact retained approval
+  only for persisted candidate validation. Keep every tombstone field unchanged;
+  never enqueue, reverify, promote, or otherwise resurrect it. A later substantive
+  review outcome still makes the persisted candidate invalid.
 - Retain canonical Windows publication paths for authority, ancestry, and
   containment checks. At the fixed Git process boundary only, translate a
   recognized canonical `\\?\C:\...` path to `C:\...` or

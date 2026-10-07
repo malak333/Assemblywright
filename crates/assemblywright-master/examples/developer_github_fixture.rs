@@ -34,6 +34,7 @@ struct FixtureState {
     merged: Option<String>,
     authenticated: bool,
     created_repositories: Vec<FixtureRepository>,
+    check_run_observations: u32,
 }
 
 fn main() {
@@ -133,7 +134,9 @@ fn gh_fixture() -> i32 {
             print!("{}", json!({"nameWithOwner": slug}));
             0
         }
-        values if values.first().map(String::as_str) == Some("api") => api_fixture(values, &state),
+        values if values.first().map(String::as_str) == Some("api") => {
+            api_fixture(values, &mut state, &state_path)
+        }
         values if values.starts_with(&["repo".into(), "create".into()]) => {
             create_repository_fixture(values, &mode, &state_path, &mut state)
         }
@@ -339,7 +342,7 @@ fn create_repository_fixture(
     }
 }
 
-fn api_fixture(arguments: &[String], state: &FixtureState) -> i32 {
+fn api_fixture(arguments: &[String], state: &mut FixtureState, state_path: &Path) -> i32 {
     let endpoint = arguments.last().expect("fixture api endpoint");
     let mode = fixture_mode();
     if arguments == ["api", "user"] {
@@ -392,9 +395,26 @@ fn api_fixture(arguments: &[String], state: &FixtureState) -> i32 {
             .and_then(|value| value.split('/').next())
             .expect("fixture check commit");
         assert_eq!(Some(commit), state.head.as_deref());
+        let (status, conclusion) = if mode == "pending" {
+            ("in_progress", Value::Null)
+        } else {
+            state.check_run_observations = state
+                .check_run_observations
+                .checked_add(1)
+                .expect("fixture check observation overflow");
+            save_state(state_path, state);
+            match state.check_run_observations {
+                1 => {
+                    print!("{}", json!({"total_count":0,"check_runs":[]}));
+                    return 0;
+                }
+                2 => ("in_progress", Value::Null),
+                _ => ("completed", json!("success")),
+            }
+        };
         print!(
             "{}",
-            json!({"total_count":1,"check_runs":[{"name":"release-local","head_sha":commit,"status":"completed","conclusion":"success","app":{"id":42}}]})
+            json!({"total_count":1,"check_runs":[{"name":"release-local","head_sha":commit,"status":status,"conclusion":conclusion,"app":{"id":42}}]})
         );
         return 0;
     }

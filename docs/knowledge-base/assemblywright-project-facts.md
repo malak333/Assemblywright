@@ -3304,3 +3304,70 @@ consistency.
   diagnostic label or documented validation command is not execution evidence.
   Preserve unfinished candidates and histories when narrowing a new feature's
   scope; success belongs only to its validated, reviewed, published candidate.
+
+## Developer completed-publication crash window
+
+- GitHub publication can durably record `succeeded`/`complete` before the queue
+  feature is locally promoted to `succeeded`/`publication_merged`. Treat that as an
+  idempotent completion-recovery case, not a new repair or publication attempt.
+- Restart must preserve the contradictory feature state. Normal Resume skips local
+  model execution and publication effects, then revalidates the exact frozen review,
+  completed PR and original merge tree through the publication runtime.
+- The remote base may have advanced through later unrelated merges. Recovery accepts
+  only the original merge or a verified descendant whose current tree retains every
+  reviewed file as one exact regular blob and every reviewed deletion as absent. It
+  rejects candidate byte/type drift, non-descendant history, moving base, stale
+  review/destination identity, Stop, and Emergency Pause.
+- Keep the original merge SHA as the feature receipt and append the currently
+  observed base SHA as audit evidence. Observation-only recovery must issue no push,
+  PR-create, or merge command.
+- Preserve an explicitly removed feature across restart. Completion-only Resume
+  does not require a local inference lease or a currently available reviewer, and
+  must not consume a repair attempt or change its repair-policy counters.
+- Capture the cancellation epoch at Start entry. Clear older run and publication
+  cancellation with compare-and-swap, then recheck the epoch; a concurrent Stop or
+  Emergency Pause must remain dominant, including Emergency Pause severity.
+- A failed manual proposal can append a provider-free `not_run` marker after a
+  valid approval even though an earlier publication already completed remotely.
+  Completion-only recovery accepts exactly one such suffix only when it matches the
+  retained unavailable `manual_chat` proposal, canonical summary, candidate and
+  diagnosis digests, and exact unavailable/authorization-not-run/application-not-run
+  lineage. It uses the immediately preceding approved entry in both local review
+  rebind and frozen publication reconstruction, preserves the entire history, and
+  rejects structural forgeries, duplicates, or later substantive outcomes.
+- GitHub Actions check runs may be absent or only partly registered immediately
+  after the feature branch/PR appears; `gh pr checks --required` can exit 1 during
+  that valid window even when the exact required check is already in progress.
+  Publication now polls latest check runs for the exact candidate SHA. Empty,
+  subset, queued, and in-progress observations remain pending within the fixed
+  timeout; exact frozen names and app IDs must each appear once and complete with
+  `success`. Wrong head/app, duplicate or malformed identity, unknown state,
+  non-success conclusion, cancellation, timeout, and policy/base drift reject.
+- Once a `succeeded`/`complete` publication receipt and frozen approval candidate
+  validate exactly, later project-tool revisions are later-work observations.
+  Advance the feature's tool cursor only; do not merge those edits, interrupt its
+  approval, or reopen its publication. This applies while a crash-gap feature awaits
+  observation-only recovery as well as after `succeeded`/`publication_merged`, and
+  deliberately excludes local-only and incomplete publication states.
+- Older builds could turn that exact completed history into
+  `paused`/`review_tool_workspace_changed`. On startup, accept the contradiction
+  only when the complete receipt is valid and the frozen candidate exactly matches
+  the last retained approval (or the separately proven single terminal no-review
+  marker case). Keep it unfinished until Resume rebinds that frozen candidate and
+  performs observation-only remote reverification. Later workspace bytes cannot
+  enter the historical candidate or publication. Preserve review history, counters,
+  and the original receipt identity; reject any later substantive review.
+- Removal remains a permanent tombstone even for a legacy interrupted complete
+  receipt. Startup may rebind its last exact approval only to validate the frozen
+  candidate and must preserve the serialized tombstone byte-for-byte. It never
+  becomes completion-reverify eligible; later substantive review evidence rejects.
+
+## Developer model catalog and installed-provider compatibility
+
+- A cached model catalog is availability guidance, not proof that the configured
+  CLI/account supports a model. On 2026-10-07 the installed Windows Codex 0.153.4
+  rejected `gpt-6.1-sol` for its ChatGPT account despite the cached catalog listing
+  it. A tool-free probe through that same configured CLI accepted `gpt-5.6-sol`.
+- Restore a verified supported selection through the revision-bound AI-settings
+  control and preserve failed planning evidence. Do not fabricate candidate
+  approval or infer successful provider execution from the catalog alone.
