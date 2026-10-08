@@ -22,9 +22,16 @@ def main():
     parser.add_argument('--codex-executable', required=True)
     args = parser.parse_args()
     executable = Path(args.codex_executable).resolve(strict=True)
-    source = (Path(__file__).resolve().parents[1] /
-              'crates/assemblywright-master/src/developer_review.rs').read_text()
-    model = re.search(r'MODEL_ID: &str = ("[^"]+")', source).group(1)
+    source_root = (Path(__file__).resolve().parents[1] /
+                   'crates/assemblywright-master/src')
+    source = (source_root / 'developer_review.rs').read_text()
+    assert re.search(r'pub const MODEL_ID: &str = DEFAULT_MODEL;', source), (
+        'MODEL_ID no longer aliases DEFAULT_MODEL')
+    settings = (source_root / 'developer_settings.rs').read_text()
+    model_match = re.search(
+        r'pub const DEFAULT_MODEL: &str = ("[^"]+");', settings)
+    assert model_match, 'DEFAULT_MODEL is not a fixed Rust string'
+    model = model_match.group(1)
 
     def argument_profile(name):
         match = re.search(
@@ -37,16 +44,13 @@ def main():
                 arguments.append(json.loads(model if line == 'MODEL_ID' else line))
         return arguments
 
-    # Match the production platform selection without dynamically probing or
+    # Match the fixed production arguments without dynamically probing or
     # accepting unknown configuration keys.
     arguments = argument_profile('CODEX_ARGUMENTS')
-    non_windows = argument_profile('NON_WINDOWS_CODEX_ARGUMENTS')
-    if os.name != 'nt':
-        arguments.extend(non_windows)
     arguments.append('--output-schema')
     assert arguments[0] == 'exec' and arguments[-1] == '--output-schema'
     assert '--ignore-user-config' in arguments and '--strict-config' in arguments
-    assert all((feature in arguments) == (os.name != 'nt') for feature in (
+    assert all(feature in arguments for feature in (
         'features.sleep_tool=false',
         'features.in_app_chat=false',
         'features.in_app_dictation=false',

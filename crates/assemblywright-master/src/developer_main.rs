@@ -81,7 +81,9 @@ const REVIEW_HISTORY_LIMIT: usize = 104;
 const REVIEWER_SELECTION_HISTORY_LIMIT: usize = 80;
 const AUTO_REPAIR_REASON_LIMIT: usize = 1000;
 const CODE_FAILURE_SUMMARY_LIMIT: usize = 4000;
+const REPAIR_PRIOR_MESSAGE_LIMIT: usize = 3500;
 const REPAIR_PROPOSAL_SUMMARY_LIMIT: usize = 4000;
+const REJECTED_REVIEW_FEEDBACK_LIMIT: usize = 64 * 1024;
 const AUTO_REPAIR_STEP_ELAPSED_LIMIT_MS: u64 = 24 * 60 * 60 * 1_000;
 const EXACT_SNAPSHOT_VALIDATION_ONLY_REASON: &str = "The owner adopted the exact current snapshot for validation and independent review only; no repair model or file write is authorized";
 const REVIEW_ASSET_BYTE_LIMIT: usize = 4 * 1024 * 1024;
@@ -1385,6 +1387,365 @@ fn automatic_code_failure_is_eligible(feature: &Feature) -> bool {
                 && feature.checkpoint.ends_with("_rejected")))
 }
 
+fn validated_rejected_review_for_checkpoint_evidence<'a>(
+    feature: &'a Feature,
+    checkpoint: &str,
+    require_current: bool,
+) -> Result<Option<&'a ReviewAttemptEvidence>> {
+    let Some(attempt_text) = checkpoint
+        .strip_prefix("review_")
+        .and_then(|value| value.strip_suffix("_rejected"))
+    else {
+        return Ok(None);
+    };
+    let attempt = attempt_text
+        .parse::<u32>()
+        .context("Rejected review checkpoint has an invalid review attempt")?;
+    let matching = feature
+        .review_history
+        .iter()
+        .filter(|review| review.attempt == attempt)
+        .collect::<Vec<_>>();
+    if matching.len() != 1
+        || matching[0].outcome != "rejected"
+        || (require_current
+            && (feature.review_attempts != attempt
+                || feature.review_history.last().map(|review| review.attempt) != Some(attempt)))
+    {
+        bail!("Rejected review evidence does not match its checkpoint");
+    }
+    let review = matching[0];
+    if review.binding_version != 2 {
+        bail!("Protected-path escalation requires current v2 review evidence");
+    }
+    if review.decision_sha256.is_none() || review.blocking_findings.is_empty() {
+        bail!("Rejected review has incomplete decision evidence");
+    }
+    if review.blocking_findings.len() > 64 {
+        bail!("Rejected review has too many blocking findings");
+    }
+    let mut finding_ids = std::collections::BTreeSet::new();
+    for finding in &review.blocking_findings {
+        if finding.finding_id.is_empty()
+            || finding.finding_id.len() > 128
+            || !finding
+                .finding_id
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphanumeric)
+            || !finding
+                .finding_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+            || !finding_ids.insert(finding.finding_id.as_str())
+        {
+            bail!("Rejected review has an invalid finding identifier");
+        }
+        if finding.path.is_empty()
+            || finding.path.len() > 240
+            || finding.path.contains('\\')
+            || finding.path.contains(':')
+            || Path::new(&finding.path)
+                .components()
+                .any(|component| !matches!(component, Component::Normal(_)))
+            || repair_sensitive_path(&finding.path)
+        {
+            bail!("Rejected review has an invalid finding path");
+        }
+        if finding.message.trim().is_empty() || finding.message.len() > 1_000 {
+            bail!("Rejected review has an invalid finding message");
+        }
+        validate_cloud_text(&finding.message)
+            .context("Rejected review finding contains secret-shaped text")?;
+    }
+    validate_sha256(&review.packet_sha256, "rejected review packet digest")?;
+    validate_sha256(
+        &review.validation_evidence_sha256,
+        "rejected review validation evidence digest",
+    )?;
+    validate_sha256(
+        review.decision_sha256.as_deref().unwrap_or_default(),
+        "rejected review decision digest",
+    )?;
+    if review.batch_packet_sha256s.is_empty()
+        || review.batch_packet_sha256s.len() > 8
+        || review.batch_receipt_sha256s.len() != review.batch_packet_sha256s.len()
+    {
+        bail!("Rejected review has incomplete batch evidence");
+    }
+    for digest in review
+        .batch_packet_sha256s
+        .iter()
+        .chain(review.batch_receipt_sha256s.iter())
+    {
+        validate_sha256(digest, "rejected review batch digest")?;
+    }
+    rejected_review_feedback_value(review)?;
+    Ok(Some(review))
+}
+
+fn validated_rejected_review_for_checkpoint<'a>(
+    feature: &'a Feature,
+    checkpoint: &str,
+) -> Result<Option<&'a ReviewAttemptEvidence>> {
+    validated_rejected_review_for_checkpoint_evidence(feature, checkpoint, true)
+}
+
+fn rejected_review_feedback_value(review: &ReviewAttemptEvidence) -> Result<Value> {
+    let feedback = json!({
+        "schema_version": 1,
+        "review_attempt": review.attempt,
+        "review_packet_sha256": review.packet_sha256,
+        "validation_evidence_sha256": review.validation_evidence_sha256,
+        "decision_sha256": review.decision_sha256,
+        "blocking_findings": review.blocking_findings,
+    });
+    let serialized =
+        serde_json::to_vec(&feedback).context("Failed to serialize rejected review feedback")?;
+    if serialized.len() > REJECTED_REVIEW_FEEDBACK_LIMIT {
+        bail!("Rejected review feedback exceeds its 64 KiB evidence bound");
+    }
+    Ok(feedback)
+}
+
+fn review_rejection_requires_staged_automatic(
+    feature: &Feature,
+    checkpoint: &str,
+    project: &Path,
+) -> Result<bool> {
+    let Some(review) = validated_rejected_review_for_checkpoint(feature, checkpoint)? else {
+        return Ok(false);
+    };
+    let validation_paths = validation_path_references(project, &feature.validation)?;
+    Ok(review
+        .blocking_findings
+        .iter()
+        .any(|finding| is_protected_repair_input(&finding.path, &validation_paths)))
+}
+
+fn review_rejection_requires_staged_automatic_in_workspace(
+    workspace: &Path,
+    feature: &Feature,
+    checkpoint: &str,
+) -> Result<bool> {
+    let project = fs::canonicalize(workspace.join(&feature.project))?;
+    if !project.starts_with(workspace) {
+        bail!("Project escapes the workspace root");
+    }
+    review_rejection_requires_staged_automatic(feature, checkpoint, &project)
+}
+
+fn automatic_staged_review_checkpoint(feature: &Feature) -> Option<&str> {
+    if feature.status != "failed"
+        || feature.auto_repair_lifecycle != "running"
+        || feature.repair_pending
+        || feature.escalation_pending
+    {
+        return None;
+    }
+    if feature.last_failure_kind == "review_rejection" {
+        return Some(feature.checkpoint.as_str());
+    }
+    if feature.last_failure_kind == "candidate_rejection"
+        && feature.checkpoint == "staged_tool_candidate_quarantined"
+        && feature.edits.is_none()
+        && feature.repair_history.len() == feature.repair_attempts as usize
+    {
+        return feature.repair_history.last().and_then(|evidence| {
+            (evidence.attempt == feature.repair_attempts)
+                .then_some(evidence.prior_checkpoint.as_str())
+        });
+    }
+    None
+}
+
+fn terminal_failed_staged_proposal(feature: &Feature) -> Result<&RepairEscalationProposal> {
+    let proposal = terminal_fully_applied_staged_proposal_with_outcome(feature, "failed")?;
+    validate_terminal_fully_applied_staged_receipts_with_outcome(feature, proposal, "failed")?;
+    validate_sha256(
+        proposal
+            .application_state_sha256
+            .as_deref()
+            .context("Terminal failed staged proposal has no application state")?,
+        "terminal failed staged application-state digest",
+    )?;
+    Ok(proposal)
+}
+
+fn terminal_staged_review_route_eligible(feature: &Feature) -> bool {
+    feature
+        .escalation_proposal
+        .as_ref()
+        .is_some_and(|proposal| {
+            proposal.source == "automatic_failure" && proposal.staged_binding.is_some()
+        })
+}
+
+fn terminal_failed_staged_review_rejection<'a>(
+    feature: &'a Feature,
+    checkpoint: &str,
+    project: &Path,
+    candidate: &[Edit],
+) -> Result<&'a ReviewAttemptEvidence> {
+    if feature.status != "failed"
+        || feature.repair_pending
+        || feature.escalation_pending
+        || feature.review_pending.is_some()
+    {
+        bail!("Terminal failed staged rejection still has pending work");
+    }
+    let review = validated_rejected_review_for_checkpoint(feature, checkpoint)?
+        .context("Terminal failed staged proposal has no exact rejected-review evidence")?;
+    if feature
+        .review_history
+        .iter()
+        .filter(|evidence| evidence.attempt == review.attempt)
+        .count()
+        != 1
+    {
+        bail!("Terminal failed staged rejection evidence is missing or duplicated");
+    }
+    let proposal = terminal_failed_staged_proposal(feature)?;
+    validate_fully_applied_staged_terminal_candidate(feature, proposal, candidate, "failed")?;
+    validate_current_review_edits(candidate, project)?;
+    let packet = developer_review_batch_set(
+        feature,
+        project,
+        candidate,
+        &review.validation_evidence_sha256,
+    )?;
+    let batch_packet_sha256s = packet
+        .batches
+        .iter()
+        .map(|batch| batch.sha256())
+        .collect::<Result<Vec<_>>>()?;
+    if packet.aggregate_sha256() != review.packet_sha256
+        || batch_packet_sha256s != review.batch_packet_sha256s
+    {
+        bail!("Terminal staged rejected-review packet no longer matches its exact candidate");
+    }
+    Ok(review)
+}
+
+fn rejected_review_repair_message(review: &ReviewAttemptEvidence) -> Result<String> {
+    let message = serde_json::to_string(&json!({
+        "failure": "independent_review_rejected",
+        "feedback": rejected_review_feedback_value(review)?,
+    }))?;
+    if message.chars().count() > REPAIR_PRIOR_MESSAGE_LIMIT {
+        bail!("Rejected review feedback exceeds the complete ordinary-repair evidence bound");
+    }
+    Ok(message)
+}
+
+fn source_only_terminal_staged_review_repair_message(
+    feature: &Feature,
+    checkpoint: &str,
+    project: &Path,
+    candidate: &[Edit],
+) -> Result<Option<String>> {
+    let review = terminal_failed_staged_review_rejection(feature, checkpoint, project, candidate)?;
+    if review_rejection_requires_staged_automatic(feature, checkpoint, project)? {
+        return Ok(None);
+    }
+    Ok(Some(rejected_review_repair_message(review)?))
+}
+
+const TERMINAL_STAGED_REVIEW_RESUME_DEFECT_PREFIX: &str =
+    "Recovered validation quarantine persistence also failed: Fully applied staged validation lineage cannot fall through to legacy validation";
+
+fn held_terminal_staged_review_repair_message(feature: &Feature, project: &Path) -> Result<String> {
+    if feature.status != "failed"
+        || feature.auto_repair_lifecycle != "held"
+        || feature.last_failure_kind != "operational"
+        || !feature
+            .message
+            .starts_with(TERMINAL_STAGED_REVIEW_RESUME_DEFECT_PREFIX)
+        || feature.review_status != "pending"
+        || feature.repair_pending
+        || feature.escalation_pending
+        || feature.review_pending.is_some()
+        || feature.repair_history.len() != feature.repair_attempts as usize
+        || feature.repair_attempts >= REPAIR_LIMIT
+    {
+        bail!("Feature is not the exact terminal staged-review routing defect");
+    }
+    source_only_terminal_staged_review_repair_message(
+        feature,
+        &feature.checkpoint,
+        project,
+        feature
+            .edits
+            .as_deref()
+            .context("Held terminal staged rejection has no cumulative candidate")?,
+    )?
+    .context("Protected review rejection cannot resume into the ordinary repair lane")
+}
+
+fn terminal_staged_review_has_ordinary_successor(feature: &Feature) -> Result<bool> {
+    if feature.repair_attempts == 0 {
+        return Ok(false);
+    }
+    let Some(proposal) = feature.escalation_proposal.as_ref() else {
+        return Ok(false);
+    };
+    if proposal.source != "automatic_failure"
+        || proposal.status != "failed"
+        || proposal.staged_binding.is_none()
+        || proposal.application_state_sha256.is_none()
+        || !proposal.staged_candidate.is_empty()
+        || !proposal.files.is_empty()
+        || proposal.staged_candidate_manifest.is_empty()
+        || proposal.apply_request_id.is_none()
+        || !proposal.review_slot_terminal
+    {
+        return Ok(false);
+    }
+    if feature.repair_history.len() != feature.repair_attempts as usize
+        || feature
+            .repair_history
+            .iter()
+            .enumerate()
+            .any(|(index, evidence)| evidence.attempt as usize != index + 1)
+    {
+        bail!("Ordinary staged-successor repair history is inconsistent");
+    }
+    let proposal = terminal_failed_staged_proposal(feature)?;
+    let mut matching_successors = 0;
+    for repair in &feature.repair_history {
+        let Some(review) = validated_rejected_review_for_checkpoint_evidence(
+            feature,
+            &repair.prior_checkpoint,
+            false,
+        )?
+        else {
+            continue;
+        };
+        if repair.prior_message != rejected_review_repair_message(review)? {
+            continue;
+        }
+        let prior = repair
+            .prior_edits
+            .iter()
+            .map(|edit| (edit.path.replace('\\', "/").to_ascii_lowercase(), edit))
+            .collect::<std::collections::HashMap<_, _>>();
+        if prior.len() != repair.prior_edits.len()
+            || proposal.staged_candidate_manifest.iter().any(|entry| {
+                prior
+                    .get(&entry.path.replace('\\', "/").to_ascii_lowercase())
+                    .is_none_or(|edit| edit.content_hash != entry.content_sha256)
+            })
+        {
+            continue;
+        }
+        matching_successors += 1;
+    }
+    if matching_successors > 1 {
+        bail!("Terminal staged proposal has duplicate ordinary successor bindings");
+    }
+    Ok(matching_successors == 1)
+}
+
 fn staged_failure_evidence_binding(
     feature: &Feature,
 ) -> Result<(Vec<DeveloperReviewFinding>, String, String, String)> {
@@ -1581,13 +1942,16 @@ fn automatic_effects_quarantine_recovery(feature: &Feature) -> bool {
             .is_some_and(|edits| !edits.is_empty())
 }
 
-fn terminal_fully_applied_staged_proposal(feature: &Feature) -> Result<&RepairEscalationProposal> {
+fn terminal_fully_applied_staged_proposal_with_outcome<'a>(
+    feature: &'a Feature,
+    terminal_outcome: &str,
+) -> Result<&'a RepairEscalationProposal> {
     let proposal = feature
         .escalation_proposal
         .as_ref()
         .context("Quarantined automatic repair has no proposal evidence")?;
     if proposal.source != "automatic_failure"
-        || proposal.status != "interrupted"
+        || proposal.status != terminal_outcome
         || proposal.staged_binding.is_none()
         || proposal.application_state_sha256.is_none()
         || !proposal.staged_candidate.is_empty()
@@ -1648,6 +2012,10 @@ fn terminal_fully_applied_staged_proposal(feature: &Feature) -> Result<&RepairEs
     Ok(proposal)
 }
 
+fn terminal_fully_applied_staged_proposal(feature: &Feature) -> Result<&RepairEscalationProposal> {
+    terminal_fully_applied_staged_proposal_with_outcome(feature, "interrupted")
+}
+
 fn fully_applied_staged_quarantine_proposal(
     feature: &Feature,
 ) -> Result<&RepairEscalationProposal> {
@@ -1657,9 +2025,10 @@ fn fully_applied_staged_quarantine_proposal(
     terminal_fully_applied_staged_proposal(feature)
 }
 
-fn validate_terminal_fully_applied_staged_receipts(
+fn validate_terminal_fully_applied_staged_receipts_with_outcome(
     feature: &Feature,
     proposal: &RepairEscalationProposal,
+    terminal_outcome: &str,
 ) -> Result<()> {
     let exact_receipt = |outcome: &str| {
         feature
@@ -1672,8 +2041,17 @@ fn validate_terminal_fully_applied_staged_receipts(
     };
     let ready = exact_receipt("ready");
     let authorized = exact_receipt("policy_authorized");
-    let interrupted = exact_receipt("interrupted");
-    if ready.len() != 1 || authorized.len() != 1 || interrupted.len() != 1 {
+    let terminal = exact_receipt(terminal_outcome);
+    let proposal_evidence_count = feature
+        .escalation_history
+        .iter()
+        .filter(|evidence| evidence.proposal_id == proposal.proposal_id)
+        .count();
+    if proposal_evidence_count != 3
+        || ready.len() != 1
+        || authorized.len() != 1
+        || terminal.len() != 1
+    {
         bail!("Quarantined staged proposal terminal evidence changed");
     }
     let proposal_sha256 = ready[0]
@@ -1701,29 +2079,29 @@ fn validate_terminal_fully_applied_staged_receipts(
         (
             receipt_index("ready"),
             receipt_index("policy_authorized"),
-            receipt_index("interrupted")
+            receipt_index(terminal_outcome)
         ),
-        (Some(ready), Some(authorized), Some(interrupted))
-            if ready < authorized && authorized < interrupted
+        (Some(ready), Some(authorized), Some(terminal))
+            if ready < authorized && authorized < terminal
     ) || authorized[0].proposal_sha256.as_deref() != Some(proposal_sha256)
-        || interrupted[0].proposal_sha256.as_deref() != Some(proposal_sha256)
+        || terminal[0].proposal_sha256.as_deref() != Some(proposal_sha256)
         || authorized[0].candidate_sha256.as_deref() != Some(candidate_sha256)
-        || interrupted[0].candidate_sha256.as_deref() != Some(candidate_sha256)
+        || terminal[0].candidate_sha256.as_deref() != Some(candidate_sha256)
         || ready[0].apply_request_id.is_some()
         || authorized[0].apply_request_id != proposal.apply_request_id
-        || interrupted[0].apply_request_id != proposal.apply_request_id
+        || terminal[0].apply_request_id != proposal.apply_request_id
         || authorized[0]
             .authorization_revision
             .is_none_or(|revision| revision == 0)
         || ready[0].authorization_revision.is_some()
-        || interrupted[0].authorization_revision.is_some()
+        || terminal[0].authorization_revision.is_some()
         || ready[0].chat_id != proposal.chat_id
         || ready[0].chat_request_id != proposal.chat_request_id
         || authorized[0].chat_id.is_some()
         || !authorized[0].chat_request_id.is_empty()
-        || interrupted[0].chat_id != proposal.chat_id
-        || interrupted[0].chat_request_id != proposal.chat_request_id
-        || [ready[0], authorized[0], interrupted[0]]
+        || terminal[0].chat_id != proposal.chat_id
+        || terminal[0].chat_request_id != proposal.chat_request_id
+        || [ready[0], authorized[0], terminal[0]]
             .into_iter()
             .any(|evidence| {
                 evidence.attempt != proposal.attempt
@@ -1740,6 +2118,13 @@ fn validate_terminal_fully_applied_staged_receipts(
         bail!("Quarantined staged proposal terminal evidence changed");
     }
     Ok(())
+}
+
+fn validate_terminal_fully_applied_staged_receipts(
+    feature: &Feature,
+    proposal: &RepairEscalationProposal,
+) -> Result<()> {
+    validate_terminal_fully_applied_staged_receipts_with_outcome(feature, proposal, "interrupted")
 }
 
 fn validate_terminal_staged_manifest_successors(
@@ -1839,10 +2224,11 @@ fn automatic_staged_exact_snapshot_validation_only(feature: &Feature) -> bool {
     validate_terminal_fully_applied_staged_receipts(feature, proposal).is_ok()
 }
 
-fn validate_fully_applied_staged_recovery_candidate(
+fn validate_fully_applied_staged_terminal_candidate(
     feature: &Feature,
     proposal: &RepairEscalationProposal,
     edits: &[Edit],
+    terminal_outcome: &str,
 ) -> Result<FullyAppliedStagedRecoveryEvidence> {
     let mut retained = std::collections::HashMap::new();
     for edit in edits {
@@ -1896,8 +2282,17 @@ fn validate_fully_applied_staged_recovery_candidate(
     };
     let ready = exact_receipt("ready");
     let authorized = exact_receipt("policy_authorized");
-    let interrupted = exact_receipt("interrupted");
-    if ready.len() != 1 || authorized.len() != 1 || interrupted.len() != 1 {
+    let terminal = exact_receipt(terminal_outcome);
+    let proposal_evidence_count = feature
+        .escalation_history
+        .iter()
+        .filter(|evidence| evidence.proposal_id == proposal.proposal_id)
+        .count();
+    if proposal_evidence_count != 3
+        || ready.len() != 1
+        || authorized.len() != 1
+        || terminal.len() != 1
+    {
         bail!("Quarantined staged proposal terminal evidence changed");
     }
     let original_proposal_sha256 = ready[0]
@@ -1917,30 +2312,30 @@ fn validate_fully_applied_staged_recovery_candidate(
         (
             receipt_index("ready"),
             receipt_index("policy_authorized"),
-            receipt_index("interrupted")
+            receipt_index(terminal_outcome)
         ),
-        (Some(ready), Some(authorized), Some(interrupted))
-            if ready < authorized && authorized < interrupted
+        (Some(ready), Some(authorized), Some(terminal))
+            if ready < authorized && authorized < terminal
     ) || ready[0].candidate_sha256.as_deref() != Some(candidate_sha256.as_str())
         || authorized[0].candidate_sha256.as_deref() != Some(candidate_sha256.as_str())
-        || interrupted[0].candidate_sha256.as_deref() != Some(candidate_sha256.as_str())
+        || terminal[0].candidate_sha256.as_deref() != Some(candidate_sha256.as_str())
         || authorized[0].proposal_sha256.as_deref() != Some(original_proposal_sha256)
-        || ready[0].proposal_sha256 != interrupted[0].proposal_sha256
+        || ready[0].proposal_sha256 != terminal[0].proposal_sha256
         || ready[0].apply_request_id.is_some()
         || authorized[0].apply_request_id != proposal.apply_request_id
-        || interrupted[0].apply_request_id != proposal.apply_request_id
+        || terminal[0].apply_request_id != proposal.apply_request_id
         || authorized[0]
             .authorization_revision
             .is_none_or(|revision| revision == 0)
         || ready[0].authorization_revision.is_some()
-        || interrupted[0].authorization_revision.is_some()
+        || terminal[0].authorization_revision.is_some()
         || ready[0].chat_id != proposal.chat_id
         || ready[0].chat_request_id != proposal.chat_request_id
         || authorized[0].chat_id.is_some()
         || !authorized[0].chat_request_id.is_empty()
-        || interrupted[0].chat_id != proposal.chat_id
-        || interrupted[0].chat_request_id != proposal.chat_request_id
-        || [ready[0], authorized[0], interrupted[0]]
+        || terminal[0].chat_id != proposal.chat_id
+        || terminal[0].chat_request_id != proposal.chat_request_id
+        || [ready[0], authorized[0], terminal[0]]
             .into_iter()
             .any(|evidence| {
                 evidence.attempt != proposal.attempt
@@ -1960,6 +2355,14 @@ fn validate_fully_applied_staged_recovery_candidate(
         original_proposal_sha256: original_proposal_sha256.into(),
         candidate_sha256,
     })
+}
+
+fn validate_fully_applied_staged_recovery_candidate(
+    feature: &Feature,
+    proposal: &RepairEscalationProposal,
+    edits: &[Edit],
+) -> Result<FullyAppliedStagedRecoveryEvidence> {
+    validate_fully_applied_staged_terminal_candidate(feature, proposal, edits, "interrupted")
 }
 
 fn validate_fully_applied_active_staged_candidate(
@@ -2229,6 +2632,21 @@ fn fully_applied_staged_validation_binding(
         // staged writes and their authority remain immutable audit lineage,
         // but cannot control or be replayed by this validation/review cycle.
         return Ok(None);
+    }
+    match terminal_staged_review_has_ordinary_successor(feature) {
+        Ok(true) => {
+            // A new ordinary repair is a distinct candidate. The failed staged
+            // proposal remains immutable predecessor evidence, but must not
+            // force that successor through recovered staged validation.
+            return Ok(None);
+        }
+        Ok(false) => {}
+        Err(error) => {
+            return Err(FullyAppliedRecoveryOperationalFailure(format!(
+                "Terminal staged ordinary-successor lineage changed: {error:#}"
+            ))
+            .into());
+        }
     }
     let complete_staged_evidence = proposal.staged_binding.is_some()
         && proposal.application_state_sha256.is_some()
@@ -3274,6 +3692,18 @@ impl Engine {
             && !publication_unresolved
             && !github_setup_unresolved
             && self.developer_work_is_idle();
+        let publication_abandonment_control_idle = publication_abandonment_control_is_idle(
+            self.shutdown.load(Ordering::SeqCst),
+            emergency_paused,
+            self.publication_running.load(Ordering::SeqCst),
+            self.publication_connection_running.load(Ordering::SeqCst),
+            github_setup_unresolved,
+            self.running.load(Ordering::SeqCst),
+            self.planning_running.load(Ordering::SeqCst),
+            self.escalation_running.load(Ordering::SeqCst),
+            self.chat.is_running(),
+            self.tools.blocks_work(),
+        );
         let projection_now_ms = current_time_ms().context("System clock is invalid")?;
         let queue: Vec<Value> = db
             .state
@@ -3316,20 +3746,8 @@ impl Engine {
                     && !self.publication_running.load(Ordering::SeqCst)
                     && !self.publication_connection_running.load(Ordering::SeqCst)
                     && f.publication.as_ref().is_some_and(|publication| publication.status == "attention"),
-                "can_abandon_publication":self.publication_runtime.is_some()
-                    && !emergency_paused
-                    && !self.shutdown.load(Ordering::SeqCst)
-                    && !self.publication_running.load(Ordering::SeqCst)
-                    && !self.publication_connection_running.load(Ordering::SeqCst)
-                    && f.status == "failed"
-                    && f.checkpoint == "publication_attention"
-                    && f.publication.as_ref().is_some_and(|publication| {
-                        publication.status == "attention"
-                            && publication.commit_sha.is_some()
-                            && publication.pr_number.is_some()
-                            && publication.pr_url.is_some()
-                            && publication.merged_sha.is_none()
-                    }),
+                "can_abandon_publication":publication_abandonment_control_idle
+                    && feature_can_abandon_publication(f, self.publication_runtime.is_some()),
                 "changed_files":f.edits.as_ref().map(|e| e.iter().map(|e| &e.path).collect::<Vec<_>>()).unwrap_or_default()
                 });
                 let object = projected.as_object_mut().unwrap();
@@ -4480,6 +4898,56 @@ impl Engine {
                 .find(|feature| feature.status != "succeeded" && feature.status != "removed")
                 .cloned();
         }
+        let mut terminal_staged_resume_feedback = None;
+        let mut terminal_staged_resume_effect_guard = None;
+        if let Some(expected) = feature.as_ref().filter(|feature| {
+            feature.status == "failed"
+                && feature.auto_repair_lifecycle == "held"
+                && feature
+                    .message
+                    .starts_with(TERMINAL_STAGED_REVIEW_RESUME_DEFECT_PREFIX)
+        }) {
+            let expected = expected.clone();
+            let expected_revision = db.state.revision;
+            let project = fs::canonicalize(self.root.join(&expected.project))?;
+            if !project.starts_with(&self.root) {
+                bail!("Project escapes the workspace root");
+            }
+            let feedback = held_terminal_staged_review_repair_message(&expected, &project)?;
+            let expected_effect = terminal_failed_staged_proposal(&expected)?
+                .application_state_sha256
+                .clone()
+                .context("Held terminal staged proposal has no application state")?;
+            drop(db);
+            let effect_guard = self
+                .effect_gate
+                .lock()
+                .map_err(|_| anyhow!("effect gate failed"))?;
+            let observed_effect = self
+                .tools
+                .project_effect_snapshot(&expected.project, None)?;
+            if observed_effect.sha256 != expected_effect {
+                bail!("Held terminal staged project effects changed before Resume");
+            }
+            db = self
+                .database
+                .lock()
+                .map_err(|_| anyhow!("state lock failed"))?;
+            let current = db
+                .state
+                .queue
+                .iter()
+                .find(|candidate| candidate.id == expected.id)
+                .context("feature missing")?;
+            if db.state.revision != expected_revision
+                || serde_json::to_vec(current)? != serde_json::to_vec(&expected)?
+            {
+                bail!("Held terminal staged review binding changed during Resume inspection");
+            }
+            feature = Some(current.clone());
+            terminal_staged_resume_feedback = Some(feedback);
+            terminal_staged_resume_effect_guard = Some(effect_guard);
+        }
         let completed_publication_recovery = feature
             .as_ref()
             .is_some_and(completed_publication_requires_reverification);
@@ -4514,9 +4982,29 @@ impl Engine {
         if self.running.load(Ordering::SeqCst) {
             return Ok(());
         }
+        let held_review_checkpoint = feature
+            .as_ref()
+            .filter(|feature| clean_staged_tool_hold_recoverable(feature))
+            .and_then(|feature| {
+                feature
+                    .repair_history
+                    .last()
+                    .filter(|evidence| evidence.attempt == feature.repair_attempts)
+            })
+            .map(|evidence| evidence.prior_checkpoint.as_str());
+        let resumes_early_staged_review = match (feature.as_ref(), held_review_checkpoint) {
+            (Some(feature), Some(checkpoint))
+                if db.state.auto_ai_repair_enabled && feature.repair_attempts < REPAIR_LIMIT =>
+            {
+                review_rejection_requires_staged_automatic_in_workspace(
+                    &self.root, feature, checkpoint,
+                )?
+            }
+            _ => false,
+        };
         let resumes_at_escalation = feature.as_ref().is_some_and(|feature| {
             db.state.auto_ai_repair_enabled
-                && feature.repair_attempts >= REPAIR_LIMIT
+                && (feature.repair_attempts >= REPAIR_LIMIT || resumes_early_staged_review)
                 && ((feature.auto_repair_lifecycle == "held" && feature.status == "failed")
                     || paused_preauthorization_cancellation_is_resumable(feature)
                     || exact_snapshot_rejection_is_resumable(feature))
@@ -4717,6 +5205,17 @@ impl Engine {
                         )?
                     } else if current.auto_repair_lifecycle == "held" && policy_enabled {
                         let resume_rejected_stage = clean_staged_tool_hold_recoverable(current);
+                        let resumes_terminal_staged_review =
+                            terminal_staged_resume_feedback.as_deref();
+                        if let Some(expected_feedback) = resumes_terminal_staged_review {
+                            let project = fs::canonicalize(self.root.join(&current.project))?;
+                            if !project.starts_with(&self.root)
+                                || held_terminal_staged_review_repair_message(current, &project)?
+                                    != expected_feedback
+                            {
+                                bail!("Held terminal staged review binding changed before Resume");
+                            }
+                        }
                         snapshot_feature_auto_repair_limit(
                             current,
                             max_escalations,
@@ -4731,8 +5230,24 @@ impl Engine {
                             "running",
                             "The owner explicitly resumed Auto AI repair after an operational hold",
                         )?;
-                        if resume_rejected_stage {
-                            if current.repair_attempts < REPAIR_LIMIT {
+                        if let Some(feedback) = resumes_terminal_staged_review {
+                            let rejected_summary = validated_rejected_review_for_checkpoint(
+                                current,
+                                &current.checkpoint,
+                            )?
+                            .context("Held terminal staged review evidence disappeared")?
+                            .summary
+                            .clone();
+                            current.last_failure_kind = "review_rejection".into();
+                            current.last_code_failure_summary = feedback.into();
+                            current.review_status = "rejected".into();
+                            current.review_summary = rejected_summary;
+                            current.message = feedback.into();
+                            reserve_repair_attempt(current)?;
+                        } else if resume_rejected_stage {
+                            if resumes_early_staged_review {
+                                current.last_failure_kind = "candidate_rejection".into();
+                            } else if current.repair_attempts < REPAIR_LIMIT {
                                 reserve_repair_attempt(current)?;
                             } else {
                                 current.last_failure_kind = "candidate_rejection".into();
@@ -4761,6 +5276,7 @@ impl Engine {
                 }
             }
         }
+        drop(terminal_staged_resume_effect_guard);
         self.clear_cancellation_for_start(start_epoch, adopted_recovery_epoch, || {})?;
         let automatic_authorized = !completed_publication_recovery
             && feature.as_ref().is_some_and(|observed| {
@@ -5362,6 +5878,7 @@ impl Engine {
             )
         } else {
             let failure_evidence = automatic_failure_prompt_json(
+                &feature,
                 proposal,
                 automatic_failure_summary
                     .context("Automatic proposal has no transient failure evidence")?,
@@ -6027,6 +6544,17 @@ impl Engine {
             if !project.starts_with(&self.root) {
                 bail!("Project escapes the workspace root");
             }
+            let early_staged_review = if observed.repair_attempts < REPAIR_LIMIT {
+                let checkpoint = automatic_staged_review_checkpoint(&observed).context(
+                    "Ordinary repair attempts must be exhausted before automatic escalation",
+                )?;
+                review_rejection_requires_staged_automatic(&observed, checkpoint, &project)?
+            } else {
+                false
+            };
+            if observed.repair_attempts < REPAIR_LIMIT && !early_staged_review {
+                bail!("Ordinary repair attempts must be exhausted before automatic escalation");
+            }
             if at_limit {
                 let snapshot = admitted_project_snapshot_with_cancellation(
                     &project,
@@ -6035,7 +6563,7 @@ impl Engine {
                 if self.cancelled() {
                     bail!("Automatic repair escalation preparation was cancelled");
                 }
-                return Ok((None, None, Some(snapshot)));
+                return Ok((project, early_staged_review, None, None, Some(snapshot)));
             }
             let target = self.model_target(&observed.model_target)?.clone();
             let project_state_sha256 = project_repair_context_with_cancellation(
@@ -6044,15 +6572,24 @@ impl Engine {
                 Some(&self.cancellation),
             )?
             .manifest_sha256;
-            Ok((Some(target), Some(project_state_sha256), None))
+            Ok((
+                project,
+                early_staged_review,
+                Some(target),
+                Some(project_state_sha256),
+                None,
+            ))
         })();
-        let (target, project_state_sha256, limit_recovery_snapshot) = match preparation {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                self.terminalize_automatic_reservation_preparation_failure(&observed, at_limit)?;
-                return Err(error);
-            }
-        };
+        let (project, early_staged_review, target, project_state_sha256, limit_recovery_snapshot) =
+            match preparation {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    self.terminalize_automatic_reservation_preparation_failure(
+                        &observed, at_limit,
+                    )?;
+                    return Err(error);
+                }
+            };
         let proposal_id = Uuid::new_v4().to_string();
         let target_for_state = target.clone();
         let reserved = self.change(|state| {
@@ -6072,12 +6609,20 @@ impl Engine {
                 || feature.auto_repair_policy_revision != observed.auto_repair_policy_revision
                 || feature.escalation_count != observed.escalation_count
                 || feature.auto_ai_repair_limit != observed.auto_ai_repair_limit
+                || feature.project != observed.project
                 || feature.auto_repair_policy_revision != Some(policy_revision)
             {
                 bail!("Automatic repair escalation binding changed during preparation");
             }
             if feature.repair_attempts < REPAIR_LIMIT {
-                bail!("Ordinary repair attempts must be exhausted before automatic escalation");
+                let checkpoint = automatic_staged_review_checkpoint(feature).context(
+                    "Ordinary repair attempts must be exhausted before automatic escalation",
+                )?;
+                if !early_staged_review
+                    || !review_rejection_requires_staged_automatic(feature, checkpoint, &project)?
+                {
+                    bail!("Ordinary repair attempts must be exhausted before automatic escalation");
+                }
             }
             let limit = feature
                 .auto_ai_repair_limit
@@ -8190,11 +8735,6 @@ impl Engine {
         expected_checkpoint: &str,
     ) -> Result<Value> {
         Uuid::parse_str(feature_id).context("Invalid feature ID")?;
-        let runtime = self
-            .publication_runtime
-            .as_ref()
-            .cloned()
-            .context("GitHub publication tools are unavailable")?;
         let idempotent = {
             let database = self
                 .database
@@ -8228,7 +8768,7 @@ impl Engine {
             .map_err(|_| anyhow!("Another GitHub publication is running"))?;
         let _running_guard = PublicationRunningGuard(&self.publication_running);
         self.publication_cancellation.store(0, Ordering::SeqCst);
-        let (input, original) = {
+        let (input, original, pre_effect) = {
             let database = self
                 .database
                 .lock()
@@ -8262,6 +8802,9 @@ impl Engine {
             {
                 bail!("Publication checkpoint changed; refresh before abandoning");
             }
+            if !feature_can_abandon_publication(feature, self.publication_runtime.is_some()) {
+                bail!("Publication evidence is not eligible for abandonment");
+            }
             let input = publication_input(feature)?;
             let publication = feature
                 .publication
@@ -8270,12 +8813,23 @@ impl Engine {
             if publication.status != "attention" {
                 bail!("Only a publication needing attention can be abandoned");
             }
-            (input, publication)
+            let pre_effect = publication.can_abandon_before_remote_effects();
+            if !pre_effect && self.publication_runtime.is_none() {
+                bail!("GitHub publication tools are unavailable");
+            }
+            (input, publication, pre_effect)
         };
         let mut abandoned = original.clone();
-        runtime
-            .observe_closed_unmerged(&input, &mut abandoned, &self.publication_cancellation)
-            .await?;
+        if pre_effect {
+            abandoned.mark_abandoned_before_remote_effects()?;
+        } else {
+            self.publication_runtime
+                .as_ref()
+                .cloned()
+                .context("GitHub publication tools are unavailable")?
+                .observe_closed_unmerged(&input, &mut abandoned, &self.publication_cancellation)
+                .await?;
+        }
         let mut database = self
             .database
             .lock()
@@ -8309,7 +8863,11 @@ impl Engine {
             feature.publication = Some(abandoned.clone());
             feature.status = "removed".into();
             feature.checkpoint = "publication_abandoned".into();
-            feature.message = "The exact retained pull request was observed closed and unmerged. Publication evidence is preserved, and this feature was removed from the active queue without a remote write.".into();
+            feature.message = if pre_effect {
+                "The exact retained publication attempt was abandoned with no durably recorded candidate commit and no branch-push, pull-request, or remote-effect intent. Candidate, validation, review, repair, and escalation evidence is preserved, and this feature was removed from the active queue without a remote write."
+            } else {
+                "The exact retained pull request was observed closed and unmerged. Publication evidence is preserved, and this feature was removed from the active queue without a remote write."
+            }.into();
             feature.repair_pending = false;
             Ok(())
         })?;
@@ -8361,9 +8919,19 @@ impl Engine {
                     .store(policy_enabled, Ordering::SeqCst);
             }
             let feature = self.freeze_feature_publication(feature)?;
+            let early_staged_review = if feature.repair_attempts < REPAIR_LIMIT {
+                match automatic_staged_review_checkpoint(&feature) {
+                    Some(checkpoint) => review_rejection_requires_staged_automatic_in_workspace(
+                        &self.root, &feature, checkpoint,
+                    )?,
+                    None => false,
+                }
+            } else {
+                false
+            };
             if feature.status == "failed"
                 && feature.auto_repair_lifecycle == "running"
-                && feature.repair_attempts >= REPAIR_LIMIT
+                && (feature.repair_attempts >= REPAIR_LIMIT || early_staged_review)
                 && !feature.repair_pending
                 && !feature.escalation_pending
                 && automatic_code_failure_is_eligible(&feature)
@@ -8521,8 +9089,50 @@ impl Engine {
                 let candidate_rejection = error
                     .downcast_ref::<RepairableStagedCandidateRejection>()
                     .is_some();
+                let terminal_staged_review_project = if review_rejection
+                    && escalation_attempt
+                    && terminal_staged_review_route_eligible(&feature)
+                {
+                    let project = fs::canonicalize(self.root.join(&feature.project))?;
+                    if !project.starts_with(&self.root) {
+                        bail!("Project escapes the workspace root");
+                    }
+                    Some(project)
+                } else {
+                    None
+                };
+                let early_staged_review = if review_rejection && !escalation_attempt {
+                    let database = self
+                        .database
+                        .lock()
+                        .map_err(|_| anyhow!("state lock failed"))?;
+                    let current = database
+                        .state
+                        .queue
+                        .iter()
+                        .find(|candidate| candidate.id == feature.id)
+                        .cloned()
+                        .context("feature missing")?;
+                    if database.state.auto_ai_repair_enabled
+                        && current.auto_repair_lifecycle == "running"
+                    {
+                        review_rejection_requires_staged_automatic_in_workspace(
+                            &self.root,
+                            &current,
+                            &current.checkpoint,
+                        )
+                    } else {
+                        Ok(false)
+                    }
+                } else {
+                    Ok(false)
+                };
+                let early_staged_review_selected = matches!(early_staged_review.as_ref(), Ok(true));
+                let early_staged_review_invalid = early_staged_review.is_err();
+                let mut terminal_staged_review_invalid = None;
                 let reserved_next = self.change(|s| {
                     let next_revision = s.revision + 1;
+                    let auto_policy_enabled = s.auto_ai_repair_enabled;
                     let current = s
                         .queue
                         .iter_mut()
@@ -8612,11 +9222,60 @@ impl Engine {
                             )?;
                         }
                     }
+                    let terminal_source_only_repair = if let Some(project) =
+                        terminal_staged_review_project.as_deref()
+                    {
+                        match source_only_terminal_staged_review_repair_message(
+                            current,
+                            &current.checkpoint,
+                            project,
+                            current.edits.as_deref().context(
+                                "Terminal staged rejection has no cumulative candidate",
+                            )?,
+                        ) {
+                            Ok(message) => message,
+                            Err(error) => {
+                                terminal_staged_review_invalid = Some(format!("{error:#}"));
+                                if current.auto_repair_lifecycle == "running" {
+                                    set_auto_repair_lifecycle(
+                                        current,
+                                        "held",
+                                        "Automatic repair stopped because terminal staged review evidence is malformed, stale, incomplete, or exceeds the complete ordinary-repair feedback bound. Inspect the durable evidence before explicitly resuming.",
+                                    )?;
+                                }
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
                     if review_rejection && !self.cancelled() {
                         self.repair_loop_authorized
                             .store(!escalation_attempt, Ordering::SeqCst);
                     }
-                    if !escalation_attempt
+                    let starts_early_staged_review = early_staged_review_selected
+                        && auto_policy_enabled
+                        && current.auto_repair_lifecycle == "running";
+                    if early_staged_review_invalid {
+                        if current.auto_repair_lifecycle == "running" {
+                            set_auto_repair_lifecycle(
+                                current,
+                                "held",
+                                "Automatic repair stopped because the retained rejected-review evidence is malformed, stale, or incomplete. Inspect the durable review evidence before explicitly resuming.",
+                            )?;
+                        }
+                        Ok(false)
+                    } else if terminal_source_only_repair.is_some()
+                        && auto_policy_enabled
+                        && current.auto_repair_lifecycle == "running"
+                        && !self.cancelled()
+                        && current.repair_attempts < REPAIR_LIMIT
+                    {
+                        current.message = terminal_source_only_repair.unwrap();
+                        reserve_repair_attempt(current)?;
+                        Ok(true)
+                    } else if !starts_early_staged_review
+                        && !escalation_attempt
                         && code_failure
                         && !self.cancelled()
                         && self.repair_loop_authorized.load(Ordering::SeqCst)
@@ -8642,6 +9301,16 @@ impl Engine {
                     }
                     Err(error) => return Err(error),
                 };
+                if let Err(error) = early_staged_review {
+                    return Err(error.context(
+                        "Rejected review evidence could not authorize automatic repair routing",
+                    ));
+                }
+                if let Some(error) = terminal_staged_review_invalid {
+                    return Err(anyhow!(error).context(
+                        "Terminal staged review evidence could not authorize ordinary repair routing",
+                    ));
+                }
                 if reserved_next {
                     continue;
                 }
@@ -12145,7 +12814,11 @@ fn reserve_repair_attempt(feature: &mut Feature) -> Result<()> {
     let evidence = RepairAttemptEvidence {
         attempt,
         prior_checkpoint: feature.checkpoint.chars().take(128).collect(),
-        prior_message: feature.message.chars().take(3500).collect(),
+        prior_message: feature
+            .message
+            .chars()
+            .take(REPAIR_PRIOR_MESSAGE_LIMIT)
+            .collect(),
         prior_edits,
     };
     feature.repair_history.push(evidence);
@@ -14226,6 +14899,62 @@ fn publication_input(feature: &Feature) -> Result<PublicationInput> {
     })
 }
 
+fn feature_can_abandon_publication(feature: &Feature, publication_runtime_available: bool) -> bool {
+    if feature.status != "failed" || feature.checkpoint != "publication_attention" {
+        return false;
+    }
+    let Ok(input) = publication_input(feature) else {
+        return false;
+    };
+    let Some(publication) = feature.publication.as_ref() else {
+        return false;
+    };
+    if publication.repository_url != input.binding.repository_url
+        || publication.repository_slug != input.binding.repository_slug
+        || publication.base_branch != input.binding.base_branch
+        || publication.feature_branch != format!("codex/feature-{}", input.feature_id)
+        || publication.required_checks != input.binding.required_checks
+        || publication.strict_required_checks != input.binding.strict_required_checks
+    {
+        return false;
+    }
+    publication.can_abandon_before_remote_effects()
+        || (publication_runtime_available
+            && publication.validate().is_ok()
+            && publication.status == "attention"
+            && publication.base_sha.is_some()
+            && publication.candidate_tree_sha.is_some()
+            && publication.commit_sha.is_some()
+            && publication.pr_number.is_some()
+            && publication.pr_url.is_some()
+            && publication.merged_sha.is_none())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn publication_abandonment_control_is_idle(
+    shutdown: bool,
+    emergency_paused: bool,
+    publication_running: bool,
+    publication_connection_running: bool,
+    github_setup_unresolved: bool,
+    running: bool,
+    planning_running: bool,
+    escalation_running: bool,
+    chat_running: bool,
+    tools_block_work: bool,
+) -> bool {
+    !shutdown
+        && !emergency_paused
+        && !publication_running
+        && !publication_connection_running
+        && !github_setup_unresolved
+        && !running
+        && !planning_running
+        && !escalation_running
+        && !chat_running
+        && !tools_block_work
+}
+
 fn aggregate_review_summary(output: &DeveloperReviewAggregateOutput) -> String {
     if output.decision == DeveloperReviewDecisionKind::Approved {
         if output.non_blocking_findings.is_empty() {
@@ -15159,6 +15888,7 @@ fn hash(data: &[u8]) -> String {
 }
 
 fn automatic_failure_prompt_json(
+    feature: &Feature,
     proposal: &RepairEscalationProposal,
     failure_summary: &str,
 ) -> Result<String> {
@@ -15169,9 +15899,31 @@ fn automatic_failure_prompt_json(
     if hash(failure_summary.as_bytes()) != proposal.diagnosis_sha256 {
         bail!("Automatic repair failure evidence digest changed before inference");
     }
+    let review_checkpoint = if proposal.feature_checkpoint.starts_with("review_")
+        && proposal.feature_checkpoint.ends_with("_rejected")
+    {
+        Some(proposal.feature_checkpoint.as_str())
+    } else if proposal.feature_checkpoint == "staged_tool_candidate_quarantined" {
+        feature.repair_history.last().and_then(|evidence| {
+            (evidence.attempt == feature.repair_attempts)
+                .then_some(evidence.prior_checkpoint.as_str())
+        })
+    } else {
+        None
+    };
+    let review_feedback = match review_checkpoint {
+        Some(checkpoint) => {
+            let review = validated_rejected_review_for_checkpoint(feature, checkpoint)?.context(
+                "Automatic escalation rejected-review checkpoint has no review evidence",
+            )?;
+            rejected_review_feedback_value(review)?
+        }
+        None => Value::Null,
+    };
     Ok(serde_json::to_string(&json!({
         "sha256": proposal.diagnosis_sha256,
         "text": failure_summary,
+        "latest_checkpoint_matched_rejected_review": review_feedback,
     }))?)
 }
 
@@ -15469,6 +16221,58 @@ fn checked_path(root: &Path, relative: &str) -> Result<PathBuf> {
         if full.exists() && !fs::canonicalize(&full)?.starts_with(root) {
             bail!("Path leaves project");
         }
+    }
+    Ok(full)
+}
+
+fn inventory_metadata_path(relative: &str) -> bool {
+    relative
+        .replace('\\', "/")
+        .split('/')
+        .any(|component| component.starts_with('.'))
+}
+
+#[cfg(any(windows, test))]
+fn checked_inventory_read_path(root: &Path, relative: &str) -> Result<PathBuf> {
+    if !inventory_metadata_path(relative) {
+        return checked_path(root, relative);
+    }
+    if relative.is_empty()
+        || relative.contains('\\')
+        || relative.contains(':')
+        || relative.len() > 240
+    {
+        bail!("Invalid inventory relative path");
+    }
+    let path = Path::new(relative);
+    if path
+        .components()
+        .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        bail!("Inventory file path escapes project");
+    }
+    if repair_sensitive_path(relative) {
+        bail!("Inventory read refuses a credential-like or sensitive path");
+    }
+    let canonical_root = fs::canonicalize(root)?;
+    let mut full = root.to_path_buf();
+    for component in path.components() {
+        let name = component.as_os_str().to_string_lossy();
+        if name.eq_ignore_ascii_case(".git") {
+            bail!("Inventory read refuses Git administrative metadata");
+        }
+        full.push(component);
+        let metadata = fs::symlink_metadata(&full)?;
+        if metadata.file_type().is_symlink() || planning_metadata_is_reparse(&metadata) {
+            bail!("Inventory read refuses a symbolic link or reparse point");
+        }
+        if !fs::canonicalize(&full)?.starts_with(&canonical_root) {
+            bail!("Inventory read path leaves project");
+        }
+    }
+    let metadata = fs::symlink_metadata(&full)?;
+    if !metadata.is_file() || planning_metadata_is_reparse(&metadata) {
+        bail!("Inventory read target is not a direct file");
     }
     Ok(full)
 }
@@ -16334,6 +17138,7 @@ fn project_repair_context_with_cancellation_epoch(
     fn record_file(
         relative_string: String,
         generated: bool,
+        excluded_metadata: bool,
         mut file: fs::File,
         opened: fs::Metadata,
         failure_evidence: &str,
@@ -16386,6 +17191,17 @@ fn project_repair_context_with_cancellation_epoch(
                 byte_length: opened.len(),
                 content_sha256: hash(b"assemblywright.excluded-sensitive-content.v1"),
                 kind: "excluded_sensitive".into(),
+                generated: false,
+            });
+            return Ok(());
+        }
+        if excluded_metadata {
+            inventory.push(RepairManifestEntry {
+                path: None,
+                path_sha256,
+                byte_length: opened.len(),
+                content_sha256,
+                kind: "excluded_metadata".into(),
                 generated: false,
             });
             return Ok(());
@@ -16670,7 +17486,7 @@ fn project_repair_context_with_cancellation_epoch(
                 });
                 continue;
             }
-            let full = checked_path(root, &relative_string)?;
+            let full = checked_inventory_read_path(root, &relative_string)?;
             let (file, opened) = open_windows_recovery_file(&full)?;
             if opened.len() != metadata.len() {
                 bail!("Repair manifest file changed before it was read");
@@ -16678,6 +17494,7 @@ fn project_repair_context_with_cancellation_epoch(
             record_file(
                 relative_string,
                 generated,
+                inventory_metadata_path(&relative.to_string_lossy()),
                 file,
                 opened,
                 failure_evidence,
@@ -16894,6 +17711,7 @@ fn project_repair_context_with_cancellation_epoch(
                     record_file(
                         relative_string.clone(),
                         generated_context_path(&relative_string),
+                        inventory_metadata_path(&relative_string),
                         file,
                         metadata,
                         failure_evidence,
@@ -23074,6 +23892,430 @@ mod tests {
             .is_none());
     }
 
+    fn terminal_staged_source_rejection_fixture(engine: &Arc<Engine>) -> Feature {
+        let mut feature = active_automatic_staged_validation_fixture(engine);
+        feature.repair_attempts = 0;
+        feature.repair_history.clear();
+        feature.status = "failed".into();
+        feature.checkpoint = "review_2_rejected".into();
+        feature.last_failure_kind = "review_rejection".into();
+        feature.last_code_failure_summary = "fixture source-only rejection".into();
+        feature.review_status = "rejected".into();
+        feature.review_summary = "fixture source-only rejection".into();
+        feature.review_attempts = 2;
+        feature.review_pending = None;
+        feature.review_history = vec![current_rejected_review(
+            1,
+            vec![DeveloperReviewFinding {
+                finding_id: "protected-first-review".into(),
+                path: "tests/test_first.py".into(),
+                message: "The first rejection required staged repair".into(),
+            }],
+        )];
+        finish_escalation_application(&mut feature, 42, "failed", "fixture source-only rejection")
+            .unwrap();
+        let project = engine.root.join("example");
+        let validation_evidence_sha256 = "b".repeat(64);
+        let packet = developer_review_batch_set(
+            &feature,
+            &project,
+            feature.edits.as_deref().unwrap(),
+            &validation_evidence_sha256,
+        )
+        .unwrap();
+        feature.review_history.push(ReviewAttemptEvidence {
+            attempt: 2,
+            packet_sha256: packet.aggregate_sha256().into(),
+            validation_evidence_sha256,
+            outcome: "rejected".into(),
+            decision_sha256: Some("c".repeat(64)),
+            binding_version: 2,
+            batch_packet_sha256s: packet
+                .batches
+                .iter()
+                .map(|batch| batch.sha256().unwrap())
+                .collect(),
+            batch_receipt_sha256s: packet.batches.iter().map(|_| "e".repeat(64)).collect(),
+            blocking_findings: vec![DeveloperReviewFinding {
+                finding_id: "source-second-review".into(),
+                path: "result.txt".into(),
+                message: "Correct the remaining implementation error".into(),
+            }],
+            summary: "fixture source-only rejection".into(),
+        });
+        feature
+    }
+
+    #[test]
+    fn terminal_staged_review_route_excludes_manual_and_json_proposals() {
+        let (_directory, engine) = control_test_engine();
+        let staged = active_automatic_staged_validation_fixture(&engine);
+        assert!(terminal_staged_review_route_eligible(&staged));
+
+        let mut manual = feature_with_escalation("failed");
+        manual.checkpoint = "review_1_rejected".into();
+        manual.auto_repair_lifecycle = "inactive".into();
+        assert!(!terminal_staged_review_route_eligible(&manual));
+        finish_escalation_application(&mut manual, 42, "failed", "fixture manual rejection")
+            .unwrap();
+        assert_eq!(
+            manual.escalation_proposal.as_ref().unwrap().status,
+            "failed"
+        );
+        assert_eq!(manual.auto_repair_lifecycle, "inactive");
+
+        let mut json_fallback = feature_with_escalation("failed");
+        json_fallback.checkpoint = "review_1_rejected".into();
+        json_fallback.auto_repair_epoch = 4;
+        json_fallback.auto_repair_policy_revision = Some(9);
+        json_fallback.auto_ai_repair_limit = Some(7);
+        set_auto_repair_lifecycle(
+            &mut json_fallback,
+            "running",
+            "fixture automatic JSON fallback",
+        )
+        .unwrap();
+        let proposal = json_fallback.escalation_proposal.as_mut().unwrap();
+        proposal.source = "automatic_failure".into();
+        proposal.automatic_epoch = Some(4);
+        proposal.policy_revision = Some(9);
+        proposal.limit_snapshot = Some(7);
+        assert!(proposal.staged_binding.is_none());
+        assert!(!terminal_staged_review_route_eligible(&json_fallback));
+        finish_escalation_application(
+            &mut json_fallback,
+            43,
+            "failed",
+            "fixture automatic JSON rejection",
+        )
+        .unwrap();
+        assert_eq!(
+            json_fallback.escalation_proposal.as_ref().unwrap().status,
+            "failed"
+        );
+        assert_eq!(json_fallback.auto_repair_lifecycle, "running");
+    }
+
+    #[test]
+    fn terminal_staged_source_rejection_reserves_bound_ordinary_successor() {
+        let (_directory, engine) = control_test_engine();
+        let mut feature = terminal_staged_source_rejection_fixture(&engine);
+        let project = engine.root.join("example");
+        let proposal_before = serde_json::to_vec(&feature.escalation_proposal).unwrap();
+        let escalation_before = serde_json::to_vec(&feature.escalation_history).unwrap();
+        let feedback = source_only_terminal_staged_review_repair_message(
+            &feature,
+            &feature.checkpoint,
+            &project,
+            feature.edits.as_deref().unwrap(),
+        )
+        .unwrap()
+        .expect("source-only staged rejection must use ordinary repair");
+        feature.message = feedback.clone();
+        reserve_repair_attempt(&mut feature).unwrap();
+        assert_eq!(feature.repair_attempts, 1);
+        assert_eq!(
+            feature.repair_history[0].prior_checkpoint,
+            "review_2_rejected"
+        );
+        assert_eq!(feature.repair_history[0].prior_message, feedback);
+        assert_eq!(
+            serde_json::to_vec(&feature.escalation_proposal).unwrap(),
+            proposal_before
+        );
+        assert_eq!(
+            serde_json::to_vec(&feature.escalation_history).unwrap(),
+            escalation_before
+        );
+
+        feature.status = "running".into();
+        feature.checkpoint = "repair_1_applied".into();
+        feature
+            .edits
+            .as_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|edit| edit.path == "result.txt")
+            .unwrap()
+            .content = "ordinary successor\n".into();
+        assert!(terminal_staged_review_has_ordinary_successor(&feature).unwrap());
+        assert!(fully_applied_staged_validation_binding(&feature)
+            .unwrap()
+            .is_none());
+
+        feature.repair_pending = false;
+        feature.checkpoint = "review_3_pending".into();
+        feature.review_attempts = 3;
+        feature.review_status = "reviewing".into();
+        feature.review_pending = Some(ReviewPendingEvidence {
+            attempt: 3,
+            packet_sha256: "1".repeat(64),
+            validation_evidence_sha256: "2".repeat(64),
+            binding_version: 2,
+            batch_packet_sha256s: vec!["3".repeat(64)],
+        });
+        assert!(terminal_staged_review_has_ordinary_successor(&feature).unwrap());
+        assert!(fully_applied_staged_validation_binding(&feature)
+            .unwrap()
+            .is_none());
+
+        feature.status = "failed".into();
+        feature.checkpoint = "review_3_unavailable".into();
+        feature.review_status = "unavailable".into();
+        feature.review_pending = None;
+        feature.review_history.push(ReviewAttemptEvidence {
+            attempt: 3,
+            packet_sha256: "1".repeat(64),
+            validation_evidence_sha256: "2".repeat(64),
+            outcome: "unavailable".into(),
+            decision_sha256: None,
+            binding_version: 2,
+            batch_packet_sha256s: vec!["3".repeat(64)],
+            batch_receipt_sha256s: Vec::new(),
+            blocking_findings: Vec::new(),
+            summary: "fixture provider unavailable after ordinary successor".into(),
+        });
+        set_auto_repair_lifecycle(
+            &mut feature,
+            "held",
+            "fixture provider unavailable after ordinary successor",
+        )
+        .unwrap();
+        assert!(terminal_staged_review_has_ordinary_successor(&feature).unwrap());
+        assert!(fully_applied_staged_validation_binding(&feature)
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn terminal_staged_source_rejection_rejects_receipt_packet_and_feedback_drift() {
+        let (_directory, engine) = control_test_engine();
+        let project = engine.root.join("example");
+        let feature = terminal_staged_source_rejection_fixture(&engine);
+
+        let mut extra_receipt = feature.clone();
+        extra_receipt
+            .escalation_history
+            .push(extra_receipt.escalation_history[0].clone());
+        assert!(source_only_terminal_staged_review_repair_message(
+            &extra_receipt,
+            &extra_receipt.checkpoint,
+            &project,
+            extra_receipt.edits.as_deref().unwrap(),
+        )
+        .is_err());
+
+        let mut packet_drift = feature.clone();
+        packet_drift
+            .review_history
+            .last_mut()
+            .unwrap()
+            .packet_sha256 = "f".repeat(64);
+        assert!(source_only_terminal_staged_review_repair_message(
+            &packet_drift,
+            &packet_drift.checkpoint,
+            &project,
+            packet_drift.edits.as_deref().unwrap(),
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("packet no longer matches"));
+
+        let mut feedback_drift = feature.clone();
+        let feedback = source_only_terminal_staged_review_repair_message(
+            &feedback_drift,
+            &feedback_drift.checkpoint,
+            &project,
+            feedback_drift.edits.as_deref().unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        feedback_drift.message = feedback;
+        reserve_repair_attempt(&mut feedback_drift).unwrap();
+        feedback_drift.status = "running".into();
+        feedback_drift.checkpoint = "repair_1_applied".into();
+        feedback_drift.repair_history[0].prior_message.push('x');
+        assert!(!terminal_staged_review_has_ordinary_successor(&feedback_drift).unwrap());
+        assert!(fully_applied_staged_validation_binding(&feedback_drift).is_err());
+
+        let mut protected = feature.clone();
+        protected
+            .review_history
+            .last_mut()
+            .unwrap()
+            .blocking_findings[0]
+            .path = "tests/test_first.py".into();
+        assert!(source_only_terminal_staged_review_repair_message(
+            &protected,
+            &protected.checkpoint,
+            &project,
+            protected.edits.as_deref().unwrap(),
+        )
+        .unwrap()
+        .is_none());
+
+        let mut missing_receipt = feature.clone();
+        missing_receipt.escalation_history.pop();
+        assert!(source_only_terminal_staged_review_repair_message(
+            &missing_receipt,
+            &missing_receipt.checkpoint,
+            &project,
+            missing_receipt.edits.as_deref().unwrap(),
+        )
+        .is_err());
+
+        let mut reordered = feature.clone();
+        reordered.escalation_history.swap(0, 1);
+        assert!(source_only_terminal_staged_review_repair_message(
+            &reordered,
+            &reordered.checkpoint,
+            &project,
+            reordered.edits.as_deref().unwrap(),
+        )
+        .is_err());
+
+        let mut pending = feature.clone();
+        pending.review_pending = Some(ReviewPendingEvidence {
+            attempt: 3,
+            packet_sha256: "1".repeat(64),
+            validation_evidence_sha256: "2".repeat(64),
+            binding_version: 2,
+            batch_packet_sha256s: vec!["3".repeat(64)],
+        });
+        assert!(source_only_terminal_staged_review_repair_message(
+            &pending,
+            &pending.checkpoint,
+            &project,
+            pending.edits.as_deref().unwrap(),
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("pending work"));
+
+        for drift in ["policy", "epoch"] {
+            let mut malformed = feature.clone();
+            if drift == "policy" {
+                malformed.auto_repair_policy_revision = Some(8);
+            } else {
+                malformed.auto_repair_epoch = 0;
+            }
+            assert!(source_only_terminal_staged_review_repair_message(
+                &malformed,
+                &malformed.checkpoint,
+                &project,
+                malformed.edits.as_deref().unwrap(),
+            )
+            .is_err());
+        }
+    }
+
+    fn held_terminal_staged_review_fixture(engine: &Arc<Engine>) -> Feature {
+        let mut feature = terminal_staged_source_rejection_fixture(engine);
+        feature.message = format!(
+            "{}: Fully applied staged validation lineage cannot fall through to legacy validation",
+            TERMINAL_STAGED_REVIEW_RESUME_DEFECT_PREFIX
+        );
+        feature.last_failure_kind = "operational".into();
+        feature.review_status = "pending".into();
+        feature.review_summary = "Required ChatGPT Codex review has not started".into();
+        set_auto_repair_lifecycle(
+            &mut feature,
+            "held",
+            "fixture recursive recovered-validation quarantine failure",
+        )
+        .unwrap();
+        feature
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn exact_held_terminal_staged_review_resume_reserves_ordinary_repair() {
+        let (_directory, engine) = control_test_engine();
+        let feature = held_terminal_staged_review_fixture(&engine);
+        let proposal_before = serde_json::to_vec(&feature.escalation_proposal).unwrap();
+        let escalation_before = serde_json::to_vec(&feature.escalation_history).unwrap();
+        let review_before = serde_json::to_vec(&feature.review_history).unwrap();
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = true;
+                state.auto_ai_repair_max_escalations = 100;
+                state.auto_ai_repair_policy_revision = 7;
+                state.queue[0] = feature.clone();
+                Ok(())
+            })
+            .unwrap();
+
+        engine
+            .start(
+                Some(&feature.id),
+                Some(&feature.model_target),
+                Some(&feature.status),
+                Some(&feature.checkpoint),
+                None,
+            )
+            .unwrap();
+        let database = engine.database.lock().unwrap();
+        let resumed = &database.state.queue[0];
+        assert_eq!(resumed.status, "queued");
+        assert_eq!(resumed.checkpoint, "repair_1_reserved");
+        assert_eq!(resumed.repair_attempts, 1);
+        assert_eq!(
+            resumed.repair_history[0].prior_checkpoint,
+            "review_2_rejected"
+        );
+        assert!(resumed.repair_history[0]
+            .prior_message
+            .contains("source-second-review"));
+        assert_eq!(resumed.escalation_count, feature.escalation_count);
+        assert_eq!(
+            serde_json::to_vec(&resumed.escalation_proposal).unwrap(),
+            proposal_before
+        );
+        assert_eq!(
+            serde_json::to_vec(&resumed.escalation_history).unwrap(),
+            escalation_before
+        );
+        assert_eq!(
+            serde_json::to_vec(&resumed.review_history).unwrap(),
+            review_before
+        );
+        assert_eq!(resumed.auto_repair_epoch, feature.auto_repair_epoch + 1);
+    }
+
+    #[test]
+    fn held_terminal_staged_review_resume_rejects_effect_drift_without_mutation() {
+        let (_directory, engine) = control_test_engine();
+        let feature = held_terminal_staged_review_fixture(&engine);
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = true;
+                state.auto_ai_repair_max_escalations = 100;
+                state.auto_ai_repair_policy_revision = 7;
+                state.queue[0] = feature.clone();
+                Ok(())
+            })
+            .unwrap();
+        fs::write(
+            engine.root.join("example/unexpected.txt"),
+            b"external drift\n",
+        )
+        .unwrap();
+        let error = engine
+            .start(
+                Some(&feature.id),
+                Some(&feature.model_target),
+                Some(&feature.status),
+                Some(&feature.checkpoint),
+                None,
+            )
+            .unwrap_err();
+        assert!(error.to_string().contains("project effects changed"));
+        let database = engine.database.lock().unwrap();
+        let retained = &database.state.queue[0];
+        assert_eq!(retained.auto_repair_lifecycle, "held");
+        assert_eq!(retained.repair_attempts, 0);
+        assert_eq!(retained.checkpoint, "review_2_rejected");
+    }
+
     #[test]
     fn fully_applied_validation_effect_drift_quarantines_without_review_admission() {
         let (_directory, engine) = control_test_engine();
@@ -23689,6 +24931,210 @@ mod tests {
         let mut missing_publication = feature_with_abandoned_publication();
         missing_publication.publication = None;
         assert!(validate_and_recover_persisted_publication(&mut missing_publication).is_err());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn exact_pre_effect_publication_can_be_abandoned_without_github_runtime() {
+        let (_directory, engine) = control_test_engine();
+        let mut feature = feature_with_publication("failed");
+        feature.checkpoint = "publication_attention".into();
+        feature.message = "Reviewed original file is absent from the remote base".into();
+        let publication = feature.publication.as_mut().unwrap();
+        publication.status = "attention".into();
+        publication.stage = "prepare_candidate".into();
+        publication.message = feature.message.clone();
+        publication.events = vec![developer_publication::PublicationEvent {
+            sequence: 1,
+            kind: "intent".into(),
+            stage: "prepare_candidate".into(),
+            evidence_sha256: None,
+            summary: "Preparing an isolated checkout from the selected remote base".into(),
+        }];
+        publication.validate().unwrap();
+        let feature_id = feature.id.clone();
+        let retained_candidate = serde_json::to_value(&feature.publication_candidate).unwrap();
+        let retained_reviews = serde_json::to_value(&feature.review_history).unwrap();
+        let retained_repairs = serde_json::to_value(&feature.repair_history).unwrap();
+        let retained_escalation = serde_json::to_value(&feature.escalation_proposal).unwrap();
+        let retained_repair_attempts = feature.repair_attempts;
+        let retained_escalation_count = feature.escalation_count;
+        engine
+            .change(|state| {
+                state.queue[0] = feature.clone();
+                Ok(())
+            })
+            .unwrap();
+
+        let revision = engine.snapshot().unwrap()["revision"].as_u64().unwrap();
+        let projected = engine.snapshot().unwrap();
+        assert_eq!(projected["queue"][0]["can_abandon_publication"], true);
+        for busy in [
+            &engine.running,
+            &engine.planning_running,
+            &engine.escalation_running,
+            &engine.publication_running,
+            &engine.publication_connection_running,
+        ] {
+            busy.store(true, Ordering::SeqCst);
+            assert_eq!(
+                engine.snapshot().unwrap()["queue"][0]["can_abandon_publication"],
+                false
+            );
+            busy.store(false, Ordering::SeqCst);
+        }
+        assert!(engine
+            .abandon_publication(&feature_id, revision + 1, "publication_attention")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("revision changed"));
+
+        engine
+            .change(|state| {
+                state.emergency_paused = true;
+                Ok(())
+            })
+            .unwrap();
+        let paused_revision = engine.snapshot().unwrap()["revision"].as_u64().unwrap();
+        assert_eq!(
+            engine.snapshot().unwrap()["queue"][0]["can_abandon_publication"],
+            false
+        );
+        assert!(engine
+            .abandon_publication(&feature_id, paused_revision, "publication_attention")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("Emergency Pause"));
+        engine
+            .change(|state| {
+                state.emergency_paused = false;
+                Ok(())
+            })
+            .unwrap();
+        let ready_revision = engine.snapshot().unwrap()["revision"].as_u64().unwrap();
+
+        let mut drifted = feature.clone();
+        drifted.publication_candidate[0].content = "drifted".into();
+        assert!(!feature_can_abandon_publication(&drifted, false));
+        let mut running = feature.clone();
+        running.status = "running".into();
+        assert!(!feature_can_abandon_publication(&running, false));
+        let mut paused = feature.clone();
+        paused.status = "paused".into();
+        assert!(!feature_can_abandon_publication(&paused, false));
+        let mut destination_drift = feature.clone();
+        destination_drift
+            .publication
+            .as_mut()
+            .unwrap()
+            .repository_url = "https://github.com/other/example.git".into();
+        destination_drift
+            .publication
+            .as_mut()
+            .unwrap()
+            .repository_slug = "other/example".into();
+        assert!(!feature_can_abandon_publication(&destination_drift, false));
+        engine.shutdown.store(true, Ordering::SeqCst);
+        assert_eq!(
+            engine.snapshot().unwrap()["queue"][0]["can_abandon_publication"],
+            false
+        );
+        assert!(engine
+            .abandon_publication(&feature_id, ready_revision, "publication_attention")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("shutdown"));
+        engine.shutdown.store(false, Ordering::SeqCst);
+
+        let abandoned = engine
+            .abandon_publication(&feature_id, ready_revision, "publication_attention")
+            .await
+            .unwrap();
+        let abandoned_revision = abandoned["revision"].as_u64().unwrap();
+        assert_eq!(abandoned_revision, ready_revision + 1);
+        assert!(abandoned["queue"].as_array().unwrap().is_empty());
+        let stored = engine.database.lock().unwrap().state.queue[0].clone();
+        assert_eq!(stored.status, "removed");
+        assert_eq!(stored.checkpoint, "publication_abandoned");
+        assert_eq!(
+            serde_json::to_value(&stored.publication_candidate).unwrap(),
+            retained_candidate
+        );
+        assert_eq!(
+            serde_json::to_value(&stored.review_history).unwrap(),
+            retained_reviews
+        );
+        assert_eq!(
+            serde_json::to_value(&stored.repair_history).unwrap(),
+            retained_repairs
+        );
+        assert_eq!(
+            serde_json::to_value(&stored.escalation_proposal).unwrap(),
+            retained_escalation
+        );
+        assert_eq!(stored.repair_attempts, retained_repair_attempts);
+        assert_eq!(stored.escalation_count, retained_escalation_count);
+        let terminal = stored.publication.as_ref().unwrap();
+        assert_eq!(terminal.status, "abandoned");
+        assert_eq!(terminal.stage, "abandoned");
+        assert_eq!(terminal.events.len(), 2);
+        assert_eq!(terminal.events[1].evidence_sha256, None);
+        validate_and_recover_persisted_publication(&mut stored.clone()).unwrap();
+
+        let idempotent = engine
+            .abandon_publication(&feature_id, abandoned_revision, "publication_abandoned")
+            .await
+            .unwrap();
+        assert_eq!(idempotent["revision"], abandoned_revision);
+
+        let (_setup_directory, setup_engine) = control_test_engine();
+        setup_engine
+            .change(|state| {
+                state.queue[0] = feature.clone();
+                Ok(())
+            })
+            .unwrap();
+        setup_engine
+            .database
+            .lock()
+            .unwrap()
+            .github_setup
+            .begin_sign_in("9c49b38c-b593-43a6-bba6-86595152ec72")
+            .unwrap();
+        assert_eq!(
+            setup_engine.snapshot().unwrap()["queue"][0]["can_abandon_publication"],
+            false
+        );
+
+        let (_tool_directory, tool_engine) = control_test_engine();
+        tool_engine
+            .change(|state| {
+                state.queue[0] = feature.clone();
+                Ok(())
+            })
+            .unwrap();
+        tool_engine.tools.latch_stage_payload_retention();
+        assert_eq!(
+            tool_engine.snapshot().unwrap()["queue"][0]["can_abandon_publication"],
+            false
+        );
+    }
+
+    #[test]
+    fn publication_abandonment_projection_requires_every_control_gate_idle() {
+        assert!(publication_abandonment_control_is_idle(
+            false, false, false, false, false, false, false, false, false, false,
+        ));
+        for blocked in 0..10 {
+            let mut gates = [false; 10];
+            gates[blocked] = true;
+            assert!(!publication_abandonment_control_is_idle(
+                gates[0], gates[1], gates[2], gates[3], gates[4], gates[5], gates[6], gates[7],
+                gates[8], gates[9],
+            ));
+        }
     }
 
     fn bind_completed_feature_review(feature: &mut Feature, project: &Path) {
@@ -27070,6 +28516,100 @@ mod tests {
     }
 
     #[test]
+    fn repair_inventory_hashes_benign_dot_metadata_without_admitting_read_or_write_context() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().join("project");
+        fs::create_dir_all(project.join(".github/workflows")).unwrap();
+        fs::create_dir_all(project.join(".git")).unwrap();
+        fs::write(project.join(".gitattributes"), b"* text=auto eol=lf\n").unwrap();
+        fs::write(
+            project.join(".github/workflows/validate.yml"),
+            b"name: Validate\n",
+        )
+        .unwrap();
+        fs::write(project.join(".git/config"), b"[core]\n\tbare = false\n").unwrap();
+        fs::write(project.join(".env"), b"PASSWORD=owner-only\n").unwrap();
+        fs::write(project.join("app.py"), b"VALUE = 1\n").unwrap();
+        let project = fs::canonicalize(project).unwrap();
+
+        for path in [".gitattributes", ".github/workflows/validate.yml"] {
+            assert_eq!(
+                checked_inventory_read_path(&project, path).unwrap(),
+                project.join(path)
+            );
+            assert!(checked_path(&project, path).is_err());
+        }
+        for path in [
+            ".git/config",
+            ".env",
+            "../outside",
+            ".github/../../outside",
+            ".github/workflows:validate.yml",
+        ] {
+            assert!(
+                checked_inventory_read_path(&project, path).is_err(),
+                "{path}"
+            );
+        }
+        let dot_write = Edit {
+            path: ".gitattributes".into(),
+            content: "changed\n".into(),
+            before: Some(hash(b"* text=auto eol=lf\n")),
+            asset: None,
+            delete: false,
+            before_text: None,
+            publication_before: None,
+        };
+        assert!(apply_edit(&project, &dot_write).is_err());
+        assert_eq!(
+            fs::read(project.join(".gitattributes")).unwrap(),
+            b"* text=auto eol=lf\n"
+        );
+
+        let first = project_repair_context(&project, "validation failed").unwrap();
+        for (path, bytes) in [
+            (".gitattributes", b"* text=auto eol=lf\n".as_slice()),
+            (
+                ".github/workflows/validate.yml",
+                b"name: Validate\n".as_slice(),
+            ),
+        ] {
+            let entry = first
+                .inventory
+                .iter()
+                .find(|entry| entry.path_sha256 == hash(path.as_bytes()))
+                .unwrap();
+            assert_eq!(entry.path, None);
+            assert_eq!(entry.kind, "excluded_metadata");
+            assert_eq!(entry.byte_length, bytes.len() as u64);
+            assert_eq!(entry.content_sha256, hash(bytes));
+        }
+        assert!(first
+            .selected_portions
+            .iter()
+            .all(|portion| !inventory_metadata_path(&portion.path)));
+        assert!(first
+            .selected_portions
+            .iter()
+            .any(|portion| portion.path == "app.py"));
+
+        fs::write(project.join(".gitattributes"), b"* text=false\n").unwrap();
+        let changed = project_repair_context(&project, "validation failed").unwrap();
+        assert_ne!(first.manifest_sha256, changed.manifest_sha256);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            symlink(
+                project.join("app.py"),
+                project.join(".github/workflows/linked.yml"),
+            )
+            .unwrap();
+            assert!(checked_inventory_read_path(&project, ".github/workflows/linked.yml").is_err());
+        }
+    }
+
+    #[test]
     fn repair_stage_omits_sensitive_paths_and_secret_shaped_text() {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("source");
@@ -29478,6 +31018,299 @@ mod tests {
         assert!(feature.edits.is_some());
     }
 
+    fn current_rejected_review(
+        attempt: u32,
+        findings: Vec<DeveloperReviewFinding>,
+    ) -> ReviewAttemptEvidence {
+        ReviewAttemptEvidence {
+            attempt,
+            packet_sha256: "a".repeat(64),
+            validation_evidence_sha256: "b".repeat(64),
+            outcome: "rejected".into(),
+            decision_sha256: Some("c".repeat(64)),
+            binding_version: 2,
+            batch_packet_sha256s: vec!["d".repeat(64)],
+            batch_receipt_sha256s: vec!["e".repeat(64)],
+            blocking_findings: findings,
+            summary: "fixture rejected review".into(),
+        }
+    }
+
+    #[test]
+    fn protected_review_blocker_reserves_staged_escalation_without_synthetic_repairs() {
+        let (_directory, engine) = control_test_engine();
+        fs::create_dir_all(engine.root.join("example/tests")).unwrap();
+        fs::write(
+            engine.root.join("example/tests/test_app.py"),
+            b"assert True\n",
+        )
+        .unwrap();
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = true;
+                state.auto_ai_repair_max_escalations = 7;
+                state.auto_ai_repair_policy_revision = 9;
+                let feature = &mut state.queue[0];
+                feature.status = "failed".into();
+                feature.checkpoint = "review_2_rejected".into();
+                feature.last_failure_kind = "review_rejection".into();
+                feature.last_code_failure_summary = "fixture rejected review".into();
+                feature.repair_attempts = 1;
+                feature.repair_history = vec![RepairAttemptEvidence {
+                    attempt: 1,
+                    prior_checkpoint: "review_1_rejected".into(),
+                    prior_message: "first repair preserved for audit".into(),
+                    prior_edits: Vec::new(),
+                }];
+                feature.review_attempts = 2;
+                feature.review_history = vec![
+                    current_rejected_review(
+                        1,
+                        vec![DeveloperReviewFinding {
+                            finding_id: "first-review".into(),
+                            path: "src/app.py".into(),
+                            message: "First rejected implementation".into(),
+                        }],
+                    ),
+                    current_rejected_review(
+                        2,
+                        vec![
+                            DeveloperReviewFinding {
+                                finding_id: "source-blocker".into(),
+                                path: "src/app.py".into(),
+                                message: "Correct the implementation".into(),
+                            },
+                            DeveloperReviewFinding {
+                                finding_id: "test-blocker".into(),
+                                path: "tests/test_app.py".into(),
+                                message: "Add the missing boundary assertion".into(),
+                            },
+                        ],
+                    ),
+                ];
+                feature.auto_ai_repair_limit = Some(7);
+                feature.auto_repair_policy_revision = Some(9);
+                feature.auto_repair_epoch = 4;
+                set_auto_repair_lifecycle(feature, "running", "fixture protected review")
+            })
+            .unwrap();
+
+        let feature_id = engine.database.lock().unwrap().state.queue[0].id.clone();
+        let reserved = engine
+            .reserve_automatic_escalation(&feature_id)
+            .unwrap()
+            .expect("protected review blocker must use the staged lane");
+        assert_eq!(reserved.2, 4);
+        let database = engine.database.lock().unwrap();
+        let feature = &database.state.queue[0];
+        assert_eq!(feature.repair_attempts, 1);
+        assert_eq!(feature.repair_history.len(), 1);
+        assert_eq!(feature.escalation_count, 1);
+        assert_eq!(feature.checkpoint, "escalation_1_preparing");
+        assert_eq!(feature.escalation_evidence_reserved, 3);
+        assert_eq!(feature.review_evidence_reserved, 1);
+        let fallback: Value = serde_json::from_str(
+            &automatic_failure_prompt_json(
+                feature,
+                feature.escalation_proposal.as_ref().unwrap(),
+                &reserved.3,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let feedback = &fallback["latest_checkpoint_matched_rejected_review"];
+        assert_eq!(feedback["review_attempt"], 2);
+        assert_eq!(feedback["review_packet_sha256"], "a".repeat(64));
+        assert_eq!(feedback["validation_evidence_sha256"], "b".repeat(64));
+        assert_eq!(feedback["decision_sha256"], "c".repeat(64));
+        assert_eq!(
+            feedback["blocking_findings"][0]["finding_id"],
+            "source-blocker"
+        );
+        assert_eq!(feedback["blocking_findings"][0]["path"], "src/app.py");
+        assert_eq!(
+            feedback["blocking_findings"][0]["message"],
+            "Correct the implementation"
+        );
+        assert_eq!(
+            feedback["blocking_findings"][1]["finding_id"],
+            "test-blocker"
+        );
+        assert_eq!(
+            feedback["blocking_findings"][1]["path"],
+            "tests/test_app.py"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn protected_review_clean_hold_resume_preserves_ordinary_attempt_history() {
+        let (_directory, engine) = control_test_engine();
+        fs::create_dir_all(engine.root.join("example/tests")).unwrap();
+        fs::write(
+            engine.root.join("example/tests/test_app.py"),
+            b"assert True\n",
+        )
+        .unwrap();
+        engine
+            .change(|state| {
+                state.auto_ai_repair_enabled = true;
+                state.auto_ai_repair_max_escalations = 7;
+                state.auto_ai_repair_policy_revision = 9;
+                let feature = &mut state.queue[0];
+                feature.status = "failed".into();
+                feature.checkpoint = "staged_tool_candidate_quarantined".into();
+                feature.message = "A protected test or validation input changed during staged tool-assisted repair; no candidate files were applied".into();
+                feature.last_failure_kind = "operational".into();
+                feature.repair_attempts = 1;
+                feature.repair_history = vec![RepairAttemptEvidence {
+                    attempt: 1,
+                    prior_checkpoint: "review_1_rejected".into(),
+                    prior_message: "retained rejected review".into(),
+                    prior_edits: Vec::new(),
+                }];
+                feature.review_attempts = 1;
+                feature.review_history = vec![current_rejected_review(
+                    1,
+                    vec![DeveloperReviewFinding {
+                        finding_id: "test-blocker".into(),
+                        path: "tests/test_app.py".into(),
+                        message: "Correct the protected test".into(),
+                    }],
+                )];
+                feature.edits = None;
+                feature.repair_pending = false;
+                feature.auto_ai_repair_limit = Some(7);
+                feature.auto_repair_policy_revision = Some(9);
+                feature.auto_repair_epoch = 4;
+                set_auto_repair_lifecycle(feature, "held", "fixture clean staged hold")
+            })
+            .unwrap();
+        let before = engine.database.lock().unwrap().state.queue[0].clone();
+        let retained_history = serde_json::to_vec(&before.repair_history).unwrap();
+
+        engine
+            .start(
+                Some(&before.id),
+                Some(&before.model_target),
+                Some(&before.status),
+                Some(&before.checkpoint),
+                None,
+            )
+            .unwrap();
+
+        let database = engine.database.lock().unwrap();
+        let resumed = &database.state.queue[0];
+        assert_eq!(resumed.auto_repair_lifecycle, "running");
+        assert_eq!(resumed.last_failure_kind, "candidate_rejection");
+        assert_eq!(resumed.repair_attempts, 1);
+        assert_eq!(
+            serde_json::to_vec(&resumed.repair_history).unwrap(),
+            retained_history
+        );
+        assert!(!resumed.repair_pending);
+        assert_eq!(
+            automatic_staged_review_checkpoint(resumed),
+            Some("review_1_rejected")
+        );
+        assert!(engine.running.load(Ordering::SeqCst));
+        drop(database);
+
+        let reserved = engine
+            .reserve_automatic_escalation(&before.id)
+            .unwrap()
+            .expect("clean protected-review hold must resume into automatic escalation");
+        let database = engine.database.lock().unwrap();
+        let resumed = &database.state.queue[0];
+        assert_eq!(resumed.repair_attempts, 1);
+        assert_eq!(
+            serde_json::to_vec(&resumed.repair_history).unwrap(),
+            retained_history
+        );
+        assert_eq!(resumed.escalation_count, 1);
+        assert_eq!(resumed.checkpoint, "escalation_1_preparing");
+        let fallback: Value = serde_json::from_str(
+            &automatic_failure_prompt_json(
+                resumed,
+                resumed.escalation_proposal.as_ref().unwrap(),
+                &reserved.3,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            fallback["latest_checkpoint_matched_rejected_review"]["blocking_findings"][0]["path"],
+            "tests/test_app.py"
+        );
+    }
+
+    #[test]
+    fn protected_review_shortcut_rejects_source_only_and_invalid_complete_evidence() {
+        let (_directory, engine) = control_test_engine();
+        let project = fs::canonicalize(engine.root.join("example")).unwrap();
+        let mut feature = feature_with_status("failed");
+        feature.checkpoint = "review_1_rejected".into();
+        feature.last_failure_kind = "review_rejection".into();
+        feature.review_attempts = 1;
+        feature.review_history = vec![current_rejected_review(
+            1,
+            vec![DeveloperReviewFinding {
+                finding_id: "source-only".into(),
+                path: "src/app.py".into(),
+                message: "Correct the implementation".into(),
+            }],
+        )];
+        assert!(!review_rejection_requires_staged_automatic(
+            &feature,
+            &feature.checkpoint,
+            &project,
+        )
+        .unwrap());
+
+        feature.review_history[0]
+            .blocking_findings
+            .push(DeveloperReviewFinding {
+                finding_id: "test-blocker".into(),
+                path: "tests/test_app.py".into(),
+                message: "Add coverage".into(),
+            });
+        feature.review_history[0]
+            .blocking_findings
+            .push(DeveloperReviewFinding {
+                finding_id: "invalid-member".into(),
+                path: "../outside.py".into(),
+                message: "This malformed member cannot be ignored".into(),
+            });
+        assert!(review_rejection_requires_staged_automatic(
+            &feature,
+            &feature.checkpoint,
+            &project,
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("invalid finding path"));
+
+        feature.review_history[0] = current_rejected_review(
+            2,
+            vec![DeveloperReviewFinding {
+                finding_id: "test-blocker".into(),
+                path: "tests/test_app.py".into(),
+                message: "Add coverage".into(),
+            }],
+        );
+        assert!(review_rejection_requires_staged_automatic(
+            &feature,
+            &feature.checkpoint,
+            &project,
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("does not match its checkpoint"));
+        assert_eq!(
+            engine.database.lock().unwrap().state.queue[0].escalation_count,
+            0
+        );
+    }
+
     #[test]
     fn repair_admission_excludes_secrets_and_rejects_credential_like_outputs() {
         let directory = tempfile::tempdir().unwrap();
@@ -31453,9 +33286,11 @@ mod tests {
         let second = feature.escalation_proposal.as_ref().unwrap();
         assert_eq!(second_failure, failure);
         assert_eq!(second.diagnosis_sha256, hash(failure.as_bytes()));
-        assert!(automatic_failure_prompt_json(second, &second_failure)
-            .unwrap()
-            .contains(failure));
+        assert!(
+            automatic_failure_prompt_json(feature, second, &second_failure)
+                .unwrap()
+                .contains(failure)
+        );
     }
 
     #[test]

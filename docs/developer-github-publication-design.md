@@ -112,6 +112,21 @@ or deletes remote objects, replays publication, reports success, or automaticall
 starts later work. A retry against the current abandoned checkpoint is an idempotent
 observation of the local terminal state.
 
+A second exact abandonment shape covers preparation failures that provably preceded
+every remote-effect intent. The feature must be `failed / publication_attention`; the
+publication must be `attention / prepare_candidate`; its event ledger must contain
+only sequence 1, the canonical `prepare_candidate` intent with no evidence digest;
+and author, base, candidate tree, commit, PR number/URL, and merge SHA must all be
+absent. A private disposable checkout may contain a commit created before a crash or
+persistence failure; that unrecorded local state has no durable authority. Windows
+also revalidates the frozen candidate and approved review binding. Because this
+durable shape proves that no GitHub effect intent began, the owner action does not
+require Git or GitHub tooling and performs no remote observation. It appends a
+distinct evidence-free abandonment receipt and otherwise uses the same revision,
+checkpoint, pause, cancellation, atomic tombstone, evidence-retention, and idempotent
+retry contract. Any extra event, receipt, later stage, effect field, or binding drift
+rejects and leaves the attention barrier intact.
+
 A separate idempotent completion case applies when the persisted publication record
 is already valid `succeeded`/`complete` but the local feature promotion was not
 durable. Restart preserves that contradiction and Resume bypasses model execution,
@@ -171,7 +186,7 @@ checkpoint and are identified as `local_only`.
 | Explicit project connection, existing repository | Infer destination; silently create a public repository | Avoids uploading project code to an unintended destination. |
 | Frozen candidate and durable publication stages | Push whatever is in the project after review | Prevents stale review and duplicate or ambiguous effects. |
 | Reconcile interrupted publication explicitly | Automatic retry; regenerate the feature | Preserves existing PR and merge evidence without replaying uncertain effects. |
-| Abandon only an exact owner-closed, unmerged PR through read-only observation | Delete a branch; treat any failure as abandoned; silently retry | Clears a permanent queue barrier without remote mutation or loss of candidate, review, PR, check, and event evidence. |
+| Abandon only an exact owner-closed, unmerged PR or exact pre-remote-effect preparation record | Delete a branch; treat any failure as abandoned; silently retry | Clears a permanent queue barrier without remote mutation or loss of candidate, review, PR, check, and event evidence; preparation recovery additionally requires no durably recorded candidate and no remote-effect intent. |
 | Reverify an already-complete receipt before local promotion | Trust startup state; replay publication | Closes the receipt/promotion crash window through observation-only PR, ancestry, tree, and reviewed-path evidence. |
 | Rebind an approval hidden by one later no-review proposal marker | Treat any trailing history entry as a new review; search backward over arbitrary outcomes | Accepts only the retained unavailable manual proposal's exact provider-free marker and no-effect lineage, then rebinds the immediately preceding approval without deleting evidence. |
 | Observe exact-head check runs while GitHub registers workflows | Treat empty/subset output or `gh pr checks` exit 1 as terminal; retry publication | Keeps empty, subset, queued, and in-progress observations pending inside the fixed deadline while exact head/app identity and terminal failures remain fail-closed. |

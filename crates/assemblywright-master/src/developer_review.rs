@@ -2530,11 +2530,19 @@ const CODEX_ARGUMENTS: &[&str] = &[
     "--config",
     "features.shell_tool=false",
     "--config",
+    "features.sleep_tool=false",
+    "--config",
     "features.auth_elicitation=false",
     "--config",
     "features.memories=false",
     "--config",
     "features.chronicle=false",
+    "--config",
+    "features.in_app_chat=false",
+    "--config",
+    "features.in_app_dictation=false",
+    "--config",
+    "features.in_app_local_automation=false",
     "--config",
     "features.workspace_dependencies=false",
     "--config",
@@ -2589,20 +2597,6 @@ const CODEX_ARGUMENTS: &[&str] = &[
     "tools.web_search=false",
 ];
 
-// Codex 0.148.0 on the supported Windows host does not define these four
-// feature keys and --strict-config correctly rejects unknown keys. The bundled
-// macOS CLI defines them, so keep those surfaces explicitly disabled there.
-const NON_WINDOWS_CODEX_ARGUMENTS: &[&str] = &[
-    "--config",
-    "features.sleep_tool=false",
-    "--config",
-    "features.in_app_chat=false",
-    "--config",
-    "features.in_app_dictation=false",
-    "--config",
-    "features.in_app_local_automation=false",
-];
-
 fn codex_arguments(
     output_schema: &Path,
     working_directory: &Path,
@@ -2610,12 +2604,11 @@ fn codex_arguments(
     reasoning_effort: &str,
     image_paths: &[PathBuf],
 ) -> Vec<OsString> {
-    codex_arguments_for_platform_with_images(
+    codex_arguments_with_images(
         output_schema,
         working_directory,
         model,
         reasoning_effort,
-        cfg!(windows),
         image_paths,
     )
 }
@@ -2626,36 +2619,27 @@ fn codex_arguments_for_platform(
     working_directory: &Path,
     model: &str,
     reasoning_effort: &str,
-    windows: bool,
+    _windows: bool,
 ) -> Vec<OsString> {
-    codex_arguments_for_platform_with_images(
+    codex_arguments_with_images(
         output_schema,
         working_directory,
         model,
         reasoning_effort,
-        windows,
         &[],
     )
 }
 
-fn codex_arguments_for_platform_with_images(
+fn codex_arguments_with_images(
     output_schema: &Path,
     working_directory: &Path,
     model: &str,
     reasoning_effort: &str,
-    windows: bool,
     image_paths: &[PathBuf],
 ) -> Vec<OsString> {
     let mut arguments: Vec<OsString> = CODEX_ARGUMENTS
         .iter()
         .copied()
-        .chain(
-            (!windows)
-                .then_some(NON_WINDOWS_CODEX_ARGUMENTS)
-                .into_iter()
-                .flatten()
-                .copied(),
-        )
         .map(OsString::from)
         .chain(
             image_paths
@@ -4358,12 +4342,11 @@ exit 1
     #[test]
     fn codex_image_attachment_is_a_real_cli_argument_and_not_prompt_base64() {
         let image_path = PathBuf::from("/private/review/map.png");
-        let arguments = codex_arguments_for_platform_with_images(
+        let arguments = codex_arguments_with_images(
             Path::new("/private/review/schema.json"),
             Path::new("/private/review"),
             MODEL_ID,
             "high",
-            false,
             std::slice::from_ref(&image_path),
         );
         let image_index = arguments
@@ -4399,12 +4382,11 @@ exit 1
             .iter()
             .map(|image| image.path.clone())
             .collect::<Vec<_>>();
-        let arguments = codex_arguments_for_platform_with_images(
+        let arguments = codex_arguments_with_images(
             Path::new("/private/review/schema.json"),
             Path::new("/private/review"),
             MODEL_ID,
             "high",
-            false,
             &paths,
         );
         let attached = arguments
@@ -4570,16 +4552,18 @@ exit 1
             "high",
             true,
         );
-        for unavailable in [
+        for required_on_both in [
             "features.sleep_tool=false",
             "features.in_app_chat=false",
             "features.in_app_dictation=false",
             "features.in_app_local_automation=false",
         ] {
-            assert!(!windows_arguments
+            assert!(windows_arguments
                 .iter()
-                .any(|argument| argument == unavailable));
-            assert!(arguments.iter().any(|argument| argument == unavailable));
+                .any(|argument| argument == required_on_both));
+            assert!(arguments
+                .iter()
+                .any(|argument| argument == required_on_both));
         }
         for required_on_both in [
             "features.shell_tool=false",
@@ -4629,6 +4613,36 @@ exit 1
             "gpt-5.3-codex-spark"
         );
         assert_eq!(schema["properties"]["reasoning_effort"]["const"], "medium");
+    }
+
+    #[test]
+    fn tool_feature_disables_are_identical_across_platforms() {
+        let output_schema = Path::new("review/developer-review-output-schema.json");
+        let working_directory = Path::new("review");
+        let non_windows_arguments =
+            codex_arguments_for_platform(output_schema, working_directory, MODEL_ID, "high", false);
+        let windows_arguments =
+            codex_arguments_for_platform(output_schema, working_directory, MODEL_ID, "high", true);
+
+        assert_eq!(windows_arguments, non_windows_arguments);
+        for disabled_feature in [
+            "features.sleep_tool=false",
+            "features.in_app_chat=false",
+            "features.in_app_dictation=false",
+            "features.in_app_local_automation=false",
+        ] {
+            assert_eq!(
+                windows_arguments
+                    .windows(2)
+                    .filter(|pair| pair[0] == "--config" && pair[1] == disabled_feature)
+                    .count(),
+                1,
+                "{disabled_feature} must be configured false exactly once"
+            );
+            assert!(!windows_arguments.iter().any(|argument| {
+                argument == disabled_feature.replace("=false", "=true").as_str()
+            }));
+        }
     }
 
     #[test]

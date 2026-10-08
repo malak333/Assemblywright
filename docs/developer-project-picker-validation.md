@@ -91,6 +91,18 @@ before returning a snapshot. Packaged-process, Swift, API, Windows and publicati
 proofs are recorded separately; none establish signing, notarization or general
 production readiness.
 
+## Pre-remote-effect publication abandonment
+
+If a connected plain workspace contains an unpublished original file that is absent
+from the selected remote base, candidate preparation stops before durably recording
+a candidate tree or commit and before any push/PR intent. A disposable private
+checkout may still contain unrecorded local work. An explicit owner-bound
+abandon action is available only when the retained publication ledger is the single
+canonical preparation intent and every author/base/tree/commit/PR/merge field is
+absent. The action preserves the frozen candidate, approval, reviews, counters, and
+repair/escalation history in the `publication_abandoned` tombstone. It does not make
+the failed feature a publication success or refresh the project from the remote.
+
 ## Successful installed autonomous pipeline proof
 
 Feature `efd43e66-fd89-44d4-8940-1392a6e69e66` in `aw-fft-demo4` completed real

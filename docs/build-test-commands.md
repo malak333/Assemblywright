@@ -117,6 +117,20 @@ and [`developer-github-setup-design.md`](developer-github-setup-design.md).
 
 ## Developer AI settings
 
+The supervised planner/reviewer runtime also requires an exact executable catalog
+check after a CLI update:
+
+```sh
+python3 -B scripts/developer-review-catalog-e2e.py --codex-executable /absolute/path/to/codex
+```
+
+Use native Windows Python and the configured `codex.exe` path on MIKE-PC. The
+current deployed baseline is official CLI 0.160.1. Both platform profiles disable
+the same tool features under strict configuration; unsupported legacy CLIs fail
+closed. The loopback catalog proof requires `tools=[]` without a real model call.
+It is separate from a live account/model structured-response check and installed
+pipeline completion. See [runtime recovery](developer-codex-runtime-recovery-validation.md).
+
 Developer AI settings use native Swift decoding and selection tests plus a real
 runner process, HTTP persistence, and provider-binding E2E:
 
@@ -147,7 +161,36 @@ cargo build -p assemblywright-master --bin assemblywright-developer
 swift test --disable-sandbox --package-path apps/mac --filter 'DeveloperRunnerTests|DeveloperRunnerClientTests|DeveloperRepairEscalationTests'
 python3 -B scripts/developer-runner-auto-repair-e2e.py --binary target/debug/assemblywright-developer
 python3 -B scripts/developer-runner-scalable-repair-e2e.py --binary target/debug/assemblywright-developer
+python3 -B scripts/developer-runner-windows-inventory-e2e.py --binary target/debug/assemblywright-developer
 ```
+
+For the bounded protected-review route alone, add `--protected-review-only` to
+the auto-repair harness. It proves a native HTTP/process JSON-proposal fallback:
+an exact v2 protected-test rejection skips ordinary attempts, enters one automatic
+escalation, revalidates its candidate and receives fresh independent fixture
+review. It does not prove a disposable OpenCode stage or real model inference.
+Run the same script with the native reviewer fixture on Windows; live Windows
+staged-tool execution requires separate stage-binding and mutation evidence.
+
+The staged-to-ordinary lineage regression uses the pinned OpenCode process and
+real HTTP, filesystem and SQLite boundaries with fixture model responses:
+
+```sh
+python3 -B scripts/developer-runner-staged-repair-e2e.py --binary target/debug/assemblywright-developer
+cargo test -p assemblywright-master --bin assemblywright-developer terminal_staged -- --nocapture
+```
+
+It forces protected review rejection, staged automatic application, a second
+source-only rejection, ordinary successor repair, fresh validation and a third
+approved review. It asserts the staged application-state binding and immutable
+receipt ancestry. The canonical `developer_workflow_e2e` test includes this
+harness. On Windows, first build `developer_review_fixture` with
+`cargo build -p assemblywright-master --example developer_review_fixture`, then
+pass the runner's native `.exe` path through `--binary` and set
+`ASSEMBLYWRIGHT_DEVELOPER_REVIEW_FIXTURE` to the reviewer fixture's `.exe` path.
+`--opencode-executable` selects an existing pinned runtime; omission provisions
+the fixture runtime. This harness does not establish real model inference or
+live GitHub publication.
 
 Focused current-snapshot recovery checks can be run with:
 
@@ -184,6 +227,21 @@ hard cap and asserts there is no 101st. These local/native checks do not prove
 Windows-native or installed-app behavior, rendered visual placement, signing or
 notarization, hosted checks, live-device QA, or production readiness; each
 remains separately recorded evidence.
+
+The inventory harness verifies that benign repository dot metadata such as
+`.gitattributes` and `.github/workflows/validate.yml` contributes exact path and
+content digests to the complete repair manifest while its names and bytes remain
+outside inventory-selected model portions. Separate Full Access project tools
+retain their existing owner-configured reading authority. The harness also proves
+the model call is reached and the
+metadata remains byte-for-byte unchanged. Sensitive paths retain redacted
+constant digests, and the write/apply policy continues to reject dot components.
+The canonical Rust E2E supplies the native reviewer fixture on Windows. For a
+direct native Windows run, prebuild the runner and reviewer fixture, then set
+`ASSEMBLYWRIGHT_DEVELOPER_REVIEW_FIXTURE` to the same-checkout
+`target\debug\examples\developer_review_fixture.exe` before running the script
+with `--binary target\debug\assemblywright-developer.exe`. This is a disposable
+local process/HTTP proof, not installed deployment or live-provider evidence.
 
 The separate scalable-repair harness uses a disposable project larger than the
 previous context ceiling, automatic repair across 49 cumulative source files,
