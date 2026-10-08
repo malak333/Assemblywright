@@ -114,3 +114,49 @@ The runner was idle afterward, with no unresolved publication barrier.
 This proves the configured pipeline completed this bounded feature. It does not
 establish that arbitrary future model tasks cannot fail. The picker repair,
 retained-failure recovery and line-ending setup are independently described above.
+
+## Closeout verdicts and proof boundaries
+
+- Documentation and safety: design, safety rules, setup/publication contracts and
+  canonical test commands were updated with the implementation. Independent
+  high-risk review approved the complete diff and integration. Authentication,
+  exact candidate bindings, required checks, cancellation and emergency pause
+  remain enforced; no security bypass was needed for the working proof.
+- Durable knowledge: the knowledge base now records local-project discovery,
+  exact closed-unmerged abandonment, Windows checkout line endings and the
+  successful bounded installed publication proof.
+- Unit workflow: `unit-testing-test-generate` was applied to the Rust creation,
+  parser, exact PR binding and persisted tombstone invariants, plus ten focused
+  Swift GitHub snapshot/selection tests. Windows-specific creation and recovery
+  unit tests passed separately.
+- E2E workflow: `e2e-testing` was applied using native Rust/Swift, process, HTTP,
+  Windows filesystem and real bare-Git boundaries. Setup/publication fixture E2Es
+  passed on Mac and Windows; the installed demo4 run separately used real Codex,
+  the owner-selected Windows model and live GitHub. No browser matrix was needed
+  for this native-app change.
+- Deployment: the supported production build, exact input/executable hash
+  checks, retained backups, healthy connection, project list, preserved recovery
+  record and idle/unpaused terminal state were verified. Visual GUI, signing,
+  notarization and broad production readiness remain unverified.
+- Source publication: the owner requested a normal feature-branch PR and merge.
+  The frozen final source head must pass the hosted Release local gate,
+  Production Windows runner and Protocol/master/identity/mTLS/SCM checks before
+  merge. The authoritative Windows Git checkout must then fast-forward to the
+  published main SHA; docs-only closeout edits do not require a different binary.
+
+The local native relay requires a real executable at the repository's expected
+`target/debug` path. An external Cargo target first left that path absent; a
+symlink alias then failed the native code-identity path binding. A regular-file
+copy of the freshly built agent from this same checkout passed the focused native
+relay E2E, including transfer, cancellation and cleanup. Packaging also requires the default Cargo package path. The final full gate
+uses the default Cargo target directory populated only with this checkout's own
+freshly built artifacts; earlier external-target attempts are not accepted as
+full-gate passes. No signature or identity check was weakened.
+
+Canonical validation verdict: PASS. `./scripts/release-local.sh` completed at
+`2026-10-08T00:11:08Z` in this isolated checkout with the default Cargo target
+layout. It passed formatting, Clippy, workspace/ignored tests, native workflow and
+relay recovery, build/connection tests, package/distribution checks, evidence
+contracts, partitioned native AppKit/bridge/remaining Swift suites and Swift build.
+The gate's final marker was `Assemblywright local release verification: ok`.
+The final documentation drift check and `git diff --check` passed separately.
