@@ -19,8 +19,20 @@ separate.
   both manual and automated escalations.
 - Auto AI repair operates independently of Auto-run. Enabling it on an eligible
   failed feature starts repair immediately.
-- Each eligible failure first receives the existing three ordinary repair
-  attempts. Automatic AI escalations then continue until success or the limit.
+- Eligible failures use the existing three ordinary repair attempts before
+  automatic escalation. A fresh, exactly bound v2 review rejection with a
+  protected test or validation-input blocker instead enters automatic escalation
+  directly; ordinary repair cannot apply those changes. Windows uses the existing
+  disposable tool stage when available; other targets retain the frozen JSON
+  proposal path. The validated
+  review evidence and project binding are rechecked before reservation. Stale,
+  incomplete or malformed evidence holds the loop without spending an attempt.
+- Explicit Resume from an already supported clean, effect-free staged-tool hold
+  may recover the exact prior rejected-review checkpoint from repair history.
+  Valid protected blockers then take automatic escalation without another
+  ordinary reservation. Ambiguous-effects quarantine remains ineligible. Both
+  tool-stage and JSON-proposal prompts retain complete validated review findings
+  and packet, validation and decision digests.
 - Only validation failures and independent Codex review rejections trigger
   another repair. No-op and duplicate candidates still consume the budget.
 - Repairs are immediate and serial, use the feature's saved model computer, and
@@ -116,8 +128,11 @@ When validation fails or Codex rejects a candidate, Windows evaluates the featur
 against exact durable state:
 
 1. If automation is disabled, retain the normal failed state.
-2. If fewer than three ordinary repair attempts have been reserved, reserve and
-   run the next existing ordinary repair.
+2. Validate the latest exact review evidence when this failure is a fresh review
+   rejection. If it contains a protected test or validation-input blocker, use
+   automatic escalation without inventing ordinary attempts. Otherwise, if
+   fewer than three ordinary attempts have been reserved, reserve and run the
+   next ordinary repair. Invalid review evidence stops before inference.
 3. Otherwise compare cumulative `escalation_count` with the feature snapshot. If
    exhausted, enter `limit_reached`, stop automatic work, and block Auto-run
    advancement.

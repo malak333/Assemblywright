@@ -188,7 +188,7 @@ enum DeveloperGitHubPresentation {
     case "pending": return "GitHub publication pending"
     case "running": return stageLabel(feature.publicationStage)
     case "attention": return "GitHub publication needs attention"
-    case "abandoned": return "Publication abandoned · pull request closed without merge"
+    case "abandoned": return "Publication abandoned · evidence preserved"
     case "succeeded":
       return hasVerifiedMergeEvidence(feature) ? "Merged on GitHub"
         : "GitHub publication result could not be verified"
@@ -227,6 +227,10 @@ enum DeveloperGitHubPresentation {
     default: return "GitHub publication in progress"
     }
   }
+
+  static let abandonmentHelp = "Windows verifies that this exact retained publication is safe to remove, preserves its candidate and history, and performs no new remote write."
+
+  static let abandonmentConfirmation = "Windows proceeds only after the backend verifies that this exact retained publication is safe to remove. For a retained pull request, Windows must observe it closed and unmerged with its reviewed head unchanged. For a preparation failure, durable evidence must show that no candidate commit was recorded and no branch-push, pull-request, or remote-effect intent began. Candidate and publication history remain preserved; this action does not publish, merge, close, or delete remote content."
 
   static func startConfirmation(feature: DeveloperRunnerFeature,
     connection: DeveloperGitHubConnection?) -> String {
@@ -281,7 +285,7 @@ struct DeveloperGitHubFeatureStatus: View {
         if feature.publicationStatus == "attention" && feature.canAbandonPublication == true {
           Button("Abandon…", role: .destructive) { confirmingAbandonment = true }
             .disabled(runner.sending || runner.snapshot?.githubPublicationUnresolved != true)
-            .help("Observe that the exact retained pull request is closed and unmerged, preserve its evidence, and remove this feature from the active queue.")
+            .help(DeveloperGitHubPresentation.abandonmentHelp)
             .accessibilityIdentifier("developer-abandon-publication-\(feature.id)")
         }
       }
@@ -301,13 +305,13 @@ struct DeveloperGitHubFeatureStatus: View {
     .font(.caption)
     .confirmationDialog("Abandon this publication?", isPresented: $confirmingAbandonment,
       titleVisibility: .visible) {
-      Button("Abandon closed pull request", role: .destructive) {
+      Button("Abandon publication", role: .destructive) {
         guard let revision = runner.snapshot?.revision else { return }
         Task { try? await runner.abandonPublication(feature, expectedRevision: revision) }
       }
       Button("Cancel", role: .cancel) {}
     } message: {
-      Text("Windows proceeds only after observing that this exact retained pull request is closed and unmerged with its reviewed head unchanged. It preserves publication evidence and removes the feature from the active queue. It does not close or delete the pull request or branch, publish, or merge anything.")
+      Text(DeveloperGitHubPresentation.abandonmentConfirmation)
     }
   }
 }

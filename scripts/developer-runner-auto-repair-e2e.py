@@ -40,7 +40,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", default=str(
         Path(__file__).resolve().parents[1] / "target/debug/assemblywright-developer"))
-    binary = str(Path(parser.parse_args().binary).resolve())
+    parser.add_argument("--protected-review-only", action="store_true",
+        help="run only the protected rejected-review automatic escalation proof")
+    args = parser.parse_args()
+    binary = str(Path(args.binary).resolve())
     lock = threading.Lock()
     calls = []
     chat_completions = []
@@ -57,6 +60,15 @@ def main():
                         "import json\nfrom pathlib import Path\nimport sys\n"
                         "sys.path.insert(0,str(Path(__file__).parents[1]))\nimport app\n"
                         "assert app.VALUE == json.loads(Path('config.json').read_text())['expected']\n"},
+                ]
+            if marker == "review-rejection":
+                return [
+                    {"path": "app.py", "content": "VALUE=0\n"},
+                    {"path": "tests/test_app.py", "content":
+                        "# VALUE = 0\n"
+                        "from pathlib import Path\nimport sys\n"
+                        "sys.path.insert(0,str(Path(__file__).parents[1]))\nimport app\n"
+                        "assert app.VALUE == 0\n"},
                 ]
             return [
                 {"path": "app.py", "content": "VALUE = 0\n"},
@@ -84,7 +96,7 @@ def main():
                     "assert config['repaired'] and app.VALUE == config['expected'] == 7\n"},
             ]
         if marker == "review-rejection":
-            value = 0 if attempt == 1 else 1
+            value = 1
             return [
                 {"path": "app.py", "content": f"VALUE = {value}\n"},
                 {"path": "tests/test_app.py", "content":
@@ -115,7 +127,9 @@ def main():
             with lock:
                 calls.append({"marker": marker, "phase": phase, "attempt": attempt,
                     "validation": next((line for line in prompt.splitlines()
-                        if "validation command:" in line.lower()), "")})
+                        if "validation command:" in line.lower()), ""),
+                    "protected_review_finding": "tests/test_app.py" in prompt
+                        and "Implementation must set VALUE to 1" in prompt})
             if phase == "automatic" and marker in entered and attempt == 1:
                 entered[marker].set()
                 released[marker].wait(20)
@@ -323,6 +337,43 @@ def main():
             return sum(json.loads(line).get("kind") == "review"
                 for line in evidence.read_text().splitlines())
 
+        def prove_protected_review_automatic_route():
+            reviews_before = reviewer_call_count()
+            review_id = start_feature("review-rejection", validation,
+                "Implement VALUE 1 [fixture:reject-zero] review-rejection")
+            reviewed = wait(lambda state: not state["running"] and
+                feature(state, review_id)["status"] == "succeeded", 50)
+            reviewed_feature = feature(reviewed, review_id)
+            review_calls = [call for call in calls
+                if call["marker"] == "review-rejection"]
+            assert reviewed_feature["repair_attempts"] == 0, (
+                reviewed_feature, review_calls)
+            assert reviewed_feature["escalation_count"] == 1
+            assert reviewed_feature["review_attempts"] == 2
+            assert reviewed_feature["review_status"] == "approved"
+            assert [call["phase"] for call in review_calls] == ["initial", "automatic"]
+            assert review_calls[1]["protected_review_finding"], review_calls
+            assert reviewer_call_count() == reviews_before + 2
+
+            durable_reviewed = durable_feature(review_id)
+            review_history = durable_reviewed["review_history"]
+            assert [item["outcome"] for item in review_history] == ["rejected", "approved"]
+            rejected_review, approved_review = review_history
+            assert rejected_review["binding_version"] == 2
+            assert rejected_review["decision_sha256"]
+            assert rejected_review["batch_packet_sha256s"]
+            assert len(rejected_review["batch_receipt_sha256s"]) == len(
+                rejected_review["batch_packet_sha256s"])
+            assert rejected_review["blocking_findings"][0]["path"] == \
+                "tests/test_app.py"
+            assert approved_review["binding_version"] == 2
+            assert approved_review["decision_sha256"]
+            assert approved_review["validation_evidence_sha256"]
+            assert (projects / "review-rejection/app.py").read_text() == "VALUE = 1\n"
+            assert "assert app.VALUE == 1" in (
+                projects / "review-rejection/tests/test_app.py").read_text()
+            return review_id
+
         def remove(feature_id):
             control("remove", id=feature_id)
 
@@ -332,6 +383,15 @@ def main():
             assert initial["auto_ai_repair_enabled"] is False
             assert initial["auto_ai_repair_max_escalations"] == 100
             assert initial["auto_ai_repair_policy_revision"] == 0
+            if args.protected_review_only:
+                policy(True, 4, initial)
+                prove_protected_review_automatic_route()
+                print(json.dumps({
+                    "native_platform": sys.platform,
+                    "protected_review_routes_directly_to_automatic_escalation": True,
+                    "protected_review_automatic_candidate_revalidated_and_freshly_reviewed": True,
+                }, sort_keys=True))
+                return
             rejected("auto-ai-repair", {"enabled": True, "max_escalations": 3,
                 "expected_revision": initial["revision"]}, codes=(401,), credential="invalid")
             for invalid in (0, 101):
@@ -383,17 +443,7 @@ def main():
                 "initial", "ordinary", "ordinary", "ordinary", "automatic"]
             assert all(validation in call["validation"] for call in scenario_calls)
 
-            review_id = start_feature("review-rejection", validation,
-                "Implement VALUE 1 [fixture:reject-zero] review-rejection")
-            reviewed = wait(lambda state: not state["running"] and
-                feature(state, review_id)["status"] == "succeeded", 50)
-            reviewed_feature = feature(reviewed, review_id)
-            assert reviewed_feature["repair_attempts"] == 3
-            assert reviewed_feature["escalation_count"] == 2
-            assert reviewed_feature["review_attempts"] == 2
-            assert reviewed_feature["review_status"] == "approved"
-            assert any(item["outcome"] == "rejected"
-                for item in durable_feature(review_id)["review_history"])
+            prove_protected_review_automatic_route()
 
             policy(False, 4)
             policy(True, 2)
@@ -843,7 +893,8 @@ def main():
                 "enable_after_existing_failure_starts_authorized_repair": True,
                 "ordinary_three_then_automatic_escalation": True,
                 "source_test_config_and_immutable_validation": True,
-                "review_rejection_continues": True,
+                "protected_review_routes_directly_to_automatic_escalation": True,
+                "protected_review_automatic_candidate_revalidated_and_freshly_reviewed": True,
                 "configured_cap_stops_without_extra_call": True,
                 "no_op_continues_to_absolute_cap_without_101st_call": True,
                 "app_independent_polling": True,

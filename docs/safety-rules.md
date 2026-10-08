@@ -43,6 +43,17 @@ PR, check, and event history, append one abandonment receipt, tombstone the feat
 and clear the barrier atomically. Do not close or delete a PR or branch, retry an
 effect, infer success, or let Stop, Emergency Pause, shutdown, or restart convert an
 incomplete observation into abandonment.
+An exact pre-remote-effect exception applies only to `failed / publication_attention` with
+publication `attention / prepare_candidate`, the one canonical sequence-1
+preparation intent, and no author, base SHA, candidate tree, commit, PR identity,
+merge SHA, extra event, or receipt. The shared projection/action predicate validates
+the frozen candidate and review binding before offering or accepting abandonment.
+It appends a distinct evidence-free abandonment receipt and retains every candidate,
+validation, review, repair, and escalation record. Any later-stage or ambiguous
+shape remains held; pause, shutdown, cancellation, revision, and checkpoint checks
+remain fail closed. Absence of durable candidate fields does not prove that the
+disposable private checkout lacks an unrecorded local commit; it proves that no such
+commit has durable authority and that no remote-effect intent began.
 
 The accepted [Developer chat history design](developer-chat-history-design.md)
 adds Windows-owned conversations within each Developer project. Chat IDs and

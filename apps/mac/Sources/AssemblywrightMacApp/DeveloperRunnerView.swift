@@ -781,7 +781,7 @@ final class DeveloperRunnerModel: ObservableObject {
         updated.revision >= (snapshot?.revision ?? expectedRevision) else {
         throw NSError(domain: "Developer GitHub", code: 3,
           userInfo: [NSLocalizedDescriptionKey:
-            "Windows did not confirm exact closed and unmerged pull request abandonment. Reload before continuing."])
+            "Windows did not confirm exact safe publication abandonment. Reload before continuing."])
       }
       snapshot = updated
       actionError = nil

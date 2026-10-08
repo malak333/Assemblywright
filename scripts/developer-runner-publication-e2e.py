@@ -38,7 +38,10 @@ def main():
             prompt = request["messages"][1]["content"]
             assert "github.com/owner/project" not in prompt.lower(), prompt
             assert "gh_token" not in prompt.lower(), prompt
-            content = json.dumps({"files": [{"path": "app.py", "content": "VALUE = 1\n"}]})
+            files = [{"path": "app.py", "content": "VALUE = 1\n"}]
+            if "[publication:pre-effect-abandon]" in prompt:
+                files.append({"path": "README.md", "content": "reviewed candidate\n"})
+            content = json.dumps({"files": files})
             body = json.dumps({"choices": [{"message": {"content": content}, "finish_reason": "stop"}]}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -181,6 +184,20 @@ def main():
                     pass
                 time.sleep(0.05)
             raise AssertionError("Timed out: " + json.dumps(snapshot) + "\n" + (root / "runner.log").read_text(errors="replace"))
+
+        def publication_controls_idle(snapshot):
+            return (
+                not snapshot["emergency_paused"]
+                and not snapshot["running"]
+                and not snapshot["planning_running"]
+                and not snapshot["escalation_running"]
+                and not snapshot["chat_running"]
+                and not snapshot["tools_running"]
+                and not snapshot["tools_need_attention"]
+                and not snapshot["github_setup_busy"]
+                and not snapshot["github_setup_unresolved"]
+                and not snapshot["github_publication_running"]
+            )
 
         def reconcile_after_stop(feature_id, timeout=10):
             deadline = time.monotonic() + timeout
@@ -529,7 +546,7 @@ def main():
             waiting_feature = next(item for item in waiting["queue"] if item["id"] == abandoned_id)
             exact_head = waiting_feature["publication_commit_sha"]
             control("stop")
-            attention = wait(lambda value: not value["github_publication_running"] and next(
+            attention = wait(lambda value: publication_controls_idle(value) and next(
                 item for item in value["queue"] if item["id"] == abandoned_id
             )["checkpoint"] == "publication_attention")
             attention_feature = next(item for item in attention["queue"] if item["id"] == abandoned_id)
@@ -665,6 +682,124 @@ def main():
             assert restarted_record["checkpoint"] == "publication_abandoned"
             assert restarted_record["publication"] == publication_after
 
+            # A preparation failure may be abandoned without GitHub tooling only
+            # when no candidate commit was durably recorded and no push, PR, or
+            # remote-effect intent began. A private disposable checkout may still
+            # contain unrecorded local work. README.md exists in the local baseline
+            # but not the exact remote base, reproducing the preparation mismatch.
+            pre_effect_id = enqueue("connected", "[publication:pre-effect-abandon]")
+            (projects / "connected" / "README.md").write_text("unpublished local baseline\n")
+            control("start")
+            pre_effect_attention = wait(lambda value: (
+                publication_controls_idle(value)
+                and next(item for item in value["queue"] if item["id"] == pre_effect_id)["checkpoint"]
+                    == "publication_attention"
+            ))
+            pre_effect_feature = next(
+                item for item in pre_effect_attention["queue"] if item["id"] == pre_effect_id
+            )
+            assert pre_effect_feature["status"] == "failed"
+            assert pre_effect_feature["publication_status"] == "attention"
+            assert pre_effect_feature["publication_stage"] == "prepare_candidate"
+            assert pre_effect_feature["publication_commit_sha"] is None
+            assert pre_effect_feature["publication_pr_url"] is None
+            assert pre_effect_feature["can_abandon_publication"] is True
+            with closing(sqlite3.connect(data / "developer.sqlite3")) as connection_db:
+                durable_pre_effect = json.loads(connection_db.execute(
+                    "SELECT state FROM developer_state WHERE id=1"
+                ).fetchone()[0])
+            pre_effect_before = next(
+                item for item in durable_pre_effect["queue_v13"] if item["id"] == pre_effect_id
+            )
+            publication_pre_effect = pre_effect_before["publication"]
+            for field in (
+                "author_name", "author_email", "base_sha", "candidate_tree_sha", "commit_sha",
+                "pr_number", "pr_url", "merged_sha",
+            ):
+                assert publication_pre_effect[field] is None, (field, publication_pre_effect)
+            assert publication_pre_effect["events"] == [{
+                "sequence": 1, "kind": "intent", "stage": "prepare_candidate",
+                "evidence_sha256": None,
+                "summary": "Preparing an isolated checkout from the selected remote base",
+            }]
+            preserved = {
+                key: pre_effect_before[key]
+                for key in (
+                    "publication_candidate", "review_history", "repair_history",
+                    "escalation_history", "repair_attempts", "escalation_count",
+                )
+            }
+            rejected("publication", dict(
+                action="abandon", feature_id=pre_effect_id,
+                expected_revision=pre_effect_attention["revision"] + 1,
+                expected_checkpoint="publication_attention",
+            ))
+            rejected("publication", dict(
+                action="abandon", feature_id=pre_effect_id,
+                expected_revision=pre_effect_attention["revision"],
+                expected_checkpoint="publication_reconciling",
+            ))
+            control("emergency")
+            emergency = api()
+            assert emergency["emergency_paused"] is True
+            assert next(item for item in emergency["queue"] if item["id"] == pre_effect_id)[
+                "can_abandon_publication"
+            ] is False
+            rejected("publication", dict(
+                action="abandon", feature_id=pre_effect_id,
+                expected_revision=emergency["revision"],
+                expected_checkpoint="publication_attention",
+            ))
+            control("clear_emergency")
+            ready_to_abandon = api()
+            calls_before_pre_effect_abandonment = calls_path.read_text().splitlines()
+            pre_effect_abandoned = api("publication", dict(
+                action="abandon", feature_id=pre_effect_id,
+                expected_revision=ready_to_abandon["revision"],
+                expected_checkpoint="publication_attention",
+            ))
+            assert pre_effect_abandoned["revision"] == ready_to_abandon["revision"] + 1
+            assert pre_effect_abandoned["github_publication_unresolved"] is False
+            assert all(item["id"] != pre_effect_id for item in pre_effect_abandoned["queue"])
+            assert calls_path.read_text().splitlines() == calls_before_pre_effect_abandonment
+            with closing(sqlite3.connect(data / "developer.sqlite3")) as connection_db:
+                durable_pre_effect_abandoned = json.loads(connection_db.execute(
+                    "SELECT state FROM developer_state WHERE id=1"
+                ).fetchone()[0])
+            pre_effect_after = next(
+                item for item in durable_pre_effect_abandoned["queue_v13"]
+                if item["id"] == pre_effect_id
+            )
+            assert pre_effect_after["status"] == "removed"
+            assert pre_effect_after["checkpoint"] == "publication_abandoned"
+            for key, value in preserved.items():
+                assert pre_effect_after[key] == value, key
+            terminal_pre_effect = pre_effect_after["publication"]
+            assert terminal_pre_effect["events"][:-1] == publication_pre_effect["events"]
+            assert terminal_pre_effect["events"][-1]["kind"] == "receipt"
+            assert terminal_pre_effect["events"][-1]["stage"] == "abandoned"
+            assert terminal_pre_effect["events"][-1]["evidence_sha256"] is None
+            for field in (
+                "author_name", "author_email", "base_sha", "candidate_tree_sha", "commit_sha",
+                "pr_number", "pr_url", "merged_sha",
+            ):
+                assert terminal_pre_effect[field] is None, (field, terminal_pre_effect)
+            api("control", {"action": "shutdown"})
+            process.wait(timeout=10)
+            output.close()
+            start_runner(append=True)
+            restarted_pre_effect = wait(lambda value: not value["running"])
+            assert all(item["id"] != pre_effect_id for item in restarted_pre_effect["queue"])
+            with closing(sqlite3.connect(data / "developer.sqlite3")) as connection_db:
+                restarted_pre_effect_durable = json.loads(connection_db.execute(
+                    "SELECT state FROM developer_state WHERE id=1"
+                ).fetchone()[0])
+            restarted_pre_effect_record = next(
+                item for item in restarted_pre_effect_durable["queue_v13"]
+                if item["id"] == pre_effect_id
+            )
+            assert restarted_pre_effect_record == pre_effect_after
+
             local_id = enqueue("local-only", "[publication:local-only]")
             control("start")
             local = wait(lambda value: next(item for item in value["queue"] if item["id"] == local_id)["status"] == "succeeded")
@@ -692,6 +827,8 @@ def main():
                 "closed_unmerged_publication_abandoned_without_remote_effect": True,
                 "abandonment_rejects_open_merged_missing_and_drifted_pr": True,
                 "abandonment_cancellation_and_restart_preserve_attention_or_terminal_history": True,
+                "pre_effect_abandonment_requires_no_durable_commit_or_remote_intent": True,
+                "pre_effect_abandonment_survives_emergency_rejection_and_restart": True,
                 "unconnected_project_local_only": True,
                 "live_github_credentials_used": False,
             }))

@@ -34,7 +34,14 @@ the authenticated abandonment action. Windows must observe the exact retained PR
 closed and unmerged with the reviewed head, repository, and base branch unchanged
 before atomically preserving its evidence, tombstoning the feature, and clearing the
 barrier. The action performs no GitHub mutation, never claims publication success,
-and remains cancellation-dominant.
+and remains cancellation-dominant. The same owner action may tombstone an exact
+`prepare_candidate` attention record before any remote effect only when durable
+evidence contains the single canonical preparation intent and no author, base,
+candidate tree, commit, PR, merge, or effect receipt. This path needs no GitHub
+runtime observation because the evidence proves that publication never crossed
+the remote-effect intent boundary. A disposable private checkout may contain an
+unrecorded local commit; no such commit becomes durable authority. The action
+preserves the frozen candidate and all review history.
 
 The owner approved project-grouped Developer chat history and one-click New Chat.
 [`Developer chat history`](docs/developer-chat-history-design.md) owns this extension:

@@ -2708,10 +2708,10 @@ Full-machine target phase: planning/creation containment has bounded native Wind
   loopback E2E verifies the actual outgoing tool catalog without real inference or
   account credentials. Executable hashing prevents changes during a runner lifetime;
   it does not replace rechecking a newly configured runtime.
-  Both installed CLIs passed with zero outgoing tools: Mac Codex 0.153.4 and Windows
-  Codex 0.148. The explicit Windows platform profile omits four flags unavailable in
-  that older CLI while retaining every supported tool-disable setting. Its probe
-  captured one loopback-fixture request and made no real model call. Rerun the actual
+  An earlier proof checked Mac Codex 0.153.4 and Windows Codex 0.148 with zero
+  outgoing tools, using a legacy Windows profile that omitted four unsupported
+  flags. That profile is retired: modern runtimes require all common explicit
+  disables, as described under Developer AI settings below. Rerun the actual
   catalog probe whenever either configured CLI is upgraded.
 - A failed SQLite commit for Emergency Pause must leave a volatile latch active.
   Start remains rejected until the owner can complete a durable transition; an error
@@ -2802,6 +2802,52 @@ consistency.
 
 ## Developer AI settings and reviewer selection
 
+- The model cache is written by other Codex clients and is not live entitlement
+  or executable-compatibility proof. On 2026-10-08, a cache fetched by 0.160.1
+  advertised `gpt-6.1-sol`, but the configured Windows CLI 0.153.4 rejected it.
+  The same login/model and exact bounded provider argv succeeded with official
+  CLI 0.160.1. Verify the configured executable, its version, cache provenance,
+  and a real structured provider call before changing generated code or retrying
+  an unsupported-model failure. Persist a corrected executable in canonical
+  `runtime.json`, restart only after idle acknowledgement, and verify the actual
+  process argv. See [live runtime recovery](../developer-codex-runtime-recovery-validation.md).
+- Planning/review tool-disabling flags are now common to Mac and modern Windows
+  Codex. The old 0.148 compatibility omission must not be reused with modern CLIs,
+  where sleep, in-app chat, dictation and local automation default on. A live
+  structured response is insufficient tool-containment evidence; separately run
+  the loopback catalog harness against the exact deployed executable and require
+  `tools=[]`. Strict configuration deliberately rejects unsupported legacy flags.
+- Before rebuilding the installed runner, verify that the source checkout can
+  read the live persisted states. The 2026-10-08 recovery exposed an older checkout
+  rejecting a newer valid abandoned-publication tombstone. Restore compatible
+  published source and retain the database; do not erase evidence to make an
+  older runner start. Compare retained queue fingerprints across the restart.
+- Fresh protected test or validation-input review blockers require automatic
+  escalation directly. Windows uses its disposable tool stage when configured;
+  other targets retain their frozen JSON proposal. Ordinary repair rejects those
+  edits and can repeat
+  the same failure if routing waits only for three exhausted attempts. Require
+  exact latest v2 checkpoint/attempt, complete bounded receipt digests and safe
+  findings, then recheck evidence and project identity at reservation. Preserve
+  ordinary counters, shared escalation limits, quarantine and fresh review.
+- A fully applied automatic staged candidate rejected by review is terminal audit
+  ancestry. If the new exact v2 blockers are source-only, reserve the ordinary
+  successor immediately from that decision; do not send the terminal proposal
+  back through active staged-validation recovery. Keep its manifest, application
+  state, three receipts and rejected packet/batch bindings intact while later
+  authorized source bytes and independent review slots advance.
+- Recovery of the 2026-10-08 staged-lineage operational hold is defect-specific.
+  Public Resume must verify the exact terminal chain and unchanged complete
+  private project snapshot under the effect gate before restoring repair routing.
+  The retained rejected review is authoritative even if the failed legacy
+  validation reset the display status to pending. Mismatched or ambiguous effects
+  remain held; do not rewrite the queue or review history to make Resume pass.
+- Isolated JSON repair fixtures missed that staged-to-ordinary handoff. The native
+  `developer-runner-staged-repair-e2e.py` regression runs the pinned OpenCode
+  process through protected rejection, staged application, source-only rejection,
+  ordinary repair and fresh approval. It belongs to `developer_workflow_e2e` and
+  the canonical gate. Its fixture model responses are separate from real model
+  and connected-repository publication evidence.
 - The Developer gear button opens the owner-facing AI settings sheet. It loads
   the Windows-owned model catalog and persisted orchestrator and reviewer pairs.
   Saving requires an idle runner, the unchanged AI-settings revision, and an
@@ -2827,8 +2873,11 @@ consistency.
   one-revision acknowledgement.
 - Each feature snapshots its maximum. Manual and automatic escalations share the
   existing cumulative counter, and enable/disable cycles do not replenish it. The
-  existing three ordinary repairs run before automatic escalation. The snapshot is
-  also the absolute lifetime AI-escalation cap; once reached, recovery is non-AI.
+  existing three ordinary repairs run before automatic escalation by default.
+  Exact v2 protected-review blockers, including a validated clean held origin,
+  use automatic escalation directly with ordinary counters preserved. The
+  snapshot is also the absolute lifetime AI-escalation cap; once reached,
+  recovery is non-AI.
 - Automatic repair is independent of queue Auto-run, uses the feature's saved model
   without fallback, runs serially, and may change any admitted project file including
   tests and configuration. The validation command, prohibited paths, credentials,
@@ -2841,12 +2890,15 @@ consistency.
 - A protected test edit made only in a disposable ordinary-repair stage is a
   rejected candidate if both protected-input scans succeed and live inputs still
   match the captured baseline. Its staged bytes are never applied; the ordinary
-  attempt is consumed, and enabled Auto AI repair can continue to the remaining
-  attempts and escalation. Live drift or incomplete evidence still holds.
+  attempt is consumed. Enabled Auto AI repair normally continues to remaining
+  attempts and escalation; a validated exact protected-review origin instead
+  goes directly to automatic escalation. Live drift or incomplete evidence holds.
 - Tool-assisted feature sessions now have a 30-minute finite event-stream and
   runner deadline; project chat remains at 15 minutes. A timed-out disposable
   stage with no live edits stays held, but exact explicit Resume can reserve the
-  next ordinary attempt after confirmed cleanup. It is not an automatic replay.
+  next ordinary attempt after confirmed cleanup, except that a validated exact
+  protected-review origin takes automatic escalation without another ordinary
+  reservation. It is not an automatic replay.
   Verify the selected provider's resolved OpenCode timeout and model limits at
   the loopback config boundary, since a silently shortened provider timeout
   can defeat the longer runner deadline.
@@ -3383,6 +3435,15 @@ consistency.
   the feature atomically. Preserve candidate, review, PR, check and event evidence;
   open, merged, missing, drifted, cancelled or paused observations leave attention
   unchanged. The action performs no remote mutation and never becomes success proof.
+- A remote-baseline mismatch can fail at `prepare_candidate` before a candidate
+  commit is durably recorded or any remote-effect intent begins. A disposable
+  private checkout may contain unrecorded local work. Permit the same explicit owner action only for the
+  exact durable shape: failed publication attention, one canonical preparation
+  intent, no author/base/tree/commit/PR/merge field or extra receipt, and an exact
+  frozen candidate/review rebind. Append an evidence-free abandonment receipt and
+  preserve all candidate, validation, review, repair, escalation, and counter
+  evidence. Any ambiguity remains held, and the tombstone is recovery evidence
+  rather than publication success.
 
 ## Developer model catalog and installed-provider compatibility
 
@@ -3441,3 +3502,17 @@ consistency.
   normal merge without candidate or publication intervention after start. See
   [project picker and publication recovery evidence](../developer-project-picker-validation.md).
   The abandoned demo3 attempt remains failure evidence, not a successful run.
+
+### Windows read-only project metadata inventory (2026-10-08)
+
+- Reading a published Windows project must not reuse the dot-path write gate for `.gitattributes` or `.github` inputs. The former failure happened before provider admission, with unchanged files and no generated edits.
+- Benign dot metadata belongs in the complete inventory with exact path/content SHA-256, `path=None`, and no selected model portion. Metadata changes must change the manifest digest. Sensitive paths/content retain opaque redacted digests.
+- Preserve strict write/apply and bounded retrieval policy, held directory handles, containment, symlink/reparse and hardlink checks, cancellation, and scan limits. Inventory-only reading does not authorize metadata edits. Existing Full Access project tools retain separate owner-configured reading authority; inventory-selected portion exclusion does not revoke or expand that authority.
+- Run `developer-runner-windows-inventory-e2e.py` on native Windows with the installed candidate and same-checkout reviewer fixture; a Darwin pass alone cannot establish the Windows inventory boundary. Canonical registration also checks this disposable process/HTTP path.
+
+### Real-model autonomous completion after runtime recovery (2026-10-08)
+
+- A passing deterministic repair fixture does not establish the complete installed sequence. The real `aw-fft-demo4` feature `01b6e979-a6ed-45d2-8030-6f55f65989ec` exercised protected staged repair, a source-only ordinary successor, additional staged repair, six reviews, immutable Windows validation and normal publication without operator intervention after its corrected public Resume.
+- Completion means terminal `succeeded` / `publication_merged`, exact-head required-check success, and independently verified remote blobs matching the frozen reviewed candidate. Website PR #5 merged at `4166c95da840f3111471ab979b601b71eea31ffb`; all four delivered file hashes and immutable CI metadata matched. See [runtime recovery and completion evidence](../developer-codex-runtime-recovery-validation.md).
+- Preserve earlier held/abandoned features as failure evidence. A corrected restart can prove downstream autonomous completion without implying the original start or every earlier attempt succeeded.
+- Concept-based factual tests provide selected corruption guards, not complete language interpretation. Retain nonblocking alternative-wording and unused-API hardening findings when the actual delivered source is correct; do not misrepresent selected mutation passes as exhaustive coverage.

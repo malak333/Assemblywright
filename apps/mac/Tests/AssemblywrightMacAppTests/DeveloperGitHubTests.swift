@@ -180,6 +180,21 @@ struct DeveloperGitHubTests {
     malformed = verified
     malformed.publicationMergedSha = nil
     #expect(!DeveloperGitHubPresentation.hasVerifiedMergeEvidence(malformed))
+
+    let abandoned = try decoder.decode(DeveloperRunnerFeature.self, from: Data(#"""
+      {"id":"feature-2","project":"demo","instruction":"feature","validation":"tests",
+       "status":"removed","checkpoint":"publication_abandoned","message":"","changed_files":[],
+       "publication_status":"abandoned","publication_stage":"abandoned"}
+      """#.utf8))
+    #expect(DeveloperGitHubPresentation.statusLabel(abandoned) ==
+      "Publication abandoned · evidence preserved")
+    #expect(DeveloperGitHubPresentation.abandonmentHelp.contains("safe to remove"))
+    #expect(DeveloperGitHubPresentation.abandonmentConfirmation.contains(
+      "no candidate commit was recorded"))
+    #expect(DeveloperGitHubPresentation.abandonmentConfirmation.contains(
+      "no branch-push, pull-request, or remote-effect intent began"))
+    #expect(DeveloperGitHubPresentation.abandonmentConfirmation.contains(
+      "closed and unmerged with its reviewed head unchanged"))
   }
 
   @Test

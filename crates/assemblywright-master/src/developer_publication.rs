@@ -23,6 +23,9 @@ const EVENT_LIMIT: usize = 80;
 const REPOSITORY_PAGE_SIZE: u32 = 50;
 const SETUP_OUTPUT_LIMIT: usize = 64 * 1024;
 const DEVICE_URL: &str = "https://github.com/login/device";
+const PREPARE_CANDIDATE_INTENT_SUMMARY: &str =
+    "Preparing an isolated checkout from the selected remote base";
+const PRE_EFFECT_ABANDONMENT_SUMMARY: &str = "Owner abandoned publication with no durably recorded candidate commit and no branch-push, pull-request, or remote-effect intent; frozen candidate and review evidence were preserved without a remote write";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -266,18 +269,19 @@ impl PublicationRecord {
                 bail!("Completed publication evidence is incomplete");
             }
         } else if self.status == "abandoned" {
-            if self.stage != "abandoned"
-                || self.base_sha.is_none()
-                || self.candidate_tree_sha.is_none()
-                || self.commit_sha.is_none()
-                || self.pr_number.is_none()
-                || self.pr_url.is_none()
-                || self.merged_sha.is_some()
-                || !self.events.last().is_some_and(|event| {
+            let closed_unmerged = self.base_sha.is_some()
+                && self.candidate_tree_sha.is_some()
+                && self.commit_sha.is_some()
+                && self.pr_number.is_some()
+                && self.pr_url.is_some()
+                && self.merged_sha.is_none()
+                && self.events.last().is_some_and(|event| {
                     event.kind == "receipt"
                         && event.stage == "abandoned"
                         && event.evidence_sha256.as_deref() == self.commit_sha.as_deref()
-                })
+                });
+            if self.stage != "abandoned"
+                || !(closed_unmerged || self.has_exact_pre_effect_abandonment_receipt())
             {
                 bail!("Abandoned publication evidence is incomplete");
             }
@@ -285,6 +289,59 @@ impl PublicationRecord {
             bail!("Incomplete publication cannot claim a terminal stage");
         }
         Ok(())
+    }
+
+    fn has_exact_prepare_candidate_intent(&self) -> bool {
+        self.events.len() == 1
+            && self.events[0].sequence == 1
+            && self.events[0].kind == "intent"
+            && self.events[0].stage == "prepare_candidate"
+            && self.events[0].evidence_sha256.is_none()
+            && self.events[0].summary == PREPARE_CANDIDATE_INTENT_SUMMARY
+    }
+
+    fn has_no_candidate_or_remote_effect_evidence(&self) -> bool {
+        self.author_name.is_none()
+            && self.author_email.is_none()
+            && self.base_sha.is_none()
+            && self.candidate_tree_sha.is_none()
+            && self.commit_sha.is_none()
+            && self.pr_number.is_none()
+            && self.pr_url.is_none()
+            && self.merged_sha.is_none()
+    }
+
+    fn has_exact_pre_effect_abandonment_receipt(&self) -> bool {
+        self.has_no_candidate_or_remote_effect_evidence()
+            && self.events.len() == 2
+            && self.events[0].sequence == 1
+            && self.events[0].kind == "intent"
+            && self.events[0].stage == "prepare_candidate"
+            && self.events[0].evidence_sha256.is_none()
+            && self.events[0].summary == PREPARE_CANDIDATE_INTENT_SUMMARY
+            && self.events[1].sequence == 2
+            && self.events[1].kind == "receipt"
+            && self.events[1].stage == "abandoned"
+            && self.events[1].evidence_sha256.is_none()
+            && self.events[1].summary == PRE_EFFECT_ABANDONMENT_SUMMARY
+    }
+
+    pub(super) fn can_abandon_before_remote_effects(&self) -> bool {
+        self.validate().is_ok()
+            && self.status == "attention"
+            && self.stage == "prepare_candidate"
+            && self.has_no_candidate_or_remote_effect_evidence()
+            && self.has_exact_prepare_candidate_intent()
+    }
+
+    pub(super) fn mark_abandoned_before_remote_effects(&mut self) -> Result<()> {
+        if !self.can_abandon_before_remote_effects() {
+            bail!("Publication has durable candidate or remote-effect evidence and cannot use pre-remote-effect abandonment");
+        }
+        self.event("receipt", "abandoned", None, PRE_EFFECT_ABANDONMENT_SUMMARY)?;
+        self.status = "abandoned".into();
+        self.stage = "abandoned".into();
+        self.validate()
     }
 
     fn event(
@@ -1196,7 +1253,7 @@ impl Runtime {
             "intent",
             "prepare_candidate",
             None,
-            "Preparing an isolated checkout from the selected remote base",
+            PREPARE_CANDIDATE_INTENT_SUMMARY,
         )?;
         persist(record)?;
         let checkout = self.checkout_root.join(&input.feature_id);
@@ -4144,6 +4201,126 @@ mod tests {
         assert_eq!(record.events.len(), evidence_before.events.len() + 1);
         assert_eq!(record.status, "abandoned");
         assert_eq!(record.stage, "abandoned");
+    }
+
+    #[test]
+    fn pre_effect_abandonment_requires_exact_prepare_intent_and_no_effect_evidence() {
+        let input = PublicationInput {
+            feature_id: "a8e78ac7-c9a9-47f0-92dc-b35777880967".into(),
+            title: "Feature".into(),
+            body: "Body".into(),
+            binding: ProjectBinding {
+                project: "demo".into(),
+                repository_url: "https://github.com/owner/repo.git".into(),
+                repository_slug: "owner/repo".into(),
+                base_branch: "main".into(),
+                required_checks: vec![RequiredCheck {
+                    context: "release-local".into(),
+                    integration_id: Some(42),
+                }],
+                strict_required_checks: true,
+            },
+            files: vec![CandidateFile {
+                path: "app.txt".into(),
+                before_sha256: None,
+                content_sha256: sha256(b"ok"),
+                content: b"ok".to_vec(),
+                delete: false,
+                before_text: None,
+            }],
+        };
+        let mut record = PublicationRecord::pending(&input).unwrap();
+        record
+            .event(
+                "intent",
+                "prepare_candidate",
+                None,
+                PREPARE_CANDIDATE_INTENT_SUMMARY,
+            )
+            .unwrap();
+        record.status = "attention".into();
+        record.stage = "prepare_candidate".into();
+        record.message = "Reviewed original file is absent from the remote base".into();
+        record.validate().unwrap();
+        assert!(record.can_abandon_before_remote_effects());
+
+        let mut adversarial = Vec::new();
+        let mut drift = record.clone();
+        drift.status = "running".into();
+        adversarial.push(drift);
+        let mut drift = record.clone();
+        drift.stage = "push_branch".into();
+        adversarial.push(drift);
+        let mut drift = record.clone();
+        drift.author_name = Some("Assemblywright".into());
+        adversarial.push(drift);
+        let mut drift = record.clone();
+        drift.author_email = Some("assemblywright@example.invalid".into());
+        adversarial.push(drift);
+        let mut drift = record.clone();
+        drift.base_sha = Some("1".repeat(40));
+        adversarial.push(drift);
+        let mut drift = record.clone();
+        drift.candidate_tree_sha = Some("2".repeat(40));
+        adversarial.push(drift);
+        let mut drift = record.clone();
+        drift.commit_sha = Some("3".repeat(40));
+        adversarial.push(drift);
+        let mut drift = record.clone();
+        drift.pr_number = Some(17);
+        adversarial.push(drift);
+        let mut drift = record.clone();
+        drift.pr_url = Some("https://github.com/owner/repo/pull/17".into());
+        adversarial.push(drift);
+        let mut drift = record.clone();
+        drift.merged_sha = Some("4".repeat(40));
+        adversarial.push(drift);
+        let mut drift = record.clone();
+        drift.events[0].kind = "receipt".into();
+        adversarial.push(drift);
+        let mut drift = record.clone();
+        drift.events[0].summary = "Preparing something else".into();
+        adversarial.push(drift);
+        let mut drift = record.clone();
+        drift.events[0].evidence_sha256 = Some("5".repeat(64));
+        adversarial.push(drift);
+        let mut drift = record.clone();
+        drift
+            .event("intent", "push_branch", None, "later effect intent")
+            .unwrap();
+        adversarial.push(drift);
+        let mut drift = record.clone();
+        drift
+            .event(
+                "receipt",
+                "prepare_candidate",
+                None,
+                "unexpected preparation receipt",
+            )
+            .unwrap();
+        adversarial.push(drift);
+        for drift in adversarial {
+            assert!(!drift.can_abandon_before_remote_effects());
+        }
+
+        let retained = record.clone();
+        record.mark_abandoned_before_remote_effects().unwrap();
+        record.validate().unwrap();
+        assert_eq!(record.status, "abandoned");
+        assert_eq!(record.stage, "abandoned");
+        assert_eq!(record.events.len(), 2);
+        assert_eq!(record.events[1].kind, "receipt");
+        assert_eq!(record.events[1].stage, "abandoned");
+        assert_eq!(record.events[1].evidence_sha256, None);
+        assert_eq!(record.events[1].summary, PRE_EFFECT_ABANDONMENT_SUMMARY);
+        assert_eq!(record.required_checks, retained.required_checks);
+
+        let mut tampered = record.clone();
+        tampered.events[1].evidence_sha256 = Some("6".repeat(64));
+        assert!(tampered.validate().is_err());
+        let mut missing_intent = record;
+        missing_intent.events.remove(0);
+        assert!(missing_intent.validate().is_err());
     }
 
     #[test]
